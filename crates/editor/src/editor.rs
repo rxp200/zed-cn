@@ -20580,11 +20580,11 @@ impl Editor {
         window: &mut Window,
         cx: &mut Context<Editor>,
     ) {
-        if !self.diagnostics_enabled() {
-            return;
-        }
+        let diagnostics_enabled =
+            self.diagnostics_enabled() && self.diagnostics_max_severity != DiagnosticSeverity::Off;
+        self.diagnostics_enabled = !diagnostics_enabled;
 
-        let new_severity = if self.diagnostics_max_severity == DiagnosticSeverity::Off {
+        let new_severity = if self.diagnostics_enabled {
             EditorSettings::get_global(cx)
                 .diagnostics_max_severity
                 .filter(|severity| severity != &DiagnosticSeverity::Off)
@@ -20593,7 +20593,7 @@ impl Editor {
             DiagnosticSeverity::Off
         };
         self.set_max_diagnostics_severity(new_severity, cx);
-        if self.diagnostics_max_severity == DiagnosticSeverity::Off {
+        if self.diagnostics_enabled {
             self.active_diagnostics = ActiveDiagnostic::None;
             self.inline_diagnostics_update = Task::ready(());
             self.inline_diagnostics.clear();
