@@ -3571,7 +3571,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-channel 2.5.0",
- "async-process",
  "async-trait",
  "base64 0.22.1",
  "collections",
