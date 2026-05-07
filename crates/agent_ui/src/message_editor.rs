@@ -3,8 +3,8 @@ use crate::SendImmediately;
 use crate::{
     ChatWithFollow,
     completion_provider::{
-        PromptCompletionProvider, PromptCompletionProviderDelegate, PromptContextAction,
-        PromptContextType, SlashCommandCompletion,
+        AgentContextSelection, PromptCompletionProvider, PromptCompletionProviderDelegate,
+        PromptContextAction, PromptContextType, SlashCommandCompletion,
     },
     mention_set::{Mention, MentionImage, MentionSet, insert_crease_for_mention},
 };
@@ -1365,7 +1365,12 @@ impl MessageEditor {
             .detach_and_log_err(cx);
     }
 
-    pub fn insert_selections(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn insert_selections(
+        &mut self,
+        selection: AgentContextSelection,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let editor = self.editor.read(cx);
         let editor_buffer = editor.buffer().read(cx);
         let Some(buffer) = editor_buffer.as_singleton() else {
@@ -1376,17 +1381,13 @@ impl MessageEditor {
         let anchor = buffer.update(cx, |buffer, _cx| {
             buffer.anchor_before(cursor_offset.0.min(buffer.len()))
         });
-        let Some(workspace) = self.workspace.upgrade() else {
-            return;
-        };
         let Some(completion) =
             PromptCompletionProvider::<MessageEditorCompletionDelegate>::completion_for_action(
                 PromptContextAction::AddSelections,
                 anchor..anchor,
                 self.editor.downgrade(),
                 self.mention_set.downgrade(),
-                &workspace,
-                cx,
+                Some(selection),
             )
         else {
             return;
@@ -2010,7 +2011,7 @@ mod tests {
     use util::{path, paths::PathStyle, rel_path::rel_path};
     use workspace::{AppState, Item, MultiWorkspace};
 
-    use crate::completion_provider::PromptContextType;
+    use crate::completion_provider::{AgentContextSelection, PromptContextType};
     use crate::{
         conversation_view::tests::init_test,
         mention_set::insert_crease_for_mention,
@@ -3731,11 +3732,17 @@ mod tests {
             })
         });
 
-        // Now let's insert the selection in the Agent Panel's editor and
-        // confirm that, after the insertion, the cursor is now in the visible
-        // range.
+        let text_editor_selection = editor.update(&mut cx, |editor, cx| {
+            let multibuffer = editor.buffer().read(cx);
+            let buffer = multibuffer.as_singleton().unwrap();
+            let buffer_snapshot = buffer.read(cx).snapshot();
+            let start = buffer_snapshot.anchor_before(0);
+            let end = buffer_snapshot.anchor_after(5);
+            AgentContextSelection::Editor(vec![(buffer, start..end)])
+        });
+
         message_editor.update_in(&mut cx, |message_editor, window, cx| {
-            message_editor.insert_selections(window, cx);
+            message_editor.insert_selections(text_editor_selection, window, cx);
         });
 
         cx.run_until_parked();
