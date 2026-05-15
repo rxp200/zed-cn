@@ -13,7 +13,8 @@ use crate::tasks::workflows::vars::JobOutput;
 use crate::tasks::workflows::{
     runners,
     steps::{
-        self, DEFAULT_REPOSITORY_OWNER_GUARD, NamedJob, RepositoryTarget, generate_token, named,
+        self, DEFAULT_REPOSITORY_OWNER_GUARD, NamedJob, RepositoryTarget, ZippyGitIdentity,
+        generate_token, named,
     },
     vars::{self, StepOutput, WorkflowInput},
 };
@@ -348,13 +349,6 @@ fn create_rollout_tag(rollout_job: &NamedJob, filter_repos_input: &WorkflowInput
         "#})
     }
 
-    fn configure_git() -> Step<Run> {
-        named::bash(indoc! {r#"
-            git config user.name "zed-zippy[bot]"
-            git config user.email "234243425+zed-zippy[bot]@users.noreply.github.com"
-        "#})
-    }
-
     let (authenticate, token) =
         generate_token(vars::ZED_ZIPPY_APP_ID, vars::ZED_ZIPPY_APP_PRIVATE_KEY)
             .for_repository(RepositoryTarget::current())
@@ -371,8 +365,7 @@ fn create_rollout_tag(rollout_job: &NamedJob, filter_repos_input: &WorkflowInput
         .timeout_minutes(1u32)
         .add_step(authenticate)
         .add_step(checkout_zed_repo(&token))
-        .add_step(configure_git())
-        .add_step(update_rollout_tag());
+        .add_step(update_rollout_tag().with_zippy_git_identity());
 
     named::job(job)
 }

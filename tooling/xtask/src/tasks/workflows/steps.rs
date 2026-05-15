@@ -63,6 +63,7 @@ enum FetchDepth {
 #[derive(Default)]
 pub(crate) struct CheckoutStep {
     fetch_depth: FetchDepth,
+    fetch_tags: bool,
     name: Option<String>,
     token: Option<String>,
     path: Option<String>,
@@ -110,6 +111,11 @@ impl CheckoutStep {
         self.ref_ = Some(ref_.to_string());
         self
     }
+
+    pub fn with_fetch_tags(mut self) -> Self {
+        self.fetch_tags = true;
+        self
+    }
 }
 
 impl From<CheckoutStep> for Step<Use> {
@@ -132,6 +138,7 @@ impl From<CheckoutStep> for Step<Use> {
             .when_some(value.repository, |step, repository| {
                 step.add_with(("repository", repository))
             })
+            .when(value.fetch_tags, |step| step.add_with(("fetch-tags", true)))
             .when_some(value.ref_, |step, ref_| step.add_with(("ref", ref_)))
             .when_some(value.token, |step, token| step.add_with(("token", token)))
     }
@@ -521,6 +528,22 @@ pub mod named {
             .skip(1)
             .collect::<Vec<_>>()
             .join("::")
+    }
+}
+
+const ZED_ZIPPY_GIT_USER_NAME: &str = "zed-zippy[bot]";
+const ZED_ZIPPY_GIT_USER_EMAIL: &str = "234243425+zed-zippy[bot]@users.noreply.github.com";
+
+pub(crate) trait ZippyGitIdentity {
+    fn with_zippy_git_identity(self) -> Self;
+}
+
+impl ZippyGitIdentity for Step<Run> {
+    fn with_zippy_git_identity(self) -> Self {
+        self.add_env(("GIT_AUTHOR_NAME", ZED_ZIPPY_GIT_USER_NAME))
+            .add_env(("GIT_AUTHOR_EMAIL", ZED_ZIPPY_GIT_USER_EMAIL))
+            .add_env(("GIT_COMMITTER_NAME", ZED_ZIPPY_GIT_USER_NAME))
+            .add_env(("GIT_COMMITTER_EMAIL", ZED_ZIPPY_GIT_USER_EMAIL))
     }
 }
 
@@ -1019,10 +1042,9 @@ pub(crate) fn create_ref(
     }
 }
 
-#[allow(unused)]
 pub(crate) fn update_ref(
     git_ref: GitRef,
-    sha: impl ToString,
+    sha: impl Into<RefSha>,
     token: &StepOutput,
     force: bool,
 ) -> impl Into<Step<Use>> {
