@@ -1346,59 +1346,59 @@ pub mod simple_message_notification {
                 .p_4()
                 .children(vec![
                     example_group_with_title(
-                        "States",
+                        "状态",
                         vec![
-                            single_example("Normal", container().child(normal).into_any_element()),
+                            single_example("普通", container().child(normal).into_any_element()),
                             single_example(
-                                "With Title",
+                                "带标题",
                                 container().child(with_title).into_any_element(),
                             ),
                             single_example(
-                                "With Primary Action (start icon)",
+                                "带主要操作（起始图标）",
                                 container().child(with_primary_action).into_any_element(),
                             ),
                             single_example(
-                                "With Primary Action (end icon)",
+                                "带主要操作（结束图标）",
                                 container().child(with_end_icon_action).into_any_element(),
                             ),
                             single_example(
-                                "Long Content + Primary Action",
+                                "长内容 + 主要操作",
                                 container()
                                     .child(with_long_content_and_action)
                                     .into_any_element(),
                             ),
                             single_example(
-                                "Error",
+                                "错误",
                                 container().child(error_state).into_any_element(),
                             ),
                         ],
                     ),
                     example_group_with_title(
-                        "Header Actions (top right)",
+                        "头部操作（右上角）",
                         vec![
                             single_example(
-                                "Close Only",
+                                "仅关闭",
                                 container().child(close_only).into_any_element(),
                             ),
                             single_example(
-                                "Copy + Close",
+                                "复制 + 关闭",
                                 container().child(copy_and_close).into_any_element(),
                             ),
                             single_example(
-                                "No Close",
+                                "无关闭",
                                 container().child(no_close).into_any_element(),
                             ),
                         ],
                     ),
                     example_group_with_title(
-                        "Workspace Errors",
+                        "工作区错误",
                         vec![
                             single_example(
-                                "Basic",
+                                "基础",
                                 container().child(basic_error).into_any_element(),
                             ),
                             single_example(
-                                "With Secondary Message",
+                                "带次要消息",
                                 container().child(detailed_error).into_any_element(),
                             ),
                             single_example(
