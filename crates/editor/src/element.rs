@@ -2714,7 +2714,7 @@ impl EditorElement {
                         });
                     })
                     .tooltip(Tooltip::for_action_title(
-                        "Expand Excerpt",
+                        "展开摘要",
                         &crate::actions::ExpandExcerpts::default(),
                     ))
                     .into_any_element();

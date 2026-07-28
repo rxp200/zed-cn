@@ -611,9 +611,9 @@ impl BranchFilter {
 
     fn label(self) -> &'static str {
         match self {
-            Self::All => "All Branches",
-            Self::Local => "Local Branches",
-            Self::Remote => "Remote Branches",
+            Self::All => "所有分支",
+            Self::Local => "本地分支",
+            Self::Remote => "远程分支",
         }
     }
 }
@@ -872,7 +872,7 @@ impl Render for DeleteBranchTooltip {
             .unwrap_or(false);
         if force_delete {
             Tooltip::for_action_in(
-                "Force Delete Branch",
+                "强制删除分支",
                 &branch_picker::ForceDeleteBranch,
                 &self.focus_handle,
                 cx,
@@ -880,9 +880,9 @@ impl Render for DeleteBranchTooltip {
             .into_any_element()
         } else {
             Tooltip::with_meta_in(
-                "Delete Branch",
+                "删除分支",
                 Some(&branch_picker::DeleteBranch),
-                "Hold alt to force delete",
+                "按住 Alt 键强制删除",
                 &self.focus_handle,
                 cx,
             )
@@ -1949,9 +1949,9 @@ impl PickerDelegate for BranchListDelegate {
                         });
                 starts_section.then(|| {
                     if branch.is_remote() {
-                        ("Remote Branches", ix != 0)
+                        ("远程分支", ix != 0)
                     } else {
-                        ("Local Branches", false)
+                        ("本地分支", false)
                     }
                 })
             });

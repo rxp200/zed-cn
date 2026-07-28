@@ -840,15 +840,15 @@ impl Component for ElicitationCardPreview {
             .gap_6()
             .children([
                 example_group_with_title(
-                    "Form Requests",
+                    "表单请求",
                     vec![
                         single_example(
-                            "Pending Form",
+                            "待处理表单",
                             render_form_preview(0, pending_status(), &[], window, cx),
                         )
                         .width(px(640.)),
                         single_example(
-                            "Validation Errors",
+                            "验证错误",
                             render_form_preview(
                                 1,
                                 pending_status(),
@@ -867,10 +867,10 @@ impl Component for ElicitationCardPreview {
                 .vertical()
                 .into_any_element(),
                 example_group_with_title(
-                    "URL Requests",
+                    "URL 请求",
                     vec![
                         single_example(
-                            "URL Consent",
+                            "URL 授权",
                             render_url_preview(3, pending_status(), window, cx),
                         )
                         .width(px(640.)),
@@ -879,15 +879,15 @@ impl Component for ElicitationCardPreview {
                 .vertical()
                 .into_any_element(),
                 example_group_with_title(
-                    "Terminal States",
+                    "终端状态",
                     vec![
                         single_example(
-                            "Declined",
+                            "已拒绝",
                             render_form_preview(6, ElicitationStatus::Declined, &[], window, cx),
                         )
                         .width(px(640.)),
                         single_example(
-                            "Canceled",
+                            "已取消",
                             render_form_preview(7, ElicitationStatus::Canceled, &[], window, cx),
                         )
                         .width(px(640.)),
@@ -1464,7 +1464,7 @@ impl<'a> ElicitationCard<'a> {
             (ElicitationStatus::Accepted, acp::ElicitationMode::Url(_))
         );
         let (status_label, status_icon, status_color) = match &self.elicitation.status {
-            ElicitationStatus::Pending { .. } => ("Waiting for input", IconName::Info, Color::Info),
+            ElicitationStatus::Pending { .. } => ("等待输入", IconName::Info, Color::Info),
             ElicitationStatus::Accepted if is_accepted_url => {
                 ("Waiting for completion", IconName::Info, Color::Info)
             }

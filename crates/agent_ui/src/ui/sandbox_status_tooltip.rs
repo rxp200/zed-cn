@@ -228,15 +228,15 @@ impl Component for SandboxStatusTooltip {
             .group(
                 SandboxGroup::new("Write Access").row(SandboxRow::path("/Users/you/project/build")),
             )
-            .group(SandboxGroup::new("Network Access").row(SandboxRow::message("None")));
+            .group(SandboxGroup::new("网络访问").row(SandboxRow::message("无")));
 
-        let unrestricted_section = SandboxSection::new("Defined in your settings:")
-            .group(SandboxGroup::new("Write Access").row(SandboxRow::message(
-                "All paths except protected Git metadata",
+        let unrestricted_section = SandboxSection::new("在您的设置中定义：")
+            .group(SandboxGroup::new("写入访问").row(SandboxRow::message(
+                "除受保护的 Git 元数据外的所有路径",
             )))
             .group(
-                SandboxGroup::new("Network Access")
-                    .row(SandboxRow::message("All domains (unrestricted)")),
+                SandboxGroup::new("网络访问")
+                    .row(SandboxRow::message("所有域（无限制）")),
             );
 
         let container = || div().p_2().elevation_2(cx).max_w_112();
@@ -245,7 +245,7 @@ impl Component for SandboxStatusTooltip {
             .gap_4()
             .child(example_group(vec![
                 single_example(
-                    "Enabled",
+                    "已启用",
                     container()
                         .child(SandboxStatusTooltip::enabled(
                             settings_section.clone(),
@@ -254,19 +254,19 @@ impl Component for SandboxStatusTooltip {
                         .into_any_element(),
                 ),
                 single_example(
-                    "Enabled (unrestricted, no overrides)",
+                    "已启用（无限制，无覆盖）",
                     container()
                         .child(SandboxStatusTooltip::enabled(unrestricted_section, None))
                         .into_any_element(),
                 ),
                 single_example(
-                    "Disabled for thread",
+                    "线程已禁用",
                     container()
                         .child(SandboxStatusTooltip::disabled_for_thread(settings_section))
                         .into_any_element(),
                 ),
                 single_example(
-                    "Disabled in settings",
+                    "在设置中已禁用",
                     container()
                         .child(SandboxStatusTooltip::disabled_in_settings())
                         .into_any_element(),

@@ -358,16 +358,16 @@ impl Render for LanguageServerPrompt {
                                             .tooltip(move |_window, cx| {
                                                 if suppress {
                                                     Tooltip::with_meta(
-                                                        "Suppress",
+                                                        "屏蔽",
                                                         Some(&SuppressNotification),
-                                                        "Click to close",
+                                                        "点击关闭",
                                                         cx,
                                                     )
                                                 } else {
                                                     Tooltip::with_meta(
-                                                        "Close",
+                                                        "关闭",
                                                         Some(&menu::Cancel),
-                                                        "Suppress with shift-click",
+                                                        "按住 Shift 点击屏蔽",
                                                         cx,
                                                     )
                                                 }
@@ -995,20 +995,20 @@ pub mod simple_message_notification {
                             .tooltip(move |_window, cx| {
                                 if suppress {
                                     Tooltip::with_meta(
-                                        "Suppress",
+                                        "屏蔽",
                                         Some(&SuppressNotification),
-                                        "Click to Close",
+                                        "点击关闭",
                                         cx,
                                     )
                                 } else if show_suppress_button {
                                     Tooltip::with_meta(
-                                        "Close",
+                                        "关闭",
                                         Some(&menu::Cancel),
-                                        "Shift-click to Suppress",
+                                        "按住 Shift 点击屏蔽",
                                         cx,
                                     )
                                 } else {
-                                    Tooltip::for_action("Close", &menu::Cancel, cx)
+                                    Tooltip::for_action("关闭", &menu::Cancel, cx)
                                 }
                             })
                             .on_click(cx.listener(move |_, _, _, cx| {
@@ -1306,7 +1306,7 @@ pub mod simple_message_notification {
                 }
                 fn primary_action(&self) -> ErrorAction {
                     ErrorAction::link(
-                        "See Docs",
+                        "查看文档",
                         "https://zed.dev/docs/linux#i-cant-open-any-files",
                     )
                 }
@@ -1323,7 +1323,7 @@ pub mod simple_message_notification {
                     ErrorSeverity::Critical
                 }
                 fn primary_action(&self) -> ErrorAction {
-                    ErrorAction::link("Update Zed", "https://zed.dev/releases")
+                    ErrorAction::link("更新 Zed", "https://zed.dev/releases")
                 }
                 fn secondary_action(&self) -> Option<ErrorAction> {
                     Some(ErrorAction::dismiss())

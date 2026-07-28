@@ -59,7 +59,7 @@ pub(crate) fn commit_context_menu(
         context_menu
             .context(focus_handle)
             .header(header)
-            .entry("View Diff", Some(OpenCommitView.boxed_clone()), {
+            .entry("查看差异", Some(OpenCommitView.boxed_clone()), {
                 let repository = repository.clone();
                 let workspace = workspace.clone();
                 move |window, cx| {
@@ -78,14 +78,14 @@ pub(crate) fn commit_context_menu(
                 }
             })
             .entry(
-                "Copy SHA",
+                "复制 SHA",
                 Some(CopyCommitSha.boxed_clone()),
                 move |_window, cx| {
                     cx.write_to_clipboard(ClipboardItem::new_string(sha.to_string()));
                 },
             )
             .when_some(ref_name.clone(), |menu, ref_name| {
-                menu.entry("Copy Ref Name", None, move |_window, cx| {
+                menu.entry("复制引用名称", None, move |_window, cx| {
                     cx.write_to_clipboard(ClipboardItem::new_string(ref_name.to_string()));
                 })
             })
@@ -130,7 +130,7 @@ pub(crate) fn commit_context_menu(
                 })
             })
             .when(source == CommitContextMenuSource::GitPanel, |menu| {
-                menu.entry("Show in Git Graph", None, move |window, cx| {
+                menu.entry("在 Git 图中显示", None, move |window, cx| {
                     window.dispatch_action(
                         Box::new(crate::git_graph::OpenAtCommit {
                             sha: sha.to_string(),

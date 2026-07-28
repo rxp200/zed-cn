@@ -280,7 +280,7 @@ impl UnstagedDiff {
             DiffMultibuffer::new(
                 branch_diff,
                 Capability::ReadWrite,
-                "No unstaged changes",
+                "没有未暂存的更改",
                 move |editor, cx| {
                     editor.set_diff_hunk_delegate(Some(Arc::new(UnstagedDiffDelegate)), cx);
                     editor.rhs_editor().update(cx, |rhs_editor, _cx| {
@@ -765,7 +765,7 @@ impl Render for UnstagedDiffToolbar {
                             .icon_size(IconSize::Small)
                             .disabled(!button_states.prev_next)
                             .tooltip(Tooltip::for_action_title_in(
-                                "Go to Previous Hunk",
+                                "转到上一个块",
                                 &GoToPreviousHunk,
                                 &focus_handle,
                             ))
@@ -778,7 +778,7 @@ impl Render for UnstagedDiffToolbar {
                             .icon_size(IconSize::Small)
                             .disabled(!button_states.prev_next)
                             .tooltip(Tooltip::for_action_title_in(
-                                "Go to Next Hunk",
+                                "转到下一个块",
                                 &GoToHunk,
                                 &focus_handle,
                             ))
@@ -805,7 +805,7 @@ impl Render for UnstagedDiffToolbar {
                             Button::new("stage", "暂存")
                                 .disabled(!button_states.stage)
                                 .tooltip(Tooltip::for_action_title_in(
-                                    "Stage and Go to Next Hunk",
+                                    "暂存并转到下一个块",
                                     &StageAndNext,
                                     &focus_handle,
                                 ))
@@ -829,7 +829,7 @@ impl Render for UnstagedDiffToolbar {
                     .width(rems_from_px(80.))
                     .disabled(!button_states.stage_all)
                     .tooltip(Tooltip::for_action_title_in(
-                        "Stage All Changes",
+                        "全部暂存更改",
                         &StageAll,
                         &focus_handle,
                     ))

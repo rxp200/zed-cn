@@ -1146,7 +1146,7 @@ impl Editor {
                 let target_display_point = range.end.to_display_point(editor_snapshot);
 
                 self.render_edit_prediction_end_of_line_popover(
-                    "Accept",
+                    "接受",
                     editor_snapshot,
                     visible_row_range,
                     target_display_point,
@@ -1634,8 +1634,8 @@ impl Editor {
             .and_then(|file| Some(file.path().extension()?.to_string()));
 
         let event_type = match accepted {
-            true => "Edit Prediction Accepted",
-            false => "Edit Prediction Discarded",
+            true => "编辑预测已接受",
+            false => "编辑预测已丢弃",
         };
         telemetry::event!(
             event_type,
@@ -1744,13 +1744,13 @@ impl Editor {
             .items_end()
             .when(flag_on_right, |el| el.items_start())
             .child(if flag_on_right {
-                self.render_edit_prediction_line_popover("Jump", None, window, cx)
+                self.render_edit_prediction_line_popover("跳转", None, window, cx)
                     .rounded_bl(px(0.))
                     .rounded_tl(px(0.))
                     .border_l_2()
                     .border_color(border_color)
             } else {
-                self.render_edit_prediction_line_popover("Jump", None, window, cx)
+                self.render_edit_prediction_line_popover("跳转", None, window, cx)
                     .rounded_br(px(0.))
                     .rounded_tr(px(0.))
                     .border_r_2()
@@ -1790,7 +1790,7 @@ impl Editor {
         cx: &mut App,
     ) -> Option<(AnyElement, gpui::Point<Pixels>)> {
         let mut element = self
-            .render_edit_prediction_line_popover("Scroll", Some(scroll_icon), window, cx)
+            .render_edit_prediction_line_popover("滚动", Some(scroll_icon), window, cx)
             .into_any();
 
         let size = element.layout_as_root(AvailableSpace::min_size(), window, cx);
@@ -1826,7 +1826,7 @@ impl Editor {
         if target_display_point.row().as_f64() < scroll_top {
             let mut element = self
                 .render_edit_prediction_line_popover(
-                    "Jump to Edit",
+                    "跳转到编辑",
                     Some(IconName::ArrowUp),
                     window,
                     cx,
@@ -1845,7 +1845,7 @@ impl Editor {
         } else if (target_display_point.row().as_f64() + 1.) > scroll_bottom {
             let mut element = self
                 .render_edit_prediction_line_popover(
-                    "Jump to Edit",
+                    "跳转到编辑",
                     Some(IconName::ArrowDown),
                     window,
                     cx,
@@ -1863,7 +1863,7 @@ impl Editor {
             Some((element, origin))
         } else {
             self.render_edit_prediction_end_of_line_popover(
-                "Jump to Edit",
+                "跳转到编辑",
                 editor_snapshot,
                 visible_row_range,
                 target_display_point,

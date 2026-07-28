@@ -304,7 +304,7 @@ impl ChangedFileEntry {
                 } else {
                     format!("{}/{}", dir_path, file_name).into()
                 };
-                move |_, cx| Tooltip::with_meta("View Changes", None, meta.clone(), cx)
+                move |_, cx| Tooltip::with_meta("查看更改", None, meta.clone(), cx)
             })
             .on_click({
                 let entry = self.clone();
@@ -385,7 +385,7 @@ impl ChangedFileDirectoryEntry {
             )
             .tooltip({
                 let name = self.name.clone();
-                move |_, cx| Tooltip::with_meta("Toggle Folder", None, name.clone(), cx)
+                move |_, cx| Tooltip::with_meta("切换文件夹", None, name.clone(), cx)
             })
             .on_click(move |_, _, cx| {
                 git_graph
@@ -2493,9 +2493,9 @@ impl GitGraph {
     ) {
         let is_path_history = matches!(self.log_source, LogSource::Path(_));
         let columns: &[&str] = if is_path_history {
-            &["Description", "Date", "Author", "Commit"]
+            &["描述", "日期", "作者", "提交"]
         } else {
-            &["Graph", "Description", "Date", "Author", "Commit"]
+            &["图", "描述", "日期", "作者", "提交"]
         };
 
         let filter = self.column_visibility.clone();
@@ -2592,7 +2592,7 @@ impl GitGraph {
                             .icon_size(IconSize::Small)
                             .tooltip(move |_, cx| {
                                 Tooltip::for_action_in(
-                                    "Select Previous Match",
+                                    "选择上一个匹配项",
                                     &SelectPreviousMatch,
                                     &focus_handle,
                                     cx,
@@ -2615,7 +2615,7 @@ impl GitGraph {
                             .icon_size(IconSize::Small)
                             .tooltip(move |_, cx| {
                                 Tooltip::for_action_in(
-                                    "Select Next Match",
+                                    "选择下一个匹配项",
                                     &SelectNextMatch,
                                     &focus_handle,
                                     cx,

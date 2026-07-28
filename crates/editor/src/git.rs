@@ -2967,7 +2967,7 @@ pub fn render_diff_hunk_controls(
                         let focus_handle = editor.focus_handle(cx);
                         move |_window, cx| {
                             Tooltip::for_action_in(
-                                "Stage Hunk",
+                                "暂存块",
                                 &::git::ToggleStaged,
                                 &focus_handle,
                                 cx,
@@ -2994,7 +2994,7 @@ pub fn render_diff_hunk_controls(
                         let focus_handle = editor.focus_handle(cx);
                         move |_window, cx| {
                             Tooltip::for_action_in(
-                                "Unstage Hunk",
+                                "取消暂存块",
                                 &::git::ToggleStaged,
                                 &focus_handle,
                                 cx,
@@ -3023,7 +3023,7 @@ pub fn render_diff_hunk_controls(
                         let focus_handle = editor.focus_handle(cx);
                         move |_window, cx| {
                             Tooltip::for_action_in(
-                                "Restore Hunk",
+                                "恢复块",
                                 &::git::Restore,
                                 &focus_handle,
                                 cx,
@@ -3054,7 +3054,7 @@ pub fn render_diff_hunk_controls(
                         .tooltip({
                             let focus_handle = editor.focus_handle(cx);
                             move |_window, cx| {
-                                Tooltip::for_action_in("Next Hunk", &GoToHunk, &focus_handle, cx)
+                                Tooltip::for_action_in("下一个块", &GoToHunk, &focus_handle, cx)
                             }
                         })
                         .on_click({
@@ -3086,7 +3086,7 @@ pub fn render_diff_hunk_controls(
                             let focus_handle = editor.focus_handle(cx);
                             move |_window, cx| {
                                 Tooltip::for_action_in(
-                                    "Previous Hunk",
+                                    "上一个块",
                                     &GoToPreviousHunk,
                                     &focus_handle,
                                     cx,

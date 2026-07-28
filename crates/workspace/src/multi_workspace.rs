@@ -1466,7 +1466,7 @@ impl MultiWorkspace {
         let key = workspace.read(cx).project_group_key(cx);
         self.retain_workspace(workspace, key, cx);
         telemetry::event!(
-            "Workspace Added",
+            "工作区已添加",
             workspace_count = self.retained_workspaces.len()
         );
         cx.notify();

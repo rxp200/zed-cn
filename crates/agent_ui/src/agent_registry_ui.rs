@@ -417,7 +417,7 @@ impl AgentRegistryPage {
             .icon_size(IconSize::Small)
             .tooltip(move |_, cx| {
                 Tooltip::with_meta(
-                    "Visit Agent Repository",
+                    "访问 Agent 仓库",
                     None,
                     repository_for_tooltip.clone(),
                     cx,
@@ -437,7 +437,7 @@ impl AgentRegistryPage {
             )
             .icon_size(IconSize::Small)
             .tooltip(move |_, cx| {
-                Tooltip::with_meta("Visit Agent Website", None, website.clone(), cx)
+                Tooltip::with_meta("访问 Agent 网站", None, website.clone(), cx)
             })
             .on_click(move |_, _, cx| {
                 cx.open_url(&website_for_click);
@@ -609,7 +609,7 @@ impl Render for AgentRegistryPage {
                                         "registry-filter-buttons",
                                         [
                                             ToggleButtonSimple::new(
-                                                "All",
+                                                "全部",
                                                 cx.listener(|this, _event, _, cx| {
                                                     this.filter = RegistryFilter::All;
                                                     this.filter_registry_agents(cx);
@@ -617,7 +617,7 @@ impl Render for AgentRegistryPage {
                                                 }),
                                             ),
                                             ToggleButtonSimple::new(
-                                                "Installed",
+                                                "已安装",
                                                 cx.listener(|this, _event, _, cx| {
                                                     this.filter = RegistryFilter::Installed;
                                                     this.filter_registry_agents(cx);
@@ -625,7 +625,7 @@ impl Render for AgentRegistryPage {
                                                 }),
                                             ),
                                             ToggleButtonSimple::new(
-                                                "Not Installed",
+                                                "未安装",
                                                 cx.listener(|this, _event, _, cx| {
                                                     this.filter = RegistryFilter::NotInstalled;
                                                     this.filter_registry_agents(cx);

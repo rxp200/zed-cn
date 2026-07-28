@@ -611,7 +611,7 @@ impl<T: 'static> PromptEditor<T> {
                 let model_info = self.model_selector.read(cx).active_model(cx);
                 let (model_id, use_streaming_tools) = {
                     let Some(configured_model) = model_info else {
-                        self.toast("No configured model", None, cx);
+                        self.toast("未配置模型", None, cx);
                         return;
                     };
                     (
@@ -674,7 +674,7 @@ impl<T: 'static> PromptEditor<T> {
                 let model_info = self.model_selector.read(cx).active_model(cx);
                 let (model_telemetry_id, use_streaming_tools) = {
                     let Some(configured_model) = model_info else {
-                        self.toast("No configured model", None, cx);
+                        self.toast("未配置模型", None, cx);
                         return;
                     };
                     (

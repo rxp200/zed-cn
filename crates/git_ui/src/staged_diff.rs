@@ -226,7 +226,7 @@ impl StagedDiff {
             DiffMultibuffer::new(
                 branch_diff,
                 Capability::ReadOnly,
-                "No staged changes",
+                "没有暂存的更改",
                 move |editor, cx| {
                     editor.set_diff_hunk_delegate(Some(Arc::new(StagedDiffDelegate)), cx);
                     editor.rhs_editor().update(cx, |rhs_editor, _cx| {

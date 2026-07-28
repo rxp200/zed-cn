@@ -919,7 +919,7 @@ fn render_diff_hunk_controls(
                             let focus_handle = editor.focus_handle(cx);
                             move |_window, cx| {
                                 Tooltip::for_action_in(
-                                    "Previous Hunk",
+                                    "上一个块",
                                     &GoToPreviousHunk,
                                     &focus_handle,
                                     cx,
@@ -1118,7 +1118,7 @@ impl Render for AgentDiffToolbar {
                                 IconButton::new("hunk-up", IconName::ArrowUp)
                                     .icon_size(IconSize::Small)
                                     .tooltip(Tooltip::for_action_title_in(
-                                        "Previous Hunk",
+                                        "上一个块",
                                         &GoToPreviousHunk,
                                         &editor_focus_handle,
                                     ))
