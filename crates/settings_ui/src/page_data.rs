@@ -6361,8 +6361,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Agent Panel Default Height",
-                description: "Default height when the agent panel is docked to the bottom.",
+                title: "Agent 面板默认高度",
+                description: "Agent 面板停靠在底部时的默认高度。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("agent.default_height"),
@@ -6382,8 +6382,8 @@ fn panels_page() -> SettingsPage {
             SettingsPageItem::DynamicItem(DynamicItem {
                 discriminant: SettingItem {
                     files: USER,
-                    title: "Limit Content Width",
-                    description: "Whether to constrain the agent panel content to a maximum width, centering it when the panel is wider, for optimal readability.",
+                    title: "限制内容宽度",
+                    description: "是否将 Agent 面板内容限制为最大宽度，面板更宽时居中显示，以获得最佳可读性。",
                     field: Box::new(SettingField::<bool> {
                         organization_override: None,
                         json_path: Some("agent.limit_content_width"),
@@ -6415,8 +6415,8 @@ fn panels_page() -> SettingsPage {
                     vec![],
                     vec![SettingItem {
                         files: USER,
-                        title: "Max Content Width",
-                        description: "Maximum content width in pixels. Content will be centered when the panel is wider than this value.",
+                        title: "最大内容宽度",
+                        description: "最大内容宽度（像素）。面板宽于此值时内容将居中。",
                         field: Box::new(SettingField {
                             organization_override: None,
                             json_path: Some("agent.max_content_width"),
@@ -6438,7 +6438,7 @@ fn panels_page() -> SettingsPage {
     }
 
     SettingsPage {
-        title: "Panels",
+        title: "面板",
         items: concat_sections![
             project_panel_section(),
             terminal_panel_section(),
@@ -6454,10 +6454,10 @@ fn panels_page() -> SettingsPage {
 fn debugger_page() -> SettingsPage {
     fn general_section() -> [SettingsPageItem; 6] {
         [
-            SettingsPageItem::SectionHeader("General"),
+            SettingsPageItem::SectionHeader("常规"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Stepping Granularity",
-                description: "Determines the stepping granularity for debug operations.",
+                title: "步进粒度",
+                description: "确定调试操作的步进粒度。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("debugger.stepping_granularity"),
@@ -6479,8 +6479,8 @@ fn debugger_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Save Breakpoints",
-                description: "Whether breakpoints should be reused across Zed sessions.",
+                title: "保存断点",
+                description: "断点是否应在 Zed 会话之间重复使用。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("debugger.save_breakpoints"),
@@ -6502,8 +6502,8 @@ fn debugger_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Timeout",
-                description: "Time in milliseconds until timeout error when connecting to a TCP debug adapter.",
+                title: "超时",
+                description: "连接到 TCP 调试适配器时的超时时间（毫秒）。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("debugger.timeout"),
@@ -6516,8 +6516,8 @@ fn debugger_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Log DAP Communications",
-                description: "Whether to log messages between active debug adapters and Zed.",
+                title: "记录 DAP 通信",
+                description: "是否记录活动调试适配器与 Zed 之间的消息。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("debugger.log_dap_communications"),
@@ -6539,8 +6539,8 @@ fn debugger_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Format DAP Log Messages",
-                description: "Whether to format DAP messages when adding them to debug adapter logger.",
+                title: "格式化 DAP 日志消息",
+                description: "将 DAP 消息添加到调试适配器日志时是否格式化。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("debugger.format_dap_log_messages"),
@@ -6565,7 +6565,7 @@ fn debugger_page() -> SettingsPage {
     }
 
     SettingsPage {
-        title: "Debugger",
+        title: "调试器",
         items: concat_sections![general_section()],
     }
 }
@@ -6573,12 +6573,12 @@ fn debugger_page() -> SettingsPage {
 fn terminal_page() -> SettingsPage {
     fn environment_section() -> [SettingsPageItem; 5] {
         [
-                SettingsPageItem::SectionHeader("Environment"),
+                SettingsPageItem::SectionHeader("环境"),
                 SettingsPageItem::DynamicItem(DynamicItem {
                     discriminant: SettingItem {
                         files: USER | PROJECT,
                         title: "Shell",
-                        description: "What shell to use when opening a terminal.",
+                        description: "打开终端时使用的 shell。",
                         field: Box::new(SettingField {
                             organization_override: None,
                             json_path: Some("terminal.shell$"),
