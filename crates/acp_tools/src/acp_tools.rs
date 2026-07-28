@@ -741,7 +741,7 @@ impl Render for AcpTools {
                             )
                             .child(
                                 CopyButton::new("copy-all-messages", copied_messages)
-                                    .tooltip_label("Copy All Messages")
+                                    .tooltip_label("复制所有消息")
                                     .disabled(!has_messages),
                             )
                             .child(

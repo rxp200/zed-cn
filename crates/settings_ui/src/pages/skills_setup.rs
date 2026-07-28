@@ -297,7 +297,7 @@ fn render_skill_row(
                     )),
                 )
                 .child(
-                    Button::new(SharedString::from(format!("open-{}", skill.name)), "Open")
+                    Button::new(SharedString::from(format!("open-{}", skill.name)), "打开")
                         .tab_index(0_isize)
                         .style(ButtonStyle::OutlinedGhost)
                         .size(ButtonSize::Medium)

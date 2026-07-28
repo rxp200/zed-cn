@@ -231,7 +231,7 @@ impl Render for ProfileSelector {
                     .gap_1()
                     .child(
                         container()
-                            .child(Label::new("Change Profile"))
+                            .child(Label::new("更改配置文件"))
                             .child(KeyBinding::for_action(&ToggleProfileSelector, cx)),
                     )
                     .child(
@@ -239,7 +239,7 @@ impl Render for ProfileSelector {
                             .pt_1()
                             .border_t_1()
                             .border_color(cx.theme().colors().border_variant)
-                            .child(Label::new("Cycle Through Profiles"))
+                            .child(Label::new("循环切换配置文件"))
                             .child(KeyBinding::for_action(&CycleModeSelector, cx)),
                     )
                     .into_any()
@@ -752,7 +752,7 @@ impl PickerDelegate for ProfilePickerDelegate {
                                                 .color(Color::Warning),
                                         )
                                         .child(
-                                            Label::new("Disabled in Restricted Mode")
+                                            Label::new("在受限模式下已禁用")
                                                 .size(LabelSize::Small),
                                         ),
                                 )

@@ -2316,7 +2316,7 @@ impl ConversationView {
                     .map(|this| {
                         if show_fallback_description {
                             this.child(
-                                Label::new("Choose one of the following authentication options:")
+                                Label::new("请选择以下认证方式之一：")
                                     .size(LabelSize::Small)
                                     .color(Color::Muted),
                             )
@@ -3213,7 +3213,7 @@ impl ConversationView {
     fn create_copy_button(&self, message: impl Into<String>) -> impl IntoElement {
         let message = message.into();
 
-        CopyButton::new("copy-error-message", message).tooltip_label("Copy Error Message")
+        CopyButton::new("copy-error-message", message).tooltip_label("复制错误消息")
     }
 
     pub(crate) fn reauthenticate(&mut self, window: &mut Window, cx: &mut Context<Self>) {

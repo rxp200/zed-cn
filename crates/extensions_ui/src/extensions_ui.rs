@@ -780,7 +780,7 @@ impl ExtensionsPage {
                                 }),
                             )
                             .child(
-                                Button::new(extension_button_id(&extension.id, ExtensionOperation::Remove), "Uninstall")
+                                Button::new(extension_button_id(&extension.id, ExtensionOperation::Remove), "卸载")
                                     .color(Color::Accent)
                                     .disabled(matches!(status, ExtensionStatus::Removing))
                                     .on_click({
@@ -1252,7 +1252,7 @@ impl ExtensionsPage {
                     None
                 } else {
                     Some(
-                        Button::new(extension_button_id(&extension.id, ExtensionOperation::Upgrade), "Upgrade")
+                        Button::new(extension_button_id(&extension.id, ExtensionOperation::Upgrade), "升级")
                           .style(ButtonStyle::Tinted(ui::TintColor::Accent))
                             .when(!is_compatible, |upgrade_button| {
                                 upgrade_button.disabled(true).tooltip({

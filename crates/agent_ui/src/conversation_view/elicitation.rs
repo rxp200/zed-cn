@@ -1884,7 +1884,7 @@ impl<'a> ElicitationCard<'a> {
                             h_flex()
                                 .gap_1()
                                 .child(
-                                    Label::new("Destination")
+                                    Label::new("目标")
                                         .size(LabelSize::Small)
                                         .color(Color::Muted),
                                 )
@@ -1996,7 +1996,7 @@ impl<'a> ElicitationCard<'a> {
             )
             .when(!is_accepted_url, |this| {
                 this.child(
-                    Button::new(("elicitation-decline", self.entry_ix), "Decline")
+                    Button::new(("elicitation-decline", self.entry_ix), "拒绝")
                         .start_icon(
                             Icon::new(IconName::Close)
                                 .size(IconSize::XSmall)
@@ -2008,7 +2008,7 @@ impl<'a> ElicitationCard<'a> {
                         }),
                 )
                 .child(
-                    Button::new(("elicitation-cancel", self.entry_ix), "Cancel")
+                    Button::new(("elicitation-cancel", self.entry_ix), "取消")
                         .label_size(LabelSize::Small)
                         .on_click(move |_, window, cx| {
                             on_cancel(cancel_id.clone(), window, cx);
@@ -2017,7 +2017,7 @@ impl<'a> ElicitationCard<'a> {
             })
             .when(is_accepted_url, |this| {
                 this.child(
-                    Button::new(("elicitation-dismiss-url", self.entry_ix), "Cancel")
+                    Button::new(("elicitation-dismiss-url", self.entry_ix), "取消")
                         .label_size(LabelSize::Small)
                         .on_click(move |_, window, cx| {
                             on_dismiss_url(dismiss_id.clone(), window, cx);

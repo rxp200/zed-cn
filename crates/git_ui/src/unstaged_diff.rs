@@ -140,7 +140,7 @@ impl DiffHunkDelegate for UnstagedDiffDelegate {
             .block_mouse_except_scroll()
             .shadow_md()
             .child(
-                Button::new(("stage", row as u64), "Stage")
+                Button::new(("stage", row as u64), "暂存")
                     .alpha(if status.is_pending() { 0.66 } else { 1.0 })
                     .tooltip(Tooltip::text("暂存代码块"))
                     .on_click({
@@ -158,7 +158,7 @@ impl DiffHunkDelegate for UnstagedDiffDelegate {
                     }),
             )
             .child(
-                Button::new(("restore", row as u64), "Restore")
+                Button::new(("restore", row as u64), "恢复")
                     .tooltip(Tooltip::text("恢复代码块"))
                     .on_click({
                         let editor = editor.clone();

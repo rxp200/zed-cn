@@ -274,7 +274,7 @@ fn render_tool_list_item(
         )
         .child({
             let tool_name = tool.name;
-            Button::new(format!("configure-{}", tool.id), "Configure")
+            Button::new(format!("configure-{}", tool.id), "配置")
                 .tab_index(tool_index as isize)
                 .style(ButtonStyle::OutlinedGhost)
                 .size(ButtonSize::Medium)

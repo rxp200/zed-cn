@@ -382,7 +382,7 @@ impl AgentRegistryPage {
 
     fn render_missing_agent(&self) -> AgentRegistryCard {
         AgentRegistryCard::new().child(
-            Label::new("Missing registry entry.")
+            Label::new("缺少注册表条目。")
                 .size(LabelSize::Small)
                 .color(Color::Muted),
         )
@@ -456,7 +456,7 @@ impl AgentRegistryPage {
                             .child(Label::new(format!("v{}", agent.version())).color(Color::Muted))
                             .when(!supports_current_platform, |this| {
                                 this.child(
-                                    Label::new("Not supported on this platform")
+                                    Label::new("此平台不支持")
                                         .size(LabelSize::Small)
                                         .color(Color::Warning),
                                 )

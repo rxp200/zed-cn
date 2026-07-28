@@ -545,7 +545,7 @@ impl ManageProfilesModal {
                             h_flex()
                                 .gap_1()
                                 .child(
-                                    Label::new("Customize")
+                                    Label::new("自定义")
                                         .size(LabelSize::Small)
                                         .color(Color::Muted),
                                 )
@@ -589,7 +589,7 @@ impl ManageProfilesModal {
                             this.child(ListSeparator)
                                 .child(
                                     div().pl_2().pb_1().child(
-                                        Label::new("Custom Profiles")
+                                        Label::new("自定义配置文件")
                                             .size(LabelSize::Small)
                                             .color(Color::Muted),
                                     ),
@@ -618,7 +618,7 @@ impl ManageProfilesModal {
                                         .inset(true)
                                         .spacing(ListItemSpacing::Sparse)
                                         .start_slot(Icon::new(IconName::Plus))
-                                        .child(Label::new("Add New Profile"))
+                                        .child(Label::new("添加新配置文件"))
                                         .on_click({
                                             cx.listener(move |this, _, window, cx| {
                                                 this.new_profile(None, window, cx);
@@ -728,7 +728,7 @@ impl ManageProfilesModal {
                                                 .size(IconSize::Small)
                                                 .color(Color::Muted),
                                         )
-                                        .child(Label::new("Fork Profile"))
+                                        .child(Label::new("派生配置文件"))
                                         .on_click({
                                             let profile_id = mode.profile_id.clone();
                                             cx.listener(move |this, _, window, cx| {
@@ -769,7 +769,7 @@ impl ManageProfilesModal {
                                                 .size(IconSize::Small)
                                                 .color(Color::Muted),
                                         )
-                                        .child(Label::new("Configure Default Model"))
+                                        .child(Label::new("配置默认模型"))
                                         .on_click({
                                             let profile_id = mode.profile_id.clone();
                                             cx.listener(move |this, _, window, cx| {
@@ -810,7 +810,7 @@ impl ManageProfilesModal {
                                                 .size(IconSize::Small)
                                                 .color(Color::Muted),
                                         )
-                                        .child(Label::new("Configure Built-in Tools"))
+                                        .child(Label::new("配置内置工具"))
                                         .on_click({
                                             let profile_id = mode.profile_id.clone();
                                             cx.listener(move |this, _, window, cx| {
@@ -847,7 +847,7 @@ impl ManageProfilesModal {
                                                 .size(IconSize::Small)
                                                 .color(Color::Muted),
                                         )
-                                        .child(Label::new("Configure MCP Tools"))
+                                        .child(Label::new("配置 MCP 工具"))
                                         .on_click({
                                             let profile_id = mode.profile_id.clone();
                                             cx.listener(move |this, _, window, cx| {
@@ -884,7 +884,7 @@ impl ManageProfilesModal {
                                                 .size(IconSize::Small)
                                                 .color(Color::Error),
                                         )
-                                        .child(Label::new("Delete Profile").color(Color::Error))
+                                        .child(Label::new("删除配置文件").color(Color::Error))
                                         .disabled(builtin_profiles::is_builtin(&mode.profile_id))
                                         .on_click({
                                             let profile_id = mode.profile_id.clone();
@@ -918,7 +918,7 @@ impl ManageProfilesModal {
                                                 .size(IconSize::Small)
                                                 .color(Color::Muted),
                                         )
-                                        .child(Label::new("Go Back"))
+                                        .child(Label::new("返回"))
                                         .end_slot(
                                             div().child(
                                                 KeyBinding::for_action_in(
@@ -970,7 +970,7 @@ impl Render for ManageProfilesModal {
                             .size(IconSize::Small)
                             .color(Color::Muted),
                     )
-                    .child(Label::new("Go Back"))
+                    .child(Label::new("返回"))
                     .end_slot(
                         div().child(
                             KeyBinding::for_action_in(&menu::Cancel, &self.focus_handle, cx)

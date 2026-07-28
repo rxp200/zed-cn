@@ -110,7 +110,7 @@ impl DiffHunkDelegate for StagedDiffDelegate {
             .block_mouse_except_scroll()
             .shadow_md()
             .child(
-                Button::new(("unstage", row as u64), "Unstage")
+                Button::new(("unstage", row as u64), "取消暂存")
                     .alpha(if status.is_pending() { 0.66 } else { 1.0 })
                     .tooltip(Tooltip::text("取消暂存代码块"))
                     .on_click({
