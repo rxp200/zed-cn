@@ -79,55 +79,55 @@ fn active_room(cx: &App) -> Option<Entity<Room>> {
 
 fn quality_label(quality: Option<ConnectionQuality>) -> (&'static str, Color) {
     match quality {
-        Some(ConnectionQuality::Excellent) => ("Excellent", Color::Success),
-        Some(ConnectionQuality::Good) => ("Good", Color::Success),
-        Some(ConnectionQuality::Poor) => ("Poor", Color::Warning),
-        Some(ConnectionQuality::Lost) => ("Lost", Color::Error),
+        Some(ConnectionQuality::Excellent) => ("极佳", Color::Success),
+        Some(ConnectionQuality::Good) => ("良好", Color::Success),
+        Some(ConnectionQuality::Poor) => ("较差", Color::Warning),
+        Some(ConnectionQuality::Lost) => ("已断开", Color::Error),
         None => ("—", Color::Muted),
     }
 }
 
 fn metric_rating(label: &str, value_ms: f64) -> (&'static str, Color) {
     match label {
-        "Latency" => {
+        "延迟" => {
             if value_ms < 100.0 {
-                ("Normal", Color::Success)
+                ("正常", Color::Success)
             } else if value_ms < 300.0 {
-                ("High", Color::Warning)
+                ("高", Color::Warning)
             } else {
-                ("Poor", Color::Error)
+                ("差", Color::Error)
             }
         }
-        "Jitter" => {
+        "抖动" => {
             if value_ms < 30.0 {
-                ("Normal", Color::Success)
+                ("正常", Color::Success)
             } else if value_ms < 75.0 {
-                ("High", Color::Warning)
+                ("高", Color::Warning)
             } else {
-                ("Poor", Color::Error)
+                ("差", Color::Error)
             }
         }
-        _ => ("Normal", Color::Success),
+        _ => ("正常", Color::Success),
     }
 }
 
 fn input_lag_rating(value_ms: f64) -> (&'static str, Color) {
     if value_ms < 20.0 {
-        ("Normal", Color::Success)
+        ("正常", Color::Success)
     } else if value_ms < 50.0 {
-        ("High", Color::Warning)
+        ("高", Color::Warning)
     } else {
-        ("Poor", Color::Error)
+        ("差", Color::Error)
     }
 }
 
 fn packet_loss_rating(loss_pct: f64) -> (&'static str, Color) {
     if loss_pct < 1.0 {
-        ("Normal", Color::Success)
+        ("正常", Color::Success)
     } else if loss_pct < 5.0 {
-        ("High", Color::Warning)
+        ("高", Color::Warning)
     } else {
-        ("Poor", Color::Error)
+        ("差", Color::Error)
     }
 }
 
@@ -210,8 +210,8 @@ impl Render for CallStatsModal {
                             |v| packet_loss_rating(v),
                         ))
                         .child(self.render_metric_row(
-                            "Input lag",
-                            "Delay from audio capture to WebRTC",
+                            "输入延迟",
+                            "从音频捕获到 WebRTC 的延迟",
                             stats.input_lag.map(|d| d.as_secs_f64() * 1000.0),
                             |v| format!("{:.1}ms", v),
                             |v| input_lag_rating(v),

@@ -840,7 +840,7 @@ fn build_conflict_resolution_prompt(conflicts: &[ConflictContent]) -> Vec<acp::C
         let conflict = &conflicts[0];
 
         blocks.push(acp::ContentBlock::Text(acp::TextContent::new(
-            "Please resolve the following merge conflict in ",
+            "请解决以下合并冲突：",
         )));
         let mention = MentionUri::File {
             abs_path: PathBuf::from(conflict.file_path.clone()),
