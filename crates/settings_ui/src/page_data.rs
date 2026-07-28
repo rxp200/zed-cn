@@ -2256,7 +2256,7 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Show Folds",
+                title: "显示折叠",
                 description: "在装订线中显示代码折叠控件。",
                 field: Box::new(SettingField {
                     organization_override: None,
