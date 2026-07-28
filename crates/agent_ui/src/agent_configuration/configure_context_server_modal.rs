@@ -968,7 +968,7 @@ impl ConfigureContextServerModal {
                             .color(Color::Muted),
                     )
                     .child(
-                        Label::new("Authenticate to connect this server")
+                        Label::new("认证以连接此服务器")
                             .size(LabelSize::Small)
                             .color(Color::Muted),
                     ),
@@ -1074,7 +1074,7 @@ impl ConfigureContextServerModal {
                             .with_rotate_animation(3),
                     )
                     .child(
-                        Label::new("Authenticating…")
+                        Label::new("正在认证…")
                             .size(LabelSize::Small)
                             .color(Color::Muted),
                     ),

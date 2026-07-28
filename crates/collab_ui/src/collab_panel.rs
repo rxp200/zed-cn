@@ -1176,7 +1176,7 @@ impl CollabPanel {
         });
 
         let end_slot = if is_pending {
-            Label::new("Calling").color(Color::Muted).into_any_element()
+            Label::new("通话中").color(Color::Muted).into_any_element()
         } else if is_current_user {
             IconButton::new("leave-call", IconName::Exit)
                 .icon_size(IconSize::Small)
@@ -1184,9 +1184,9 @@ impl CollabPanel {
                 .on_click(move |_, window, cx| Self::leave_call(window, cx))
                 .into_any_element()
         } else if role == proto::ChannelRole::Guest {
-            Label::new("Guest").color(Color::Muted).into_any_element()
+            Label::new("访客").color(Color::Muted).into_any_element()
         } else if role == proto::ChannelRole::Talker {
-            Label::new("Mic only")
+            Label::new("仅麦克风")
                 .color(Color::Muted)
                 .into_any_element()
         } else {
@@ -1296,7 +1296,7 @@ impl CollabPanel {
                             .color(Color::Muted),
                     ),
             )
-            .child(Label::new("Screen"))
+            .child(Label::new("屏幕"))
             .when_some(peer_id, |this, _| {
                 this.on_click(cx.listener(move |this, _, window, cx| {
                     this.workspace
@@ -2988,7 +2988,7 @@ impl CollabPanel {
                         this.child(
                             CopyButton::new("copy-channel-link", channel_link)
                                 .visible_on_hover("section-header")
-                                .tooltip_label("Copy Channel Link"),
+                                .tooltip_label("复制频道链接"),
                         )
                     })
                     .child(
@@ -3316,7 +3316,7 @@ impl CollabPanel {
     fn render_contact_placeholder(&self, is_selected: bool, cx: &mut Context<Self>) -> ListItem {
         ListItem::new("contact-placeholder")
             .child(Icon::new(IconName::Plus))
-            .child(Label::new("Add a Contact"))
+            .child(Label::new("添加联系人"))
             .toggle_state(is_selected)
             .on_click(cx.listener(|this, _, window, cx| this.toggle_contact_finder(window, cx)))
     }
@@ -4121,7 +4121,7 @@ impl Render for JoinChannelTooltip {
                 .channel_participants(self.channel_id);
 
             container
-                .child(Label::new("Join Channel"))
+                .child(Label::new("加入频道"))
                 .children(participants.iter().map(|participant| {
                     h_flex()
                         .gap_2()

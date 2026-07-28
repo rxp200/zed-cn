@@ -381,7 +381,7 @@ fn render_subpage_item(
                 }),
         )
         .child(
-            Button::new(format!("configure-{}", provider_id.0), "Configure")
+            Button::new(format!("configure-{}", provider_id.0), "配置")
                 .style(ButtonStyle::OutlinedGhost)
                 .size(ButtonSize::Medium)
                 .end_icon(
@@ -822,7 +822,7 @@ fn render_model(
         .child(render_model_capabilities(kind, model, index, window, cx))
         .when(model_count > 1, |this| {
             this.child(
-                Button::new(("remove-model", index), "Remove Model")
+                Button::new(("remove-model", index), "移除模型")
                     .start_icon(
                         Icon::new(IconName::Trash)
                             .size(IconSize::XSmall)

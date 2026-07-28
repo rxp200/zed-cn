@@ -164,7 +164,7 @@ impl Render for CallStatsModal {
             .child(
                 h_flex()
                     .justify_between()
-                    .child(Label::new("Call Diagnostics").size(LabelSize::Large))
+                    .child(Label::new("通话诊断").size(LabelSize::Large))
                     .child(
                         Label::new(quality_text)
                             .size(LabelSize::Large)
@@ -176,7 +176,7 @@ impl Render for CallStatsModal {
                     h_flex()
                         .justify_center()
                         .py_4()
-                        .child(Label::new("Not in a call").color(Color::Muted)),
+                        .child(Label::new("当前不在通话中").color(Color::Muted)),
                 )
             })
             .when(is_connected, |this| {
@@ -186,7 +186,7 @@ impl Render for CallStatsModal {
                         .child(
                             h_flex()
                                 .gap_2()
-                                .child(Label::new("Network").weight(FontWeight::SEMIBOLD)),
+                                .child(Label::new("网络").weight(FontWeight::SEMIBOLD)),
                         )
                         .child(self.render_metric_row(
                             "Latency",

@@ -323,7 +323,7 @@ impl Output {
                             let full_error = format!("{}: {}\n{}", ename, evalue, traceback_text);
 
                             CopyButton::new("copy-full-error", full_error)
-                                .tooltip_label("Copy Full Error")
+                                .tooltip_label("复制完整错误")
                         })
                         .child(
                             IconButton::new(

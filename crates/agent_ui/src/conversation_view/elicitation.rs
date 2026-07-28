@@ -1655,9 +1655,9 @@ impl<'a> ElicitationCard<'a> {
             _ => None,
         };
         let (accept_label, accept_icon, accept_icon_color) = if open_url.is_some() {
-            ("Open", IconName::ArrowUpRight, Color::Muted)
+            ("打开", IconName::ArrowUpRight, Color::Muted)
         } else {
-            ("Submit", IconName::Check, Color::Success)
+            ("提交", IconName::Check, Color::Success)
         };
         let border_color = cx.theme().colors().border.opacity(0.8);
         let on_submit = self.handlers.on_submit.clone();
@@ -1692,7 +1692,7 @@ impl<'a> ElicitationCard<'a> {
                     }),
             )
             .child(
-                Button::new(("elicitation-decline", self.entry_ix), "Decline")
+                Button::new(("elicitation-decline", self.entry_ix), "拒绝")
                     .start_icon(
                         Icon::new(IconName::Close)
                             .size(IconSize::XSmall)
@@ -1704,7 +1704,7 @@ impl<'a> ElicitationCard<'a> {
                     }),
             )
             .child(
-                Button::new(("elicitation-cancel", self.entry_ix), "Cancel")
+                Button::new(("elicitation-cancel", self.entry_ix), "取消")
                     .label_size(LabelSize::Small)
                     .on_click(move |_, window, cx| {
                         on_cancel(cancel_id.clone(), window, cx);

@@ -351,7 +351,7 @@ impl Render for LanguageServerPrompt {
                                             "copy-description",
                                             request.message.clone(),
                                         )
-                                        .tooltip_label("Copy Description"),
+                                        .tooltip_label("复制描述"),
                                     )
                                     .child(
                                         IconButton::new(close_id, close_icon)
@@ -986,7 +986,7 @@ pub mod simple_message_notification {
                 .when_some(copy_text, |el, text| {
                     el.child(
                         CopyButton::new("copy-notification-message", text)
-                            .tooltip_label("Copy Message"),
+                            .tooltip_label("复制消息"),
                     )
                 })
                 .when(show_close_button, |el| {

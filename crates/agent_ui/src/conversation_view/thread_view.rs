@@ -430,7 +430,7 @@ fn render_cat_numbered_code_block(
                 .right_0()
                 .justify_end()
                 .visible_on_hover("read-file-code-block")
-                .child(CopyButton::new(copy_button_id, code).tooltip_label("Copy Code")),
+                .child(CopyButton::new(copy_button_id, code).tooltip_label("复制代码")),
         )
         .into_any_element()
 }
@@ -2245,7 +2245,7 @@ impl ThreadView {
     }
 
     /// The shared "actually send this entry" path, used by fast-track,
-    /// auto-processing on Stopped, and "Send Now". The entry must already have
+    /// auto-processing on Stopped, and "立即发送". The entry must already have
     /// been removed from the queue.
     pub fn dispatch_queued_entry(
         &mut self,
@@ -3262,7 +3262,7 @@ impl ThreadView {
                                     .tooltip({
                                         move |_, cx| {
                                             Tooltip::with_meta(
-                                                "Go to File",
+                                                "转到文件",
                                                 None,
                                                 full_path.clone(),
                                                 cx,
@@ -3322,7 +3322,7 @@ impl ThreadView {
                     }),
             )
             .child(
-                Button::new(("reject-file", index), "Reject")
+                Button::new(("reject-file", index), "拒绝")
                     .label_size(LabelSize::Small)
                     .disabled(pending_edits)
                     .on_click({
@@ -3347,7 +3347,7 @@ impl ThreadView {
                     }),
             )
             .child(
-                Button::new(("keep-file", index), "Keep")
+                Button::new(("keep-file", index), "保留")
                     .label_size(LabelSize::Small)
                     .disabled(pending_edits)
                     .on_click({
@@ -3431,7 +3431,7 @@ impl ThreadView {
                         .border_b_1()
                         .border_color(cx.theme().colors().border)
                         .child(
-                            Label::new("Subagents Awaiting Permission:")
+                            Label::new("等待权限的子 Agent：")
                                 .size(LabelSize::Small)
                                 .color(Color::Muted),
                         )
@@ -3475,7 +3475,7 @@ impl ThreadView {
                                 )
                                 .child(
                                     div().visible_on_hover(&group).child(
-                                        Label::new("Scroll to Subagent")
+                                        Label::new("滚动到子 Agent")
                                             .size(LabelSize::Small)
                                             .color(Color::Muted)
                                             .truncate(),
@@ -3535,7 +3535,7 @@ impl ThreadView {
         let label: SharedString = if pending_count > 1 {
             format!("Awaiting Confirmation ({pending_count})").into()
         } else {
-            "Awaiting Confirmation".into()
+            "等待确认".into()
         };
 
         let header = h_flex()
@@ -3647,7 +3647,7 @@ impl ThreadView {
                 .gap_1()
                 .truncate()
                 .child(
-                    Label::new("Current:")
+                    Label::new("当前：")
                         .size(LabelSize::Small)
                         .color(Color::Muted),
                 )
@@ -3836,7 +3836,7 @@ impl ThreadView {
                             .border_b_1()
                             .border_color(self.tool_card_border_color(cx))
                             .child(
-                                Label::new("Completed Plan")
+                                Label::new("已完成计划")
                                     .size(LabelSize::Small)
                                     .color(Color::Muted),
                             )
@@ -4060,7 +4060,7 @@ impl ThreadView {
                             };
 
                             this.child(
-                                Label::new("Edits")
+                                Label::new("编辑")
                                     .size(LabelSize::Small)
                                     .color(Color::Muted),
                             )
@@ -4395,7 +4395,7 @@ impl ThreadView {
     ) -> impl IntoElement {
         let focus_handle = self.message_editor.focus_handle(cx);
 
-        Button::new(("steer", index), "Steer")
+        Button::new(("steer", index), "引导")
             .label_size(LabelSize::Small)
             .toggle_state(steer_on)
             .selected_style(ButtonStyle::Tinted(TintColor::Accent))
@@ -4407,7 +4407,7 @@ impl ThreadView {
             })
             .tooltip(move |_window, cx| {
                 Tooltip::with_meta(
-                    "Steer",
+                    "引导",
                     None,
                     "Interrupt the agent at its next step to send this message. \
                      When off, queued messages wait for the agent to finish.",
@@ -4500,7 +4500,7 @@ impl ThreadView {
                                 ))
                             })
                             .child(
-                                Button::new(("send_now_focused", index), "Send Now")
+                                Button::new(("send_now_focused", index), "立即发送")
                                     .label_size(LabelSize::Small)
                                     .style(ButtonStyle::Outlined)
                                     .key_binding(
@@ -4574,7 +4574,7 @@ impl ThreadView {
                                 ))
                             })
                             .child(
-                                Button::new(("send_now", index), "Send Now")
+                                Button::new(("send_now", index), "立即发送")
                                     .label_size(LabelSize::Small)
                                     .when(is_next, |this| this.style(ButtonStyle::Outlined))
                                     .when(is_next && message_editor.is_empty(cx), |this| {
@@ -5196,7 +5196,7 @@ impl ThreadView {
                     h_flex()
                         .gap_2()
                         .justify_between()
-                        .child(Label::new("Change Thinking Effort"))
+                        .child(Label::new("更改思考力度"))
                         .child(KeyBinding::for_action_in(
                             &ToggleThinkingEffortMenu,
                             &focus_handle,
@@ -5212,7 +5212,7 @@ impl ThreadView {
                             .justify_between()
                             .border_t_1()
                             .border_color(cx.theme().colors().border_variant)
-                            .child(Label::new("Cycle Thinking Effort"))
+                            .child(Label::new("循环切换思考力度"))
                             .child(KeyBinding::for_action_in(
                                 &CycleThinkingEffort,
                                 &focus_handle,
@@ -5250,7 +5250,7 @@ impl ThreadView {
             )
             .menu(move |window, cx| {
                 Some(ContextMenu::build(window, cx, |mut menu, _window, _cx| {
-                    menu = menu.header("Change Thinking Effort");
+                    menu = menu.header("更改思考力度");
 
                     for effort_level in supported_effort_levels.clone() {
                         let is_selected = selected
@@ -5372,7 +5372,7 @@ impl ThreadView {
                                     h_flex()
                                         .gap_2()
                                         .justify_between()
-                                        .child(Label::new("Queue and Send"))
+                                        .child(Label::new("加入队列并发送"))
                                         .child(KeyBinding::for_action_in(&Chat, &focus_handle, cx)),
                                 )
                                 .child(
@@ -5382,7 +5382,7 @@ impl ThreadView {
                                         .justify_between()
                                         .border_t_1()
                                         .border_color(cx.theme().colors().border_variant)
-                                        .child(Label::new("Send Immediately"))
+                                        .child(Label::new("立即发送"))
                                         .child(KeyBinding::for_action_in(
                                             &SendImmediately,
                                             &focus_handle,
@@ -5695,7 +5695,7 @@ impl Render for TokenUsageTooltip {
                             .child(
                                 h_flex()
                                     .gap_0p5()
-                                    .child(Label::new("Input:").color(Color::Muted).mr_0p5())
+                                    .child(Label::new("输入：").color(Color::Muted).mr_0p5())
                                     .child(Label::new(input_tokens))
                                     .child(Label::new("/").color(separator_color))
                                     .child(Label::new(input_max).color(Color::Muted)),
@@ -5703,7 +5703,7 @@ impl Render for TokenUsageTooltip {
                             .child(
                                 h_flex()
                                     .gap_0p5()
-                                    .child(Label::new("Output:").color(Color::Muted).mr_0p5())
+                                    .child(Label::new("输出：").color(Color::Muted).mr_0p5())
                                     .child(Label::new(output_tokens))
                                     .child(Label::new("/").color(separator_color))
                                     .child(Label::new(output_max).color(Color::Muted)),
@@ -5719,7 +5719,7 @@ impl Render for TokenUsageTooltip {
                             .border_t_1()
                             .border_color(cx.theme().colors().border_variant)
                             .child(
-                                Label::new("Cost")
+                                Label::new("费用")
                                     .color(Color::Muted)
                                     .size(LabelSize::Small),
                             )
@@ -5738,7 +5738,7 @@ impl Render for TokenUsageTooltip {
                                 .border_t_1()
                                 .border_color(cx.theme().colors().border_variant)
                                 .child(
-                                    Label::new("Rules")
+                                    Label::new("规则")
                                         .color(Color::Muted)
                                         .size(LabelSize::Small),
                                 )
@@ -6225,7 +6225,7 @@ impl ThreadView {
                                                     move |_, _| {
                                                         v_flex()
                                                             .gap_1()
-                                                            .child(Label::new("Unavailable Editing"))
+                                                            .child(Label::new("编辑不可用"))
                                                             .child(
                                                                 div().max_w_64().child(
                                                                     Label::new(format!(
@@ -6405,7 +6405,7 @@ impl ThreadView {
                                         .size(IconSize::Small),
                                 )
                                 .child(
-                                    Label::new("Subagent Output")
+                                    Label::new("子 Agent 输出")
                                         .size(LabelSize::Custom(self.tool_name_font_size()))
                                         .color(Color::Muted),
                                 ),
@@ -7282,7 +7282,7 @@ impl ThreadView {
                     )
                     .child(
                         div().min_w(rems(8.)).child(
-                            LoadingLabel::new("Awaiting Confirmation")
+                            LoadingLabel::new("等待确认")
                                 .size(LabelSize::Small)
                                 .color(Color::Muted),
                         ),
@@ -7710,7 +7710,7 @@ impl ThreadView {
         let run_command_label = if is_preview {
             Some(
                 h_flex().h_6().child(
-                    Label::new("Run Command")
+                    Label::new("运行命令")
                         .buffer_font(cx)
                         .size(LabelSize::XSmall)
                         .color(Color::Muted),
@@ -7731,7 +7731,7 @@ impl ThreadView {
             });
         let copy_button_id = SharedString::from(format!("{group}-copy-command"));
         let copy_button = CopyButton::new(copy_button_id, command_text)
-            .tooltip_label("Copy Command")
+            .tooltip_label("复制命令")
             .visible_on_hover(group.clone());
 
         v_flex()
@@ -7953,7 +7953,7 @@ impl ThreadView {
         let (title, detail, docs_section): (SharedString, SharedString, Option<&'static str>) =
             match reason {
                 SandboxNotAppliedReason::ErrorLinuxWsl(error) => (
-                    "Couldn't create a sandbox".into(),
+                    "无法创建沙箱".into(),
                     error.user_facing_message().into(),
                     Some(error.docs_section()),
                 ),
@@ -8294,7 +8294,7 @@ impl ThreadView {
                                         ),
                                     )
                                 }))
-                                .child(input_output_header("Output:".into())),
+                                .child(input_output_header("输出：".into())),
                         )
                     })
                     .children(
@@ -8698,7 +8698,7 @@ impl ThreadView {
                             h_flex()
                                 .gap_1()
                                 .child(
-                                    Label::new("Network access")
+                                    Label::new("网络访问")
                                         .size(LabelSize::Small)
                                         .color(Color::Muted),
                                 )
@@ -8794,7 +8794,7 @@ impl ThreadView {
                             h_flex()
                                 .gap_1()
                                 .child(
-                                    Label::new("Write access")
+                                    Label::new("写入权限")
                                         .size(LabelSize::Small)
                                         .color(Color::Muted),
                                 )
@@ -8846,7 +8846,7 @@ impl ThreadView {
                         .size(IconSize::Small),
                 )
                 .child(
-                    Label::new("Runs without the OS sandbox")
+                    Label::new("不使用操作系统沙箱运行")
                         .size(LabelSize::Small)
                         .color(Color::Muted),
                 )
@@ -8858,7 +8858,7 @@ impl ThreadView {
                 .py_1()
                 .gap_0p5()
                 .child(
-                    Label::new("Reason from agent")
+                    Label::new("Agent 原因")
                         .size(LabelSize::XSmall)
                         .color(Color::Muted)
                         .buffer_font(cx),
@@ -9082,7 +9082,7 @@ impl ThreadView {
                     .min_w_0()
                     .gap_0p5()
                     .child(
-                        Label::new("Couldn't create a sandbox")
+                        Label::new("无法创建沙箱")
                             .size(LabelSize::Small)
                             .color(Color::Muted),
                     )
@@ -9160,7 +9160,7 @@ impl ThreadView {
         tool_call_id: acp::ToolCallId,
         focus_handle: &FocusHandle,
         // When true, the "allow" choices are disabled (e.g. an unacknowledged
-        // surprising-Unicode warning is showing). "Deny"/"Retry" stay enabled.
+        // surprising-Unicode warning is showing). "拒绝"/"Retry" stay enabled.
         allow_disabled: bool,
         cx: &Context<Self>,
     ) -> Div {
@@ -9267,7 +9267,7 @@ impl ThreadView {
                 h_flex()
                     .gap_0p5()
                     .child(
-                        Button::new(("allow-btn", entry_ix), "Allow")
+                        Button::new(("allow-btn", entry_ix), "允许")
                             .disabled(allow_disabled)
                             .start_icon(
                                 Icon::new(IconName::Check)
@@ -9300,7 +9300,7 @@ impl ThreadView {
                             })),
                     )
                     .child(
-                        Button::new(("deny-btn", entry_ix), "Deny")
+                        Button::new(("deny-btn", entry_ix), "拒绝")
                             .start_icon(
                                 Icon::new(IconName::Close)
                                     .size(IconSize::XSmall)
@@ -10296,7 +10296,7 @@ impl ThreadView {
             .when_some(location, |this, _loc| {
                 this.child(
                     h_flex().w_full().justify_end().child(
-                        Button::new(("go-to-file", entry_ix), "Go to File")
+                        Button::new(("go-to-file", entry_ix), "转到文件")
                             .label_size(LabelSize::Small)
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.open_tool_call_location(entry_ix, 0, window, cx);
@@ -11262,7 +11262,7 @@ impl ThreadView {
     fn create_copy_button(&self, message: impl Into<String>) -> impl IntoElement {
         let message = message.into();
 
-        CopyButton::new("copy-error-message", message).tooltip_label("Copy Error Message")
+        CopyButton::new("copy-error-message", message).tooltip_label("复制错误消息")
     }
 
     fn dismiss_error_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -11360,7 +11360,7 @@ impl ThreadView {
                     .title(title)
                     .description(format!("{}\n{path_label}", issue.message))
                     .actions_slot(
-                        Button::new(("open-skill-file", index), "Open Skill")
+                        Button::new(("open-skill-file", index), "打开技能")
                             .style(ButtonStyle::Outlined)
                             .label_size(LabelSize::Small)
                             .on_click(cx.listener(move |_, _, window, cx| {
@@ -11705,7 +11705,7 @@ impl ThreadView {
                 h_flex()
                     .gap_1()
                     .child(
-                        Label::new("Anthropic will retain inference logs.")
+                        Label::new("Anthropic 将保留推理日志。")
                             .size(LabelSize::Small)
                             .color(Color::Muted),
                     )
