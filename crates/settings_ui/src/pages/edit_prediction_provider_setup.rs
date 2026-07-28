@@ -465,8 +465,8 @@ fn ollama_settings() -> Box<[SettingsPageItem]> {
             metadata: None,
         }),
         SettingsPageItem::SettingItem(SettingItem {
-            title: "Max Output Tokens",
-            description: "The maximum number of tokens to generate.",
+            title: "最大输出令牌数",
+            description: "要生成的最大令牌数。",
             field: Box::new(SettingField {
                 organization_override: None,
                 pick: |settings| {

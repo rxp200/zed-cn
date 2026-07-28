@@ -293,17 +293,17 @@ pub fn init(cx: &mut App) {
 
 fn extension_provides_label(provides: ExtensionProvides) -> &'static str {
     match provides {
-        ExtensionProvides::Themes => "Themes",
-        ExtensionProvides::IconThemes => "Icon Themes",
-        ExtensionProvides::Languages => "Languages",
-        ExtensionProvides::Grammars => "Grammars",
-        ExtensionProvides::LanguageServers => "Language Servers",
-        ExtensionProvides::ContextServers => "MCP Servers",
-        ExtensionProvides::AgentServers => "Agent Servers",
-        ExtensionProvides::SlashCommands => "Slash Commands",
-        ExtensionProvides::IndexedDocsProviders => "Indexed Docs Providers",
-        ExtensionProvides::Snippets => "Snippets",
-        ExtensionProvides::DebugAdapters => "Debug Adapters",
+        ExtensionProvides::Themes => "主题",
+        ExtensionProvides::IconThemes => "图标主题",
+        ExtensionProvides::Languages => "语言",
+        ExtensionProvides::Grammars => "语法",
+        ExtensionProvides::LanguageServers => "语言服务器",
+        ExtensionProvides::ContextServers => "MCP 服务器",
+        ExtensionProvides::AgentServers => "Agent 服务器",
+        ExtensionProvides::SlashCommands => "斜杠命令",
+        ExtensionProvides::IndexedDocsProviders => "索引文档提供者",
+        ExtensionProvides::Snippets => "代码片段",
+        ExtensionProvides::DebugAdapters => "调试适配器",
     }
 }
 
@@ -1187,21 +1187,21 @@ impl ExtensionsPage {
             ExtensionStatus::Upgrading => ExtensionCardButtons {
                 install_or_uninstall: Button::new(
                     extension_button_id(&extension.id, ExtensionOperation::Remove),
-                    "Uninstall",
+                    "卸载",
                 )
                 .style(ButtonStyle::OutlinedGhost)
                 .disabled(true),
                 configure: is_configurable.then(|| {
                     Button::new(
                         SharedString::from(format!("configure-{}", extension.id)),
-                        "Configure",
+                        "配置",
                     )
                     .disabled(true)
                 }),
                 upgrade: Some(
                     Button::new(
                         extension_button_id(&extension.id, ExtensionOperation::Upgrade),
-                        "Upgrade",
+                        "升级",
                     )
                     .disabled(true),
                 ),
@@ -1209,7 +1209,7 @@ impl ExtensionsPage {
             ExtensionStatus::Installed(installed_version) => ExtensionCardButtons {
                 install_or_uninstall: Button::new(
                     extension_button_id(&extension.id, ExtensionOperation::Remove),
-                    "Uninstall",
+                    "卸载",
                 )
                 .style(ButtonStyle::OutlinedGhost)
                 .on_click({
@@ -1226,7 +1226,7 @@ impl ExtensionsPage {
                 configure: is_configurable.then(|| {
                     Button::new(
                         SharedString::from(format!("configure-{}", extension.id)),
-                        "Configure",
+                        "配置",
                     )
                     .style(ButtonStyle::OutlinedGhost)
                     .on_click({

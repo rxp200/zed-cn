@@ -197,9 +197,9 @@ impl BreakpointList {
     ) {
         self.strip_mode = Some(prop);
         let placeholder = match prop {
-            ActiveBreakpointStripMode::Log => "Set Log Message",
-            ActiveBreakpointStripMode::Condition => "Set Condition",
-            ActiveBreakpointStripMode::HitCondition => "Set Hit Condition",
+            ActiveBreakpointStripMode::Log => "设置日志消息",
+            ActiveBreakpointStripMode::Condition => "设置条件",
+            ActiveBreakpointStripMode::HitCondition => "设置命中条件",
         };
         let mut is_exception_breakpoint = true;
         let active_value = self.selected_ix.and_then(|ix| {
@@ -585,21 +585,21 @@ impl BreakpointList {
         let focus_handle = self.focus_handle.clone();
 
         let remove_breakpoint_tooltip = selection_kind.map(|(kind, _)| match kind {
-            SelectedBreakpointKind::Source => "Remove breakpoint from a breakpoint list",
+            SelectedBreakpointKind::Source => "从断点列表中移除断点",
             SelectedBreakpointKind::Exception => {
                 "Exception Breakpoints cannot be removed from the breakpoint list"
             }
-            SelectedBreakpointKind::Data => "Remove data breakpoint from a breakpoint list",
+            SelectedBreakpointKind::Data => "从断点列表中移除数据断点",
         });
 
         let toggle_label = selection_kind.map(|(_, is_enabled)| {
             if is_enabled {
                 (
-                    "Disable Breakpoint",
-                    "Disable a breakpoint without removing it from the list",
+                    "禁用断点",
+                    "禁用断点而不从列表中移除",
                 )
             } else {
-                ("Enable Breakpoint", "Re-enable a breakpoint")
+                ("启用断点", "重新启用断点")
             }
         });
 
@@ -641,7 +641,7 @@ impl BreakpointList {
                             let focus_handle = focus_handle.clone();
                             move |_window, cx| {
                                 Tooltip::with_meta_in(
-                                    "Remove Breakpoint",
+                                    "移除断点",
                                     Some(&UnsetBreakpoint),
                                     tooltip,
                                     &focus_handle,
@@ -1433,7 +1433,7 @@ impl RenderOnce for BreakpointOptionsStrip {
                         .on_click(self.on_click_callback(ActiveBreakpointStripMode::Log))
                         .tooltip(|_window, cx|  {
                             Tooltip::with_meta(
-                                "Set Log Message",
+                                "设置日志消息",
                                 None,
                                 "Set log message to display (instead of stopping) when a breakpoint is hit.",
                                 cx,
@@ -1469,7 +1469,7 @@ impl RenderOnce for BreakpointOptionsStrip {
                             .on_click(self.on_click_callback(ActiveBreakpointStripMode::Condition))
                             .tooltip(|_window, cx|  {
                                 Tooltip::with_meta(
-                                    "Set Condition",
+                                    "设置条件",
                                     None,
                                     "Set condition to evaluate when a breakpoint is hit. Program execution will stop only when the condition is met.",
                                     cx,
@@ -1504,7 +1504,7 @@ impl RenderOnce for BreakpointOptionsStrip {
                         .on_click(self.on_click_callback(ActiveBreakpointStripMode::HitCondition))
                         .tooltip(|_window, cx|  {
                             Tooltip::with_meta(
-                                "Set Hit Condition",
+                                "设置命中条件",
                                 None,
                                 "Set expression that controls how many hits of the breakpoint are ignored.",
                                 cx,

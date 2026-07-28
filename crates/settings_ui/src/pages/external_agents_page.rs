@@ -197,8 +197,8 @@ fn render_agent(
     });
 
     let remove_tooltip = match source {
-        ExternalAgentSource::Registry => "Remove Registry Agent",
-        ExternalAgentSource::Custom => "Remove Custom Agent",
+        ExternalAgentSource::Registry => "移除注册表 Agent",
+        ExternalAgentSource::Custom => "移除自定义 Agent",
     };
 
     let remove_button = IconButton::new(format!("uninstall-{}", id_string), IconName::Trash)
@@ -284,7 +284,7 @@ pub(crate) fn render_add_agent_popover(
         .menu(move |window, cx| {
             let settings_window = settings_window.clone();
             Some(ContextMenu::build(window, cx, move |menu, _window, _cx| {
-                menu.entry("Install from Registry", None, move |_window, cx| {
+                menu.entry("从注册表安装", None, move |_window, cx| {
                     if let Some(original_window) = original_window {
                         cx.activate(true);
                         original_window
@@ -295,7 +295,7 @@ pub(crate) fn render_add_agent_popover(
                             .log_err();
                     }
                 })
-                .entry("Add Custom Agent", None, move |window, cx| {
+                .entry("添加自定义 Agent", None, move |window, cx| {
                     settings_window
                         .update(cx, |this, cx| {
                             open_custom_agent_form(this, None, window, cx);
@@ -454,8 +454,8 @@ fn new_kv_row(
     cx: &mut Context<SettingsWindow>,
 ) -> KeyValueRow {
     KeyValueRow {
-        key: new_input("Key", key, window, cx),
-        value: new_input("Value", value, window, cx),
+        key: new_input("键", key, window, cx),
+        value: new_input("值", value, window, cx),
     }
 }
 
@@ -477,7 +477,7 @@ pub(crate) fn open_custom_agent_form(
 
     settings_window.push_dynamic_sub_page(
         title,
-        "Agent Configuration",
+        "Agent 配置",
         Some("agent_servers"),
         false,
         render_custom_agent_form_page,
@@ -503,7 +503,7 @@ fn render_custom_agent_form_page(
         .child(
             crate::render_settings_item_layout(
                 settings_window,
-                "Agent Name",
+                "Agent 名称",
                 "Required. A unique name used to identify this agent.",
                 input_box(&form.name, cx).into_any_element(),
                 None,
@@ -517,7 +517,7 @@ fn render_custom_agent_form_page(
         .child(
             crate::render_settings_item_layout(
                 settings_window,
-                "Command",
+                "命令",
                 "Required. Path to the executable that launches the agent.",
                 input_box(&form.command, cx).into_any_element(),
                 None,
@@ -531,7 +531,7 @@ fn render_custom_agent_form_page(
         .child(
             crate::render_settings_item_layout(
                 settings_window,
-                "Arguments",
+                "参数",
                 "Space-separated arguments passed to the command.",
                 input_box(&form.args, cx).into_any_element(),
                 None,
@@ -638,7 +638,7 @@ fn render_env_section(
 
     crate::render_settings_item_layout(
         settings_window,
-        "Environment Variables",
+        "环境变量",
         "Environment variables provided to the agent process.",
         control,
         None,

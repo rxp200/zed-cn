@@ -1251,7 +1251,7 @@ impl CollabPanel {
                         let app_state = workspace.app_state().clone();
                         workspace::join_in_room_project(project_id, host_user_id, app_state, cx)
                             .detach_and_prompt_err(
-                                "Failed to join project",
+                                "加入项目失败",
                                 window,
                                 cx,
                                 |error, _, _| Some(format!("{error:#}")),
@@ -1392,7 +1392,7 @@ impl CollabPanel {
         let context_menu = ContextMenu::build(window, cx, |mut context_menu, window, _| {
             if role == proto::ChannelRole::Guest {
                 context_menu = context_menu.entry(
-                    "Grant Mic Access",
+                    "授予麦克风访问权限",
                     None,
                     window.handler_for(&this, move |_, window, cx| {
                         ActiveCall::global(cx)
@@ -1419,7 +1419,7 @@ impl CollabPanel {
             }
             if role == proto::ChannelRole::Guest || role == proto::ChannelRole::Talker {
                 context_menu = context_menu.entry(
-                    "Grant Write Access",
+                    "授予写入访问权限",
                     None,
                     window.handler_for(&this, move |_, window, cx| {
                         ActiveCall::global(cx)
@@ -1839,7 +1839,7 @@ impl CollabPanel {
                         let app_state = workspace.read(cx).app_state().clone();
                         workspace::join_in_room_project(*project_id, *host_user_id, app_state, cx)
                             .detach_and_prompt_err(
-                                "Failed to join project",
+                                "加入项目失败",
                                 window,
                                 cx,
                                 |error, _, _| Some(format!("{error:#}")),
@@ -2103,7 +2103,7 @@ impl CollabPanel {
     fn leave_call(window: &mut Window, cx: &mut App) {
         ActiveCall::global(cx)
             .update(cx, |call, cx| call.hang_up(cx))
-            .detach_and_prompt_err("Failed to hang up", window, cx, |_, _, _| None);
+            .detach_and_prompt_err("挂断失败", window, cx, |_, _, _| None);
     }
 
     fn toggle_contact_finder(&mut self, window: &mut Window, cx: &mut Context<Self>) {

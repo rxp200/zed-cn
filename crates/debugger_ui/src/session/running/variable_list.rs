@@ -724,8 +724,8 @@ impl VariableList {
                                             format!(
                                                 "Toggle {} Data Breakpoint",
                                                 match access {
-                                                    dap::DataBreakpointAccessType::Read => "Read",
-                                                    dap::DataBreakpointAccessType::Write => "Write",
+                                                    dap::DataBreakpointAccessType::Read => "读取",
+                                                    dap::DataBreakpointAccessType::Write => "写入",
                                                     dap::DataBreakpointAccessType::ReadWrite =>
                                                         "Read/Write",
                                                 }
@@ -740,7 +740,7 @@ impl VariableList {
                                     menu
                                 } else {
                                     menu.action(
-                                        "Toggle Data Breakpoint",
+                                        "切换数据断点",
                                         crate::ToggleDataBreakpoint { access_type: None }
                                             .boxed_clone(),
                                     )
@@ -1346,7 +1346,7 @@ impl VariableList {
                         }
                     })
                     .tooltip(move |_window, cx| {
-                        Tooltip::for_action_in("Remove Watch", &RemoveWatch, &focus_handle, cx)
+                        Tooltip::for_action_in("移除监视", &RemoveWatch, &focus_handle, cx)
                     })
                     .icon_size(ui::IconSize::Indicator),
                 ),
