@@ -2179,7 +2179,7 @@ impl GitPanel {
                     Ok(())
                 })
                 .detach_and_prompt_err(
-                    "Failed to trash file",
+                    "删除文件失败",
                     window,
                     cx,
                     |e, _, _| Some(format!("{e}")),
@@ -2379,7 +2379,7 @@ impl GitPanel {
             }
             Ok(())
         })
-        .detach_and_prompt_err("Failed to trash files", window, cx, |e, _, _| {
+        .detach_and_prompt_err("删除文件失败", window, cx, |e, _, _| {
             Some(format!("{e}"))
         });
     }
@@ -5023,7 +5023,7 @@ impl GitPanel {
                         workspace.show_toast(
                             workspace::Toast::new(
                                 NotificationId::unique::<GitJobQueueToast>(),
-                                "No active repository",
+                                "没有活动仓库",
                             )
                             .autohide(),
                             cx,
@@ -6078,7 +6078,7 @@ impl GitPanel {
                                 .icon_size(IconSize::Small)
                                 .tooltip(|_window, cx| {
                                     Tooltip::for_action(
-                                        "Open Git Graph",
+                                        "打开 Git 图",
                                         &crate::git_graph::Open,
                                         cx,
                                     )
@@ -6170,7 +6170,7 @@ impl GitPanel {
                     this.child(Self::render_history_placeholder("No repository found"))
                 }
                 CommitHistory::Error(_) => this.child(Self::render_history_placeholder(
-                    "Failed to load commit history",
+                    "加载提交历史失败",
                 )),
                 CommitHistory::Loading => {
                     this.child(Self::render_history_placeholder("Loading Commit History…"))
@@ -6696,7 +6696,7 @@ impl GitPanel {
                                                 };
 
                                                 Tooltip::with_meta(
-                                                    "View Commit Diff",
+                                                    "查看提交差异",
                                                     None,
                                                     description,
                                                     cx,
@@ -7736,7 +7736,7 @@ impl GitPanel {
                             })
                             .tooltip(move |_window, cx| {
                                 if resolved_conflict {
-                                    Tooltip::simple("Conflicts marked as resolved", cx)
+                                    Tooltip::simple("冲突已标记为已解决", cx)
                                 } else {
                                     let action = stage_intent.label(|| stage_status);
                                     Tooltip::simple(format!("{action} Folder"), cx)
@@ -8459,7 +8459,7 @@ impl RenderOnce for PanelRepoFooter {
                     if single_repo {
                         cx.new(|_| Empty).into()
                     } else {
-                        Tooltip::simple("Switch Active Repository", cx)
+                        Tooltip::simple("切换活动仓库", cx)
                     }
                 },
             )
@@ -8486,7 +8486,7 @@ impl RenderOnce for PanelRepoFooter {
             })
             .trigger_with_tooltip(
                 branch_selector_button,
-                Tooltip::for_action_title("Switch Branch", &zed_actions::git::Switch),
+                Tooltip::for_action_title("切换分支", &zed_actions::git::Switch),
             )
             .anchor(Anchor::BottomLeft)
             .offset(gpui::Point {

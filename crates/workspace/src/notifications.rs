@@ -1402,7 +1402,7 @@ pub mod simple_message_notification {
                                 container().child(detailed_error).into_any_element(),
                             ),
                             single_example(
-                                "With Documentation Link",
+                                "带文档链接",
                                 container().child(docs_error).into_any_element(),
                             ),
                             single_example(

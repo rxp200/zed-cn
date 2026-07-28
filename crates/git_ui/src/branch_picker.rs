@@ -1033,7 +1033,7 @@ impl BranchListDelegate {
         let focus_handle = self.focus_handle.clone();
         move |_, cx| {
             Tooltip::for_action_in(
-                "Filter Branches",
+                "筛选分支",
                 &branch_picker::ToggleFilterMenu,
                 &focus_handle,
                 cx,
@@ -1065,7 +1065,7 @@ impl BranchListDelegate {
 
             Ok(())
         })
-        .detach_and_prompt_err("Failed to create branch", window, cx, |e, _, _| {
+        .detach_and_prompt_err("创建分支失败", window, cx, |e, _, _| {
             Some(e.to_string())
         });
         cx.emit(DismissEvent);
@@ -1085,7 +1085,7 @@ impl BranchListDelegate {
         let receiver = repo.update(cx, |repo, _| repo.create_remote(remote_name, remote_url));
 
         cx.background_spawn(async move { receiver.await? })
-            .detach_and_prompt_err("Failed to create remote", window, cx, |e, _, _cx| {
+            .detach_and_prompt_err("创建远程仓库失败", window, cx, |e, _, _cx| {
                 Some(e.to_string())
             });
         cx.emit(DismissEvent);
@@ -1144,7 +1144,7 @@ impl BranchListDelegate {
                                 PromptLevel::Warning,
                                 &prompt_message,
                                 None,
-                                &["Force Delete", "Cancel"],
+                                &["强制删除", "取消"],
                                 cx,
                             )
                         })?;
@@ -1572,7 +1572,7 @@ impl PickerDelegate for BranchListDelegate {
                     anyhow::Ok(())
                 })
                 .detach_and_prompt_err(
-                    "Failed to change branch",
+                    "切换分支失败",
                     window,
                     cx,
                     |_, _, _| None,

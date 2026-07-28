@@ -82,7 +82,7 @@ impl WorkspaceError for DevExtensionNotInstalledError {
     }
 
     fn primary_action(&self) -> ErrorAction {
-        ErrorAction::new("Install Dev Extension", InstallDevExtension)
+        ErrorAction::new("安装开发扩展", InstallDevExtension)
     }
 
     fn severity(&self) -> ErrorSeverity {
