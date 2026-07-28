@@ -6699,8 +6699,8 @@ fn terminal_page() -> SettingsPage {
                             settings::ShellDiscriminants::System => vec![],
                             settings::ShellDiscriminants::Program => vec![SettingItem {
                                 files: USER | PROJECT,
-                                title: "Program",
-                                description: "The shell program to use.",
+                                title: "程序",
+                                description: "要使用的 shell 程序。",
                                 field: Box::new(SettingField {
                                     organization_override: None,
                                     json_path: Some("terminal.shell"),
@@ -6730,8 +6730,8 @@ fn terminal_page() -> SettingsPage {
                             settings::ShellDiscriminants::WithArguments => vec![
                                 SettingItem {
                                     files: USER | PROJECT,
-                                    title: "Program",
-                                    description: "The shell program to run.",
+                                    title: "程序",
+                                    description: "要运行的 shell 程序。",
                                     field: Box::new(SettingField {
                                         organization_override: None,
                                         json_path: Some("terminal.shell.program"),
@@ -6763,8 +6763,8 @@ fn terminal_page() -> SettingsPage {
                                 },
                                 SettingItem {
                                     files: USER | PROJECT,
-                                    title: "Arguments",
-                                    description: "The arguments to pass to the shell program.",
+                                    title: "参数",
+                                    description: "传递给 shell 程序的参数。",
                                     field: Box::new(
                                         SettingField {
                                             organization_override: None,
@@ -6797,8 +6797,8 @@ fn terminal_page() -> SettingsPage {
                                 },
                                 SettingItem {
                                     files: USER | PROJECT,
-                                    title: "Title Override",
-                                    description: "An optional string to override the title of the terminal tab.",
+                                    title: "标题覆盖",
+                                    description: "覆盖终端标签标题的可选字符串。",
                                     field: Box::new(SettingField {
                                         organization_override: None,
                                         json_path: Some("terminal.shell.title_override"),
@@ -6834,8 +6834,8 @@ fn terminal_page() -> SettingsPage {
                 SettingsPageItem::DynamicItem(DynamicItem {
                     discriminant: SettingItem {
                         files: USER | PROJECT,
-                        title: "Working Directory",
-                        description: "What working directory to use when launching the terminal.",
+                        title: "工作目录",
+                        description: "启动终端时使用的工作目录。",
                         field: Box::new(SettingField {
                             organization_override: None,
                             json_path: Some("terminal.working_directory$"),
@@ -6908,8 +6908,8 @@ fn terminal_page() -> SettingsPage {
                             settings::WorkingDirectoryDiscriminants::AlwaysHome => vec![],
                             settings::WorkingDirectoryDiscriminants::Always => vec![SettingItem {
                                 files: USER | PROJECT,
-                                title: "Directory",
-                                description: "The directory path to use (will be shell expanded).",
+                                title: "目录",
+                                description: "要使用的目录路径（将进行 shell 扩展）。",
                                 field: Box::new(SettingField {
                                     organization_override: None,
                                     json_path: Some("terminal.working_directory.always"),
@@ -6939,8 +6939,8 @@ fn terminal_page() -> SettingsPage {
                         .collect(),
                 }),
                 SettingsPageItem::SettingItem(SettingItem {
-                    title: "Environment Variables",
-                    description: "Key-value pairs to add to the terminal's environment.",
+                    title: "环境变量",
+                    description: "要添加到终端环境的键值对。",
                     field: Box::new(
                         SettingField {
                             organization_override: None,
@@ -6956,8 +6956,8 @@ fn terminal_page() -> SettingsPage {
                     files: USER | PROJECT,
                 }),
                 SettingsPageItem::SettingItem(SettingItem {
-                    title: "Detect Virtual Environment",
-                    description: "Activates the Python virtual environment, if one is found, in the terminal's working directory.",
+                    title: "检测虚拟环境",
+                    description: "如果在终端的工作目录中找到 Python 虚拟环境，则激活它。",
                     field: Box::new(
                         SettingField {
                             organization_override: None,
@@ -7125,8 +7125,8 @@ fn terminal_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Cursor Shape",
-                description: "Default cursor shape for the terminal (bar, block, underline, or hollow).",
+                title: "光标形状",
+                description: "终端的默认光标形状（竖线、方块、下划线或空心）。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.cursor_shape"),
@@ -7144,8 +7144,8 @@ fn terminal_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Cursor Blinking",
-                description: "Sets the cursor blinking behavior in the terminal.",
+                title: "光标闪烁",
+                description: "设置终端中的光标闪烁行为。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.blinking"),
@@ -7158,8 +7158,8 @@ fn terminal_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Alternate Scroll",
-                description: "Whether alternate scroll mode is active by default (converts mouse scroll to arrow keys in apps like Vim).",
+                title: "备用滚动",
+                description: "是否默认启用备用滚动模式（将鼠标滚轮转换为 Vim 等应用程序中的箭头键）。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.alternate_scroll"),
@@ -7181,8 +7181,8 @@ fn terminal_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Minimum Contrast",
-                description: "The minimum APCA perceptual contrast between foreground and background colors (0-106).",
+                title: "最小对比度",
+                description: "前景色和背景色之间的最小 APCA 感知对比度（0-106）。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.minimum_contrast"),
@@ -7208,10 +7208,10 @@ fn terminal_page() -> SettingsPage {
 
     fn behavior_settings_section() -> [SettingsPageItem; 6] {
         [
-            SettingsPageItem::SectionHeader("Behavior Settings"),
+            SettingsPageItem::SectionHeader("行为设置"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Option As Meta",
-                description: "Whether the option key behaves as the meta key.",
+                title: "Option 作为 Meta",
+                description: "Option 键是否作为 meta 键。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.option_as_meta"),
@@ -7229,8 +7229,8 @@ fn terminal_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Copy On Select",
-                description: "Whether selecting text in the terminal automatically copies to the system clipboard.",
+                title: "选择时复制",
+                description: "在终端中选择文本时是否自动复制到系统剪贴板。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.copy_on_select"),
@@ -7248,8 +7248,8 @@ fn terminal_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Keep Selection On Copy",
-                description: "Whether to keep the text selection after copying it to the clipboard.",
+                title: "复制后保留选区",
+                description: "复制到剪贴板后是否保留文本选区。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.keep_selection_on_copy"),
@@ -7271,8 +7271,8 @@ fn terminal_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Open Links In Mouse Mode",
-                description: "Whether cmd-click (ctrl-click on Linux and Windows) opens hyperlinks even when the terminal application has enabled mouse reporting. When disabled, these clicks are forwarded to the application; links can still be opened with shift-cmd-click.",
+                title: "鼠标模式下打开链接",
+                description: "即使在终端应用程序启用了鼠标报告时，cmd-单击（Linux 和 Windows 上为 ctrl-单击）是否打开超链接。禁用时，这些单击将转发给应用程序；仍可通过 shift-cmd-单击打开链接。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.open_links_in_mouse_mode"),
@@ -7294,8 +7294,8 @@ fn terminal_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Audible Bell",
-                description: "Whether to play a sound when the BEL character (`\\a`, `0x07`) is printed",
+                title: "声音提示",
+                description: "当打印 BEL 字符（`\\a`、`0x07`）时是否播放声音。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.bell"),
@@ -7312,10 +7312,10 @@ fn terminal_page() -> SettingsPage {
 
     fn layout_settings_section() -> [SettingsPageItem; 3] {
         [
-            SettingsPageItem::SectionHeader("Layout Settings"),
+            SettingsPageItem::SectionHeader("布局设置"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Default Width",
-                description: "Default width when the terminal is docked to the left or right (in pixels).",
+                title: "默认宽度",
+                description: "终端停靠在左侧或右侧时的默认宽度（像素）。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.default_width"),
@@ -7333,8 +7333,8 @@ fn terminal_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Default Height",
-                description: "Default height when the terminal is docked to the bottom (in pixels).",
+                title: "默认高度",
+                description: "终端停靠在底部时的默认高度（像素）。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.default_height"),
@@ -7356,10 +7356,10 @@ fn terminal_page() -> SettingsPage {
 
     fn advanced_settings_section() -> [SettingsPageItem; 3] {
         [
-            SettingsPageItem::SectionHeader("Advanced Settings"),
+            SettingsPageItem::SectionHeader("高级设置"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Max Scroll History Lines",
-                description: "Maximum number of lines to keep in scrollback history (max: 100,000; 0 disables scrolling).",
+                title: "最大滚动历史行数",
+                description: "在回滚历史中保留的最大行数（最大：100,000；0 禁用滚动）。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.max_scroll_history_lines"),
@@ -7381,8 +7381,8 @@ fn terminal_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Scroll Multiplier",
-                description: "The multiplier for scrolling in the terminal with the mouse wheel",
+                title: "滚动倍数",
+                description: "使用鼠标滚轮在终端中滚动的倍数。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.scroll_multiplier"),
@@ -7408,10 +7408,10 @@ fn terminal_page() -> SettingsPage {
 
     fn toolbar_section() -> [SettingsPageItem; 2] {
         [
-            SettingsPageItem::SectionHeader("Toolbar"),
+            SettingsPageItem::SectionHeader("工具栏"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Breadcrumbs",
-                description: "Display the terminal title in breadcrumbs inside the terminal pane.",
+                title: "面包屑导航",
+                description: "在终端窗格的面包屑中显示终端标题。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.toolbar.breadcrumbs"),
@@ -7441,10 +7441,10 @@ fn terminal_page() -> SettingsPage {
 
     fn scrollbar_section() -> [SettingsPageItem; 2] {
         [
-            SettingsPageItem::SectionHeader("Scrollbar"),
+            SettingsPageItem::SectionHeader("滚动条"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Show Scrollbar",
-                description: "When to show the scrollbar in the terminal.",
+                title: "显示滚动条",
+                description: "何时在终端中显示滚动条。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.scrollbar.show"),
@@ -7475,7 +7475,7 @@ fn terminal_page() -> SettingsPage {
     }
 
     SettingsPage {
-        title: "Terminal",
+        title: "终端",
         items: concat_sections![
             environment_section(),
             font_section(),
@@ -7492,12 +7492,12 @@ fn terminal_page() -> SettingsPage {
 fn version_control_page() -> SettingsPage {
     fn git_integration_section() -> [SettingsPageItem; 2] {
         [
-            SettingsPageItem::SectionHeader("Git Integration"),
+            SettingsPageItem::SectionHeader("Git 集成"),
             SettingsPageItem::DynamicItem(DynamicItem {
                 discriminant: SettingItem {
                     files: USER,
-                    title: "Disable Git Integration",
-                    description: "Disable all Git integration features in Zed.",
+                    title: "禁用 Git 集成",
+                    description: "禁用 Zed 中的所有 Git 集成功能。",
                     field: Box::new(SettingField::<bool> {
                         organization_override: None,
                         json_path: Some("git.disable_git"),
@@ -7536,8 +7536,8 @@ fn version_control_page() -> SettingsPage {
                     vec![
                         SettingItem {
                             files: USER,
-                            title: "Enable Git Status",
-                            description: "Show Git status information in the editor.",
+                            title: "启用 Git 状态",
+                            description: "在编辑器中显示 Git 状态信息。",
                             field: Box::new(SettingField::<bool> {
                                 organization_override: None,
                                 json_path: Some("git.enable_status"),
@@ -7563,8 +7563,8 @@ fn version_control_page() -> SettingsPage {
                         },
                         SettingItem {
                             files: USER,
-                            title: "Enable Git Diff",
-                            description: "Show Git diff information in the editor.",
+                            title: "启用 Git 差异",
+                            description: "在编辑器中显示 Git 差异信息。",
                             field: Box::new(SettingField::<bool> {
                                 organization_override: None,
                                 json_path: Some("git.enable_diff"),
@@ -7596,10 +7596,10 @@ fn version_control_page() -> SettingsPage {
 
     fn git_gutter_section() -> [SettingsPageItem; 3] {
         [
-            SettingsPageItem::SectionHeader("Git Gutter"),
+            SettingsPageItem::SectionHeader("Git 装订线"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Visibility",
-                description: "Control whether Git status is shown in the editor's gutter.",
+                title: "可见性",
+                description: "控制是否在编辑器的装订线中显示 Git 状态。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git.git_gutter"),
@@ -7613,8 +7613,8 @@ fn version_control_page() -> SettingsPage {
             }),
             // todo(settings_ui): Figure out the right default for this value in default.json
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Debounce",
-                description: "Debounce threshold in milliseconds after which changes are reflected in the Git gutter.",
+                title: "去抖",
+                description: "去抖阈值（毫秒），之后更改将反映在 Git 装订线中。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git.gutter_debounce"),
@@ -7633,11 +7633,11 @@ fn version_control_page() -> SettingsPage {
 
     fn inline_git_blame_section() -> [SettingsPageItem; 6] {
         [
-            SettingsPageItem::SectionHeader("Inline Git Blame"),
+            SettingsPageItem::SectionHeader("内联 Git 追溯"),
             SettingsPageItem::DynamicItem(DynamicItem {
                 discriminant: SettingItem {
-                    title: "Enabled",
-                    description: "Whether or not to show Git blame data for the currently focused line.",
+                    title: "启用",
+                    description: "是否显示当前焦点行的 Git 追溯数据。",
                     field: Box::new(SettingField {
                         organization_override: None,
                         json_path: Some("git.inline_blame.enabled"),
@@ -7676,8 +7676,8 @@ fn version_control_page() -> SettingsPage {
                 fields: vec![
                     vec![],
                     vec![SettingItem {
-                        title: "Location",
-                        description: "Where to render Git blame when it is enabled.",
+                        title: "位置",
+                        description: "启用 Git 追溯时的渲染位置。",
                         field: Box::new(SettingField {
                             organization_override: None,
                             json_path: Some("git.inline_blame.location"),
@@ -7705,8 +7705,8 @@ fn version_control_page() -> SettingsPage {
                 ],
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Delay",
-                description: "The delay after which the inline blame information is shown.",
+                title: "延迟",
+                description: "显示内联追溯信息前的延迟。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git.inline_blame.delay_ms"),
@@ -7732,8 +7732,8 @@ fn version_control_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Padding",
-                description: "Padding between the end of the source line and the start of the inline blame in columns.",
+                title: "内边距",
+                description: "源代码行末尾与内联追溯开头之间的列间距。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git.inline_blame.padding"),
@@ -7759,8 +7759,8 @@ fn version_control_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Minimum Column",
-                description: "The minimum column number at which to show the inline blame information.",
+                title: "最小列",
+                description: "显示内联追溯信息的最小列号。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git.inline_blame.min_column"),
@@ -7786,8 +7786,8 @@ fn version_control_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Show Commit Summary",
-                description: "Show commit summary as part of the inline blame.",
+                title: "显示提交摘要",
+                description: "在内联追溯中显示提交摘要。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git.inline_blame.show_commit_summary"),
@@ -7817,10 +7817,10 @@ fn version_control_page() -> SettingsPage {
 
     fn git_blame_view_section() -> [SettingsPageItem; 2] {
         [
-            SettingsPageItem::SectionHeader("Git Blame View"),
+            SettingsPageItem::SectionHeader("Git 追溯视图"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Show Avatar",
-                description: "Show the avatar of the author of the commit.",
+                title: "显示头像",
+                description: "显示提交作者的头像。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git.blame.show_avatar"),
@@ -7850,10 +7850,10 @@ fn version_control_page() -> SettingsPage {
 
     fn branch_picker_section() -> [SettingsPageItem; 2] {
         [
-            SettingsPageItem::SectionHeader("Branch Picker"),
+            SettingsPageItem::SectionHeader("分支选择器"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Show Author Name",
-                description: "Show author name as part of the commit information in branch picker.",
+                title: "显示作者姓名",
+                description: "在分支选择器中显示作者姓名作为提交信息的一部分。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git.branch_picker.show_author_name"),
@@ -7883,10 +7883,10 @@ fn version_control_page() -> SettingsPage {
 
     fn git_hunks_section() -> [SettingsPageItem; 4] {
         [
-            SettingsPageItem::SectionHeader("Git Hunks"),
+            SettingsPageItem::SectionHeader("Git 块"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Hunk Style",
-                description: "How Git hunks are displayed visually in the editor.",
+                title: "块样式",
+                description: "Git 块在编辑器中的视觉显示方式。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git.hunk_style"),
