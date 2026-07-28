@@ -74,7 +74,7 @@ fn render_context_server_timeout(
     cx: &mut Context<SettingsWindow>,
 ) -> AnyElement {
     let item = SettingsPageItem::SettingItem(SettingItem {
-        title: "MCP Server Timeout",
+        title: "MCP 服务器超时",
         description: "Default timeout in seconds for MCP server tool calls.",
         field: Box::new(SettingField {
             organization_override: None,
@@ -562,7 +562,7 @@ pub(crate) fn render_add_server_popover(
             move |window, cx| {
                 let settings_window = settings_window.clone();
                 Some(ContextMenu::build(window, cx, move |menu, _window, _cx| {
-                    menu.entry("Add Local Server", None, {
+                    menu.entry("添加本地服务器", None, {
                         let settings_window = settings_window.clone();
                         move |window, cx| {
                             settings_window
@@ -578,7 +578,7 @@ pub(crate) fn render_add_server_popover(
                                 .log_err();
                         }
                     })
-                    .entry("Add Remote Server", None, {
+                    .entry("添加远程服务器", None, {
                         let settings_window = settings_window.clone();
                         move |window, cx| {
                             settings_window
@@ -595,7 +595,7 @@ pub(crate) fn render_add_server_popover(
                         }
                     })
                     .separator()
-                    .entry("Install from Extensions", None, {
+                    .entry("从扩展安装", None, {
                         move |_window, cx| {
                             if let Some(original_window) = original_window.as_ref() {
                                 cx.activate(true);
@@ -807,7 +807,7 @@ impl McpServerForm {
             ),
             timeout: new_input("60", timeout_initial.as_deref(), window, cx),
             oauth_client_id: new_input(
-                "Optional OAuth client ID",
+                "可选的 OAuth 客户端 ID",
                 oauth_initial.as_deref(),
                 window,
                 cx,

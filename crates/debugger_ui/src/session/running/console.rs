@@ -92,7 +92,7 @@ impl Console {
         let this = cx.weak_entity();
         let query_bar = cx.new(|cx| {
             let mut editor = Editor::single_line(window, cx);
-            editor.set_placeholder_text("Evaluate an expression", window, cx);
+            editor.set_placeholder_text("计算表达式", window, cx);
             editor.set_use_autoclose(false);
             editor.set_show_gutter(false, cx);
             editor.set_show_wrap_guides(false, cx);
@@ -482,7 +482,7 @@ impl Render for Console {
 
                                 move |_window, cx| {
                                     Tooltip::for_action_in(
-                                        "Evaluate",
+                                        "计算",
                                         &Confirm,
                                         &query_focus_handle,
                                         cx,

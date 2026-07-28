@@ -510,7 +510,7 @@ impl DebugPanel {
                     gpui::PromptLevel::Warning,
                     "This Debug Session is still running. Are you sure you want to terminate it?",
                     None,
-                    &["Yes", "No"],
+                    &["是", "否"],
                 );
                 if response.await == Ok(1) {
                     return;
@@ -627,7 +627,7 @@ impl DebugPanel {
                     let focus_handle = focus_handle.clone();
                     move |_window, cx| {
                         Tooltip::for_action_in(
-                            "Start Debug Session",
+                            "开始调试会话",
                             &crate::Start,
                             &focus_handle,
                             cx,
@@ -717,7 +717,7 @@ impl DebugPanel {
                                                     let focus_handle = focus_handle.clone();
                                                     move |_window, cx| {
                                                         Tooltip::for_action_in(
-                                                            "Pause Program",
+                                                            "暂停程序",
                                                             &Pause,
                                                             &focus_handle,
                                                             cx,
@@ -741,7 +741,7 @@ impl DebugPanel {
                                                     let focus_handle = focus_handle.clone();
                                                     move |_window, cx| {
                                                         Tooltip::for_action_in(
-                                                            "Continue Program",
+                                                            "继续程序",
                                                             &Continue,
                                                             &focus_handle,
                                                             cx,
@@ -765,7 +765,7 @@ impl DebugPanel {
                                                 let focus_handle = focus_handle.clone();
                                                 move |_window, cx| {
                                                     Tooltip::for_action_in(
-                                                        "Step Over",
+                                                        "单步跳过",
                                                         &StepOver,
                                                         &focus_handle,
                                                         cx,
@@ -787,7 +787,7 @@ impl DebugPanel {
                                                 let focus_handle = focus_handle.clone();
                                                 move |_window, cx| {
                                                     Tooltip::for_action_in(
-                                                        "Step In",
+                                                        "单步进入",
                                                         &StepInto,
                                                         &focus_handle,
                                                         cx,
@@ -809,7 +809,7 @@ impl DebugPanel {
                                                 let focus_handle = focus_handle.clone();
                                                 move |_window, cx| {
                                                     Tooltip::for_action_in(
-                                                        "Step Out",
+                                                        "单步跳出",
                                                         &StepOut,
                                                         &focus_handle,
                                                         cx,
@@ -831,7 +831,7 @@ impl DebugPanel {
                                                 let focus_handle = focus_handle.clone();
                                                 move |_window, cx| {
                                                     Tooltip::for_action_in(
-                                                        "Rerun Session",
+                                                        "重新运行会话",
                                                         &RerunSession,
                                                         &focus_handle,
                                                         cx,
@@ -904,7 +904,7 @@ impl DebugPanel {
                                                 let focus_handle = focus_handle.clone();
                                                 move |_window, cx| {
                                                     Tooltip::for_action_in(
-                                                        "Detach",
+                                                        "分离",
                                                         &Detach,
                                                         &focus_handle,
                                                         cx,
@@ -1342,7 +1342,7 @@ impl DebugPanel {
                                 .read(cx)
                                 .historic_snapshots();
 
-                            context_menu = context_menu.entry("Current State", None, {
+                            context_menu = context_menu.entry("当前状态", None, {
                                 let running_state = running_state.clone();
                                 move |_window, cx| {
                                     handler(None, running_state.clone(), cx);
@@ -1790,7 +1790,7 @@ impl Render for DebugPanel {
                         .child(
                             Button::new(
                                 "spawn-new-session-install-extensions",
-                                "Debugger Extensions",
+                                "调试器扩展",
                             )
                             .start_icon(
                                 Icon::new(IconName::Blocks)

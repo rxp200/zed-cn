@@ -544,10 +544,10 @@ pub(crate) enum NewProcessMode {
 impl std::fmt::Display for NewProcessMode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mode = match self {
-            NewProcessMode::Task => "Run",
-            NewProcessMode::Debug => "Debug",
-            NewProcessMode::Attach => "Attach",
-            NewProcessMode::Launch => "Launch",
+            NewProcessMode::Task => "运行",
+            NewProcessMode::Debug => "调试",
+            NewProcessMode::Attach => "附加",
+            NewProcessMode::Launch => "启动",
         };
 
         write!(f, "{}", mode)
@@ -642,7 +642,7 @@ impl Render for NewProcessModal {
                             )
                             .tooltip(move |_, cx| {
                                 Tooltip::for_action_in(
-                                    "Run predefined task",
+                                    "运行预定义任务",
                                     &ActivateTaskTab,
                                     &task_focus_handle,
                                     cx,
@@ -658,7 +658,7 @@ impl Render for NewProcessModal {
                             )
                             .tooltip(move |_, cx| {
                                 Tooltip::for_action_in(
-                                    "Start a predefined debug scenario",
+                                    "启动预定义调试方案",
                                     &ActivateDebugTab,
                                     &debug_focus_handle,
                                     cx,
@@ -683,7 +683,7 @@ impl Render for NewProcessModal {
                             )
                             .tooltip(move |_, cx| {
                                 Tooltip::for_action_in(
-                                    "Attach the debugger to a running process",
+                                    "附加调试器到运行中的进程",
                                     &ActivateAttachTab,
                                     &attach_focus_handle,
                                     cx,
@@ -699,7 +699,7 @@ impl Render for NewProcessModal {
                             )
                             .tooltip(move |_, cx| {
                                 Tooltip::for_action_in(
-                                    "Launch a new process with a debugger",
+                                    "使用调试器启动新进程",
                                     &ActivateLaunchTab,
                                     &launch_focus_handle,
                                     cx,

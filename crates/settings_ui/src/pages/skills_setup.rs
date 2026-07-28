@@ -242,7 +242,7 @@ fn render_skill_row(
                                 PromptLevel::Info,
                                 &prompt_message,
                                 Some(&prompt_detail),
-                                &["Delete", "Cancel"],
+                                &["删除", "取消"],
                                 cx,
                             );
 

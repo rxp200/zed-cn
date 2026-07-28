@@ -128,7 +128,7 @@ pub(crate) fn render_sandbox_settings_page(
                     .tab_index(0),
                 )
                 .child(render_list_section(
-                    "Allowed Domains",
+                    "允许的域名",
                     DOMAINS_DESCRIPTION,
                     host_rows,
                     add_host_input,
@@ -157,7 +157,7 @@ pub(crate) fn render_sandbox_settings_page(
                     .tab_index(0),
                 )
                 .child(render_list_section(
-                    "Writable Paths",
+                    "可写入路径",
                     WRITE_PATHS_DESCRIPTION,
                     path_rows,
                     add_path_input,

@@ -189,22 +189,22 @@ impl Render for CallStatsModal {
                                 .child(Label::new("网络").weight(FontWeight::SEMIBOLD)),
                         )
                         .child(self.render_metric_row(
-                            "Latency",
-                            "Time for data to travel to the server",
+                            "延迟",
+                            "数据到服务器的传输时间",
                             stats.latency_ms,
                             |v| format!("{:.0}ms", v),
-                            |v| metric_rating("Latency", v),
+                            |v| metric_rating("延迟", v),
                         ))
                         .child(self.render_metric_row(
-                            "Jitter",
-                            "Variance or fluctuation in latency",
+                            "抖动",
+                            "延迟的方差或波动",
                             stats.jitter_ms,
                             |v| format!("{:.0}ms", v),
-                            |v| metric_rating("Jitter", v),
+                            |v| metric_rating("抖动", v),
                         ))
                         .child(self.render_metric_row(
-                            "Packet loss",
-                            "Amount of data lost during transfer",
+                            "丢包率",
+                            "传输过程中丢失的数据量",
                             stats.packet_loss_pct,
                             |v| format!("{:.1}%", v),
                             |v| packet_loss_rating(v),
