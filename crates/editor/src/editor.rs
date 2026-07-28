@@ -318,9 +318,9 @@ enum ReportEditorEvent {
 impl ReportEditorEvent {
     pub fn event_type(&self) -> &'static str {
         match self {
-            Self::Saved { .. } => "Editor Saved",
-            Self::EditorOpened => "Editor Opened",
-            Self::Closed => "Editor Closed",
+            Self::Saved { .. } => "编辑器已保存",
+            Self::EditorOpened => "编辑器已打开",
+            Self::Closed => "编辑器已关闭",
         }
     }
 }
@@ -1644,8 +1644,8 @@ enum GutterButtonIntent {
 impl GutterButtonIntent {
     fn as_str(&self) -> &'static str {
         match self {
-            Self::SetBookmark => "Set Bookmark",
-            Self::SetBreakpoint => "Set Breakpoint",
+            Self::SetBookmark => "设置书签",
+            Self::SetBreakpoint => "设置断点",
         }
     }
 
@@ -2827,7 +2827,7 @@ impl Editor {
         cx: &mut Context<Workspace>,
     ) {
         Self::new_in_workspace(workspace, window, cx).detach_and_prompt_err(
-            "Failed to create buffer",
+            "创建缓冲区失败",
             window,
             cx,
             |e, _, _| match e.error_code() {
@@ -2909,7 +2909,7 @@ impl Editor {
             })?;
             anyhow::Ok(())
         })
-        .detach_and_prompt_err("Failed to create buffer", window, cx, |e, _, _| {
+        .detach_and_prompt_err("创建缓冲区失败", window, cx, |e, _, _| {
             match e.error_code() {
                 ErrorCode::RemoteUpgradeRequired => Some(format!(
                 "The remote instance of Zed does not support this yet. It must be upgraded to {}",
@@ -4080,9 +4080,9 @@ impl Editor {
             }))
             .tooltip(move |_window, cx| {
                 Tooltip::with_meta_in(
-                    "Remove Bookmark",
+                    "移除书签",
                     Some(&ToggleBookmark),
-                    SharedString::from("Right-click for more options"),
+                    SharedString::from("右键点击查看更多选项"),
                     &focus_handle,
                     cx,
                 )
@@ -4228,10 +4228,10 @@ impl Editor {
         let toggle_state_entry: Option<(&str, Box<dyn Action>)> =
             breakpoint.as_ref().map(|bp| match bp.1.state {
                 BreakpointState::Enabled => {
-                    ("Disable", crate::actions::DisableBreakpoint.boxed_clone())
+                    ("禁用", crate::actions::DisableBreakpoint.boxed_clone())
                 }
                 BreakpointState::Disabled => {
-                    ("Enable", crate::actions::EnableBreakpoint.boxed_clone())
+                    ("启用", crate::actions::EnableBreakpoint.boxed_clone())
                 }
             });
 
@@ -4244,7 +4244,7 @@ impl Editor {
                 .when_some(
                     clear_runnable_task_status,
                     |this, (buffer_id, buffer_row)| {
-                        this.entry("Clear Run Status", None, {
+                        this.entry("清除运行状态", None, {
                             let weak_editor = weak_editor.clone();
                             move |_window, cx| {
                                 weak_editor
@@ -4260,7 +4260,7 @@ impl Editor {
                 .when(run_to_cursor, |this| {
                     let weak_editor = weak_editor.clone();
                     this.entry(
-                        "Run to Cursor",
+                        "运行到光标",
                         Some(RunToCursor.boxed_clone()),
                         move |window, cx| {
                             weak_editor
@@ -4400,7 +4400,7 @@ impl Editor {
                 })
                 .when(has_bookmark, |this| {
                     this.entry(
-                        "Edit Bookmark",
+                        "编辑书签",
                         Some(EditBookmark.boxed_clone()),
                         move |window, cx| {
                             weak_editor
@@ -5958,7 +5958,7 @@ impl Editor {
             BreakpointPromptEditAction::Condition => {
                 "Condition when a breakpoint is hit. Expressions within {} are interpolated."
             }
-            BreakpointPromptEditAction::HitCondition => "How many breakpoint hits to ignore",
+            BreakpointPromptEditAction::HitCondition => "忽略多少个断点命中",
         };
 
         let breakpoint = breakpoint.clone();
@@ -12443,7 +12443,7 @@ impl PromptEditor {
             .icon_color(Color::Muted)
             .shape(IconButtonShape::Square)
             .tooltip(move |_window, cx| {
-                Tooltip::for_action_in("Cancel", &menu::Cancel, &focus_handle, cx)
+                Tooltip::for_action_in("取消", &menu::Cancel, &focus_handle, cx)
             })
             .on_click(cx.listener(|this, _, window, cx| {
                 this.cancel(&menu::Cancel, window, cx);
@@ -12456,7 +12456,7 @@ impl PromptEditor {
             .icon_color(Color::Muted)
             .shape(IconButtonShape::Square)
             .tooltip(move |_window, cx| {
-                Tooltip::for_action_in("Confirm", &menu::Confirm, &focus_handle, cx)
+                Tooltip::for_action_in("确认", &menu::Confirm, &focus_handle, cx)
             })
             .on_click(cx.listener(|this, _, window, cx| {
                 this.confirm(&menu::Confirm, window, cx);

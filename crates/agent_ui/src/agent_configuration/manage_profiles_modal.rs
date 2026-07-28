@@ -184,7 +184,7 @@ impl ManageProfilesModal {
     ) {
         let name_editor = cx.new(|cx| Editor::single_line(window, cx));
         name_editor.update(cx, |editor, cx| {
-            editor.set_placeholder_text("Profile name", window, cx);
+            editor.set_placeholder_text("配置名称", window, cx);
         });
 
         self.mode = Mode::NewProfile(NewProfileMode {
@@ -575,7 +575,7 @@ impl ManageProfilesModal {
             div()
                 .track_focus(&self.focus_handle(cx))
                 .size_full()
-                .child(ProfileModalHeader::new("Agent Profiles", None))
+                .child(ProfileModalHeader::new("Agent 配置", None))
                 .child(
                     v_flex()
                         .pb_1()

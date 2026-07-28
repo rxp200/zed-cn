@@ -3482,7 +3482,7 @@ mod tests {
         language_registry.add(plain_text_language);
 
         let mut fake_language_servers = language_registry.register_fake_lsp(
-            "Plain Text",
+            "纯文本",
             language::FakeLspAdapter {
                 capabilities: lsp::ServerCapabilities {
                     workspace_symbol_provider: Some(lsp::OneOf::Left(true)),

@@ -659,7 +659,7 @@ impl Render for MergeConflictIndicator {
                         Tooltip::with_meta(
                             tooltip_label.clone(),
                             None,
-                            "Click to Resolve with Agent",
+                            "点击使用 Agent 解决",
                             cx,
                         )
                     })

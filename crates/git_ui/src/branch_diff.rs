@@ -296,7 +296,7 @@ impl BranchDiff {
             DiffMultibuffer::new(
                 branch_diff,
                 Capability::ReadWrite,
-                "No changes",
+                "没有更改",
                 move |editor, cx| {
                     editor.set_diff_hunk_delegate(Some(Arc::new(RestoreOnlyDiffHunkDelegate)), cx);
                     editor.rhs_editor().update(cx, move |rhs_editor, _cx| {
@@ -815,9 +815,9 @@ impl Render for BranchDiffToolbar {
                         )
                         .tooltip(move |_, cx| {
                             Tooltip::with_meta_in(
-                                "Review Diff",
+                                "查看差异",
                                 Some(&ReviewDiff),
-                                "Send this diff for your last agent to review.",
+                                "发送此差异供您的上一个 Agent 审阅。",
                                 &focus_handle,
                                 cx,
                             )

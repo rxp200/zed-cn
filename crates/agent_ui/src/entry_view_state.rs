@@ -882,7 +882,7 @@ mod tests {
                             acp::ElicitationSessionScope::new(session_id.clone()),
                             acp::ElicitationSchema::new().string("name", true),
                         ),
-                        "Provide a name",
+                        "提供名称",
                     ),
                     cx,
                 )

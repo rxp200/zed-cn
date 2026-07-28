@@ -1999,7 +1999,7 @@ impl Pane {
                         PromptLevel::Warning,
                         "Do you want to save changes to the following files?",
                         Some(&detail),
-                        &["Save all", "Discard all", "Cancel"],
+                        &["全部保存", "全部丢弃", "取消"],
                         cx,
                     )
                 })?;
@@ -2041,7 +2041,7 @@ impl Pane {
                                     PromptLevel::Warning,
                                     &format!("Unable to save file: {}", &err),
                                     Some(&detail),
-                                    &["Close Without Saving", "Cancel"],
+                                    &["不保存关闭", "取消"],
                                     cx,
                                 )
                             })?;
@@ -2311,7 +2311,7 @@ impl Pane {
                         PromptLevel::Warning,
                         DELETED_MESSAGE,
                         None,
-                        &["Save", "关闭", "Cancel"],
+                        &["保存", "关闭", "取消"],
                         cx,
                     )
                 })?;
@@ -2346,7 +2346,7 @@ impl Pane {
                         PromptLevel::Warning,
                         CONFLICT_MESSAGE,
                         None,
-                        &["Overwrite", "Discard Edits", "Cancel"],
+                        &["覆盖", "丢弃更改", "取消"],
                         cx,
                     )
                 })?;
@@ -2389,7 +2389,7 @@ impl Pane {
                                 PromptLevel::Warning,
                                 &prompt,
                                 None,
-                                &["Save", "Don't Save", "Cancel"],
+                                &["保存", "不保存", "取消"],
                                 cx,
                             ))
                         } else {
@@ -2875,13 +2875,13 @@ impl Pane {
                 .tooltip(move |_, cx| {
                     if toggleable {
                         Tooltip::with_meta(
-                            "Unlock File",
+                            "解锁标签页",
                             None,
-                            "This will make this file editable",
+                            "这将使此标签页可编辑",
                             cx,
                         )
                     } else {
-                        Tooltip::with_meta("Locked File", None, "This file is read-only", cx)
+                        Tooltip::with_meta("锁定标签页", None, "此标签页为只读", cx)
                     }
                 })
                 .on_click(cx.listener(move |pane, _, window, cx| {
@@ -3348,7 +3348,7 @@ impl Pane {
                                 .map(pin_tab_entries)
                                 .when(visible_in_project_panel, |menu| {
                                     menu.entry(
-                                        "Reveal In Project Panel",
+                                        "在项目面板中显示",
                                         Some(Box::new(RevealInProjectPanel::default())),
                                         window.handler_for(&pane, move |pane, _, cx| {
                                             pane.project
@@ -3363,7 +3363,7 @@ impl Pane {
                                 })
                                 .when_some(parent_abs_path, |menu, parent_abs_path| {
                                     menu.entry(
-                                        "Open in Terminal",
+                                        "在终端中打开",
                                         Some(Box::new(OpenInTerminal)),
                                         window.handler_for(&pane, move |_, window, cx| {
                                             window.dispatch_action(
@@ -3417,7 +3417,7 @@ impl Pane {
                 let focus_handle = focus_handle.clone();
                 move |window, cx| {
                     Tooltip::for_action_in(
-                        "Go Back",
+                        "后退",
                         &GoBack,
                         &window.focused(cx).unwrap_or_else(|| focus_handle.clone()),
                         cx,
@@ -3440,7 +3440,7 @@ impl Pane {
                 let focus_handle = focus_handle.clone();
                 move |window, cx| {
                     Tooltip::for_action_in(
-                        "Go Forward",
+                        "前进",
                         &GoForward,
                         &window.focused(cx).unwrap_or_else(|| focus_handle.clone()),
                         cx,
@@ -4060,7 +4060,7 @@ impl Pane {
             .workspace
             .update(cx, |workspace, cx| {
                 if workspace.project().read(cx).is_via_collab() {
-                    workspace.show_error("Cannot drop files on a remote project", cx);
+                    workspace.show_error("无法在远程项目中拖放文件", cx);
                     true
                 } else {
                     false

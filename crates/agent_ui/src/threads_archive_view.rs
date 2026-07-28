@@ -92,11 +92,11 @@ impl TimeBucket {
 
     fn label(&self) -> &'static str {
         match self {
-            TimeBucket::Today => "Today",
-            TimeBucket::Yesterday => "Yesterday",
-            TimeBucket::ThisWeek => "This Week",
-            TimeBucket::PastWeek => "Past Week",
-            TimeBucket::Older => "Older",
+            TimeBucket::Today => "今天",
+            TimeBucket::Yesterday => "昨天",
+            TimeBucket::ThisWeek => "本周",
+            TimeBucket::PastWeek => "上周",
+            TimeBucket::Older => "更早",
         }
     }
 }
@@ -714,7 +714,7 @@ impl ThreadsArchiveView {
                             .tooltip({
                                 move |_window, cx| {
                                     Tooltip::for_action_in(
-                                        "Delete Thread",
+                                        "删除线程",
                                         &RemoveSelectedThread,
                                         &focus_handle,
                                         cx,
@@ -752,7 +752,7 @@ impl ThreadsArchiveView {
                             .tooltip({
                                 move |_window, cx| {
                                     Tooltip::for_action_in(
-                                        "Archive Thread",
+                                        "归档线程",
                                         &ArchiveSelectedThread,
                                         &focus_handle,
                                         cx,

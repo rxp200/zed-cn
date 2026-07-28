@@ -3869,7 +3869,7 @@ impl AgentPanel {
         };
 
         let Some(store) = ThreadMetadataStore::try_global(cx) else {
-            Self::show_deferred_toast(&self.workspace, "Thread metadata store not available", cx);
+            Self::show_deferred_toast(&self.workspace, "线程元数据存储不可用", cx);
             return;
         };
 
@@ -3892,7 +3892,7 @@ impl AgentPanel {
         cx: &mut Context<Self>,
     ) {
         let Some(store) = ThreadMetadataStore::try_global(cx) else {
-            Self::show_deferred_toast(&self.workspace, "Thread metadata store not available", cx);
+            Self::show_deferred_toast(&self.workspace, "线程元数据存储不可用", cx);
             return;
         };
 
@@ -5592,7 +5592,7 @@ impl AgentPanel {
                     .icon_size(IconSize::Small),
                 move |_window, cx| {
                     Tooltip::for_action_in(
-                        "Toggle Agent Menu",
+                        "切换 Agent 菜单",
                         &ToggleOptionsMenu,
                         &focus_handle,
                         cx,
@@ -5611,7 +5611,7 @@ impl AgentPanel {
 
                             if let Some(conversation_view) = conversation_view.as_ref() {
                                 if can_regenerate_thread_title {
-                                    menu = menu.entry("Regenerate Thread Title", None, {
+                                    menu = menu.entry("重新生成线程标题", None, {
                                         let conversation_view = conversation_view.clone();
                                         let workspace = workspace.clone();
                                         move |_, cx| {
@@ -5628,7 +5628,7 @@ impl AgentPanel {
                                     conversation_view.read(cx).root_thread_view();
                                 if let Some(thread_view) = root_thread_view {
                                     let workspace = workspace.clone();
-                                    menu = menu.entry("Open Thread as Markdown", None, {
+                                    menu = menu.entry("以 Markdown 打开线程", None, {
                                         move |window, cx| {
                                             if let Some(workspace) = workspace.upgrade() {
                                                 thread_view.update(cx, |thread_view, cx| {
@@ -5753,7 +5753,7 @@ impl AgentPanel {
         let focus_handle = self.focus_handle(cx);
 
         ProjectEmptyState::new(
-            "Agent Panel",
+            "Agent 面板",
             focus_handle.clone(),
             KeyBinding::for_action_in(&workspace::Open::default(), &focus_handle, cx),
         )
@@ -6009,7 +6009,7 @@ impl AgentPanel {
                 Tooltip::with_meta(
                     selected_agent_label_for_tooltip.clone(),
                     None,
-                    "Selected Agent",
+                    "已选择的 Agent",
                     cx,
                 )
             });
@@ -6047,13 +6047,13 @@ impl AgentPanel {
             (
                 "disable-full-screen",
                 IconName::Minimize,
-                "Disable Full Screen",
+                "退出全屏",
             )
         } else {
             (
                 "enable-full-screen",
                 IconName::Maximize,
-                "Enable Full Screen",
+                "进入全屏",
             )
         };
         let full_screen_button = IconButton::new(icon_id, icon_name)

@@ -210,7 +210,7 @@ fn git_panel_context_menu(
             .action_disabled_when(!has_staged_changes, "取消全部暂存", UnstageAll.boxed_clone())
             .action_disabled_when(
                 !has_tracked_changes,
-                "Restore All Changes",
+                "恢复所有更改",
                 RestoreTrackedFiles.boxed_clone(),
             )
             .separator()
@@ -562,11 +562,11 @@ impl GitHeaderEntry {
     }
     pub fn title(&self) -> &'static str {
         match self.header {
-            Section::Conflict => "Conflicts",
-            Section::Tracked => "Tracked",
-            Section::New => "Untracked",
-            Section::Staged => "Staged",
-            Section::Unstaged => "Unstaged",
+            Section::Conflict => "冲突",
+            Section::Tracked => "已跟踪",
+            Section::New => "未跟踪",
+            Section::Staged => "已暂存",
+            Section::Unstaged => "未暂存",
         }
     }
 }
@@ -2964,7 +2964,7 @@ impl GitPanel {
                 .collect::<Vec<_>>();
 
             if changed_files.is_empty() && !options.amend {
-                error_spawn("No changes to commit", window, cx);
+                error_spawn("没有可提交的更改", window, cx);
                 return;
             }
 
@@ -3514,7 +3514,7 @@ impl GitPanel {
             let selection = cx
                 .update(|window, cx| {
                     picker_prompt::prompt(
-                        "Pick which remote to fetch",
+                        "选择要获取的远程仓库",
                         remotes.iter().map(|r| r.name()).collect(),
                         workspace,
                         window,
@@ -5303,10 +5303,10 @@ impl GitPanel {
         } else {
             button.tooltip(move |_window, cx| {
                 if !can_commit {
-                    Tooltip::simple("No Changes to Commit", cx)
+                    Tooltip::simple("没有可提交的更改", cx)
                 } else {
                     Tooltip::for_action_in(
-                        "Generate Commit Message",
+                        "生成提交消息",
                         &git::GenerateCommitMessage,
                         &editor_focus_handle,
                         cx,
@@ -5390,7 +5390,7 @@ impl GitPanel {
                             })
                             .when(has_previous_commit, |this| {
                                 this.toggleable_entry(
-                                    "Amend",
+                                    "修正提交",
                                     amend,
                                     IconPosition::Start,
                                     Some(Box::new(Amend)),
@@ -5407,7 +5407,7 @@ impl GitPanel {
                                 )
                             })
                             .toggleable_entry(
-                                "Signoff",
+                                "签字确认",
                                 signoff,
                                 IconPosition::Start,
                                 Some(Box::new(Signoff)),
@@ -5625,7 +5625,7 @@ impl GitPanel {
                                 ),
                         )
                         .tooltip(Tooltip::for_action_title_in(
-                            "View Diff",
+                            "查看差异",
                             &Diff,
                             &self.focus_handle,
                         ))
@@ -5718,7 +5718,7 @@ impl GitPanel {
                     .tooltip({
                         move |_window, cx| {
                             Tooltip::for_action_in(
-                                "Open Commit Modal",
+                                "打开提交模态框",
                                 &git::ExpandCommitEditor,
                                 &editor_focus_handle,
                                 cx,
@@ -6028,7 +6028,7 @@ impl GitPanel {
                                     .icon_size(IconSize::Small)
                                     .tooltip(move |_window, cx| {
                                         Tooltip::with_meta(
-                                            "Uncommit",
+                                            "取消提交",
                                             Some(&git::Uncommit),
                                             if has_unstaged {
                                                 "git reset HEAD^ --soft"
@@ -6838,7 +6838,7 @@ impl GitPanel {
         } else if worktree_count == 0 {
             let focus_handle = self.focus_handle.clone();
             ProjectEmptyState::new(
-                "Git Panel",
+                "Git 面板",
                 focus_handle.clone(),
                 KeyBinding::for_action_in(&workspace::Open::default(), &focus_handle, cx),
             )
@@ -7150,9 +7150,9 @@ impl GitPanel {
 
     fn render_empty_section(&self, section: Section) -> AnyElement {
         let message = match section {
-            Section::Staged => "No staged changes yet",
-            Section::Unstaged => "No unstaged changes",
-            _ => "No changes",
+            Section::Staged => "还没有暂存的更改",
+            Section::Unstaged => "还没有未暂存的更改",
+            _ => "没有更改",
         };
         h_flex()
             .h(self.list_item_height())
@@ -7527,7 +7527,7 @@ impl GitPanel {
                             })
                             .tooltip(move |_window, cx| {
                                 if resolved_conflict {
-                                    Tooltip::simple("Conflict marked as resolved", cx)
+                                    Tooltip::simple("冲突已标记为已解决", cx)
                                 } else {
                                     let action = stage_intent.label(|| stage_status);
                                     Tooltip::for_action(action, &ToggleStaged, cx)
