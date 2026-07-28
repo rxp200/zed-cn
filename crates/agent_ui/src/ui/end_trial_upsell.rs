@@ -33,7 +33,7 @@ impl RenderOnce for EndTrialUpsell {
             )
             .child(PlanDefinitions.pro_plan())
             .child(
-                Button::new("cta-button", "Upgrade to Zed Pro")
+                Button::new("cta-button", "升级到Zed Pro")
                     .full_width()
                     .style(ButtonStyle::Tinted(ui::TintColor::Accent))
                     .on_click(move |_, _window, cx| {
@@ -77,7 +77,7 @@ impl RenderOnce for EndTrialUpsell {
                 h_flex().absolute().top_4().right_4().child(
                     IconButton::new("dismiss_onboarding", IconName::Close)
                         .icon_size(IconSize::Small)
-                        .tooltip(Tooltip::text("Dismiss"))
+                        .tooltip(Tooltip::text("关闭"))
                         .on_click({
                             let callback = self.dismiss_upsell.clone();
                             move |_, window, cx| {

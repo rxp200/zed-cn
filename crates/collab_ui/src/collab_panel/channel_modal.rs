@@ -179,7 +179,7 @@ impl Render for ChannelModal {
                             )
                             .children(
                                 Some(
-                                    Button::new("copy-link", "Copy Link")
+                                    Button::new("copy-link", "复制链接")
                                         .label_size(LabelSize::Small)
                                         .on_click(cx.listener(move |this, _, _, cx| {
                                             if let Some(channel) = this

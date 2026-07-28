@@ -185,7 +185,7 @@ fn render_agent(
             .icon_size(IconSize::Small)
             .size(ButtonSize::Medium)
             .tab_index(0isize)
-            .tooltip(Tooltip::text("Configure Agent"))
+            .tooltip(Tooltip::text("配置Agent"))
             .on_click(cx.listener({
                 let id = id.clone();
                 move |this, _event, window, cx| {
@@ -270,7 +270,7 @@ pub(crate) fn render_add_agent_popover(
 
     let popover = PopoverMenu::new("add-agent-server-popover")
         .trigger(
-            Button::new("add-agent", "Add Agent")
+            Button::new("add-agent", "添加Agent")
                 .style(ButtonStyle::Outlined)
                 .track_focus(&focus_handle)
                 .start_icon(
@@ -600,7 +600,7 @@ fn render_env_section(
                             .icon_size(IconSize::Small)
                             .icon_color(Color::Muted)
                             .tab_index(0isize)
-                            .tooltip(Tooltip::text("Remove"))
+                            .tooltip(Tooltip::text("移除"))
                             .on_click(cx.listener(move |this, _, _window, cx| {
                                 if let Some(form) = this.custom_agent_form.as_mut()
                                     && ix < form.env.len()
@@ -613,7 +613,7 @@ fn render_env_section(
             )
         }))
         .child(
-            Button::new("custom-agent-env-add", "Add")
+            Button::new("custom-agent-env-add", "添加")
                 .style(ButtonStyle::Outlined)
                 .label_size(LabelSize::Small)
                 .tab_index(0isize)
@@ -684,7 +684,7 @@ fn render_form_actions(
                 .border_1()
                 .border_color(cancel_border)
                 .child(
-                    Button::new("custom-agent-form-cancel", "Cancel")
+                    Button::new("custom-agent-form-cancel", "取消")
                         .style(ButtonStyle::Subtle)
                         .track_focus(&cancel_handle)
                         .on_click(cx.listener(|this, _, window, cx| {
@@ -699,7 +699,7 @@ fn render_form_actions(
                 .border_1()
                 .border_color(save_border)
                 .child(
-                    Button::new("custom-agent-form-save", "Save")
+                    Button::new("custom-agent-form-save", "保存")
                         .style(ButtonStyle::Filled)
                         .track_focus(&save_handle)
                         .on_click(cx.listener(|this, _, window, cx| {

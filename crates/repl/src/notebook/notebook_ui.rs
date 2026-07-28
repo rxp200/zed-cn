@@ -1125,7 +1125,7 @@ impl NotebookEditor {
                     .items_center()
                     .child(
                         Self::render_notebook_control("more-menu", IconName::Ellipsis, window, cx)
-                            .tooltip(move |window, cx| (Tooltip::text("More options"))(window, cx)),
+                            .tooltip(move |window, cx| (Tooltip::text("更多选项"))(window, cx)),
                     )
                     .child(Self::button_group(window, cx).child({
                         let kernel_status = self.kernel.status();
@@ -1289,7 +1289,7 @@ impl NotebookEditor {
                 h_flex()
                     .gap_2()
                     .child(
-                        Button::new("empty-state-add-code", "Add code cell")
+                        Button::new("empty-state-add-code", "添加代码单元格")
                             .start_icon(Icon::new(IconName::Code))
                             .key_binding(KeyBinding::for_action_in(
                                 &AddCodeBlock,
@@ -1301,7 +1301,7 @@ impl NotebookEditor {
                             ),
                     )
                     .child(
-                        Button::new("empty-state-add-markdown", "Add markdown cell")
+                        Button::new("empty-state-add-markdown", "添加Markdown单元格")
                             .style(ButtonStyle::Subtle)
                             .start_icon(Icon::new(IconName::FileMarkdown))
                             .key_binding(KeyBinding::for_action_in(

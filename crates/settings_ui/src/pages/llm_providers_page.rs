@@ -85,7 +85,7 @@ pub(crate) fn render_add_llm_provider_popover(
 
     PopoverMenu::new("add-llm-provider-popover")
         .trigger(
-            Button::new("add-llm-provider", "Add Provider")
+            Button::new("add-llm-provider", "添加提供商")
                 .style(ButtonStyle::Outlined)
                 .track_focus(&focus_handle)
                 .label_size(LabelSize::Small)
@@ -756,7 +756,7 @@ fn render_models_section(
                 .justify_between()
                 .child(Label::new("Models"))
                 .child(
-                    Button::new("add-model", "Add Model")
+                    Button::new("add-model", "添加模型")
                         .start_icon(
                             Icon::new(IconName::Plus)
                                 .size(IconSize::XSmall)
@@ -1018,7 +1018,7 @@ fn render_form_actions(cx: &mut Context<SettingsWindow>) -> impl IntoElement {
         .gap_1()
         .justify_end()
         .child(
-            Button::new("llm-provider-form-cancel", "Cancel").on_click(cx.listener(
+            Button::new("llm-provider-form-cancel", "取消").on_click(cx.listener(
                 |this, _, window, cx| {
                     this.llm_provider_form = None;
                     this.pop_sub_page(window, cx);
@@ -1026,7 +1026,7 @@ fn render_form_actions(cx: &mut Context<SettingsWindow>) -> impl IntoElement {
             )),
         )
         .child(
-            Button::new("llm-provider-form-save", "Save Provider")
+            Button::new("llm-provider-form-save", "保存提供商")
                 .style(ButtonStyle::Filled)
                 .on_click(cx.listener(|this, _, window, cx| {
                     save_llm_provider_form(this, window, cx);

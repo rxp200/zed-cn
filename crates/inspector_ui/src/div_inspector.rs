@@ -544,7 +544,7 @@ impl Render for DivInspector {
                                     .child(Label::new("Rust Style").size(LabelSize::Large))
                                     .child(
                                         IconButton::new("reset-style", IconName::Eraser)
-                                            .tooltip(Tooltip::text("Reset style"))
+                                            .tooltip(Tooltip::text("重置样式"))
                                             .on_click(cx.listener(|this, _, _window, cx| {
                                                 this.reset_style(cx);
                                             })),
@@ -588,7 +588,7 @@ fn render_layout_state(inspector_state: &DivInspectorState, cx: &App) -> Div {
             div()
                 .id("content-size")
                 .text_ui(cx)
-                .tooltip(Tooltip::text("Size of the element's children"))
+                .tooltip(Tooltip::text("元素子项的大小"))
                 .child(
                     if inspector_state.content_size != inspector_state.bounds.size {
                         format!("Content size: {}", inspector_state.content_size)

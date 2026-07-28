@@ -14,7 +14,7 @@ use gpui::{AnyElement, IntoElement, ParentElement, Styled};
 ///     .severity(Severity::Success)
 ///     .children([Label::new("This is a success message")])
 ///     .action_slot(
-///         Button::new("learn-more", "Learn More")
+///         Button::new("learn-more", "了解更多")
 ///             .end_icon(Icon::new(IconName::ArrowUpRight).size(IconSize::Small)),
 ///     );
 /// ```
@@ -153,7 +153,7 @@ impl Component for Banner {
                     .severity(Severity::Info)
                     .child(Label::new("This is an informational message"))
                     .action_slot(
-                        Button::new("learn-more", "Learn More")
+                        Button::new("learn-more", "了解更多")
                             .end_icon(Icon::new(IconName::ArrowUpRight).size(IconSize::Small)),
                     )
                     .into_any_element(),
@@ -163,7 +163,7 @@ impl Component for Banner {
                 Banner::new()
                     .severity(Severity::Success)
                     .child(Label::new("Operation completed successfully"))
-                    .action_slot(Button::new("dismiss", "Dismiss"))
+                    .action_slot(Button::new("dismiss", "关闭"))
                     .into_any_element(),
             ),
             single_example(
@@ -171,7 +171,7 @@ impl Component for Banner {
                 Banner::new()
                     .severity(Severity::Warning)
                     .child(Label::new("Your settings file uses deprecated settings"))
-                    .action_slot(Button::new("update", "Update Settings"))
+                    .action_slot(Button::new("update", "更新设置"))
                     .into_any_element(),
             ),
             single_example(
@@ -179,7 +179,7 @@ impl Component for Banner {
                 Banner::new()
                     .severity(Severity::Error)
                     .child(Label::new("Connection error: unable to connect to server"))
-                    .action_slot(Button::new("reconnect", "Retry"))
+                    .action_slot(Button::new("reconnect", "重试"))
                     .into_any_element(),
             ),
         ];

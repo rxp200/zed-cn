@@ -205,9 +205,9 @@ impl QuickActionBar {
                         },
                     )
                     .separator()
-                    .action("View Sessions", Box::new(repl::Sessions))
+                    .action("查看会话", Box::new(repl::Sessions))
                     // TODO: Add shut down all kernels action
-                    // .action("Shut Down all Kernels", Box::new(gpui::NoAction))
+                    // .action("关闭所有内核", Box::new(gpui::NoAction))
                 })
                 .into()
             })
@@ -220,7 +220,7 @@ impl QuickActionBar {
                     )
                     .width(rems(1.))
                     .disabled(menu_state.popover_disabled),
-                Tooltip::text("REPL Menu"),
+                Tooltip::text("REPL菜单"),
             );
 
         let button = ButtonLike::new_rounded_left("toggle_repl_icon")
@@ -367,7 +367,7 @@ impl QuickActionBar {
                                 .size(IconSize::XSmall),
                         ),
                 ),
-            Tooltip::text("Select Kernel"),
+            Tooltip::text("选择内核"),
         )
         .with_handle(menu_handle)
         .into_any_element()

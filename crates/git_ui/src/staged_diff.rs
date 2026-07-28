@@ -112,7 +112,7 @@ impl DiffHunkDelegate for StagedDiffDelegate {
             .child(
                 Button::new(("unstage", row as u64), "Unstage")
                     .alpha(if status.is_pending() { 0.66 } else { 1.0 })
-                    .tooltip(Tooltip::text("Unstage Hunk"))
+                    .tooltip(Tooltip::text("取消暂存代码块"))
                     .on_click({
                         let editor = editor.clone();
                         move |_event, window, cx| {
@@ -686,9 +686,9 @@ impl Render for StagedDiffToolbar {
                 h_group_sm()
                     .when(button_states.selection, |this| {
                         this.child(
-                            Button::new("unstage", "Unstage")
+                            Button::new("unstage", "取消暂存")
                                 .disabled(!button_states.unstage)
-                                .tooltip(Tooltip::text("Unstage Selected Hunks"))
+                                .tooltip(Tooltip::text("取消暂存选中的代码块"))
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.unstage_selected_staged_hunks(false, window, cx)
                                 })),
@@ -696,7 +696,7 @@ impl Render for StagedDiffToolbar {
                     })
                     .when(!button_states.selection, |this| {
                         this.child(
-                            Button::new("unstage", "Unstage")
+                            Button::new("unstage", "取消暂存")
                                 .disabled(!button_states.unstage)
                                 .tooltip(Tooltip::for_action_title_in(
                                     "Unstage and Go to Next Hunk",
@@ -711,7 +711,7 @@ impl Render for StagedDiffToolbar {
             )
             .child(Divider::vertical())
             .child(
-                Button::new("unstage-all", "Unstage All")
+                Button::new("unstage-all", "取消全部暂存")
                     .width(rems_from_px(80.))
                     .disabled(!button_states.unstage_all)
                     .tooltip(Tooltip::for_action_title_in(
@@ -723,7 +723,7 @@ impl Render for StagedDiffToolbar {
             )
             .child(Divider::vertical())
             .child(
-                Button::new("commit", "Commit")
+                Button::new("commit", "提交")
                     .tooltip(Tooltip::for_action_title_in(
                         "Commit",
                         &Commit,

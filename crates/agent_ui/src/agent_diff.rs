@@ -711,7 +711,7 @@ impl Render for AgentDiffPane {
                         .gap_2()
                         .child("No changes to review")
                         .child(
-                            Button::new("continue-iterating", "Continue Iterating")
+                            Button::new("continue-iterating", "继续迭代")
                                 .style(ButtonStyle::Filled)
                                 .start_icon(
                                     Icon::new(IconName::ForwardArrow)
@@ -1089,7 +1089,7 @@ impl Render for AgentDiffToolbar {
         let spinner_icon = div()
             .px_0p5()
             .id("generating")
-            .tooltip(Tooltip::text("Generating Changes…"))
+            .tooltip(Tooltip::text("正在生成更改…"))
             .child(
                 Icon::new(IconName::LoadCircle)
                     .size(IconSize::Small)
@@ -1154,7 +1154,7 @@ impl Render for AgentDiffToolbar {
                         h_flex()
                             .gap_0p5()
                             .child(
-                                Button::new("reject-all", "Reject All")
+                                Button::new("reject-all", "全部拒绝")
                                     .key_binding({
                                         KeyBinding::for_action_in(
                                             &RejectAll,
@@ -1168,7 +1168,7 @@ impl Render for AgentDiffToolbar {
                                     })),
                             )
                             .child(
-                                Button::new("keep-all", "Keep All")
+                                Button::new("keep-all", "全部保留")
                                     .key_binding({
                                         KeyBinding::for_action_in(
                                             &KeepAll,
@@ -1250,7 +1250,7 @@ impl Render for AgentDiffToolbar {
                     .child(
                         h_group_sm()
                             .child(
-                                Button::new("reject-all", "Reject All")
+                                Button::new("reject-all", "全部拒绝")
                                     .key_binding({
                                         KeyBinding::for_action_in(&RejectAll, &focus_handle, cx)
                                             .map(|kb| kb.size(rems_from_px(12.)))
@@ -1260,7 +1260,7 @@ impl Render for AgentDiffToolbar {
                                     })),
                             )
                             .child(
-                                Button::new("keep-all", "Keep All")
+                                Button::new("keep-all", "全部保留")
                                     .key_binding({
                                         KeyBinding::for_action_in(&KeepAll, &focus_handle, cx)
                                             .map(|kb| kb.size(rems_from_px(12.)))

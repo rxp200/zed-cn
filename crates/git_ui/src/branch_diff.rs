@@ -801,13 +801,13 @@ impl Render for BranchDiffToolbar {
                                 .size(IconSize::XSmall)
                                 .color(Color::Muted),
                         ),
-                        Tooltip::text("Select Base Branch"),
+                        Tooltip::text("选择基础分支"),
                     ),
             )
             .when(show_review_button, |this| {
                 let focus_handle = focus_handle.clone();
                 this.child(Divider::vertical()).child(
-                    Button::new("review-diff", "Review Diff")
+                    Button::new("review-diff", "审查差异")
                         .start_icon(
                             Icon::new(IconName::ZedAssistant)
                                 .size(IconSize::Small)

@@ -253,7 +253,7 @@ impl<S: ApiCompatibleProviderSettings> Render for ApiCompatibleProviderConfigura
                 )
                 .child(
                     h_flex().flex_shrink_0().child(
-                        Button::new("reset-api-key", "Reset API Key")
+                        Button::new("reset-api-key", "重置API密钥")
                             .label_size(LabelSize::Small)
                             .start_icon(Icon::new(IconName::Undo).size(IconSize::Small))
                             .layer(ElevationIndex::ModalSurface)
@@ -279,7 +279,7 @@ impl<S: ApiCompatibleProviderSettings> Render for ApiCompatibleProviderConfigura
                 .child(api_key_section)
                 .child(
                     h_flex().w_full().justify_end().child(
-                        Button::new("remove-compatible-provider", "Remove Provider")
+                        Button::new("remove-compatible-provider", "移除提供商")
                             .style(ButtonStyle::OutlinedGhost)
                             .label_size(LabelSize::Small)
                             .start_icon(

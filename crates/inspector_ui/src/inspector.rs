@@ -80,7 +80,7 @@ fn render_inspector(
                 .border_color(colors.border_variant)
                 .child(
                     IconButton::new("pick-mode", IconName::MagnifyingGlass)
-                        .tooltip(Tooltip::text("Start inspector pick mode"))
+                        .tooltip(Tooltip::text("启动检查器拾取模式"))
                         .selected_icon_color(Color::Selected)
                         .toggle_state(inspector.is_picking())
                         .on_click(cx.listener(|inspector, _, window, _cx| {
@@ -139,7 +139,7 @@ fn render_inspector_id(inspector_id: &InspectorElementId, cx: &App) -> Div {
                 .font_buffer(cx)
                 .text_xs()
                 .child(source_location_string)
-                .tooltip(Tooltip::text("Click to open by running Zed CLI"))
+                .tooltip(Tooltip::text("点击以运行Zed CLI打开"))
                 .on_click(move |_, _window, cx| {
                     cx.background_spawn(open_zed_source_location(source_location))
                         .detach_and_log_err(cx);
