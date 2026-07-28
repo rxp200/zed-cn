@@ -1177,7 +1177,7 @@ impl Editor {
                     .border_color(icon_color.opacity(0.5))
             })
             .child(Icon::new(IconName::Plus).size(IconSize::Small))
-            .tooltip(Tooltip::text("Add Review (drag to select multiple lines)"))
+            .tooltip(Tooltip::text("添加审查（拖动以选择多行）"))
             .on_mouse_down(
                 gpui::MouseButton::Left,
                 cx.listener(move |editor, _event: &gpui::MouseDownEvent, window, cx| {
@@ -2546,7 +2546,7 @@ impl Editor {
                                 IconButton::new("diff-review-close", IconName::Close)
                                     .icon_color(ui::Color::Muted)
                                     .icon_size(action_icon_size)
-                                    .tooltip(Tooltip::text("Close"))
+                                    .tooltip(Tooltip::text("关闭"))
                                     .on_click(|_, window, cx| {
                                         window
                                             .dispatch_action(Box::new(crate::actions::Cancel), cx);
@@ -2556,7 +2556,7 @@ impl Editor {
                                 IconButton::new("diff-review-add", IconName::Return)
                                     .icon_color(ui::Color::Muted)
                                     .icon_size(action_icon_size)
-                                    .tooltip(Tooltip::text("Add comment"))
+                                    .tooltip(Tooltip::text("添加评论"))
                                     .on_click(|_, window, cx| {
                                         window.dispatch_action(
                                             Box::new(crate::actions::SubmitDiffReviewComment),
@@ -2716,7 +2716,7 @@ impl Editor {
                         )
                         .icon_color(ui::Color::Muted)
                         .icon_size(action_icon_size)
-                        .tooltip(Tooltip::text("Cancel"))
+                        .tooltip(Tooltip::text("取消"))
                         .on_click(move |_, window, cx| {
                             window.dispatch_action(
                                 Box::new(crate::actions::CancelEditReviewComment {
@@ -2733,7 +2733,7 @@ impl Editor {
                         )
                         .icon_color(ui::Color::Muted)
                         .icon_size(action_icon_size)
-                        .tooltip(Tooltip::text("Confirm"))
+                        .tooltip(Tooltip::text("确认"))
                         .on_click(move |_, window, cx| {
                             window.dispatch_action(
                                 Box::new(crate::actions::ConfirmEditReviewComment {

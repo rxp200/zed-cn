@@ -207,12 +207,12 @@ impl Render for KeyContextView {
                     .mt_4()
                     .gap_4()
                     .child(
-                        Button::new("open_documentation", "Open Documentation")
+                        Button::new("open_documentation", "打开文档")
                             .style(ButtonStyle::Filled)
                             .on_click(|_, _, cx| cx.open_url("https://zed.dev/docs/key-bindings")),
                     )
                     .child(
-                        Button::new("view_default_keymap", "View Default Keymap")
+                        Button::new("view_default_keymap", "查看默认键位映射")
                             .style(ButtonStyle::Filled)
                             .key_binding(ui::KeyBinding::for_action(
                                 &zed_actions::OpenDefaultKeymap,
@@ -223,7 +223,7 @@ impl Render for KeyContextView {
                             }),
                     )
                     .child(
-                        Button::new("edit_your_keymap", "Edit Keymap File")
+                        Button::new("edit_your_keymap", "编辑键位映射文件")
                             .style(ButtonStyle::Filled)
                             .key_binding(ui::KeyBinding::for_action(&zed_actions::OpenKeymapFile, cx))
                             .on_click(|_, window, cx| {

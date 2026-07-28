@@ -1121,7 +1121,7 @@ impl Render for ConfigurationView {
                                 }
                             })
                             .child(
-                                Button::new("view-models", "Model Catalog")
+                                Button::new("view-models", "模型目录")
                                     .style(ButtonStyle::OutlinedGhost)
                                     .size(ButtonSize::Medium)
                                     .end_icon(
@@ -1147,7 +1147,7 @@ impl Render for ConfigurationView {
                                     )
                                     .child(
                                         IconButton::new("refresh-models", IconName::RotateCcw)
-                                            .tooltip(Tooltip::text("Refresh Models"))
+                                            .tooltip(Tooltip::text("刷新模型"))
                                             .icon_size(IconSize::Small)
                                             .on_click(cx.listener(|this, _, _window, cx| {
                                                 this.state.update(cx, |state, _| {
@@ -1159,7 +1159,7 @@ impl Render for ConfigurationView {
                             )
                         } else {
                             this.child(
-                                Button::new("retry_lmstudio_models", "Connect")
+                                Button::new("retry_lmstudio_models", "连接")
                                     .style(ButtonStyle::Outlined)
                                     .size(ButtonSize::Medium)
                                     .start_icon(

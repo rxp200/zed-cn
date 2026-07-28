@@ -142,7 +142,7 @@ impl TerminalPanel {
                         PopoverMenu::new("terminal-tab-bar-popover-menu")
                             .trigger_with_tooltip(
                                 IconButton::new("plus", IconName::Plus).icon_size(IconSize::Small),
-                                Tooltip::text("New…"),
+                                Tooltip::text("新建…"),
                             )
                             .anchor(Anchor::TopRight)
                             .with_handle(pane.new_item_context_menu_handle.clone())
@@ -176,7 +176,7 @@ impl TerminalPanel {
                             .trigger_with_tooltip(
                                 IconButton::new("terminal-pane-split", IconName::Split)
                                     .icon_size(IconSize::Small),
-                                Tooltip::text("Split Pane"),
+                                Tooltip::text("分割窗格"),
                             )
                             .anchor(Anchor::TopRight)
                             .with_handle(pane.split_item_context_menu_handle.clone())
@@ -187,10 +187,10 @@ impl TerminalPanel {
                                             split_context.clone(),
                                             |menu, split_context| menu.context(split_context),
                                         )
-                                        .action("Split Right", SplitRight::default().boxed_clone())
-                                        .action("Split Left", SplitLeft::default().boxed_clone())
-                                        .action("Split Up", SplitUp::default().boxed_clone())
-                                        .action("Split Down", SplitDown::default().boxed_clone())
+                                        .action("向右分割", SplitRight::default().boxed_clone())
+                                        .action("向左分割", SplitLeft::default().boxed_clone())
+                                        .action("向上分割", SplitUp::default().boxed_clone())
+                                        .action("向下分割", SplitDown::default().boxed_clone())
                                     })
                                     .into()
                                 }
@@ -1305,7 +1305,7 @@ impl Render for FailedToSpawnTerminal {
             .menu(move |window, cx| {
                 Some(ContextMenu::build(window, cx, |context_menu, _, _| {
                     context_menu
-                        .action("Open Settings", zed_actions::OpenSettings.boxed_clone())
+                        .action("打开设置", zed_actions::OpenSettings.boxed_clone())
                         .action(
                             "Edit settings.json",
                             zed_actions::OpenSettingsFile.boxed_clone(),

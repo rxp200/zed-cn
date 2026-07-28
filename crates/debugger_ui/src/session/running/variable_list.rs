@@ -707,15 +707,15 @@ impl VariableList {
             cx.update(|window, cx| {
                 let context_menu = ContextMenu::build(window, cx, |menu, _, _| {
                     menu.when_some(entry.as_variable(), |menu, _| {
-                        menu.action("Copy Name", CopyVariableName.boxed_clone())
-                            .action("Copy Value", CopyVariableValue.boxed_clone())
+                        menu.action("复制名称", CopyVariableName.boxed_clone())
+                            .action("复制值", CopyVariableValue.boxed_clone())
                             .when(supports_set_variable, |menu| {
-                                menu.action("Edit Value", EditVariable.boxed_clone())
+                                menu.action("编辑值", EditVariable.boxed_clone())
                             })
                             .when(supports_go_to_memory, |menu| {
-                                menu.action("Go To Memory", GoToMemory.boxed_clone())
+                                menu.action("转到内存", GoToMemory.boxed_clone())
                             })
-                            .action("Watch Variable", AddWatch.boxed_clone())
+                            .action("监视变量", AddWatch.boxed_clone())
                             .when_some(can_toggle_data_breakpoint, |mut menu, data_info| {
                                 menu = menu.separator();
                                 if let Some(access_types) = data_info.access_types {
@@ -748,12 +748,12 @@ impl VariableList {
                             })
                     })
                     .when(entry.as_watcher().is_some(), |menu| {
-                        menu.action("Copy Name", CopyVariableName.boxed_clone())
-                            .action("Copy Value", CopyVariableValue.boxed_clone())
+                        menu.action("复制名称", CopyVariableName.boxed_clone())
+                            .action("复制值", CopyVariableValue.boxed_clone())
                             .when(supports_set_variable, |menu| {
-                                menu.action("Edit Value", EditVariable.boxed_clone())
+                                menu.action("编辑值", EditVariable.boxed_clone())
                             })
-                            .action("Remove Watch", RemoveWatch.boxed_clone())
+                            .action("移除监视", RemoveWatch.boxed_clone())
                     })
                     .context(focus_handle.clone())
                 });

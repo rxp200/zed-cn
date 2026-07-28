@@ -462,7 +462,7 @@ fn render_mermaid_tab_header(
         .gap_0p5()
         .mb_2p5()
         .child(
-            Button::new(preview_id, "Preview")
+            Button::new(preview_id, "预览")
                 .label_size(LabelSize::Small)
                 .selected_style(ButtonStyle::Tinted(TintColor::Accent))
                 .toggle_state(!showing_code)
@@ -476,7 +476,7 @@ fn render_mermaid_tab_header(
                 }),
         )
         .child(
-            Button::new(code_id, "Code")
+            Button::new(code_id, "代码")
                 .label_size(LabelSize::Small)
                 .selected_style(ButtonStyle::Tinted(TintColor::Accent))
                 .toggle_state(showing_code)

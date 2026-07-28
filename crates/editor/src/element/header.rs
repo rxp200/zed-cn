@@ -925,7 +925,7 @@ pub(crate) fn render_buffer_header(
                                 })
                                 .when(show_open_file_button, |this| {
                                     this.child(
-                                        Button::new("open-file-button", "Open File")
+                                        Button::new("open-file-button", "打开文件")
                                             .style(ButtonStyle::OutlinedCustom(
                                                 cx.theme().colors().border.opacity(0.6),
                                             ))

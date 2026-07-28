@@ -1180,7 +1180,7 @@ impl CollabPanel {
         } else if is_current_user {
             IconButton::new("leave-call", IconName::Exit)
                 .icon_size(IconSize::Small)
-                .tooltip(Tooltip::text("Leave Call"))
+                .tooltip(Tooltip::text("离开通话"))
                 .on_click(move |_, window, cx| Self::leave_call(window, cx))
                 .into_any_element()
         } else if role == proto::ChannelRole::Guest {
@@ -1198,7 +1198,7 @@ impl CollabPanel {
             .child(render_participant_name_and_handle(user))
             .toggle_state(is_selected)
             .end_slot(end_slot)
-            .tooltip(Tooltip::text("Click to Follow"))
+            .tooltip(Tooltip::text("点击跟随"))
             .when_some(peer_id, |el, peer_id| {
                 if role == proto::ChannelRole::Guest {
                     return el;
@@ -1305,7 +1305,7 @@ impl CollabPanel {
                         })
                         .ok();
                 }))
-                .tooltip(Tooltip::text("Open Shared Screen"))
+                .tooltip(Tooltip::text("打开共享屏幕"))
             })
     }
 
@@ -1360,7 +1360,7 @@ impl CollabPanel {
                     ),
             )
             .child(Label::new("notes"))
-            .tooltip(Tooltip::text("Open Channel Notes"))
+            .tooltip(Tooltip::text("打开频道笔记"))
     }
 
     fn has_subchannels(&self, ix: usize) -> bool {
@@ -2849,7 +2849,7 @@ impl CollabPanel {
                         this.pr_2p5().child(
                             IconButton::new("clear_filter", IconName::Close)
                                 .shape(IconButtonShape::Square)
-                                .tooltip(Tooltip::text("Clear Filter"))
+                                .tooltip(Tooltip::text("清除筛选"))
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.reset_filter_editor_text(window, cx);
                                     cx.notify();
@@ -3028,7 +3028,7 @@ impl CollabPanel {
                     .on_click(
                         cx.listener(|this, _, window, cx| this.toggle_contact_finder(window, cx)),
                     )
-                    .tooltip(Tooltip::text("Search for New Contact"))
+                    .tooltip(Tooltip::text("搜索新联系人"))
                     .into_any_element(),
             ),
             Section::Channels => {
@@ -3056,7 +3056,7 @@ impl CollabPanel {
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.new_root_channel(window, cx)
                                 }))
-                                .tooltip(Tooltip::text("Create Channel")),
+                                .tooltip(Tooltip::text("创建频道")),
                         )
                         .into_any_element(),
                 )
@@ -3231,13 +3231,13 @@ impl CollabPanel {
                         this.respond_to_contact_request(user_id, false, window, cx);
                     }))
                     .icon_color(color)
-                    .tooltip(Tooltip::text("Decline invite")),
+                    .tooltip(Tooltip::text("拒绝邀请")),
                 IconButton::new("accept-contact", IconName::Check)
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.respond_to_contact_request(user_id, true, window, cx);
                     }))
                     .icon_color(color)
-                    .tooltip(Tooltip::text("Accept invite")),
+                    .tooltip(Tooltip::text("接受邀请")),
             ]
         } else {
             let github_login = username.clone();
@@ -3247,7 +3247,7 @@ impl CollabPanel {
                         this.remove_contact(user_id, &github_login, window, cx);
                     }))
                     .icon_color(color)
-                    .tooltip(Tooltip::text("Cancel invite")),
+                    .tooltip(Tooltip::text("取消邀请")),
             ]
         };
 
@@ -3288,13 +3288,13 @@ impl CollabPanel {
                     this.respond_to_channel_invite(channel_id, false, cx);
                 }))
                 .icon_color(color)
-                .tooltip(Tooltip::text("Decline invite")),
+                .tooltip(Tooltip::text("拒绝邀请")),
             IconButton::new("accept-invite", IconName::Check)
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.respond_to_channel_invite(channel_id, true, cx);
                 }))
                 .icon_color(color)
-                .tooltip(Tooltip::text("Accept invite")),
+                .tooltip(Tooltip::text("接受邀请")),
         ];
 
         ListItem::new(("channel-invite", channel.id.0 as usize))
@@ -4184,23 +4184,23 @@ impl Render for CollabNotificationToast {
         let needs_response = self.notification.is_some();
 
         let accept_button = if needs_response {
-            Button::new("accept", "Accept").on_click(cx.listener(|this, _, window, cx| {
+            Button::new("accept", "接受").on_click(cx.listener(|this, _, window, cx| {
                 this.respond(true, window, cx);
                 cx.stop_propagation();
             }))
         } else {
-            Button::new("dismiss", "Dismiss").on_click(cx.listener(|_, _, _, cx| {
+            Button::new("dismiss", "关闭").on_click(cx.listener(|_, _, _, cx| {
                 cx.emit(DismissEvent);
             }))
         };
 
         let decline_button = if needs_response {
-            Button::new("decline", "Decline").on_click(cx.listener(|this, _, window, cx| {
+            Button::new("decline", "拒绝").on_click(cx.listener(|this, _, window, cx| {
                 this.respond(false, window, cx);
                 cx.stop_propagation();
             }))
         } else {
-            Button::new("close", "Close").on_click(cx.listener(|_, _, _, cx| {
+            Button::new("close", "关闭").on_click(cx.listener(|_, _, _, cx| {
                 cx.emit(DismissEvent);
             }))
         };

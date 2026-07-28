@@ -181,11 +181,11 @@ impl Render for ProfileSelector {
         }
 
         if !self.provider.profiles_supported(cx) {
-            return Button::new("tools-not-supported-button", "Tools Unsupported")
+            return Button::new("tools-not-supported-button", "不支持的工具")
                 .disabled(true)
                 .label_size(LabelSize::Small)
                 .color(Color::Muted)
-                .tooltip(Tooltip::text("This model does not support tools."))
+                .tooltip(Tooltip::text("此模型不支持工具。"))
                 .into_any_element();
         }
 
@@ -790,7 +790,7 @@ impl PickerDelegate for ProfilePickerDelegate {
                         .border_color(cx.theme().colors().border_variant)
                         .p_1p5()
                         .child(
-                            Button::new("configure", "Configure")
+                            Button::new("configure", "配置")
                                 .full_width()
                                 .style(ButtonStyle::Outlined)
                                 .key_binding(
@@ -817,7 +817,7 @@ impl PickerDelegate for ProfilePickerDelegate {
                             .border_color(cx.theme().colors().border_variant)
                             .p_1p5()
                             .child(
-                                Button::new("restricted-mode", "Restricted Mode")
+                                Button::new("restricted-mode", "受限模式")
                                     .full_width()
                                     .style(ButtonStyle::Tinted(TintColor::Warning))
                                     .color(Color::Warning)

@@ -517,7 +517,7 @@ impl RenderOnce for DiffStyleControls {
                 IconButton::new("diff-style-unified", IconName::DiffUnified)
                     .icon_size(IconSize::Small)
                     .toggle_state(diff_view_style == DiffViewStyle::Unified)
-                    .tooltip(Tooltip::text("Unified"))
+                    .tooltip(Tooltip::text("统一"))
                     .on_click({
                         let splittable_editor = self.splittable_editor.clone();
                         move |_, window, cx| {

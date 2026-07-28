@@ -997,7 +997,7 @@ impl EditPredictionButton {
                 .context(editor_focus_handle)
                 .when(
                     cx.has_flag::<PredictEditsRatePredictionsFeatureFlag>(),
-                    |this| this.action("Rate Predictions", RatePredictions.boxed_clone()),
+                    |this| this.action("评价预测", RatePredictions.boxed_clone()),
                 );
         }
 
@@ -1057,7 +1057,7 @@ impl EditPredictionButton {
                     "Go to Copilot Settings",
                     OpenBrowser { url: settings_url }.boxed_clone(),
                 )
-                .action("Sign Out", copilot::SignOut.boxed_clone());
+                .action("登出", copilot::SignOut.boxed_clone());
             menu
         })
     }

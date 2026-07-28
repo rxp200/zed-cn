@@ -238,7 +238,7 @@ impl RenderOnce for ModelSelectorFooter {
             .border_t_1()
             .border_color(cx.theme().colors().border_variant)
             .child(
-                Button::new("configure", "Configure")
+                Button::new("configure", "配置")
                     .full_width()
                     .style(ButtonStyle::Outlined)
                     .key_binding(

@@ -284,7 +284,7 @@ fn render_configure_button(
     )
     .icon_size(IconSize::Small)
     .tab_index(0isize)
-    .tooltip(Tooltip::text("Configure MCP Server"))
+    .tooltip(Tooltip::text("配置MCP服务器"))
     .on_click(move |_event, window, cx| {
         let transport = match &server_settings {
             Some(ContextServerSettings::Http { .. }) => McpTransport::Http,
@@ -313,7 +313,7 @@ fn render_uninstall_button(
     )
     .icon_size(IconSize::Small)
     .tab_index(0isize)
-    .tooltip(Tooltip::text("Uninstall MCP Server"))
+    .tooltip(Tooltip::text("卸载MCP服务器"))
     .on_click(move |_event, _window, cx| {
         uninstall_server(&context_server_id, provided_by_extension, cx);
     })
@@ -411,7 +411,7 @@ fn render_status_details(
                     )
                     .when(should_show_logout, |this| {
                         this.child(
-                            Button::new("error-logout", "Log Out")
+                            Button::new("error-logout", "登出")
                                 .style(ButtonStyle::Outlined)
                                 .label_size(LabelSize::Small)
                                 .on_click({
@@ -450,7 +450,7 @@ fn render_status_details(
                             ),
                     )
                     .child(
-                        Button::new("authenticate-server", "Authenticate")
+                        Button::new("authenticate-server", "认证")
                             .style(ButtonStyle::Outlined)
                             .label_size(LabelSize::Small)
                             .on_click({
@@ -507,7 +507,7 @@ fn render_status_details(
                     .w_full()
                     .justify_end()
                     .child(
-                        Button::new("running-logout", "Log Out")
+                        Button::new("running-logout", "登出")
                             .style(ButtonStyle::Outlined)
                             .label_size(LabelSize::Small)
                             .on_click(move |_event, _window, cx| {
@@ -547,7 +547,7 @@ pub(crate) fn render_add_server_popover(
 
     let popover = PopoverMenu::new("add-mcp-server-popover")
         .trigger(
-            Button::new("add-mcp-server", "Add Server")
+            Button::new("add-mcp-server", "添加服务器")
                 .style(ButtonStyle::Outlined)
                 .track_focus(&focus_handle)
                 .start_icon(
@@ -1053,7 +1053,7 @@ fn render_kv_section(
                             IconButton::new((kind.remove_id(), ix), IconName::Close)
                                 .icon_size(IconSize::Small)
                                 .icon_color(Color::Muted)
-                                .tooltip(Tooltip::text("Remove"))
+                                .tooltip(Tooltip::text("移除"))
                                 .on_click(cx.listener(move |this, _, _window, cx| {
                                     if let Some(form) = this.mcp_server_form.as_mut() {
                                         let rows = kind.rows_mut(form);
@@ -1068,7 +1068,7 @@ fn render_kv_section(
                 .child(input_box(&row.value, cx))
         }))
         .child(
-            Button::new(kind.add_id(), "Add")
+            Button::new(kind.add_id(), "添加")
                 .style(ButtonStyle::Outlined)
                 .label_size(LabelSize::Small)
                 .start_icon(
@@ -1120,7 +1120,7 @@ fn render_form_actions(cx: &mut Context<SettingsWindow>) -> impl IntoElement {
         .justify_end()
         .pt_2()
         .child(
-            Button::new("mcp-form-cancel", "Cancel")
+            Button::new("mcp-form-cancel", "取消")
                 .style(ButtonStyle::Subtle)
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.mcp_server_form = None;
@@ -1128,7 +1128,7 @@ fn render_form_actions(cx: &mut Context<SettingsWindow>) -> impl IntoElement {
                 })),
         )
         .child(
-            Button::new("mcp-form-save", "Save")
+            Button::new("mcp-form-save", "保存")
                 .style(ButtonStyle::Filled)
                 .on_click(cx.listener(|this, _, window, cx| {
                     save_mcp_server_form(this, window, cx);

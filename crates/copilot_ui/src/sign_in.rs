@@ -321,7 +321,7 @@ impl CopilotCodeVerification {
                             }),
                     )
                     .child(
-                        Button::new("copilot-enable-cancel-button", "Cancel")
+                        Button::new("copilot-enable-cancel-button", "取消")
                             .full_width()
                             .size(ButtonSize::Medium)
                             .on_click(cx.listener(|_, _, _, cx| {
@@ -339,7 +339,7 @@ impl CopilotCodeVerification {
             .child(Headline::new("Copilot Enabled!").size(HeadlineSize::Large))
             .child(Label::new("You're all set to use GitHub Copilot.").color(Color::Muted))
             .child(
-                Button::new("copilot-enabled-done-button", "Done")
+                Button::new("copilot-enabled-done-button", "完成")
                     .full_width()
                     .style(ButtonStyle::Outlined)
                     .size(ButtonSize::Medium)
@@ -365,14 +365,14 @@ impl CopilotCodeVerification {
             )
             .child(Label::new(description).color(Color::Warning))
             .child(
-                Button::new("copilot-subscribe-button", "Subscribe on GitHub")
+                Button::new("copilot-subscribe-button", "在GitHub上订阅")
                     .full_width()
                     .style(ButtonStyle::Outlined)
                     .size(ButtonSize::Medium)
                     .on_click(move |_, _, cx| cx.open_url(&sign_up_url)),
             )
             .child(
-                Button::new("copilot-subscribe-cancel-button", "Cancel")
+                Button::new("copilot-subscribe-cancel-button", "取消")
                     .full_width()
                     .size(ButtonSize::Medium)
                     .on_click(cx.listener(|_, _, _, cx| cx.emit(DismissEvent))),
@@ -387,7 +387,7 @@ impl CopilotCodeVerification {
             .child(Headline::new("An Error Happened").size(HeadlineSize::Large))
             .child(Label::new(ERROR_LABEL).color(Color::Muted))
             .child(
-                Button::new("copilot-subscribe-button", "Reinstall Copilot and Sign In")
+                Button::new("copilot-subscribe-button", "重新安装Copilot并登录")
                     .full_width()
                     .style(ButtonStyle::Outlined)
                     .size(ButtonSize::Medium)

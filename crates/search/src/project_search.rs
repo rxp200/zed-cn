@@ -1843,7 +1843,7 @@ impl ProjectSearchView {
                     .mb_2(),
             )
             .child(
-                Button::new("filter-paths", "Include/exclude specific paths")
+                Button::new("filter-paths", "包含/排除特定路径")
                     .start_icon(Icon::new(IconName::Filter).size(IconSize::Small))
                     .key_binding(KeyBinding::for_action_in(&ToggleFilters, &focus_handle, cx))
                     .on_click(|_event, window, cx| {
@@ -1851,7 +1851,7 @@ impl ProjectSearchView {
                     }),
             )
             .child(
-                Button::new("find-replace", "Find and replace")
+                Button::new("find-replace", "查找和替换")
                     .start_icon(Icon::new(IconName::Replace).size(IconSize::Small))
                     .key_binding(KeyBinding::for_action_in(&ToggleReplace, &focus_handle, cx))
                     .on_click(|_event, window, cx| {
@@ -1859,7 +1859,7 @@ impl ProjectSearchView {
                     }),
             )
             .child(
-                Button::new("regex", "Match with regex")
+                Button::new("regex", "使用正则表达式匹配")
                     .start_icon(Icon::new(IconName::Regex).size(IconSize::Small))
                     .key_binding(KeyBinding::for_action_in(&ToggleRegex, &focus_handle, cx))
                     .on_click(|_event, window, cx| {
@@ -1867,7 +1867,7 @@ impl ProjectSearchView {
                     }),
             )
             .child(
-                Button::new("match-case", "Match case")
+                Button::new("match-case", "匹配大小写")
                     .start_icon(Icon::new(IconName::CaseSensitive).size(IconSize::Small))
                     .key_binding(KeyBinding::for_action_in(
                         &ToggleCaseSensitive,
@@ -1879,7 +1879,7 @@ impl ProjectSearchView {
                     }),
             )
             .child(
-                Button::new("match-whole-words", "Match whole words")
+                Button::new("match-whole-words", "匹配整个单词")
                     .start_icon(Icon::new(IconName::WholeWord).size(IconSize::Small))
                     .key_binding(KeyBinding::for_action_in(
                         &ToggleWholeWord,
@@ -2593,7 +2593,7 @@ impl Render for ProjectSearchBar {
                     IconButton::new("project-search-opened-only", IconName::FolderSearch)
                         .shape(IconButtonShape::Square)
                         .toggle_state(self.is_opened_only_enabled(cx))
-                        .tooltip(Tooltip::text("Only Search Open Files"))
+                        .tooltip(Tooltip::text("仅搜索打开的文件"))
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.toggle_opened_only(window, cx);
                         })),

@@ -642,14 +642,14 @@ impl DebugPanel {
                 .on_click(|_, window, cx| {
                     window.dispatch_action(zed_actions::OpenProjectDebugTasks.boxed_clone(), cx);
                 })
-                .tooltip(Tooltip::text("Edit debug.json"))
+                .tooltip(Tooltip::text("编辑debug.json"))
         };
 
         let documentation_button = || {
             IconButton::new("debug-open-documentation", IconName::CircleHelp)
                 .icon_size(IconSize::Small)
                 .on_click(move |_, _, cx| cx.open_url("https://zed.dev/docs/debugger"))
-                .tooltip(Tooltip::text("Open Documentation"))
+                .tooltip(Tooltip::text("打开文档"))
         };
 
         let logs_button = || {
@@ -658,7 +658,7 @@ impl DebugPanel {
                 .on_click(move |_, window, cx| {
                     window.dispatch_action(debugger_tools::OpenDebugAdapterLogs.boxed_clone(), cx)
                 })
-                .tooltip(Tooltip::text("Open Debug Adapter Logs"))
+                .tooltip(Tooltip::text("打开调试适配器日志"))
         };
 
         let close_bottom_panel_button = {
@@ -668,7 +668,7 @@ impl DebugPanel {
                     .on_click(move |_, window, cx| {
                         window.dispatch_action(workspace::ToggleBottomDock.boxed_clone(), cx)
                     })
-                    .tooltip(Tooltip::text("Close Panel")),
+                    .tooltip(Tooltip::text("关闭面板")),
             )
         };
 
@@ -1288,7 +1288,7 @@ impl DebugPanel {
             .disabled(
                 thread_status == ThreadStatus::Running || thread_status == ThreadStatus::Stepping,
             )
-            .tooltip(Tooltip::text("Step Back in Session History"))
+            .tooltip(Tooltip::text("在会话历史中后退"))
             .on_click(window.listener_for(running_state, |this, _, _window, cx| {
                 this.session().update(cx, |session, cx| {
                     let ix = session
@@ -1754,7 +1754,7 @@ impl Render for DebugPanel {
                         .justify_center()
                         .gap_2()
                         .child(
-                            Button::new("spawn-new-session-empty-state", "New Session")
+                            Button::new("spawn-new-session-empty-state", "新建会话")
                                 .start_icon(
                                     Icon::new(IconName::Plus)
                                         .size(IconSize::Small)
@@ -1765,7 +1765,7 @@ impl Render for DebugPanel {
                                 }),
                         )
                         .child(
-                            Button::new("edit-debug-settings", "Edit debug.json")
+                            Button::new("edit-debug-settings", "编辑debug.json")
                                 .start_icon(
                                     Icon::new(IconName::Code)
                                         .size(IconSize::Small)
@@ -1779,7 +1779,7 @@ impl Render for DebugPanel {
                                 }),
                         )
                         .child(
-                            Button::new("open-debugger-docs", "Debugger Docs")
+                            Button::new("open-debugger-docs", "调试器文档")
                                 .start_icon(
                                     Icon::new(IconName::Book)
                                         .size(IconSize::Small)

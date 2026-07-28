@@ -1561,7 +1561,7 @@ impl ExtensionsPage {
         vim: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let docs_url_button = Button::new("open_docs", "View Documentation")
+        let docs_url_button = Button::new("open_docs", "查看文档")
             .end_icon(Icon::new(IconName::ArrowUpRight).size(IconSize::Small))
             .on_click({
                 move |_event, _window, cx| {
@@ -1933,7 +1933,7 @@ impl Render for ExtensionsPage {
                             .justify_between()
                             .child(Headline::new("Extensions").size(HeadlineSize::Large))
                             .child(
-                                Button::new("install-dev-extension", "Install Dev Extension")
+                                Button::new("install-dev-extension", "安装开发扩展")
                                     .style(ButtonStyle::Outlined)
                                     .size(ButtonSize::Medium)
                                     .on_click(|_event, window, cx| {
@@ -2002,7 +2002,7 @@ impl Render for ExtensionsPage {
                     .border_color(cx.theme().colors().border_variant)
                     .overflow_x_scroll()
                     .child(
-                        Button::new("filter-all-categories", "All")
+                        Button::new("filter-all-categories", "全部")
                             .when(self.provides_filter.is_none(), |button| {
                                 button.style(ButtonStyle::Filled)
                             })

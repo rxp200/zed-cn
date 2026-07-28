@@ -3143,7 +3143,7 @@ impl GitGraph {
             .child(Divider::horizontal())
             .child(
                 h_flex().p_1p5().w_full().child(
-                    Button::new("view-commit", "View Commit")
+                    Button::new("view-commit", "查看提交")
                         .full_width()
                         .start_icon(
                             Icon::new(IconName::GitCommit)

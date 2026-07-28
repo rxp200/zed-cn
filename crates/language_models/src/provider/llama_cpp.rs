@@ -1443,7 +1443,7 @@ impl ConfigurationView {
                         ))),
                 )
                 .child(
-                    Button::new("reset-context-window", "Reset")
+                    Button::new("reset-context-window", "重置")
                         .style(ButtonStyle::Outlined)
                         .label_size(LabelSize::Small)
                         .start_icon(Icon::new(IconName::Undo).size(IconSize::Small))
@@ -1489,7 +1489,7 @@ impl ConfigurationView {
                         .child(Label::new(api_url)),
                 )
                 .child(
-                    Button::new("reset-api-url", "Reset API URL")
+                    Button::new("reset-api-url", "重置API URL")
                         .style(ButtonStyle::Outlined)
                         .label_size(LabelSize::Small)
                         .start_icon(Icon::new(IconName::Undo).size(IconSize::Small))
@@ -1534,7 +1534,7 @@ impl Render for ConfigurationView {
                             .map(|this| {
                                 if is_authenticated {
                                     this.child(
-                                        Button::new("llama-cpp-webui", "Open WebUI")
+                                        Button::new("llama-cpp-webui", "打开WebUI")
                                             .style(ButtonStyle::OutlinedGhost)
                                             .size(ButtonSize::Medium)
                                             .end_icon(
@@ -1565,7 +1565,7 @@ impl Render for ConfigurationView {
                                     )
                                 } else {
                                     this.child(
-                                        Button::new("download_llama_cpp_button", "Get llama.cpp")
+                                        Button::new("download_llama_cpp_button", "获取llama.cpp")
                                             .style(ButtonStyle::OutlinedGhost)
                                             .size(ButtonSize::Medium)
                                             .end_icon(
@@ -1581,7 +1581,7 @@ impl Render for ConfigurationView {
                                 }
                             })
                             .child(
-                                Button::new("view-models", "Browse GGUF Models")
+                                Button::new("view-models", "浏览GGUF模型")
                                     .style(ButtonStyle::OutlinedGhost)
                                     .size(ButtonSize::Medium)
                                     .end_icon(
@@ -1606,7 +1606,7 @@ impl Render for ConfigurationView {
                                     .child(
                                         IconButton::new("refresh-models", IconName::RotateCcw)
                                             .icon_size(IconSize::Small)
-                                            .tooltip(Tooltip::text("Refresh Models"))
+                                            .tooltip(Tooltip::text("刷新模型"))
                                             .on_click(cx.listener(|this, _, window, cx| {
                                                 this.state.update(cx, |state, _| {
                                                     state.fetched_models.clear();
@@ -1617,7 +1617,7 @@ impl Render for ConfigurationView {
                             )
                         } else {
                             this.child(
-                                Button::new("retry_llama_cpp_models", "Connect")
+                                Button::new("retry_llama_cpp_models", "连接")
                                     .style(ButtonStyle::Outlined)
                                     .size(ButtonSize::Medium)
                                     .start_icon(

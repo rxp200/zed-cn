@@ -1125,7 +1125,7 @@ impl NotebookEditor {
                     .items_center()
                     .child(
                         Self::render_notebook_control("more-menu", IconName::Ellipsis, window, cx)
-                            .tooltip(move |window, cx| (Tooltip::text("More options"))(window, cx)),
+                            .tooltip(move |window, cx| (Tooltip::text("更多选项"))(window, cx)),
                     )
                     .child(Self::button_group(window, cx).child({
                         let kernel_status = self.kernel.status();

@@ -16,7 +16,7 @@ pub fn show_undo_reject_toast(
                 .size(IconSize::Small)
                 .color(Color::Muted),
         )
-        .action("Undo", move |_window, cx| {
+        .action("撤销", move |_window, cx| {
             if let Some(action_log) = action_log_weak.upgrade() {
                 action_log
                     .update(cx, |action_log, cx| action_log.undo_last_reject(cx))

@@ -580,7 +580,7 @@ impl Render for TelemetryLogToolbarItemView {
             .child(
                 IconButton::new("clear_events", IconName::Trash)
                     .icon_size(IconSize::Small)
-                    .tooltip(Tooltip::text("Clear Events"))
+                    .tooltip(Tooltip::text("清除事件"))
                     .disabled(!has_events)
                     .on_click(cx.listener(move |_this, _, _window, cx| {
                         telemetry_log_clone.update(cx, |log, cx| {
@@ -591,7 +591,7 @@ impl Render for TelemetryLogToolbarItemView {
             .child(
                 IconButton::new("open_log_file", IconName::File)
                     .icon_size(IconSize::Small)
-                    .tooltip(Tooltip::text("Open Raw Log File"))
+                    .tooltip(Tooltip::text("打开原始日志文件"))
                     .on_click(|_, _window, cx| {
                         let path = Telemetry::log_file_path();
                         cx.open_url(&format!("file://{}", path.display()));

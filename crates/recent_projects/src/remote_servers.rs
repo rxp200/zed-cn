@@ -327,7 +327,7 @@ impl PickerDelegate for DevContainerPickerDelegate {
                 .border_t_1()
                 .border_color(cx.theme().colors().border_variant)
                 .child(
-                    Button::new("run-action", "Start Dev Container")
+                    Button::new("run-action", "启动开发容器")
                         .key_binding(
                             KeyBinding::for_action(&menu::Confirm, cx)
                                 .map(|kb| kb.size(rems_from_px(12.))),
@@ -337,7 +337,7 @@ impl PickerDelegate for DevContainerPickerDelegate {
                         }),
                 )
                 .child(
-                    Button::new("run-action-secondary", "Open devcontainer.json")
+                    Button::new("run-action-secondary", "打开devcontainer.json")
                         .key_binding(
                             KeyBinding::for_action(&menu::SecondaryConfirm, cx)
                                 .map(|kb| kb.size(rems_from_px(12.))),
@@ -1317,7 +1317,7 @@ impl PickerDelegate for RemoteServerPickerDelegate {
                                     .icon_size(IconSize::Small)
                                     .shape(IconButtonShape::Square)
                                     .size(ButtonSize::Large)
-                                    .tooltip(Tooltip::text("Delete Remote Project"))
+                                    .tooltip(Tooltip::text("删除远程项目"))
                                     .on_click(cx.listener(move |_, _, _, cx| {
                                         let remote_project = remote_project.clone();
                                         remote_server_projects
@@ -1359,7 +1359,7 @@ impl PickerDelegate for RemoteServerPickerDelegate {
             h_flex()
                 .gap_1()
                 .child(
-                    Button::new("open_new_window", "New Window")
+                    Button::new("open_new_window", "新窗口")
                         .key_binding(KeyBinding::for_action(&menu::SecondaryConfirm, cx))
                         .on_click(|_, window, cx| {
                             window.dispatch_action(menu::SecondaryConfirm.boxed_clone(), cx)
@@ -2527,7 +2527,7 @@ impl RemoteServerProjects {
                                         .size(LabelSize::Small),
                                     )
                                     .child(
-                                        Button::new("learn-more", "Learn More")
+                                        Button::new("learn-more", "了解更多")
                                             .label_size(LabelSize::Small)
                                             .end_icon(
                                                 Icon::new(IconName::ArrowUpRight)

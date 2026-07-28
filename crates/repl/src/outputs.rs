@@ -199,7 +199,7 @@ impl Output {
                     el.child(
                         IconButton::new(ElementId::Name("copy-output".into()), IconName::Copy)
                             .style(ButtonStyle::Transparent)
-                            .tooltip(Tooltip::text("Copy Output"))
+                            .tooltip(Tooltip::text("复制输出"))
                             .on_click(move |_, window, cx| {
                                 let clipboard_content = v.clipboard_content(window, cx);
 
@@ -217,7 +217,7 @@ impl Output {
                             IconName::FileTextOutlined,
                         )
                         .style(ButtonStyle::Transparent)
-                        .tooltip(Tooltip::text("Open in Buffer"))
+                        .tooltip(Tooltip::text("在缓冲区中打开"))
                         .on_click({
                             let workspace = workspace.clone();
                             move |_, window, cx| {
@@ -331,7 +331,7 @@ impl Output {
                                 IconName::FileTextOutlined,
                             )
                             .style(ButtonStyle::Transparent)
-                            .tooltip(Tooltip::text("Open Full Error in Buffer"))
+                            .tooltip(Tooltip::text("在缓冲区中打开完整错误"))
                             .on_click({
                                 let ename = err.ename.clone();
                                 let evalue = err.evalue.clone();

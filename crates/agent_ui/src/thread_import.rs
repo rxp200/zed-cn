@@ -622,7 +622,7 @@ impl Render for ThreadImportModal {
                                 )
                             })
                             .end_slot(
-                                Button::new("import-threads", "Import Threads")
+                                Button::new("import-threads", "导入线程")
                                     .loading(self.is_importing)
                                     .disabled(disabled_import_thread)
                                     .key_binding(

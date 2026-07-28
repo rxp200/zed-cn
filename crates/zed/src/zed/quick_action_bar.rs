@@ -258,7 +258,7 @@ impl Render for QuickActionBar {
                         .icon_size(IconSize::Small)
                         .style(ButtonStyle::Subtle)
                         .toggle_state(self.toggle_selections_handle.is_deployed()),
-                    Tooltip::text("Selection Controls"),
+                    Tooltip::text("选区控制"),
                 )
                 .with_handle(self.toggle_selections_handle.clone())
                 .anchor(Anchor::TopRight)
@@ -266,15 +266,15 @@ impl Render for QuickActionBar {
                     let focus = focus.clone();
                     let menu = ContextMenu::build(window, cx, move |menu, _, _| {
                         menu.context(focus.clone())
-                            .action("Select All", Box::new(SelectAll))
+                            .action("全选", Box::new(SelectAll))
                             .action(
                                 "Select Next Occurrence",
                                 Box::new(SelectNext {
                                     replace_newest: false,
                                 }),
                             )
-                            .action("Expand Selection", Box::new(SelectLargerSyntaxNode))
-                            .action("Shrink Selection", Box::new(SelectSmallerSyntaxNode))
+                            .action("展开选区", Box::new(SelectLargerSyntaxNode))
+                            .action("收缩选区", Box::new(SelectSmallerSyntaxNode))
                             .action(
                                 "Add Cursor Above",
                                 Box::new(AddSelectionAbove {
@@ -295,10 +295,10 @@ impl Render for QuickActionBar {
                                 )
                             })
                             .separator()
-                            .action("Go to Symbol", Box::new(ToggleOutline))
-                            .action("Go to Line/Column", Box::new(ToggleGoToLine))
+                            .action("转到符号", Box::new(ToggleOutline))
+                            .action("转到行/列", Box::new(ToggleGoToLine))
                             .separator()
-                            .action("Next Problem", Box::new(GoToDiagnostic::default()))
+                            .action("下一个问题", Box::new(GoToDiagnostic::default()))
                             .action(
                                 "Previous Problem",
                                 Box::new(GoToPreviousDiagnostic::default()),
@@ -311,9 +311,9 @@ impl Render for QuickActionBar {
                                 Box::new(GoToPreviousHunk),
                             )
                             .separator()
-                            .action("Move Line Up", Box::new(MoveLineUp))
-                            .action("Move Line Down", Box::new(MoveLineDown))
-                            .action("Duplicate Selection", Box::new(DuplicateLineDown))
+                            .action("上移行", Box::new(MoveLineUp))
+                            .action("下移行", Box::new(MoveLineDown))
+                            .action("复制选区", Box::new(DuplicateLineDown))
                     });
                     Some(menu)
                 })
@@ -330,7 +330,7 @@ impl Render for QuickActionBar {
                     IconButton::new("toggle_editor_settings_icon", IconName::Filter)
                         .icon_size(IconSize::Small)
                         .toggle_state(self.toggle_settings_handle.is_deployed()),
-                    Tooltip::text("Editor Controls"),
+                    Tooltip::text("编辑器控制"),
                 )
                 .anchor(Anchor::TopRight)
                 .with_handle(self.toggle_settings_handle.clone())

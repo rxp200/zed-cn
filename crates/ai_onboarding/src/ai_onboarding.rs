@@ -144,7 +144,7 @@ impl ZedAiOnboarding {
                 .child(
                     IconButton::new("dismiss_onboarding", IconName::Close)
                         .icon_size(IconSize::Small)
-                        .tooltip(Tooltip::text("Dismiss"))
+                        .tooltip(Tooltip::text("关闭"))
                         .on_click(move |_, window, cx| {
                             telemetry::event!("Banner Dismissed", source = "AI Onboarding",);
                             callback(window, cx)
@@ -169,7 +169,7 @@ impl ZedAiOnboarding {
             )
             .child(PlanDefinitions.sign_in_upsell())
             .child(
-                Button::new("sign_in", "Try Zed Pro for Free")
+                Button::new("sign_in", "免费试用Zed Pro")
                     .disabled(signing_in)
                     .full_width()
                     .style(ButtonStyle::Tinted(ui::TintColor::Accent))
@@ -210,7 +210,7 @@ impl ZedAiOnboarding {
                         )
                         .child(PlanDefinitions.pro_plan())
                         .child(
-                            Button::new("pro", "Get Started")
+                            Button::new("pro", "开始使用")
                                 .full_width()
                                 .style(ButtonStyle::Tinted(ui::TintColor::Accent))
                                 .on_click(move |_, _window, cx| {
@@ -272,7 +272,7 @@ impl ZedAiOnboarding {
                         )
                         .child(PlanDefinitions.pro_trial(true))
                         .child(
-                            Button::new("pro", "Start Free Trial")
+                            Button::new("pro", "开始免费试用")
                                 .full_width()
                                 .style(ButtonStyle::Tinted(ui::TintColor::Accent))
                                 .on_click(move |_, _window, cx| {
