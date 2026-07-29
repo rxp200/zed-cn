@@ -188,7 +188,7 @@ impl ThreadFeedbackState {
                 cx,
             );
             editor.set_placeholder_text(
-                "What went wrong? Share your feedback so we can improve.",
+                "出了什么问题？分享您的反馈以便我们改进。",
                 window,
                 cx,
             );
@@ -1158,7 +1158,7 @@ impl ThreadView {
         match command {
             PromptLocalCommand::ThumbsUp => {
                 self.handle_feedback_click(ThreadFeedback::Positive, window, cx);
-                self.show_local_command_toast("Thanks for your feedback!", cx);
+                self.show_local_command_toast("感谢您的反馈！", cx);
             }
             PromptLocalCommand::ThumbsDown => {
                 self.handle_feedback_click(ThreadFeedback::Negative, window, cx);
@@ -1867,7 +1867,7 @@ impl ThreadView {
                 ThreadError::PaymentRequired => (
                     "payment_required",
                     None,
-                    "You reached your free usage limit. Upgrade to Zed Pro for more prompts."
+                    "您已达到免费使用限制。升级到 Zed Pro 以获取更多提示。"
                         .into(),
                 ),
                 ThreadError::Refusal => {
@@ -1901,22 +1901,22 @@ impl ThreadView {
                 ThreadError::PromptTooLarge => (
                     "prompt_too_large",
                     None,
-                    "Context too large for the model's context window.".into(),
+                    "上下文过大，超出模型的上下文窗口。".into(),
                 ),
                 ThreadError::NoCredentials { provider } => (
                     "no_api_key",
                     None,
-                    format!("No credentials configured for {provider}.").into(),
+                    format!("未为 {provider} 配置凭据。").into(),
                 ),
                 ThreadError::StreamError { provider } => (
                     "stream_error",
                     None,
-                    format!("Connection to {provider}'s API was interrupted.").into(),
+                    format!("与 {provider} 的 API 连接被中断。").into(),
                 ),
                 ThreadError::AuthenticationFailed { provider } => (
                     "invalid_api_key",
                     None,
-                    format!("Authentication with {provider} failed.").into(),
+                    format!("与 {provider} 的认证失败。").into(),
                 ),
                 ThreadError::PermissionDenied { provider, message } => (
                     "permission_denied",
@@ -1931,15 +1931,15 @@ impl ThreadView {
                 ThreadError::RequestFailed => (
                     "request_failed",
                     None,
-                    "Request could not be completed after multiple attempts.".into(),
+                    "多次尝试后无法完成请求。".into(),
                 ),
                 ThreadError::MaxOutputTokens => (
                     "max_output_tokens",
                     None,
-                    "Model reached its maximum output length.".into(),
+                    "模型已达到其最大输出长度。".into(),
                 ),
                 ThreadError::NoModelSelected => {
-                    ("no_model_selected", None, "No model selected.".into())
+                    ("no_model_selected", None, "未选择模型。".into())
                 }
                 ThreadError::ApiError { provider } => (
                     "api_error",
@@ -3027,7 +3027,7 @@ impl ThreadView {
                     .icon(IconName::Warning)
                     .severity(Severity::Warning)
                     .title(state.last_error.clone())
-                    .description(format!("Retrying with {fallback_model}"))
+                    .description(format!("正在使用 {fallback_model} 重试"))
                     .dismiss_action(
                         IconButton::new("dismiss-refusal-fallback", IconName::Close)
                             .icon_size(IconSize::Small)
@@ -3051,18 +3051,18 @@ impl ThreadView {
 
         let retry_message = if state.max_attempts == 1 {
             if next_attempt_in_secs == 1 {
-                "Retrying. Next attempt in 1 second.".to_string()
+                "重试中。1 秒后下一次尝试。".to_string()
             } else {
-                format!("Retrying. Next attempt in {next_attempt_in_secs} seconds.")
+                format!("重试中。{next_attempt_in_secs} 秒后下一次尝试。")
             }
         } else if next_attempt_in_secs == 1 {
             format!(
-                "Retrying. Next attempt in 1 second (Attempt {} of {}).",
+                "重试中。1 秒后下一次尝试（第 {} 次，共 {} 次）。",
                 state.attempt, state.max_attempts,
             )
         } else {
             format!(
-                "Retrying. Next attempt in {next_attempt_in_secs} seconds (Attempt {} of {}).",
+                "重试中。{next_attempt_in_secs} 秒后下一次尝试（第 {} 次，共 {} 次）。",
                 state.attempt, state.max_attempts,
             )
         };
@@ -3441,7 +3441,7 @@ impl ThreadView {
                 let info = tool_call.subagent_session_info.as_ref()?;
                 let summary_text = tool_call.label.read(cx).source().to_string();
                 let subagent_summary = if summary_text.is_empty() {
-                    SharedString::from("Subagent")
+                    SharedString::from("子 Agent")
                 } else {
                     SharedString::from(summary_text)
                 };
@@ -3591,7 +3591,7 @@ impl ThreadView {
         );
 
         let label: SharedString = if pending_count > 1 {
-            format!("Awaiting Confirmation ({pending_count})").into()
+            format!("等待确认 ({pending_count})").into()
         } else {
             "等待确认".into()
         };
@@ -3642,9 +3642,9 @@ impl ThreadView {
     ) -> impl IntoElement {
         let queue_count = self.message_queue.len();
         let title: SharedString = if queue_count == 1 {
-            "1 Queued Message".into()
+            "1 条排队消息".into()
         } else {
-            format!("{} Queued Messages", queue_count).into()
+            format!("{} 条排队消息", queue_count).into()
         };
 
         h_flex()
@@ -3733,7 +3733,7 @@ impl ThreadView {
                             )))
                             .child(
                                 div().pr_0p5().bg(self.activity_bar_bg(cx)).child(
-                                    Label::new(format!("{} left", stats.pending))
+                                    Label::new(format!("剩余 {}", stats.pending))
                                         .size(LabelSize::Small)
                                         .color(Color::Muted),
                                 ),
@@ -3742,9 +3742,9 @@ impl ThreadView {
                 })
         } else {
             let status_label = if stats.pending == 0 {
-                "All Done".to_string()
+                "全部完成".to_string()
             } else if stats.completed == 0 {
-                format!("{} Tasks", plan.entries.len())
+                format!("{} 个任务", plan.entries.len())
             } else {
                 format!("{}/{}", stats.completed, plan.entries.len())
             };
@@ -4070,7 +4070,7 @@ impl ThreadView {
         pending_edits: bool,
         cx: &Context<Self>,
     ) -> Div {
-        const EDIT_NOT_READY_TOOLTIP_LABEL: &str = "Wait until file edits are complete.";
+        const EDIT_NOT_READY_TOOLTIP_LABEL: &str = "等待文件编辑完成。";
 
         let focus_handle = self.focus_handle(cx);
 
@@ -4091,13 +4091,8 @@ impl ThreadView {
                         if pending_edits {
                             this.child(
                                 Label::new(format!(
-                                    "Editing {} {}…",
+                                    "正在编辑 {} 个文件…",
                                     changed_buffers.len(),
-                                    if changed_buffers.len() == 1 {
-                                        "file"
-                                    } else {
-                                        "files"
-                                    }
                                 ))
                                 .color(Color::Muted)
                                 .size(LabelSize::Small)
@@ -4329,9 +4324,9 @@ impl ThreadView {
 
         let editor_expanded = self.editor_expanded;
         let (expand_icon, expand_tooltip) = if editor_expanded {
-            (IconName::Minimize, "Minimize Message Editor")
+            (IconName::Minimize, "最小化消息编辑器")
         } else {
-            (IconName::Maximize, "Expand Message Editor")
+            (IconName::Maximize, "展开消息编辑器")
         };
 
         let max_content_width = AgentSettings::get_global(cx).max_content_width;
@@ -4498,9 +4493,9 @@ impl ThreadView {
                 let editor = &entry.editor;
                 let is_next = index == 0;
                 let (icon_color, tooltip_text) = if is_next {
-                    (Color::Accent, "Next in Queue")
+                    (Color::Accent, "队列中下一个")
                 } else {
-                    (Color::Muted, "In Queue")
+                    (Color::Muted, "排队中")
                 };
 
                 let editor_focused = editor.focus_handle(cx).is_focused(_window);
@@ -4926,7 +4921,7 @@ impl ThreadView {
             (ThreadSandbox::Sandboxed(settings_policy), ThreadSandbox::Unsandboxed) => {
                 let settings = augment_settings_sandbox_policy(&settings_policy, baseline);
                 SandboxStatusTooltip::disabled_for_thread(sandbox_section(
-                    "Defined in your settings:",
+                    "在您的设置中定义的：",
                     &settings,
                     true,
                 ))
@@ -4939,9 +4934,9 @@ impl ThreadView {
                 let thread = SandboxPolicyDisplay::from_policy(&thread_policy);
                 // Omit the per-thread section when it grants nothing extra.
                 let thread = (!sandbox_policy_grants_nothing(&thread))
-                    .then(|| sandbox_section("Allowed for this thread:", &thread, false));
+                    .then(|| sandbox_section("此线程允许的：", &thread, false));
                 SandboxStatusTooltip::enabled(
-                    sandbox_section("Defined in your settings:", &settings, true),
+                    sandbox_section("在您的设置中定义的：", &settings, true),
                     thread,
                 )
             }
@@ -5036,7 +5031,7 @@ impl ThreadView {
                                     .into_any_element()
                             })
                             .separator()
-                            .item(ContextMenuEntry::new("Enable Now").handler({
+                            .item(ContextMenuEntry::new("立即启用").handler({
                                 let weak_self = weak_self.clone();
                                 move |_window, cx| {
                                     weak_self
@@ -5047,7 +5042,7 @@ impl ThreadView {
                                 }
                             }))
                             .item(
-                                ContextMenuEntry::new("Enable and Don't Show Again").handler({
+                                ContextMenuEntry::new("启用且不再显示").handler({
                                     let weak_self = weak_self.clone();
                                     let provider_id = provider_id.clone();
                                     let model_id = model_id;
@@ -5237,7 +5232,7 @@ impl ThreadView {
         let label = selected
             .clone()
             .or(default_effort_level)
-            .map_or("Select Effort".into(), |effort| effort.name);
+            .map_or("选择思考力度".into(), |effort| effort.name);
 
         let (label_color, icon) = if self.thinking_effort_menu_handle.is_deployed() {
             (Color::Accent, IconName::ChevronUp)
@@ -5529,7 +5524,7 @@ impl ThreadView {
         ContextMenu::build(window, cx, move |menu, _window, _cx| {
             menu.key_context("AddContextMenu")
                 .item(
-                    ContextMenuEntry::new("Files & Directories")
+                    ContextMenuEntry::new("文件和目录")
                         .icon(IconName::File)
                         .icon_color(Color::Muted)
                         .icon_size(IconSize::XSmall)
@@ -5618,7 +5613,7 @@ impl ThreadView {
                         }),
                 )
                 .item(
-                    ContextMenuEntry::new("Branch Diff")
+                    ContextMenuEntry::new("分支差异")
                         .icon(IconName::GitBranch)
                         .icon_color(Color::Muted)
                         .icon_size(IconSize::XSmall)
@@ -5658,15 +5653,15 @@ impl ThreadView {
 
         let tooltip_label = if following {
             if self.agent_id.as_ref() == agent::ZED_AGENT_ID.as_ref() {
-                format!("Stop Following the {}", self.agent_id)
+                format!("停止跟随 {}", self.agent_id)
             } else {
-                format!("Stop Following {}", self.agent_id)
+                format!("停止跟随 {}", self.agent_id)
             }
         } else {
             if self.agent_id.as_ref() == agent::ZED_AGENT_ID.as_ref() {
-                format!("Follow the {}", self.agent_id)
+                format!("跟随 {}", self.agent_id)
             } else {
-                format!("Follow {}", self.agent_id)
+                format!("跟随 {}", self.agent_id)
             }
         };
 
@@ -5682,7 +5677,7 @@ impl ThreadView {
                     Tooltip::with_meta(
                         tooltip_label.clone(),
                         Some(&Follow),
-                        "Track the agent's location as it reads and edits files.",
+                        "跟踪 Agent 读取和编辑文件时的位置。",
                         cx,
                     )
                 }
@@ -5731,7 +5726,7 @@ impl Render for TokenUsageTooltip {
             container
                 .min_w_40()
                 .child(
-                    Label::new("Context")
+                    Label::new("上下文")
                         .color(Color::Muted)
                         .size(LabelSize::Small),
                 )
@@ -5999,12 +5994,12 @@ fn sandbox_section(title: &str, policy: &SandboxPolicyDisplay, show_empty: bool)
 
     if show_empty || !write_empty {
         section =
-            section.group(SandboxGroup::new("Write Access").rows(sandbox_fs_rows(&policy.fs)));
+            section.group(SandboxGroup::new("写入访问").rows(sandbox_fs_rows(&policy.fs)));
     }
 
     if show_empty || !network_empty {
         section = section
-            .group(SandboxGroup::new("Network Access").rows(sandbox_network_rows(&policy.network)));
+            .group(SandboxGroup::new("网络访问").rows(sandbox_network_rows(&policy.network)));
     }
 
     section
@@ -6036,7 +6031,7 @@ fn sandbox_fs_rows(fs: &SandboxFsDisplay) -> Vec<SandboxRow> {
             "除受保护的 Git 元数据外的所有路径",
         )],
         SandboxFsDisplay::Restricted(entries) if entries.is_empty() => {
-            vec![SandboxRow::message("None")]
+            vec![SandboxRow::message("无")]
         }
         SandboxFsDisplay::Restricted(entries) => entries
             .iter()
@@ -6056,10 +6051,10 @@ fn sandbox_fs_rows(fs: &SandboxFsDisplay) -> Vec<SandboxRow> {
 /// one row per allowed domain.
 fn sandbox_network_rows(network: &SandboxNetPolicy) -> Vec<SandboxRow> {
     match network {
-        SandboxNetPolicy::Unrestricted => vec![SandboxRow::message("All domains (unrestricted)")],
-        SandboxNetPolicy::Blocked => vec![SandboxRow::message("None")],
+        SandboxNetPolicy::Unrestricted => vec![SandboxRow::message("所有域名（无限制）")],
+        SandboxNetPolicy::Blocked => vec![SandboxRow::message("无")],
         SandboxNetPolicy::Restricted { allowed_domains } if allowed_domains.is_empty() => {
-            vec![SandboxRow::message("None")]
+            vec![SandboxRow::message("无")]
         }
         SandboxNetPolicy::Restricted { allowed_domains } => allowed_domains
             .iter()
@@ -6257,7 +6252,7 @@ impl ThreadView {
                                                         .icon_color(Color::Muted)
                                                         .icon_size(IconSize::XSmall)
                                                         .tooltip(Tooltip::text(
-                                                            "Editing will restart the thread from this point."
+                                                            "编辑将从此位置重新启动线程。"
                                                         ))
                                                         .on_click(cx.listener({
                                                             let editor = editor.clone();
@@ -6287,7 +6282,7 @@ impl ThreadView {
                                                             .child(
                                                                 div().max_w_64().child(
                                                                     Label::new(format!(
-                                                                        "Editing previous messages is not available for {} yet.",
+                                                                        "{} 尚不支持编辑之前的消息。",
                                                                         agent_name
                                                                     ))
                                                                     .size(LabelSize::Small)
@@ -6838,7 +6833,7 @@ impl ThreadView {
                 (self.is_subagent() && self.is_thread_feedback_enabled(cx)).then(|| {
                     let feedback = self.thread_feedback.feedback;
                     let tooltip_meta =
-                        "Rating the thread sends all of your current conversation to the Zed team.";
+                        "对线程进行评分会将您当前的所有对话发送给 Zed 团队。";
 
                     h_flex()
                         .child(
@@ -6872,7 +6867,7 @@ impl ThreadView {
                                 })
                                 .tooltip(move |window, cx| match feedback {
                                     Some(ThreadFeedback::Negative) => Tooltip::text(
-                                        "We appreciate your feedback and will use it to improve in the future.",
+                                        "我们感谢您的反馈，并将利用它来改进未来的产品。",
                                     )(
                                         window, cx
                                     ),
@@ -7580,7 +7575,7 @@ impl ThreadView {
                     });
 
                     let copy_this_agent_response =
-                        ContextMenuEntry::new("Copy This Agent Response").handler({
+                        ContextMenuEntry::new("复制此 Agent 响应").handler({
                             let entity = entity.clone();
                             move |_, cx| {
                                 entity.update(cx, |this, cx| {
@@ -7595,7 +7590,7 @@ impl ThreadView {
                         });
 
                     let scroll_item = if is_at_top {
-                        ContextMenuEntry::new("Scroll to Bottom").handler({
+                        ContextMenuEntry::new("滚动到底部").handler({
                             let entity = entity.clone();
                             move |_, cx| {
                                 entity.update(cx, |this, cx| {
@@ -7604,7 +7599,7 @@ impl ThreadView {
                             }
                         })
                     } else {
-                        ContextMenuEntry::new("Scroll to Top").handler({
+                        ContextMenuEntry::new("滚动到顶部").handler({
                             let entity = entity.clone();
                             move |_, cx| {
                                 entity.update(cx, |this, cx| {
@@ -7614,7 +7609,7 @@ impl ThreadView {
                         })
                     };
 
-                    let open_thread_as_markdown = ContextMenuEntry::new("Open Thread as Markdown")
+                    let open_thread_as_markdown = ContextMenuEntry::new("以 Markdown 格式打开线程")
                         .handler({
                             let entity = entity.clone();
                             let workspace = workspace.clone();
@@ -7890,7 +7885,7 @@ impl ThreadView {
                     )
                 }
             } else {
-                "Output was truncated".to_string()
+                "输出已被截断".to_string()
             }
         });
 
@@ -8025,15 +8020,15 @@ impl ThreadView {
                         .as_ref()
                         .map(|error| {
                             SharedString::from(format!(
-                                "Allowed for this thread after the sandbox failed: {}",
+                                "沙箱失败后此线程允许的：{}",
                                 error.user_facing_message()
                             ))
                         })
                         .unwrap_or_else(|| {
-                            "Unsandboxed execution is allowed for the rest of this thread.".into()
+                            "此线程的其余部分允许非沙箱执行。".into()
                         });
                     let docs_section = thread_error.as_ref().map(|error| error.docs_section());
-                    ("Ran without sandbox".into(), detail, docs_section)
+                    ("在无沙箱下运行".into(), detail, docs_section)
                 }
             };
 
@@ -8257,9 +8252,9 @@ impl ThreadView {
                                 self.expanded_tool_call_raw_inputs.contains(&tool_call.id);
 
                             let input_header = if is_raw_input_expanded {
-                                "Raw Input:"
+                                "原始输入："
                             } else {
-                                "View Raw Input"
+                                "查看原始输入"
                             };
 
                             this.child(
@@ -8344,7 +8339,7 @@ impl ThreadView {
                                 .gap_1()
                                 .border_l_1()
                                 .border_color(self.tool_card_border_color(cx))
-                                .child(input_output_header("Raw Input:".into()))
+                                .child(input_output_header("原始输入：".into()))
                                 .children(tool_call.raw_input_markdown.clone().map(|input| {
                                     div().id(("tool-call-raw-input-markdown", entry_ix)).child(
                                         self.render_markdown(
@@ -8669,7 +8664,7 @@ impl ThreadView {
         cx: &Context<Self>,
     ) -> AnyElement {
         let url = zed_urls::sandboxing_docs(section, cx);
-        let tooltip = format!("Opens {url}");
+        let tooltip = format!("打开 {url}");
         // Wrap in a row so the button shrinks to its content width instead of
         // stretching to fill the enclosing column.
         h_flex()
@@ -8710,7 +8705,7 @@ impl ThreadView {
 
         let network_section = has_network.then(|| {
             let summary = if details.network_all_hosts {
-                "any host".to_string()
+                "任何主机".to_string()
             } else {
                 format!(
                     "{} {}",
@@ -8808,7 +8803,7 @@ impl ThreadView {
 
         let write_section = has_write.then(|| {
             let summary = if details.allow_fs_write_all {
-                "unrestricted except Git metadata".to_string()
+                "除 Git 元数据外无限制".to_string()
             } else {
                 format!(
                     "{} {}",
@@ -9100,7 +9095,7 @@ impl ThreadView {
                         ToggleState::Unselected
                     },
                 )
-                .label("I understand and wish to proceed")
+                .label("我理解并希望继续")
                 .label_size(LabelSize::Small)
                 .on_click(cx.listener({
                     let tool_call_id = tool_call_id.clone();
@@ -9288,13 +9283,13 @@ impl ThreadView {
 
         let dropdown_label: SharedString =
             if matches!(selection, Some(PermissionSelection::SelectedPatterns(_))) {
-                "Always for selected commands".into()
+                "始终对所选命令".into()
             } else {
                 choices
                     .get(selected_index)
                     .or(choices.last())
                     .map(|choice| choice.label())
-                    .unwrap_or_else(|| "Only this time".into())
+                    .unwrap_or_else(|| "仅此一次".into())
             };
 
         let dropdown = if let Some((pattern_list, tool_name)) = patterns {
@@ -9494,7 +9489,7 @@ impl ThreadView {
             .map(|(i, cp)| {
                 (
                     i,
-                    SharedString::from(format!("Always for `{}` commands", cp.display_name)),
+                    SharedString::from(format!("始终对 `{}` 命令", cp.display_name)),
                 )
             })
             .collect();
@@ -9578,7 +9573,7 @@ impl ThreadView {
                             );
                         }
 
-                        menu = menu.separator().header("Select Options…");
+                        menu = menu.separator().header("选择选项…");
 
                         for (pattern_index, label) in patterns.iter() {
                             let label = label.clone();
@@ -10478,11 +10473,11 @@ impl ThreadView {
         } else if !tool_call_label.is_empty() {
             tool_call_label.into()
         } else if is_cancelled {
-            "Subagent Canceled".into()
+            "子 Agent 已取消".into()
         } else if is_failed {
-            "Subagent Failed".into()
+            "子 Agent 失败".into()
         } else {
-            "Spawning Agent…".into()
+            "正在生成 Agent…".into()
         };
 
         let card_header_id = format!("subagent-header-{}", entry_ix);
@@ -10527,9 +10522,9 @@ impl ThreadView {
             .map_or(false, |thread| !thread.read(cx).entries().is_empty());
 
         let tooltip_meta_description = if is_expanded {
-            "Click to Collapse"
+            "点击折叠"
         } else {
-            "Click to Preview"
+            "点击预览"
         };
 
         let error_message = self.subagent_error_message(&tool_call.status, tool_call, cx);
@@ -10917,7 +10912,7 @@ impl ThreadView {
                 let message = Self::provider_by_name(provider, cx)
                     .map(|provider| provider.missing_credentials_error_message())
                     .unwrap_or_else(|| {
-                        format!("No credentials are configured for {provider}.").into()
+                        format!("未为 {provider} 配置凭据。").into()
                     });
                 self.render_error_callout("缺少凭据", message, false, true, cx)
             }
@@ -10935,7 +10930,7 @@ impl ThreadView {
             ThreadError::AuthenticationFailed { provider } => {
                 let message = Self::provider_by_name(provider, cx)
                     .map(|provider| provider.authentication_error_message())
-                    .unwrap_or_else(|| format!("Could not authenticate with {provider}.").into());
+                    .unwrap_or_else(|| format!("无法使用 {provider} 进行认证。").into());
                 self.render_error_callout("认证失败", message, false, false, cx)
             }
             ThreadError::PermissionDenied { provider, message } => {
@@ -11002,7 +10997,7 @@ impl ThreadView {
 
         Callout::new()
             .severity(Severity::Error)
-            .title("Request Refused")
+            .title("请求被拒绝")
             .icon(IconName::XCircle)
             .description(refusal_message.clone())
             .actions_slot(self.create_copy_button(&refusal_message))
@@ -11016,7 +11011,7 @@ impl ThreadView {
     ) -> Callout {
         Callout::new()
             .severity(Severity::Error)
-            .title("Authentication Required")
+            .title("需要认证")
             .icon(IconName::XCircle)
             .description(error.clone())
             .actions_slot(
@@ -11030,12 +11025,12 @@ impl ThreadView {
 
     fn render_payment_required_error(&self, cx: &mut Context<Self>) -> Callout {
         const ERROR_MESSAGE: &str =
-            "You reached your free usage limit. Upgrade to Zed Pro for more prompts.";
+            "您已达到免费使用限制。升级到 Zed Pro 以获取更多提示。";
 
         Callout::new()
             .severity(Severity::Error)
             .icon(IconName::XCircle)
-            .title("Free Usage Exceeded")
+            .title("免费使用已超出")
             .description(ERROR_MESSAGE)
             .actions_slot(
                 h_flex()
@@ -11091,35 +11086,35 @@ impl ThreadView {
                     {
                         if !provider.is_authenticated(cx) {
                             (
-                                format!("Failed to authenticate with {} provider", provider.name())
+                                format!("无法使用 {} 提供者进行认证", provider.name())
                                     .into(),
-                                "Open the settings to configure the selected provider".into(),
+                                "打开设置以配置所选提供者".into(),
                             )
                         } else {
                             (
-                                format!("Model {} was not found", selected_model.model.0).into(),
-                                "You may need to reconfigure authentication for this provider"
+                                format!("未找到模型 {}", selected_model.model.0).into(),
+                                "您可能需要为此提供者重新配置认证"
                                     .into(),
                             )
                         }
                     } else {
                         (
-                            format!("Provider {} was not found", selected_model.provider).into(),
-                            "Open the settings to configure providers".into(),
+                            format!("未找到提供者 {}", selected_model.provider).into(),
+                            "打开设置以配置提供者".into(),
                         )
                     }
                 }
                 agent::ThreadModel::Unset => {
                     if has_authenticated_provider {
                         (
-                            "No model selected".into(),
-                            "Choose a different model or configure other providers to get started"
+                            "未选择模型".into(),
+                            "选择其他模型或配置其他提供商以开始使用"
                                 .into(),
                         )
                     } else {
                         (
-                            "No model selected".into(),
-                            "Configure a provider to get started".into(),
+                            "未选择模型".into(),
+                            "配置提供商以开始使用".into(),
                         )
                     }
                 }
@@ -11177,7 +11172,7 @@ impl ThreadView {
         Callout::new()
             .severity(Severity::Error)
             .icon(IconName::XCircle)
-            .title("Context Too Large")
+            .title("上下文太大")
             .description(MESSAGE)
             .actions_slot(
                 h_flex()
@@ -11288,7 +11283,7 @@ impl ThreadView {
         Callout::new()
             .severity(Severity::Error)
             .icon(IconName::XCircle)
-            .title("An Error Happened")
+            .title("发生错误")
             .description_slot(description)
             .actions_slot(
                 h_flex()
@@ -11348,7 +11343,7 @@ impl ThreadView {
             .border_position(CalloutBorderPosition::Bottom)
             .severity(Severity::Info)
             .icon(IconName::Info)
-            .title("Resumed Session")
+            .title("恢复的会话")
             .description(description)
             .into_any_element()
     }
@@ -11358,8 +11353,8 @@ impl ThreadView {
             .border_position(self.callout_border_position())
             .icon(IconName::Warning)
             .severity(Severity::Warning)
-            .title("Codex on Windows")
-            .description("For best performance, run Codex in Windows Subsystem for Linux (WSL2)")
+            .title("Windows 上的 Codex")
+            .description("为了获得最佳性能，请在 Windows Subsystem for Linux (WSL2) 中运行 Codex")
             .actions_slot(
                 Button::new("open-wsl-modal", "在WSL中打开").on_click(cx.listener({
                     move |_, _, _window, cx| {
@@ -11609,7 +11604,7 @@ impl ThreadView {
             .next()
             .and_then(|p| p.file_name())
             .map(|name| name.to_string_lossy().to_string())
-            .unwrap_or_else(|| "one folder".to_string());
+            .unwrap_or_else(|| "一个文件夹".to_string());
 
         Some(
             Callout::new()
@@ -11617,7 +11612,8 @@ impl ThreadView {
                 .icon(IconName::Warning)
                 .title("This agent doesn't currently support multi-root workspaces")
                 .description(format!(
-                    "It currently only operates by default on \"{}\".",
+                    "它目前默认只在以下位置操作：\"{}\"",
+
                     active_dir
                 ))
                 .border_position(self.callout_border_position())

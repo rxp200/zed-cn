@@ -48,9 +48,9 @@ pub(crate) fn render_external_agents_page(
         .pb_16()
         .track_scroll(scroll_handle)
         .overflow_y_scroll()
-        .child(Label::new("External Agents"))
+        .child(Label::new("外部 Agent"))
         .child(
-            Label::new("Agents connected through the Agent Client Protocol.")
+            Label::new("通过 Agent 客户端协议连接的 Agent。")
                 .size(LabelSize::Small)
                 .color(Color::Muted),
         )
@@ -120,7 +120,7 @@ fn render_empty_state(cx: &App) -> AnyElement {
         .border_color(cx.theme().colors().border.opacity(0.6))
         .rounded_sm()
         .child(
-            Label::new("No external agents added yet. Click \"Add Agent\" to get started.")
+            Label::new("尚未添加外部 Agent。点击「添加 Agent」开始使用。")
                 .color(Color::Muted)
                 .size(LabelSize::Small),
         )
@@ -136,7 +136,7 @@ fn render_no_project_state(cx: &App) -> AnyElement {
         .border_color(cx.theme().colors().border.opacity(0.6))
         .rounded_sm()
         .child(
-            Label::new("No active project found. Open a workspace to manage external agents.")
+            Label::new("未找到活动项目。打开工作区以管理外部 Agent。")
                 .color(Color::Muted)
                 .size(LabelSize::Small),
         )
@@ -303,9 +303,9 @@ pub(crate) fn render_add_agent_popover(
                         .log_err();
                 })
                 .separator()
-                .header("Learn More")
+                .header("了解更多")
                 .item(
-                    ContextMenuEntry::new("ACP Docs")
+                    ContextMenuEntry::new("ACP 文档")
                         .icon(IconName::ArrowUpRight)
                         .icon_color(Color::Muted)
                         .icon_position(IconPosition::End)
@@ -406,9 +406,9 @@ impl CustomAgentForm {
 
         Self {
             original_id,
-            name: new_input("my-agent", name_initial.as_deref(), window, cx),
-            command: new_input("/path/to/agent", command_initial.as_deref(), window, cx),
-            args: new_input("--flag value", args_initial.as_deref(), window, cx),
+            name: new_input("my-agent（我的 Agent）", name_initial.as_deref(), window, cx),
+            command: new_input("/path/to/agent（Agent 路径）", command_initial.as_deref(), window, cx),
+            args: new_input("--flag value（标志 值）", args_initial.as_deref(), window, cx),
             env,
             default_mode,
             default_config_options,
@@ -470,9 +470,9 @@ pub(crate) fn open_custom_agent_form(
     settings_window.custom_agent_form = Some(CustomAgentForm::new(existing, window, cx));
 
     let title = if is_edit {
-        "Configure External Agent"
+        "配置外部 Agent"
     } else {
-        "Add Custom Agent"
+        "添加自定义 Agent"
     };
 
     settings_window.push_dynamic_sub_page(
@@ -504,7 +504,7 @@ fn render_custom_agent_form_page(
             crate::render_settings_item_layout(
                 settings_window,
                 "Agent 名称",
-                "Required. A unique name used to identify this agent.",
+                "必填。用于标识此 Agent 的唯一名称。",
                 input_box(&form.name, cx).into_any_element(),
                 None,
                 None,
@@ -518,7 +518,7 @@ fn render_custom_agent_form_page(
             crate::render_settings_item_layout(
                 settings_window,
                 "命令",
-                "Required. Path to the executable that launches the agent.",
+                "必填。启动 Agent 的可执行文件路径。",
                 input_box(&form.command, cx).into_any_element(),
                 None,
                 None,
@@ -532,7 +532,7 @@ fn render_custom_agent_form_page(
             crate::render_settings_item_layout(
                 settings_window,
                 "参数",
-                "Space-separated arguments passed to the command.",
+                "传递给命令的空格分隔参数。",
                 input_box(&form.args, cx).into_any_element(),
                 None,
                 None,
@@ -639,7 +639,7 @@ fn render_env_section(
     crate::render_settings_item_layout(
         settings_window,
         "环境变量",
-        "Environment variables provided to the agent process.",
+        "提供给 Agent 进程的环境变量。",
         control,
         None,
         None,
@@ -755,7 +755,7 @@ fn save_custom_agent_form(
         });
     if collides_with_other_agent {
         if let Some(form) = settings_window.custom_agent_form.as_mut() {
-            form.error = Some(format!("An agent named \"{}\" already exists.", id.0).into());
+            form.error = Some(format!("名为「{}」的 Agent 已存在。", id.0).into());
         }
         cx.notify();
         return;
@@ -817,12 +817,12 @@ fn build_settings_from_values(
 ) -> Result<(AgentId, Option<AgentId>, CustomAgentServerSettings), SharedString> {
     let name = values.name.trim().to_string();
     if name.is_empty() {
-        return Err("Agent name is required.".into());
+        return Err("Agent 名称是必填项。".into());
     }
 
     let command = values.command.trim().to_string();
     if command.is_empty() {
-        return Err("Command is required.".into());
+        return Err("命令是必填项。".into());
     }
 
     let args = values
@@ -866,7 +866,7 @@ fn collect_kv(
             continue;
         }
         if map.contains_key(&key) {
-            return Err(format!("Duplicate {label} \"{key}\".").into());
+            return Err(format!("重复的{label}「{key}」。").into());
         }
         map.insert(key, value.clone());
     }

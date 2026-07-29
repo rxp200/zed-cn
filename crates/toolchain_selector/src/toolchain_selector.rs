@@ -175,7 +175,7 @@ impl AddToolchainState {
                                 .p_1()
                                 .justify_between()
                                 .gap_2()
-                                .child(Label::new("Select Toolchain Path").color(Color::Muted).map(
+                                .child(Label::new("选择工具链路径").color(Color::Muted).map(
                                     |this| {
                                         if is_loading {
                                             this.with_animation(

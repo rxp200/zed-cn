@@ -174,7 +174,7 @@ impl Render for ChannelModal {
                                         ui::ToggleState::Unselected
                                     },
                                 )
-                                .label("Public")
+                                .label("公开")
                                 .on_click(cx.listener(Self::set_channel_visibility)),
                             )
                             .children(
@@ -208,7 +208,7 @@ impl Render for ChannelModal {
                                     .when(mode == Mode::ManageMembers, |this| {
                                         this.border_color(cx.theme().colors().border)
                                     })
-                                    .child(Label::new("Manage Members"))
+                                    .child(Label::new("管理成员"))
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.set_mode(Mode::ManageMembers, window, cx);
                                     })),
@@ -223,7 +223,7 @@ impl Render for ChannelModal {
                                     .when(mode == Mode::InviteMembers, |this| {
                                         this.border_color(cx.theme().colors().border)
                                     })
-                                    .child(Label::new("Invite Members"))
+                                    .child(Label::new("邀请成员"))
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.set_mode(Mode::InviteMembers, window, cx);
                                     })),
@@ -263,7 +263,7 @@ impl PickerDelegate for ChannelModalDelegate {
     }
 
     fn placeholder_text(&self, _window: &mut Window, _cx: &mut App) -> Arc<str> {
-        "Search collaborator by username...".into()
+        "按用户名搜索协作者...".into()
     }
 
     fn match_count(&self) -> usize {
@@ -429,14 +429,14 @@ impl PickerDelegate for ChannelModalDelegate {
                         Mode::ManageMembers => slot
                             .children(
                                 if request_status == Some(proto::channel_member::Kind::Invitee) {
-                                    Some(Label::new("Invited"))
+                                    Some(Label::new("已邀请"))
                                 } else {
                                     None
                                 },
                             )
                             .children(match membership.map(|m| m.role) {
-                                Some(ChannelRole::Admin) => Some(Label::new("Admin")),
-                                Some(ChannelRole::Guest) => Some(Label::new("Guest")),
+                                Some(ChannelRole::Admin) => Some(Label::new("管理员")),
+                                Some(ChannelRole::Guest) => Some(Label::new("访客")),
                                 _ => None,
                             })
                             .when(!is_me, |el| {
@@ -459,10 +459,10 @@ impl PickerDelegate for ChannelModalDelegate {
                             ),
                         Mode::InviteMembers => match request_status {
                             Some(proto::channel_member::Kind::Invitee) => {
-                                slot.children(Some(Label::new("Invited")))
+                                slot.children(Some(Label::new("已邀请")))
                             }
                             Some(proto::channel_member::Kind::Member) => {
-                                slot.children(Some(Label::new("Member")))
+                                slot.children(Some(Label::new("成员")))
                             }
                             _ => slot,
                         },
@@ -635,9 +635,9 @@ impl ChannelModalDelegate {
             if role == ChannelRole::Admin || role == ChannelRole::Guest {
                 let picker = picker.clone();
                 let label = if role == ChannelRole::Guest {
-                    "Promote to Member"
+                    "提升为成员"
                 } else {
-                    "Demote to Member"
+                    "降级为成员"
                 };
 
                 menu = menu.entry(label, None, move |window, cx| {

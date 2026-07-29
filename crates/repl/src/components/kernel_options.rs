@@ -385,7 +385,7 @@ impl PickerDelegate for KernelPickerDelegate {
                                                 )
                                                 .when(*is_recommended, |flex| {
                                                     flex.child(
-                                                        Label::new("Recommended")
+                                                        Label::new("推荐")
                                                             .size(LabelSize::XSmall)
                                                             .color(Color::Accent),
                                                     )

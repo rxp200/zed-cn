@@ -1390,7 +1390,7 @@ impl Editor {
                                     .child(self.render_edit_prediction_popover_keystroke(
                                         keystroke, key_color, cx,
                                     ))
-                                    .child(Label::new("Preview").into_any_element())
+                                    .child(Label::new("预览").into_any_element())
                                     .opacity(if has_completion { 1.0 } else { 0.4 }),
                             )
                         } else {
@@ -2420,7 +2420,7 @@ impl Editor {
                         } else {
                             Icon::new(icons.up)
                         })
-                        .child(Label::new("Jump to Edit")),
+                        .child(Label::new("跳转到编辑")),
                 )
             }
             EditPrediction::MoveOutside { snapshot, .. } => {
@@ -2522,7 +2522,7 @@ impl Render for MissingEditPredictionKeybindingTooltip {
                     v_flex()
                         .flex_1()
                         .text_ui_sm(cx)
-                        .child(Label::new("Conflict with Accept Keybinding"))
+                        .child(Label::new("与接受快捷键冲突"))
                         .child("Your keymap currently overrides the default accept keybinding. To continue, assign one keybinding for the `editor::AcceptEditPrediction` action.")
                 )
                 .child(

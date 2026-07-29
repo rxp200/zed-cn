@@ -495,7 +495,7 @@ impl PickerDelegate for ColumnFilterDelegate {
                         .id("csv-filter-clear-all")
                         .cursor_pointer()
                         .child(
-                            Label::new("Clear all")
+                            Label::new("清除全部")
                                 .size(LabelSize::Small)
                                 .color(Color::Accent),
                         )

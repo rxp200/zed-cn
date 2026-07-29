@@ -643,7 +643,7 @@ impl Render for ProjectSearchView {
             let page_content: Option<AnyElement> = match model.search_state {
                 SearchState::Idle => Some(self.landing_text_minor(cx).into_any_element()),
                 SearchState::Completed(SearchCompletion::NoResults) => Some(
-                    Label::new("No results found in this project for the provided query")
+                    Label::new("在此项目中未找到与查询匹配的结果")
                         .size(LabelSize::Small)
                         .into_any_element(),
                 ),
@@ -1838,7 +1838,7 @@ impl ProjectSearchView {
         v_flex()
             .gap_1()
             .child(
-                Label::new("Hit enter to search. For more options:")
+                Label::new("按回车搜索。更多选项：")
                     .color(Color::Muted)
                     .mb_2(),
             )

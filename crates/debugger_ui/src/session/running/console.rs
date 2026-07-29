@@ -476,7 +476,7 @@ impl Render for Console {
                             })
                             .layer(ui::ElevationIndex::ModalSurface)
                             .size(ui::ButtonSize::Compact)
-                            .child(Label::new("Evaluate"))
+                            .child(Label::new("求值"))
                             .tooltip({
                                 let query_focus_handle = query_focus_handle.clone();
 

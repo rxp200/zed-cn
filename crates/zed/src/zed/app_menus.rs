@@ -52,7 +52,7 @@ pub fn app_menus(cx: &mut App) -> Vec<Menu> {
 
     if ReleaseChannel::try_global(cx) == Some(ReleaseChannel::Dev) {
         view_items.push(MenuItem::action(
-            "切换 GPUI 调试器",,
+            "切换 GPUI 调试器",
             dev::ToggleInspector,
         ));
         view_items.push(MenuItem::separator());

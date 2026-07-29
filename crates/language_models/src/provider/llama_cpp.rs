@@ -605,7 +605,7 @@ impl LanguageModelProvider for LlamaCppLanguageModelProvider {
                     .into()
             })
             .description(InlineDescription::Text(
-                "Run local models on your machine with LlamaCpp.".into(),
+                "使用 LlamaCpp 在您的机器上运行本地模型。".into(),
             )),
         ))
     }
@@ -1180,16 +1180,16 @@ struct ConfigurationView {
 
 impl ConfigurationView {
     pub fn new(state: Entity<State>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let api_key_editor = cx.new(|cx| InputField::new(window, cx, "sk-...").label("API key"));
+        let api_key_editor = cx.new(|cx| InputField::new(window, cx, "sk-...").label("API 密钥"));
 
         let api_url_editor = cx.new(|cx| {
-            let input = InputField::new(window, cx, LLAMA_CPP_API_URL).label("API URL");
+            let input = InputField::new(window, cx, LLAMA_CPP_API_URL).label("API 地址");
             input.set_text(&LlamaCppLanguageModelProvider::api_url(cx), window, cx);
             input
         });
 
         let context_window_editor = cx.new(|cx| {
-            let input = InputField::new(window, cx, "8192").label("Context Window");
+            let input = InputField::new(window, cx, "8192").label("上下文窗口");
             if let Some(context_window) = LlamaCppLanguageModelProvider::settings(cx).context_window
             {
                 input.set_text(&context_window.to_string(), window, cx);
@@ -1348,37 +1348,35 @@ impl ConfigurationView {
             .gap_2()
             .child(
                 Label::new(
-                    "Run open models locally with llama.cpp's built-in server, or connect to a \
-                remote llama.cpp server.",
+                    "使用 llama.cpp 的内置服务器在本地运行开放模型，或连接到远程 llama.cpp 服务器。",
                 )
                 .color(Color::Muted),
             )
-            .child(Label::new("To use a local llama.cpp server:").color(Color::Muted))
+            .child(Label::new("要使用本地 llama.cpp 服务器：").color(Color::Muted))
             .child(
                 List::new()
                     .child(
                         ListBulletItem::new("")
-                            .child(Label::new("Install llama.cpp from").color(Color::Muted))
+                            .child(Label::new("从以下位置安装 llama.cpp").color(Color::Muted))
                             .child(ButtonLink::new("llama.app", LLAMA_CPP_DOWNLOAD_URL)),
                     )
                     .child(
                         ListBulletItem::new("")
                             .child(
-                                Label::new("Start the server in router mode:").color(Color::Muted),
+                                Label::new("以路由模式启动服务器：").color(Color::Muted),
                             )
                             .child(Label::new("llama serve").inline_code(cx)),
                     )
                     .child(
                         ListBulletItem::new(
-                            "Click 'Connect' below to start using llama.cpp in Zed",
+                            "点击下方的'连接'开始在 Zed 中使用 llama.cpp",
                         )
                         .label_color(Color::Muted),
                     ),
             )
             .child(
                 Label::new(
-                    "Alternatively, you can connect to a remote llama.cpp server by specifying its \
-                URL and API key (set with --api-key, may not be required):",
+                    "或者，您可以通过指定远程 llama.cpp 服务器的 URL 和 API 密钥（通过 --api-key 设置，可能不需要）进行连接：",
                 )
                 .color(Color::Muted),
             )
@@ -1388,9 +1386,9 @@ impl ConfigurationView {
         let state = self.state.read(cx);
         let env_var_set = state.api_key_state.is_from_env_var();
         let configured_card_label = if env_var_set {
-            format!("API key set in {API_KEY_ENV_VAR_NAME} environment variable.")
+            format!("API 密钥已在 {API_KEY_ENV_VAR_NAME} 环境变量中设置。")
         } else {
-            "API key configured".to_string()
+            "API 密钥已配置".to_string()
         };
 
         let api_key_control = if !state.api_key_state.has_key() {
@@ -1401,7 +1399,7 @@ impl ConfigurationView {
                 .on_click(cx.listener(|this, _, window, cx| this.reset_api_key(window, cx)))
                 .when(env_var_set, |this| {
                     this.tooltip_label(format!(
-                        "To reset your API key, unset the {API_KEY_ENV_VAR_NAME} environment variable."
+                        "要重置您的 API 密钥，请取消设置 {API_KEY_ENV_VAR_NAME} 环境变量。"
                     ))
                 })
                 .into_any_element()
@@ -1414,7 +1412,7 @@ impl ConfigurationView {
             .mb_2()
             .child(
                 Label::new(format!(
-                    "You can also set the {API_KEY_ENV_VAR_NAME} environment variable and restart Zed."
+                    "您也可以设置 {API_KEY_ENV_VAR_NAME} 环境变量并重新启动 Zed。"
                 ))
                 .size(LabelSize::Small)
                 .color(Color::Muted),
@@ -1438,7 +1436,7 @@ impl ConfigurationView {
                         .gap_1()
                         .child(Icon::new(IconName::Check).color(Color::Success))
                         .child(Label::new(format!(
-                            "Context Window: {}",
+                            "上下文窗口：{}",
                             settings.context_window.unwrap_or_default()
                         ))),
                 )
@@ -1463,7 +1461,7 @@ impl ConfigurationView {
                 .child(self.context_window_editor.clone())
                 .gap_1p5()
                 .child(
-                    Label::new("Default: Discovered from the server")
+                    Label::new("默认：从服务器发现")
                         .size(LabelSize::Small)
                         .color(Color::Muted),
                 )
@@ -1601,7 +1599,7 @@ impl Render for ConfigurationView {
                                         h_flex()
                                             .gap_1()
                                             .child(Icon::new(IconName::Check).color(Color::Success))
-                                            .child(Label::new("Connected")),
+                                            .child(Label::new("已连接")),
                                     )
                                     .child(
                                         IconButton::new("refresh-models", IconName::RotateCcw)

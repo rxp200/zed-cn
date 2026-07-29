@@ -144,14 +144,14 @@ impl Component for Banner {
             single_example(
                 "Default",
                 Banner::new()
-                    .child(Label::new("This is a default banner with no customization"))
+                    .child(Label::new("这是一个没有任何自定义的默认横幅"))
                     .into_any_element(),
             ),
             single_example(
                 "Info",
                 Banner::new()
                     .severity(Severity::Info)
-                    .child(Label::new("This is an informational message"))
+                    .child(Label::new("这是一条信息性消息"))
                     .action_slot(
                         Button::new("learn-more", "了解更多")
                             .end_icon(Icon::new(IconName::ArrowUpRight).size(IconSize::Small)),
@@ -162,7 +162,7 @@ impl Component for Banner {
                 "Success",
                 Banner::new()
                     .severity(Severity::Success)
-                    .child(Label::new("Operation completed successfully"))
+                    .child(Label::new("操作成功完成"))
                     .action_slot(Button::new("dismiss", "关闭"))
                     .into_any_element(),
             ),
@@ -170,7 +170,7 @@ impl Component for Banner {
                 "Warning",
                 Banner::new()
                     .severity(Severity::Warning)
-                    .child(Label::new("Your settings file uses deprecated settings"))
+                    .child(Label::new("您的设置文件使用了已弃用的设置"))
                     .action_slot(Button::new("update", "更新设置"))
                     .into_any_element(),
             ),
@@ -178,7 +178,7 @@ impl Component for Banner {
                 "Error",
                 Banner::new()
                     .severity(Severity::Error)
-                    .child(Label::new("Connection error: unable to connect to server"))
+                    .child(Label::new("连接错误：无法连接到服务器"))
                     .action_slot(Button::new("reconnect", "重试"))
                     .into_any_element(),
             ),

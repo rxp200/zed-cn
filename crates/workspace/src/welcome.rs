@@ -351,7 +351,7 @@ impl WelcomePage {
                             .color(Color::Muted)
                             .size(IconSize::Small),
                     )
-                    .child(Label::new("Collaborate with Agents")),
+                    .child(Label::new("与 Agent 协作")),
             )
             .child(
                 Label::new(description)
@@ -480,7 +480,7 @@ impl Render for WelcomePage {
                             .child(Vector::square(VectorName::ZedLogo, rems_from_px(45.)))
                             .child(
                                 v_flex().child(Headline::new(welcome_label)).child(
-                                    Label::new("The editor for what's next")
+                                    Label::new("为未来而生的编辑器")
                                         .size(LabelSize::Small)
                                         .color(Color::Muted)
                                         .italic(),

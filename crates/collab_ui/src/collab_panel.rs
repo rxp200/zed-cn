@@ -3158,7 +3158,7 @@ impl CollabPanel {
                             .child(render_participant_name_and_handle(&contact.user)),
                     )
                     .when(calling, |el| {
-                        el.child(Label::new("Calling…").color(Color::Muted))
+                        el.child(Label::new("正在通话...").color(Color::Muted))
                     })
                     .when(!calling, |el| {
                         el.child(

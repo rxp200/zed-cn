@@ -59,7 +59,7 @@ fn render_flag_row(
                     ))
                     .when(forced_on, |this| {
                         this.child(
-                            Label::new("enabled for all")
+                            Label::new("已为所有用户启用")
                                 .size(LabelSize::Small)
                                 .color(Color::Muted),
                         )

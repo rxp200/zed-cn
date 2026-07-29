@@ -454,7 +454,7 @@ impl NewProcessModal {
                 cx.emit(DismissEvent);
             })
         })
-        .detach_and_prompt_err("Failed to edit debug.json", window, cx, |_, _, _| None);
+        .detach_and_prompt_err("编辑 debug.json 失败", window, cx, |_, _, _| None);
     }
 
     fn adapter_drop_down_menu(
@@ -531,7 +531,7 @@ impl NewProcessModal {
     }
 }
 
-static SELECT_DEBUGGER_LABEL: SharedString = SharedString::new_static("Select Debugger");
+static SELECT_DEBUGGER_LABEL: SharedString = SharedString::new_static("选择调试器");
 
 #[derive(Clone, Copy)]
 pub(crate) enum NewProcessMode {
@@ -829,14 +829,14 @@ impl ConfigureMode {
     pub(super) fn new(window: &mut Window, cx: &mut App) -> Entity<Self> {
         let program = cx.new(|cx| {
             InputField::new(window, cx, "ENV=Zed ~/bin/program --option")
-                .label("Program")
+                .label("程序")
                 .tab_stop(true)
                 .tab_index(1)
         });
 
         let cwd = cx.new(|cx| {
-            InputField::new(window, cx, "Ex: $ZED_WORKTREE_ROOT")
-                .label("Working Directory")
+            InputField::new(window, cx, "例如：$ZED_WORKTREE_ROOT")
+                .label("工作目录")
                 .tab_stop(true)
                 .tab_index(2)
         });
@@ -933,7 +933,7 @@ impl ConfigureMode {
             .child(
                 h_flex()
                     .gap_1()
-                    .child(Label::new("Debugger:").color(Color::Muted))
+                    .child(Label::new("调试器：").color(Color::Muted))
                     .child(adapter_menu),
             )
             .child(self.program.clone())
@@ -941,7 +941,7 @@ impl ConfigureMode {
             .child(
                 Switch::new("debugger-stop-on-entry", self.stop_on_entry)
                     .tab_index(3_isize)
-                    .label("Stop on Entry")
+                    .label("入口处停止")
                     .label_position(SwitchLabelPosition::Start)
                     .label_size(LabelSize::Default)
                     .on_click({
@@ -973,7 +973,7 @@ impl AttachMode {
     ) -> Entity<Self> {
         let definition = ZedDebugConfig {
             adapter: debugger.unwrap_or(DebugAdapterName("".into())).0,
-            label: "Attach New Session Setup".into(),
+            label: "附加新会话设置".into(),
             request: dap::DebugRequest::Attach(task::AttachRequest { process_id: None }),
             stop_on_entry: Some(false),
         };
@@ -1083,9 +1083,9 @@ impl DebugDelegate {
                 Some(abs_path.to_string_lossy().into_owned())
             }
             Some(TaskSourceKind::Lsp { language_name, .. }) => {
-                Some(format!("LSP: {language_name}"))
+                Some(format!("LSP：{language_name}"))
             }
-            Some(TaskSourceKind::Language { name }) => Some(format!("Language: {name}")),
+            Some(TaskSourceKind::Language { name }) => Some(format!("语言：{name}")),
             _ => context.clone().and_then(|ctx| {
                 ctx.task_context
                     .task_variables
@@ -1230,7 +1230,7 @@ impl PickerDelegate for DebugDelegate {
     }
 
     fn placeholder_text(&self, _window: &mut Window, _cx: &mut App) -> std::sync::Arc<str> {
-        "Find a debug task, or debug a command".into()
+        "查找调试任务，或调试命令".into()
     }
 
     fn update_matches(
@@ -1520,7 +1520,7 @@ impl PickerDelegate for DebugDelegate {
                 } else {
                     this.child({
                         let is_recent_selected = self.divider_index >= Some(self.selected_index);
-                        let run_entry_label = if is_recent_selected { "Rerun" } else { "Spawn" };
+                        let run_entry_label = if is_recent_selected { "重新运行" } else { "启动" };
 
                         Button::new("spawn", run_entry_label)
                             .key_binding(KeyBinding::for_action(&menu::Confirm, cx))
