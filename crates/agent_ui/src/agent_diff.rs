@@ -548,7 +548,7 @@ impl Item for AgentDiffPane {
                         title.clone().unwrap_or_else(|| "Review".to_string()),
                     ))
                     .child(
-                        Label::new("Agent Diff")
+                        Label::new("Agent 差异")
                             .color(Color::Muted)
                             .size(LabelSize::Small),
                     )

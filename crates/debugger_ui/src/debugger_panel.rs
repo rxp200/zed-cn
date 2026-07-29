@@ -1836,7 +1836,7 @@ impl Render for DebugPanel {
                                 .justify_between()
                                 .border_b_1()
                                 .border_color(cx.theme().colors().border_variant)
-                                .child(Label::new("Breakpoints").size(LabelSize::Small))
+                                .child(Label::new("断点").size(LabelSize::Small))
                                 .child(
                                     h_flex().visible_on_hover("base-breakpoint-list").child(
                                         self.breakpoint_list.read(cx).render_control_strip(),
@@ -1849,7 +1849,7 @@ impl Render for DebugPanel {
                         .when(!has_breakpoints, |this| {
                             this.child(
                                 v_flex().size_full().items_center().justify_center().child(
-                                    Label::new("No Breakpoints Set")
+                                    Label::new("未设置断点")
                                         .size(LabelSize::Small)
                                         .color(Color::Muted),
                                 ),

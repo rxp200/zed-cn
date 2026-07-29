@@ -67,7 +67,7 @@ impl RenderOnce for EndTrialUpsell {
         AgentPanelOnboardingCard::new()
             .child(Headline::new("Your Zed Pro Trial has expired"))
             .child(
-                Label::new("You've been automatically reset to the Free plan.")
+                Label::new("您已自动重置为免费计划。")
                     .color(Color::Muted)
                     .mb_2(),
             )

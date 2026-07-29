@@ -769,7 +769,7 @@ impl Render for ExecutionView {
             ExecutionStatus::Finished => Icon::new(IconName::Check)
                 .size(IconSize::Small)
                 .into_any_element(),
-            ExecutionStatus::Unknown => Label::new("Unknown status")
+            ExecutionStatus::Unknown => Label::new("未知状态")
                 .color(Color::Muted)
                 .into_any_element(),
             ExecutionStatus::ShuttingDown => Label::new("Kernel shutting down...")
@@ -778,7 +778,7 @@ impl Render for ExecutionView {
             ExecutionStatus::Restarting => Label::new("Kernel restarting...")
                 .color(Color::Muted)
                 .into_any_element(),
-            ExecutionStatus::Shutdown => Label::new("Kernel shutdown")
+            ExecutionStatus::Shutdown => Label::new("内核已关闭")
                 .color(Color::Muted)
                 .into_any_element(),
             ExecutionStatus::Queued => Label::new("Queued...")

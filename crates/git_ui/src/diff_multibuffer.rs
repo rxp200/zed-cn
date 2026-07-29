@@ -922,7 +922,7 @@ impl Render for DiffMultibuffer {
                             None => el.child(
                                 h_flex()
                                     .justify_around()
-                                    .child(Label::new("Remote up to date")),
+                                    .child(Label::new("远程已是最新")),
                             ),
                         })
                         .child(

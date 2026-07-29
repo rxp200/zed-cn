@@ -3799,16 +3799,16 @@ impl Render for GitGraph {
                                                     .color(Color::Muted)
                                                     .truncate()
                                                     .into_any_element(),
-                                                Label::new("Description")
+                                                Label::new("描述")
                                                     .color(Color::Muted)
                                                     .into_any_element(),
                                                 Label::new("Date")
                                                     .color(Color::Muted)
                                                     .into_any_element(),
-                                                Label::new("Author")
+                                                Label::new("作者")
                                                     .color(Color::Muted)
                                                     .into_any_element(),
-                                                Label::new("Commit")
+                                                Label::new("提交")
                                                     .color(Color::Muted)
                                                     .into_any_element(),
                                             ],
@@ -3817,16 +3817,16 @@ impl Render for GitGraph {
                                     } else {
                                         TableRow::from_vec(
                                             vec![
-                                                Label::new("Description")
+                                                Label::new("描述")
                                                     .color(Color::Muted)
                                                     .into_any_element(),
                                                 Label::new("Date")
                                                     .color(Color::Muted)
                                                     .into_any_element(),
-                                                Label::new("Author")
+                                                Label::new("作者")
                                                     .color(Color::Muted)
                                                     .into_any_element(),
-                                                Label::new("Commit")
+                                                Label::new("提交")
                                                     .color(Color::Muted)
                                                     .into_any_element(),
                                             ],

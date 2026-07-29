@@ -91,7 +91,7 @@ fn developer_page(cx: &App) -> SettingsPage {
     if cx.feature_flag_overrides_enabled() {
         items.push(SettingsPageItem::SectionHeader("Feature Flags"));
         items.push(SettingsPageItem::SubPageLink(SubPageLink {
-            title: "Feature Flags".into(),
+            title: "功能标志".into(),
             r#type: Default::default(),
             description: None,
             search_aliases: &[],
@@ -130,7 +130,7 @@ fn developer_page(cx: &App) -> SettingsPage {
     }));
 
     SettingsPage {
-        title: "Developer",
+        title: "开发者",
         items: items.into_boxed_slice(),
     }
 }
@@ -3229,8 +3229,8 @@ fn languages_and_tools_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Update Debounce",
-                description: "The delay in milliseconds to show inline diagnostics after the last diagnostic update.",
+                title: "更新防抖",
+                description: "上次诊断更新后显示内联诊断的延迟时间（毫秒）。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("diagnostics.inline.update_debounce_ms"),
@@ -3256,8 +3256,8 @@ fn languages_and_tools_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Padding",
-                description: "The amount of padding between the end of the source line and the start of the inline diagnostic.",
+                title: "内边距",
+                description: "源代码行末尾与内联诊断开始之间的内边距量。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("diagnostics.inline.padding"),
@@ -3283,8 +3283,8 @@ fn languages_and_tools_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Minimum Column",
-                description: "The minimum column at which to display inline diagnostics.",
+                title: "最小列数",
+                description: "显示内联诊断的最小列数。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("diagnostics.inline.min_column"),
@@ -3316,8 +3316,8 @@ fn languages_and_tools_page(cx: &App) -> SettingsPage {
         [
             SettingsPageItem::SectionHeader("LSP Pull Diagnostics"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Enabled",
-                description: "Whether to pull for language server-powered diagnostics or not.",
+                title: "启用",
+                description: "是否拉取语言服务器提供的诊断信息。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("diagnostics.lsp_pull_diagnostics.enabled"),
@@ -3344,8 +3344,8 @@ fn languages_and_tools_page(cx: &App) -> SettingsPage {
             }),
             // todo(settings_ui): Needs unit
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Debounce",
-                description: "Minimum time to wait before pulling diagnostics from the language server(s).",
+                title: "防抖",
+                description: "从语言服务器拉取诊断信息前的最短等待时间。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("diagnostics.lsp_pull_diagnostics.debounce_ms"),
@@ -3377,8 +3377,8 @@ fn languages_and_tools_page(cx: &App) -> SettingsPage {
         [
             SettingsPageItem::SectionHeader("LSP Highlights"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Debounce",
-                description: "The debounce delay before querying highlights from the language.",
+                title: "防抖",
+                description: "从语言查询高亮前的防抖延迟。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("lsp_highlight_debounce"),
@@ -3429,7 +3429,7 @@ fn languages_and_tools_page(cx: &App) -> SettingsPage {
     }
 
     SettingsPage {
-        title: "Languages & Tools",
+        title: "语言与工具",
         items: {
             concat_sections!(
                 non_editor_language_settings_data(),
@@ -3449,8 +3449,8 @@ fn search_and_files_page() -> SettingsPage {
         [
             SettingsPageItem::SectionHeader("Search"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Whole Word",
-                description: "Search for whole words by default.",
+                title: "全词匹配",
+                description: "默认搜索整个单词。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("search.whole_word"),
@@ -3469,8 +3469,8 @@ fn search_and_files_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Case Sensitive",
-                description: "Search case-sensitively by default.",
+                title: "区分大小写",
+                description: "默认区分大小写搜索。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("search.case_sensitive"),
@@ -3494,8 +3494,8 @@ fn search_and_files_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Use Smartcase Search",
-                description: "Whether to automatically enable case-sensitive search based on the search query.",
+                title: "使用智能大小写搜索",
+                description: "是否根据搜索查询自动启用区分大小写搜索。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("use_smartcase_search"),
@@ -3508,8 +3508,8 @@ fn search_and_files_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Include Ignored",
-                description: "Include ignored files in search results by default.",
+                title: "包含忽略文件",
+                description: "默认在搜索结果中包含被忽略的文件。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("search.include_ignored"),
@@ -3533,8 +3533,8 @@ fn search_and_files_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Regex",
-                description: "Use regex search by default.",
+                title: "正则表达式",
+                description: "默认使用正则表达式搜索。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("search.regex"),
@@ -3549,8 +3549,8 @@ fn search_and_files_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Search Wrap",
-                description: "Whether the editor search results will loop.",
+                title: "搜索循环",
+                description: "编辑器搜索结果是否循环。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("search_wrap"),
@@ -3563,8 +3563,8 @@ fn search_and_files_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Center on Match",
-                description: "Whether to center the current match in the editor",
+                title: "匹配居中",
+                description: "是否在编辑器中将当前匹配项居中显示",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("editor.search.center_on_match"),
@@ -3587,8 +3587,8 @@ fn search_and_files_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Seed Search Query From Cursor",
-                description: "When to populate a new search's query based on the text under the cursor.",
+                title: "从光标处预填搜索查询",
+                description: "何时根据光标下的文本填充新搜索的查询。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("seed_search_query_from_cursor"),
@@ -4615,8 +4615,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Enable Preview Multibuffer From Code Navigation",
-                description: "Whether to open tabs in preview mode when code navigation is used to open a multibuffer.",
+                title: "从代码导航启用多缓冲预览",
+                description: "使用代码导航打开多缓冲时是否以预览模式打开标签页。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("preview_tabs.enable_preview_multibuffer_from_code_navigation"),
@@ -4638,8 +4638,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Enable Preview File From Code Navigation",
-                description: "Whether to open tabs in preview mode when code navigation is used to open a single file.",
+                title: "从代码导航启用文件预览",
+                description: "使用代码导航打开单个文件时是否以预览模式打开标签页。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("preview_tabs.enable_preview_file_from_code_navigation"),
@@ -4661,8 +4661,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Enable Keep Preview On Code Navigation",
-                description: "Whether to keep tabs in preview mode when code navigation is used to navigate away from them. If `enable_preview_file_from_code_navigation` or `enable_preview_multibuffer_from_code_navigation` is also true, the new tab may replace the existing one.",
+                title: "代码导航时保持预览",
+                description: "使用代码导航离开标签页时是否保持预览模式。如果同时启用了「从代码导航启用文件预览」或「从代码导航启用多缓冲预览」，新标签页可能会替换现有标签页。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("preview_tabs.enable_keep_preview_on_code_navigation"),
@@ -4690,8 +4690,8 @@ fn window_and_layout_page() -> SettingsPage {
         [
             SettingsPageItem::SectionHeader("Layout"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Bottom Dock Layout",
-                description: "Layout mode for the bottom dock.",
+                title: "底部面板布局",
+                description: "底部面板的布局模式。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("bottom_dock_layout"),
@@ -4705,8 +4705,8 @@ fn window_and_layout_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 files: USER,
-                title: "Centered Layout Left Padding",
-                description: "Left padding for centered layout.",
+                title: "居中布局左内边距",
+                description: "居中布局的左内边距。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("centered_layout.left_padding"),
@@ -4730,8 +4730,8 @@ fn window_and_layout_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 files: USER,
-                title: "Centered Layout Right Padding",
-                description: "Right padding for centered layout.",
+                title: "居中布局右侧内边距",
+                description: "居中布局的右侧内边距。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("centered_layout.right_padding"),
@@ -4754,8 +4754,8 @@ fn window_and_layout_page() -> SettingsPage {
                 metadata: None,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Focus Follows Mouse",
-                description: "Whether to change focus to a pane when the mouse hovers over it.",
+                title: "鼠标跟随焦点",
+                description: "鼠标悬停在窗格上时是否将焦点切换到该窗格。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("focus_follows_mouse.enabled"),
@@ -4778,8 +4778,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Focus Follows Mouse Debounce ms",
-                description: "Amount of time to wait before changing focus.",
+                title: "鼠标跟随焦点去抖毫秒数",
+                description: "更改焦点之前等待的时间。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("focus_follows_mouse.debounce_ms"),
@@ -4809,8 +4809,8 @@ fn window_and_layout_page() -> SettingsPage {
             SettingsPageItem::SectionHeader("Window"),
             // todo(settings_ui): Should we filter by platform.as_ref()?
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Use System Window Tabs",
-                description: "(macOS only) whether to allow Windows to tab together.",
+                title: "使用系统窗口标签",
+                description: "（仅 macOS）是否允许窗口合并标签。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("use_system_window_tabs"),
@@ -4825,8 +4825,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Window Decorations",
-                description: "(Linux only) whether Zed or your compositor should draw window decorations.",
+                title: "窗口装饰",
+                description: "（仅 Linux）Zed 或合成器是否应绘制窗口装饰。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("window_decorations"),
@@ -4845,8 +4845,8 @@ fn window_and_layout_page() -> SettingsPage {
         [
             SettingsPageItem::SectionHeader("Pane Modifiers"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Inactive Opacity",
-                description: "Opacity of inactive panels (0.0 - 1.0).",
+                title: "非活动面板透明度",
+                description: "非活动面板的透明度（0.0 - 1.0）。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("active_pane_modifiers.inactive_opacity"),
@@ -4870,8 +4870,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Border Size",
-                description: "Size of the border surrounding the active pane.",
+                title: "边框大小",
+                description: "活动窗格周围边框的大小。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("active_pane_modifiers.border_size"),
@@ -4895,8 +4895,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Zoomed Padding",
-                description: "Show padding for zoomed panes.",
+                title: "缩放内边距",
+                description: "显示缩放窗格的内边距。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("zoomed_padding"),
@@ -4915,8 +4915,8 @@ fn window_and_layout_page() -> SettingsPage {
         [
             SettingsPageItem::SectionHeader("Pane Split Direction"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Vertical Split Direction",
-                description: "Direction to split vertically.",
+                title: "垂直分割方向",
+                description: "垂直分割的方向。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("pane_split_direction_vertical"),
@@ -4934,8 +4934,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Horizontal Split Direction",
-                description: "Direction to split horizontally.",
+                title: "水平分割方向",
+                description: "水平分割的方向。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("pane_split_direction_horizontal"),
@@ -4976,8 +4976,8 @@ fn panels_page() -> SettingsPage {
         [
             SettingsPageItem::SectionHeader("Project Panel"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Project Panel Dock",
-                description: "Where to dock the project panel.",
+                title: "项目面板停靠",
+                description: "项目面板的停靠位置。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.dock"),
@@ -4990,8 +4990,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Project Panel Default Width",
-                description: "Default width of the project panel in pixels.",
+                title: "项目面板默认宽度",
+                description: "项目面板的默认宽度（像素）。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.default_width"),
@@ -5013,8 +5013,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Hide .gitignore",
-                description: "Whether to hide the gitignore entries in the project panel.",
+                title: "隐藏 .gitignore",
+                description: "是否在项目面板中隐藏 .gitignore 条目。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.hide_gitignore"),
@@ -5036,8 +5036,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Entry Spacing",
-                description: "Spacing between worktree entries in the project panel.",
+                title: "条目间距",
+                description: "项目面板中工作区条目之间的间距。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.entry_spacing"),
@@ -5059,8 +5059,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "File Icons",
-                description: "Show file icons in the project panel.",
+                title: "文件图标",
+                description: "在项目面板中显示文件图标。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.file_icons"),
@@ -5078,8 +5078,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Folder Icons",
-                description: "Whether to show folder icons or chevrons for directories in the project panel.",
+                title: "文件夹图标",
+                description: "是否在项目面板中为目录显示文件夹图标或箭头。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.folder_icons"),
@@ -5101,8 +5101,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Git Status",
-                description: "Show the Git status in the project panel.",
+                title: "Git 状态",
+                description: "在项目面板中显示 Git 状态。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.git_status"),
@@ -5120,8 +5120,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Indent Size",
-                description: "Amount of indentation for nested items.",
+                title: "缩进大小",
+                description: "嵌套项的缩进量。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.indent_size"),
@@ -5143,8 +5143,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Auto Reveal Entries",
-                description: "Whether to reveal entries in the project panel automatically when a corresponding project entry becomes active.",
+                title: "自动显示条目",
+                description: "当对应的项目条目变为活动时，是否自动在项目面板中显示该条目。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.auto_reveal_entries"),
@@ -5166,8 +5166,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Starts Open",
-                description: "Whether the project panel should open on startup.",
+                title: "启动时打开",
+                description: "项目面板是否应在启动时打开。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.starts_open"),
@@ -5189,8 +5189,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Auto Fold Directories",
-                description: "Whether to fold directories automatically and show compact folders when a directory has only one subdirectory inside.",
+                title: "自动折叠目录",
+                description: "是否自动折叠目录并在目录仅包含一个子目录时显示紧凑文件夹。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.auto_fold_dirs"),
@@ -5212,8 +5212,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Bold Folder Labels",
-                description: "Whether to show folder names with bold text in the project panel.",
+                title: "加粗文件夹标签",
+                description: "是否在项目面板中以粗体显示文件夹名称。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.bold_folder_labels"),
@@ -5235,8 +5235,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Show Scrollbar",
-                description: "Show the scrollbar in the project panel.",
+                title: "显示滚动条",
+                description: "在项目面板中显示滚动条。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.scrollbar.show"),
@@ -5567,8 +5567,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Auto Open Files On Drop",
-                description: "Whether to automatically open files dropped from external sources.",
+                title: "拖放时自动打开文件",
+                description: "是否自动打开从外部来源拖放的文件。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.auto_open.on_drop"),
@@ -5594,8 +5594,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Hidden Files",
-                description: "Globs to match files that will be considered \"hidden\" and can be hidden from the project panel.",
+                title: "隐藏文件",
+                description: "用于匹配被视为\"隐藏\"并可从项目面板中隐藏的文件的 glob 模式。",
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -5619,8 +5619,8 @@ fn panels_page() -> SettingsPage {
         [
             SettingsPageItem::SectionHeader("Terminal Panel"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Terminal Dock",
-                description: "Where to dock the terminal panel.",
+                title: "终端停靠位置",
+                description: "终端面板的停靠位置。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.dock"),
@@ -5633,8 +5633,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Terminal Panel Flexible Sizing",
-                description: "Whether the terminal panel should use flexible (proportional) sizing when docked to the left or right.",
+                title: "终端面板弹性大小",
+                description: "终端面板停靠在左侧或右侧时是否使用弹性大小。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.flexible"),
@@ -5647,8 +5647,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Show Count Badge",
-                description: "Show a badge on the terminal panel icon with the count of open terminals.",
+                title: "显示数量徽章",
+                description: "在终端面板图标上显示带打开终端数量的徽章。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.show_count_badge"),
@@ -5676,8 +5676,8 @@ fn panels_page() -> SettingsPage {
         [
             SettingsPageItem::SectionHeader("Outline Panel"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Outline Panel Button",
-                description: "Show the outline panel button in the status bar.",
+                title: "大纲面板按钮",
+                description: "在状态栏中显示大纲面板按钮。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("outline_panel.button"),
@@ -5695,8 +5695,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Outline Panel Dock",
-                description: "Where to dock the outline panel.",
+                title: "大纲面板停靠位置",
+                description: "大纲面板的停靠位置。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("outline_panel.dock"),
@@ -5709,8 +5709,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Outline Panel Default Width",
-                description: "Default width of the outline panel in pixels.",
+                title: "大纲面板默认宽度",
+                description: "大纲面板的默认宽度（像素）。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("outline_panel.default_width"),
@@ -5816,8 +5816,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Auto Reveal Entries",
-                description: "Whether to reveal when a corresponding outline entry becomes active.",
+                title: "自动显示条目",
+                description: "当对应的大纲条目变为活动时是否自动显示。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("outline_panel.auto_reveal_entries"),
@@ -5839,8 +5839,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Auto Fold Directories",
-                description: "Whether to fold directories automatically when a directory contains only one subdirectory.",
+                title: "自动折叠目录",
+                description: "是否在目录仅包含一个子目录时自动折叠目录。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("outline_panel.auto_fold_dirs"),
@@ -5863,8 +5863,8 @@ fn panels_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 files: USER,
-                title: "Show Indent Guides",
-                description: "When to show indent guides in the outline panel.",
+                title: "显示缩进参考线",
+                description: "何时在大纲面板中显示缩进参考线。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("outline_panel.indent_guides.show"),
@@ -5895,8 +5895,8 @@ fn panels_page() -> SettingsPage {
         [
             SettingsPageItem::SectionHeader("Git Panel"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Git Panel Button",
-                description: "Show the Git panel button in the status bar.",
+                title: "Git 面板按钮",
+                description: "在状态栏中显示 Git 面板按钮。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git_panel.button"),
@@ -5909,8 +5909,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Git Panel Dock",
-                description: "Where to dock the Git panel.",
+                title: "Git 面板停靠位置",
+                description: "Git 面板的停靠位置。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git_panel.dock"),
@@ -5923,8 +5923,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Git Panel Default Width",
-                description: "Default width of the Git panel in pixels.",
+                title: "Git 面板默认宽度",
+                description: "Git 面板的默认宽度（像素）。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git_panel.default_width"),
@@ -5942,8 +5942,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Git Panel Status Style",
-                description: "How entry statuses are displayed.",
+                title: "Git 面板状态样式",
+                description: "条目状态的显示方式。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git_panel.status_style"),
@@ -5961,8 +5961,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Fallback Branch Name",
-                description: "Default branch name will be when init.defaultbranch is not set in Git.",
+                title: "后备分支名称",
+                description: "当 Git 中未设置 init.defaultBranch 时的默认分支名称。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git_panel.fallback_branch_name"),
@@ -5984,8 +5984,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Sort By",
-                description: "How to sort entries in the git panel.",
+                title: "排序方式",
+                description: "如何排序 Git 面板中的条目。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git_panel.sort_by"),
@@ -5998,8 +5998,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Group By",
-                description: "How to group entries in the git panel.",
+                title: "分组方式",
+                description: "如何分组 Git 面板中的条目。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git_panel.group_by"),
@@ -6012,8 +6012,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Collapse Untracked Diff",
-                description: "Whether to collapse untracked files in the diff panel.",
+                title: "折叠未跟踪差异",
+                description: "是否在差异面板中折叠未跟踪的文件。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git_panel.collapse_untracked_diff"),
@@ -6035,8 +6035,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Tree View",
-                description: "Enable to show entries in tree view list, disable to show in flat view list.",
+                title: "树形视图",
+                description: "启用以树形视图列表显示条目，禁用则以扁平视图列表显示。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git_panel.tree_view"),
@@ -6943,8 +6943,8 @@ fn terminal_page() -> SettingsPage {
         [
             SettingsPageItem::SectionHeader("Font"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Font Size",
-                description: "Font size for terminal text. If not set, defaults to buffer font size.",
+                title: "字体大小",
+                description: "终端文本的字体大小。如果未设置，默认为缓冲区字体大小。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.font_size"),
@@ -6963,8 +6963,8 @@ fn terminal_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Font Family",
-                description: "Font family for terminal text. If not set, defaults to buffer font family.",
+                title: "字体",
+                description: "终端文本的字体。如果未设置，默认为缓冲区字体。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.font_family"),
@@ -6986,8 +6986,8 @@ fn terminal_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Font Fallbacks",
-                description: "Font fallbacks for terminal text. If not set, defaults to buffer font fallbacks.",
+                title: "后备字体",
+                description: "终端文本的后备字体。如果未设置，默认为缓冲区后备字体。",
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -7012,8 +7012,8 @@ fn terminal_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Font Weight",
-                description: "Font weight for terminal text in CSS weight units (100-900).",
+                title: "字体粗细",
+                description: "终端文本的字体粗细，CSS 粗细单位（100-900）。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.font_weight"),
@@ -7031,8 +7031,8 @@ fn terminal_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Font Features",
-                description: "Font features for terminal text.",
+                title: "字体特性",
+                description: "终端文本的字体特性。",
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -7063,8 +7063,8 @@ fn terminal_page() -> SettingsPage {
         [
             SettingsPageItem::SectionHeader("Display Settings"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Line Height",
-                description: "Line height for terminal text.",
+                title: "行高",
+                description: "终端文本的行高。",
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -8055,8 +8055,8 @@ fn ai_page(cx: &App) -> SettingsPage {
         [
             SettingsPageItem::SectionHeader("General"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Disable AI",
-                description: "Whether to disable all AI features in Zed.",
+                title: "禁用 AI",
+                description: "是否禁用 Zed 中的所有 AI 功能。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("disable_ai"),
@@ -8069,8 +8069,8 @@ fn ai_page(cx: &App) -> SettingsPage {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Threads Sidebar Side",
-                description: "Which side of the window the threads sidebar appears on.",
+                title: "线程侧边栏位置",
+                description: "线程侧边栏显示在窗口的哪一侧。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("agent.sidebar_side"),
@@ -8083,7 +8083,7 @@ fn ai_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SubPageLink(SubPageLink {
-                title: "LLM Providers".into(),
+                title: "LLM 提供者".into(),
                 r#type: Default::default(),
                 json_path: Some("llm_providers"),
                 description: Some("Configure natively-included model providers.".into()),
@@ -8118,7 +8118,7 @@ fn ai_page(cx: &App) -> SettingsPage {
                 render: render_llm_providers_page,
             }),
             SettingsPageItem::SubPageLink(SubPageLink {
-                title: "External Agents".into(),
+                title: "外部 Agent".into(),
                 r#type: Default::default(),
                 json_path: Some("agent_servers"),
                 description: Some(
@@ -8146,7 +8146,7 @@ fn ai_page(cx: &App) -> SettingsPage {
                 render: render_external_agents_page,
             }),
             SettingsPageItem::SubPageLink(SubPageLink {
-                title: "MCP Servers".into(),
+                title: "MCP 服务器".into(),
                 r#type: Default::default(),
                 json_path: Some("context_servers"),
                 description: Some(
@@ -8165,7 +8165,7 @@ fn ai_page(cx: &App) -> SettingsPage {
 
         items.extend([
             SettingsPageItem::SubPageLink(SubPageLink {
-                title: "Skills".into(),
+                title: "技能".into(),
                 r#type: Default::default(),
                 json_path: Some(zed_actions::AGENT_SKILLS_SETTINGS_PATH),
                 description: Some("View and manage agent skills installed globally or in project worktrees.".into()),
@@ -8175,7 +8175,7 @@ fn ai_page(cx: &App) -> SettingsPage {
                 render: render_skills_setup_page,
             }),
             SettingsPageItem::SubPageLink(SubPageLink {
-                title: "Sandbox".into(),
+                title: "沙箱".into(),
                 r#type: Default::default(),
                 json_path: Some(zed_actions::AGENT_SANDBOX_SETTINGS_PATH),
                 description: Some(
@@ -8196,7 +8196,7 @@ fn ai_page(cx: &App) -> SettingsPage {
                 render: render_sandbox_settings_page,
             }),
             SettingsPageItem::SubPageLink(SubPageLink {
-                title: "Tool Permissions".into(),
+                title: "工具权限".into(),
                 r#type: Default::default(),
                 json_path: Some("agent.tool_permissions"),
                 description: Some("Set up regex patterns to auto-allow, auto-deny, or always request confirmation, for specific tool inputs.".into()),
@@ -8209,8 +8209,8 @@ fn ai_page(cx: &App) -> SettingsPage {
 
         items.extend([
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Single File Review",
-                description: "When enabled, agent edits will also be displayed in single-file buffers for review.",
+                title: "单文件审查",
+                description: "启用后，Agent 的编辑也将在单文件缓冲区中显示以供审查。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("agent.single_file_review"),
@@ -8461,8 +8461,8 @@ fn ai_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Show Turn Stats",
-                description: "Whether to show turn statistics like elapsed time during generation and final turn duration.",
+                title: "显示轮次统计",
+                description: "是否显示轮次统计信息，如生成过程中的经过时间和最终轮次时长。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("agent.show_turn_stats"),
@@ -8480,8 +8480,8 @@ fn ai_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Show Merge Conflict Indicator",
-                description: "Whether to show the merge conflict indicator in the status bar that offers to resolve conflicts using the agent.",
+                title: "显示合并冲突指示器",
+                description: "是否在状态栏中显示合并冲突指示器，提供使用 Agent 解决冲突的选项。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("agent.show_merge_conflict_indicator"),
@@ -8502,8 +8502,8 @@ fn ai_page(cx: &App) -> SettingsPage {
 
         items.extend([
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Auto Compact",
-                description: "Automatically compact the agent's context when it grows too large, summarizing earlier messages to free up room in the model's context window.",
+                title: "自动压缩",
+                description: "当 Agent 上下文过大时自动压缩，总结早期消息以释放模型上下文窗口中的空间。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("agent.auto_compact.enabled"),
@@ -8529,8 +8529,8 @@ fn ai_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Auto Compact Threshold",
-                description: "When auto compaction runs. A percentage string like \"90%\" is measured against the context window. A positive integer is the number of used tokens to compact after. A negative integer is the number of tokens remaining in the context window before compacting.",
+                title: "自动压缩阈值",
+                description: "自动压缩运行的时机。百分比字符串如\"90%\"相对于上下文窗口衡量。正整数表示在使用的 token 数量达到该值后压缩。负整数表示上下文窗口中剩余 token 数量少于该值时压缩。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("agent.auto_compact.threshold"),
@@ -8565,8 +8565,8 @@ fn ai_page(cx: &App) -> SettingsPage {
 
     fn edit_prediction_display_sub_section() -> [SettingsPageItem; 1] {
         [SettingsPageItem::SettingItem(SettingItem {
-            title: "Display Mode",
-            description: "When to show edit predictions previews in buffer. The eager mode displays them inline, while the subtle mode displays them only when holding a modifier key.",
+            title: "显示模式",
+            description: "何时在缓冲区中显示编辑预测预览。急切模式内联显示，而微妙模式仅在按住修饰键时显示。",
             field: Box::new(SettingField {
                 organization_override: None,
                 json_path: Some("edit_prediction.display_mode"),
@@ -8890,10 +8890,10 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
 
     fn indent_guides_section() -> [SettingsPageItem; 6] {
         [
-            SettingsPageItem::SectionHeader("Indent Guides"),
+            SettingsPageItem::SectionHeader("缩进参考线"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Enabled",
-                description: "Display indent guides in the editor.",
+                title: "已启用",
+                description: "在编辑器中显示缩进参考线。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).indent_guides.enabled"),
@@ -8915,8 +8915,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Line Width",
-                description: "The width of the indent guides in pixels, between 1 and 10.",
+                title: "线条宽度",
+                description: "缩进参考线的宽度（像素），介于 1 到 10 之间。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).indent_guides.line_width"),
@@ -8938,8 +8938,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Active Line Width",
-                description: "The width of the active indent guide in pixels, between 1 and 10.",
+                title: "活动线条宽度",
+                description: "活动缩进参考线的宽度（像素），介于 1 到 10 之间。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).indent_guides.active_line_width"),
@@ -8964,8 +8964,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Coloring",
-                description: "Determines how indent guides are colored.",
+                title: "着色",
+                description: "确定缩进参考线的着色方式。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).indent_guides.coloring"),
@@ -8987,8 +8987,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Background Coloring",
-                description: "Determines how indent guide backgrounds are colored.",
+                title: "背景着色",
+                description: "确定缩进参考线背景的着色方式。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).indent_guides.background_coloring"),
@@ -9018,8 +9018,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
         [
             SettingsPageItem::SectionHeader("Formatting"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Format On Save",
-                description: "On: format the whole buffer.\nOff: do not format.\nModifications: format only lines with unstaged changes; skips formatting when a git diff or LSP range formatting is unavailable.\nModifications If Available: same, but falls back to formatting the whole buffer.",
+                title: "保存时格式化",
+                description: "开启：格式化整个缓冲区。\n关闭：不格式化。\n仅修改：仅格式化有未暂存更改的行；当 git diff 或 LSP 范围格式化不可用时跳过格式化。\n如果可用则仅修改：同上，但回退为格式化整个缓冲区。",
                 field: Box::new(
                     // TODO(settings_ui): this setting should just be a bool
                     SettingField {
@@ -9045,8 +9045,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Remove Trailing Whitespace On Save",
-                description: "Whether or not to remove any trailing whitespace from lines of a buffer before saving it.",
+                title: "保存时删除尾随空白",
+                description: "是否在保存前删除缓冲区行尾的任何尾随空白。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).remove_trailing_whitespace_on_save"),
@@ -9065,8 +9065,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Ensure Final Newline On Save",
-                description: "Whether or not to ensure there's a single newline at the end of a buffer when saving it.",
+                title: "保存时确保末尾换行",
+                description: "是否在保存时确保缓冲区末尾有一个换行符。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).ensure_final_newline_on_save"),
@@ -9085,8 +9085,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Line Ending",
-                description: "How line endings should be handled for new files and during format and save operations.",
+                title: "换行符",
+                description: "新文件以及格式化和保存操作期间如何处理换行符。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).line_ending"),
@@ -9108,8 +9108,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Formatter",
-                description: "How to perform a buffer format.",
+                title: "格式化器",
+                description: "如何执行缓冲区格式化。",
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -9135,8 +9135,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Use On Type Format",
-                description: "Whether to use additional LSP queries to format (and amend) the code after every \"trigger\" symbol input, defined by LSP server capabilities",
+                title: "输入时格式化",
+                description: "是否在每次输入 LSP 服务器能力定义的\"触发器\"符号后使用额外的 LSP 查询来格式化（和修正）代码。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).use_on_type_format"),
@@ -9155,8 +9155,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Code Actions On Format",
-                description: "Additional code actions to run when formatting.",
+                title: "格式化时代码操作",
+                description: "格式化时要运行的额外代码操作。",
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -9188,8 +9188,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
         [
             SettingsPageItem::SectionHeader("Autoclose"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Use Autoclose",
-                description: "Whether to automatically type closing characters for you. For example, when you type '(', Zed will automatically add a closing ')' at the correct position.",
+                title: "自动关闭",
+                description: "是否自动为您输入闭合字符。例如，当您输入 '('，Zed 会自动在正确位置添加闭合的 ')'。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).use_autoclose"),
@@ -9208,8 +9208,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Use Auto Surround",
-                description: "Whether to automatically surround text with characters for you. For example, when you select text and type '(', Zed will automatically surround text with ().",
+                title: "自动包围",
+                description: "是否自动用字符包围所选文本。例如，当您选择文本并输入 '('，Zed 会自动将文本用 () 包围。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).use_auto_surround"),
@@ -9228,8 +9228,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Always Treat Brackets As Autoclosed",
-                description: "Controls whether the closing characters are always skipped over and auto-removed no matter how they were inserted.",
+                title: "始终将括号视为自动关闭",
+                description: "控制是否无论闭合字符如何插入都始终跳过和自动删除它们。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).always_treat_brackets_as_autoclosed"),
@@ -9248,8 +9248,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "JSX Tag Auto Close",
-                description: "Whether to automatically close JSX tags.",
+                title: "JSX 标签自动关闭",
+                description: "是否自动关闭 JSX 标签。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).jsx_tag_auto_close"),
@@ -9275,8 +9275,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
         [
             SettingsPageItem::SectionHeader("Whitespace"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Show Whitespaces",
-                description: "Whether to show tabs and spaces in the editor.",
+                title: "显示空白字符",
+                description: "是否在编辑器中显示制表符和空格。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).show_whitespaces"),
@@ -9295,8 +9295,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Space Whitespace Indicator",
-                description: "Visible character used to render space characters when show_whitespaces is enabled (default: \"•\")",
+                title: "空格指示符",
+                description: "当 show_whitespaces 启用时用于渲染空格字符的可见字符（默认：\"•\"）",
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -9322,8 +9322,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Tab Whitespace Indicator",
-                description: "Visible character used to render tab characters when show_whitespaces is enabled (default: \"→\")",
+                title: "制表符指示符",
+                description: "当 show_whitespaces 启用时用于渲染制表符的可见字符（默认：\"→\"）",
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -9355,8 +9355,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
         [
             SettingsPageItem::SectionHeader("Completions"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Show Completions On Input",
-                description: "Whether to pop the completions menu while typing in an editor without explicitly requesting it.",
+                title: "输入时显示补全",
+                description: "是否在编辑器中输入时自动弹出补全菜单，无需显式请求。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).show_completions_on_input"),
@@ -9375,8 +9375,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Show Completion Documentation",
-                description: "Whether to display inline and alongside documentation for items in the completions menu.",
+                title: "显示补全文档",
+                description: "是否在补全菜单中内联和并排显示条目的文档。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).show_completion_documentation"),
@@ -9395,8 +9395,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Words",
-                description: "Controls how words are completed.",
+                title: "词语",
+                description: "控制词语的补全方式。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).completions.words"),
@@ -9415,8 +9415,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Words Min Length",
-                description: "How many characters has to be in the completions query to automatically show the words-based completions.",
+                title: "词语最小长度",
+                description: "补全查询中至少需要多少个字符才能自动显示基于词语的补全。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).completions.words_min_length"),
@@ -9438,8 +9438,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Completion Menu Scrollbar",
-                description: "When to show the scrollbar in the completion menu.",
+                title: "补全菜单滚动条",
+                description: "何时在补全菜单中显示滚动条。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("editor.completion_menu_scrollbar"),
@@ -9454,8 +9454,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Completion Detail Alignment",
-                description: "Whether to align detail text in code completions context menus left or right.",
+                title: "补全详情对齐",
+                description: "在代码补全上下文菜单中详情文本是左对齐还是右对齐。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("editor.completion_detail_alignment"),
@@ -9470,8 +9470,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Completion Menu Item Kind",
-                description: "How to display the LSP item kind (function, method, variable, etc.) of each entry in the completions menu.",
+                title: "补全菜单项类型",
+                description: "如何在补全菜单中显示每个条目的 LSP 项类型（函数、方法、变量等）。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("editor.completion_menu_item_kind"),
@@ -9490,10 +9490,10 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
 
     fn inlay_hints_section() -> [SettingsPageItem; 10] {
         [
-            SettingsPageItem::SectionHeader("Inlay Hints"),
+            SettingsPageItem::SectionHeader("内联提示"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Enabled",
-                description: "Global switch to toggle hints on and off.",
+                title: "已启用",
+                description: "全局开关，用于打开或关闭提示。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).inlay_hints.enabled"),
@@ -9512,8 +9512,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Show Value Hints",
-                description: "Global switch to toggle inline values on and off when debugging.",
+                title: "显示值提示",
+                description: "全局开关，用于在调试时打开或关闭内联值显示。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).inlay_hints.show_value_hints"),
@@ -9535,8 +9535,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Show Type Hints",
-                description: "Whether type hints should be shown.",
+                title: "显示类型提示",
+                description: "是否显示类型提示。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).inlay_hints.show_type_hints"),
@@ -9555,8 +9555,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Show Parameter Hints",
-                description: "Whether parameter hints should be shown.",
+                title: "显示参数提示",
+                description: "是否显示参数提示。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).inlay_hints.show_parameter_hints"),
@@ -9578,8 +9578,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Show Other Hints",
-                description: "Whether other hints should be shown.",
+                title: "显示其他提示",
+                description: "是否显示其他提示。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).inlay_hints.show_other_hints"),
@@ -9601,8 +9601,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Show Background",
-                description: "Show a background for inlay hints.",
+                title: "显示背景",
+                description: "为内联提示显示背景。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).inlay_hints.show_background"),
@@ -9621,8 +9621,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Edit Debounce Ms",
-                description: "Whether or not to debounce inlay hints updates after buffer edits (set to 0 to disable debouncing).",
+                title: "编辑去抖毫秒数",
+                description: "是否在缓冲区编辑后对内联提示更新进行去抖（设置为 0 以禁用去抖）。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).inlay_hints.edit_debounce_ms"),
@@ -9644,8 +9644,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Scroll Debounce Ms",
-                description: "Whether or not to debounce inlay hints updates after buffer scrolls (set to 0 to disable debouncing).",
+                title: "滚动去抖毫秒数",
+                description: "是否在缓冲区滚动后对内联提示更新进行去抖（设置为 0 以禁用去抖）。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).inlay_hints.scroll_debounce_ms"),
@@ -9667,8 +9667,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Toggle On Modifiers Press",
-                description: "Toggles inlay hints (hides or shows) when the user presses the modifiers specified.",
+                title: "按下修饰键时切换",
+                description: "当用户按下指定的修饰键时切换内联提示（隐藏或显示）。",
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -9707,10 +9707,10 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
 
     fn tasks_section() -> [SettingsPageItem; 4] {
         [
-            SettingsPageItem::SectionHeader("Tasks"),
+            SettingsPageItem::SectionHeader("任务"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Enabled",
-                description: "Whether tasks are enabled for this language.",
+                title: "已启用",
+                description: "是否为此语言启用任务。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).tasks.enabled"),
@@ -9729,8 +9729,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Variables",
-                description: "Extra task variables to set for a particular language.",
+                title: "变量",
+                description: "为特定语言设置的额外任务变量。",
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -9756,8 +9756,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Prefer LSP",
-                description: "Use LSP tasks over Zed language extension tasks.",
+                title: "优先使用 LSP",
+                description: "优先使用 LSP 任务而非 Zed 语言扩展任务。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).tasks.prefer_lsp"),
@@ -9782,8 +9782,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
         [
             SettingsPageItem::SectionHeader("Miscellaneous"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Word Diff Enabled",
-                description: "Whether to enable word diff highlighting in the editor. When enabled, changed words within modified lines are highlighted to show exactly what changed.",
+                title: "启用词语差异",
+                description: "是否在编辑器中启用词语差异高亮。启用后，修改行内更改的词语会被高亮显示以精确展示更改内容。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).word_diff_enabled"),
@@ -9802,8 +9802,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Debuggers",
-                description: "Preferred debuggers for this language.",
+                title: "调试器",
+                description: "此语言的首选调试器。",
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -9829,8 +9829,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Middle Click Paste",
-                description: "Enable middle-click paste on Linux.",
+                title: "中键粘贴",
+                description: "在 Linux 上启用中键粘贴。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).editor.middle_click_paste"),
@@ -9843,8 +9843,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Extend Comment On Newline",
-                description: "Whether to start a new line with a comment when a previous line is a comment as well.",
+                title: "换行时延续注释",
+                description: "当上一行也是注释时，是否在新行也以注释开头。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).extend_comment_on_newline"),
@@ -9863,8 +9863,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Colorize Brackets",
-                description: "Whether to colorize brackets in the editor.",
+                title: "括号着色",
+                description: "是否在编辑器中为括号着色。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).colorize_brackets"),
@@ -9883,8 +9883,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Vim/Emacs Modeline Support",
-                description: "Number of lines to search for modelines (set to 0 to disable).",
+                title: "Vim/Emacs 模式行支持",
+                description: "搜索模式行的行数（设置为 0 以禁用）。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("modeline_lines"),
@@ -9902,8 +9902,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
     fn global_only_miscellaneous_sub_section() -> [SettingsPageItem; 3] {
         [
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Image Viewer",
-                description: "The unit for image file sizes.",
+                title: "图片查看器",
+                description: "图片文件大小的单位。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("image_viewer.unit"),
@@ -9923,8 +9923,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
             SettingsPageItem::DynamicItem(DynamicItem {
                 discriminant: SettingItem {
                     files: USER,
-                    title: "Limit Markdown Preview Width",
-                    description: "Whether to constrain the markdown preview content to a maximum width, centering it when the pane is wider, for optimal readability.",
+                    title: "限制 Markdown 预览宽度",
+                    description: "是否限制 Markdown 预览内容的最大宽度，当窗格更宽时居中显示，以获得最佳可读性。",
                     field: Box::new(SettingField::<bool> {
                         organization_override: None,
                         json_path: Some("markdown_preview.limit_content_width"),
@@ -9980,8 +9980,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 ],
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Drop Size Target",
-                description: "Relative size of the drop target in the editor that will open dropped file as a split pane.",
+                title: "拖放大小目标",
+                description: "编辑器中拖放目标的相对大小，拖放文件时将作为拆分窗格打开。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("drop_target_size"),
@@ -9999,8 +9999,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
     let is_global = active_language().is_none();
 
     let code_lens_item = [SettingsPageItem::SettingItem(SettingItem {
-        title: "Code Lens",
-        description: "Whether and how to display code lenses from language servers.",
+        title: "代码透镜",
+        description: "是否以及如何显示来自语言服务器的代码透镜。",
         field: Box::new(SettingField {
             organization_override: None,
             json_path: Some("code_lens"),
@@ -10014,8 +10014,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
     })];
 
     let lsp_document_colors_item = [SettingsPageItem::SettingItem(SettingItem {
-        title: "LSP Document Colors",
-        description: "How to render LSP color previews in the editor.",
+        title: "LSP 文档颜色",
+        description: "如何在编辑器中渲染 LSP 颜色预览。",
         field: Box::new(SettingField {
             organization_override: None,
             json_path: Some("lsp_document_colors"),
@@ -10184,7 +10184,7 @@ fn non_editor_language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Semantic Tokens",
+                title: "语义标记",
                 description: {
                     static DESCRIPTION: OnceLock<&'static str> = OnceLock::new();
                     DESCRIPTION.get_or_init(|| {

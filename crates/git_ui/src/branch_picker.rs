@@ -1686,7 +1686,7 @@ impl PickerDelegate for BranchListDelegate {
         };
 
         let entry_title = match entry {
-            Entry::NewUrl { .. } => Label::new("Create Remote Repository")
+            Entry::NewUrl { .. } => Label::new("创建远程仓库")
                 .single_line()
                 .truncate()
                 .into_any_element(),
@@ -1865,7 +1865,7 @@ impl PickerDelegate for BranchListDelegate {
                                         })
                                         .when(!has_commit, |this| {
                                             this.child(
-                                                Label::new("No commits found")
+                                                Label::new("未找到提交")
                                                     .color(Color::Muted)
                                                     .size(LabelSize::Small),
                                             )
@@ -1892,14 +1892,14 @@ impl PickerDelegate for BranchListDelegate {
                                                 .child(Label::new(branch_name.clone()))
                                                 .when(is_select_only && is_checked, |this| {
                                                     this.child(
-                                                        Label::new("Selected Branch")
+                                                        Label::new("已选择的分支")
                                                             .size(LabelSize::Small)
                                                             .color(Color::Muted),
                                                     )
                                                 })
                                                 .when(is_head, |this| {
                                                     this.child(
-                                                        Label::new("Current Branch")
+                                                        Label::new("当前分支")
                                                             .size(LabelSize::Small)
                                                             .color(Color::Muted),
                                                     )

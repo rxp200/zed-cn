@@ -18,18 +18,18 @@ impl CsvPreviewView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let current_alignment_text = match self.settings.vertical_alignment {
-            VerticalAlignment::Top => "Top",
-            VerticalAlignment::Center => "Center",
+            VerticalAlignment::Top => "顶部",
+            VerticalAlignment::Center => "居中",
         };
 
         let current_filter_sort_text = match self.settings.filter_sort_order {
-            FilterSortOrder::AlphaThenCount => "A-Z, then Count",
-            FilterSortOrder::CountThenAlpha => "Count, then A-Z",
+            FilterSortOrder::AlphaThenCount => "A-Z，再按数量",
+            FilterSortOrder::CountThenAlpha => "按数量，再按A-Z",
         };
 
         let view = cx.entity();
         let alignment_dropdown_menu = ContextMenu::build(window, cx, |menu, _window, _cx| {
-            menu.entry("Top", None, {
+            menu.entry("顶部", None, {
                 let view = view.clone();
                 move |_window, cx| {
                     view.update(cx, |this, cx| {
@@ -38,7 +38,7 @@ impl CsvPreviewView {
                     });
                 }
             })
-            .entry("Center", None, {
+            .entry("居中", None, {
                 let view = view.clone();
                 move |_window, cx| {
                     view.update(cx, |this, cx| {
@@ -50,7 +50,7 @@ impl CsvPreviewView {
         });
 
         let filter_sort_dropdown_menu = ContextMenu::build(window, cx, |menu, _window, _cx| {
-            menu.entry("A-Z, then Count", None, {
+            menu.entry("A-Z，再按数量", None, {
                 let view = view.clone();
                 move |_window, cx| {
                     view.update(cx, |this, cx| {
@@ -59,7 +59,7 @@ impl CsvPreviewView {
                     });
                 }
             })
-            .entry("Count, then A-Z", None, {
+            .entry("按数量，再按A-Z", None, {
                 let view = view.clone();
                 move |_window, cx| {
                     view.update(cx, |this, cx| {
@@ -85,7 +85,7 @@ impl CsvPreviewView {
                         div()
                             .text_sm()
                             .text_color(cx.theme().colors().text_muted)
-                            .child("Text Alignment:"),
+                            .child("文本对齐："),
                     )
                     .child(
                         DropdownMenu::new(
@@ -95,7 +95,7 @@ impl CsvPreviewView {
                         )
                         .trigger_size(ButtonSize::Compact)
                         .trigger_tooltip(Tooltip::text(
-                            "Choose vertical text alignment within cells",
+                            "选择单元格内的垂直文本对齐方式",
                         )),
                     ),
             )
@@ -107,7 +107,7 @@ impl CsvPreviewView {
                         div()
                             .text_sm()
                             .text_color(cx.theme().colors().text_muted)
-                            .child("Filter Sort:"),
+                            .child("筛选排序："),
                     )
                     .child(
                         DropdownMenu::new(
@@ -117,7 +117,7 @@ impl CsvPreviewView {
                         )
                         .trigger_size(ButtonSize::Compact)
                         .trigger_tooltip(Tooltip::text(
-                            "Choose how filter values are sorted in the filter menu",
+                            "选择筛选菜单中筛选值的排序方式",
                         )),
                     ),
             );
@@ -133,10 +133,10 @@ impl CsvPreviewView {
                     ToggleState::Unselected
                 },
             )
-            .label("Display multiline rows")
+            .label("显示多行单元格")
             .tooltip(Tooltip::text(
-                "When enabled, row height grows to show all content. \
-                 When disabled, only the first line is visible — hover a cell to see the rest.",
+                "启用时，行高将增长以显示所有内容。\
+                 禁用时，仅显示第一行——悬停在单元格上可查看其余内容。",
             ))
             .on_click(move |_state, _window, cx| {
                 view.update(cx, |this, cx| {
@@ -175,7 +175,7 @@ fn create_dev_only_popover_menu(
         .trigger_with_tooltip(
             IconButton::new("debug-options-trigger", IconName::Settings).icon_size(IconSize::Small),
             Tooltip::text(
-                "Dev-only section used for debugging purposes.\nWill be removed on public release of CSV feature"
+                "仅开发用的调试部分。\nCSV 功能公开发布后将移除。"
             ),
         )
         .menu({
@@ -184,9 +184,9 @@ fn create_dev_only_popover_menu(
                 let view = view_entity.read(cx);
                 let settings = view.settings.clone();
                 Some(ContextMenu::build(window, cx, |menu, _, _| {
-                    menu.header("Rendering Mode")
+                    menu.header("渲染模式")
                         .toggleable_entry(
-                            "Variable Height",
+                            "可变高度",
                             settings.rendering_with == RowRenderMechanism::VariableList,
                             IconPosition::Start,
                             None,
@@ -202,7 +202,7 @@ fn create_dev_only_popover_menu(
                             },
                         )
                         .toggleable_entry(
-                            "Uniform Height",
+                            "统一高度",
                             settings.rendering_with == RowRenderMechanism::UniformList,
                             IconPosition::Start,
                             None,
@@ -219,7 +219,7 @@ fn create_dev_only_popover_menu(
                         )
                         .separator()
                         .toggleable_entry(
-                            "Show perf metrics",
+                            "显示性能指标",
                             settings.show_perf_metrics_overlay,
                             IconPosition::Start,
                             None,
@@ -235,7 +235,7 @@ fn create_dev_only_popover_menu(
                             },
                         )
                         .toggleable_entry(
-                            "Show cell positions",
+                            "显示单元格位置",
                             settings.show_debug_info,
                             IconPosition::Start,
                             None,

@@ -215,7 +215,7 @@ impl Render for InputField {
                             )
                             .icon_size(IconSize::Small)
                             .icon_color(Color::Muted)
-                            .tooltip(Tooltip::text(if is_masked { "Show" } else { "Hide" }))
+                            .tooltip(Tooltip::text(if is_masked { "显示" } else { "隐藏" }))
                             .on_click(cx.listener(
                                 |this, _, window, cx| {
                                     if let Some(ref mut masked) = this.masked {
@@ -240,18 +240,17 @@ impl Component for InputField {
     }
 
     fn description() -> &'static str {
-        "A single-line text field used for search inputs, \
-        form fields, and similar inputs, supporting labels, placeholders, \
-        leading icons, and masked content."
+        "用于搜索输入、表单字段等的单行文本字段，\
+        支持标签、占位符、前导图标和掩码内容。"
     }
 
     fn preview(window: &mut Window, cx: &mut App) -> AnyElement {
         let input_small =
-            cx.new(|cx| InputField::new(window, cx, "placeholder").label("Small Label"));
+            cx.new(|cx| InputField::new(window, cx, "占位符").label("小标签"));
 
         let input_regular = cx.new(|cx| {
-            InputField::new(window, cx, "placeholder")
-                .label("Regular Label")
+            InputField::new(window, cx, "占位符")
+                .label("普通标签")
                 .label_size(LabelSize::Default)
         });
 
@@ -259,11 +258,11 @@ impl Component for InputField {
             .gap_6()
             .children(vec![example_group(vec![
                 single_example(
-                    "Small Label (Default)",
+                    "小标签（默认）",
                     div().child(input_small).into_any_element(),
                 ),
                 single_example(
-                    "Regular Label",
+                    "普通标签",
                     div().child(input_regular).into_any_element(),
                 ),
             ])])

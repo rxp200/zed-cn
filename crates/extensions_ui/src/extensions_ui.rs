@@ -1592,7 +1592,7 @@ impl ExtensionsPage {
                                         h_flex()
                                             .pl_1()
                                             .gap_1()
-                                            .child(Label::new("Enable Vim mode"))
+                                            .child(Label::new("启用 Vim 模式"))
                                             .child(
                                                 Switch::new(
                                                     "enable-vim",

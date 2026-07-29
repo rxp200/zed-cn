@@ -254,12 +254,12 @@ impl CopilotCodeVerification {
             .text_center()
             .child(Headline::new("Use GitHub Copilot in Zed").size(HeadlineSize::Large))
             .child(
-                Label::new("Using Copilot requires an active subscription on GitHub.")
+                Label::new("使用 Copilot 需要在 GitHub 上拥有有效订阅。")
                     .color(Color::Muted),
             )
             .child(Self::render_device_code(data, cx))
             .child(
-                Label::new("Paste this code into GitHub after clicking the button below.")
+                Label::new("点击下方按钮后，将此代码粘贴到 GitHub 中。")
                     .color(Color::Muted),
             )
             .child(
@@ -337,7 +337,7 @@ impl CopilotCodeVerification {
             .text_center()
             .justify_center()
             .child(Headline::new("Copilot Enabled!").size(HeadlineSize::Large))
-            .child(Label::new("You're all set to use GitHub Copilot.").color(Color::Muted))
+            .child(Label::new("您已准备好使用 GitHub Copilot 了。").color(Color::Muted))
             .child(
                 Button::new("copilot-enabled-done-button", "完成")
                     .full_width()
@@ -629,7 +629,7 @@ impl ConfigurationView {
                     v_flex()
                         .w_full()
                         .max_w_1_2()
-                        .child(Label::new("Authenticate To Use"))
+                        .child(Label::new("认证以使用"))
                         .child(
                             Label::new(description)
                                 .color(Color::Muted)

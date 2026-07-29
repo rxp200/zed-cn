@@ -267,7 +267,7 @@ fn render_api_key_providers_item(
                         .min_w_0()
                         .max_w_1_2()
                         .gap_0p5()
-                        .child(Label::new("API Key"))
+                        .child(Label::new("API 密钥"))
                         .child(
                             h_flex()
                                 .w_full()
@@ -275,7 +275,7 @@ fn render_api_key_providers_item(
                                 .flex_wrap()
                                 .gap_0p5()
                                 .child(
-                                    Label::new("Visit the")
+                                    Label::new("访问")
                                         .size(LabelSize::Small)
                                         .color(Color::Muted),
                                 )
@@ -289,14 +289,14 @@ fn render_api_key_providers_item(
                                     .label_color(Color::Muted),
                                 )
                                 .child(
-                                    Label::new("to generate an API key.")
+                                    Label::new("以生成 API 密钥。")
                                         .size(LabelSize::Small)
                                         .color(Color::Muted),
                                 ),
                         )
                         .child(
                             Label::new(format!(
-                                "Or set the {env_var_name} env var and restart Zed for it to take effect."
+                                "或设置 {env_var_name} 环境变量并重启 Zed 以生效。"
                             ))
                             .size(LabelSize::XSmall)
                             .color(Color::Muted),
@@ -375,7 +375,7 @@ fn render_subpage_item(
                 .min_w_0()
                 .max_w_1_2()
                 .gap_0p5()
-                .child(Label::new("Configure Provider"))
+                .child(Label::new("配置提供者"))
                 .when_some(description, |this, description| {
                     this.child(render_inline_description(provider_name, description))
                 }),
@@ -405,7 +405,7 @@ fn render_inline_description(
         InlineDescription::ApiKeyUrl(url) => h_flex()
             .gap_0p5()
             .child(
-                Label::new("To find an API key, visit the")
+                Label::new("要获取 API 密钥，请访问")
                     .size(LabelSize::Small)
                     .color(Color::Muted),
             )
@@ -656,28 +656,28 @@ fn render_llm_provider_form_page(
                 .overflow_y_scroll()
                 .child(Label::new(match form.kind {
                     CompatibleProviderKind::OpenAi => {
-                        "This provider will use an OpenAI-compatible API."
+                        "此提供者将使用 OpenAI 兼容 API。"
                     }
                     CompatibleProviderKind::Anthropic => {
-                        "This provider will use an Anthropic Messages-compatible API."
+                        "此提供者将使用 Anthropic Messages 兼容 API。"
                     }
                 }))
                 .child(Divider::horizontal().flex_shrink_0())
                 .child(render_form_field(
-                    "Provider Name",
-                    "A unique name used to identify this provider.",
+                    "提供者名称",
+                    "用于标识此提供者的唯一名称。",
                     &form.provider_name,
                     cx,
                 ))
                 .child(render_form_field(
                     "API URL",
-                    "The base URL for the compatible API.",
+                    "兼容 API 的基础 URL。",
                     &form.api_url,
                     cx,
                 ))
                 .child(render_form_field(
                     "API Key",
-                    "Stored in the system keychain, not in settings.json.",
+                    "存储在系统密钥链中，而非 settings.json。",
                     &form.api_key,
                     cx,
                 ))
@@ -754,7 +754,7 @@ fn render_models_section(
         .child(
             h_flex()
                 .justify_between()
-                .child(Label::new("Models"))
+                .child(Label::new("模型"))
                 .child(
                     Button::new("add-model", "添加模型")
                         .start_icon(
@@ -794,28 +794,28 @@ fn render_model(
         .border_color(cx.theme().colors().border.opacity(0.6))
         .bg(cx.theme().colors().element_active.opacity(0.15))
         .child(render_form_field(
-            "Model Name",
-            "The model's name in the provider's API.",
+            "模型名称",
+            "模型在提供者 API 中的名称。",
             &model.name,
             cx,
         ))
         .when(matches!(kind, CompatibleProviderKind::OpenAi), |this| {
             this.child(render_form_field(
-                "Max Completion Tokens",
-                "Maximum completion tokens for OpenAI-compatible requests.",
+                "最大补全令牌数",
+                "OpenAI 兼容请求的最大补全令牌数。",
                 &model.max_completion_tokens,
                 cx,
             ))
         })
         .child(render_form_field(
-            "Max Output Tokens",
-            "The maximum number of tokens the model can output.",
+            "最大输出令牌数",
+            "模型可以输出的最大令牌数。",
             &model.max_output_tokens,
             cx,
         ))
         .child(render_form_field(
-            "Max Tokens",
-            "The model context window size.",
+            "最大令牌数",
+            "模型上下文窗口大小。",
             &model.max_tokens,
             cx,
         ))
@@ -986,7 +986,7 @@ fn render_reasoning_effort_selector(
 
     v_flex()
         .gap_1()
-        .child(Label::new("Default reasoning effort").size(LabelSize::Small))
+        .child(Label::new("默认推理力度").size(LabelSize::Small))
         .child(
             DropdownMenu::new(
                 ElementId::Name(format!("reasoning-effort-selector-{index}").into()),
@@ -996,7 +996,7 @@ fn render_reasoning_effort_selector(
             .style(DropdownStyle::Outlined)
             .trigger_size(ButtonSize::Compact)
             .full_width(true)
-            .aria_label("Default reasoning effort"),
+            .aria_label("默认推理力度"),
         )
 }
 
@@ -1192,7 +1192,7 @@ fn validate_llm_provider_form(
 ) -> Result<(String, String, String, ParsedModels), SharedString> {
     let provider_name = values.provider_name.clone();
     if provider_name.is_empty() {
-        return Err("Provider Name cannot be empty".into());
+        return Err("提供者名称不能为空".into());
     }
 
     if LanguageModelRegistry::read_global(cx)
@@ -1203,12 +1203,12 @@ fn validate_llm_provider_form(
                 || provider.name().0.as_ref() == provider_name.as_str()
         })
     {
-        return Err("Provider Name is already taken by another provider".into());
+        return Err("提供者名称已被其他提供者占用".into());
     }
 
     let api_url = values.api_url.clone();
     if api_url.is_empty() {
-        return Err("API URL cannot be empty".into());
+        return Err("API URL 不能为空".into());
     }
 
     let api_key = values.api_key.clone();
@@ -1243,7 +1243,7 @@ fn validate_llm_provider_form(
             .all(|model| model_names.insert(model.name.clone())),
     };
     if !model_names_are_unique {
-        return Err("Model Names must be unique".into());
+        return Err("模型名称必须唯一".into());
     }
 
     Ok((provider_name, api_url, api_key, models))
@@ -1251,7 +1251,7 @@ fn validate_llm_provider_form(
 
 fn parse_model_name(model: &ModelValues) -> Result<String, SharedString> {
     if model.name.is_empty() {
-        return Err("Model Name cannot be empty".into());
+        return Err("模型名称不能为空".into());
     }
     Ok(model.name.clone())
 }

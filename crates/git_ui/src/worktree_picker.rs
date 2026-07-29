@@ -1225,7 +1225,7 @@ impl PickerDelegate for WorktreePickerDelegate {
                                             .with_rotate_animation(2),
                                     )
                                     .child(
-                                        Label::new("Deleting…")
+                                        Label::new("正在删除...")
                                             .size(LabelSize::Small)
                                             .color(Color::Muted),
                                     ),

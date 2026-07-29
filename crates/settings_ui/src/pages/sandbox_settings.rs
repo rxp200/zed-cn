@@ -61,9 +61,9 @@ pub(crate) fn render_sandbox_settings_page(
         .child(
             SwitchField::new(
                 "sandbox-enabled",
-                Some("Enable Sandbox"),
+                Some("启用沙箱"),
                 Some(
-                    "Wrap agent-run terminal commands in an OS-level sandbox. When off, commands run with Zed's own permissions."
+                    "将 Agent 运行的终端命令包装在操作系统级别的沙箱中。关闭时，命令以 Zed 自身的权限运行。"
                         .into(),
                 ),
                 sandbox_enabled,
@@ -76,7 +76,7 @@ pub(crate) fn render_sandbox_settings_page(
         .child({
             let docs_url =
                 client::zed_urls::sandboxing_docs(Some("persistent-sandbox-permissions"), cx);
-            let tooltip = format!("Opens {docs_url}");
+            let tooltip = format!("打开 {docs_url}");
             // Wrap in a row so the button shrinks to its content width instead
             // of stretching across the settings page.
             h_flex().child(
@@ -111,13 +111,13 @@ pub(crate) fn render_sandbox_settings_page(
         .child(
             v_flex()
                 .gap_4()
-                .child(SettingsSectionHeader::new("Network").no_padding(true))
+                .child(SettingsSectionHeader::new("网络").no_padding(true))
                 .child(
                     SwitchField::new(
                         "sandbox-allow-all-hosts",
-                        Some("Allow All Domains"),
+                        Some("允许所有域名"),
                         Some(
-                            "Let sandboxed commands reach any domain over the network without prompting."
+                            "允许沙箱命令无需提示即可访问网络上的任何域名。"
                                 .into(),
                         ),
                         permissions.allow_all_hosts,
@@ -140,13 +140,13 @@ pub(crate) fn render_sandbox_settings_page(
         .child(
             v_flex()
                 .gap_4()
-                .child(SettingsSectionHeader::new("File System").no_padding(true))
+                .child(SettingsSectionHeader::new("文件系统").no_padding(true))
                 .child(
                     SwitchField::new(
                         "sandbox-allow-fs-write-all",
-                        Some("Allow All File System Writes"),
+                        Some("允许所有文件系统写入"),
                         Some(
-                            "Let sandboxed commands write anywhere except protected Git metadata without prompting."
+                            "允许沙箱命令无需提示即可写入除受保护的 Git 元数据之外的任何位置。"
                                 .into(),
                         ),
                         permissions.allow_fs_write_all,
@@ -168,13 +168,13 @@ pub(crate) fn render_sandbox_settings_page(
         .child(
             v_flex()
                 .gap_4()
-                .child(SettingsSectionHeader::new("Escalation Prompts").no_padding(true))
+                .child(SettingsSectionHeader::new("升级提示").no_padding(true))
                 .child(
                     SwitchField::new(
                         "sandbox-warn-confusable-unicode",
-                        Some("Warn About Confusable Unicode"),
+                        Some("警告可疑的 Unicode 字符"),
                         Some(
-                            "Warn when an approval prompt requests a domain or write path that contains potentially confusable Unicode characters, such as homoglyphs (i.e. two symbols that look similar, such as a Cyrillic `а`)"
+                            "当批准提示请求的域名或写入路径包含可能混淆的 Unicode 字符（如同形异字，即两个外观相似的符号，如西里尔字母「а」）时发出警告。"
                                 .into(),
                         ),
                         permissions.warn_confusable_unicode,
@@ -229,7 +229,7 @@ fn render_empty_state(border_color: gpui::Hsla) -> AnyElement {
         .border_dashed()
         .border_color(border_color)
         .child(
-            Label::new("Nothing configured")
+            Label::new("未配置任何内容")
                 .size(LabelSize::Small)
                 .color(Color::Disabled),
         )

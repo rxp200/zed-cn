@@ -704,7 +704,7 @@ impl LanguageModelProvider for BedrockLanguageModelProvider {
                     .into()
             })
             .description(InlineDescription::Text(
-                "To use Zed's agent with Bedrock, set a custom authentication strategy in your settings or use static credentials. Mantle-only models (e.g. GPT-5.5, GPT-5.4, Grok 4.3) additionally require IAM permissions for the `bedrock-mantle` endpoint.".into(),
+                "要使用 Zed 的 Agent 与 Bedrock 配合，请在设置中配置自定义认证策略或使用静态凭据。仅 Mantle 模型（如 GPT-5.5、GPT-5.4、Grok 4.3）还需要对 `bedrock-mantle` 端点的 IAM 权限。".into(),
             )),
         ))
     }
@@ -2510,28 +2510,28 @@ impl ConfigurationView {
 
         let access_key_id_editor = cx.new(|cx| {
             InputField::new(window, cx, Self::PLACEHOLDER_ACCESS_KEY_ID_TEXT)
-                .label("Access Key ID")
+                .label("访问密钥 ID")
                 .tab_index(0)
                 .tab_stop(true)
         });
 
         let secret_access_key_editor = cx.new(|cx| {
             InputField::new(window, cx, Self::PLACEHOLDER_SECRET_ACCESS_KEY_TEXT)
-                .label("Secret Access Key")
+                .label("秘密访问密钥")
                 .tab_index(1)
                 .tab_stop(true)
         });
 
         let session_token_editor = cx.new(|cx| {
             InputField::new(window, cx, Self::PLACEHOLDER_SESSION_TOKEN_TEXT)
-                .label("Session Token (Optional)")
+                .label("会话令牌（可选）")
                 .tab_index(2)
                 .tab_stop(true)
         });
 
         let bearer_token_editor = cx.new(|cx| {
             InputField::new(window, cx, Self::PLACEHOLDER_BEARER_TOKEN_TEXT)
-                .label("Bedrock API Key")
+                .label("Bedrock API 密钥")
                 .tab_index(3)
                 .tab_stop(true)
         });
@@ -2661,34 +2661,34 @@ impl Render for ConfigurationView {
             .and_then(|s| s.authentication_method.clone());
 
         if self.load_credentials_task.is_some() {
-            return div().child(Label::new("Loading credentials...")).into_any();
+            return div().child(Label::new("正在加载凭据...")).into_any();
         }
 
         let configured_label = match &auth {
             Some(BedrockAuth::Automatic) => {
-                "Using automatic credentials (AWS default chain)".into()
+                "使用自动凭据（AWS 默认链）".into()
             }
             Some(BedrockAuth::NamedProfile { profile_name }) => {
-                format!("Using AWS profile: {profile_name}")
+                format!("使用 AWS 配置文件：{profile_name}")
             }
             Some(BedrockAuth::SingleSignOn { profile_name }) => {
-                format!("Using AWS SSO profile: {profile_name}")
+                format!("使用 AWS SSO 配置文件：{profile_name}")
             }
             Some(BedrockAuth::IamCredentials { .. }) if env_var_set => {
                 format!(
-                    "Using IAM credentials from {} and {} environment variables",
+                    "使用来自 {} 和 {} 环境变量的 IAM 凭据",
                     ZED_BEDROCK_ACCESS_KEY_ID_VAR.name, ZED_BEDROCK_SECRET_ACCESS_KEY_VAR.name
                 )
             }
-            Some(BedrockAuth::IamCredentials { .. }) => "Using IAM credentials".into(),
+            Some(BedrockAuth::IamCredentials { .. }) => "使用 IAM 凭据".into(),
             Some(BedrockAuth::ApiKey { .. }) if env_var_set => {
                 format!(
-                    "Using Bedrock API Key from {} environment variable",
+                    "使用来自 {} 环境变量的 Bedrock API 密钥",
                     ZED_BEDROCK_BEARER_TOKEN_VAR.name
                 )
             }
-            Some(BedrockAuth::ApiKey { .. }) => "Using Bedrock API Key".into(),
-            None => "Not authenticated".into(),
+            Some(BedrockAuth::ApiKey { .. }) => "使用 Bedrock API 密钥".into(),
+            None => "未认证".into(),
         };
 
         // Determine if credentials can be reset
@@ -2702,7 +2702,7 @@ impl Render for ConfigurationView {
 
         let tooltip_label = if env_var_set {
             Some(format!(
-                "To reset your credentials, unset the {}, {}, and {} or {} environment variables.",
+                "要重置凭据，请取消设置 {}、{}、{} 或 {} 环境变量。",
                 ZED_BEDROCK_ACCESS_KEY_ID_VAR.name,
                 ZED_BEDROCK_SECRET_ACCESS_KEY_VAR.name,
                 ZED_BEDROCK_SESSION_TOKEN_VAR.name,
@@ -2710,7 +2710,7 @@ impl Render for ConfigurationView {
             ))
         } else if is_settings_derived {
             Some(
-                "Authentication method is configured in settings. Edit settings.json to change."
+                "认证方法已在设置中配置。编辑 settings.json 以更改。"
                     .to_string(),
             )
         } else {
@@ -2738,12 +2738,12 @@ impl Render for ConfigurationView {
             .child(Headline::new("Amazon Bedrock").size(HeadlineSize::Small))
             .child(
                 Label::new(
-                    "To use Zed's agent with Bedrock, you can set a custom authentication strategy through your settings file or use static credentials.",
+                    "要使用 Zed 的 Agent 与 Bedrock 配合，您可以通过设置文件配置自定义认证策略，或使用静态凭据。",
                 )
                 .color(Color::Muted),
             )
             .child(
-                Label::new("But first, to access models on AWS, you need to:")
+                Label::new("但首先，要访问 AWS 上的模型，您需要：")
                     .mt_1()
                     .color(Color::Muted),
             )
@@ -2753,23 +2753,23 @@ impl Render for ConfigurationView {
                         ListBulletItem::new("")
                             .child(
                                 Label::new(
-                                    "Grant permissions to the strategy you'll use according to the:",
+                                    "根据以下内容授予您将要使用的策略权限：",
                                 )
                                 .color(Color::Muted),
                             )
                             .child(ButtonLink::new(
-                                "Prerequisites",
+                                "前提条件",
                                 "https://docs.aws.amazon.com/bedrock/latest/userguide/inference-prereq.html",
                             )),
                     )
                     .child(
                         ListBulletItem::new("")
                             .child(
-                                Label::new("Select the models you would like access to:")
+                                Label::new("选择您想要访问的模型：")
                                     .color(Color::Muted),
                             )
                             .child(ButtonLink::new(
-                                "Bedrock Model Catalog",
+                                "Bedrock 模型目录",
                                 "https://us-east-1.console.aws.amazon.com/bedrock/home?region=us-east-1#/model-catalog",
                             )),
                     ),
@@ -2786,40 +2786,40 @@ impl ConfigurationView {
                 ListBulletItem::new("")
                     .child(
                         Label::new(
-                            "For access keys: Create an IAM user in the AWS console with programmatic access",
+                            "对于访问密钥：在 AWS 控制台中创建具有编程访问权限的 IAM 用户",
                         )
                         .color(Color::Muted),
                     )
                     .child(ButtonLink::new(
-                        "IAM Console",
+                        "IAM 控制台",
                         "https://us-east-1.console.aws.amazon.com/iam/home?region=us-east-1#/users",
                     )),
             )
             .child(
                 ListBulletItem::new("")
                     .child(
-                        Label::new("For Bedrock API Keys: Generate an API key from the")
+                        Label::new("对于 Bedrock API 密钥：从以下位置生成 API 密钥")
                             .color(Color::Muted),
                     )
                     .child(ButtonLink::new(
-                        "Bedrock Console",
+                        "Bedrock 控制台",
                         "https://docs.aws.amazon.com/bedrock/latest/userguide/api-keys-use.html",
                     )),
             )
             .child(
                 ListBulletItem::new("")
                     .child(
-                        Label::new("Attach the necessary Bedrock permissions to")
+                        Label::new("将必要的 Bedrock 权限附加到")
                             .color(Color::Muted),
                     )
                     .child(ButtonLink::new(
-                        "this user",
+                        "此用户",
                         "https://docs.aws.amazon.com/bedrock/latest/userguide/inference-prereq.html",
                     )),
             )
             .child(
                 ListBulletItem::new(
-                    "Enter either access keys OR a Bedrock API Key below (not both)",
+                    "在下方输入访问密钥或 Bedrock API 密钥（不要同时输入两者）",
                 )
                 .label_color(Color::Muted),
             );
@@ -2829,10 +2829,10 @@ impl ConfigurationView {
             .tab_group()
             .gap_1p5()
             .child(Divider::horizontal())
-            .child(Label::new("Static Credentials").mt_2())
+            .child(Label::new("静态凭据").mt_2())
             .child(
                 Label::new(
-                    "This method uses your AWS access key ID and secret access key, or a Bedrock API Key.",
+                    "此方法使用您的 AWS 访问密钥 ID 和秘密访问密钥，或 Bedrock API 密钥。",
                 )
                 .color(Color::Muted),
             )
@@ -2846,7 +2846,7 @@ impl ConfigurationView {
             )
             .child(
                 Label::new(format!(
-                    "You can also set the {}, {} and {} environment variables (or {} for Bedrock API Key authentication) and restart Zed.",
+                    "您也可以设置 {}、{} 和 {} 环境变量（或 {} 用于 Bedrock API 密钥认证），然后重新启动 Zed。",
                     ZED_BEDROCK_ACCESS_KEY_ID_VAR.name,
                     ZED_BEDROCK_SECRET_ACCESS_KEY_VAR.name,
                     ZED_BEDROCK_REGION_VAR.name,
@@ -2857,7 +2857,7 @@ impl ConfigurationView {
             )
             .child(
                 Label::new(format!(
-                    "Optionally, if your environment uses AWS CLI profiles, you can set {}; if it requires a custom endpoint, you can set {}; and if it requires a Session Token, you can set {}.",
+                    "可选地，如果您的环境使用 AWS CLI 配置文件，您可以设置 {}；如果需要自定义端点，可以设置 {}；如果需要会话令牌，可以设置 {}。",
                     ZED_AWS_PROFILE_VAR.name,
                     ZED_AWS_ENDPOINT_VAR.name,
                     ZED_BEDROCK_SESSION_TOKEN_VAR.name
@@ -2868,11 +2868,11 @@ impl ConfigurationView {
                 .mb_2p5(),
             )
             .child(Divider::horizontal())
-            .child(Label::new("Using the API key").mt_2().mb_1())
+            .child(Label::new("使用 API 密钥").mt_2().mb_1())
             .child(self.bearer_token_editor.clone())
             .child(
                 Label::new(format!(
-                    "Region is configured via {} environment variable or settings.json (defaults to us-east-1).",
+                    "区域通过 {} 环境变量或 settings.json 配置（默认为 us-east-1）。",
                     ZED_BEDROCK_REGION_VAR.name
                 ))
                 .size(LabelSize::Small)
