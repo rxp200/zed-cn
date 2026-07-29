@@ -1801,6 +1801,12 @@
       "model": "",
       "prompt_format": "infer",
       "max_output_tokens": 64,
+      // The API type used for edit predictions:
+      // - "completions": text completion API (e.g. /v1/completions), for native FIM models;
+      // - "chat_completions": chat completion API (e.g. /v1/chat/completions), for chat
+      //   models. Zed builds an instruction-based fill-in-the-middle prompt, so chat
+      //   models without native FIM support can be used for edit predictions.
+      "api_type": "completions",
     },
     // Controls whether Zed may collect training data when using Zed's Edit Predictions.
     // Data is only captured when the project is detected as open source.
