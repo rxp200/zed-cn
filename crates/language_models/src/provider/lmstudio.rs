@@ -103,13 +103,22 @@ impl State {
                 .into_iter()
                 .filter(|model| model.r#type != ModelType::Embeddings)
                 .map(|model| {
+                    // When the server does not report capabilities (e.g. LM Studio's
+                    // OpenAI-compatible `/v1/models` endpoint), assume modern local
+                    // instruct models support tools. Users can still disable this via
+                    // the `available_models` settings override.
+                    let supports_tool_calls = if model.capabilities.is_empty() {
+                        true
+                    } else {
+                        model.capabilities.supports_tool_calls()
+                    };
                     lmstudio::Model::new(
                         &model.id,
                         None,
                         model
                             .loaded_context_length
                             .or_else(|| model.max_context_length),
-                        model.capabilities.supports_tool_calls(),
+                        supports_tool_calls,
                         model.capabilities.supports_images() || model.r#type == ModelType::Vlm,
                     )
                 })

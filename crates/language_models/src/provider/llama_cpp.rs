@@ -422,11 +422,13 @@ fn model_from_entry(entry: &ModelEntry, props: Option<&Props>) -> llama_cpp::Mod
         .or_else(|| entry.meta.as_ref().and_then(|meta| meta.n_ctx))
         .or_else(|| entry.meta.as_ref().and_then(|meta| meta.n_ctx_train))
         .unwrap_or(ASSUMED_UNLOADED_CONTEXT);
-    // Trust `/props` when present. Without it, assume tools for an unloaded model
-    // (re-discovery corrects on load) but not for a loaded model whose probe failed.
+    // Trust `/props` when present. If the server doesn't expose `/props` (e.g.
+    // LM Studio or other OpenAI-compatible servers), assume the loaded model
+    // supports tools; modern local instruct models commonly do, and users can
+    // override in settings if needed.
     let supports_tools = match props {
         Some(props) => props.supports_tools(),
-        None => !entry.is_loaded(),
+        None => true,
     };
     let supports_images = props.is_some_and(Props::supports_images) || entry.supports_images_hint();
     let supports_thinking = props.is_some_and(Props::supports_thinking);
@@ -1724,7 +1726,9 @@ mod tests {
         assert!(model.supports_thinking);
 
         // Unprobed: falls back to the listing's runtime context, then trained
-        // context. Tools are assumed supported until the model loads.
+        // context. Tools are assumed supported when the server does not expose
+        // `/props` (e.g. LM Studio or other OpenAI-compatible servers), since modern
+        // local instruct models commonly support tools.
         let model = model_from_entry(&entry("m", Some(4096), Some(131072)), None);
         assert_eq!(model.max_tokens, 4096);
         assert!(model.supports_tools);
@@ -1755,6 +1759,29 @@ mod tests {
         assert!(model.supports_images);
         // Unprobed router models optimistically advertise tools until loaded.
         assert!(model.supports_tools);
+    }
+
+    #[test]
+    fn loaded_router_entry_without_props_advertises_tools() {
+        let router_entry = ModelEntry {
+            id: "qwen2.5-coder".to_string(),
+            meta: Some(llama_cpp::ModelMeta {
+                n_ctx: Some(32768),
+                n_ctx_train: Some(131072),
+            }),
+            architecture: Some(llama_cpp::Architecture {
+                input_modalities: vec!["text".to_string()],
+            }),
+            status: Some(llama_cpp::ModelStatus {
+                value: "loaded".to_string(),
+            }),
+        };
+        let model = model_from_entry(&router_entry, None);
+        // Servers that don't expose `/props` (e.g. LM Studio) still get tool
+        // support advertised for loaded models, since modern local instruct
+        // models commonly support tools and users can override in settings.
+        assert!(model.supports_tools);
+        assert!(!model.supports_images);
     }
 
     #[test]
