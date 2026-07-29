@@ -168,6 +168,40 @@ pub struct CustomEditPredictionProviderSettingsContent {
     ///
     /// Default: 256
     pub max_output_tokens: Option<u32>,
+    /// The API type to use for edit predictions.
+    ///
+    /// Use `completions` for text completion APIs (`/v1/completions`, native
+    /// FIM models) and `chat_completions` for chat completion APIs
+    /// (`/v1/chat/completions`, chat models). When `chat_completions` is used,
+    /// Zed builds an instruction-based fill-in-the-middle prompt instead of
+    /// using model-native FIM tokens.
+    ///
+    /// Default: "completions"
+    pub api_type: Option<OpenAiCompatibleApiTypeContent>,
+}
+
+#[derive(
+    Copy,
+    Clone,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+    MergeFrom,
+    strum::VariantArray,
+    strum::VariantNames,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum OpenAiCompatibleApiTypeContent {
+    /// Text completion API (`/v1/completions`) using model-native FIM tokens.
+    #[default]
+    Completions,
+    /// Chat completion API (`/v1/chat/completions`) using an
+    /// instruction-based fill-in-the-middle prompt.
+    ChatCompletions,
 }
 
 #[derive(

@@ -600,6 +600,37 @@ fn open_ai_compatible_settings() -> Box<[SettingsPageItem]> {
             metadata: None,
         }),
         SettingsPageItem::SettingItem(SettingItem {
+            title: "API 类型",
+            description: "Completions：文本补全接口（/v1/completions），适用于原生 FIM 模型；Chat Completions：对话补全接口（/v1/chat/completions），适用于聊天模型，Zed 会自动构造填空提示词。使用 Chat Completions 时，API 地址需指向 chat/completions 端点。",
+            field: Box::new(SettingField {
+                organization_override: None,
+                pick: |settings| {
+                    settings
+                        .project
+                        .all_languages
+                        .edit_predictions
+                        .as_ref()?
+                        .open_ai_compatible_api
+                        .as_ref()?
+                        .api_type
+                        .as_ref()
+                },
+                write: |settings, value, _app: &App| {
+                    settings
+                        .project
+                        .all_languages
+                        .edit_predictions
+                        .get_or_insert_default()
+                        .open_ai_compatible_api
+                        .get_or_insert_default()
+                        .api_type = value;
+                },
+                json_path: Some("edit_predictions.open_ai_compatible_api.api_type"),
+            }),
+            files: USER,
+            metadata: None,
+        }),
+        SettingsPageItem::SettingItem(SettingItem {
             title: "最大输出令牌数",
             description: "要生成的最大令牌数。",
             field: Box::new(SettingField {
