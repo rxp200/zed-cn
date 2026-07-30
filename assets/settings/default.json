@@ -1765,11 +1765,11 @@
       "/**/zed/settings.json", // zed user settings
       "/**/zed/keymap.json",
     ],
-    // When to show edit predictions previews in buffer.
+    // When to request and show edit prediction previews in buffer.
     // This setting takes two possible values:
-    // 1. Display predictions inline when there are no language server completions available.
+    // 1. Request predictions automatically and display them inline when there are no language server completions available.
     //     "mode": "eager"
-    // 2. Display predictions inline only when holding a modifier key (alt by default).
+    // 2. Request and display predictions only when holding a modifier key (alt by default).
     //     "mode": "subtle"
     "mode": "eager",
     // Copilot-specific settings

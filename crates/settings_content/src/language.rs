@@ -362,8 +362,7 @@ pub enum EditPredictionDataCollectionChoice {
 )]
 #[serde(rename_all = "snake_case")]
 pub enum EditPredictionsMode {
-    /// If provider supports it, display inline when holding modifier key (e.g., alt).
-    /// Otherwise, eager preview is used.
+    /// Request and display predictions when holding a modifier key (e.g., alt).
     #[serde(alias = "auto")]
     Subtle,
     /// Display inline when there are no language server completions available.
