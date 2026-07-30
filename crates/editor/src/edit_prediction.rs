@@ -256,8 +256,11 @@ impl Editor {
 
         self.update_visible_edit_prediction(window, cx);
 
+        let subtle_preview_is_inactive =
+            self.edit_prediction_requires_modifier() && !self.edit_prediction_preview_is_active();
         if !user_requested
-            && (!self.should_show_edit_predictions()
+            && (subtle_preview_is_inactive
+                || !self.should_show_edit_predictions()
                 || !self.is_focused(window)
                 || buffer.read(cx).is_empty())
         {
@@ -770,6 +773,15 @@ impl Editor {
                 };
 
                 self.update_visible_edit_prediction(window, cx);
+                if self.edit_prediction_requires_modifier() && !self.has_active_edit_prediction() {
+                    self.refresh_edit_prediction(
+                        false,
+                        false,
+                        EditPredictionRequestTrigger::Explicit,
+                        window,
+                        cx,
+                    );
+                }
                 cx.notify();
             }
         } else if let EditPredictionPreview::Active {
