@@ -810,10 +810,7 @@ impl SshRemoteConnection {
         version: Version,
         cx: &mut AsyncApp,
     ) -> Result<Arc<RelPath>> {
-        let version_str = match release_channel {
-            ReleaseChannel::Dev => "build".to_string(),
-            _ => version.to_string(),
-        };
+        let version_str = super::remote_server_version(release_channel, &version);
         let binary_name = format!(
             "zed-remote-server-{}-{}{}",
             release_channel.dev_name(),
