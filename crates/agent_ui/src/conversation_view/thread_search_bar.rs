@@ -169,7 +169,7 @@ impl ThreadSearchBar {
     ) -> Self {
         let query_editor = cx.new(|cx| {
             let mut editor = Editor::single_line(window, cx);
-            editor.set_placeholder_text("Search this thread…", window, cx);
+            editor.set_placeholder_text("搜索当前线程…", window, cx);
             editor
         });
         let editor_subscription = cx.subscribe_in(

@@ -358,7 +358,7 @@ impl CollabPanel {
         cx.new(|cx| {
             let filter_editor = cx.new(|cx| {
                 let mut editor = Editor::single_line(window, cx);
-                editor.set_placeholder_text("Search channels…", window, cx);
+                editor.set_placeholder_text("搜索频道…", window, cx);
                 editor
             });
 
@@ -1359,7 +1359,7 @@ impl CollabPanel {
                             }),
                     ),
             )
-            .child(Label::new("notes"))
+            .child(Label::new("笔记"))
             .tooltip(Tooltip::text("打开频道笔记"))
     }
 
@@ -2503,12 +2503,12 @@ impl CollabPanel {
         let Some(channel) = self.channel_store.read(cx).channel_for_id(channel_id) else {
             return;
         };
-        let prompt_message = format!("Are you sure you want to leave \"#{}\"?", channel.name);
+        let prompt_message = format!("确定要离开 \"#{}\" 吗？", channel.name);
         let answer = window.prompt(
             PromptLevel::Warning,
             &prompt_message,
             None,
-            &["Leave", "Cancel"],
+            &["离开", "取消"],
             cx,
         );
         cx.spawn_in(window, async move |this, cx| {
@@ -2534,14 +2534,14 @@ impl CollabPanel {
         let channel_store = self.channel_store.clone();
         if let Some(channel) = channel_store.read(cx).channel_for_id(channel_id) {
             let prompt_message = format!(
-                "Are you sure you want to remove the channel \"{}\"?",
+                "确定要移除频道 \"{}\" 吗？",
                 channel.name
             );
             let answer = window.prompt(
                 PromptLevel::Warning,
                 &prompt_message,
                 None,
-                &["Remove", "Cancel"],
+                &["移除", "取消"],
                 cx,
             );
             let workspace = self.workspace.clone();
@@ -2576,7 +2576,7 @@ impl CollabPanel {
             PromptLevel::Warning,
             &prompt_message,
             None,
-            &["Remove", "Cancel"],
+            &["移除", "取消"],
             cx,
         );
         let workspace = self.workspace.clone();
@@ -2961,16 +2961,16 @@ impl CollabPanel {
                 if let Some(name) = channel_name {
                     name
                 } else {
-                    SharedString::from("Current Call")
+                    SharedString::from("当前通话")
                 }
             }
-            Section::FavoriteChannels => SharedString::from("Favorites"),
-            Section::ContactRequests => SharedString::from("Requests"),
-            Section::Contacts => SharedString::from("Contacts"),
-            Section::Channels => SharedString::from("Channels"),
-            Section::ChannelInvites => SharedString::from("Invites"),
-            Section::Online => SharedString::from("Online"),
-            Section::Offline => SharedString::from("Offline"),
+            Section::FavoriteChannels => SharedString::from("收藏"),
+            Section::ContactRequests => SharedString::from("请求"),
+            Section::Contacts => SharedString::from("联系人"),
+            Section::Channels => SharedString::from("频道"),
+            Section::ChannelInvites => SharedString::from("邀请"),
+            Section::Online => SharedString::from("在线"),
+            Section::Offline => SharedString::from("离线"),
         };
 
         let auto_watch_state = self

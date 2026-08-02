@@ -290,7 +290,7 @@ impl AcpTools {
         self.selected_connection
             .as_ref()
             .map(|agent_id| agent_id.0.clone())
-            .unwrap_or_else(|| SharedString::from("No connection selected"))
+            .unwrap_or_else(|| SharedString::from("未选择连接"))
     }
 
     fn connection_menu(&self, window: &mut Window, cx: &mut Context<Self>) -> Entity<ContextMenu> {
@@ -677,7 +677,7 @@ impl Item for AcpTools {
         format!(
             "ACP: {}",
             self.selected_watched_connection()
-                .map_or("Disconnected", |connection| connection.agent_id.0.as_ref())
+                .map_or("已断开", |connection| connection.agent_id.0.as_ref())
         )
         .into()
     }

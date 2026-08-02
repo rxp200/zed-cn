@@ -1592,7 +1592,7 @@ mod tests {
         let message = error.to_string();
 
         assert!(
-            message.contains("unexpected redirect (302)"),
+            message.contains("意外的重定向 (302)"),
             "error should report the redirect, got: {message}"
         );
     }
@@ -1613,7 +1613,7 @@ mod tests {
         let message = error.to_string();
 
         assert!(
-            message.contains("no repository exists at this URL, or it is private"),
+            message.contains("不存在仓库，或是私有仓库"),
             "404 error should mention private repositories, got: {message}"
         );
         assert_eq!(client.authorization_headers(), vec![None]);
@@ -1638,11 +1638,11 @@ mod tests {
         let message = error.to_string();
 
         assert!(
-            message.contains("exceeds maximum size"),
+            message.contains("超过最大大小"),
             "error should report the skill size limit, got: {message}"
         );
         assert!(
-            !message.contains("failed to read response body"),
+            !message.contains("读取响应正文失败"),
             "reader should not be polled past the limit, got: {message}"
         );
     }
@@ -1663,7 +1663,7 @@ mod tests {
         .expect_err("non-success responses should be rejected");
         let message = error.to_string();
 
-        assert!(message.contains("GitHub returned 500"));
+        assert!(message.contains("GitHub 在获取技能时返回 500"));
         assert!(
             message.ends_with('…'),
             "error body should be visibly truncated, got: {message}"
@@ -1722,7 +1722,7 @@ mod tests {
         .await
         .expect_err("writing over an existing skill must fail");
         assert!(
-            err.to_string().contains("already exists"),
+            err.to_string().contains("已存在"),
             "error message should mention the conflict, got: {err}"
         );
     }
@@ -1753,7 +1753,7 @@ mod tests {
         .expect_err("writing where a file already lives must fail");
         let message = err.to_string();
         assert!(
-            message.contains("not a skill directory"),
+            message.contains("非技能目录"),
             "error should explain the conflict is a non-directory, got: {message}"
         );
         // Path separator differs between platforms

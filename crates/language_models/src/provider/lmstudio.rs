@@ -1062,7 +1062,7 @@ impl Render for ConfigurationView {
                     .gap_1()
                     .child(Headline::new("LM Studio").size(HeadlineSize::Small))
                     .child(
-                        Label::new("Run local LLMs like Llama, Phi, and Qwen.").color(Color::Muted),
+                        Label::new("运行本地大语言模型，如 Llama、Phi 和 Qwen。").color(Color::Muted),
                     )
                     .child(
                         List::new()

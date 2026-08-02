@@ -1274,7 +1274,7 @@ impl<'a> ElicitationCard<'a> {
                                     .color(status_color),
                             )
                             .child(
-                                Label::new("Input Requested")
+                                Label::new("请求输入")
                                     .size(LabelSize::Custom(tool_name_font_size))
                                     .truncate(),
                             ),

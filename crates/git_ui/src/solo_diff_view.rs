@@ -897,7 +897,7 @@ impl Render for SoloDiffGitToolbar {
             .child(
                 Button::new("commit", "提交")
                     .tooltip(Tooltip::for_action_title_in(
-                        "Commit",
+                        "提交",
                         &Commit,
                         &focus_handle,
                     ))

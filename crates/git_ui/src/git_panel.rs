@@ -1018,7 +1018,7 @@ pub(crate) fn commit_message_editor(
     commit_editor.set_use_modal_editing(true);
     commit_editor.set_show_wrap_guides(false, cx);
     commit_editor.set_show_indent_guides(false, cx);
-    let placeholder = placeholder.unwrap_or("Enter commit message".into());
+    let placeholder = placeholder.unwrap_or("输入提交信息".into());
     commit_editor.set_placeholder_text(&placeholder, window, cx);
     commit_editor
 }
@@ -2919,7 +2919,7 @@ impl GitPanel {
             return;
         };
         let error_spawn = |message, window: &mut Window, cx: &mut App| {
-            let prompt = window.prompt(PromptLevel::Warning, message, None, &["OK"], cx);
+            let prompt = window.prompt(PromptLevel::Warning, message, None, &["确定"], cx);
             cx.spawn(async move |_| {
                 prompt.await.ok();
             })
@@ -3615,7 +3615,7 @@ impl GitPanel {
                 PromptLevel::Warning,
                 "Unable to initialize a git repository",
                 Some("Open a directory first"),
-                &["OK"],
+                &["确定"],
                 cx,
             );
             cx.background_executor()
@@ -4843,7 +4843,7 @@ impl GitPanel {
         self.select_last_entry_if_out_of_bounds(window, cx);
 
         let suggested_commit_message = self.suggest_commit_message(cx);
-        let placeholder_text = suggested_commit_message.unwrap_or("Enter commit message".into());
+        let placeholder_text = suggested_commit_message.unwrap_or("输入提交信息".into());
 
         self.commit_editor.update(cx, |editor, cx| {
             editor.set_placeholder_text(&placeholder_text, window, cx)
@@ -5455,7 +5455,7 @@ impl GitPanel {
                 "Amend"
             }
         } else if self.has_staged_changes() {
-            "Commit"
+            "提交"
         } else {
             "Commit Tracked"
         }
@@ -9590,7 +9590,7 @@ mod tests {
 
         assert_eq!(
             message,
-            "Are you sure you want to discard changes to `__somefile__`?"
+            "您确定要放弃对 `__somefile__` 的更改吗？"
         );
     }
 
@@ -12048,7 +12048,7 @@ mod tests {
         // - [x] untracked
         //
         // The commit message should now read:
-        // "Enter commit message"
+        // "输入提交信息"
         // (which means we should see None returned).
         let message = panel.update(cx, |panel, cx| panel.suggest_commit_message(cx));
         assert!(message.is_none());

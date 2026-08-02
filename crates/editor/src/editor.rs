@@ -4452,7 +4452,7 @@ impl Editor {
         let has_context_menu = self.has_mouse_context_menu();
 
         let meta = if is_rejected {
-            SharedString::from("No executable code is associated with this line.")
+            SharedString::from("此行没有可执行的代码。")
         } else if !breakpoint.is_disabled() {
             SharedString::from(format!(
                 "{alt_as_text}-click to disable\nright-click for more options"

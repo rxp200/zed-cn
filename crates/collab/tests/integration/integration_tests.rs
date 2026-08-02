@@ -6960,7 +6960,7 @@ async fn test_right_click_menu_behind_collab_panel(cx: &mut TestAppContext) {
     });
 
     // regression test that the right click menu for tabs does not open.
-    assert!(cx.debug_bounds("MENU_ITEM-Close").is_none());
+    assert!(cx.debug_bounds("MENU_ITEM-关闭").is_none());
 
     let tab_bounds = cx.debug_bounds("TAB-1").unwrap();
     cx.simulate_event(MouseDownEvent {
@@ -6970,7 +6970,7 @@ async fn test_right_click_menu_behind_collab_panel(cx: &mut TestAppContext) {
         click_count: 1,
         first_mouse: false,
     });
-    assert!(cx.debug_bounds("MENU_ITEM-Close").is_some());
+    assert!(cx.debug_bounds("MENU_ITEM-关闭").is_some());
 }
 
 #[gpui::test]

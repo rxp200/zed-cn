@@ -64,7 +64,7 @@ pub fn init(cx: &mut App) {
                         PromptLevel::Info,
                         "Copied into clipboard",
                         Some(&specs),
-                        &["OK"],
+                        &["确定"],
                     )
                     .await
                 })
@@ -77,7 +77,7 @@ pub fn init(cx: &mut App) {
                     PromptLevel::Info,
                     "Copied into clipboard",
                     Some(&clipboard_text),
-                    &["OK"],
+                    &["确定"],
                     cx,
                 ));
             })

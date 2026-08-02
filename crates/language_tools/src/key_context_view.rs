@@ -146,7 +146,7 @@ impl Item for KeyContextView {
     fn to_item_events(_: &Self::Event, _: &mut dyn FnMut(workspace::item::ItemEvent)) {}
 
     fn tab_content_text(&self, _detail: usize, _cx: &App) -> SharedString {
-        "Keyboard Context".into()
+        "键盘上下文".into()
     }
 
     fn telemetry_event_text(&self) -> Option<&'static str> {
@@ -200,8 +200,8 @@ impl Render for KeyContextView {
                     });
                 }),
             )
-            .child(Label::new("Keyboard Context").size(LabelSize::Large))
-            .child(Label::new("This view lets you determine the current context stack for creating custom key bindings in Zed. When a keyboard shortcut is triggered, it also shows all the possible contexts it could have triggered in, and which one matched."))
+            .child(Label::new("键盘上下文").size(LabelSize::Large))
+            .child(Label::new("此视图帮助你确定 Zed 中创建自定义快捷键绑定的当前上下文栈。当触发键盘快捷键时，它还会显示所有可能触发它的上下文，以及实际匹配了哪一个。"))
             .child(
                 h_flex()
                     .mt_4()
@@ -232,7 +232,7 @@ impl Render for KeyContextView {
                     ),
             )
             .child(
-                Label::new("Current Context Stack")
+                Label::new("当前上下文栈")
                     .size(LabelSize::Large)
                     .mt_8(),
             )
@@ -252,7 +252,7 @@ impl Render for KeyContextView {
                     Label::new(format!("{} {}", primary, secondary)).ml(px(12. * (i + 1) as f32))
                 })
             })
-            .child(Label::new("Last Keystroke").mt_4().size(LabelSize::Large))
+            .child(Label::new("最后一次按键").mt_4().size(LabelSize::Large))
             .when_some(self.pending_keystrokes.as_ref(), |el, keystrokes| {
                 el.child(
                     Label::new(format!(
@@ -283,7 +283,7 @@ impl Render for KeyContextView {
                     )
             })
             .when_some(key_equivalents, |el, key_equivalents| {
-                el.child(Label::new("Key Equivalents").mt_4().size(LabelSize::Large))
+                el.child(Label::new("按键等效项").mt_4().size(LabelSize::Large))
                     .child(Label::new("Shortcuts defined using some characters have been remapped so that shortcuts can be typed without holding option."))
                     .children(
                         key_equivalents
