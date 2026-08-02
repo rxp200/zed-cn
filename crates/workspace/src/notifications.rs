@@ -1670,7 +1670,7 @@ where
                         display.push('.');
                     }
                     let detail = f(err, window, cx).unwrap_or(display);
-                    window.prompt(PromptLevel::Critical, &msg, Some(&detail), &["OK"], cx)
+                    window.prompt(PromptLevel::Critical, &msg, Some(&detail), &["确定"], cx)
                 }) {
                     prompt.await.ok();
                 }

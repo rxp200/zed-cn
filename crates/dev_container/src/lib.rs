@@ -670,7 +670,7 @@ impl DevContainerModal {
                 .child(
                     div().track_focus(&self.focus_handle).child(
                         ModalHeader::new().child(
-                            Headline::new("Create Dev Container").size(HeadlineSize::XSmall),
+                            Headline::new("创建开发容器").size(HeadlineSize::XSmall),
                         ),
                     ),
                 )
@@ -699,7 +699,7 @@ impl DevContainerModal {
                                     );
                                     cx.notify();
                                 }))
-                                .child(Label::new("Search for Dev Container Templates")),
+                                .child(Label::new("搜索开发容器模板")),
                         ),
                 )
                 .into_any_element(),
@@ -765,7 +765,7 @@ impl DevContainerModal {
                         .child(
                             ModalHeader::new()
                                 .child(
-                                    Headline::new("Template Option: ").size(HeadlineSize::XSmall),
+                                    Headline::new("模板选项：").size(HeadlineSize::XSmall),
                                 )
                                 .child(
                                     Headline::new(&next_option_entries.option_name)
@@ -845,7 +845,7 @@ impl DevContainerModal {
                                     this.accept_message(DevContainerMessage::GoBack, window, cx);
                                     cx.notify();
                                 }))
-                                .child(Label::new("Go Back")),
+                                .child(Label::new("返回")),
                         ),
                 )
                 .into_any_element(),
@@ -887,7 +887,7 @@ impl DevContainerModal {
                         ModalHeader::new()
                             .icon(Icon::new(IconName::Warning).color(Color::Warning))
                             .child(
-                                Headline::new("Overwrite Existing Configuration?")
+                                Headline::new("覆盖现有配置？")
                                     .size(HeadlineSize::XSmall),
                             ),
                     ),
@@ -923,7 +923,7 @@ impl DevContainerModal {
                                     );
                                     cx.notify();
                                 }))
-                                .child(Label::new("Overwrite")),
+                                .child(Label::new("覆盖")),
                         ),
                 )
                 .child(
@@ -944,7 +944,7 @@ impl DevContainerModal {
                                     this.dismiss(&menu::Cancel, window, cx);
                                     cx.notify();
                                 }))
-                                .child(Label::new("Cancel")),
+                                .child(Label::new("取消")),
                         ),
                 )
                 .into_any_element(),
@@ -961,7 +961,7 @@ impl DevContainerModal {
                 .child(
                     div().track_focus(&self.focus_handle).child(
                         ModalHeader::new().child(
-                            Headline::new("Create Dev Container").size(HeadlineSize::XSmall),
+                            Headline::new("创建开发容器").size(HeadlineSize::XSmall),
                         ),
                     ),
                 )
@@ -976,7 +976,7 @@ impl DevContainerModal {
                                     .color(Color::Muted)
                                     .with_rotate_animation(2),
                             )
-                            .child(Label::new("Querying template registry...")),
+                            .child(Label::new("正在查询模板注册表…")),
                     ),
                 )
                 .child(ListSeparator)
@@ -998,7 +998,7 @@ impl DevContainerModal {
                                     this.accept_message(DevContainerMessage::GoBack, window, cx);
                                     cx.notify();
                                 }))
-                                .child(Label::new("Go Back")),
+                                .child(Label::new("返回")),
                         ),
                 )
                 .into_any_element(),
@@ -1013,7 +1013,7 @@ impl DevContainerModal {
                 .child(
                     div().track_focus(&self.focus_handle).child(
                         ModalHeader::new().child(
-                            Headline::new("Create Dev Container").size(HeadlineSize::XSmall),
+                            Headline::new("创建开发容器").size(HeadlineSize::XSmall),
                         ),
                     ),
                 )
@@ -1028,7 +1028,7 @@ impl DevContainerModal {
                                     .color(Color::Muted)
                                     .with_rotate_animation(2),
                             )
-                            .child(Label::new("Querying features...")),
+                            .child(Label::new("正在查询功能…")),
                     ),
                 )
                 .child(ListSeparator)
@@ -1050,7 +1050,7 @@ impl DevContainerModal {
                                     this.accept_message(DevContainerMessage::GoBack, window, cx);
                                     cx.notify();
                                 }))
-                                .child(Label::new("Go Back")),
+                                .child(Label::new("返回")),
                         ),
                 )
                 .into_any_element(),

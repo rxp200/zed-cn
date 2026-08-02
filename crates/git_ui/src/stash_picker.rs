@@ -623,7 +623,7 @@ impl PickerDelegate for StashListDelegate {
     }
 
     fn no_matches_text(&self, _window: &mut Window, _cx: &mut App) -> Option<SharedString> {
-        Some("No stashes found".into())
+        Some("未找到暂存".into())
     }
 
     fn render_footer(&self, _: &mut Window, cx: &mut Context<Picker<Self>>) -> Option<AnyElement> {

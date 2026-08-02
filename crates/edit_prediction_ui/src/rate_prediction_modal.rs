@@ -101,7 +101,7 @@ impl RatePredictionsModal {
                 RatePredictionsModal::new(ep_store, language_registry, window, cx)
             });
 
-            telemetry::event!("Rate Prediction Modal Open", source = "Edit Prediction");
+            telemetry::event!("Rate Prediction Modal Open", source = "编辑预测");
         }
     }
 
@@ -797,7 +797,7 @@ impl RatePredictionsModal {
                     editor.set_show_wrap_guides(false, cx);
                     editor.set_show_indent_guides(false, cx);
                     editor.set_show_edit_predictions(Some(false), window, cx);
-                    editor.set_placeholder_text("Add your feedback…", window, cx);
+                    editor.set_placeholder_text("添加反馈…", window, cx);
                     editor.set_completion_provider(Some(Rc::new(FeedbackCompletionProvider)));
                     if focus {
                         cx.focus_self(window);
@@ -880,7 +880,7 @@ impl RatePredictionsModal {
                                 .px_2()
                                 .border_b_1()
                                 .border_color(border_color)
-                                .child(Label::new("Predicted Patch").size(LabelSize::Small)),
+                                .child(Label::new("预测的补丁").size(LabelSize::Small)),
                         )
                         .child(
                             div()
@@ -906,7 +906,7 @@ impl RatePredictionsModal {
                                 .gap_2()
                                 .border_b_1()
                                 .border_color(border_color)
-                                .child(Label::new("Expected Patch").size(LabelSize::Small)),
+                                .child(Label::new("预期补丁").size(LabelSize::Small)),
                         )
                         .child(
                             div()
@@ -1144,7 +1144,7 @@ impl RatePredictionsModal {
                                             .size(IconSize::Small)
                                             .color(Color::Success),
                                     )
-                                    .child(Label::new("Rated completion.").color(Color::Muted)),
+                                    .child(Label::new("已评价补全。").color(Color::Muted)),
                             )
                         } else if active_prediction.prediction.edits.is_empty() {
                             Some(
@@ -1154,7 +1154,7 @@ impl RatePredictionsModal {
                                             .size(IconSize::Small)
                                             .color(Color::Warning),
                                     )
-                                    .child(Label::new("No edits produced.").color(Color::Muted)),
+                                    .child(Label::new("未产生任何编辑。").color(Color::Muted)),
                             )
                         } else {
                             Some(label_container)
@@ -1356,7 +1356,7 @@ impl Render for RatePredictionsModal {
                             .border_color(border_color)
                             .child(Icon::new(icons.base).size(IconSize::Small))
                             .child(
-                                Label::new("From most recent to oldest")
+                                Label::new("从最近到最旧")
                                     .color(Color::Muted)
                                     .size(LabelSize::Small),
                             )

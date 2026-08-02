@@ -261,7 +261,7 @@ fn render_api_key_provider(
                     .label_color(Color::Muted),
             )
             .child(
-                Label::new("to generate an API key.")
+                Label::new("以生成 API 密钥。")
                     .size(LabelSize::Small)
                     .color(Color::Muted),
             ),

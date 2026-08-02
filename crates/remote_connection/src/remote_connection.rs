@@ -191,7 +191,7 @@ impl Render for RemoteConnectionPrompt {
                                     .color(Color::Muted),
                             )
                             .child(
-                                Label::new("Caps lock is on.")
+                                Label::new("大写锁定已开启。")
                                     .size(LabelSize::Small)
                                     .color(Color::Muted),
                             ),

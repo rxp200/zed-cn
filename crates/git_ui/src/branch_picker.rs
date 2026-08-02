@@ -1251,7 +1251,7 @@ impl PickerDelegate for BranchListDelegate {
     fn no_matches_text(&self, _window: &mut Window, _cx: &mut App) -> Option<SharedString> {
         match self.state {
             PickerState::CreateRemote(_) => {
-                Some(SharedString::new_static("Remote name can't be empty"))
+                Some(SharedString::new_static("远程名称不能为空"))
             }
             _ => None,
         }
@@ -1269,7 +1269,7 @@ impl PickerDelegate for BranchListDelegate {
 
         let warning_banner = || {
             self.branch_list_error.as_deref().map(|error| {
-                let message = format!("Some branches could not be loaded: {error}");
+                let message = format!("无法加载部分分支：{error}");
                 div().p_1p5().child(
                     Banner::new()
                         .severity(Severity::Warning)
@@ -2630,7 +2630,7 @@ mod tests {
         cx.run_until_parked();
         assert!(cx.has_pending_prompt());
 
-        cx.simulate_prompt_answer("Force Delete");
+        cx.simulate_prompt_answer("强制删除");
         cx.run_until_parked();
 
         let repo_branches = branch_list
@@ -2709,7 +2709,7 @@ mod tests {
         cx.run_until_parked();
         assert!(cx.has_pending_prompt());
 
-        cx.simulate_prompt_answer("Cancel");
+        cx.simulate_prompt_answer("取消");
         cx.run_until_parked();
         assert!(!cx.has_pending_prompt());
 

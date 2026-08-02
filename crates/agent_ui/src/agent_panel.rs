@@ -9400,7 +9400,7 @@ mod tests {
         cx.run_until_parked();
 
         assert!(
-            cx.debug_bounds("MENU_ITEM-Skills").is_some(),
+            cx.debug_bounds("MENU_ITEM-技能").is_some(),
             "Skills menu item should be visible"
         );
         assert!(

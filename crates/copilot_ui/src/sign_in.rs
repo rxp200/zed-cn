@@ -252,7 +252,7 @@ impl CopilotCodeVerification {
             .gap_2p5()
             .items_center()
             .text_center()
-            .child(Headline::new("Use GitHub Copilot in Zed").size(HeadlineSize::Large))
+            .child(Headline::new("在 Zed 中使用 GitHub Copilot").size(HeadlineSize::Large))
             .child(
                 Label::new("使用 Copilot 需要在 GitHub 上拥有有效订阅。")
                     .color(Color::Muted),
@@ -336,7 +336,7 @@ impl CopilotCodeVerification {
             .gap_2()
             .text_center()
             .justify_center()
-            .child(Headline::new("Copilot Enabled!").size(HeadlineSize::Large))
+            .child(Headline::new("Copilot 已启用！").size(HeadlineSize::Large))
             .child(Label::new("您已准备好使用 GitHub Copilot 了。").color(Color::Muted))
             .child(
                 Button::new("copilot-enabled-done-button", "完成")
@@ -360,7 +360,7 @@ impl CopilotCodeVerification {
             .text_center()
             .justify_center()
             .child(
-                Headline::new("You must have an active GitHub Copilot subscription.")
+                Headline::new("你必须拥有有效的 GitHub Copilot 订阅。")
                     .size(HeadlineSize::Large),
             )
             .child(Label::new(description).color(Color::Warning))
@@ -384,7 +384,7 @@ impl CopilotCodeVerification {
             .gap_2()
             .text_center()
             .justify_center()
-            .child(Headline::new("An Error Happened").size(HeadlineSize::Large))
+            .child(Headline::new("发生错误").size(HeadlineSize::Large))
             .child(Label::new(ERROR_LABEL).color(Color::Muted))
             .child(
                 Button::new("copilot-subscribe-button", "重新安装Copilot并登录")
@@ -569,7 +569,7 @@ impl ConfigurationView {
         let label = if edit_prediction {
             "Sign in to GitHub"
         } else {
-            "Sign In"
+            "登录"
         };
 
         Button::new("sign_in", label)

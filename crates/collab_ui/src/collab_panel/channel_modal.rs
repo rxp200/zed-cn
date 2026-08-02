@@ -442,7 +442,7 @@ impl PickerDelegate for ChannelModalDelegate {
                             .when(!is_me, |el| {
                                 el.child(IconButton::new("ellipsis", IconName::Ellipsis))
                             })
-                            .when(is_me, |el| el.child(Label::new("You").color(Color::Muted)))
+                            .when(is_me, |el| el.child(Label::new("你").color(Color::Muted)))
                             .children(
                                 if let (Some((menu, _)), true) = (&self.context_menu, selected) {
                                     Some(

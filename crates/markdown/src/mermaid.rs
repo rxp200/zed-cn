@@ -339,7 +339,7 @@ pub(crate) fn render_mermaid_diagram(
                         img(ImageSource::Render(render_image.clone()))
                             .max_w_full()
                             .with_fallback(|| {
-                                Label::new("Failed to Load Mermaid Diagram").into_any_element()
+                                Label::new("加载 Mermaid 图表失败").into_any_element()
                             }),
                     )
                     .into_any_element()
@@ -388,7 +388,7 @@ pub(crate) fn render_mermaid_diagram(
                                     .max_w_full()
                                     .with_fallback(|| {
                                         div()
-                                            .child(Label::new("Failed to load mermaid diagram"))
+                                            .child(Label::new("加载 Mermaid 图表失败"))
                                             .into_any_element()
                                     }),
                             )
@@ -414,7 +414,7 @@ pub(crate) fn render_mermaid_diagram(
                     .child(render_mermaid_code_view(&parsed.contents.contents))
                     .child(
                         div().absolute().top_1().right_2().child(
-                            Label::new("Rendering...")
+                            Label::new("正在渲染…")
                                 .size(LabelSize::XSmall)
                                 .color(Color::Muted)
                                 .with_animation(

@@ -88,7 +88,7 @@ fn render_inspector(
                             window.refresh();
                         })),
                 )
-                .child(h_flex().justify_end().child(Label::new("GPUI Inspector"))),
+                .child(h_flex().justify_end().child(Label::new("GPUI 检查器"))),
         )
         .child(
             v_flex()
@@ -119,7 +119,7 @@ fn render_inspector_id(inspector_id: &InspectorElementId, cx: &App) -> Div {
         .child(
             h_flex()
                 .justify_between()
-                .child(Label::new("Element ID").size(LabelSize::Large))
+                .child(Label::new("元素 ID").size(LabelSize::Large))
                 .child(
                     div()
                         .id("instance-id")

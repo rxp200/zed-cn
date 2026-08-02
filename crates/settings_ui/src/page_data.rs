@@ -4688,7 +4688,7 @@ fn window_and_layout_page() -> SettingsPage {
 
     fn layout_section() -> [SettingsPageItem; 6] {
         [
-            SettingsPageItem::SectionHeader("Layout"),
+            SettingsPageItem::SectionHeader("布局"),
             SettingsPageItem::SettingItem(SettingItem {
                 title: "底部面板布局",
                 description: "底部面板的布局模式。",

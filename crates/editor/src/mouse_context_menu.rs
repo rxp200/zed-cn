@@ -447,6 +447,6 @@ mod tests {
         });
         cx.run_until_parked();
 
-        assert!(cx.debug_bounds("MENU_ITEM-Copy").is_some());
+        assert!(cx.debug_bounds("MENU_ITEM-复制").is_some());
     }
 }

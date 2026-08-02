@@ -1282,7 +1282,7 @@ impl Editor {
                                     .bg(Self::edit_prediction_line_popover_bg_color(cx))
                                     .when(keybind_display.show_hold_label, |el| {
                                         el.child(
-                                            Label::new("Hold")
+                                            Label::new("按住")
                                                 .size(LabelSize::Small)
                                                 .when(
                                                     keybind_display.missing_accept_keystroke,

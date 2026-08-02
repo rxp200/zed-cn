@@ -3696,7 +3696,7 @@ impl ThreadView {
                 .gap_1()
                 .justify_between()
                 .child(
-                    Label::new("Plan")
+                    Label::new("计划")
                         .size(LabelSize::Small)
                         .color(Color::Muted),
                 )
