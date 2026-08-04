@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use settings_macros::{MergeFrom, with_fallible_options};
 use std::sync::Arc;
 
-use crate::{DocumentFoldingRanges, DocumentSymbols, ExtendingVec, SemanticTokens, merge_from};
+use crate::{DocumentFoldingRanges, DocumentSymbols, ExtendingSet, SemanticTokens, merge_from};
 
 /// The state of the modifier keys at some point in time
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, MergeFrom)]
@@ -164,7 +164,7 @@ pub struct CustomEditPredictionProviderSettingsContent {
     ///
     /// Default: ""
     pub model: Option<String>,
-    /// Maximum tokens to generate.
+    /// Maximum tokens to generate for FIM models and self-hosted Sweep rewrite responses.
     ///
     /// Default: 256
     pub max_output_tokens: Option<u32>,
@@ -232,6 +232,7 @@ pub enum EditPredictionPromptFormatContent {
     CodeGemma,
     Codestral,
     Glm,
+    Sweep,
 }
 
 #[with_fallible_options]
@@ -303,7 +304,7 @@ pub struct OllamaEditPredictionSettingsContent {
     ///
     /// Default: none
     pub model: Option<OllamaModelName>,
-    /// Maximum tokens to generate for FIM models.
+    /// Maximum tokens to generate for FIM models and self-hosted Sweep rewrite responses.
     ///
     /// Default: 256
     pub max_output_tokens: Option<u32>,
@@ -1211,11 +1212,11 @@ pub struct LanguageToSettingsMap(pub HashMap<String, LanguageSettingsContent>);
 /// Map from language name to file patterns.
 #[with_fallible_options]
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, MergeFrom)]
-pub struct FileTypeMap(pub HashMap<Arc<str>, ExtendingVec<String>>);
+pub struct FileTypeMap(pub HashMap<Arc<str>, ExtendingSet<String>>);
 
 impl<'a> IntoIterator for &'a FileTypeMap {
-    type Item = (&'a Arc<str>, &'a ExtendingVec<String>);
-    type IntoIter = std::collections::hash_map::Iter<'a, Arc<str>, ExtendingVec<String>>;
+    type Item = (&'a Arc<str>, &'a ExtendingSet<String>);
+    type IntoIter = std::collections::hash_map::Iter<'a, Arc<str>, ExtendingSet<String>>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.0.iter()

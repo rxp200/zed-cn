@@ -1130,9 +1130,29 @@ fn appearance_page() -> SettingsPage {
         ]
     }
 
-    fn agent_panel_font_section() -> [SettingsPageItem; 3] {
+    fn agent_panel_font_section() -> [SettingsPageItem; 5] {
         [
             SettingsPageItem::SectionHeader("Agent 面板字体"),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: "UI 字体族",
+                description: "Agent 面板中 Agent 回复文本的字体族。回退到常规 UI 字体族。",
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("agent_ui_font_family"),
+                    pick: |settings_content| {
+                        settings_content
+                            .theme
+                            .agent_ui_font_family
+                            .as_ref()
+                            .or(settings_content.theme.ui_font_family.as_ref())
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content.theme.agent_ui_font_family = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: "UI 字体大小",
                 description: "Agent 面板中 Agent 回复文本的字体大小。回退到常规 UI 字体大小。",
@@ -1148,6 +1168,26 @@ fn appearance_page() -> SettingsPage {
                     },
                     write: |settings_content, value, _| {
                         settings_content.theme.agent_ui_font_size = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: "缓冲区字体族",
+                description: "Agent 面板中用户消息文本的字体族。回退到常规缓冲区字体族。",
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("agent_buffer_font_family"),
+                    pick: |settings_content| {
+                        settings_content
+                            .theme
+                            .agent_buffer_font_family
+                            .as_ref()
+                            .or(settings_content.theme.buffer_font_family.as_ref())
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content.theme.agent_buffer_font_family = value;
                     },
                 }),
                 metadata: None,
@@ -2142,7 +2182,7 @@ fn editor_page() -> SettingsPage {
         ]
     }
 
-    fn gutter_section() -> [SettingsPageItem; 9] {
+    fn gutter_section() -> [SettingsPageItem; 10] {
         [
             SettingsPageItem::SectionHeader("装订线"),
             SettingsPageItem::SettingItem(SettingItem {
@@ -2294,6 +2334,30 @@ fn editor_page() -> SettingsPage {
                             .gutter
                             .get_or_insert_default()
                             .min_line_number_digits = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: "Git 边距指示条宽度",
+                description: "边距中 git 差异指示条的宽度（像素）。未设置时，宽度随缓冲区字体大小缩放。",
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("gutter.git_gutter_width"),
+                    pick: |settings_content| {
+                        settings_content
+                            .editor
+                            .gutter
+                            .as_ref()
+                            .and_then(|gutter| gutter.git_gutter_width.as_ref())
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content
+                            .editor
+                            .gutter
+                            .get_or_insert_default()
+                            .git_gutter_width = value;
                     },
                 }),
                 metadata: None,
@@ -7841,7 +7905,7 @@ fn version_control_page() -> SettingsPage {
         ]
     }
 
-    fn git_hunks_section() -> [SettingsPageItem; 4] {
+    fn git_hunks_section() -> [SettingsPageItem; 5] {
         [
             SettingsPageItem::SectionHeader("Git 块"),
             SettingsPageItem::SettingItem(SettingItem {
@@ -7853,6 +7917,20 @@ fn version_control_page() -> SettingsPage {
                     pick: |settings_content| settings_content.git.as_ref()?.hunk_style.as_ref(),
                     write: |settings_content, value, _| {
                         settings_content.git.get_or_insert_default().hunk_style = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: "差异基准",
+                description: "Git 功能显示相对于 HEAD（未提交的更改）还是相对于默认分支（当前分支上的所有更改）的差异。",
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("git.diff_base"),
+                    pick: |settings_content| settings_content.git.as_ref()?.diff_base.as_ref(),
+                    write: |settings_content, value, _| {
+                        settings_content.git.get_or_insert_default().diff_base = value;
                     },
                 }),
                 metadata: None,
