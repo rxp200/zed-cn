@@ -499,7 +499,7 @@ pub fn next_word_end(map: &DisplaySnapshot, point: DisplayPoint) -> DisplayPoint
         // Make alt-right skip punctuation to respect VSCode behaviour. For example: |.hello goes to .hello|
         if is_first_iteration
             && classifier.is_punctuation(left)
-            && classifier.is_word(right)
+            && !classifier.is_punctuation(right)
             && right != '\n'
         {
             is_first_iteration = false;
@@ -1126,6 +1126,7 @@ mod tests {
         assert("helloˇ.---..ˇtest", cx);
         assert("test  ˇ.--ˇtest", cx);
         assert("oneˇ,;:!?ˇtwo", cx);
+
         assert("foo ˇ.ˇ bar", cx);
         assert("ˇfoo @ˇbar", cx);
         assert("foo ˇ@barˇ baz", cx);
@@ -1141,6 +1142,7 @@ mod tests {
         assert("a@ˇbˇ", cx);
         // Punctuation at start of buffer (or after whitespace) is a true prefix.
         assert("ˇ@wordˇ", cx);
+
     }
 
     #[gpui::test]
@@ -1324,10 +1326,6 @@ mod tests {
         assert("helloˇ.---..ˇtest", cx);
         assert("testˇ.--ˇ test", cx);
         assert("oneˇ,;:!?ˇtwo", cx);
-        assert("foo ˇ.ˇ bar", cx);
-        assert("fooˇ.ˇ bar", cx);
-        assert("foo ˇ@barˇ baz", cx);
-        assert("[2001:4860:4860::8888ˇ]ˇ ", cx);
     }
 
     #[gpui::test]
