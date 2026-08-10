@@ -20,7 +20,7 @@ preview = []
 nightly = []
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows.workspace = true
+windows = { workspace = true, features = ["Win32_System_Registry"] }
 windows-core.workspace = true
 windows-registry = "0.5"
 
