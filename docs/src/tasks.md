@@ -344,6 +344,11 @@ In doing so, you can change which task is shown in the runnables indicator.
 
 When you have a task definition that is bound to the runnable, you can quickly run it using [Code Actions](https://zed.dev/docs/configuring-languages?#code-actions) that you can trigger either via {#action editor::ToggleCodeActions} command or by the `cmd-.`/`ctrl-.` shortcut. Your task will be the first in the dropdown. The task will run immediately if there are no additional Code Actions for this line.
 
+Two default keybindings make this even quicker (override them from your own `keymap.json` if you prefer):
+
+- `ctrl-alt-n` runs {#action editor::SpawnNearestTask}, which runs the nearest runnable task from the cursor position without opening any menu — the same behavior as clicking the run button in the gutter.
+- `ctrl-alt-m` spawns the task tagged `run-current` (if any) directly, falling back to the task picker when no matching task is found. Define a "run current file" task in your `tasks.json` with `"tags": ["run-current"]` to use it.
+
 ## Running Bash Scripts
 
 You can run bash scripts directly from Zed. When you open a `.sh` or `.bash` file, Zed automatically detects the script as runnable and makes it available in the task picker.
