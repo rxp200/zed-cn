@@ -573,6 +573,21 @@
     // The layout of window control buttons in the title bar (Linux only).
     "button_layout": "platform_default",
   },
+  "hover_translation": {
+    // Whether to automatically translate non-Chinese hover documentation
+    // into the target language (shown underlined below the original text).
+    "enabled": false,
+    // The language model provider used for translation, matching one of the
+    // providers configured under `language_models`. `null` means the default
+    // fast model is used.
+    "provider": null,
+    // The model used for translation. `null` means the provider's default.
+    "model": null,
+    // The target language to translate into.
+    "target_language": "中文",
+    // Maximum number of documentation characters sent for translation.
+    "max_chars": 4000,
+  },
   "audio": {
     // Select specific output audio device.
     // `null` means use system default.

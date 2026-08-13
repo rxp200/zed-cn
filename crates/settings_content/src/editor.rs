@@ -995,6 +995,39 @@ pub struct JupyterContent {
     pub kernel_selections: Option<HashMap<String, String>>,
 }
 
+/// Settings for AI-powered translation in the editor's hover popovers.
+#[with_fallible_options]
+#[derive(Clone, Default, Debug, Serialize, Deserialize, JsonSchema, MergeFrom, PartialEq, Eq)]
+pub struct HoverTranslationSettingsContent {
+    /// Whether to automatically translate non-Chinese parts of hover
+    /// documentation (e.g. LSP hover information) into the target language.
+    /// The translation is shown underlined below the original text.
+    ///
+    /// Default: false
+    pub enabled: Option<bool>,
+    /// The language model provider (channel) used for translation, matching
+    /// one of the providers configured under `language_models`, e.g.
+    /// "openai_compatible", "anthropic", "google", "ollama".
+    /// When unset, the default fast model is used.
+    ///
+    /// Default: null
+    pub provider: Option<String>,
+    /// The model to use for translation, as provided by the configured
+    /// `provider`.
+    ///
+    /// Default: null
+    pub model: Option<String>,
+    /// The target language to translate into.
+    ///
+    /// Default: 中文
+    pub target_language: Option<String>,
+    /// Maximum number of characters of documentation sent for translation.
+    /// Longer documents are truncated to limit token usage.
+    ///
+    /// Default: 4000
+    pub max_chars: Option<u64>,
+}
+
 /// Whether to allow drag and drop text selection in buffer.
 #[with_fallible_options]
 #[derive(Clone, Default, Debug, Serialize, Deserialize, JsonSchema, MergeFrom, PartialEq, Eq)]

@@ -4,6 +4,7 @@ use crate::{
     display_map::{InlayOffset, ToDisplayPoint, is_invisible},
     editor_settings::EditorSettingsScrollbarProxy,
     hover_links::{InlayHighlight, RangeInEditor},
+    hover_translation::{HoverTranslationSettings, TranslationService, needs_translation},
     movement::TextLayoutDetails,
     scroll::ScrollAmount,
 };
@@ -221,11 +222,14 @@ pub fn hover_at_inlay(
                 let hover_popover = InfoPopover {
                     symbol_range: RangeInEditor::Inlay(inlay_hover.range.clone()),
                     parsed_content,
+                    translated_content: None,
                     scroll_handle,
                     keyboard_grace: Rc::new(RefCell::new(false)),
                     anchor: None,
                     last_bounds: Rc::new(Cell::new(None)),
                     _subscription: subscription,
+                    _translated_subscription: None,
+                    _translation_task: None,
                 };
 
                 this.update(cx, |this, cx| {
@@ -473,6 +477,9 @@ fn show_hover(
             let mut info_popovers = Vec::with_capacity(
                 hovers_response.len() + if invisible_char.is_some() { 1 } else { 0 },
             );
+            // Documentation text (non-code blocks) for each info popover, used
+            // for AI translation of hover contents.
+            let mut doc_texts: Vec<Option<String>> = Vec::new();
 
             if let Some((invisible, range)) = invisible_char {
                 let blocks = vec![HoverBlock {
@@ -492,12 +499,16 @@ fn show_hover(
                 info_popovers.push(InfoPopover {
                     symbol_range: RangeInEditor::Text(range),
                     parsed_content,
+                    translated_content: None,
                     scroll_handle,
                     keyboard_grace: Rc::new(RefCell::new(ignore_timeout)),
                     anchor: Some(anchor),
                     last_bounds: Rc::new(Cell::new(None)),
                     _subscription: subscription,
-                })
+                    _translated_subscription: None,
+                    _translation_task: None,
+                });
+                doc_texts.push(None);
             }
 
             let doc_link_task = this
@@ -540,6 +551,7 @@ fn show_hover(
 
                 let blocks = hover_result.contents;
                 let language = hover_result.language;
+                let doc_text = crate::hover_translation::documentation_text(&blocks);
                 let parsed_content =
                     parse_blocks(&blocks, language_registry.as_ref(), language, cx);
                 let scroll_handle = ScrollHandle::new();
@@ -555,12 +567,16 @@ fn show_hover(
                 info_popovers.push(InfoPopover {
                     symbol_range: RangeInEditor::Text(range),
                     parsed_content,
+                    translated_content: None,
                     scroll_handle,
                     keyboard_grace: Rc::new(RefCell::new(ignore_timeout)),
                     anchor: Some(anchor),
                     last_bounds: Rc::new(Cell::new(None)),
                     _subscription: subscription,
+                    _translated_subscription: None,
+                    _translation_task: None,
                 });
+                doc_texts.push(doc_text);
             }
 
             for (multi_buffer_range, tooltip) in doc_link_tooltips {
@@ -581,12 +597,16 @@ fn show_hover(
                 info_popovers.push(InfoPopover {
                     symbol_range: RangeInEditor::Text(multi_buffer_range),
                     parsed_content,
+                    translated_content: None,
                     scroll_handle,
                     keyboard_grace: Rc::new(RefCell::new(ignore_timeout)),
                     anchor: Some(anchor),
                     last_bounds: Rc::new(Cell::new(None)),
                     _subscription: subscription,
+                    _translated_subscription: None,
+                    _translation_task: None,
                 });
+                doc_texts.push(None);
             }
 
             this.update_in(cx, |editor, window, cx| {
@@ -600,6 +620,39 @@ fn show_hover(
                         |_, theme| theme.colors().element_hover, // todo update theme
                         cx,
                     );
+                }
+
+                if HoverTranslationSettings::get_global(cx).enabled {
+                    for (popover, doc_text) in info_popovers.iter_mut().zip(doc_texts) {
+                        let Some(doc_text) = doc_text else {
+                            continue;
+                        };
+                        if !needs_translation(&doc_text) {
+                            continue;
+                        }
+                        // Rendered once the translation arrives; kept empty
+                        // until then so the popover shows the original first.
+                        let markdown =
+                            cx.new(|cx| Markdown::new(Default::default(), None, None, cx));
+                        let subscription = cx.observe(&markdown, |_, _, cx| cx.notify());
+                        let task = cx.spawn_in(window, {
+                            let markdown = markdown.clone();
+                            async move |_, cx| {
+                                let Ok(translation_task) =
+                                    cx.update(|_, cx| TranslationService::translate(doc_text, cx))
+                                else {
+                                    return;
+                                };
+                                if let Ok(translation) = translation_task.await {
+                                    markdown
+                                        .update(cx, |markdown, cx| markdown.reset(translation, cx));
+                                }
+                            }
+                        });
+                        popover.translated_content = Some(markdown);
+                        popover._translated_subscription = Some(subscription);
+                        popover._translation_task = Some(task);
+                    }
                 }
 
                 editor.hover_state.info_popovers = info_popovers;
@@ -741,6 +794,21 @@ pub fn hover_markdown_style(window: &Window, cx: &App) -> MarkdownStyle {
         table_columns_min_size: true,
         ..Default::default()
     }
+}
+
+/// Markdown style for AI translations of hover documentation: same as the
+/// regular hover style, but underlined and slightly muted to distinguish the
+/// translation from the original text.
+pub fn translation_markdown_style(window: &Window, cx: &App) -> MarkdownStyle {
+    let mut style = hover_markdown_style(window, cx);
+    let color = cx.theme().colors().editor_foreground.opacity(0.75);
+    style.base_text_style.color = color;
+    style.base_text_style.underline = Some(gpui::UnderlineStyle {
+        thickness: px(1.),
+        color: Some(color),
+        wavy: false,
+    });
+    style
 }
 
 pub fn diagnostics_markdown_style(window: &Window, cx: &App) -> MarkdownStyle {
@@ -1043,11 +1111,16 @@ impl HoverState {
 pub struct InfoPopover {
     pub symbol_range: RangeInEditor,
     pub parsed_content: Option<Entity<Markdown>>,
+    /// AI translation of the non-code parts of `parsed_content`, rendered
+    /// underlined below the original documentation once it arrives.
+    pub translated_content: Option<Entity<Markdown>>,
     pub scroll_handle: ScrollHandle,
     pub keyboard_grace: Rc<RefCell<bool>>,
     pub anchor: Option<Anchor>,
     pub last_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
-    _subscription: Option<Subscription>,
+    pub(crate) _subscription: Option<Subscription>,
+    pub(crate) _translated_subscription: Option<Subscription>,
+    pub(crate) _translation_task: Option<Task<()>>,
 }
 
 impl InfoPopover {
@@ -1122,7 +1195,31 @@ impl InfoPopover {
                                     )
                                 })
                                 .p_2(),
-                        ),
+                        )
+                        .when_some(self.translated_content.clone(), |this, translated| {
+                            // Only take up space once the translation has arrived.
+                            this.when(!translated.read(cx).source().is_empty(), |this| {
+                                this.child(
+                                    div()
+                                        .mx_2()
+                                        .border_t_1()
+                                        .border_color(cx.theme().colors().border),
+                                )
+                                .child(
+                                    MarkdownElement::new(
+                                        translated,
+                                        translation_markdown_style(window, cx),
+                                    )
+                                    .code_block_renderer(markdown::CodeBlockRenderer::Default {
+                                        copy_button_visibility: CopyButtonVisibility::Hidden,
+                                        wrap_button_visibility:
+                                            markdown::WrapButtonVisibility::Hidden,
+                                        border: false,
+                                    })
+                                    .p_2(),
+                                )
+                            })
+                        }),
                 )
                 .custom_scrollbars(
                     Scrollbars::for_settings::<EditorSettingsScrollbarProxy>()
