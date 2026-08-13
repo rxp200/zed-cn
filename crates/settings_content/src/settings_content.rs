@@ -269,6 +269,9 @@ pub struct SettingsContent {
 
     pub title_bar: Option<TitleBarSettingsContent>,
 
+    /// Configuration for AI-powered translation in the editor's hover popovers.
+    pub hover_translation: Option<HoverTranslationSettingsContent>,
+
     /// Whether or not to enable Vim mode.
     ///
     /// Default: false

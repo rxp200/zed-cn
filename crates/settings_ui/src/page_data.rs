@@ -2062,6 +2062,111 @@ fn editor_page() -> SettingsPage {
         ]
     }
 
+    fn hover_translation_section() -> [SettingsPageItem; 6] {
+        [
+            SettingsPageItem::SectionHeader("悬停翻译"),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: "启用文档翻译",
+                description: "悬停弹出的文档中，非中文内容自动调用 AI 翻译，译文以下划线形式显示在原文下方。",
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("hover_translation.enabled"),
+                    pick: |settings_content| {
+                        settings_content.hover_translation.as_ref()?.enabled.as_ref()
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content
+                            .hover_translation
+                            .get_or_insert_default()
+                            .enabled = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: "翻译渠道",
+                description: "用于翻译的语言模型提供商，对应 language_models 中配置的渠道（如 openai_compatible、anthropic、ollama）。留空则使用默认快速模型。快捷键翻译（editor::TranslateSelection）也使用该渠道。",
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("hover_translation.provider"),
+                    pick: |settings_content| {
+                        settings_content.hover_translation.as_ref()?.provider.as_ref()
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content
+                            .hover_translation
+                            .get_or_insert_default()
+                            .provider = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: "翻译模型",
+                description: "用于翻译的模型名称，需由所选翻译渠道提供。",
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("hover_translation.model"),
+                    pick: |settings_content| {
+                        settings_content.hover_translation.as_ref()?.model.as_ref()
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content
+                            .hover_translation
+                            .get_or_insert_default()
+                            .model = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: "目标语言",
+                description: "翻译的目标语言。",
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("hover_translation.target_language"),
+                    pick: |settings_content| {
+                        settings_content
+                            .hover_translation
+                            .as_ref()?
+                            .target_language
+                            .as_ref()
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content
+                            .hover_translation
+                            .get_or_insert_default()
+                            .target_language = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: "最大翻译字符数",
+                description: "发送给模型翻译的文档最大字符数，超出部分将被截断，用于控制 token 消耗。",
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("hover_translation.max_chars"),
+                    pick: |settings_content| {
+                        settings_content.hover_translation.as_ref()?.max_chars.as_ref()
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content
+                            .hover_translation
+                            .get_or_insert_default()
+                            .max_chars = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+        ]
+    }
+
     fn hover_popover_section() -> [SettingsPageItem; 5] {
         [
             SettingsPageItem::SectionHeader("悬停弹出"),
@@ -3176,6 +3281,7 @@ fn editor_page() -> SettingsPage {
         scrolling_section(),
         signature_help_section(),
         hover_popover_section(),
+        hover_translation_section(),
         drag_and_drop_selection_section(),
         gutter_section(),
         scrollbar_section(),
