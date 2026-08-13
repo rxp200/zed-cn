@@ -16,6 +16,7 @@ use gpui::{
 };
 
 use language::Buffer;
+use language_model::{LanguageModelProviderId, LanguageModelRegistry};
 use platform_title_bar::PlatformTitleBar;
 use project::{Project, ProjectPath, Worktree, WorktreeId};
 use release_channel::ReleaseChannel;
@@ -55,7 +56,7 @@ use zed_actions::{
 use crate::components::{
     EnumVariantDropdown, NumberField, NumberFieldMode, NumberFieldType, SettingsInputField,
     SettingsSectionHeader, font_picker, icon_theme_picker, render_ollama_model_picker,
-    text_field_a11y_state, theme_picker,
+    text_field_a11y_state, theme_picker, translation_picker,
 };
 use crate::pages::{
     CustomAgentForm, LlmProviderForm, McpServerForm, render_input_audio_device_dropdown,
@@ -646,6 +647,8 @@ fn init_renderers(cx: &mut App) {
         .add_basic_renderer::<settings::ScanSymlinksSetting>(render_dropdown)
         .add_basic_renderer::<settings::FontSize>(render_editable_number_field)
         .add_basic_renderer::<settings::OllamaModelName>(render_ollama_model_picker)
+        .add_basic_renderer::<settings::TranslationProviderSetting>(render_translation_provider_picker)
+        .add_basic_renderer::<settings::TranslationModelSetting>(render_translation_model_picker)
         .add_basic_renderer::<settings::SemanticTokens>(render_dropdown)
         .add_basic_renderer::<settings::DocumentFoldingRanges>(render_dropdown)
         .add_basic_renderer::<settings::DocumentSymbols>(render_dropdown)
@@ -5131,6 +5134,200 @@ fn render_font_picker(
             y: px(2.0),
         })
         .with_handle(handle)
+        .into_any_element()
+}
+
+/// The language model providers configured under `language_models`, limited to
+/// those that are currently usable (authenticated, or reachable local
+/// servers). Returns `(provider_id, display_name)` pairs.
+fn translation_provider_options(cx: &App) -> Vec<(SharedString, SharedString)> {
+    let Some(registry) = LanguageModelRegistry::try_read_global(cx) else {
+        return Vec::new();
+    };
+    registry
+        .visible_providers()
+        .into_iter()
+        .filter(|provider| provider.is_authenticated(cx))
+        .map(|provider| {
+            (
+                SharedString::from(provider.id().0.as_ref()),
+                SharedString::from(provider.name().0.as_ref()),
+            )
+        })
+        .collect()
+}
+
+/// The models provided by the given translation provider, as `(model_id,
+/// display_name)` pairs.
+fn translation_model_options(cx: &App, provider_id: &str) -> Vec<(SharedString, SharedString)> {
+    if provider_id.is_empty() {
+        return Vec::new();
+    }
+    let Some(registry) = LanguageModelRegistry::try_read_global(cx) else {
+        return Vec::new();
+    };
+    let Some(provider) = registry.provider(&LanguageModelProviderId(provider_id.into())) else {
+        return Vec::new();
+    };
+    provider
+        .provided_models(cx)
+        .into_iter()
+        .map(|model| {
+            (
+                SharedString::from(model.id().0.as_ref()),
+                SharedString::from(model.name().0.as_ref()),
+            )
+        })
+        .collect()
+}
+
+fn render_translation_provider_picker(
+    field: SettingField<settings::TranslationProviderSetting>,
+    file: SettingsUiFile,
+    _metadata: Option<&SettingsFieldMetadata>,
+    title: &'static str,
+    description: &'static str,
+    _window: &mut Window,
+    cx: &mut App,
+) -> AnyElement {
+    let (_, value) = SettingsStore::global(cx).get_value_from_file(file.to_settings(), field.pick);
+    let current_value: SharedString = value
+        .map(|provider| provider.0.as_str().into())
+        .unwrap_or_default();
+
+    let trigger_value: SharedString = if current_value.is_empty() {
+        "选择一个渠道…".into()
+    } else {
+        current_value.clone()
+    };
+
+    PopoverMenu::new("translation-provider-picker")
+        .trigger(
+            render_picker_trigger_button(
+                "translation_provider_picker_trigger".into(),
+                trigger_value,
+            )
+            .aria_label(title)
+            .when(!description.is_empty(), |this| {
+                this.aria_description(description)
+            }),
+        )
+        .menu(move |window, cx| {
+            let file = file.clone();
+            let current_value = current_value.clone();
+            let options = translation_provider_options(cx);
+            Some(cx.new(move |cx| {
+                translation_picker(
+                    options,
+                    current_value,
+                    move |provider_id, window, cx| {
+                        update_settings_file(
+                            file.clone(),
+                            field.json_path,
+                            window,
+                            cx,
+                            move |settings, app| {
+                                (field.write)(
+                                    settings,
+                                    Some(settings::TranslationProviderSetting(
+                                        provider_id.to_string(),
+                                    )),
+                                    app,
+                                );
+                            },
+                        )
+                        .log_err();
+                    },
+                    window,
+                    cx,
+                )
+            }))
+        })
+        .anchor(gpui::Anchor::TopLeft)
+        .offset(gpui::Point {
+            x: px(0.0),
+            y: px(2.0),
+        })
+        .with_handle(ui::PopoverMenuHandle::default())
+        .into_any_element()
+}
+
+fn render_translation_model_picker(
+    field: SettingField<settings::TranslationModelSetting>,
+    file: SettingsUiFile,
+    _metadata: Option<&SettingsFieldMetadata>,
+    title: &'static str,
+    description: &'static str,
+    _window: &mut Window,
+    cx: &mut App,
+) -> AnyElement {
+    let store = SettingsStore::global(cx);
+    let (_, provider_value) = store.get_value_from_file(
+        file.to_settings(),
+        |content| content.hover_translation.as_ref()?.provider.as_ref(),
+    );
+    let provider_id: SharedString = provider_value
+        .map(|provider| provider.0.as_str().into())
+        .unwrap_or_default();
+
+    let (_, value) = store.get_value_from_file(file.to_settings(), field.pick);
+    let current_value: SharedString = value
+        .map(|model| model.0.as_str().into())
+        .unwrap_or_default();
+
+    let trigger_value: SharedString = if provider_id.is_empty() {
+        "请先选择翻译渠道…".into()
+    } else if current_value.is_empty() {
+        "选择一个模型…".into()
+    } else {
+        current_value.clone()
+    };
+
+    PopoverMenu::new("translation-model-picker")
+        .trigger(
+            render_picker_trigger_button("translation_model_picker_trigger".into(), trigger_value)
+                .aria_label(title)
+                .when(!description.is_empty(), |this| {
+                    this.aria_description(description)
+                }),
+        )
+        .menu(move |window, cx| {
+            let file = file.clone();
+            let current_value = current_value.clone();
+            let options = translation_model_options(cx, provider_id.as_ref());
+            Some(cx.new(move |cx| {
+                translation_picker(
+                    options,
+                    current_value,
+                    move |model_id, window, cx| {
+                        update_settings_file(
+                            file.clone(),
+                            field.json_path,
+                            window,
+                            cx,
+                            move |settings, app| {
+                                (field.write)(
+                                    settings,
+                                    Some(settings::TranslationModelSetting(
+                                        model_id.to_string(),
+                                    )),
+                                    app,
+                                );
+                            },
+                        )
+                        .log_err();
+                    },
+                    window,
+                    cx,
+                )
+            }))
+        })
+        .anchor(gpui::Anchor::TopLeft)
+        .offset(gpui::Point {
+            x: px(0.0),
+            y: px(2.0),
+        })
+        .with_handle(ui::PopoverMenuHandle::default())
         .into_any_element()
 }
 

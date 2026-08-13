@@ -71,6 +71,7 @@
       "ctrl-y": "editor::KillRingYank",
       "cmd-k cmd-q": "editor::Rewrap",
       "cmd-k q": "editor::Rewrap",
+      "ctrl-alt-t": "editor::TranslateSelection",
       "cmd-backspace": "editor::DeleteToBeginningOfLine",
       "cmd-delete": "editor::DeleteToEndOfLine",
       "alt-backspace": ["editor::DeleteToPreviousWordStart", { "ignore_newlines": false, "ignore_brackets": false }],

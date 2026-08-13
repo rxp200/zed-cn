@@ -66,6 +66,7 @@
       "shift-tab": "editor::Backtab",
       "ctrl-k ctrl-q": "editor::Rewrap",
       "ctrl-k q": "editor::Rewrap",
+      "ctrl-alt-t": "editor::TranslateSelection",
       "ctrl-backspace": ["editor::DeleteToPreviousWordStart", { "ignore_newlines": false, "ignore_brackets": false }],
       "ctrl-delete": ["editor::DeleteToNextWordEnd", { "ignore_newlines": false, "ignore_brackets": false }],
       "cut": "editor::Cut",

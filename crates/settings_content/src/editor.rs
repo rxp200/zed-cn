@@ -995,6 +995,43 @@ pub struct JupyterContent {
     pub kernel_selections: Option<HashMap<String, String>>,
 }
 
+/// The language model provider (channel) used for translation, matching one
+/// of the providers configured under `language_models`.
+#[with_fallible_options]
+#[derive(Clone, Default, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, MergeFrom)]
+#[serde(transparent)]
+pub struct TranslationProviderSetting(pub String);
+
+impl TranslationProviderSetting {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<String> for TranslationProviderSetting {
+    fn from(value: String) -> Self {
+        Self(value)
+    }
+}
+
+/// The model to use for translation, provided by the selected provider.
+#[with_fallible_options]
+#[derive(Clone, Default, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, MergeFrom)]
+#[serde(transparent)]
+pub struct TranslationModelSetting(pub String);
+
+impl TranslationModelSetting {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<String> for TranslationModelSetting {
+    fn from(value: String) -> Self {
+        Self(value)
+    }
+}
+
 /// Settings for AI-powered translation in the editor's hover popovers.
 #[with_fallible_options]
 #[derive(Clone, Default, Debug, Serialize, Deserialize, JsonSchema, MergeFrom, PartialEq, Eq)]
@@ -1011,12 +1048,12 @@ pub struct HoverTranslationSettingsContent {
     /// When unset, the default fast model is used.
     ///
     /// Default: null
-    pub provider: Option<String>,
+    pub provider: Option<TranslationProviderSetting>,
     /// The model to use for translation, as provided by the configured
     /// `provider`.
     ///
     /// Default: null
-    pub model: Option<String>,
+    pub model: Option<TranslationModelSetting>,
     /// The target language to translate into.
     ///
     /// Default: 中文
