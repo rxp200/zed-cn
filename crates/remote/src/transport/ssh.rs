@@ -11,7 +11,7 @@ use futures::{
     channel::mpsc::{Sender, UnboundedReceiver, UnboundedSender},
     select_biased,
 };
-use gpui::{App, AppContext as _, AsyncApp, Task};
+use gpui::{App, AppContext as _, AsyncApp, FutureExt as _, Task};
 use parking_lot::Mutex;
 use paths::remote_server_dir_relative;
 use release_channel::{AppVersion, ReleaseChannel};
@@ -38,6 +38,16 @@ use util::{
 
 /// How long to wait for SSH to connect when no askpass prompt has opened.
 const SSH_CONNECTION_PROMPT_TIMEOUT: Duration = Duration::from_secs(17);
+
+/// How long to wait for a remote shell/platform detection command to finish
+/// before giving up.
+///
+/// The SSH connection itself may be healthy ("ssh" works from a terminal)
+/// while an individual session spawned for detection stalls indefinitely
+/// (e.g. a wedged ControlMaster session or a remote login shell that blocks
+/// on startup). Without this guard the connection modal would hang forever
+/// at the "detecting remote shell" step instead of failing with an error.
+const REMOTE_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub(crate) struct SshRemoteConnection {
     socket: SshSocket,
@@ -761,17 +771,17 @@ impl SshRemoteConnection {
             (socket, Some(master_process))
         };
 
-        let is_windows = socket.probe_is_windows().await;
+        let is_windows = socket.probe_is_windows(cx).await;
         log::info!("Remote is windows: {}", is_windows);
 
-        let ssh_shell = socket.shell(is_windows).await;
+        let ssh_shell = socket.shell(is_windows, cx).await;
         log::info!("Remote shell discovered: {}", ssh_shell);
 
         let ssh_shell_kind = ShellKind::new(&ssh_shell, is_windows);
-        let ssh_platform = socket.platform(ssh_shell_kind, is_windows).await?;
+        let ssh_platform = socket.platform(ssh_shell_kind, is_windows, cx).await?;
         log::info!("Remote platform discovered: {:?}", ssh_platform);
 
-        let ssh_os_version = socket.os_version(ssh_platform.os, ssh_shell_kind).await;
+        let ssh_os_version = socket.os_version(ssh_platform.os, ssh_shell_kind, cx).await;
         log::info!("Remote OS version discovered: {:?}", ssh_os_version);
 
         let (ssh_path_style, ssh_default_system_shell) = match ssh_platform.os {
@@ -829,11 +839,13 @@ impl SshRemoteConnection {
 
         let binary_exists_on_server = self
             .socket
-            .run_command(
+            .run_command_with_timeout(
                 self.ssh_shell_kind,
                 &dst_path.display(self.path_style()),
                 &["version"],
                 true,
+                REMOTE_COMMAND_TIMEOUT,
+                cx,
             )
             .await
             .is_ok();
@@ -1375,6 +1387,34 @@ impl SshSocket {
         Ok(String::from_utf8_lossy(&output.stdout).to_string())
     }
 
+    /// Like [`Self::run_command`], but fails with an error if the remote
+    /// command does not finish within `timeout`. The spawned `ssh` process is
+    /// killed on drop so a wedged session cannot leak.
+    async fn run_command_with_timeout(
+        &self,
+        shell_kind: ShellKind,
+        program: &str,
+        args: &[impl AsRef<str>],
+        allow_pseudo_tty: bool,
+        timeout: Duration,
+        cx: &AsyncApp,
+    ) -> Result<String> {
+        let mut command = self.ssh_command(shell_kind, program, args, allow_pseudo_tty);
+        command.kill_on_drop(true);
+        let output = command
+            .output()
+            .with_timeout(timeout, cx.background_executor())
+            .await
+            .with_context(|| format!("remote command timed out after {timeout:?}"))??;
+        log::debug!("{:?}: {:?}", command, output);
+        anyhow::ensure!(
+            output.status.success(),
+            "failed to run command {command:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    }
+
     fn ssh_options<'a>(
         &self,
         command: &'a mut util::command::Command,
@@ -1429,17 +1469,22 @@ impl SshSocket {
         arguments
     }
 
-    async fn platform(&self, shell: ShellKind, is_windows: bool) -> Result<RemotePlatform> {
+    async fn platform(
+        &self,
+        shell: ShellKind,
+        is_windows: bool,
+        cx: &AsyncApp,
+    ) -> Result<RemotePlatform> {
         if is_windows {
-            self.platform_windows(shell).await
+            self.platform_windows(shell, cx).await
         } else {
-            self.platform_posix(shell).await
+            self.platform_posix(shell, cx).await
         }
     }
 
-    async fn platform_posix(&self, shell: ShellKind) -> Result<RemotePlatform> {
+    async fn platform_posix(&self, shell: ShellKind, cx: &AsyncApp) -> Result<RemotePlatform> {
         let output = self
-            .run_command(shell, "uname", &["-sm"], false)
+            .run_command_with_timeout(shell, "uname", &["-sm"], false, REMOTE_COMMAND_TIMEOUT, cx)
             .await
             .context("Failed to run 'uname -sm' to determine platform")?;
         parse_platform(&output)
@@ -1448,9 +1493,12 @@ impl SshSocket {
     /// Best-effort detection of the remote OS version. Failures are logged and
     /// result in `None` rather than failing the connection, since this is only
     /// used for telemetry.
-    async fn os_version(&self, os: RemoteOs, shell: ShellKind) -> Option<String> {
+    async fn os_version(&self, os: RemoteOs, shell: ShellKind, cx: &AsyncApp) -> Option<String> {
         let (program, args) = super::os_version_command(os);
-        match self.run_command(shell, program, args, false).await {
+        match self
+            .run_command_with_timeout(shell, program, args, false, REMOTE_COMMAND_TIMEOUT, cx)
+            .await
+        {
             Ok(output) => super::parse_os_version(os, &output),
             Err(error) => {
                 log::warn!("Failed to determine remote OS version: {error:#}");
@@ -1459,13 +1507,15 @@ impl SshSocket {
         }
     }
 
-    async fn platform_windows(&self, shell: ShellKind) -> Result<RemotePlatform> {
+    async fn platform_windows(&self, shell: ShellKind, cx: &AsyncApp) -> Result<RemotePlatform> {
         let output = self
-            .run_command(
+            .run_command_with_timeout(
                 shell,
                 "cmd.exe",
                 &["/c", "echo", "%PROCESSOR_ARCHITECTURE%"],
                 false,
+                REMOTE_COMMAND_TIMEOUT,
+                cx,
             )
             .await
             .context(
@@ -1488,9 +1538,16 @@ impl SshSocket {
     ///
     /// This is done by attempting to run a simple Windows-specific command.
     /// If it succeeds and returns Windows-like output, we assume it's Windows.
-    async fn probe_is_windows(&self) -> bool {
+    async fn probe_is_windows(&self, cx: &AsyncApp) -> bool {
         match self
-            .run_command(ShellKind::Cmd, "cmd.exe", &["/c", "ver"], false)
+            .run_command_with_timeout(
+                ShellKind::Cmd,
+                "cmd.exe",
+                &["/c", "ver"],
+                false,
+                REMOTE_COMMAND_TIMEOUT,
+                cx,
+            )
             .await
         {
             // Windows 'ver' command outputs something like "Microsoft Windows [Version 10.0.19045.5011]"
@@ -1499,18 +1556,25 @@ impl SshSocket {
         }
     }
 
-    async fn shell(&self, is_windows: bool) -> String {
+    async fn shell(&self, is_windows: bool, cx: &AsyncApp) -> String {
         if is_windows {
-            self.shell_windows().await
+            self.shell_windows(cx).await
         } else {
-            self.shell_posix().await
+            self.shell_posix(cx).await
         }
     }
 
-    async fn shell_posix(&self) -> String {
+    async fn shell_posix(&self, cx: &AsyncApp) -> String {
         const DEFAULT_SHELL: &str = "sh";
         match self
-            .run_command(ShellKind::Posix, "sh", &["-c", "echo $SHELL"], false)
+            .run_command_with_timeout(
+                ShellKind::Posix,
+                "sh",
+                &["-c", "echo $SHELL"],
+                false,
+                REMOTE_COMMAND_TIMEOUT,
+                cx,
+            )
             .await
         {
             Ok(output) => parse_shell(&output, DEFAULT_SHELL),
@@ -1521,7 +1585,7 @@ impl SshSocket {
         }
     }
 
-    async fn shell_windows(&self) -> String {
+    async fn shell_windows(&self, cx: &AsyncApp) -> String {
         const DEFAULT_SHELL: &str = "cmd.exe";
 
         // We detect the shell used by the SSH session by running the following command in PowerShell:
@@ -1530,7 +1594,7 @@ impl SshSocket {
         // We pass it as a Base64 encoded string since we don't yet know how to correctly quote that command.
         // (We'd need to know what the shell is to do that...)
         match self
-            .run_command(
+            .run_command_with_timeout(
                 ShellKind::Cmd,
                 "powershell",
                 &[
@@ -1538,6 +1602,8 @@ impl SshSocket {
                     "KABHAGUAdAAtAEMAaQBtAEkAbgBzAHQAYQBuAGMAZQAgAFcAaQBuADMAMgBfAFAAcgBvAGMAZQBzAHMAIAAtAEYAaQBsAHQAZQByACAAIgBQAHIAbwBjAGUAcwBzAEkAZAAgAD0AIAAkACgAKABHAGUAdAAtAEMAaQBtAEkAbgBzAHQAYQBuAGMAZQAgAFcAaQBuADMAMgBfAFAAcgBvAGMAZQBzAHMAIAAtAEYAaQBsAHQAZQByACAAUAByAG8AYwBlAHMAcwBJAGQAPQAkAFAASQBEACkALgBQAGEAcgBlAG4AdABQAHIAbwBjAGUAcwBzAEkAZAApACIAKQAuAE4AYQBtAGUA",
                 ],
                 false,
+                REMOTE_COMMAND_TIMEOUT,
+                cx,
             )
             .await
         {
