@@ -107,7 +107,7 @@ impl RemoteConnectionPrompt {
 
     pub fn confirm(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some((_, tx)) = self.prompt.take() {
-            self.status_message = Some("Connecting".into());
+            self.status_message = Some("正在建立 SSH 连接".into());
 
             let pw = self.editor.text(cx);
             if let Ok(secure) = EncryptedPassword::try_from(pw.as_ref()) {
@@ -191,7 +191,7 @@ impl Render for RemoteConnectionPrompt {
                                     .color(Color::Muted),
                             )
                             .child(
-                                Label::new("Caps lock is on.")
+                                Label::new("大写锁定已开启。")
                                     .size(LabelSize::Small)
                                     .color(Color::Muted),
                             ),
@@ -492,11 +492,11 @@ impl remote::RemoteClientDelegate for RemoteClientDelegate {
             .await
             .with_context(|| {
                 format!(
-                    "Downloading remote server binary (version: {}, os: {}, arch: {})",
+                    "下载远程开发服务失败（版本：{}，操作系统：{}，架构：{}）",
                     version
                         .as_ref()
                         .map(|v| format!("{}", v))
-                        .unwrap_or("unknown".to_string()),
+                        .unwrap_or("未知".to_string()),
                     platform.os,
                     platform.arch,
                 )
@@ -657,11 +657,11 @@ impl remote::RemoteClientDelegate for BackgroundRemoteClientDelegate {
             .await
             .with_context(|| {
                 format!(
-                    "Downloading remote server binary (version: {}, os: {}, arch: {})",
+                    "下载远程开发服务失败（版本：{}，操作系统：{}，架构：{}）",
                     version
                         .as_ref()
                         .map(|v| format!("{v}"))
-                        .unwrap_or("unknown".to_string()),
+                        .unwrap_or("未知".to_string()),
                     platform.os,
                     platform.arch,
                 )

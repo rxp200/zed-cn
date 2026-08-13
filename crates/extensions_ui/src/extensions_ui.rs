@@ -78,7 +78,7 @@ impl WorkspaceError for DevExtensionNotInstalledError {
             Some(extension_id) => {
                 format!("Dev extension '{extension_id}' is not installed.").into()
             }
-            None => "No dev extensions are installed.".into(),
+            None => "尚未安装开发扩展。".into(),
         }
     }
 
@@ -292,6 +292,8 @@ pub fn init(cx: &mut App) {
     .detach();
 }
 
+
+
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
 enum ExtensionFilter {
     All,
@@ -430,7 +432,7 @@ impl ExtensionsPage {
 
             let query_editor = cx.new(|cx| {
                 let mut input = Editor::single_line(window, cx);
-                input.set_placeholder_text("Search extensions...", window, cx);
+                input.set_placeholder_text("搜索扩展…", window, cx);
                 if let Some(id) = focus_extension_id {
                     input.set_text(format!("id:{id}"), window, cx);
                 }
@@ -695,6 +697,8 @@ impl ExtensionsPage {
             .collect()
     }
 
+
+
     fn render_remote_extension(
         &self,
         extension: &ExtensionMetadata,
@@ -771,6 +775,8 @@ impl ExtensionsPage {
         })
         .detach_and_log_err(cx);
     }
+
+
 
     fn render_search(&self, cx: &mut Context<Self>) -> Div {
         let mut key_context = KeyContext::new_with_defaults();
@@ -1377,7 +1383,7 @@ impl PickerDelegate for DevExtensionRebuildPickerDelegate {
     }
 
     fn no_matches_text(&self, _window: &mut Window, _cx: &mut App) -> Option<SharedString> {
-        Some("No dev extensions found".into())
+        Some("未找到开发扩展".into())
     }
 }
 
@@ -1397,7 +1403,7 @@ impl Render for ExtensionsPage {
                             .w_full()
                             .gap_1p5()
                             .justify_between()
-                            .child(Headline::new("Extensions").size(HeadlineSize::Large))
+                            .child(Headline::new("扩展").size(HeadlineSize::Large))
                             .child(
                                 Button::new("install-dev-extension", "安装开发扩展")
                                     .style(ButtonStyle::Outlined)

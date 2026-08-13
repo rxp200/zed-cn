@@ -11,7 +11,9 @@ use futures::{
     channel::mpsc::{Sender, UnboundedReceiver, UnboundedSender},
 };
 use gpui::{AppContext as _, AsyncApp, Task};
+use release_channel::ReleaseChannel;
 use rpc::proto::Envelope;
+use semver::Version;
 use util::command::Child;
 
 pub mod docker;
@@ -19,6 +21,19 @@ pub mod docker;
 pub mod mock;
 pub mod ssh;
 pub mod wsl;
+
+fn remote_server_version(release_channel: ReleaseChannel, version: &Version) -> String {
+    match release_channel {
+        ReleaseChannel::Dev => "build".to_string(),
+        ReleaseChannel::Nightly => version.to_string(),
+        ReleaseChannel::Stable | ReleaseChannel::Preview => {
+            let mut version = version.clone();
+            version.pre = semver::Prerelease::EMPTY;
+            version.build = semver::BuildMetadata::EMPTY;
+            version.to_string()
+        }
+    }
+}
 
 /// Parses the output of `uname -sm` to determine the remote platform.
 /// Takes the last line to skip possible shell initialization output.
@@ -457,6 +472,29 @@ async fn which(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_remote_server_version() {
+        let version = Version::parse("1.13.1+stable.35fda0ced3").unwrap();
+        assert_eq!(
+            remote_server_version(ReleaseChannel::Stable, &version),
+            "1.13.1"
+        );
+
+        let version = Version::parse("1.14.0-pre.2+preview.35fda0ced3").unwrap();
+        assert_eq!(
+            remote_server_version(ReleaseChannel::Preview, &version),
+            "1.14.0"
+        );
+        assert_eq!(
+            remote_server_version(ReleaseChannel::Nightly, &version),
+            version.to_string()
+        );
+        assert_eq!(
+            remote_server_version(ReleaseChannel::Dev, &version),
+            "build"
+        );
+    }
 
     #[test]
     fn test_parse_platform() {

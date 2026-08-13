@@ -486,9 +486,9 @@ impl PickerDelegate for ProfilePickerDelegate {
 
     fn no_matches_text(&self, _window: &mut Window, _cx: &mut App) -> Option<SharedString> {
         let text = if self.candidates.is_empty() {
-            "No profiles.".into()
+            "没有配置文件。".into()
         } else {
-            "No profiles match your search.".into()
+            "没有与你搜索匹配的配置文件。".into()
         };
         Some(text)
     }
@@ -854,7 +854,7 @@ mod tests {
         let candidates = vec![
             ProfileCandidate {
                 id: AgentProfileId("write".into()),
-                name: SharedString::from("Write"),
+                name: SharedString::from("编写"),
                 is_builtin: true,
             },
             ProfileCandidate {
@@ -881,7 +881,7 @@ mod tests {
     fn fuzzy_filter_returns_no_results_and_keeps_configure(cx: &mut TestAppContext) {
         let candidates = vec![ProfileCandidate {
             id: AgentProfileId("write".into()),
-            name: SharedString::from("Write"),
+            name: SharedString::from("编写"),
             is_builtin: true,
         }];
 
@@ -913,12 +913,12 @@ mod tests {
         let candidates = vec![
             ProfileCandidate {
                 id: AgentProfileId("write".into()),
-                name: SharedString::from("Write"),
+                name: SharedString::from("编写"),
                 is_builtin: true,
             },
             ProfileCandidate {
                 id: AgentProfileId("ask".into()),
-                name: SharedString::from("Ask"),
+                name: SharedString::from("询问"),
                 is_builtin: true,
             },
         ];

@@ -48,8 +48,8 @@ impl Render for BasedPyrightBanner {
                         .child(
                             v_flex()
                                 .gap_0p5()
-                                .child(Label::new("Basedpyright is now the only default language server for Python").mt_0p5())
-                                .child(Label::new("We have disabled PyRight and pylsp by default. They can be re-enabled in your settings.").size(LabelSize::Small).color(Color::Muted))
+                                .child(Label::new("Basedpyright 现在是 Python 的唯一默认语言服务器").mt_0p5())
+                                .child(Label::new("我们默认已禁用 PyRight 和 pylsp。你可以在设置中重新启用它们。").size(LabelSize::Small).color(Color::Muted))
                         )
                         .action_slot(
                             h_flex()

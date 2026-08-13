@@ -416,7 +416,7 @@ TBD: Centered layout related settings
 
 ```json [settings]
   "edit_predictions": {
-    "mode": "eager"                  // Automatically show (eager) or hold-alt (subtle)
+    "mode": "eager"                  // Automatically request/show (eager) or request/show while holding alt (subtle)
   },
   "show_edit_predictions": true     // Show/hide predictions in editor
 ```

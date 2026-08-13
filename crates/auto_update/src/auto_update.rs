@@ -3,8 +3,8 @@ use client::Client;
 use db::kvp::KeyValueStore;
 use futures_lite::StreamExt;
 use gpui::{
-    App, AppContext as _, AsyncApp, BackgroundExecutor, Context, Entity, Global, Task, TaskExt,
-    Window, actions,
+    App, AppContext as _, AsyncApp, BackgroundExecutor, Context, Entity, FutureExt as _, Global,
+    Task, TaskExt, Window, actions,
 };
 use http_client::{HttpClient, HttpClientWithUrl};
 use paths::remote_servers_dir;
@@ -15,7 +15,7 @@ use settings::{RegisterSetting, Settings, SettingsStore};
 use smol::fs::File;
 use smol::{
     fs,
-    io::{AsyncReadExt, AsyncWriteExt},
+    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
 };
 use std::mem;
 use std::{
@@ -47,6 +47,8 @@ impl std::error::Error for MissingDependencyError {}
 const POLL_INTERVAL: Duration = Duration::from_secs(60 * 60);
 const NIGHTLY_POLL_INTERVAL: Duration = Duration::from_secs(15 * 60);
 const REMOTE_SERVER_CACHE_LIMIT: usize = 5;
+const REMOTE_SERVER_DOWNLOAD_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
+const REMOTE_SERVER_DOWNLOAD_TOTAL_TIMEOUT: Duration = Duration::from_secs(300);
 
 #[cfg(target_os = "linux")]
 fn linux_rsync_install_hint() -> &'static str {
@@ -310,7 +312,7 @@ pub fn check(_: &Check, window: &mut Window, cx: &mut App) {
             gpui::PromptLevel::Info,
             "Zed was installed via a package manager.",
             Some(&message),
-            &["OK"],
+            &["确定"],
             cx,
         ));
         return;
@@ -330,7 +332,7 @@ pub fn check(_: &Check, window: &mut Window, cx: &mut App) {
             gpui::PromptLevel::Info,
             "Could not check for updates",
             Some("Auto-updates disabled for non-bundled app."),
-            &["OK"],
+            &["确定"],
             cx,
         ));
     }
@@ -576,7 +578,16 @@ impl AutoUpdater {
                 .context("auto-update not initialized")
         })?;
 
-        set_status("Fetching remote server release", cx);
+        let uses_proxy = this.read_with(cx, |this, _| this.client.http_client().proxy().is_some());
+        set_status(
+            if uses_proxy {
+                "正在通过本地代理获取远程开发服务下载信息"
+            } else {
+                "正在通过本地网络获取远程开发服务下载信息"
+            },
+            cx,
+        );
+        let executor = cx.background_executor().clone();
         let release = Self::get_release_asset(
             &this,
             release_channel,
@@ -586,7 +597,9 @@ impl AutoUpdater {
             arch,
             cx,
         )
-        .await?;
+        .with_timeout(REMOTE_SERVER_DOWNLOAD_IDLE_TIMEOUT, &executor)
+        .await
+        .context("获取远程开发服务发布信息超时")??;
 
         let servers_dir = paths::remote_servers_dir();
         let channel_dir = servers_dir.join(release_channel.dev_name());
@@ -601,8 +614,21 @@ impl AutoUpdater {
                 "downloading zed-remote-server {os} {arch} version {}",
                 release.version
             );
-            set_status("Downloading remote server", cx);
-            download_remote_server_binary(&version_path, release, client).await?;
+            set_status(
+                if uses_proxy {
+                    "正在通过本地代理下载远程开发服务"
+                } else {
+                    "正在通过本地网络下载远程开发服务"
+                },
+                cx,
+            );
+            download_remote_server_binary(
+                &version_path,
+                release,
+                client,
+                cx.background_executor().clone(),
+            )
+            .await?;
         }
 
         if let Err(error) =
@@ -632,9 +658,12 @@ impl AutoUpdater {
                 .context("auto-update not initialized")
         })?;
 
+        let executor = cx.background_executor().clone();
         let release =
             Self::get_release_asset(&this, channel, version, "zed-remote-server", os, arch, cx)
-                .await?;
+                .with_timeout(REMOTE_SERVER_DOWNLOAD_IDLE_TIMEOUT, &executor)
+                .await
+                .context("获取远程开发服务下载地址超时")??;
 
         Ok(Some(release.url))
     }
@@ -961,19 +990,67 @@ async fn download_remote_server_binary(
     target_path: &PathBuf,
     release: ReleaseAsset,
     client: Arc<HttpClientWithUrl>,
+    executor: BackgroundExecutor,
 ) -> Result<()> {
     let temp = tempfile::Builder::new().tempfile_in(remote_servers_dir())?;
     let mut temp_file = File::create(&temp).await?;
 
-    let mut response = client.get(&release.url, Default::default(), true).await?;
+    let mut response = client
+        .get(&release.url, Default::default(), true)
+        .with_timeout(REMOTE_SERVER_DOWNLOAD_IDLE_TIMEOUT, &executor)
+        .await
+        .context("获取远程开发服务下载响应超时")??;
     anyhow::ensure!(
         response.status().is_success(),
         "failed to download remote server release: {:?}",
         response.status()
     );
-    smol::io::copy(response.body_mut(), &mut temp_file).await?;
+
+    copy_remote_server_binary(
+        response.body_mut(),
+        &mut temp_file,
+        &executor,
+        REMOTE_SERVER_DOWNLOAD_IDLE_TIMEOUT,
+        REMOTE_SERVER_DOWNLOAD_TOTAL_TIMEOUT,
+    )
+    .await?;
     smol::fs::rename(&temp, &target_path).await?;
 
+    Ok(())
+}
+
+async fn copy_remote_server_binary(
+    reader: &mut (impl AsyncRead + Unpin),
+    writer: &mut (impl AsyncWrite + Unpin),
+    executor: &BackgroundExecutor,
+    idle_timeout: Duration,
+    total_timeout: Duration,
+) -> Result<()> {
+    let download = async {
+        let mut buffer = vec![0; 64 * 1024];
+        loop {
+            let bytes_read = reader
+                .read(&mut buffer)
+                .with_timeout(idle_timeout, executor)
+                .await
+                .with_context(|| {
+                    format!(
+                        "下载远程开发服务连续 {} 秒没有收到数据",
+                        idle_timeout.as_secs()
+                    )
+                })??;
+            if bytes_read == 0 {
+                break;
+            }
+            writer.write_all(&buffer[..bytes_read]).await?;
+        }
+        writer.flush().await?;
+        anyhow::Ok(())
+    };
+    download
+        .with_timeout(total_timeout, executor)
+        .await
+        .with_context(|| format!("下载远程开发服务超过 {} 秒", total_timeout.as_secs()))??;
     Ok(())
 }
 
@@ -1326,11 +1403,13 @@ mod tests {
     use http_client::{FakeHttpClient, Response};
     use settings::default_settings;
     use std::{
+        pin::Pin,
         rc::Rc,
         sync::{
             Arc,
             atomic::{self, AtomicBool},
         },
+        task::{Context as TaskContext, Poll},
     };
     use tempfile::tempdir;
 
@@ -1467,6 +1546,39 @@ mod tests {
         let path = will_restart.await.unwrap().unwrap();
         assert_eq!(path, tmp_dir.path().join("zed"));
         assert_eq!(std::fs::read_to_string(path).unwrap(), "<fake-zed-update>");
+    }
+
+    struct StalledReader;
+
+    impl futures::AsyncRead for StalledReader {
+        fn poll_read(
+            self: Pin<&mut Self>,
+            _cx: &mut TaskContext<'_>,
+            _buffer: &mut [u8],
+        ) -> Poll<std::io::Result<usize>> {
+            Poll::Pending
+        }
+    }
+
+    #[gpui::test]
+    async fn test_remote_server_download_times_out_when_body_stalls(executor: BackgroundExecutor) {
+        let mut reader = StalledReader;
+        let mut writer = futures::io::Cursor::new(Vec::new());
+
+        let error = copy_remote_server_binary(
+            &mut reader,
+            &mut writer,
+            &executor,
+            Duration::from_secs(1),
+            Duration::from_secs(10),
+        )
+        .await
+        .expect_err("stalled downloads should time out");
+
+        assert!(
+            format!("{error:#}").contains("连续 1 秒没有收到数据"),
+            "unexpected error: {error:#}"
+        );
     }
 
     #[gpui::test]

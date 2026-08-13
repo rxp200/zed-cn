@@ -1058,7 +1058,7 @@ mod tests {
         values.name = "   ".into();
         assert_eq!(
             build_settings_from_values(values).unwrap_err().as_ref(),
-            "Agent name is required."
+            "Agent 名称是必填项。"
         );
     }
 
@@ -1068,7 +1068,7 @@ mod tests {
         values.command = "   ".into();
         assert_eq!(
             build_settings_from_values(values).unwrap_err().as_ref(),
-            "Command is required."
+            "命令是必填项。"
         );
     }
 
@@ -1078,7 +1078,7 @@ mod tests {
         values.env = vec![("FOO".into(), "1".into()), ("FOO".into(), "2".into())];
         assert_eq!(
             build_settings_from_values(values).unwrap_err().as_ref(),
-            "Duplicate environment variable \"FOO\"."
+            "重复的environment variable「FOO」。"
         );
     }
 

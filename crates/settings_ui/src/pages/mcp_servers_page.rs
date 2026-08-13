@@ -1401,7 +1401,7 @@ mod tests {
         values.command = "/bin/server".into();
         assert_eq!(
             build_settings_from_values(&values).unwrap_err().as_ref(),
-            "Server name is required."
+            "服务器名称是必填项。"
         );
     }
 
@@ -1410,7 +1410,7 @@ mod tests {
         let values = values(McpTransport::Stdio);
         assert_eq!(
             build_settings_from_values(&values).unwrap_err().as_ref(),
-            "Command is required."
+            "命令是必填项。"
         );
     }
 
@@ -1419,7 +1419,7 @@ mod tests {
         let values = values(McpTransport::Http);
         assert_eq!(
             build_settings_from_values(&values).unwrap_err().as_ref(),
-            "URL is required."
+            "URL 是必填项。"
         );
     }
 
@@ -1429,7 +1429,7 @@ mod tests {
         values.url = "not a url".into();
         let error = build_settings_from_values(&values).unwrap_err();
         assert!(
-            error.starts_with("Invalid URL"),
+            error.starts_with("无效的 URL"),
             "unexpected error: {error}"
         );
     }
@@ -1441,7 +1441,7 @@ mod tests {
         values.timeout = "soon".into();
         assert_eq!(
             build_settings_from_values(&values).unwrap_err().as_ref(),
-            "Timeout must be a positive whole number of seconds."
+            "超时时间必须是正整数秒数。"
         );
     }
 
@@ -1452,7 +1452,7 @@ mod tests {
         values.env = vec![("FOO".into(), "1".into()), ("FOO".into(), "2".into())];
         assert_eq!(
             build_settings_from_values(&values).unwrap_err().as_ref(),
-            "Duplicate environment variable \"FOO\"."
+            "重复的environment variable「FOO」。"
         );
     }
 
@@ -1466,7 +1466,7 @@ mod tests {
         ];
         assert_eq!(
             build_settings_from_values(&values).unwrap_err().as_ref(),
-            "Duplicate header \"Authorization\"."
+            "重复的header「Authorization」。"
         );
     }
 
@@ -1548,7 +1548,7 @@ mod tests {
             settings_validation_error(Some(&http("not a url")))
                 .unwrap()
                 .as_ref(),
-            "Invalid URL in settings."
+            "设置中的 URL 无效。"
         );
         assert!(settings_validation_error(Some(&http("https://example.com/mcp"))).is_none());
         assert!(settings_validation_error(None).is_none());

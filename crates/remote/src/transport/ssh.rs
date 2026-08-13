@@ -38,6 +38,10 @@ use util::{
 
 /// How long to wait for SSH to connect when no askpass prompt has opened.
 const SSH_CONNECTION_PROMPT_TIMEOUT: Duration = Duration::from_secs(17);
+const REMOTE_SERVER_DOWNLOAD_IDLE_TIMEOUT_SECS: u64 = 30;
+const REMOTE_SERVER_DOWNLOAD_TOTAL_TIMEOUT_SECS: u64 = 300;
+const REMOTE_SERVER_DOWNLOAD_TOTAL_TIMEOUT: Duration =
+    Duration::from_secs(REMOTE_SERVER_DOWNLOAD_TOTAL_TIMEOUT_SECS);
 
 /// How long to wait for a remote shell/platform detection command to finish
 /// before giving up.
@@ -460,7 +464,7 @@ impl RemoteConnection for SshRemoteConnection {
         cx: &mut AsyncApp,
     ) -> Task<Result<i32>> {
         const VARS: [&str; 3] = ["RUST_LOG", "RUST_BACKTRACE", "ZED_GENERATE_MINIDUMPS"];
-        delegate.set_status(Some("Starting proxy"), cx);
+        delegate.set_status(Some("正在启动远程开发服务"), cx);
 
         let Some(remote_binary_path) = self.remote_binary_path.clone() else {
             return Task::ready(Err(anyhow!("Remote binary path not set")));
@@ -639,7 +643,7 @@ impl SshRemoteConnection {
 
         #[cfg(not(windows))]
         let (socket, master_process_option) = if let Some(reused_path) = reused_socket {
-            delegate.set_status(Some("Connecting (reusing session)"), cx);
+            delegate.set_status(Some("正在复用已有 SSH 连接"), cx);
             log::info!("reusing existing ControlMaster, skipping authentication");
             let socket = SshSocket::new(connection_options, reused_path).await?;
             (socket, None)
@@ -653,7 +657,7 @@ impl SshRemoteConnection {
                 askpass::AskPassSession::new(cx.background_executor().clone(), askpass_delegate)
                     .await?;
 
-            delegate.set_status(Some("Connecting"), cx);
+            delegate.set_status(Some("正在建立 SSH 连接"), cx);
 
             // Start the master SSH process, which does not do anything except
             // for establish the connection and keep it open, allowing other ssh
@@ -715,7 +719,7 @@ impl SshRemoteConnection {
                 askpass::AskPassSession::new(cx.background_executor().clone(), askpass_delegate)
                     .await?;
 
-            delegate.set_status(Some("Connecting"), cx);
+            delegate.set_status(Some("正在建立 SSH 连接"), cx);
 
             let mut master_process = MasterProcess::new(
                 askpass.script_path().as_ref(),
@@ -771,16 +775,20 @@ impl SshRemoteConnection {
             (socket, Some(master_process))
         };
 
+        delegate.set_status(Some("SSH 连接成功，正在检测远程操作系统"), cx);
         let is_windows = socket.probe_is_windows(cx).await;
         log::info!("Remote is windows: {}", is_windows);
 
+        delegate.set_status(Some("正在检测远程 Shell"), cx);
         let ssh_shell = socket.shell(is_windows, cx).await;
         log::info!("Remote shell discovered: {}", ssh_shell);
 
+        delegate.set_status(Some("正在检测远程 CPU 架构"), cx);
         let ssh_shell_kind = ShellKind::new(&ssh_shell, is_windows);
         let ssh_platform = socket.platform(ssh_shell_kind, is_windows, cx).await?;
         log::info!("Remote platform discovered: {:?}", ssh_platform);
 
+        delegate.set_status(Some("正在检测远程系统版本"), cx);
         let ssh_os_version = socket.os_version(ssh_platform.os, ssh_shell_kind, cx).await;
         log::info!("Remote OS version discovered: {:?}", ssh_os_version);
 
@@ -820,10 +828,7 @@ impl SshRemoteConnection {
         version: Version,
         cx: &mut AsyncApp,
     ) -> Result<Arc<RelPath>> {
-        let version_str = match release_channel {
-            ReleaseChannel::Dev => "build".to_string(),
-            _ => version.to_string(),
-        };
+        let version_str = super::remote_server_version(release_channel, &version);
         let binary_name = format!(
             "zed-remote-server-{}-{}{}",
             release_channel.dev_name(),
@@ -837,6 +842,7 @@ impl SshRemoteConnection {
         let dst_path =
             paths::remote_server_dir_relative().join(RelPath::from_unix_str(&binary_name).unwrap());
 
+        delegate.set_status(Some(&format!("正在检查远程开发服务 {version_str}")), cx);
         let binary_exists_on_server = self
             .socket
             .run_command_with_timeout(
@@ -875,9 +881,11 @@ impl SshRemoteConnection {
         }
 
         if binary_exists_on_server {
+            delegate.set_status(Some("已找到远程开发服务"), cx);
             return Ok(dst_path.into());
         }
 
+        delegate.set_status(Some("远程开发服务不存在，正在准备安装"), cx);
         let wanted_version = cx.update(|cx| match release_channel {
             ReleaseChannel::Nightly => Ok(None),
             ReleaseChannel::Dev => {
@@ -902,49 +910,84 @@ impl SshRemoteConnection {
             ))
             .unwrap(),
         );
-        if !self.socket.connection_options.upload_binary_over_ssh
-            && let Some(url) = delegate
+        let mut remote_download_error = None;
+        if !self.socket.connection_options.upload_binary_over_ssh {
+            delegate.set_status(Some("正在获取远程开发服务下载地址"), cx);
+            match delegate
                 .get_download_url(
                     self.ssh_platform,
                     release_channel,
                     wanted_version.clone(),
                     cx,
                 )
-                .await?
-        {
-            match self
-                .download_binary_on_server(&url, &tmp_path_compressed, delegate, cx)
                 .await
             {
-                Ok(_) => {
-                    self.extract_server_binary(&dst_path, &tmp_path_compressed, delegate, cx)
+                Ok(Some(url)) => {
+                    match self
+                        .download_binary_on_server(&url, &tmp_path_compressed, delegate, cx)
                         .await
-                        .context("extracting server binary")?;
-                    return Ok(dst_path.into());
+                    {
+                        Ok(()) => {
+                            self.extract_server_binary(
+                                &dst_path,
+                                &tmp_path_compressed,
+                                delegate,
+                                cx,
+                            )
+                            .await
+                            .context("解压远程开发服务失败")?;
+                            return Ok(dst_path.into());
+                        }
+                        Err(error) => {
+                            log::warn!(
+                                "Failed to download remote server binary on host; falling back to a local download: {error:#}"
+                            );
+                            self.remove_remote_download(&tmp_path_compressed, cx).await;
+                            delegate.set_status(Some("远程主机下载失败，正在改用本地网络下载"), cx);
+                            remote_download_error = Some(error);
+                        }
+                    }
                 }
-                Err(e) => {
-                    log::error!(
-                        "Failed to download binary on server, attempting to download locally and then upload it the server: {e:#}",
-                    )
+                Ok(None) => {
+                    let error = anyhow!("没有可供远程主机使用的下载地址");
+                    delegate.set_status(Some("无法远程下载，正在改用本地下载"), cx);
+                    remote_download_error = Some(error);
+                }
+                Err(error) => {
+                    log::warn!("Failed to obtain a remote server download URL: {error:#}");
+                    delegate.set_status(Some("获取远程下载地址失败，正在改用本地下载"), cx);
+                    remote_download_error = Some(error);
                 }
             }
+        } else {
+            delegate.set_status(Some("正在使用本地网络下载远程开发服务"), cx);
         }
 
-        let src_path = delegate
+        let local_download = delegate
             .download_server_binary_locally(
                 self.ssh_platform,
                 release_channel,
                 wanted_version.clone(),
                 cx,
             )
-            .await
-            .context("downloading server binary locally")?;
+            .await;
+        let src_path = match (local_download, remote_download_error) {
+            (Ok(path), _) => path,
+            (Err(local_error), Some(remote_error)) => {
+                return Err(local_error).context(format!(
+                    "无法安装远程开发服务；远程主机下载失败：{remote_error:#}；本地下载也失败"
+                ));
+            }
+            (Err(local_error), None) => {
+                return Err(local_error).context("本地下载远程开发服务失败");
+            }
+        };
         self.upload_local_server_binary(&src_path, &tmp_path_compressed, delegate, cx)
             .await
-            .context("uploading server binary")?;
+            .context("上传远程开发服务失败")?;
         self.extract_server_binary(&dst_path, &tmp_path_compressed, delegate, cx)
             .await
-            .context("extracting server binary")?;
+            .context("解压远程开发服务失败")?;
         Ok(dst_path.into())
     }
 
@@ -971,7 +1014,7 @@ impl SshRemoteConnection {
             }
         }
 
-        delegate.set_status(Some("Downloading remote development server on host"), cx);
+        delegate.set_status(Some("正在从远程主机下载远程开发服务"), cx);
 
         let connection_timeout = self
             .socket
@@ -979,10 +1022,13 @@ impl SshRemoteConnection {
             .connection_timeout
             .unwrap_or(10)
             .to_string();
+        let idle_timeout = REMOTE_SERVER_DOWNLOAD_IDLE_TIMEOUT_SECS.to_string();
+        let total_timeout = REMOTE_SERVER_DOWNLOAD_TOTAL_TIMEOUT_SECS.to_string();
+        let tmp_path = tmp_path.display(self.path_style());
 
         match self
             .socket
-            .run_command(
+            .run_command_with_timeout(
                 self.ssh_shell_kind,
                 "curl",
                 &[
@@ -990,11 +1036,19 @@ impl SshRemoteConnection {
                     "-L",
                     "--connect-timeout",
                     &connection_timeout,
+                    "--speed-limit",
+                    "1024",
+                    "--speed-time",
+                    &idle_timeout,
+                    "--max-time",
+                    &total_timeout,
                     url,
                     "-o",
-                    &tmp_path.display(self.path_style()),
+                    &tmp_path,
                 ],
                 true,
+                REMOTE_SERVER_DOWNLOAD_TOTAL_TIMEOUT,
+                cx,
             )
             .await
         {
@@ -1002,7 +1056,14 @@ impl SshRemoteConnection {
             Err(e) => {
                 if self
                     .socket
-                    .run_command(self.ssh_shell_kind, "which", &["curl"], true)
+                    .run_command_with_timeout(
+                        self.ssh_shell_kind,
+                        "which",
+                        &["curl"],
+                        true,
+                        Duration::from_secs(10),
+                        cx,
+                    )
                     .await
                     .is_ok()
                 {
@@ -1012,19 +1073,23 @@ impl SshRemoteConnection {
                 log::info!("curl is not available, trying wget");
                 match self
                     .socket
-                    .run_command(
+                    .run_command_with_timeout(
                         self.ssh_shell_kind,
                         "wget",
                         &[
                             "--connect-timeout",
                             &connection_timeout,
+                            "--timeout",
+                            &idle_timeout,
                             "--tries",
                             "1",
                             url,
                             "-O",
-                            &tmp_path.display(self.path_style()),
+                            &tmp_path,
                         ],
                         true,
+                        REMOTE_SERVER_DOWNLOAD_TOTAL_TIMEOUT,
+                        cx,
                     )
                     .await
                 {
@@ -1032,7 +1097,14 @@ impl SshRemoteConnection {
                     Err(e) => {
                         if self
                             .socket
-                            .run_command(self.ssh_shell_kind, "which", &["wget"], true)
+                            .run_command_with_timeout(
+                                self.ssh_shell_kind,
+                                "which",
+                                &["wget"],
+                                true,
+                                Duration::from_secs(10),
+                                cx,
+                            )
                             .await
                             .is_ok()
                         {
@@ -1046,6 +1118,44 @@ impl SshRemoteConnection {
         }
 
         Ok(())
+    }
+
+    async fn remove_remote_download(&self, path: &RelPath, cx: &mut AsyncApp) {
+        let result = if self.ssh_platform.os.is_windows() {
+            let path = path.display(self.path_style());
+            let Some(path) = ShellKind::Pwsh.try_quote(&path) else {
+                log::warn!("Failed to quote partial remote download path");
+                return;
+            };
+            self.socket
+                .run_command_with_timeout(
+                    self.ssh_shell_kind,
+                    "powershell",
+                    &[
+                        "-NoProfile",
+                        "-Command",
+                        &format!("Remove-Item -Force -ErrorAction SilentlyContinue {path}"),
+                    ],
+                    true,
+                    Duration::from_secs(10),
+                    cx,
+                )
+                .await
+        } else {
+            self.socket
+                .run_command_with_timeout(
+                    self.ssh_shell_kind,
+                    "rm",
+                    &["-f", path.display(self.path_style()).as_ref()],
+                    true,
+                    Duration::from_secs(10),
+                    cx,
+                )
+                .await
+        };
+        if let Err(error) = result {
+            log::warn!("Failed to remove partial remote server download: {error:#}");
+        }
     }
 
     async fn upload_local_server_binary(
@@ -1077,7 +1187,7 @@ impl SshRemoteConnection {
         let size = src_stat.len();
 
         let t0 = Instant::now();
-        delegate.set_status(Some("Uploading remote development server"), cx);
+        delegate.set_status(Some("正在上传远程开发服务到远程主机"), cx);
         log::info!(
             "uploading remote development server to {:?} ({}kb)",
             tmp_path,
@@ -1097,7 +1207,7 @@ impl SshRemoteConnection {
         delegate: &Arc<dyn RemoteClientDelegate>,
         cx: &mut AsyncApp,
     ) -> Result<()> {
-        delegate.set_status(Some("Extracting remote development server"), cx);
+        delegate.set_status(Some("正在远程主机上解压远程开发服务"), cx);
 
         if self.ssh_platform.os.is_windows() {
             self.extract_server_binary_windows(dst_path, tmp_path).await
