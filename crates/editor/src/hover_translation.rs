@@ -60,8 +60,8 @@ impl Settings for HoverTranslationSettings {
         let content = content.hover_translation.clone().unwrap();
         Self {
             enabled: content.enabled.unwrap(),
-            provider: content.provider.map(Into::into),
-            model: content.model.map(Into::into),
+            provider: content.provider.map(|provider| provider.as_str().into()),
+            model: content.model.map(|model| model.as_str().into()),
             target_language: content.target_language.unwrap().into(),
             max_chars: content.max_chars.unwrap() as usize,
         }
@@ -180,18 +180,22 @@ impl TranslationService {
 fn resolve_model(cx: &App) -> Option<ConfiguredModel> {
     let settings = HoverTranslationSettings::get_global(cx);
     let registry = LanguageModelRegistry::read_global(cx);
-    if let (Some(provider), Some(model_name)) = (&settings.provider, &settings.model) {
-        let provider = registry.provider(&LanguageModelProviderId(provider.clone()))?;
-        let model = provider
-            .provided_models(cx)
-            .into_iter()
-            .find(|model| model.id().0.as_ref() == model_name.as_str())?;
-        Some(ConfiguredModel { provider, model })
-    } else {
-        registry
-            .default_fast_model(cx)
-            .or_else(|| registry.default_model())
+    if let (Some(provider_id), Some(model_name)) = (&settings.provider, &settings.model) {
+        if let Some(provider) = registry.provider(&LanguageModelProviderId(provider_id.clone())) {
+            if let Some(model) = provider
+                .provided_models(cx)
+                .into_iter()
+                .find(|model| model.id().0.as_ref() == model_name.as_str())
+            {
+                return Some(ConfiguredModel { provider, model });
+            }
+        }
     }
+    // Fall back to the default (fast) model when no provider/model is
+    // configured, or when the configured one is no longer available.
+    registry
+        .default_fast_model(cx)
+        .or_else(|| registry.default_model())
 }
 
 async fn request_translation(
@@ -410,6 +414,31 @@ mod tests {
             assert_eq!(popover_text(editor, cx), "柱");
         });
         assert!(model.pending_completions().is_empty());
+    }
+
+    #[gpui::test]
+    async fn test_translate_selection_without_configured_model(cx: &mut gpui::TestAppContext) {
+        init_test(cx, |_| {});
+        cx.update(|cx| {
+            LanguageModelRegistry::test(cx);
+            // Simulate an unconfigured translation setup: no default model
+            // and no explicit provider/model in hover_translation settings.
+            LanguageModelRegistry::global(cx).update(cx, |registry, cx| {
+                registry.set_default_model(None, cx);
+            });
+        });
+        let mut cx = EditorTestContext::new(cx).await;
+
+        cx.set_state("let \u{02C7}value = 1;");
+        cx.dispatch_action(TranslateSelection);
+        cx.run_until_parked();
+
+        // The popover should tell the user the model is not configured,
+        // instead of doing nothing.
+        cx.editor(|editor, _, cx| {
+            let text = popover_text(editor, cx);
+            assert!(text.contains("未配置翻译模型"), "got: {text}");
+        });
     }
 
     #[gpui::test]
