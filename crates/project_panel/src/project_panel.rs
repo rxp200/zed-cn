@@ -649,6 +649,17 @@ enum RemoveEntryTask {
     Delete(Task<Result<()>>),
 }
 
+struct RemovalPrompt {
+    message: String,
+    detail: Option<&'static str>,
+    confirmation_label: &'static str,
+}
+
+enum RemovalKind {
+    Trash,
+    Delete,
+}
+
 impl ProjectPanel {
     fn new(
         workspace: &mut Workspace,
@@ -2549,6 +2560,74 @@ impl ProjectPanel {
         });
     }
 
+    /// Builds the confirmation prompt shared by direct removal and undo/redo.
+    ///
+    /// The `names` slice must contain every path being removed, and this
+    /// function will apply markdown formatting and display truncation. The
+    /// `dirty_buffers` parameter should be the number of those paths that have
+    /// unsaved changes.
+    fn build_removal_prompt<S>(
+        kind: RemovalKind,
+        names: &[S],
+        dirty_buffers: usize,
+    ) -> RemovalPrompt
+    where
+        S: AsRef<str>,
+    {
+        let (message_start, confirmation_label, detail) = match kind {
+            RemovalKind::Trash => ("您确定要移到废纸篓", "移到废纸篓", None),
+            RemovalKind::Delete => (
+                "您确定要永久删除",
+                "删除",
+                Some("此操作无法撤销。"),
+            ),
+        };
+
+        let mut message = match names {
+            [name] => format!("{message_start} {}？", MarkdownInlineCode(name.as_ref())),
+            _ => {
+                const CUTOFF_POINT: usize = 10;
+                let mut listed_names = names
+                    .iter()
+                    .take(CUTOFF_POINT)
+                    .map(|name| MarkdownInlineCode(name.as_ref()).to_string())
+                    .collect::<Vec<_>>();
+                let omitted_count = names.len().saturating_sub(CUTOFF_POINT);
+                if omitted_count == 1 {
+                    listed_names.push(".. 未显示 1 个文件".into());
+                } else if omitted_count > 1 {
+                    listed_names.push(format!(".. 未显示 {omitted_count} 个文件"));
+                }
+
+                format!(
+                    "{message_start} 以下 {} 个文件？\n{}",
+                    names.len(),
+                    listed_names.join("\n")
+                )
+            }
+        };
+        match dirty_buffers {
+            0 => {}
+            1 if names.len() == 1 => {
+                message.push_str("\n\n它含有未保存的更改，这些更改将丢失。");
+            }
+            1 => {
+                message.push_str("\n\n其中有 1 个含有未保存的更改，这些更改将丢失。");
+            }
+            dirty_buffers => {
+                message.push_str(&format!(
+                    "\n\n其中有 {dirty_buffers} 个含有未保存的更改，这些更改将丢失。"
+                ));
+            }
+        }
+
+        RemovalPrompt {
+            message,
+            detail,
+            confirmation_label,
+        }
+    }
+
     // TODO(yara|dino): trashing and deleting are conceptually distinct, even
     // more so with the fact that trashing can now be undone, whereas deleting
     // cannot.
@@ -2587,70 +2666,24 @@ impl ProjectPanel {
                 return None;
             }
             let answer = if !skip_prompt {
-                let operation = if trash { "移到废纸篓" } else { "删除" };
-                let message_start = if trash {
-                    "您确定要移到废纸篓"
+                let names = file_paths
+                    .iter()
+                    .map(|(_, _, name)| name.as_str())
+                    .collect::<Vec<_>>();
+
+                let removal_kind = if trash {
+                    RemovalKind::Trash
                 } else {
-                    "您确定要永久删除"
+                    RemovalKind::Delete
                 };
-                let prompt = match file_paths.first() {
-                    Some((_, _, path)) if file_paths.len() == 1 => {
-                        let unsaved_warning = if dirty_buffers > 0 {
-                            "\n\nIt has unsaved changes, which will be lost."
-                        } else {
-                            ""
-                        };
 
-                        format!(
-                            "{message_start} {}?{unsaved_warning}",
-                            MarkdownInlineCode(path)
-                        )
-                    }
-                    _ => {
-                        const CUTOFF_POINT: usize = 10;
-                        let names = if file_paths.len() > CUTOFF_POINT {
-                            let truncated_path_counts = file_paths.len() - CUTOFF_POINT;
-                            let mut paths = file_paths
-                                .iter()
-                                .map(|(_, _, path)| MarkdownInlineCode(path).to_string())
-                                .take(CUTOFF_POINT)
-                                .collect::<Vec<String>>();
-                            paths.truncate(CUTOFF_POINT);
-                            if truncated_path_counts == 1 {
-                                paths.push(".. 1 file not shown".into());
-                            } else {
-                                paths.push(format!(".. {} files not shown", truncated_path_counts));
-                            }
-                            paths
-                        } else {
-                            file_paths
-                                .iter()
-                                .map(|(_, _, path)| MarkdownInlineCode(path).to_string())
-                                .collect()
-                        };
-                        let unsaved_warning = if dirty_buffers == 0 {
-                            String::new()
-                        } else if dirty_buffers == 1 {
-                            "\n\n1 of these has unsaved changes, which will be lost.".to_string()
-                        } else {
-                            format!(
-                                "\n\n{dirty_buffers} of these have unsaved changes, which will be lost."
-                            )
-                        };
+                let prompt = Self::build_removal_prompt(removal_kind, &names, dirty_buffers);
 
-                        format!(
-                            "{message_start} the following {} files?\n{}{unsaved_warning}",
-                            file_paths.len(),
-                            names.join("\n")
-                        )
-                    }
-                };
-                let detail = (!trash).then_some("This cannot be undone.");
                 Some(window.prompt(
                     PromptLevel::Info,
-                    &prompt,
-                    detail,
-                    &[operation, "Cancel"],
+                    &prompt.message,
+                    prompt.detail,
+                    &[prompt.confirmation_label, "Cancel"],
                     cx,
                 ))
             } else {
