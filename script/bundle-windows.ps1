@@ -276,6 +276,8 @@ function BuildInstaller {
             $appUserId = "ZedIndustries.Zed"
             $appShellNameShort = "Z&ed"
             $appAppxFullName = "ZedIndustries.Zed_1.0.0.0_neutral__japxn1gcva8rg"
+            # Must match CONTEXT_MENU_CLSID in crates/explorer_command_injector (stable)
+            $appContextMenuClsid = "{ef6eda23-89b3-435f-816e-af20ff984938}"
         }
         "preview" {
             $appId = "{{F70E4811-D0E2-4D88-AC99-D63752799F95}"
@@ -290,6 +292,8 @@ function BuildInstaller {
             $appUserId = "ZedIndustries.Zed.Preview"
             $appShellNameShort = "Z&ed Preview"
             $appAppxFullName = "ZedIndustries.Zed.Preview_1.0.0.0_neutral__japxn1gcva8rg"
+            # Must match CONTEXT_MENU_CLSID in crates/explorer_command_injector (preview)
+            $appContextMenuClsid = "{755ad97e-00bf-4696-962f-6c62113db47a}"
         }
         "nightly" {
             $appId = "{{1BDB21D3-14E7-433C-843C-9C97382B2FE0}"
@@ -304,6 +308,8 @@ function BuildInstaller {
             $appUserId = "ZedIndustries.Zed.Nightly"
             $appShellNameShort = "Z&ed Editor Nightly"
             $appAppxFullName = "ZedIndustries.Zed.Nightly_1.0.0.0_neutral__japxn1gcva8rg"
+            # Must match CONTEXT_MENU_CLSID in crates/explorer_command_injector (nightly)
+            $appContextMenuClsid = "{e15a7999-ced2-428f-bb19-09567a90d65b}"
         }
         "dev" {
             $appId = "{{8357632E-24A4-4F32-BA97-E575B4D1FE5D}"
@@ -318,6 +324,8 @@ function BuildInstaller {
             $appUserId = "ZedIndustries.Zed.Dev"
             $appShellNameShort = "Z&ed Dev"
             $appAppxFullName = "ZedIndustries.Zed.Dev_1.0.0.0_neutral__japxn1gcva8rg"
+            # The dev channel builds the DLL with the default (nightly) features.
+            $appContextMenuClsid = "{e15a7999-ced2-428f-bb19-09567a90d65b}"
         }
         default {
             Write-Error "can't bundle installer for $channel."
@@ -346,6 +354,7 @@ function BuildInstaller {
         "Version"        = "$env:RELEASE_VERSION"
         "SourceDir"      = "$env:ZED_WORKSPACE"
         "AppxFullName"   = $appAppxFullName
+        "ContextMenuClsid" = $appContextMenuClsid
     }
 
     $defs = @()

@@ -392,7 +392,7 @@ impl PickerDelegate for KernelPickerDelegate {
                                                 })
                                                 .when(!has_ipykernel, |flex| {
                                                     flex.child(
-                                                        Label::new("ipykernel not installed")
+                                                        Label::new("未安装 ipykernel")
                                                             .size(LabelSize::XSmall)
                                                             .color(Color::Warning),
                                                     )

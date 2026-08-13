@@ -165,9 +165,9 @@ impl ZedAiOnboarding {
             .w_full()
             .relative()
             .gap_1()
-            .child(Headline::new("Welcome to Zed AI"))
+            .child(Headline::new("欢迎使用 Zed AI"))
             .child(
-                Label::new("Sign in to try Zed Pro free for 14 days.")
+                Label::new("登录即可免费试用 Zed Pro 14 天。")
                     .color(Color::Muted)
                     .mb_2(),
             )
@@ -195,7 +195,7 @@ impl ZedAiOnboarding {
                 .relative()
                 .min_w_0()
                 .gap_1()
-                .child(Headline::new("Welcome to Zed AI"))
+                .child(Headline::new("欢迎使用 Zed AI"))
                 .child(YoungAccountBanner)
                 .child(
                     v_flex()
@@ -232,7 +232,7 @@ impl ZedAiOnboarding {
                 .w_full()
                 .relative()
                 .gap_1()
-                .child(Headline::new("Welcome to Zed AI"))
+                .child(Headline::new("欢迎使用 Zed AI"))
                 .child(
                     v_flex()
                         .mt_2()
@@ -241,7 +241,7 @@ impl ZedAiOnboarding {
                             h_flex()
                                 .gap_2()
                                 .child(
-                                    Label::new("Free")
+                                    Label::new("免费")
                                         .size(LabelSize::Small)
                                         .color(Color::Muted)
                                         .buffer_font(cx),
@@ -267,7 +267,7 @@ impl ZedAiOnboarding {
                             h_flex()
                                 .gap_2()
                                 .child(
-                                    Label::new("Pro Trial")
+                                    Label::new("Pro 试用")
                                         .size(LabelSize::Small)
                                         .color(Color::Accent)
                                         .buffer_font(cx),
@@ -298,9 +298,9 @@ impl ZedAiOnboarding {
             .relative()
             .gap_1()
             .child(Self::pro_trial_stamp(cx))
-            .child(Headline::new("Welcome to the Zed Pro Trial"))
+            .child(Headline::new("欢迎试用 Zed Pro"))
             .child(
-                Label::new("Here's what you get for the next 14 days:")
+                Label::new("以下是你接下来 14 天获得的内容：")
                     .color(Color::Muted)
                     .mb_2(),
             )
@@ -315,9 +315,9 @@ impl ZedAiOnboarding {
             .relative()
             .gap_1()
             .child(Self::certified_user_stamp(cx))
-            .child(Headline::new("Welcome to Zed Pro"))
+            .child(Headline::new("欢迎使用 Zed Pro"))
             .child(
-                Label::new("Here's what you get:")
+                Label::new("以下是你获得的内容：")
                     .color(Color::Muted)
                     .mb_2(),
             )
@@ -332,9 +332,9 @@ impl ZedAiOnboarding {
             .relative()
             .gap_1()
             .child(Self::business_stamp(cx))
-            .child(Headline::new("Welcome to Zed Business"))
+            .child(Headline::new("欢迎使用 Zed Business"))
             .child(
-                Label::new("Here's what you get:")
+                Label::new("以下是你获得的内容：")
                     .color(Color::Muted)
                     .mb_2(),
             )
@@ -349,9 +349,9 @@ impl ZedAiOnboarding {
             .relative()
             .gap_1()
             .child(Self::vip_stamp(cx))
-            .child(Headline::new("Welcome to Zed VIP"))
+            .child(Headline::new("欢迎使用 Zed VIP"))
             .child(
-                Label::new("Here's what you get:")
+                Label::new("以下是你获得的内容：")
                     .color(Color::Muted)
                     .mb_2(),
             )
@@ -366,9 +366,9 @@ impl ZedAiOnboarding {
             .relative()
             .gap_1()
             .child(Self::student_stamp(cx))
-            .child(Headline::new("Welcome to Zed Student"))
+            .child(Headline::new("欢迎使用 Zed Student"))
             .child(
-                Label::new("Here's what you get:")
+                Label::new("以下是你获得的内容：")
                     .color(Color::Muted)
                     .mb_2(),
             )
@@ -454,7 +454,7 @@ impl Component for ZedAiOnboarding {
                     onboarding(SignInStatus::SignedIn, Some(Plan::ZedFree), false),
                 ),
                 single_example(
-                    "Pro Trial",
+                    "Pro 试用",
                     onboarding(SignInStatus::SignedIn, Some(Plan::ZedProTrial), false),
                 ),
                 single_example(

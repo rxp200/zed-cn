@@ -3754,7 +3754,7 @@ impl ThreadView {
                 .gap_1()
                 .justify_between()
                 .child(
-                    Label::new("Plan")
+                    Label::new("计划")
                         .size(LabelSize::Small)
                         .color(Color::Muted),
                 )
@@ -8679,20 +8679,26 @@ impl ThreadView {
         cx: &Context<Self>,
     ) -> AnyElement {
         let url = zed_urls::sandboxing_docs(section, cx);
-
-        Button::new(id, "了解更多")
-            .label_size(LabelSize::Small)
-            .color(Color::Muted)
-            .end_icon(
-                Icon::new(IconName::ArrowUpRight)
+        let tooltip = format!("打开 {url}");
+        // Wrap in a row so the button shrinks to its content width instead of
+        // stretching to fill the enclosing column.
+        h_flex()
+            .child(
+                Button::new(id, "了解更多")
+                    .label_size(LabelSize::Small)
                     .color(Color::Muted)
-                    .size(IconSize::XSmall),
+                    .end_icon(
+                        Icon::new(IconName::ArrowUpRight)
+                            .color(Color::Muted)
+                            .size(IconSize::XSmall),
+                    )
+                    .tooltip({
+                        let tooltip = tooltip.clone();
+                        let url = url.clone();
+                        move |_, cx| Tooltip::with_meta(tooltip.as_str(), None, url.clone(), cx)
+                    })
+                    .on_click(move |_, _, cx| cx.open_url(&url)),
             )
-            .tooltip({
-                let url = url.clone();
-                move |_, cx| Tooltip::with_meta("打开文档", None, url.clone(), cx)
-            })
-            .on_click(move |_, _, cx| cx.open_url(&url))
             .into_any_element()
     }
 

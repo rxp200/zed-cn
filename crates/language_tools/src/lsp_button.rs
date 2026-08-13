@@ -243,12 +243,12 @@ impl LanguageServerState {
                                         .size(IconSize::XSmall),
                                 )
                                 .child(
-                                    Label::new("Project is in Restricted Mode")
+                                    Label::new("项目处于受限模式")
                                         .size(LabelSize::Small),
                                 ),
                         )
                         .child(
-                            Label::new("Language Servers can't run until you trust this project.")
+                            Label::new("在你信任此项目之前，语言服务器无法运行。")
                                 .size(LabelSize::Small)
                                 .color(Color::Muted),
                         )
