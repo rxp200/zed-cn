@@ -212,7 +212,7 @@ impl StashMessageModal {
     fn new(panel: WeakEntity<GitPanel>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let editor = cx.new(|cx| {
             let mut editor = Editor::single_line(window, cx);
-            editor.set_placeholder_text("Optionally provide a stash message", window, cx);
+            editor.set_placeholder_text("可选：提供储藏说明", window, cx);
             editor
         });
         Self { editor, panel }
@@ -256,7 +256,7 @@ impl Render for StashMessageModal {
                     .w_full()
                     .gap_1p5()
                     .child(Icon::new(IconName::GitBranch).size(IconSize::XSmall))
-                    .child(Headline::new("Stash All").size(HeadlineSize::XSmall)),
+                    .child(Headline::new("全部储藏").size(HeadlineSize::XSmall)),
             )
             .child(div().px_3().pb_3().w_full().child(self.editor.clone()))
     }
@@ -7445,8 +7445,8 @@ impl GitPanel {
                 .action("未暂存的更改", ViewUnstagedChanges.boxed_clone())
                 .action("已暂存的更改", ViewStagedChanges.boxed_clone())
                 .separator()
-                .action("Copy Path", CopyPath.boxed_clone())
-                .action("Copy Relative Path", CopyRelativePath.boxed_clone())
+                .action("复制路径", CopyPath.boxed_clone())
+                .action("复制相对路径", CopyRelativePath.boxed_clone())
                 .separator()
                 .action_disabled_when(
                     !is_created,
