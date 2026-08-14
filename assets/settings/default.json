@@ -587,6 +587,14 @@
     "target_language": "中文",
     // Maximum number of documentation characters sent for translation.
     "max_chars": 4000,
+    // Whether translations are persisted to an on-disk cache reused across
+    // sessions, so repeatedly translating the same documentation does not
+    // call the model again.
+    "cache_persist": true,
+    // Maximum size of the on-disk translation cache, in bytes. When the cache
+    // grows beyond this limit, the least useful entries (least
+    // recently/frequently viewed and largest) are evicted.
+    "cache_max_bytes": 5242880,
   },
   "audio": {
     // Select specific output audio device.
