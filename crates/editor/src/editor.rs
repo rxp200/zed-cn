@@ -30,6 +30,7 @@ mod highlight_matching_bracket;
 pub mod hover_links;
 pub mod hover_popover;
 pub mod hover_translation;
+mod translation_cache;
 mod indent_guides;
 mod inlays;
 pub mod items;

@@ -2062,7 +2062,7 @@ fn editor_page() -> SettingsPage {
         ]
     }
 
-    fn hover_translation_section() -> [SettingsPageItem; 6] {
+    fn hover_translation_section() -> [SettingsPageItem; 8] {
         [
             SettingsPageItem::SectionHeader("悬停翻译"),
             SettingsPageItem::SettingItem(SettingItem {
@@ -2159,6 +2159,44 @@ fn editor_page() -> SettingsPage {
                             .hover_translation
                             .get_or_insert_default()
                             .max_chars = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: "持久化翻译缓存",
+                description: "将翻译结果保存到磁盘缓存，跨会话复用，避免重复调用模型翻译相同内容。",
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("hover_translation.cache_persist"),
+                    pick: |settings_content| {
+                        settings_content.hover_translation.as_ref()?.cache_persist.as_ref()
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content
+                            .hover_translation
+                            .get_or_insert_default()
+                            .cache_persist = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: "缓存大小上限",
+                description: "磁盘翻译缓存的最大字节数（默认 5 MiB）。超出后按使用频率、最近查看时间和占用大小淘汰最不常用的条目。",
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("hover_translation.cache_max_bytes"),
+                    pick: |settings_content| {
+                        settings_content.hover_translation.as_ref()?.cache_max_bytes.as_ref()
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content
+                            .hover_translation
+                            .get_or_insert_default()
+                            .cache_max_bytes = value;
                     },
                 }),
                 metadata: None,

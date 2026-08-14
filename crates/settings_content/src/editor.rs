@@ -1063,6 +1063,18 @@ pub struct HoverTranslationSettingsContent {
     ///
     /// Default: 4000
     pub max_chars: Option<u64>,
+    /// Whether translations are persisted to an on-disk cache that is reused
+    /// across sessions, so repeatedly translating the same documentation does
+    /// not call the model again.
+    ///
+    /// Default: true
+    pub cache_persist: Option<bool>,
+    /// Maximum size of the on-disk translation cache, in bytes. When the cache
+    /// grows beyond this limit, the least useful entries (least
+    /// recently/frequently viewed and largest) are evicted.
+    ///
+    /// Default: 5242880 (5 MiB)
+    pub cache_max_bytes: Option<u64>,
 }
 
 /// Whether to allow drag and drop text selection in buffer.
