@@ -7246,6 +7246,16 @@ impl LineWithInvisibles {
                         }
                     }
 
+                    // The current display line has already exceeded the maximum
+                    // display length. Skip the rest of its chunks without
+                    // processing them (the visible prefix has been laid out
+                    // already, and any further text is not displayed). This
+                    // keeps rendering cost bounded for very long lines (e.g.
+                    // minified JSON), regardless of the line's length.
+                    if line_exceeded_max_len {
+                        continue;
+                    }
+
                     if !line_chunk.is_empty() && !line_exceeded_max_len {
                         let text_style = if let Some(style) = highlighted_chunk.style {
                             Cow::Owned(text_style.clone().highlight(style))
