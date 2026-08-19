@@ -2769,10 +2769,10 @@ impl ProjectPanel {
         cx: &mut Context<Self>,
     ) {
         let message = match (trash, total_count) {
-            (true, 1) => format!("Failed to trash {failed_count} of {total_count} file."),
-            (true, _) => format!("Failed to trash {failed_count} of {total_count} files."),
-            (false, 1) => format!("Failed to delete {failed_count} of {total_count} file."),
-            (false, _) => format!("Failed to delete {failed_count} of {total_count} files."),
+            (true, 1) => format!("无法将 {failed_count}/{total_count} 个文件移入回收站。"),
+            (true, _) => format!("无法将 {failed_count}/{total_count} 个文件移入回收站。"),
+            (false, 1) => format!("无法删除 {failed_count}/{total_count} 个文件。"),
+            (false, _) => format!("无法删除 {failed_count}/{total_count} 个文件。"),
         };
 
         let toast = StatusToast::new(message, cx, |this, _| {

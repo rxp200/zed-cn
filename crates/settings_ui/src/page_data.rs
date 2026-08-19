@@ -952,8 +952,10 @@ fn appearance_page() -> SettingsPage {
                                 }
                                 settings::BufferLineHeightDiscriminants::Custom => {
                                     let custom_value =
-                                        theme_settings::BufferLineHeight::from(*settings_value)
-                                            .value();
+                                        theme_settings::buffer_line_height_from_settings(
+                                            *settings_value,
+                                        )
+                                        .value();
                                     settings::BufferLineHeight::Custom(custom_value)
                                 }
                             };
@@ -2482,29 +2484,96 @@ fn editor_page() -> SettingsPage {
                 metadata: None,
                 files: USER,
             }),
-            SettingsPageItem::SettingItem(SettingItem {
-                title: "Git 装订线宽度",
-                description: "装订线中 Git 差异指示器的宽度（像素）。未设置时，宽度随缓冲区字体大小缩放。",
-                field: Box::new(SettingField {
-                    organization_override: None,
-                    json_path: Some("gutter.git_gutter_width"),
-                    pick: |settings_content| {
+            SettingsPageItem::DynamicItem(DynamicItem {
+                discriminant: SettingItem {
+                    title: "Git 装订线宽度",
+                    description: "装订线中 Git 差异指示器的宽度（像素）。未设置时，宽度随缓冲区字体大小缩放。",
+                    field: Box::new(SettingField {
+                        organization_override: None,
+                        json_path: Some("gutter.git_gutter_width$"),
+                        pick: |settings_content| {
+                            Some(
+                                &dynamic_variants::<settings::GitGutterWidth>()[settings_content
+                                    .editor
+                                    .gutter
+                                    .as_ref()?
+                                    .git_gutter_width
+                                    .as_ref()?
+                                    .discriminant()
+                                    as usize],
+                            )
+                        },
+                        write: |settings_content, value, _| {
+                            let gutter = settings_content.editor.gutter.get_or_insert_default();
+                            gutter.git_gutter_width = value.map(|value| match value {
+                                settings::GitGutterWidthDiscriminants::Default => {
+                                    settings::GitGutterWidth::Default
+                                }
+                                settings::GitGutterWidthDiscriminants::Custom => {
+                                    let width = match gutter.git_gutter_width {
+                                        Some(settings::GitGutterWidth::Custom(width)) => {
+                                            settings::PixelSetting(*width)
+                                        }
+                                        _ => settings::PixelSetting(3.0),
+                                    };
+                                    settings::GitGutterWidth::Custom(width)
+                                }
+                            });
+                        },
+                    }),
+                    metadata: None,
+                    files: USER,
+                },
+                pick_discriminant: |settings_content| {
+                    Some(
                         settings_content
                             .editor
                             .gutter
-                            .as_ref()
-                            .and_then(|gutter| gutter.git_gutter_width.as_ref())
-                    },
-                    write: |settings_content, value, _| {
-                        settings_content
-                            .editor
-                            .gutter
-                            .get_or_insert_default()
-                            .git_gutter_width = value;
-                    },
-                }),
-                metadata: None,
-                files: USER,
+                            .as_ref()?
+                            .git_gutter_width
+                            .as_ref()?
+                            .discriminant() as usize,
+                    )
+                },
+                fields: dynamic_variants::<settings::GitGutterWidth>()
+                    .into_iter()
+                    .map(|variant| match variant {
+                        settings::GitGutterWidthDiscriminants::Default => vec![],
+                        settings::GitGutterWidthDiscriminants::Custom => vec![SettingItem {
+                            files: USER,
+                            title: "自定义宽度",
+                            description: "Git 差异指示器的宽度（像素）。",
+                            field: Box::new(SettingField {
+                                organization_override: None,
+                                json_path: Some("gutter.git_gutter_width"),
+                                pick: |settings_content| match settings_content
+                                    .editor
+                                    .gutter
+                                    .as_ref()
+                                    .and_then(|gutter| gutter.git_gutter_width.as_ref())
+                                {
+                                    Some(settings::GitGutterWidth::Custom(value)) => Some(value),
+                                    _ => None,
+                                },
+                                write: |settings_content, value, _| {
+                                    let Some(value) = value else {
+                                        return;
+                                    };
+                                    if let Some(settings::GitGutterWidth::Custom(width)) =
+                                        settings_content
+                                            .editor
+                                            .gutter
+                                            .as_mut()
+                                            .and_then(|gutter| gutter.git_gutter_width.as_mut())
+                                    {
+                                        *width = value;
+                                    }
+                                },
+                            }),
+                            metadata: None,
+                        }],
+                    })
+                    .collect(),
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: "内联代码操作",
@@ -3888,7 +3957,7 @@ fn search_and_files_page() -> SettingsPage {
         ]
     }
 
-    fn file_scan_section() -> [SettingsPageItem; 6] {
+    fn file_scan_section() -> [SettingsPageItem; 7] {
         [
             SettingsPageItem::SectionHeader("文件扫描"),
             SettingsPageItem::SettingItem(SettingItem {
@@ -3936,6 +4005,22 @@ fn search_and_files_page() -> SettingsPage {
                 ),
                 metadata: None,
                 files: USER,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: "文件扫描深度",
+                description: "在 Git 仓库之外主动索引的最大目录深度；达到或超过此深度的目录内容按需索引。根目录浅于此深度的仓库始终完整索引。在未以 Git 仓库为根的项目中，直接位于根文件夹内的仓库会立即启用其 Git 功能；更深的仓库在首次使用时启用。0 表示无限制并立即启用所有 Git 仓库。",
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("file_scan_depth"),
+                    pick: |settings_content| {
+                        settings_content.project.worktree.file_scan_depth.as_ref()
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content.project.worktree.file_scan_depth = value;
+                    },
+                }),
+                metadata: None,
+                files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: "扫描符号链接",
@@ -5012,7 +5097,7 @@ fn window_and_layout_page() -> SettingsPage {
         ]
     }
 
-    fn window_section() -> [SettingsPageItem; 3] {
+    fn window_section() -> [SettingsPageItem; 4] {
         [
             SettingsPageItem::SectionHeader("Window"),
             // todo(settings_ui): Should we filter by platform.as_ref()?
@@ -5027,6 +5112,20 @@ fn window_and_layout_page() -> SettingsPage {
                     },
                     write: |settings_content, value, _| {
                         settings_content.workspace.use_system_window_tabs = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: "全屏模式",
+                description: "（仅 macOS）全屏切换操作进入的全屏模式。",
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("fullscreen_mode"),
+                    pick: |settings_content| settings_content.workspace.fullscreen_mode.as_ref(),
+                    write: |settings_content, value, _| {
+                        settings_content.workspace.fullscreen_mode = value;
                     },
                 }),
                 metadata: None,
