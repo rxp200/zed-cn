@@ -2026,6 +2026,14 @@ impl SettingsWindow {
         this
     }
 
+    fn clear_search(&mut self, window: &mut Window, cx: &mut Context<SettingsWindow>) {
+        if !self.search_bar.read(cx).is_empty(cx) {
+            self.search_bar.update(cx, |editor, cx| {
+                editor.set_text("", window, cx);
+            });
+        }
+    }
+
     fn handle_project_event(
         &mut self,
         _: &Entity<Project>,
@@ -2983,19 +2991,26 @@ impl SettingsWindow {
     //     }
     // }
 
-    fn render_search(&self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render_search(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<SettingsWindow>,
+    ) -> Stateful<Div> {
+        let has_query = !self.search_bar.read(cx).is_empty(cx);
         let (a11y_value, a11y_text_runs) =
             text_field_a11y_state("settings-ui-search", &self.search_bar, window, cx);
 
         h_flex()
             .id("settings-ui-search")
             .role(Role::SearchInput)
-            .aria_label("Search Settings")
+            .aria_label("搜索设置")
             .aria_value(a11y_value)
             .track_focus(&self.search_bar.focus_handle(cx))
             .a11y_synthetic_children(a11y_text_runs)
             .py_1()
-            .px_1p5()
+            .pl_1p5()
+            .pr_0p5()
+            .h_7()
             .mb_3()
             .gap_1p5()
             .rounded_sm()
@@ -3004,6 +3019,17 @@ impl SettingsWindow {
             .border_color(cx.theme().colors().border)
             .child(Icon::new(IconName::MagnifyingGlass).color(Color::Muted))
             .child(self.search_bar.clone())
+            .when(has_query, |this| {
+                this.child(
+                    IconButton::new("clear-btn", IconName::Close)
+                        .icon_color(Color::Muted)
+                        .icon_size(IconSize::Small)
+                        .tooltip(Tooltip::text("清除"))
+                        .on_click(cx.listener(|settings_window, _, window, cx| {
+                            settings_window.clear_search(window, cx);
+                        })),
+                )
+            })
     }
 
     fn render_nav(

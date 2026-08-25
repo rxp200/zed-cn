@@ -1928,11 +1928,9 @@ impl ThreadView {
                         .into()
                     }),
                 ),
-                ThreadError::RequestFailed => (
-                    "request_failed",
-                    None,
-                    "多次尝试后无法完成请求。".into(),
-                ),
+                ThreadError::ProviderRejection { message } => {
+                    ("provider_rejection", None, message.clone())
+                }
                 ThreadError::MaxOutputTokens => (
                     "max_output_tokens",
                     None,
@@ -11090,15 +11088,9 @@ impl ThreadView {
 
                 self.render_error_callout("权限被拒绝", message, false, false, cx)
             }
-            ThreadError::RequestFailed => self.render_error_callout(
-                "请求失败",
-                "The request could not be completed after multiple attempts. \
-                Try again in a moment."
-                    .into(),
-                true,
-                false,
-                cx,
-            ),
+            ThreadError::ProviderRejection { message } => {
+                self.render_error_callout("请求失败", message.clone(), true, false, cx)
+            }
             ThreadError::MaxOutputTokens => self.render_error_callout(
                 "达到输出限制",
                 "The model stopped because it reached its maximum output length. \

@@ -533,10 +533,7 @@ impl Render for SyntaxTreeView {
                             if editor_state.is_some_and(|state| !state.has_language()) {
                                 this.child(Label::new("当前编辑器没有关联的语言"))
                                     .child(
-                                        Label::new(concat!(
-                                            "Try assigning a language or",
-                                            "switching to a different buffer"
-                                        ))
+                                        Label::new("尝试指定一种语言或切换到其他缓冲区")
                                         .size(LabelSize::Small),
                                     )
                             } else {
