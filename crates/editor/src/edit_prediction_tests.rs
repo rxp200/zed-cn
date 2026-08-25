@@ -20,6 +20,7 @@ use std::{
         Arc,
         atomic::{self, AtomicUsize},
     },
+    time::Duration,
 };
 use text::{Point, ToOffset};
 use ui::prelude::*;
@@ -1864,7 +1865,7 @@ impl EditPredictionDelegate for FakeEditPredictionDelegate {
         &mut self,
         _buffer: gpui::Entity<language::Buffer>,
         _cursor_position: language::Anchor,
-        _debounce: bool,
+        _debounce_duration: Duration,
         _trigger: edit_prediction_types::EditPredictionRequestTrigger,
         _cx: &mut gpui::Context<Self>,
     ) {
@@ -1943,7 +1944,7 @@ impl EditPredictionDelegate for FakeNonZedEditPredictionDelegate {
         &mut self,
         _buffer: gpui::Entity<language::Buffer>,
         _cursor_position: language::Anchor,
-        _debounce: bool,
+        _debounce_duration: Duration,
         _trigger: edit_prediction_types::EditPredictionRequestTrigger,
         _cx: &mut gpui::Context<Self>,
     ) {

@@ -236,8 +236,14 @@ pub fn app_menus(cx: &mut App) -> Vec<Menu> {
                     "转到定义",
                     editor::actions::GoToDefinition::default(),
                 ),
-                MenuItem::action("转到声明", editor::actions::GoToDeclaration),
-                MenuItem::action("转到类型定义", editor::actions::GoToTypeDefinition),
+                MenuItem::action(
+                    "转到声明",
+                    editor::actions::GoToDeclaration::default(),
+                ),
+                MenuItem::action(
+                    "转到类型定义",
+                    editor::actions::GoToTypeDefinition::default(),
+                ),
                 MenuItem::action(
                     "查找所有引用",
                     editor::actions::FindAllReferences::default(),

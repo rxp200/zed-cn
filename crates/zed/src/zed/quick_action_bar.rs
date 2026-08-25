@@ -440,7 +440,7 @@ impl Render for QuickActionBar {
                             }
 
                             if supports_minimap {
-                                menu = menu.toggleable_entry("Minimap", minimap_enabled, IconPosition::Start, Some(editor::actions::ToggleMinimap.boxed_clone()), {
+                                menu = menu.toggleable_entry("小地图", minimap_enabled, IconPosition::Start, Some(editor::actions::ToggleMinimap.boxed_clone()), {
                                     let editor = editor.clone();
                                     move |window, cx| {
                                         editor
@@ -457,7 +457,7 @@ impl Render for QuickActionBar {
                             }
 
                             if has_edit_prediction_provider {
-                                let mut edit_prediction_entry = ContextMenuEntry::new("Edit Predictions")
+                                let mut edit_prediction_entry = ContextMenuEntry::new("编辑预测")
                                     .toggleable(IconPosition::Start, edit_predictions_enabled_at_cursor && show_edit_predictions)
                                     .disabled(!edit_predictions_enabled_at_cursor)
                                     .action(
@@ -489,7 +489,7 @@ impl Render for QuickActionBar {
 
                             if is_full {
                                 menu = menu.toggleable_entry(
-                                    "Diagnostics",
+                                    "诊断",
                                     diagnostics_enabled,
                                     IconPosition::Start,
                                     Some(ToggleDiagnostics.boxed_clone()),
@@ -510,7 +510,7 @@ impl Render for QuickActionBar {
                                 );
 
                                 if supports_inline_diagnostics {
-                                    let mut inline_diagnostics_item = ContextMenuEntry::new("Inline Diagnostics")
+                                    let mut inline_diagnostics_item = ContextMenuEntry::new("内联诊断")
                                         .toggleable(IconPosition::Start, diagnostics_enabled && inline_diagnostics_enabled)
                                         .action(ToggleInlineDiagnostics.boxed_clone())
                                         .handler({

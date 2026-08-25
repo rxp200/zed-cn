@@ -723,7 +723,7 @@ impl EditPredictionButton {
         let fs = self.fs.clone();
         let line_height = window.line_height();
 
-        menu = menu.header("Show Edit Predictions For");
+        menu = menu.header("显示编辑预测范围");
 
         let language_state = self.language.as_ref().map(|language| {
             (
@@ -733,7 +733,7 @@ impl EditPredictionButton {
         });
 
         if let Some(editor_focus_handle) = self.editor_focus_handle.clone() {
-            let entry = ContextMenuEntry::new("This Buffer")
+            let entry = ContextMenuEntry::new("当前缓冲区")
                 .toggleable(IconPosition::Start, self.editor_show_predictions)
                 .action(Box::new(editor::actions::ToggleEditPrediction))
                 .handler(move |window, cx| {
@@ -750,7 +750,7 @@ impl EditPredictionButton {
                         DocumentationSide::Left,
                         move |_cx| {
                             Label::new(format!(
-                                "Edit predictions are disabled for {}",
+                                "已对 {} 禁用编辑预测",
                                 language.name()
                             ))
                             .into_any_element()
@@ -785,7 +785,7 @@ impl EditPredictionButton {
         let settings = AllLanguageSettings::get_global(cx);
 
         let globally_enabled = settings.show_edit_predictions(None, cx);
-        let entry = ContextMenuEntry::new("All Files")
+        let entry = ContextMenuEntry::new("所有文件")
             .toggleable(IconPosition::Start, globally_enabled)
             .action(workspace::ToggleEditPrediction.boxed_clone())
             .handler(|window, cx| {
@@ -800,9 +800,9 @@ impl EditPredictionButton {
 
         menu = menu
                 .separator()
-                .header("Display Modes")
+                .header("显示模式")
                 .item(
-                    ContextMenuEntry::new("Eager")
+                    ContextMenuEntry::new("即时")
                         .toggleable(IconPosition::Start, eager_mode)
                         .documentation_aside(DocumentationSide::Left, move |_| {
                             Label::new("当没有语言服务器补全可用时内联显示预测。").into_any_element()
@@ -820,7 +820,7 @@ impl EditPredictionButton {
                         }),
                 )
                 .item(
-                    ContextMenuEntry::new("Subtle")
+                    ContextMenuEntry::new("按键触发")
                         .toggleable(IconPosition::Start, subtle_mode)
                         .documentation_aside(DocumentationSide::Left, move |_| {
                             Label::new("仅在按住修饰键时内联显示预测（默认 alt）。").into_any_element()
@@ -838,7 +838,7 @@ impl EditPredictionButton {
                         }),
                 );
 
-        menu = menu.separator().header("Privacy");
+        menu = menu.separator().header("隐私");
 
         if matches!(provider, EditPredictionProvider::Zed) {
             if let Some(provider) = &self.edit_prediction_provider {
