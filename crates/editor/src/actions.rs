@@ -917,6 +917,10 @@ actions!(
         ToggleSoftWrap,
         /// Toggles the tab bar display.
         ToggleTabBar,
+        /// Translates the selected text, or the word under the cursor when
+        /// nothing is selected, using the model configured under
+        /// `hover_translation` in settings.
+        TranslateSelection,
         /// Transposes characters around cursor.
         Transpose,
         /// Undoes the last edit.

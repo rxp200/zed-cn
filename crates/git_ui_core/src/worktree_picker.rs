@@ -548,7 +548,7 @@ impl WorktreePickerDelegate {
                                 PromptLevel::Warning,
                                 &prompt_message,
                                 None,
-                                &["Force Delete", "Cancel"],
+                                &["强制删除", "取消"],
                                 cx,
                             )
                         })?;
@@ -1229,7 +1229,7 @@ impl PickerDelegate for WorktreePickerDelegate {
                                             .with_rotate_animation(2),
                                     )
                                     .child(
-                                        Label::new("Deleting…")
+                                        Label::new("正在删除...")
                                             .size(LabelSize::Small)
                                             .color(Color::Muted),
                                     ),
@@ -1239,7 +1239,7 @@ impl PickerDelegate for WorktreePickerDelegate {
                             let open_in_new_window_button =
                                 IconButton::new(("open-new-window", ix), IconName::ArrowUpRight)
                                     .icon_size(IconSize::Small)
-                                    .tooltip(Tooltip::text("Open in New Window"))
+                                    .tooltip(Tooltip::text("在新窗口中打开"))
                                     .on_click(cx.listener(move |picker, _, window, cx| {
                                         let Some(entry) = picker.delegate.matches.get(ix) else {
                                             return;
@@ -1307,7 +1307,7 @@ impl PickerDelegate for WorktreePickerDelegate {
                                                 IconName::Close,
                                             )
                                             .icon_size(IconSize::Small)
-                                            .tooltip(Tooltip::text("Remove Worktree from Window"))
+                                            .tooltip(Tooltip::text("从窗口中移除工作树"))
                                             .on_click(
                                                 cx.listener(move |picker, _, window, cx| {
                                                     picker.delegate.remove_worktree_from_window(
@@ -1426,7 +1426,7 @@ impl PickerDelegate for WorktreePickerDelegate {
             .border_t_1()
             .border_color(cx.theme().colors().border_variant)
             .child(
-                Button::new("configure-worktree-tasks", "Automate Setup")
+                Button::new("configure-worktree-tasks", "自动设置")
                     .key_binding(
                         KeyBinding::for_action_in(&OpenWorktreeSetupTasks, &focus_handle, cx)
                             .map(|kb| kb.size(rems_from_px(12_f32))),
@@ -1440,7 +1440,7 @@ impl PickerDelegate for WorktreePickerDelegate {
             Some(
                 footer
                     .child(
-                        Button::new("create-worktree", "Create")
+                        Button::new("create-worktree", "创建")
                             .key_binding(
                                 KeyBinding::for_action_in(&menu::Confirm, &focus_handle, cx)
                                     .map(|kb| kb.size(rems_from_px(12_f32))),
@@ -1459,7 +1459,7 @@ impl PickerDelegate for WorktreePickerDelegate {
                             .gap_0p5()
                             .when(is_deleting, |this| {
                                 this.child(
-                                    Button::new("delete-worktree", "Deleting…")
+                                    Button::new("delete-worktree", "删除中…")
                                         .loading(true)
                                         .disabled(true),
                                 )
@@ -1467,7 +1467,7 @@ impl PickerDelegate for WorktreePickerDelegate {
                             .when(!is_deleting && can_delete, |this| {
                                 let focus_handle = focus_handle.clone();
                                 this.child(
-                                    Button::new("delete-worktree", "Delete")
+                                    Button::new("delete-worktree", "删除")
                                         .key_binding(
                                             KeyBinding::for_action_in(
                                                 &DeleteWorktree,
@@ -1484,7 +1484,7 @@ impl PickerDelegate for WorktreePickerDelegate {
                             .when(!is_deleting && !is_current, |this| {
                                 let focus_handle = focus_handle.clone();
                                 this.child(
-                                    Button::new("open-in-new-window", "Open in New Window")
+                                    Button::new("open-in-new-window", "在新窗口中打开")
                                         .key_binding(
                                             KeyBinding::for_action_in(
                                                 &menu::SecondaryConfirm,
@@ -1503,7 +1503,7 @@ impl PickerDelegate for WorktreePickerDelegate {
                             })
                             .when(!is_deleting, |this| {
                                 this.child(
-                                    Button::new("open-worktree", "Open")
+                                    Button::new("open-worktree", "打开")
                                         .key_binding(
                                             KeyBinding::for_action_in(
                                                 &menu::Confirm,
@@ -1962,7 +1962,7 @@ mod tests {
             "pending delete state should clear while waiting for force-delete confirmation"
         );
 
-        cx.simulate_prompt_answer("Force Delete");
+        cx.simulate_prompt_answer("强制删除");
         cx.run_until_parked();
 
         assert!(!cx.has_pending_prompt());
@@ -2006,7 +2006,7 @@ mod tests {
         assert!(cx.has_pending_prompt());
         assert!(deleting_worktree_paths(&worktree_picker, &mut cx).is_empty());
 
-        cx.simulate_prompt_answer("Cancel");
+        cx.simulate_prompt_answer("取消");
         cx.run_until_parked();
 
         assert!(!cx.has_pending_prompt());

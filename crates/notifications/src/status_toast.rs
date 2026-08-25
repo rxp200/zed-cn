@@ -116,7 +116,7 @@ impl Render for StatusToast {
                         .shape(ui::IconButtonShape::Square)
                         .icon_size(IconSize::Small)
                         .icon_color(Color::Muted)
-                        .tooltip(Tooltip::text("Dismiss"))
+                        .tooltip(Tooltip::text("关闭"))
                         .on_click(move |_click_event, _window, cx| {
                             handle.update(cx, |_, cx| {
                                 cx.emit(DismissEvent);
@@ -160,7 +160,7 @@ impl Component for StatusToast {
         let text_example = StatusToast::new("Operation completed", cx, |this, _| this);
 
         let action_example = StatusToast::new("Update ready to install", cx, |this, _cx| {
-            this.action("Restart", |_, _| {})
+            this.action("重新启动", |_, _| {})
         });
 
         let dismiss_button_example =
@@ -195,7 +195,7 @@ impl Component for StatusToast {
                         .size(IconSize::Small)
                         .color(Color::Error),
                 )
-                .action("More Info", |_, _| {})
+                .action("更多信息", |_, _| {})
             },
         );
 
@@ -205,7 +205,7 @@ impl Component for StatusToast {
                     .size(IconSize::Small)
                     .color(Color::Warning),
             )
-            .action("More Info", |_, _| {})
+            .action("更多信息", |_, _| {})
         });
 
         let pr_example =
@@ -215,7 +215,7 @@ impl Component for StatusToast {
                         .size(IconSize::Small)
                         .color(Color::Muted),
                 )
-                .action("Open Pull Request", |_, cx| {
+                .action("打开拉取请求", |_, cx| {
                     cx.open_url("https://github.com/")
                 })
             });

@@ -11412,7 +11412,7 @@ fn submit_deletion(panel: &Entity<ProjectPanel>, cx: &mut VisualTestContext) {
         cx.has_pending_prompt(),
         "Should have a prompt after the deletion"
     );
-    cx.simulate_prompt_answer("Delete");
+    cx.simulate_prompt_answer("删除");
     assert!(
         !cx.has_pending_prompt(),
         "Should have no prompts after prompt was replied to"
@@ -11554,10 +11554,7 @@ async fn test_delete_prompt_escapes_markdown_in_file_name(cx: &mut gpui::TestApp
         .pending_prompt()
         .expect("delete should show a confirmation prompt");
 
-    assert_eq!(
-        message,
-        "Are you sure you want to permanently delete `__somefile__`?"
-    );
+    assert_eq!(message, "您确定要永久删除 `__somefile__`?");
 }
 
 #[gpui::test]
@@ -11595,5 +11592,5 @@ async fn test_restore_file_prompt_escapes_markdown_in_file_name(cx: &mut gpui::T
         .pending_prompt()
         .expect("restore should show a confirmation prompt");
 
-    assert_eq!(message, "Discard changes to `__init__.py`?");
+    assert_eq!(message, "确定放弃对 `__init__.py` 的更改吗？");
 }

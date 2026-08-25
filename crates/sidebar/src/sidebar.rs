@@ -805,7 +805,7 @@ impl Sidebar {
 
         let filter_editor = cx.new(|cx| {
             let mut editor = Editor::single_line(window, cx);
-            editor.set_placeholder_text("Search threads…", window, cx);
+            editor.set_placeholder_text("搜索线程…", window, cx);
             editor
         });
         let thread_rename_editor = cx.new(|cx| Editor::single_line(window, cx));
@@ -2251,7 +2251,7 @@ impl Sidebar {
                         .size(IconSize::XSmall)
                         .color(Color::Muted),
                 )
-                .tooltip(Tooltip::text("Remote Project"))
+                .tooltip(Tooltip::text("远程项目"))
                 .into_any_element(),
         )
     }
@@ -2466,7 +2466,7 @@ impl Sidebar {
                             Color::Custom(cx.theme().colors().icon_placeholder.opacity(0.1)),
                         ))
                         .child(
-                            Label::new("No threads yet")
+                            Label::new("暂无线程")
                                 .size(LabelSize::Small)
                                 .color(Color::Placeholder),
                         ),
@@ -3015,7 +3015,7 @@ impl Sidebar {
                                                     )
                                                     .icon_size(IconSize::Small)
                                                     .visible_on_hover(&row_group_name)
-                                                    .tooltip(Tooltip::text("Close Worktree"))
+                                                    .tooltip(Tooltip::text("关闭工作树"))
                                                     .on_click(move |_, window, cx| {
                                                         cx.stop_propagation();
                                                         window.prevent_default();
@@ -6246,7 +6246,7 @@ impl Sidebar {
                             .icon_size(IconSize::Small)
                             .icon_color(Color::Error)
                             .style(ButtonStyle::Tinted(TintColor::Error))
-                            .tooltip(Tooltip::text("Stop Generation"))
+                            .tooltip(Tooltip::text("停止生成"))
                             .on_click(cx.listener(move |this, _, _window, cx| {
                                 this.stop_thread(&thread_id_for_actions, cx);
                             }))
@@ -6258,7 +6258,7 @@ impl Sidebar {
                         Some(DraftKind::WithContent) => Some(
                             IconButton::new("discard_thread", IconName::Close)
                                 .icon_size(IconSize::Small)
-                                .tooltip(Tooltip::text("Discard Draft"))
+                                .tooltip(Tooltip::text("放弃草稿"))
                                 .on_click({
                                     let thread_workspace = thread_workspace.clone();
                                     cx.listener(move |this, _, window, cx| {
@@ -7254,7 +7254,7 @@ impl Sidebar {
                                 this.child(
                                     IconButton::new("clear_filter", IconName::Close)
                                         .icon_size(IconSize::Small)
-                                        .tooltip(Tooltip::text("Clear Search"))
+                                        .tooltip(Tooltip::text("清除搜索"))
                                         .on_click(cx.listener(|this, _, window, cx| {
                                             this.reset_filter_editor_text(window, cx);
                                             this.update_entries(cx);
@@ -7313,7 +7313,7 @@ impl Sidebar {
                                 h_flex()
                                     .gap_2()
                                     .justify_between()
-                                    .child(Label::new("Toggle Sidebar"))
+                                    .child(Label::new("切换侧边栏"))
                                     .child(KeyBinding::for_action(&ToggleWorkspaceSidebar, cx)),
                             )
                             .child(
@@ -7323,7 +7323,7 @@ impl Sidebar {
                                     .border_t_1()
                                     .border_color(cx.theme().colors().border_variant)
                                     .justify_between()
-                                    .child(Label::new("Focus Sidebar"))
+                                    .child(Label::new("聚焦侧边栏"))
                                     .child(KeyBinding::for_action(&FocusWorkspaceSidebar, cx)),
                             )
                             .into_any_element()

@@ -478,7 +478,7 @@ impl BlameRenderer for GitBlameRenderer {
                                             .child(Divider::vertical())
                                             .child(
                                                 CopyButton::new("copy-blame-sha", sha.to_string())
-                                                    .tooltip_label("Copy SHA"),
+                                                    .tooltip_label("复制 SHA"),
                                             ),
                                     ),
                             ),
@@ -519,13 +519,13 @@ fn deploy_blame_entry_context_menu(
     let context_menu = ContextMenu::build(window, cx, move |menu, _, _| {
         let sha = format!("{}", blame_entry.sha);
         menu.on_blur_subscription(Subscription::new(|| {}))
-            .entry("Copy Commit SHA", None, move |_, cx| {
+            .entry("复制提交 SHA", None, move |_, cx| {
                 cx.write_to_clipboard(ClipboardItem::new_string(sha.clone()));
             })
             .when_some(
                 details.and_then(|details| details.permalink.clone()),
                 |this, url| {
-                    this.entry("Open Permalink", None, move |_, cx| {
+                    this.entry("打开永久链接", None, move |_, cx| {
                         cx.open_url(url.as_str())
                     })
                 },

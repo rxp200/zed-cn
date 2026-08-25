@@ -340,9 +340,9 @@ impl From<TerminalDockPosition> for DockPosition {
 impl DockPosition {
     fn label(&self) -> &'static str {
         match self {
-            Self::Left => "Left",
-            Self::Bottom => "Bottom",
-            Self::Right => "Right",
+            Self::Left => "左侧",
+            Self::Bottom => "底部",
+            Self::Right => "右侧",
         }
     }
 
@@ -1338,7 +1338,7 @@ impl Render for PanelButtons {
                                     let dock_for_flex = dock_for_menu.clone();
                                     let workspace_for_flex = workspace_for_menu.clone();
                                     menu = menu.toggleable_entry(
-                                        "Flex Width",
+                                        "弹性宽度",
                                         currently_flexible,
                                         IconPosition::Start,
                                         None,
@@ -1361,7 +1361,7 @@ impl Render for PanelButtons {
                                     let dock_for_fixed = dock_for_menu.clone();
                                     let workspace_for_fixed = workspace_for_menu.clone();
                                     menu = menu.toggleable_entry(
-                                        "Fixed Width",
+                                        "固定宽度",
                                         !currently_flexible,
                                         IconPosition::Start,
                                         None,

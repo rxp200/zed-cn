@@ -175,7 +175,7 @@ impl AddToolchainState {
                                 .p_1()
                                 .justify_between()
                                 .gap_2()
-                                .child(Label::new("Select Toolchain Path").color(Color::Muted).map(
+                                .child(Label::new("选择工具链路径").color(Color::Muted).map(
                                     |this| {
                                         if is_loading {
                                             this.with_animation(
@@ -435,7 +435,7 @@ impl Render for AddToolchainState {
                             .child(
                                 v_flex()
                                     .child(
-                                        Label::new("Scope")
+                                        Label::new("作用域")
                                             .size(LabelSize::Small)
                                             .color(Color::Muted)
                                             .mt_1()
@@ -864,7 +864,7 @@ impl ToolchainSelectorDelegate {
                 Some(())
             }
         });
-        let placeholder_text = "Select a toolchain…".to_string().into();
+        let placeholder_text = "选择工具链…".to_string().into();
         Self {
             toolchain_selector,
             candidates: Default::default(),
@@ -1147,7 +1147,7 @@ impl PickerDelegate for ToolchainSelectorDelegate {
                                 }),
                         )
                         .child(
-                            Button::new("select", "Select")
+                            Button::new("select", "选择")
                                 .key_binding(KeyBinding::for_action_in(
                                     &menu::Confirm,
                                     &self.focus_handle,

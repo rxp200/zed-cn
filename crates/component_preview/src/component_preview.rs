@@ -561,7 +561,7 @@ impl ComponentPreview {
                                 .size(IconSize::Small)
                                 .color(Color::Muted),
                         )
-                        .action("Open Pull Request", |_, cx| {
+                        .action("打开拉取请求", |_, cx| {
                             cx.open_url("https://github.com/")
                         })
                     });
@@ -644,7 +644,7 @@ impl Render for ComponentPreview {
                             .border_t_1()
                             .border_color(cx.theme().colors().border)
                             .child(
-                                Button::new("toast-test", "Launch Toast")
+                                Button::new("toast-test", "启动提示框")
                                     .full_width()
                                     .on_click(cx.listener({
                                         move |this, _, _window, cx| {

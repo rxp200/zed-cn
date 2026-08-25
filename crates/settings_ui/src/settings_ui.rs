@@ -16,6 +16,7 @@ use gpui::{
 };
 
 use language::Buffer;
+use language_model::{LanguageModelProviderId, LanguageModelRegistry};
 use platform_title_bar::PlatformTitleBar;
 use project::{Project, ProjectPath, Worktree, WorktreeId};
 use release_channel::ReleaseChannel;
@@ -55,7 +56,7 @@ use zed_actions::{
 use crate::components::{
     EnumVariantDropdown, NumberField, NumberFieldMode, NumberFieldType, SettingsInputField,
     SettingsSectionHeader, font_picker, icon_theme_picker, render_ollama_model_picker,
-    text_field_a11y_state, theme_picker,
+    text_field_a11y_state, theme_picker, translation_picker,
 };
 use crate::pages::{
     CustomAgentForm, LlmProviderForm, McpServerForm, render_input_audio_device_dropdown,
@@ -511,7 +512,7 @@ fn init_renderers(cx: &mut App) {
                     settings_window,
                     item,
                     settings_file,
-                    Button::new("open-in-settings-file", "Edit in settings.json")
+                    Button::new("open-in-settings-file", "在settings.json中编辑")
                         .style(ButtonStyle::Outlined)
                         .size(ButtonSize::Medium)
                         .tab_index(0_isize)
@@ -589,6 +590,7 @@ fn init_renderers(cx: &mut App) {
         .add_basic_renderer::<settings::TerminalBlink>(render_dropdown)
         .add_basic_renderer::<settings::CursorShapeContent>(render_dropdown)
         .add_basic_renderer::<settings::EditPredictionPromptFormatContent>(render_dropdown)
+        .add_basic_renderer::<settings::OpenAiCompatibleApiTypeContent>(render_dropdown)
         .add_basic_renderer::<settings::EditPredictionDataCollectionChoice>(render_dropdown)
         .add_basic_renderer::<f32>(render_editable_number_field)
         .add_basic_renderer::<settings::AutoCompactThreshold>(render_text_field)
@@ -647,6 +649,8 @@ fn init_renderers(cx: &mut App) {
         .add_basic_renderer::<settings::ScanSymlinksSetting>(render_dropdown)
         .add_basic_renderer::<settings::FontSize>(render_editable_number_field)
         .add_basic_renderer::<settings::OllamaModelName>(render_ollama_model_picker)
+        .add_basic_renderer::<settings::TranslationProviderSetting>(render_translation_provider_picker)
+        .add_basic_renderer::<settings::TranslationModelSetting>(render_translation_model_picker)
         .add_basic_renderer::<settings::SemanticTokens>(render_dropdown)
         .add_basic_renderer::<settings::DocumentFoldingRanges>(render_dropdown)
         .add_basic_renderer::<settings::DocumentSymbols>(render_dropdown)
@@ -1416,7 +1420,7 @@ fn render_settings_item_layout(
                                     .icon_color(Color::Muted)
                                     .icon_size(IconSize::Small)
                                     .aria_label("Reset to Default")
-                                    .tooltip(Tooltip::text("Reset to Default"))
+                                    .tooltip(Tooltip::text("重置为默认值"))
                                     .on_click(move |_, window, cx| {
                                         reset_to_default(window, cx);
                                     }),
@@ -1548,7 +1552,7 @@ fn render_settings_item_link(
                 .icon_size(IconSize::Small)
                 .shape(IconButtonShape::Square)
                 .aria_label("Copy Link")
-                .tooltip(Tooltip::text("Copy Link"))
+                .tooltip(Tooltip::text("复制链接"))
                 .when_some(json_path, |this, path| {
                     this.on_click(cx.listener(move |this, _, _, cx| {
                         let link = format!("zed://settings/{}", path);
@@ -1771,7 +1775,7 @@ impl SettingsWindow {
         let current_file = SettingsUiFile::User;
         let search_bar = cx.new(|cx| {
             let mut editor = Editor::single_line(window, cx);
-            editor.set_placeholder_text("Search settings…", window, cx);
+            editor.set_placeholder_text("搜索设置…", window, cx);
             editor
         });
         cx.subscribe(&search_bar, |this, _, event: &EditorEvent, cx| {
@@ -2905,7 +2909,7 @@ impl SettingsWindow {
                                         }),
                                     )
                                     .style(DropdownStyle::Subtle)
-                                    .trigger_tooltip(Tooltip::text("View Other Projects"))
+                                    .trigger_tooltip(Tooltip::text("查看其他项目"))
                                     .trigger_icon(IconName::ChevronDown)
                                     .attach(gpui::Anchor::BottomLeft)
                                     .offset(gpui::Point {
@@ -2918,7 +2922,7 @@ impl SettingsWindow {
                     }),
             )
             .child(
-                Button::new(edit_in_json_id, "Edit in settings.json")
+                Button::new(edit_in_json_id, "在settings.json中编辑")
                     .tab_index(0_isize)
                     .style(ButtonStyle::OutlinedGhost)
                     .tooltip(Tooltip::for_action_title_in(
@@ -2985,7 +2989,7 @@ impl SettingsWindow {
         h_flex()
             .id("settings-ui-search")
             .role(Role::SearchInput)
-            .aria_label("Search Settings")
+            .aria_label("搜索设置")
             .aria_value(a11y_value)
             .track_focus(&self.search_bar.focus_handle(cx))
             .a11y_synthetic_children(a11y_text_runs)
@@ -3443,7 +3447,7 @@ impl SettingsWindow {
                 "sub-page-scope-picker",
                 scope_name,
                 ContextMenu::build(window, cx, move |mut menu, _, _| {
-                    menu = menu.header("Scope");
+                    menu = menu.header("作用域");
 
                     for ix in allowed_file_indices {
                         let (file, focus_handle) = &self.files[ix];
@@ -3473,7 +3477,7 @@ impl SettingsWindow {
                 }),
             )
             .style(DropdownStyle::Subtle)
-            .trigger_tooltip(Tooltip::text("Change Scope"))
+            .trigger_tooltip(Tooltip::text("更改范围"))
             .attach(gpui::Anchor::BottomLeft)
             .offset(gpui::Point {
                 x: px(0.0),
@@ -3520,7 +3524,7 @@ impl SettingsWindow {
             .items_center()
             .justify_center()
             .gap_1()
-            .child(Label::new("No Results"))
+            .child(Label::new("无结果"))
             .child(
                 Label::new(format!("No settings match \"{}\"", search_query))
                     .size(LabelSize::Small)
@@ -3756,7 +3760,7 @@ impl SettingsWindow {
                         .flex_shrink_0()
                         .when(current_sub_page.link.in_json, |this| {
                             this.child(
-                                Button::new("open-in-settings-file", "Edit in settings.json")
+                                Button::new("open-in-settings-file", "在settings.json中编辑")
                                     .tab_index(0_isize)
                                     .style(ButtonStyle::OutlinedGhost)
                                     .tooltip(Tooltip::for_action_title_in(
@@ -3774,7 +3778,7 @@ impl SettingsWindow {
                         })
                         .when(is_skills_page, |this| {
                             this.child(
-                                Button::new("open-skill-creator", "Create Skill")
+                                Button::new("open-skill-creator", "创建技能")
                                     .tab_index(0_isize)
                                     .style(ButtonStyle::OutlinedGhost)
                                     .on_click(cx.listener(|this, _, window, cx| {
@@ -3832,7 +3836,7 @@ impl SettingsWindow {
                     )
                     .action_slot(
                         div().pr_1().pb_1().child(
-                            Button::new("fix-in-json", "Fix in settings.json")
+                            Button::new("fix-in-json", "在settings.json中修复")
                                 .tab_index(0_isize)
                                 .style(ButtonStyle::Tinted(ui::TintColor::Warning))
                                 .on_click(cx.listener(|this, _, window, cx| {
@@ -3849,7 +3853,7 @@ impl SettingsWindow {
                 .gap_2()
                 .when_some(parse_error, |this, err| {
                     this.child(banner(
-                        "Failed to load your settings. Some values may be incorrect and changes may be lost.",
+                        "无法加载您的设置。某些值可能不正确，更改可能会丢失。",
                         err,
                         &mut self.shown_errors,
                         cx,
@@ -3857,17 +3861,20 @@ impl SettingsWindow {
                 })
                 .map(|this| match &error.migration_status {
                     settings::MigrationStatus::Succeeded => this.child(banner(
-                        "Your settings are out of date, and need to be updated.",
+                        "您的设置已过时，需要进行更新。",
                         match &self.current_file {
-                            SettingsUiFile::User => "They can be automatically migrated to the latest version.",
-                            SettingsUiFile::Server(_) | SettingsUiFile::Project(_)  => "They must be manually migrated to the latest version."
-                        }.to_string(),
+                            SettingsUiFile::User => "可以自动迁移到最新版本。",
+                            SettingsUiFile::Server(_) | SettingsUiFile::Project(_) => {
+                                "必须手动迁移到最新版本。"
+                            }
+                        }
+                        .to_string(),
                         &mut self.shown_errors,
                         cx,
                     )),
                     settings::MigrationStatus::Failed { error: err } if !parse_failed => this
                         .child(banner(
-                            "Your settings file is out of date, automatic migration failed",
+                            "您的设置文件已过时，自动迁移失败",
                             err.clone(),
                             &mut self.shown_errors,
                             cx,
@@ -3899,7 +3906,7 @@ impl SettingsWindow {
                         v_flex()
                             .my_0p5()
                             .gap_0p5()
-                            .child(Label::new("Restricted Mode"))
+                            .child(Label::new("受限模式"))
                             .child(
                                 Label::new(
                                     "This project is in restricted mode. Some project settings may not apply.",
@@ -3910,7 +3917,7 @@ impl SettingsWindow {
                     )
                     .action_slot(
                         div().pr_2().pb_1().child(
-                            Button::new("manage-trust", "Manage Trust")
+                            Button::new("manage-trust", "管理信任")
                                 .style(ButtonStyle::Tinted(ui::TintColor::Warning))
                                 .on_click(cx.listener(move |_this, _, window, cx| {
                                     if let Some(original_window) = original_window {
@@ -4279,7 +4286,7 @@ impl SettingsWindow {
         self.skill_creator_page = Some((page.clone(), subscription));
 
         let sub_page_link = SubPageLink {
-            title: "Create Skill".into(),
+            title: "创建技能".into(),
             r#type: SubPageType::SkillCreator,
             description: None,
             search_aliases: &[],
@@ -5132,6 +5139,197 @@ fn render_font_picker(
             y: px(2.0),
         })
         .with_handle(handle)
+        .into_any_element()
+}
+
+/// The language model providers configured under `language_models`, limited to
+/// those that are currently usable (authenticated, or reachable local
+/// servers). Returns `(provider_id, display_name)` pairs.
+fn translation_provider_options(cx: &App) -> Vec<(SharedString, SharedString)> {
+    let Some(registry) = LanguageModelRegistry::try_read_global(cx) else {
+        return Vec::new();
+    };
+    registry
+        .visible_providers()
+        .into_iter()
+        .filter(|provider| provider.is_authenticated(cx))
+        .map(|provider| {
+            (
+                SharedString::from(provider.id().0.as_ref()),
+                SharedString::from(provider.name().0.as_ref()),
+            )
+        })
+        .collect()
+}
+
+/// The models provided by the given translation provider, as `(model_id,
+/// display_name)` pairs.
+fn translation_model_options(cx: &App, provider_id: &str) -> Vec<(SharedString, SharedString)> {
+    if provider_id.is_empty() {
+        return Vec::new();
+    }
+    let Some(registry) = LanguageModelRegistry::try_read_global(cx) else {
+        return Vec::new();
+    };
+    let Some(provider) = registry.provider(&LanguageModelProviderId(provider_id.into())) else {
+        return Vec::new();
+    };
+    provider
+        .provided_models(cx)
+        .into_iter()
+        .map(|model| {
+            (
+                SharedString::from(model.id().0.as_ref()),
+                SharedString::from(model.name().0.as_ref()),
+            )
+        })
+        .collect()
+}
+
+fn render_translation_provider_picker(
+    field: SettingField<settings::TranslationProviderSetting>,
+    file: SettingsUiFile,
+    _metadata: Option<&SettingsFieldMetadata>,
+    title: &'static str,
+    description: &'static str,
+    _window: &mut Window,
+    cx: &mut App,
+) -> AnyElement {
+    let (_, value) = SettingsStore::global(cx).get_value_from_file(file.to_settings(), field.pick);
+    let current_value: SharedString = value
+        .map(|provider| provider.0.as_str().into())
+        .unwrap_or_default();
+
+    let trigger_value: SharedString = if current_value.is_empty() {
+        "选择一个渠道…".into()
+    } else {
+        current_value.clone()
+    };
+
+    PopoverMenu::new("translation-provider-picker")
+        .trigger(
+            render_picker_trigger_button(
+                "translation_provider_picker_trigger".into(),
+                trigger_value,
+            )
+            .aria_label(title)
+            .when(!description.is_empty(), |this| {
+                this.aria_description(description)
+            }),
+        )
+        .menu(move |window, cx| {
+            let file = file.clone();
+            let current_value = current_value.clone();
+            let options = translation_provider_options(cx);
+            Some(cx.new(move |cx| {
+                translation_picker(
+                    options,
+                    current_value,
+                    move |provider_id, window, cx| {
+                        update_settings_file(
+                            file.clone(),
+                            field.json_path,
+                            window,
+                            cx,
+                            move |settings, app| {
+                                (field.write)(
+                                    settings,
+                                    Some(settings::TranslationProviderSetting(
+                                        provider_id.to_string(),
+                                    )),
+                                    app,
+                                );
+                            },
+                        )
+                        .log_err();
+                    },
+                    window,
+                    cx,
+                )
+            }))
+        })
+        .anchor(gpui::Anchor::TopLeft)
+        .offset(gpui::Point {
+            x: px(0.0),
+            y: px(2.0),
+        })
+        .with_handle(ui::PopoverMenuHandle::default())
+        .into_any_element()
+}
+
+fn render_translation_model_picker(
+    field: SettingField<settings::TranslationModelSetting>,
+    file: SettingsUiFile,
+    _metadata: Option<&SettingsFieldMetadata>,
+    title: &'static str,
+    description: &'static str,
+    _window: &mut Window,
+    cx: &mut App,
+) -> AnyElement {
+    let store = SettingsStore::global(cx);
+    let (_, provider_value) = store.get_value_from_file(file.to_settings(), |content| {
+        content.hover_translation.as_ref()?.provider.as_ref()
+    });
+    let provider_id: SharedString = provider_value
+        .map(|provider| provider.0.as_str().into())
+        .unwrap_or_default();
+
+    let (_, value) = store.get_value_from_file(file.to_settings(), field.pick);
+    let current_value: SharedString = value
+        .map(|model| model.0.as_str().into())
+        .unwrap_or_default();
+
+    let trigger_value: SharedString = if provider_id.is_empty() {
+        "请先选择翻译渠道…".into()
+    } else if current_value.is_empty() {
+        "选择一个模型…".into()
+    } else {
+        current_value.clone()
+    };
+
+    PopoverMenu::new("translation-model-picker")
+        .trigger(
+            render_picker_trigger_button("translation_model_picker_trigger".into(), trigger_value)
+                .aria_label(title)
+                .when(!description.is_empty(), |this| {
+                    this.aria_description(description)
+                }),
+        )
+        .menu(move |window, cx| {
+            let file = file.clone();
+            let current_value = current_value.clone();
+            let options = translation_model_options(cx, provider_id.as_ref());
+            Some(cx.new(move |cx| {
+                translation_picker(
+                    options,
+                    current_value,
+                    move |model_id, window, cx| {
+                        update_settings_file(
+                            file.clone(),
+                            field.json_path,
+                            window,
+                            cx,
+                            move |settings, app| {
+                                (field.write)(
+                                    settings,
+                                    Some(settings::TranslationModelSetting(model_id.to_string())),
+                                    app,
+                                );
+                            },
+                        )
+                        .log_err();
+                    },
+                    window,
+                    cx,
+                )
+            }))
+        })
+        .anchor(gpui::Anchor::TopLeft)
+        .offset(gpui::Point {
+            x: px(0.0),
+            y: px(2.0),
+        })
+        .with_handle(ui::PopoverMenuHandle::default())
         .into_any_element()
 }
 
@@ -6238,7 +6436,7 @@ pub mod test {
                 1,
                 "Skills sub-page should stay open when switching scope"
             );
-            assert_eq!(settings_window.sub_page_stack[0].link.title, "Skills");
+            assert_eq!(settings_window.sub_page_stack[0].link.title, "技能");
             assert_eq!(
                 displayed_skill_names(settings_window, cx),
                 ["project-skill"]
@@ -6335,7 +6533,7 @@ pub mod test {
                 .collect();
             assert_eq!(
                 titles,
-                ["Skills", "Create Skill"],
+                ["技能", "创建技能"],
                 "skill creator should be pushed on top of the skills page"
             );
             assert!(
@@ -6428,7 +6626,7 @@ pub mod test {
                     .collect();
                 assert_eq!(
                     titles,
-                    ["Skills", "Create Skill"],
+                    ["技能", "创建技能"],
                     "skill creator should be pushed on top of the skills page"
                 );
             })

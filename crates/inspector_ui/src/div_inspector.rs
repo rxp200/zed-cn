@@ -102,7 +102,7 @@ impl DivInspector {
 
                             // Initialize editors immediately instead of waiting for
                             // `update_inspected_element`. This avoids continuing to show
-                            // "Loading..." until the user moves the mouse to a different element.
+                            // "加载中…" until the user moves the mouse to a different element.
                             if let Some(id) = this.inspector_id.take() {
                                 let inspector_state =
                                     window.with_inspector_state(Some(&id), cx, |state, _window| {
@@ -515,14 +515,12 @@ impl Render for DivInspector {
             .when_some(self.inspector_state.as_ref(), |this, inspector_state| {
                 this.child(
                     v_flex()
-                        .child(Label::new("Layout").size(LabelSize::Large))
+                        .child(Label::new("布局").size(LabelSize::Large))
                         .child(render_layout_state(inspector_state, cx)),
                 )
             })
             .map(|this| match &self.state {
-                State::Loading | State::BuffersLoaded { .. } => {
-                    this.child(Label::new("Loading..."))
-                }
+                State::Loading | State::BuffersLoaded { .. } => this.child(Label::new("加载中…")),
                 State::LoadError { message } => this.child(
                     div()
                         .w_full()
@@ -541,10 +539,10 @@ impl Render for DivInspector {
                             .child(
                                 h_flex()
                                     .justify_between()
-                                    .child(Label::new("Rust Style").size(LabelSize::Large))
+                                    .child(Label::new("Rust 风格").size(LabelSize::Large))
                                     .child(
                                         IconButton::new("reset-style", IconName::Eraser)
-                                            .tooltip(Tooltip::text("Reset style"))
+                                            .tooltip(Tooltip::text("重置样式"))
                                             .on_click(cx.listener(|this, _, _window, cx| {
                                                 this.reset_style(cx);
                                             })),
@@ -555,7 +553,7 @@ impl Render for DivInspector {
                     .child(
                         v_flex()
                             .gap_2()
-                            .child(Label::new("JSON Style").size(LabelSize::Large))
+                            .child(Label::new("JSON 风格").size(LabelSize::Large))
                             .child(div().h_128().child(json_style_editor.clone()))
                             .when_some(self.json_style_error.as_ref(), |this, last_error| {
                                 this.child(
@@ -588,7 +586,7 @@ fn render_layout_state(inspector_state: &DivInspectorState, cx: &App) -> Div {
             div()
                 .id("content-size")
                 .text_ui(cx)
-                .tooltip(Tooltip::text("Size of the element's children"))
+                .tooltip(Tooltip::text("元素子项的大小"))
                 .child(
                     if inspector_state.content_size != inspector_state.bounds.size {
                         format!("Content size: {}", inspector_state.content_size)

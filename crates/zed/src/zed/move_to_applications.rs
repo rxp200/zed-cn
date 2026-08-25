@@ -105,7 +105,7 @@ impl MoveToApplicationsRequest {
                         PromptLevel::Critical,
                         "Failed to move Zed to Applications",
                         Some(&error.to_string()),
-                        &["OK"],
+                        &["确定"],
                     )
                     .await
                     .log_err();
@@ -178,7 +178,7 @@ impl Render for InstallingZedModal {
                     .py_3()
                     .border_b_1()
                     .border_color(theme.colors().border_variant)
-                    .child(Label::new("Installing Zed…")),
+                    .child(Label::new("正在安装 Zed…")),
             )
             .child(
                 h_flex()
@@ -196,9 +196,9 @@ impl Render for InstallingZedModal {
                     .child(
                         v_flex()
                             .gap_1()
-                            .child(Label::new("Moving Zed to Applications"))
+                            .child(Label::new("正在将 Zed 移动到应用程序文件夹"))
                             .child(
-                                Label::new("Zed will reopen when installation is complete.")
+                                Label::new("安装完成后 Zed 将重新打开。")
                                     .size(LabelSize::Small)
                                     .color(Color::Muted),
                             ),

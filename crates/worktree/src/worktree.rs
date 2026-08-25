@@ -7118,10 +7118,7 @@ pub async fn decode_file_text(
         file_first_bytes.extend_from_slice(&buf[..n]);
     }
     let (bom_encoding, byte_content) = decode_byte_header(&file_first_bytes);
-    anyhow::ensure!(
-        byte_content != ByteContent::Binary,
-        "Binary files are not supported"
-    );
+    anyhow::ensure!(byte_content != ByteContent::Binary, "不支持二进制文件");
 
     // If the file is eligible for opening, read the rest of the file.
     let mut content = file_first_bytes;
@@ -7169,7 +7166,7 @@ fn decode_byte_full(
             return Ok((cow.into_owned(), encoding, false));
         }
         ByteContent::Binary => {
-            anyhow::bail!("Binary files are not supported");
+            anyhow::bail!("不支持二进制文件");
         }
         ByteContent::Unknown => {}
     }

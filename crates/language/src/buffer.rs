@@ -152,6 +152,13 @@ pub struct TreeSitterData {
 
 const MAX_ROWS_IN_A_CHUNK: u32 = 50;
 
+/// The maximum length (in bytes) of a line for which syntax highlighting
+/// (tree-sitter capture queries) will be computed. Lines longer than this are
+/// rendered as plain text, mirroring VS Code's
+/// `editor.maxTokenizationLineLength` (which defaults to 20,000 characters) to
+/// avoid pathological performance on very long lines (e.g. minified JSON).
+pub const MAX_HIGHLIGHTED_LINE_LEN: usize = 20_000;
+
 impl TreeSitterData {
     fn clear(&mut self, snapshot: &text::BufferSnapshot) {
         self.chunks = RowChunks::new(snapshot, MAX_ROWS_IN_A_CHUNK);
@@ -528,6 +535,15 @@ pub struct BufferChunks<'a> {
     unnecessary_depth: usize,
     underline: bool,
     highlights: Option<BufferChunkHighlights<'a>>,
+    /// Byte ranges within `range` for which syntax highlighting is skipped
+    /// (very long lines, see [`MAX_HIGHLIGHTED_LINE_LEN`]). While iterating
+    /// within one of these ranges, the tree-sitter capture cursor is not
+    /// advanced, so no tokens are computed for that line.
+    skip_highlights: Option<Vec<Range<usize>>>,
+    /// Set while iterating inside a `skip_highlights` range, indicating that
+    /// the capture cursor must be re-seeked to the current position once the
+    /// iteration leaves the range.
+    needs_capture_reseek: bool,
 }
 
 /// A chunk of a buffer's text, along with its syntax highlight and
@@ -759,6 +775,7 @@ impl HighlightedTextBuilder {
             range,
             Some((captures, highlight_maps)),
             false,
+            None,
             None,
         )
     }
@@ -1615,7 +1632,7 @@ impl Buffer {
 
             anyhow::ensure!(
                 analyze_byte_content(&bytes) != ByteContent::Binary,
-                "Binary files are not supported"
+                "不支持二进制文件"
             );
 
             let is_unicode = target_encoding == encoding_rs::UTF_8
@@ -3979,8 +3996,14 @@ impl BufferSnapshot {
         let range = range.start.to_offset(self)..range.end.to_offset(self);
 
         let mut syntax = None;
+        let mut skip_highlights = None;
         if language_aware.tree_sitter {
+            // Always create captures for the whole range; lines that are too
+            // long are skipped at the chunk-iteration level via
+            // `skip_highlights`, so they never advance the tree-sitter capture
+            // cursor (see [`BufferChunks::next`]).
             syntax = Some(self.get_highlights(range.clone()));
+            skip_highlights = self.long_line_highlight_skips(range.clone());
         }
         BufferChunks::new(
             self.text.as_rope(),
@@ -3988,7 +4011,30 @@ impl BufferSnapshot {
             syntax,
             language_aware.diagnostics,
             Some(self),
+            skip_highlights,
         )
+    }
+
+    /// Computes the byte ranges (within `range`) of lines that are too long to
+    /// syntax-highlight. While producing [`BufferChunks`] for these ranges,
+    /// tree-sitter capture queries are skipped so that very long lines (e.g.
+    /// minified JSON) do not incur a per-frame cost proportional to their
+    /// length. This mirrors VS Code's `editor.maxTokenizationLineLength`.
+    fn long_line_highlight_skips(&self, range: Range<usize>) -> Option<Vec<Range<usize>>> {
+        if range.is_empty() {
+            return None;
+        }
+        let start_point = self.text.offset_to_point(range.start);
+        let end_point = self.text.offset_to_point(range.end);
+        let mut skips = Vec::new();
+        for row in start_point.row..=end_point.row {
+            let line_len = self.text.line_len(row) as usize;
+            if line_len >= MAX_HIGHLIGHTED_LINE_LEN {
+                let start = self.text.point_to_offset(Point::new(row, 0));
+                skips.push(start..start + line_len);
+            }
+        }
+        if skips.is_empty() { None } else { Some(skips) }
     }
 
     pub fn highlighted_text_for_range<T: ToOffset>(
@@ -5336,6 +5382,7 @@ impl<'a> BufferChunks<'a> {
         syntax: Option<(SyntaxMapCaptures<'a>, Vec<HighlightMap>)>,
         diagnostics: bool,
         buffer_snapshot: Option<&'a BufferSnapshot>,
+        skip_highlights: Option<Vec<Range<usize>>>,
     ) -> Self {
         let mut highlights = None;
         if let Some((captures, highlight_maps)) = syntax {
@@ -5362,6 +5409,8 @@ impl<'a> BufferChunks<'a> {
             unnecessary_depth: 0,
             underline: true,
             highlights,
+            skip_highlights,
+            needs_capture_reseek: false,
         };
         this.initialize_diagnostic_endpoints();
         this
@@ -5371,6 +5420,13 @@ impl<'a> BufferChunks<'a> {
     pub fn seek(&mut self, range: Range<usize>) {
         let old_range = std::mem::replace(&mut self.range, range.clone());
         self.chunks.set_range(self.range.clone());
+        // Recompute the highlight skip ranges for the new range. Line lengths
+        // only change on edit, and edits rebuild this iterator, so it is safe
+        // to use the current buffer snapshot here.
+        if let Some(snapshot) = self.buffer_snapshot {
+            self.skip_highlights = snapshot.long_line_highlight_skips(self.range.clone());
+            self.needs_capture_reseek = false;
+        }
         if let Some(highlights) = self.highlights.as_mut() {
             if old_range.start <= self.range.start && old_range.end >= self.range.end {
                 // Reuse existing highlights stack, as the new range is a subrange of the old one.
@@ -5499,33 +5555,59 @@ impl<'a> Iterator for BufferChunks<'a> {
     fn next(&mut self) -> Option<Self::Item> {
         let mut next_capture_start = usize::MAX;
         let mut next_diagnostic_endpoint = usize::MAX;
+        let mut next_skip_end = usize::MAX;
 
         if let Some(highlights) = self.highlights.as_mut() {
-            while let Some((parent_capture_end, _)) = highlights.stack.last() {
-                if *parent_capture_end <= self.range.start {
-                    highlights.stack.pop();
-                } else {
-                    break;
+            // If the current position is inside a range for which syntax
+            // highlighting is skipped (a very long line), do not advance the
+            // capture cursor: the line is rendered as plain text. Chunks are
+            // truncated at the end of the skip range so that highlighting
+            // resumes right after it; once the iteration leaves the range,
+            // the capture cursor is re-seeked to the current position.
+            let current_skip = self
+                .skip_highlights
+                .as_ref()
+                .and_then(|skips| skips.iter().find(|skip| skip.contains(&self.range.start)));
+            if let Some(skip) = current_skip {
+                highlights.stack.clear();
+                highlights.next_capture = None;
+                self.needs_capture_reseek = true;
+                next_skip_end = skip.end;
+            } else {
+                if self.needs_capture_reseek {
+                    highlights
+                        .captures
+                        .set_byte_range(self.range.start..self.range.end);
+                    highlights.stack.clear();
+                    highlights.next_capture = None;
+                    self.needs_capture_reseek = false;
                 }
-            }
-
-            if highlights.next_capture.is_none() {
-                highlights.next_capture = highlights.captures.next();
-            }
-
-            while let Some(capture) = highlights.next_capture.as_ref() {
-                if self.range.start < capture.node.start_byte() {
-                    next_capture_start = capture.node.start_byte();
-                    break;
-                } else {
-                    let highlight_id =
-                        highlights.highlight_maps[capture.grammar_index].get(capture.index);
-                    if let Some(highlight_id) = highlight_id {
-                        highlights
-                            .stack
-                            .push((capture.node.end_byte(), highlight_id));
+                while let Some((parent_capture_end, _)) = highlights.stack.last() {
+                    if *parent_capture_end <= self.range.start {
+                        highlights.stack.pop();
+                    } else {
+                        break;
                     }
+                }
+
+                if highlights.next_capture.is_none() {
                     highlights.next_capture = highlights.captures.next();
+                }
+
+                while let Some(capture) = highlights.next_capture.as_ref() {
+                    if self.range.start < capture.node.start_byte() {
+                        next_capture_start = capture.node.start_byte();
+                        break;
+                    } else {
+                        let highlight_id =
+                            highlights.highlight_maps[capture.grammar_index].get(capture.index);
+                        if let Some(highlight_id) = highlight_id {
+                            highlights
+                                .stack
+                                .push((capture.node.end_byte(), highlight_id));
+                        }
+                        highlights.next_capture = highlights.captures.next();
+                    }
                 }
             }
         }
@@ -5555,7 +5637,8 @@ impl<'a> Iterator for BufferChunks<'a> {
             let chunk_start = self.range.start;
             let mut chunk_end = (self.chunks.offset() + chunk.len())
                 .min(next_capture_start)
-                .min(next_diagnostic_endpoint);
+                .min(next_diagnostic_endpoint)
+                .min(next_skip_end);
             let mut highlight_id = None;
             if let Some(highlights) = self.highlights.as_ref()
                 && let Some((parent_capture_end, parent_highlight_id)) = highlights.stack.last()

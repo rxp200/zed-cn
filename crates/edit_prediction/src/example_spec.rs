@@ -74,7 +74,7 @@ const RECENTLY_OPENED_FILES_HEADING: &str = "Recently Opened Files";
 const RECENTLY_VIEWED_FILES_HEADING: &str = "Recently Viewed Files";
 const EDIT_HISTORY_HEADING: &str = "Edit History";
 const CURSOR_POSITION_HEADING: &str = "Cursor Position";
-const EXPECTED_PATCH_HEADING: &str = "Expected Patch";
+const EXPECTED_PATCH_HEADING: &str = "预期补丁";
 const REJECTED_PATCH_HEADING: &str = "Rejected Patch";
 const ACCEPTED_PREDICTION_MARKER: &str = "// User accepted prediction:";
 

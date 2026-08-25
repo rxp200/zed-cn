@@ -1,3 +1,4 @@
+mod action_translations;
 mod persistence;
 
 use std::{
@@ -392,7 +393,7 @@ impl PickerDelegate for CommandPaletteDelegate {
     }
 
     fn placeholder_text(&self, _window: &mut Window, _cx: &mut App) -> Arc<str> {
-        "Execute a command...".into()
+        "执行命令…".into()
     }
 
     fn select_history(
@@ -666,7 +667,7 @@ impl PickerDelegate for CommandPaletteDelegate {
 
         let focus_handle = &self.previous_focus_handle;
         let keybinding_buttons = if keybind.has_binding(window) {
-            Button::new("change", "Change Keybinding…")
+            Button::new("change", "更改键绑定…")
                 .key_binding(
                     KeyBinding::for_action_in(&menu::SecondaryConfirm, focus_handle, cx)
                         .map(|kb| kb.size(rems_from_px(12_f32))),
@@ -675,7 +676,7 @@ impl PickerDelegate for CommandPaletteDelegate {
                     window.dispatch_action(menu::SecondaryConfirm.boxed_clone(), cx);
                 })
         } else {
-            Button::new("add", "Add Keybinding…")
+            Button::new("add", "添加键绑定…")
                 .key_binding(
                     KeyBinding::for_action_in(&menu::SecondaryConfirm, focus_handle, cx)
                         .map(|kb| kb.size(rems_from_px(12_f32))),
@@ -695,7 +696,7 @@ impl PickerDelegate for CommandPaletteDelegate {
                 .border_color(cx.theme().colors().border_variant)
                 .child(keybinding_buttons)
                 .child(
-                    Button::new("run-action", "Run")
+                    Button::new("run-action", "运行")
                         .key_binding(
                             KeyBinding::for_action_in(&menu::Confirm, &focus_handle, cx)
                                 .map(|kb| kb.size(rems_from_px(12_f32))),
@@ -710,6 +711,10 @@ impl PickerDelegate for CommandPaletteDelegate {
 }
 
 pub fn humanize_action_name(name: &str) -> String {
+    if let Some(translated) = action_translations::translate_action_name(name) {
+        return translated.to_string();
+    }
+
     let chars = name.chars().collect::<Vec<_>>();
     let capacity = name.len() + chars.iter().filter(|c| c.is_uppercase()).count();
     let mut result = String::with_capacity(capacity);
@@ -773,6 +778,15 @@ pub fn humanize_action_name(name: &str) -> String {
         }
     }
 
+    // 翻译未收录 action 的命名空间前缀（冒号左边部分）
+    if let Some((namespace, _)) = name.split_once("::")
+        && let Some(translated_namespace) =
+            action_translations::translate_action_namespace(namespace)
+        && let Some(colon_ix) = result.find(':')
+    {
+        return format!("{}{}", translated_namespace, &result[colon_ix..]);
+    }
+
     result
 }
 
@@ -801,28 +815,22 @@ mod tests {
     fn test_humanize_action_name() {
         assert_eq!(
             humanize_action_name("editor::GoToDefinition"),
-            "editor: go to definition"
+            "编辑器: 转到定义"
         );
-        assert_eq!(
-            humanize_action_name("editor::Backspace"),
-            "editor: backspace"
-        );
-        assert_eq!(
-            humanize_action_name("go_to_line::Deploy"),
-            "go to line: deploy"
-        );
+        assert_eq!(humanize_action_name("editor::Backspace"), "编辑器: 退格");
+        assert_eq!(humanize_action_name("go_to_line::Deploy"), "转到行: deploy");
         assert_eq!(
             humanize_action_name("agent::OpenGlobalAGENTS.mdRules"),
-            "agent: open global AGENTS.md rules"
+            "Agent: open global AGENTS.md rules"
         );
         assert_eq!(
             humanize_action_name("agent::OpenProjectAGENTS.mdRules"),
-            "agent: open project AGENTS.md rules"
+            "Agent: open project AGENTS.md rules"
         );
-        assert_eq!(humanize_action_name("editor::OpenURL"), "editor: open URL");
+        assert_eq!(humanize_action_name("editor::OpenUrl"), "编辑器: 打开 URL");
         assert_eq!(
-            humanize_action_name("editor::OpenURLParser"),
-            "editor: open URL parser"
+            humanize_action_name("editor::ToggleGoToLine"),
+            "编辑器: 转到行"
         );
     }
 
@@ -901,10 +909,10 @@ mod tests {
             assert!(is_sorted(&palette.delegate.commands));
         });
 
-        cx.simulate_input("bcksp");
+        cx.simulate_input("退格");
 
         palette.read_with(cx, |palette, _| {
-            assert_eq!(palette.delegate.matches[0].string, "editor: backspace");
+            assert_eq!(palette.delegate.matches[0].string, "编辑器: 退格");
         });
 
         cx.simulate_keystrokes("enter");
@@ -994,9 +1002,9 @@ mod tests {
                 .clone()
         });
 
-        cx.simulate_input("Editor::    Backspace");
+        cx.simulate_input("编辑器::    退格");
         palette.read_with(cx, |palette, _| {
-            assert_eq!(palette.delegate.matches[0].string, "editor: backspace");
+            assert_eq!(palette.delegate.matches[0].string, "编辑器: 退格");
         });
     }
 
@@ -1018,7 +1026,7 @@ mod tests {
         });
 
         cx.simulate_keystrokes("cmd-shift-p");
-        cx.simulate_input("go to line: Toggle");
+        cx.simulate_input("转到行");
         cx.simulate_keystrokes("enter");
 
         workspace.update(cx, |workspace, cx| {
@@ -1053,7 +1061,7 @@ mod tests {
 
         for _ in 0..2 {
             cx.simulate_keystrokes("cmd-shift-p");
-            cx.simulate_input("go to line: Toggle");
+            cx.simulate_input("转到行");
             cx.simulate_keystrokes("enter");
 
             workspace.update(cx, |workspace, cx| {
@@ -1190,10 +1198,10 @@ mod tests {
             cx.add_window_view(|window, cx| MultiWorkspace::test_new(project.clone(), window, cx));
         let workspace = multi_workspace.read_with(cx, |mw, _| mw.workspace().clone());
 
-        let palette = open_palette_with_history(&workspace, &["editor: close", "editor: open"], cx);
+        let palette = open_palette_with_history(&workspace, &["编辑器: 关闭", "编辑器: 打开"], cx);
 
         // Open palette with a query that has multiple matches
-        cx.simulate_input("editor");
+        cx.simulate_input("编辑器");
         cx.background_executor.run_until_parked();
 
         // Should have multiple matches, selected_ix should be 0
@@ -1217,11 +1225,11 @@ mod tests {
         });
 
         // Press up again at top - should enter history mode and show previous query
-        // that matches the "editor" prefix
+        // that matches the "编辑器" prefix
         cx.simulate_keystrokes("up");
         cx.background_executor.run_until_parked();
         palette.read_with(cx, |palette, cx| {
-            assert_eq!(palette.query(cx), "editor: open");
+            assert_eq!(palette.query(cx), "编辑器: 打开");
         });
     }
 

@@ -454,6 +454,7 @@ impl RemoteClient {
                     cx,
                 );
 
+                delegate.set_status(Some("正在等待远程开发服务响应"), cx);
                 let ready = client
                     .wait_for_remote_started()
                     .with_timeout(INITIAL_CONNECTION_TIMEOUT, cx.background_executor())
@@ -500,6 +501,7 @@ impl RemoteClient {
 
                 let heartbeat_task = Self::heartbeat(this.downgrade(), connection_activity_rx, cx);
 
+                delegate.set_status(Some("远程开发连接已建立"), cx);
                 this.update(cx, |this, _| {
                     this.state = Some(State::Connected {
                         remote_connection,
@@ -1232,7 +1234,7 @@ impl ConnectionPool {
                 if let Some(task) = task.upgrade() {
                     log::debug!("Connecting task is still alive");
                     cx.spawn(async move |cx| {
-                        delegate.set_status(Some("Waiting for existing connection attempt"), cx)
+                        delegate.set_status(Some("正在等待已有的连接任务"), cx)
                     })
                     .detach();
                     return task;

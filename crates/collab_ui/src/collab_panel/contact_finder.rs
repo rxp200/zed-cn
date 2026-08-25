@@ -38,8 +38,8 @@ impl Render for ContactFinder {
                     .bg(cx.theme().colors().element_background)
                     // HACK: Prevent the background color from overflowing the parent container.
                     .rounded_t(px(8.))
-                    .child(Label::new("Contacts"))
-                    .child(h_flex().child(Label::new("Invite new contacts"))),
+                    .child(Label::new("联系人"))
+                    .child(h_flex().child(Label::new("邀请新联系人"))),
             )
             .child(self.picker.clone())
     }

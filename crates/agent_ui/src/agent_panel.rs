@@ -840,7 +840,7 @@ fn build_conflict_resolution_prompt(conflicts: &[ConflictContent]) -> Vec<acp::C
         let conflict = &conflicts[0];
 
         blocks.push(acp::ContentBlock::Text(acp::TextContent::new(
-            "Please resolve the following merge conflict in ",
+            "请解决以下合并冲突：",
         )));
         let mention = MentionUri::File {
             abs_path: PathBuf::from(conflict.file_path.clone()),
@@ -3865,7 +3865,7 @@ impl AgentPanel {
         };
 
         let Some(store) = ThreadMetadataStore::try_global(cx) else {
-            Self::show_deferred_toast(&self.workspace, "Thread metadata store not available", cx);
+            Self::show_deferred_toast(&self.workspace, "线程元数据存储不可用", cx);
             return;
         };
 
@@ -3888,7 +3888,7 @@ impl AgentPanel {
         cx: &mut Context<Self>,
     ) {
         let Some(store) = ThreadMetadataStore::try_global(cx) else {
-            Self::show_deferred_toast(&self.workspace, "Thread metadata store not available", cx);
+            Self::show_deferred_toast(&self.workspace, "线程元数据存储不可用", cx);
             return;
         };
 
@@ -5460,7 +5460,7 @@ impl AgentPanel {
                             .into_any_element()
                     }
                 } else {
-                    Label::new("Terminal").into_any_element()
+                    Label::new("终端").into_any_element()
                 }
             }
 
@@ -5498,7 +5498,7 @@ impl AgentPanel {
                             .child(
                                 IconButton::new("edit_tile", IconName::Pencil)
                                     .icon_size(IconSize::Small)
-                                    .tooltip(Tooltip::text("Edit Thread Title")),
+                                    .tooltip(Tooltip::text("编辑线程标题")),
                             ),
                     )
             })
@@ -5599,12 +5599,7 @@ impl AgentPanel {
                 IconButton::new("agent-options-menu", IconName::Ellipsis)
                     .icon_size(IconSize::Small),
                 move |_window, cx| {
-                    Tooltip::for_action_in(
-                        "Toggle Agent Menu",
-                        &ToggleOptionsMenu,
-                        &focus_handle,
-                        cx,
-                    )
+                    Tooltip::for_action_in("切换 Agent 菜单", &ToggleOptionsMenu, &focus_handle, cx)
                 },
             )
             .anchor(Anchor::TopRight)
@@ -5615,11 +5610,11 @@ impl AgentPanel {
                         menu = menu.context(menu_action_context.clone());
 
                         if has_thread_messages {
-                            menu = menu.header("Current Thread");
+                            menu = menu.header("当前线程");
 
                             if let Some(conversation_view) = conversation_view.as_ref() {
                                 if can_regenerate_thread_title {
-                                    menu = menu.entry("Regenerate Thread Title", None, {
+                                    menu = menu.entry("重新生成线程标题", None, {
                                         let conversation_view = conversation_view.clone();
                                         let workspace = workspace.clone();
                                         move |_, cx| {
@@ -5636,7 +5631,7 @@ impl AgentPanel {
                                     conversation_view.read(cx).root_thread_view();
                                 if let Some(thread_view) = root_thread_view {
                                     let workspace = workspace.clone();
-                                    menu = menu.entry("Open Thread as Markdown", None, {
+                                    menu = menu.entry("以 Markdown 打开线程", None, {
                                         move |window, cx| {
                                             if let Some(workspace) = workspace.upgrade() {
                                                 thread_view.update(cx, |thread_view, cx| {
@@ -5657,16 +5652,16 @@ impl AgentPanel {
 
                         if !showing_terminal {
                             menu = menu
-                                .header("MCP Servers")
+                                .header("MCP 服务器")
                                 .action(
-                                    "Add Server…",
+                                    "添加服务器…",
                                     Box::new(zed_actions::OpenSettingsAt {
                                         path: "context_servers".to_string(),
                                         target: None,
                                     }),
                                 )
                                 .action(
-                                    "Install New Servers…",
+                                    "安装新服务器…",
                                     Box::new(zed_actions::Extensions {
                                         category_filter: Some(
                                             zed_actions::ExtensionCategoryFilter::ContextServers,
@@ -5675,8 +5670,8 @@ impl AgentPanel {
                                     }),
                                 )
                                 .separator()
-                                .header("Context")
-                                .action("Skills", Box::new(ManageSkills));
+                                .header("上下文")
+                                .action("技能", Box::new(ManageSkills));
 
                             if project_agents_md_path.is_some() || global_agents_md_loaded {
                                 if global_agents_md_loaded {
@@ -5687,7 +5682,7 @@ impl AgentPanel {
                                             h_flex()
                                                 .w_full()
                                                 .gap_1()
-                                                .child(Label::new("Open Global Rules"))
+                                                .child(Label::new("打开全局规则"))
                                                 .child(
                                                     Label::new("(AGENTS.md)")
                                                         .color(Color::Muted)
@@ -5712,7 +5707,7 @@ impl AgentPanel {
                                             h_flex()
                                                 .w_full()
                                                 .gap_1()
-                                                .child(Label::new("Open Project Rules"))
+                                                .child(Label::new("打开项目规则"))
                                                 .child(
                                                     Label::new("(AGENTS.md)")
                                                         .color(Color::Muted)
@@ -5733,22 +5728,22 @@ impl AgentPanel {
 
                             menu = menu
                                 .separator()
-                                .action("Profiles", Box::new(ManageProfiles::default()));
+                                .action("配置文件", Box::new(ManageProfiles::default()));
                         }
 
                         menu = menu
-                            .action("Settings", Box::new(OpenSettings))
+                            .action("设置", Box::new(OpenSettings))
                             .separator()
-                            .action("Toggle Threads Sidebar", Box::new(ToggleWorkspaceSidebar));
+                            .action("切换线程侧边栏", Box::new(ToggleWorkspaceSidebar));
 
                         if has_auth_methods || supports_logout {
                             menu = menu.separator()
                         }
                         if has_auth_methods {
-                            menu = menu.action("Reauthenticate", Box::new(ReauthenticateAgent))
+                            menu = menu.action("重新认证", Box::new(ReauthenticateAgent))
                         }
                         if supports_logout {
-                            menu = menu.action("Log Out", Box::new(LogoutAgent))
+                            menu = menu.action("登出", Box::new(LogoutAgent))
                         }
 
                         menu
@@ -5761,7 +5756,7 @@ impl AgentPanel {
         let focus_handle = self.focus_handle(cx);
 
         ProjectEmptyState::new(
-            "Agent Panel",
+            "Agent 面板",
             focus_handle.clone(),
             KeyBinding::for_action_in(&workspace::Open::default(), &focus_handle, cx),
         )
@@ -5911,7 +5906,7 @@ impl AgentPanel {
                                 .collect::<Vec<_>>();
 
                             if !agent_items.is_empty() {
-                                menu = menu.separator().header("External Agents");
+                                menu = menu.separator().header("外部Agent");
                             }
                             for item in &agent_items {
                                 let mut entry = ContextMenuEntry::new(item.display_name.clone());
@@ -6017,7 +6012,7 @@ impl AgentPanel {
                 Tooltip::with_meta(
                     selected_agent_label_for_tooltip.clone(),
                     None,
-                    "Selected Agent",
+                    "已选择的 Agent",
                     cx,
                 )
             });
@@ -6052,9 +6047,9 @@ impl AgentPanel {
 
         let is_full_screen = self.is_zoomed(window, cx);
         let (icon_name, tooltip_text) = if is_full_screen {
-            (IconName::Minimize, "Disable Full Screen")
+            (IconName::Minimize, "退出全屏")
         } else {
-            (IconName::Maximize, "Enable Full Screen")
+            (IconName::Maximize, "进入全屏")
         };
         let full_screen_button = IconButton::new("toggle-full-screen", icon_name)
             .icon_size(IconSize::Small)
@@ -9519,7 +9514,7 @@ mod tests {
         cx.run_until_parked();
 
         assert!(
-            cx.debug_bounds("MENU_ITEM-Skills").is_some(),
+            cx.debug_bounds("MENU_ITEM-技能").is_some(),
             "Skills menu item should be visible"
         );
         assert!(

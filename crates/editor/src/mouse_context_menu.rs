@@ -247,47 +247,41 @@ pub fn deploy_context_menu(
             let builder = menu
                 .on_blur_subscription(Subscription::new(|| {}))
                 .when(run_to_cursor, |builder| {
-                    builder.action("Run to Cursor", Box::new(RunToCursor))
+                    builder.action("运行到光标处", Box::new(RunToCursor))
                 })
                 .when(evaluate_selection && has_selections, |builder| {
-                    builder.action("Evaluate Selection", Box::new(EvaluateSelectedText))
+                    builder.action("求值选择内容", Box::new(EvaluateSelectedText))
                 })
                 .when(
                     run_to_cursor || (evaluate_selection && has_selections),
                     |builder| builder.separator(),
                 )
-                .action("Go to Definition", Box::new(GoToDefinition::default()))
-                .action("Go to Declaration", Box::new(GoToDeclaration))
-                .action("Go to Type Definition", Box::new(GoToTypeDefinition))
-                .action(
-                    "Go to Implementation",
-                    Box::new(GoToImplementation::default()),
-                )
-                .action(
-                    "Find All References",
-                    Box::new(FindAllReferences::default()),
-                )
+                .action("转到定义", Box::new(GoToDefinition::default()))
+                .action("转到声明", Box::new(GoToDeclaration))
+                .action("转到类型定义", Box::new(GoToTypeDefinition))
+                .action("转到实现", Box::new(GoToImplementation::default()))
+                .action("查找所有引用", Box::new(FindAllReferences::default()))
                 .separator()
-                .action("Rename Symbol", Box::new(Rename))
-                .action("Format Buffer", Box::new(Format))
+                .action("重命名符号", Box::new(Rename))
+                .action("格式化缓冲区", Box::new(Format))
                 .when(format_selections, |cx| {
-                    cx.action("Format Selections", Box::new(FormatSelections))
+                    cx.action("格式化选中内容", Box::new(FormatSelections))
                 })
                 .action(
-                    "Show Code Actions",
+                    "显示代码操作",
                     Box::new(ToggleCodeActions {
                         deployed_from: None,
                         quick_launch: false,
                     }),
                 )
                 .when(!disable_ai && has_selections, |this| {
-                    this.action("Add to Agent Thread", Box::new(AddSelectionToThread))
+                    this.action("添加到Agent线程", Box::new(AddSelectionToThread))
                 })
                 .separator()
-                .action("Cut", Box::new(Cut))
-                .action("Copy", Box::new(Copy))
-                .action("Copy and Trim", Box::new(CopyAndTrim))
-                .action("Paste", Box::new(Paste))
+                .action("剪切", Box::new(Cut))
+                .action("复制", Box::new(Copy))
+                .action("复制并修剪", Box::new(CopyAndTrim))
+                .action("粘贴", Box::new(Paste))
                 .separator()
                 .action_disabled_when(
                     !has_reveal_target,
@@ -295,26 +289,14 @@ pub fn deploy_context_menu(
                     Box::new(RevealInFileManager),
                 )
                 .when(is_markdown, |builder| {
-                    builder.action("Open Markdown Preview", Box::new(OpenMarkdownPreview))
+                    builder.action("打开Markdown预览", Box::new(OpenMarkdownPreview))
                 })
                 .when(is_svg, |builder| {
-                    builder.action("Open SVG Preview", Box::new(OpenSvgPreview))
+                    builder.action("打开SVG预览", Box::new(OpenSvgPreview))
                 })
-                .action_disabled_when(
-                    !has_reveal_target,
-                    "Open in Terminal",
-                    Box::new(OpenInTerminal),
-                )
-                .action_disabled_when(
-                    !has_git_repo,
-                    "Copy Permalink",
-                    Box::new(CopyPermalinkToLine),
-                )
-                .action_disabled_when(
-                    !has_git_repo,
-                    "View File History",
-                    Box::new(git::FileHistory),
-                );
+                .action_disabled_when(!has_reveal_target, "在终端中打开", Box::new(OpenInTerminal))
+                .action_disabled_when(!has_git_repo, "复制永久链接", Box::new(CopyPermalinkToLine))
+                .action_disabled_when(!has_git_repo, "查看文件历史", Box::new(git::FileHistory));
             match focus {
                 Some(focus) => builder.context(focus),
                 None => builder,
@@ -447,6 +429,6 @@ mod tests {
         });
         cx.run_until_parked();
 
-        assert!(cx.debug_bounds("MENU_ITEM-Copy").is_some());
+        assert!(cx.debug_bounds("MENU_ITEM-复制").is_some());
     }
 }

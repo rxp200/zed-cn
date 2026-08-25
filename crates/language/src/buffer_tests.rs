@@ -5249,3 +5249,166 @@ fn test_formatted_chunks(cx: &mut gpui::App) {
         }
     }
 }
+
+#[gpui::test]
+async fn test_chunks_skip_highlighting_for_very_long_lines(cx: &mut TestAppContext) {
+    let buffer = cx.new(|cx| {
+        // A line longer than `MAX_HIGHLIGHTED_LINE_LEN` should not be
+        // syntax-highlighted (mirroring VS Code's `maxTokenizationLineLength`),
+        // while the normal lines around it still are.
+        let lang = Arc::new(
+            Language::new(
+                LanguageConfig {
+                    name: "TestLang".into(),
+                    ..Default::default()
+                },
+                Some(tree_sitter_rust::LANGUAGE.into()),
+            )
+            .with_highlights_query("(identifier) @function (line_comment) @comment")
+            .unwrap(),
+        );
+        lang.set_theme(&SyntaxTheme::new([
+            ("function".to_string(), gpui::rgba(0xff0000ff).into()),
+            ("comment".to_string(), gpui::rgba(0x00ff00ff).into()),
+        ]));
+        let long_line = "x".repeat(MAX_HIGHLIGHTED_LINE_LEN);
+        let text = format!(
+            "fn main() {{
+//{long_line}
+fn foo() {{}}
+"
+        );
+        let buffer = Buffer::local(text, cx).with_language(lang, cx);
+        buffer.check_invariants();
+        buffer
+    });
+
+    cx.run_until_parked();
+
+    buffer.read_with(cx, |buffer, _cx| {
+        let snapshot = buffer.snapshot();
+        let row_chunks = |row: u32| {
+            let start = snapshot.point_to_offset(Point::new(row, 0));
+            let end = snapshot.point_to_offset(Point::new(row, snapshot.line_len(row)));
+            snapshot
+                .chunks(
+                    start..end,
+                    LanguageAwareStyling {
+                        tree_sitter: true,
+                        diagnostics: false,
+                    },
+                )
+                .collect::<Vec<_>>()
+        };
+        let row_captures = |row: u32| {
+            let start = snapshot.point_to_offset(Point::new(row, 0));
+            let end = snapshot.point_to_offset(Point::new(row, snapshot.line_len(row)));
+            snapshot
+                .captures(start..end, |grammar| {
+                    grammar
+                        .highlights_config
+                        .as_ref()
+                        .map(|config| &config.query)
+                })
+                .count()
+        };
+
+        // Sanity check: without the skip logic, the very long line would
+        // produce captures (its comment node lies fully within the row range).
+        assert!(
+            row_captures(1) > 0,
+            "sanity check failed: long line should match captures without skip"
+        );
+
+        // Normal lines are still syntax-highlighted.
+        assert!(
+            row_chunks(0)
+                .iter()
+                .any(|c| c.syntax_highlight_id.is_some()),
+            "first line should be highlighted"
+        );
+        assert!(
+            row_chunks(2)
+                .iter()
+                .any(|c| c.syntax_highlight_id.is_some()),
+            "last line should be highlighted"
+        );
+        // The very long line is rendered as plain text (no highlight).
+        assert!(
+            !row_chunks(1)
+                .iter()
+                .any(|c| c.syntax_highlight_id.is_some()),
+            "very long line should not be highlighted"
+        );
+    });
+}
+
+#[gpui::test]
+async fn test_chunks_skip_highlighting_resumes_after_long_line(cx: &mut TestAppContext) {
+    let buffer = cx.new(|cx| {
+        let lang = Arc::new(
+            Language::new(
+                LanguageConfig {
+                    name: "TestLang".into(),
+                    ..Default::default()
+                },
+                Some(tree_sitter_rust::LANGUAGE.into()),
+            )
+            .with_highlights_query("(identifier) @function (line_comment) @comment")
+            .unwrap(),
+        );
+        lang.set_theme(&SyntaxTheme::new([
+            ("function".to_string(), gpui::rgba(0xff0000ff).into()),
+            ("comment".to_string(), gpui::rgba(0x00ff00ff).into()),
+        ]));
+        let long_line = "x".repeat(MAX_HIGHLIGHTED_LINE_LEN);
+        // Row 0: `fn a() {`, Row 1: very long comment, Row 2: `fn b() {}`, Row 3: `}`
+        let text = format!("fn a() {{\n//{long_line}\nfn b() {{}}\n}}\n");
+        let buffer = Buffer::local(text, cx).with_language(lang, cx);
+        buffer.check_invariants();
+        buffer
+    });
+
+    cx.run_until_parked();
+
+    buffer.read_with(cx, |buffer, _cx| {
+        let snapshot = buffer.snapshot();
+        let long_start = snapshot.point_to_offset(Point::new(1, 0));
+        let long_end = long_start + snapshot.line_len(1) as usize;
+        let row2_start = snapshot.point_to_offset(Point::new(2, 0));
+
+        let mut offset = 0;
+        let mut long_line_highlighted = false;
+        let mut row_after_long_line_highlighted = false;
+        for chunk in snapshot.chunks(
+            0..snapshot.len(),
+            LanguageAwareStyling {
+                tree_sitter: true,
+                diagnostics: false,
+            },
+        ) {
+            let start = offset;
+            let end = offset + chunk.text.len();
+            offset = end;
+
+            let overlaps_long_line = start < long_end && end > long_start;
+            if overlaps_long_line && chunk.syntax_highlight_id.is_some() {
+                long_line_highlighted = true;
+            }
+            if start >= row2_start && chunk.syntax_highlight_id.is_some() {
+                row_after_long_line_highlighted = true;
+            }
+        }
+
+        // The very long line is rendered as plain text...
+        assert!(
+            !long_line_highlighted,
+            "long line should not be highlighted"
+        );
+        // ...and highlighting resumes correctly after it.
+        assert!(
+            row_after_long_line_highlighted,
+            "line after the long line should still be highlighted"
+        );
+    });
+}

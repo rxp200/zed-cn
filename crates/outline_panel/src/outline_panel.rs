@@ -710,7 +710,7 @@ impl OutlinePanel {
         cx.new(|cx| {
             let filter_editor = cx.new(|cx| {
                 let mut editor = Editor::single_line(window, cx);
-                editor.set_placeholder_text("Search buffer symbols…", window, cx);
+                editor.set_placeholder_text("搜索缓冲区符号…", window, cx);
                 editor
             });
             let filter_update_subscription = cx.subscribe_in(
@@ -1455,15 +1455,15 @@ impl OutlinePanel {
                     ui::utils::reveal_in_file_manager_label(false),
                     Box::new(RevealInFileManager),
                 )
-                .action("Open in Terminal", Box::new(OpenInTerminal))
+                .action("在终端中打开", Box::new(OpenInTerminal))
                 .when(is_unfoldable, |menu| {
-                    menu.action("Unfold Directory", Box::new(UnfoldDirectory))
+                    menu.action("展开目录", Box::new(UnfoldDirectory))
                 })
                 .when(is_foldable, |menu| {
-                    menu.action("Fold Directory", Box::new(FoldDirectory))
+                    menu.action("折叠目录", Box::new(FoldDirectory))
                 })
                 .separator()
-                .action("Copy Path", Box::new(zed_actions::workspace::CopyPath))
+                .action("复制路径", Box::new(zed_actions::workspace::CopyPath))
                 .action(
                     "Copy Relative Path",
                     Box::new(zed_actions::workspace::CopyRelativePath),
@@ -4642,7 +4642,7 @@ impl OutlinePanel {
                     h_flex()
                         .gap_1()
                         .justify_center()
-                        .child(Label::new("Toggle Panel With").color(Color::Muted))
+                        .child(Label::new("切换面板方式").color(Color::Muted))
                         .child({
                             let key_binding = match self.position(window, cx) {
                                 DockPosition::Left => {
@@ -4842,7 +4842,7 @@ impl OutlinePanel {
                         this.child(
                             IconButton::new("clear_filter", IconName::Close)
                                 .shape(IconButtonShape::Square)
-                                .tooltip(Tooltip::text("Clear Filter"))
+                                .tooltip(Tooltip::text("清除筛选"))
                                 .on_click(cx.listener(|outline_panel, _, window, cx| {
                                     outline_panel.filter_editor.update(cx, |editor, cx| {
                                         editor.set_text("", window, cx);
@@ -5141,7 +5141,7 @@ impl Render for OutlinePanel {
                         .gap_0p5()
                         .border_b_1()
                         .border_color(cx.theme().colors().border_variant)
-                        .child(Label::new("Searching:").color(Color::Muted))
+                        .child(Label::new("正在搜索：").color(Color::Muted))
                         .child(Label::new(query_text)),
                 )
             })

@@ -168,6 +168,31 @@ pub struct CustomEditPredictionProviderSettingsContent {
     ///
     /// Default: 256
     pub max_output_tokens: Option<u32>,
+    /// The API type to use for edit predictions.
+    ///
+    /// Default: "completions"
+    pub api_type: Option<OpenAiCompatibleApiTypeContent>,
+}
+
+#[derive(
+    Copy,
+    Clone,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+    MergeFrom,
+    strum::VariantArray,
+    strum::VariantNames,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum OpenAiCompatibleApiTypeContent {
+    #[default]
+    Completions,
+    ChatCompletions,
 }
 
 #[derive(
@@ -329,8 +354,7 @@ pub enum EditPredictionDataCollectionChoice {
 )]
 #[serde(rename_all = "snake_case")]
 pub enum EditPredictionsMode {
-    /// If provider supports it, display inline when holding modifier key (e.g., alt).
-    /// Otherwise, eager preview is used.
+    /// Request and display predictions when holding a modifier key (e.g., alt).
     #[serde(alias = "auto")]
     Subtle,
     /// Display inline when there are no language server completions available.

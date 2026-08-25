@@ -529,33 +529,33 @@ impl TerminalView {
         let context_menu = ContextMenu::build(window, cx, |menu, _, _| {
             menu.context(self.focus_handle.clone())
                 .when(self.shows_workspace_actions(), |menu| {
-                    menu.action("New Terminal", Box::new(NewTerminal::default()))
+                    menu.action("新建终端", Box::new(NewTerminal::default()))
                         .action(
                             "New Center Terminal",
                             Box::new(NewCenterTerminal::default()),
                         )
                         .separator()
                 })
-                .action("Copy", Box::new(Copy))
+                .action("复制", Box::new(Copy))
                 .when(
                     !matches!(self.mode, TerminalMode::Embedded { .. }),
                     |menu| {
-                        menu.action("Paste", Box::new(Paste))
-                            .action("Paste Text", Box::new(PasteText))
+                        menu.action("粘贴", Box::new(Paste))
+                            .action("粘贴文本", Box::new(PasteText))
                     },
                 )
-                .action("Select All", Box::new(SelectAll))
+                .action("全选", Box::new(SelectAll))
                 .when(
                     !matches!(self.mode, TerminalMode::Embedded { .. }),
-                    |menu| menu.action("Clear", Box::new(Clear)),
+                    |menu| menu.action("清除", Box::new(Clear)),
                 )
                 .when(
                     assistant_enabled && !matches!(self.mode, TerminalMode::Embedded { .. }),
                     |menu| {
                         menu.separator()
-                            .action("Inline Assist", Box::new(InlineAssist::default()))
+                            .action("内联辅助", Box::new(InlineAssist::default()))
                             .when(has_selection && self.shows_workspace_actions(), |menu| {
-                                menu.action("Add to Agent Thread", Box::new(AddSelectionToThread))
+                                menu.action("添加到Agent线程", Box::new(AddSelectionToThread))
                             })
                     },
                 )

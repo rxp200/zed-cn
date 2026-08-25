@@ -1641,11 +1641,11 @@ impl ConversationView {
                 self.load_subagent_session(subagent_session_id.clone(), session_id, window, cx)
             }
             AcpThreadEvent::ToolAuthorizationRequested(_) => {
-                self.notify_with_sound("Waiting for tool confirmation", IconName::Info, window, cx);
+                self.notify_with_sound("等待工具确认", IconName::Info, window, cx);
             }
             AcpThreadEvent::ToolAuthorizationReceived(_) => {}
             AcpThreadEvent::ElicitationRequested(_) => {
-                self.notify_with_sound("Waiting for input", IconName::Info, window, cx);
+                self.notify_with_sound("等待输入", IconName::Info, window, cx);
             }
             AcpThreadEvent::ElicitationResponded(_) => {}
             AcpThreadEvent::Retry(retry) => {
@@ -1747,12 +1747,7 @@ impl ConversationView {
                     });
                 }
                 if !is_subagent {
-                    self.notify_with_sound(
-                        "Agent stopped due to an error",
-                        IconName::Warning,
-                        window,
-                        cx,
-                    );
+                    self.notify_with_sound("Agent 因错误而停止", IconName::Warning, window, cx);
                 }
             }
             AcpThreadEvent::LoadError(error) => {
@@ -2316,7 +2311,7 @@ impl ConversationView {
                     .map(|this| {
                         if show_fallback_description {
                             this.child(
-                                Label::new("Choose one of the following authentication options:")
+                                Label::new("请选择以下认证方式之一：")
                                     .size(LabelSize::Small)
                                     .color(Color::Muted),
                             )
@@ -2712,7 +2707,7 @@ impl ConversationView {
                 return self.render_unsupported(path, current_version, minimum_version, window, cx);
             }
             LoadError::FailedToInstall(msg) => (
-                "Failed to Install",
+                "安装失败",
                 msg.into(),
                 Some(self.create_copy_button(msg.to_string()).into_any_element()),
             ),
@@ -2725,10 +2720,10 @@ impl ConversationView {
                 let action_slot = stderr
                     .is_some()
                     .then(|| self.create_copy_button(message.clone()).into_any_element());
-                ("Failed to Launch", message.into(), action_slot)
+                ("启动失败", message.into(), action_slot)
             }
             LoadError::Other(msg) => (
-                "Failed to Launch",
+                "启动失败",
                 msg.into(),
                 Some(self.create_copy_button(msg.to_string()).into_any_element()),
             ),
@@ -3213,7 +3208,7 @@ impl ConversationView {
     fn create_copy_button(&self, message: impl Into<String>) -> impl IntoElement {
         let message = message.into();
 
-        CopyButton::new("copy-error-message", message).tooltip_label("Copy Error Message")
+        CopyButton::new("copy-error-message", message).tooltip_label("复制错误消息")
     }
 
     pub(crate) fn reauthenticate(&mut self, window: &mut Window, cx: &mut Context<Self>) {

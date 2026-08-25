@@ -1302,7 +1302,7 @@ impl MultiWorkspace {
         let index = self.hold(workspace, window, cx);
         self.pin(index, key, cx);
         telemetry::event!(
-            "Workspace Added",
+            "工作区已添加",
             workspace_count = self.held.iter().filter(|held| held.pinned).count()
         );
         cx.notify();

@@ -304,7 +304,7 @@ impl ChangedFileEntry {
                 } else {
                     format!("{}/{}", dir_path, file_name).into()
                 };
-                move |_, cx| Tooltip::with_meta("View Changes", None, meta.clone(), cx)
+                move |_, cx| Tooltip::with_meta("查看更改", None, meta.clone(), cx)
             })
             .on_click({
                 let entry = self.clone();
@@ -385,7 +385,7 @@ impl ChangedFileDirectoryEntry {
             )
             .tooltip({
                 let name = self.name.clone();
-                move |_, cx| Tooltip::with_meta("Toggle Folder", None, name.clone(), cx)
+                move |_, cx| Tooltip::with_meta("切换文件夹", None, name.clone(), cx)
             })
             .on_click(move |_, _, cx| {
                 git_graph
@@ -1472,7 +1472,7 @@ impl GitGraph {
 
         let search_editor = cx.new(|cx| {
             let mut editor = Editor::single_line(window, cx);
-            editor.set_placeholder_text("Search commits…", window, cx);
+            editor.set_placeholder_text("搜索提交…", window, cx);
             editor
         });
 
@@ -2493,9 +2493,9 @@ impl GitGraph {
     ) {
         let is_path_history = matches!(self.log_source, LogSource::Path(_));
         let columns: &[&str] = if is_path_history {
-            &["Description", "Date", "Author", "Commit"]
+            &["描述", "日期", "作者", "提交"]
         } else {
-            &["Graph", "Description", "Date", "Author", "Commit"]
+            &["图", "描述", "日期", "作者", "提交"]
         };
 
         let filter = self.column_visibility.clone();
@@ -2602,7 +2602,7 @@ impl GitGraph {
                             .icon_size(IconSize::Small)
                             .tooltip(move |_, cx| {
                                 Tooltip::for_action_in(
-                                    "Select Previous Match",
+                                    "选择上一个匹配项",
                                     &SelectPreviousMatch,
                                     &focus_handle,
                                     cx,
@@ -2625,7 +2625,7 @@ impl GitGraph {
                             .icon_size(IconSize::Small)
                             .tooltip(move |_, cx| {
                                 Tooltip::for_action_in(
-                                    "Select Next Match",
+                                    "选择下一个匹配项",
                                     &SelectNextMatch,
                                     &focus_handle,
                                     cx,
@@ -3153,7 +3153,7 @@ impl GitGraph {
             .child(Divider::horizontal())
             .child(
                 h_flex().p_1p5().w_full().child(
-                    Button::new("view-commit", "View Commit")
+                    Button::new("view-commit", "查看提交")
                         .full_width()
                         .start_icon(
                             Icon::new(IconName::GitCommit)
@@ -3805,20 +3805,20 @@ impl Render for GitGraph {
                                     if !is_path_history {
                                         TableRow::from_vec(
                                             vec![
-                                                Label::new("Graph")
+                                                Label::new("图形")
                                                     .color(Color::Muted)
                                                     .truncate()
                                                     .into_any_element(),
-                                                Label::new("Description")
+                                                Label::new("描述")
                                                     .color(Color::Muted)
                                                     .into_any_element(),
-                                                Label::new("Date")
+                                                Label::new("日期")
                                                     .color(Color::Muted)
                                                     .into_any_element(),
-                                                Label::new("Author")
+                                                Label::new("作者")
                                                     .color(Color::Muted)
                                                     .into_any_element(),
-                                                Label::new("Commit")
+                                                Label::new("提交")
                                                     .color(Color::Muted)
                                                     .into_any_element(),
                                             ],
@@ -3827,16 +3827,16 @@ impl Render for GitGraph {
                                     } else {
                                         TableRow::from_vec(
                                             vec![
-                                                Label::new("Description")
+                                                Label::new("描述")
                                                     .color(Color::Muted)
                                                     .into_any_element(),
-                                                Label::new("Date")
+                                                Label::new("日期")
                                                     .color(Color::Muted)
                                                     .into_any_element(),
-                                                Label::new("Author")
+                                                Label::new("作者")
                                                     .color(Color::Muted)
                                                     .into_any_element(),
-                                                Label::new("Commit")
+                                                Label::new("提交")
                                                     .color(Color::Muted)
                                                     .into_any_element(),
                                             ],
@@ -6018,7 +6018,7 @@ mod tests {
             .await
             .expect("should create workspace id");
         let db = cx.read(|cx| persistence::GitGraphsDb::global(cx));
-        // Hide the "Date" column (index 2 in the non-path-history layout).
+        // Hide the "日期" column (index 2 in the non-path-history layout).
         let hidden_columns =
             persistence::serialize_hidden_columns(&[false, false, true, false, false]);
         db.save_git_graph(

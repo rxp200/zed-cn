@@ -92,11 +92,11 @@ impl TimeBucket {
 
     fn label(&self) -> &'static str {
         match self {
-            TimeBucket::Today => "Today",
-            TimeBucket::Yesterday => "Yesterday",
-            TimeBucket::ThisWeek => "This Week",
-            TimeBucket::PastWeek => "Past Week",
-            TimeBucket::Older => "Older",
+            TimeBucket::Today => "今天",
+            TimeBucket::Yesterday => "昨天",
+            TimeBucket::ThisWeek => "本周",
+            TimeBucket::PastWeek => "上周",
+            TimeBucket::Older => "更早",
         }
     }
 }
@@ -170,7 +170,7 @@ impl ThreadsArchiveView {
 
         let filter_editor = cx.new(|cx| {
             let mut editor = Editor::single_line(window, cx);
-            editor.set_placeholder_text("Search all threads…", window, cx);
+            editor.set_placeholder_text("搜索全部线程…", window, cx);
             editor
         });
 
@@ -693,7 +693,7 @@ impl ThreadsArchiveView {
                             IconButton::new("cancel-restore", IconName::Close)
                                 .icon_size(IconSize::Small)
                                 .icon_color(Color::Muted)
-                                .tooltip(Tooltip::text("Cancel Restore"))
+                                .tooltip(Tooltip::text("取消恢复"))
                                 .on_click({
                                     let thread_id = thread.thread_id;
                                     cx.listener(move |this, _, _, cx| {
@@ -714,7 +714,7 @@ impl ThreadsArchiveView {
                             .tooltip({
                                 move |_window, cx| {
                                     Tooltip::for_action_in(
-                                        "Delete Thread",
+                                        "删除线程",
                                         &RemoveSelectedThread,
                                         &focus_handle,
                                         cx,
@@ -752,7 +752,7 @@ impl ThreadsArchiveView {
                             .tooltip({
                                 move |_window, cx| {
                                     Tooltip::for_action_in(
-                                        "Archive Thread",
+                                        "归档线程",
                                         &ArchiveSelectedThread,
                                         &focus_handle,
                                         cx,
@@ -912,7 +912,7 @@ impl ThreadsArchiveView {
                 this.child(
                     IconButton::new("clear-filter", IconName::Close)
                         .icon_size(IconSize::Small)
-                        .tooltip(Tooltip::text("Clear Search"))
+                        .tooltip(Tooltip::text("清除搜索"))
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.reset_filter_editor_text(window, cx);
                             this.update_items(cx);
@@ -977,7 +977,7 @@ impl ThreadsArchiveView {
                     .child(
                         IconButton::new("new-thread", IconName::Plus)
                             .icon_size(IconSize::Small)
-                            .tooltip(Tooltip::text("Start New Agent Thread"))
+                            .tooltip(Tooltip::text("开始新的Agent线程"))
                             .on_click(cx.listener(|_this, _, _, cx| {
                                 cx.emit(ThreadsArchiveViewEvent::NewThread);
                             })),
@@ -985,7 +985,7 @@ impl ThreadsArchiveView {
                     .child(
                         IconButton::new("thread-import", IconName::Download)
                             .icon_size(IconSize::Small)
-                            .tooltip(Tooltip::text("Import Threads"))
+                            .tooltip(Tooltip::text("导入线程"))
                             .on_click(cx.listener(|_this, _, _, cx| {
                                 cx.emit(ThreadsArchiveViewEvent::Import);
                             })),
@@ -1492,9 +1492,9 @@ impl PickerDelegate for ProjectPickerDelegate {
 
     fn no_matches_text(&self, _window: &mut Window, _cx: &mut App) -> Option<SharedString> {
         let text = if self.workspaces.is_empty() {
-            "No recent projects found"
+            "未找到最近项目"
         } else {
-            "No matches"
+            "无匹配项"
         };
         Some(text.into())
     }
@@ -1611,7 +1611,7 @@ impl PickerDelegate for ProjectPickerDelegate {
                 .border_t_1()
                 .border_color(cx.theme().colors().border_variant)
                 .child(
-                    Button::new("open_local_folder", "Choose from Local Folders")
+                    Button::new("open_local_folder", "从本地文件夹选择")
                         .key_binding(KeyBinding::for_action_in(
                             &workspace::Open::default(),
                             &focus_handle,
@@ -1622,7 +1622,7 @@ impl PickerDelegate for ProjectPickerDelegate {
                         })),
                 )
                 .child(
-                    Button::new("select_project", "Select")
+                    Button::new("select_project", "选择")
                         .disabled(!has_selection)
                         .key_binding(KeyBinding::for_action_in(&menu::Confirm, &focus_handle, cx))
                         .on_click(cx.listener(move |picker, _, window, cx| {

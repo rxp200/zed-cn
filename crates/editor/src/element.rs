@@ -292,6 +292,11 @@ impl EditorElement {
         register_action(editor, window, Editor::select_page_up);
         register_action(editor, window, Editor::cancel);
         register_action(editor, window, Editor::blame_hover);
+        register_action(
+            editor,
+            window,
+            crate::hover_translation::translate_selection,
+        );
         register_action(editor, window, Editor::next_snippet_tabstop);
         register_action(editor, window, Editor::previous_snippet_tabstop);
         register_action(editor, window, Editor::copy);
@@ -2715,7 +2720,7 @@ impl EditorElement {
                         });
                     })
                     .tooltip(Tooltip::for_action_title(
-                        "Expand Excerpt",
+                        "展开摘要",
                         &crate::actions::ExpandExcerpts::default(),
                     ))
                     .into_any_element();
@@ -6846,7 +6851,7 @@ pub fn render_breadcrumb_text(
                                     h_flex()
                                         .gap_1()
                                         .justify_between()
-                                        .child(Label::new("Show Symbol Outline"))
+                                        .child(Label::new("显示符号大纲"))
                                         .child(ui::KeyBinding::for_action_in(
                                             &zed_actions::outline::ToggleOutline,
                                             &focus_handle,
@@ -6861,7 +6866,7 @@ pub fn render_breadcrumb_text(
                                             .pt_1()
                                             .border_t_1()
                                             .border_color(cx.theme().colors().border_variant)
-                                            .child(Label::new("Right-Click to Copy Path")),
+                                            .child(Label::new("右键复制路径")),
                                     )
                                 })
                                 .into_any_element()
@@ -7239,6 +7244,16 @@ impl LineWithInvisibles {
                         if row == max_line_count {
                             return layouts;
                         }
+                    }
+
+                    // The current display line has already exceeded the maximum
+                    // display length. Skip the rest of its chunks without
+                    // processing them (the visible prefix has been laid out
+                    // already, and any further text is not displayed). This
+                    // keeps rendering cost bounded for very long lines (e.g.
+                    // minified JSON), regardless of the line's length.
+                    if line_exceeded_max_len {
+                        continue;
                     }
 
                     if !line_chunk.is_empty() && !line_exceeded_max_len {

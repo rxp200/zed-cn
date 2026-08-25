@@ -168,9 +168,9 @@ pub enum LspPickerKind {
 impl LspPickerKind {
     fn placeholder(self) -> &'static str {
         match self {
-            LspPickerKind::References => "Filter references…",
-            LspPickerKind::Definition => "Filter definitions…",
-            LspPickerKind::Implementation => "Filter implementations…",
+            LspPickerKind::References => "筛选引用…",
+            LspPickerKind::Definition => "筛选定义…",
+            LspPickerKind::Implementation => "筛选实现…",
         }
     }
 
@@ -178,9 +178,9 @@ impl LspPickerKind {
     /// appear to silently do nothing.
     fn empty_message(self) -> &'static str {
         match self {
-            LspPickerKind::References => "No references found",
-            LspPickerKind::Definition => "No definitions found",
-            LspPickerKind::Implementation => "No implementations found",
+            LspPickerKind::References => "未找到引用",
+            LspPickerKind::Definition => "未找到定义",
+            LspPickerKind::Implementation => "未找到实现",
         }
     }
 

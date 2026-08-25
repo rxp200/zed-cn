@@ -55,8 +55,8 @@ pub(crate) fn render_mcp_servers_page(
                 .px_8()
                 .gap_2()
                 .child(
-                    v_flex().child(Label::new("Configured Servers")).child(
-                        Label::new("Manage servers connected directly or via extensions.")
+                    v_flex().child(Label::new("已配置的服务器")).child(
+                        Label::new("管理直接或通过扩展连接的服务器。")
                             .size(LabelSize::Small)
                             .color(Color::Muted),
                     ),
@@ -74,8 +74,8 @@ fn render_context_server_timeout(
     cx: &mut Context<SettingsWindow>,
 ) -> AnyElement {
     let item = SettingsPageItem::SettingItem(SettingItem {
-        title: "MCP Server Timeout",
-        description: "Default timeout in seconds for MCP server tool calls.",
+        title: "MCP 服务器超时",
+        description: "MCP 服务器工具调用的默认超时时间（秒）。",
         field: Box::new(SettingField {
             organization_override: None,
             json_path: Some("context_server_timeout"),
@@ -108,7 +108,7 @@ fn render_empty_state(cx: &App) -> AnyElement {
         .border_color(cx.theme().colors().border.opacity(0.6))
         .rounded_sm()
         .child(
-            Label::new("No MCP servers added yet. Click \"Add Server\" to get started.")
+            Label::new("尚未添加 MCP 服务器。点击「添加服务器」开始使用。")
                 .color(Color::Muted)
                 .size(LabelSize::Small),
         )
@@ -124,7 +124,7 @@ fn render_no_project_state(cx: &App) -> AnyElement {
         .border_color(cx.theme().colors().border.opacity(0.6))
         .rounded_sm()
         .child(
-            Label::new("No active project found. Open a workspace to manage MCP servers.")
+            Label::new("未找到活动项目。打开工作区以管理 MCP 服务器。")
                 .color(Color::Muted)
                 .size(LabelSize::Small),
         )
@@ -197,9 +197,9 @@ fn render_context_server(
 
     let tool_label = if is_running && tool_count > 0 {
         Some(if tool_count == 1 {
-            SharedString::from("1 tool")
+            SharedString::from("1 个工具")
         } else {
-            SharedString::from(format!("{} tools", tool_count))
+            SharedString::from(format!("{} 个工具", tool_count))
         })
     } else {
         None
@@ -281,7 +281,7 @@ fn render_configure_button(
     )
     .icon_size(IconSize::Small)
     .tab_index(0isize)
-    .tooltip(Tooltip::text("Configure MCP Server"))
+    .tooltip(Tooltip::text("配置MCP服务器"))
     .on_click(move |_event, window, cx| {
         let transport = match &server_settings {
             Some(ContextServerSettings::Http { .. }) => McpTransport::Http,
@@ -310,7 +310,7 @@ fn render_uninstall_button(
     )
     .icon_size(IconSize::Small)
     .tab_index(0isize)
-    .tooltip(Tooltip::text("Uninstall MCP Server"))
+    .tooltip(Tooltip::text("卸载MCP服务器"))
     .on_click(move |_event, _window, cx| {
         uninstall_server(&context_server_id, provided_by_extension, cx);
     })
@@ -408,7 +408,7 @@ fn render_status_details(
                     )
                     .when(should_show_logout, |this| {
                         this.child(
-                            Button::new("error-logout", "Log Out")
+                            Button::new("error-logout", "登出")
                                 .style(ButtonStyle::Outlined)
                                 .label_size(LabelSize::Small)
                                 .on_click({
@@ -441,13 +441,13 @@ fn render_status_details(
                                     .color(Color::Muted),
                             )
                             .child(
-                                Label::new("Authenticate to connect this server")
+                                Label::new("认证以连接此服务器")
                                     .color(Color::Muted)
                                     .size(LabelSize::Small),
                             ),
                     )
                     .child(
-                        Button::new("authenticate-server", "Authenticate")
+                        Button::new("authenticate-server", "认证")
                             .style(ButtonStyle::Outlined)
                             .label_size(LabelSize::Small)
                             .on_click({
@@ -474,7 +474,7 @@ fn render_status_details(
                                 .color(Color::Muted),
                         )
                         .child(
-                            Label::new("A client secret is required to connect this server")
+                            Label::new("连接此服务器需要客户端密钥")
                                 .color(Color::Muted)
                                 .size(LabelSize::Small),
                         ),
@@ -489,7 +489,7 @@ fn render_status_details(
                 .gap_2()
                 .child(div().size_3().flex_shrink_0())
                 .child(
-                    Label::new("Authenticating…")
+                    Label::new("正在认证...")
                         .color(Color::Muted)
                         .size(LabelSize::Small),
                 )
@@ -504,7 +504,7 @@ fn render_status_details(
                     .w_full()
                     .justify_end()
                     .child(
-                        Button::new("running-logout", "Log Out")
+                        Button::new("running-logout", "登出")
                             .style(ButtonStyle::Outlined)
                             .label_size(LabelSize::Small)
                             .on_click(move |_event, _window, cx| {
@@ -544,7 +544,7 @@ pub(crate) fn render_add_server_popover(
 
     let popover = PopoverMenu::new("add-mcp-server-popover")
         .trigger(
-            Button::new("add-mcp-server", "Add Server")
+            Button::new("add-mcp-server", "添加服务器")
                 .style(ButtonStyle::Outlined)
                 .track_focus(&focus_handle)
                 .start_icon(
@@ -559,7 +559,7 @@ pub(crate) fn render_add_server_popover(
             move |window, cx| {
                 let settings_window = settings_window.clone();
                 Some(ContextMenu::build(window, cx, move |menu, _window, _cx| {
-                    menu.entry("Add Local Server", None, {
+                    menu.entry("添加本地服务器", None, {
                         let settings_window = settings_window.clone();
                         move |window, cx| {
                             settings_window
@@ -575,7 +575,7 @@ pub(crate) fn render_add_server_popover(
                                 .log_err();
                         }
                     })
-                    .entry("Add Remote Server", None, {
+                    .entry("添加远程服务器", None, {
                         let settings_window = settings_window.clone();
                         move |window, cx| {
                             settings_window
@@ -592,7 +592,7 @@ pub(crate) fn render_add_server_popover(
                         }
                     })
                     .separator()
-                    .entry("Install from Extensions", None, {
+                    .entry("从扩展安装", None, {
                         move |_window, cx| {
                             if let Some(original_window) = original_window.as_ref() {
                                 cx.activate(true);
@@ -804,7 +804,7 @@ impl McpServerForm {
             ),
             timeout: new_input("60", timeout_initial.as_deref(), window, cx),
             oauth_client_id: new_input(
-                "Optional OAuth client ID",
+                "可选的 OAuth 客户端 ID",
                 oauth_initial.as_deref(),
                 window,
                 cx,
@@ -850,8 +850,8 @@ fn new_kv_row(
     cx: &mut Context<SettingsWindow>,
 ) -> KeyValueRow {
     KeyValueRow {
-        key: new_input("Key", key, window, cx),
-        value: new_input("Value", value, window, cx),
+        key: new_input("键", key, window, cx),
+        value: new_input("值", value, window, cx),
     }
 }
 
@@ -867,17 +867,17 @@ pub(crate) fn open_mcp_server_form(
     settings_window.mcp_server_form = Some(McpServerForm::new(transport, existing, window, cx));
 
     let title = if is_edit {
-        "Configure MCP Server"
+        "配置 MCP 服务器"
     } else {
         match transport {
-            McpTransport::Stdio => "Add Local MCP Server",
-            McpTransport::Http => "Add Remote MCP Server",
+            McpTransport::Stdio => "添加本地 MCP 服务器",
+            McpTransport::Http => "添加远程 MCP 服务器",
         }
     };
 
     settings_window.push_dynamic_sub_page(
         title,
-        "Agent Configuration",
+        "Agent 配置",
         Some("context_servers"),
         false,
         render_mcp_server_form_page,
@@ -1050,7 +1050,7 @@ fn render_kv_section(
                             IconButton::new((kind.remove_id(), ix), IconName::Close)
                                 .icon_size(IconSize::Small)
                                 .icon_color(Color::Muted)
-                                .tooltip(Tooltip::text("Remove"))
+                                .tooltip(Tooltip::text("移除"))
                                 .on_click(cx.listener(move |this, _, _window, cx| {
                                     if let Some(form) = this.mcp_server_form.as_mut() {
                                         let rows = kind.rows_mut(form);
@@ -1065,7 +1065,7 @@ fn render_kv_section(
                 .child(input_box(&row.value, cx))
         }))
         .child(
-            Button::new(kind.add_id(), "Add")
+            Button::new(kind.add_id(), "添加")
                 .style(ButtonStyle::Outlined)
                 .label_size(LabelSize::Small)
                 .start_icon(
@@ -1117,7 +1117,7 @@ fn render_form_actions(cx: &mut Context<SettingsWindow>) -> impl IntoElement {
         .justify_end()
         .pt_2()
         .child(
-            Button::new("mcp-form-cancel", "Cancel")
+            Button::new("mcp-form-cancel", "取消")
                 .style(ButtonStyle::Subtle)
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.mcp_server_form = None;
@@ -1125,7 +1125,7 @@ fn render_form_actions(cx: &mut Context<SettingsWindow>) -> impl IntoElement {
                 })),
         )
         .child(
-            Button::new("mcp-form-save", "Save")
+            Button::new("mcp-form-save", "保存")
                 .style(ButtonStyle::Filled)
                 .on_click(cx.listener(|this, _, window, cx| {
                     save_mcp_server_form(this, window, cx);
@@ -1165,7 +1165,7 @@ fn save_mcp_server_form(
         });
     if collides_with_other_server {
         if let Some(form) = settings_window.mcp_server_form.as_mut() {
-            form.error = Some(format!("A server named \"{}\" already exists.", id.0).into());
+            form.error = Some(format!("名为「{}」的服务器已存在。", id.0).into());
         }
         cx.notify();
         return;
@@ -1247,7 +1247,7 @@ fn build_settings_from_values(
 > {
     let name = values.name.trim().to_string();
     if name.is_empty() {
-        return Err("Server name is required.".into());
+        return Err("服务器名称是必填项。".into());
     }
 
     let timeout = parse_timeout(&values.timeout)?;
@@ -1256,7 +1256,7 @@ fn build_settings_from_values(
         McpTransport::Stdio => {
             let command = values.command.trim().to_string();
             if command.is_empty() {
-                return Err("Command is required.".into());
+                return Err("命令是必填项。".into());
             }
             let args = values
                 .args
@@ -1278,13 +1278,13 @@ fn build_settings_from_values(
         McpTransport::Http => {
             let url = values.url.trim().to_string();
             if url.is_empty() {
-                return Err("URL is required.".into());
+                return Err("URL 是必填项。".into());
             }
             // Validate the URL on save (a deliberate action) rather than on every
             // render, so a clearly invalid URL is reported to the user instead of
             // being silently written and failing later when the server starts.
             if let Err(error) = url::Url::parse(&url) {
-                return Err(format!("Invalid URL: {error}").into());
+                return Err(format!("无效的 URL：{error}").into());
             }
             let headers = collect_kv(&values.headers, "header")?;
             let oauth_client_id = values.oauth_client_id.trim().to_string();
@@ -1315,7 +1315,7 @@ fn build_settings_from_values(
 fn settings_validation_error(settings: Option<&ContextServerSettings>) -> Option<SharedString> {
     match settings? {
         ContextServerSettings::Http { url, .. } if url::Url::parse(url).is_err() => {
-            Some("Invalid URL in settings.".into())
+            Some("设置中的 URL 无效。".into())
         }
         _ => None,
     }
@@ -1339,7 +1339,7 @@ fn parse_timeout(text: &str) -> Result<Option<u64>, SharedString> {
     }
     text.parse::<u64>()
         .map(Some)
-        .map_err(|_| "Timeout must be a positive whole number of seconds.".into())
+        .map_err(|_| "超时时间必须是正整数秒数。".into())
 }
 
 fn collect_kv(
@@ -1353,7 +1353,7 @@ fn collect_kv(
             continue;
         }
         if map.contains_key(&key) {
-            return Err(format!("Duplicate {label} \"{key}\".").into());
+            return Err(format!("重复的{label}「{key}」。").into());
         }
         map.insert(key, value.clone());
     }
@@ -1401,7 +1401,7 @@ mod tests {
         values.command = "/bin/server".into();
         assert_eq!(
             build_settings_from_values(&values).unwrap_err().as_ref(),
-            "Server name is required."
+            "服务器名称是必填项。"
         );
     }
 
@@ -1410,7 +1410,7 @@ mod tests {
         let values = values(McpTransport::Stdio);
         assert_eq!(
             build_settings_from_values(&values).unwrap_err().as_ref(),
-            "Command is required."
+            "命令是必填项。"
         );
     }
 
@@ -1419,7 +1419,7 @@ mod tests {
         let values = values(McpTransport::Http);
         assert_eq!(
             build_settings_from_values(&values).unwrap_err().as_ref(),
-            "URL is required."
+            "URL 是必填项。"
         );
     }
 
@@ -1428,10 +1428,7 @@ mod tests {
         let mut values = values(McpTransport::Http);
         values.url = "not a url".into();
         let error = build_settings_from_values(&values).unwrap_err();
-        assert!(
-            error.starts_with("Invalid URL"),
-            "unexpected error: {error}"
-        );
+        assert!(error.starts_with("无效的 URL"), "unexpected error: {error}");
     }
 
     #[test]
@@ -1441,7 +1438,7 @@ mod tests {
         values.timeout = "soon".into();
         assert_eq!(
             build_settings_from_values(&values).unwrap_err().as_ref(),
-            "Timeout must be a positive whole number of seconds."
+            "超时时间必须是正整数秒数。"
         );
     }
 
@@ -1452,7 +1449,7 @@ mod tests {
         values.env = vec![("FOO".into(), "1".into()), ("FOO".into(), "2".into())];
         assert_eq!(
             build_settings_from_values(&values).unwrap_err().as_ref(),
-            "Duplicate environment variable \"FOO\"."
+            "重复的environment variable「FOO」。"
         );
     }
 
@@ -1466,7 +1463,7 @@ mod tests {
         ];
         assert_eq!(
             build_settings_from_values(&values).unwrap_err().as_ref(),
-            "Duplicate header \"Authorization\"."
+            "重复的header「Authorization」。"
         );
     }
 
@@ -1548,7 +1545,7 @@ mod tests {
             settings_validation_error(Some(&http("not a url")))
                 .unwrap()
                 .as_ref(),
-            "Invalid URL in settings."
+            "设置中的 URL 无效。"
         );
         assert!(settings_validation_error(Some(&http("https://example.com/mcp"))).is_none());
         assert!(settings_validation_error(None).is_none());
