@@ -36,6 +36,7 @@ use rpc::{
     proto::{self, Envelope, EnvelopedMessage, PeerId, RequestMessage, build_typed_envelope},
 };
 use semver::Version;
+use settings::{RegisterSetting, Settings};
 use std::{
     collections::VecDeque,
     fmt,
@@ -376,11 +377,47 @@ impl ConnectionIdentifier {
     }
 }
 
+#[derive(Clone, Copy, Debug, RegisterSetting)]
+struct RemoteServerDownloadSettings {
+    china_server_adaptation: bool,
+}
+
+impl Settings for RemoteServerDownloadSettings {
+    fn from_settings(content: &settings::SettingsContent) -> Self {
+        Self {
+            china_server_adaptation: content.remote.china_server_adaptation.unwrap(),
+        }
+    }
+}
+
+fn apply_remote_server_download_settings(
+    mut connection_options: RemoteConnectionOptions,
+    china_server_adaptation: bool,
+) -> RemoteConnectionOptions {
+    if china_server_adaptation
+        && let RemoteConnectionOptions::Ssh(options) = &mut connection_options
+    {
+        options.upload_binary_over_ssh = true;
+    }
+    connection_options
+}
+
+fn connection_options_with_settings(
+    connection_options: RemoteConnectionOptions,
+    cx: &App,
+) -> RemoteConnectionOptions {
+    let china_server_adaptation = RemoteServerDownloadSettings::try_get(cx)
+        .is_some_and(|settings| settings.china_server_adaptation);
+    apply_remote_server_download_settings(connection_options, china_server_adaptation)
+}
+
 pub async fn connect(
     connection_options: RemoteConnectionOptions,
     delegate: Arc<dyn RemoteClientDelegate>,
     cx: &mut AsyncApp,
 ) -> Result<Arc<dyn RemoteConnection>> {
+    let connection_options =
+        cx.update(|cx| connection_options_with_settings(connection_options, cx));
     cx.update(|cx| {
         cx.update_default_global(|pool: &mut ConnectionPool, cx| {
             pool.connect(connection_options.clone(), delegate.clone(), cx)
@@ -395,9 +432,10 @@ pub async fn connect(
 /// whether to show interactive UI (e.g., a password modal) before
 /// connecting.
 pub fn has_active_connection(opts: &RemoteConnectionOptions, cx: &App) -> bool {
+    let opts = connection_options_with_settings(opts.clone(), cx);
     cx.try_global::<ConnectionPool>().is_some_and(|pool| {
         matches!(
-            pool.connections.get(opts),
+            pool.connections.get(&opts),
             Some(ConnectionPoolEntry::Connected(remote))
                 if remote.upgrade().is_some_and(|r| !r.has_been_killed())
         )
@@ -1373,6 +1411,53 @@ mod tests {
     use super::*;
     use gpui::TestAppContext;
     use rpc::{ErrorCodeExt, proto::ErrorCode};
+
+    #[test]
+    fn china_server_adaptation_forces_local_remote_server_download_for_ssh() {
+        let options = RemoteConnectionOptions::Ssh(SshConnectionOptions {
+            upload_binary_over_ssh: false,
+            ..Default::default()
+        });
+
+        let RemoteConnectionOptions::Ssh(options) =
+            apply_remote_server_download_settings(options, true)
+        else {
+            panic!("SSH options should remain SSH options");
+        };
+
+        assert!(options.upload_binary_over_ssh);
+    }
+
+    #[test]
+    fn disabled_china_server_adaptation_preserves_per_connection_setting() {
+        for upload_binary_over_ssh in [false, true] {
+            let options = RemoteConnectionOptions::Ssh(SshConnectionOptions {
+                upload_binary_over_ssh,
+                ..Default::default()
+            });
+
+            let RemoteConnectionOptions::Ssh(options) =
+                apply_remote_server_download_settings(options, false)
+            else {
+                panic!("SSH options should remain SSH options");
+            };
+
+            assert_eq!(options.upload_binary_over_ssh, upload_binary_over_ssh);
+        }
+    }
+
+    #[test]
+    fn china_server_adaptation_does_not_change_non_ssh_connections() {
+        let options = RemoteConnectionOptions::Wsl(WslConnectionOptions {
+            distro_name: "Ubuntu".to_string(),
+            user: None,
+        });
+
+        assert_eq!(
+            apply_remote_server_download_settings(options.clone(), true),
+            options
+        );
+    }
 
     #[test]
     fn test_ssh_display_name_prefers_nickname() {

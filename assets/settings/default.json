@@ -2790,6 +2790,9 @@
   "ssh_connections": [],
   // Whether to read ~/.ssh/config for ssh connection sources.
   "read_ssh_config": true,
+  // 中国服务器适配。启用后，SSH 远程开发服务将直接由本机通过已配置的代理下载，
+  // 再经 SSH 上传到远程主机，不会先尝试由远程主机直接下载。
+  "china_server_adaptation": false,
   // Default timeout in seconds for all context server tool calls.
   // Individual servers can override this in their configuration.
   // Examples:
