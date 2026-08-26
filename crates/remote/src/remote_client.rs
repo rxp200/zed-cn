@@ -138,6 +138,7 @@ pub trait RemoteClientDelegate: Send + Sync {
         &self,
         prompt: String,
         tx: oneshot::Sender<EncryptedPassword>,
+        cancellation: oneshot::Receiver<()>,
         cx: &mut AsyncApp,
     );
     fn get_download_url(
