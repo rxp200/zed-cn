@@ -9006,9 +9006,31 @@ fn network_page() -> SettingsPage {
         ]
     }
 
+    fn remote_server_section() -> [SettingsPageItem; 2] {
+        [
+            SettingsPageItem::SectionHeader("远程服务器"),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: "中国服务器适配",
+                description: "启用后，不再尝试由远程主机直接下载远程开发服务，而是立即由本机通过已配置的代理下载，再经 SSH 上传到远程主机。适用于无法访问 Zed 发布资源的国内服务器。",
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("china_server_adaptation"),
+                    pick: |settings_content| {
+                        settings_content.remote.china_server_adaptation.as_ref()
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content.remote.china_server_adaptation = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+        ]
+    }
+
     SettingsPage {
         title: "网络",
-        items: concat_sections![network_section()],
+        items: concat_sections![network_section(), remote_server_section()],
     }
 }
 

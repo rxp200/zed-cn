@@ -1283,6 +1283,14 @@ pub struct RemoteSettingsContent {
     pub wsl_connections: Option<Vec<WslConnection>>,
     pub dev_container_connections: Option<Vec<DevContainerConnection>>,
     pub read_ssh_config: Option<bool>,
+    /// Whether SSH remote server binaries should be downloaded by the local Zed client and then
+    /// uploaded over SSH, without first attempting a download from the remote host.
+    ///
+    /// This is useful for servers that cannot access Zed's release assets directly. The local
+    /// download uses Zed's configured proxy.
+    ///
+    /// Default: false
+    pub china_server_adaptation: Option<bool>,
     pub use_podman: Option<bool>,
     /// Whether to build dev container images with BuildKit.
     ///
@@ -1324,7 +1332,8 @@ pub struct SshConnection {
     // By default Zed will download the binary to the host directly.
     // If this is set to true, Zed will download the binary to your local machine,
     // and then upload it over the SSH connection. Useful if your SSH server has
-    // limited outbound internet access.
+    // limited outbound internet access. The global `china_server_adaptation`
+    // setting forces this behavior for every SSH connection.
     pub upload_binary_over_ssh: Option<bool>,
 
     pub port_forwards: Option<Vec<SshPortForwardOption>>,
