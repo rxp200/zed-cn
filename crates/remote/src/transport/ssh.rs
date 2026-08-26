@@ -985,7 +985,10 @@ impl SshRemoteConnection {
                 }
             }
         } else {
-            delegate.set_status(Some("正在使用本地网络下载远程开发服务"), cx);
+            delegate.set_status(
+                Some("正在通过本机网络下载远程开发服务，完成后将经 SSH 上传"),
+                cx,
+            );
         }
 
         let local_download = delegate
