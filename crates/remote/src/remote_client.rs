@@ -164,7 +164,22 @@ const HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(5);
 const INITIAL_CONNECTION_TIMEOUT: Duration =
     Duration::from_secs(if cfg!(debug_assertions) { 5 } else { 60 });
 
-pub const MAX_RECONNECT_ATTEMPTS: usize = 3;
+/// Keep retrying long enough for temporary network outages to recover instead of
+/// exhausting all attempts while the network is still unavailable.
+pub const MAX_RECONNECT_ATTEMPTS: usize = 30;
+const INITIAL_RECONNECT_DELAY: Duration = Duration::from_secs(1);
+const MAX_RECONNECT_DELAY: Duration = Duration::from_secs(30);
+
+fn reconnect_delay(attempt: usize) -> Duration {
+    if attempt <= 1 {
+        return Duration::ZERO;
+    }
+
+    let exponent = attempt.saturating_sub(2).min(5) as u32;
+    INITIAL_RECONNECT_DELAY
+        .saturating_mul(1_u32 << exponent)
+        .min(MAX_RECONNECT_DELAY)
+}
 
 enum State {
     Connecting,
@@ -674,10 +689,10 @@ impl RemoteClient {
             | State::ServerNotRunning => unreachable!(),
         };
 
-        let attempts = attempts + 1;
+        let attempts = attempts.saturating_add(1);
         if attempts > MAX_RECONNECT_ATTEMPTS {
             log::error!(
-                "Failed to reconnect to after {} attempts, giving up",
+                "Failed to reconnect after {} attempts, giving up",
                 MAX_RECONNECT_ATTEMPTS
             );
             self.set_state(State::ReconnectExhausted, cx);
@@ -686,14 +701,44 @@ impl RemoteClient {
 
         self.set_state(State::Reconnecting, cx);
 
-        log::info!(
-            "Trying to reconnect to remote server... Attempt {}",
-            attempts
-        );
+        let retry_delay = reconnect_delay(attempts);
+        if retry_delay.is_zero() {
+            log::info!(
+                "Trying to reconnect to remote server... Attempt {}",
+                attempts
+            );
+        } else {
+            log::info!(
+                "Retrying remote server connection in {:?}... Attempt {} of {}",
+                retry_delay,
+                attempts,
+                MAX_RECONNECT_ATTEMPTS
+            );
+        }
 
         let unique_identifier = self.unique_identifier.clone();
         let client = self.client.clone();
         let reconnect_task = cx.spawn(async move |this, cx| {
+            if !retry_delay.is_zero() {
+                delegate.set_status(
+                    Some(&format!(
+                        "网络连接中断，{} 秒后进行第 {} 次重连",
+                        retry_delay.as_secs(),
+                        attempts
+                    )),
+                    cx,
+                );
+                cx.background_executor().timer(retry_delay).await;
+            }
+
+            delegate.set_status(
+                Some(&format!(
+                    "正在重新连接远程开发服务（第 {}/{} 次）",
+                    attempts, MAX_RECONNECT_ATTEMPTS
+                )),
+                cx,
+            );
+
             macro_rules! failed {
                 ($error:expr, $attempts:expr, $remote_connection:expr, $delegate:expr) => {
                     delegate.set_status(Some(&format!("{error:#}", error = $error)), cx);
@@ -754,6 +799,7 @@ impl RemoteClient {
                 failed!(error, attempts, remote_connection, delegate);
             };
 
+            delegate.set_status(Some("远程开发连接已恢复"), cx);
             State::Connected {
                 remote_connection,
                 delegate,
@@ -1412,6 +1458,20 @@ mod tests {
     use super::*;
     use gpui::TestAppContext;
     use rpc::{ErrorCodeExt, proto::ErrorCode};
+
+    #[test]
+    fn reconnect_uses_capped_exponential_backoff() {
+        assert_eq!(reconnect_delay(1), Duration::ZERO);
+        assert_eq!(reconnect_delay(2), Duration::from_secs(1));
+        assert_eq!(reconnect_delay(3), Duration::from_secs(2));
+        assert_eq!(reconnect_delay(4), Duration::from_secs(4));
+        assert_eq!(reconnect_delay(6), Duration::from_secs(16));
+        assert_eq!(reconnect_delay(7), Duration::from_secs(30));
+        assert_eq!(
+            reconnect_delay(MAX_RECONNECT_ATTEMPTS),
+            Duration::from_secs(30)
+        );
+    }
 
     #[test]
     fn china_server_adaptation_forces_local_remote_server_download_for_ssh() {
