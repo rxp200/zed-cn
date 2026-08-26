@@ -198,6 +198,7 @@ impl From<anyhow::Error> for ThreadError {
                         provider: provider.to_string().into(),
                     },
                     ProviderErrorCategory::InvalidEncryptedContent
+                    | ProviderErrorCategory::ContentPolicy
                     | ProviderErrorCategory::InvalidRequest
                     | ProviderErrorCategory::Conflict
                     | ProviderErrorCategory::Timeout
@@ -977,6 +978,15 @@ impl ConversationView {
     fn request_elicitation_store(&self) -> Option<Entity<ElicitationStore>> {
         self.request_elicitation_connection()?
             .request_elicitations()
+    }
+
+    /// Drops the cached connection for this agent (so the next request spawns a
+    /// fresh server process) and rebuilds the thread state from scratch.
+    pub(crate) fn retry_connection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.connection_store.update(cx, |store, cx| {
+            store.restart_connection(self.connection_key.clone(), self.agent.clone(), cx);
+        });
+        self.reset(window, cx);
     }
 
     fn reset(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -2715,7 +2725,7 @@ impl ConversationView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let (title, message, action_slot): (_, SharedString, _) = match e {
+        let (title, message) = match e {
             LoadError::Unsupported {
                 command: path,
                 current_version,
@@ -2723,35 +2733,36 @@ impl ConversationView {
             } => {
                 return self.render_unsupported(path, current_version, minimum_version, window, cx);
             }
-            LoadError::FailedToInstall(msg) => (
-                "安装失败",
-                msg.into(),
-                Some(self.create_copy_button(msg.to_string()).into_any_element()),
-            ),
+            LoadError::FailedToInstall(msg) => ("安装失败", msg.to_string()),
             LoadError::Exited { status, stderr } => {
-                let mut message = format!("Server exited with status {status}");
+                let mut message = format!("服务进程已退出，状态为 {status}");
                 if let Some(stderr) = stderr {
                     message.push_str("\n");
                     message.push_str(stderr);
                 };
-                let action_slot = stderr
-                    .is_some()
-                    .then(|| self.create_copy_button(message.clone()).into_any_element());
-                ("启动失败", message.into(), action_slot)
+                ("启动失败", message)
             }
-            LoadError::Other(msg) => (
-                "启动失败",
-                msg.into(),
-                Some(self.create_copy_button(msg.to_string()).into_any_element()),
-            ),
+            LoadError::Other(msg) => ("启动失败", msg.to_string()),
         };
+
+        let action_slot = h_flex()
+            .gap_1()
+            .child(
+                Button::new("retry-agent-launch", "重试")
+                    .tooltip(Tooltip::text("尝试重新启动 Agent"))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.retry_connection(window, cx);
+                    })),
+            )
+            .child(self.create_copy_button(message.clone()))
+            .into_any_element();
 
         Callout::new()
             .severity(Severity::Error)
             .icon(IconName::XCircleFilled)
             .title(title)
             .description(message)
-            .actions_slot(div().children(action_slot))
+            .actions_slot(action_slot)
             .into_any_element()
     }
 
