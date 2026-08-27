@@ -17,15 +17,15 @@ on:
         required: true
         default: true
         type: boolean
-  release:
-    types:
-      - published
+  push:
+    tags:
+      - zed-cn-v*-r*
 
 permissions:
   contents: write
 
 concurrency:
-  group: windows-release-${{ github.event_name == 'release' && github.event.release.tag_name || inputs.release_tag }}
+  group: windows-release-${{ github.event_name == 'push' && github.ref_name || inputs.release_tag }}
   cancel-in-progress: false
 
 env:
@@ -49,9 +49,9 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
 
-          if ("${{ github.event_name }}" -eq "release") {
-              $sourceRef = "${{ github.event.release.tag_name }}"
-              $releaseTag = "${{ github.event.release.tag_name }}"
+          if ("${{ github.event_name }}" -eq "push") {
+              $sourceRef = "${{ github.ref }}"
+              $releaseTag = "${{ github.ref_name }}"
               $draft = "false"
           } else {
               $sourceRef = $env:DISPATCH_SOURCE_REF.Trim()
