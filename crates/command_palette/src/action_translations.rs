@@ -1028,6 +1028,7 @@ pub fn translate_action_name(name: &str) -> Option<&'static str> {
         "file_finder::ToggleFileFinder" => Some("文件查找器: 打开文件"),
         // === terminal_panel ===
         "terminal_panel::Toggle" => Some("终端面板: 切换"),
+        "terminal_panel::ManagePortForwards" => Some("端口转发: 管理 SSH 端口"),
         // === panel ===
         "panel::NextPanelTab" => Some("面板: 下一个面板标签"),
         // === worktree_picker ===

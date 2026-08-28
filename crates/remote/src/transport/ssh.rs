@@ -397,12 +397,13 @@ impl RemoteConnection for SshRemoteConnection {
         forwards: Vec<(u16, String, u16)>,
     ) -> Result<CommandTemplate> {
         let Self { socket, .. } = self;
-        let mut args = socket.ssh_command_options();
+        let mut args = socket.ssh_command_options_without_port_forwards();
+        args.extend(["-o".into(), "ExitOnForwardFailure=yes".into()]);
         args.push("-N".into());
         for (local_port, host, remote_port) in forwards {
             args.push("-L".into());
             args.push(format!(
-                "{}:{}:{}",
+                "127.0.0.1:{}:{}:{}",
                 local_port,
                 bracket_ipv6(&host),
                 remote_port
@@ -412,7 +413,7 @@ impl RemoteConnection for SshRemoteConnection {
         Ok(CommandTemplate {
             program: "ssh".into(),
             args,
-            env: Default::default(),
+            env: socket.envs.clone(),
         })
     }
 
@@ -1593,6 +1594,17 @@ impl SshSocket {
     // SSH command structure: ssh [options] destination [command]
     fn ssh_command_options(&self) -> Vec<String> {
         let arguments = self.connection_options.additional_args();
+        self.with_control_path(arguments)
+    }
+
+    fn ssh_command_options_without_port_forwards(&self) -> Vec<String> {
+        let arguments = self
+            .connection_options
+            .additional_args_without_port_forwards();
+        self.with_control_path(arguments)
+    }
+
+    fn with_control_path(&self, arguments: Vec<String>) -> Vec<String> {
         #[cfg(not(windows))]
         let arguments = {
             let mut args = arguments;
@@ -1965,7 +1977,7 @@ impl SshConnectionOptions {
         self.args.iter().flatten().cloned().collect::<Vec<String>>()
     }
 
-    pub fn additional_args(&self) -> Vec<String> {
+    pub fn additional_args_without_port_forwards(&self) -> Vec<String> {
         let mut args = self.additional_args_for_scp();
 
         if let Some(timeout) = self.connection_timeout {
@@ -1976,6 +1988,12 @@ impl SshConnectionOptions {
             args.push("-p".to_string());
             args.push(port.to_string());
         }
+
+        args
+    }
+
+    pub fn additional_args(&self) -> Vec<String> {
+        let mut args = self.additional_args_without_port_forwards();
 
         if let Some(forwards) = &self.port_forwards {
             args.extend(forwards.iter().map(|pf| {
@@ -2466,6 +2484,9 @@ mod tests {
                 "StrictHostKeyChecking=no".to_string(),
             ]
         );
+
+        let dynamic_forward_args = options.additional_args_without_port_forwards();
+        assert!(!dynamic_forward_args.iter().any(|arg| arg.starts_with("-L")));
     }
 
     #[test]

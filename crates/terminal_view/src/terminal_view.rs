@@ -1,4 +1,5 @@
 mod persistence;
+pub mod port_forwarding;
 pub mod terminal_element;
 pub mod terminal_panel;
 mod terminal_path_like_target;
@@ -1129,6 +1130,18 @@ fn subscribe_for_terminal_events(
 
             match event {
                 Event::Wakeup => {
+                    if terminal.read(cx).is_remote_terminal() {
+                        let output = terminal.read(cx).last_n_non_empty_lines(12).join("\n");
+                        if let Some(project) = terminal_view.project.upgrade()
+                            && let Some(workspace) = terminal_view.workspace.upgrade()
+                            && let Some(terminal_panel) =
+                                workspace.read(cx).panel::<TerminalPanel>(cx)
+                        {
+                            terminal_panel.update(cx, |terminal_panel, cx| {
+                                terminal_panel.detect_ports(&output, project, cx);
+                            });
+                        }
+                    }
                     cx.notify();
                     window.invalidate_character_coordinates();
                     cx.emit(Event::Wakeup);
