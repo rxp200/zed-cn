@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       source_ref:
-        description: Private branch, tag, or commit to build
+        description: Public-safe branch, tag, or commit to build
         required: true
         default: custom-v1.17.2
         type: string
@@ -69,7 +69,7 @@ jobs:
           "release_revision=$($Matches.revision)" >> $env:GITHUB_OUTPUT
           "draft=$draft" >> $env:GITHUB_OUTPUT
 
-      - name: Check out private source
+      - name: Check out public-safe source
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
         with:
           ref: ${{ steps.inputs.outputs.source_ref }}
