@@ -33,6 +33,7 @@ pub struct OpenPathDelegate {
     tx: Option<oneshot::Sender<Option<Vec<PathBuf>>>>,
     lister: DirectoryLister,
     selected_index: usize,
+    current_query: String,
     directory_state: DirectoryState,
     string_matches: Vec<StringMatch>,
     cancel_flag: Arc<AtomicBool>,
@@ -62,6 +63,7 @@ impl OpenPathDelegate {
             tx: Some(tx),
             lister,
             selected_index: 0,
+            current_query: String::new(),
             directory_state: DirectoryState::None {
                 create: creating_path,
             },
@@ -293,6 +295,7 @@ impl PickerDelegate for OpenPathDelegate {
     ) -> Task<()> {
         let lister = &self.lister;
         let input_is_empty = query.is_empty();
+        self.current_query.clone_from(&query);
         let (dir, suffix) = get_dir_and_suffix(query, self.path_style);
 
         let query = match &self.directory_state {
@@ -657,6 +660,19 @@ impl PickerDelegate for OpenPathDelegate {
             })
             .unwrap_or(query),
         )
+    }
+
+    fn confirm_update_query(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Picker<Self>>,
+    ) -> Option<String> {
+        if !matches!(&self.directory_state, DirectoryState::List { .. }) {
+            return None;
+        }
+
+        let completed_query = self.confirm_completion(self.current_query.clone(), window, cx)?;
+        (completed_query != self.current_query).then_some(completed_query)
     }
 
     fn confirm(&mut self, _: bool, window: &mut Window, cx: &mut Context<Picker<Self>>) {
