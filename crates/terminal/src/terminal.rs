@@ -2363,6 +2363,10 @@ impl Terminal {
         content_text(&term)
     }
 
+    pub fn is_remote_terminal(&self) -> bool {
+        self.is_remote_terminal
+    }
+
     pub fn last_n_non_empty_lines(&self, n: usize) -> Vec<String> {
         let terminal = self.term.lock_unfair();
         last_non_empty_lines(&terminal, n)

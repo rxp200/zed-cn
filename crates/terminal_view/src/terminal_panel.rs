@@ -5,6 +5,7 @@ use crate::{
     persistence::{
         SerializedItems, SerializedTerminalPanel, deserialize_terminal_panel, serialize_pane_group,
     },
+    port_forwarding::{self, PortForwardManager},
 };
 use breadcrumbs::Breadcrumbs;
 use collections::HashMap;
@@ -48,7 +49,9 @@ actions!(
         /// Toggles the terminal panel.
         Toggle,
         /// Toggles focus on the terminal panel.
-        ToggleFocus
+        ToggleFocus,
+        /// Opens the SSH port forwarding manager.
+        ManagePortForwards
     ]
 );
 
@@ -57,6 +60,13 @@ pub fn init(cx: &mut App) {
         |workspace: &mut Workspace, _window, _: &mut Context<Workspace>| {
             workspace.register_action(TerminalPanel::new_terminal);
             workspace.register_action(TerminalPanel::open_terminal);
+            workspace.register_action(|workspace, _: &ManagePortForwards, window, cx| {
+                let Some(panel) = workspace.panel::<TerminalPanel>(cx) else {
+                    return;
+                };
+                let manager = panel.read(cx).port_forward_manager.clone();
+                port_forwarding::show_modal(workspace, manager, window, cx);
+            });
             workspace.register_action(|workspace, _: &ToggleFocus, window, cx| {
                 if is_enabled_in_workspace(workspace, cx) {
                     workspace.toggle_panel_focus::<TerminalPanel>(window, cx);
@@ -87,6 +97,7 @@ pub struct TerminalPanel {
     deferred_tasks: HashMap<TaskId, Task<()>>,
     assistant_enabled: bool,
     active: bool,
+    port_forward_manager: Entity<PortForwardManager>,
 }
 
 impl TerminalPanel {
@@ -107,9 +118,16 @@ impl TerminalPanel {
             deferred_tasks: HashMap::default(),
             assistant_enabled: false,
             active: false,
+            port_forward_manager: cx.new(|_| PortForwardManager::new()),
         };
         terminal_panel.apply_tab_bar_buttons(&terminal_panel.active_pane, cx);
         terminal_panel
+    }
+
+    pub fn detect_ports(&mut self, output: &str, project: Entity<Project>, cx: &mut Context<Self>) {
+        self.port_forward_manager.update(cx, |manager, cx| {
+            manager.detect_from_terminal_output(output, project, cx);
+        });
     }
 
     pub fn set_assistant_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
@@ -125,6 +143,7 @@ impl TerminalPanel {
         cx: &mut Context<Self>,
     ) {
         let assistant_enabled = self.assistant_enabled;
+        let workspace = self.workspace.clone();
         terminal_pane.update(cx, |pane, cx| {
             pane.set_render_tab_bar_buttons(cx, move |pane, window, cx| {
                 let split_context = pane
@@ -142,8 +161,20 @@ impl TerminalPanel {
                     return (None, None);
                 }
                 let focus_handle = pane.focus_handle(cx);
+                let port_forwarding_available = workspace.upgrade().is_some_and(|workspace| {
+                    port_forwarding::is_available(&workspace.read(cx).project(), cx)
+                });
                 let right_children = h_flex()
                     .gap(DynamicSpacing::Base02.rems(cx))
+                    .when(port_forwarding_available, |this| {
+                        this.child(
+                            Button::new("manage-port-forwards", "端口")
+                                .style(ButtonStyle::Subtle)
+                                .on_click(move |_, window, cx| {
+                                    window.dispatch_action(ManagePortForwards.boxed_clone(), cx);
+                                }),
+                        )
+                    })
                     .child(
                         PopoverMenu::new("terminal-tab-bar-popover-menu")
                             .trigger_with_tooltip(
