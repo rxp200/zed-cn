@@ -3722,7 +3722,7 @@ fn languages_and_tools_page(cx: &App) -> SettingsPage {
 }
 
 fn search_and_files_page() -> SettingsPage {
-    fn search_section() -> [SettingsPageItem; 9] {
+    fn search_section() -> [SettingsPageItem; 10] {
         [
             SettingsPageItem::SectionHeader("Search"),
             SettingsPageItem::SettingItem(SettingItem {
@@ -3858,6 +3858,30 @@ fn search_and_files_page() -> SettingsPage {
                             .search
                             .get_or_insert_default()
                             .center_on_match = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: "输入时搜索",
+                description: "在项目搜索中输入时立即开始搜索，无需按回车键。",
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("editor.search.search_on_type"),
+                    pick: |settings_content| {
+                        settings_content
+                            .editor
+                            .search
+                            .as_ref()
+                            .and_then(|search| search.search_on_type.as_ref())
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content
+                            .editor
+                            .search
+                            .get_or_insert_default()
+                            .search_on_type = value;
                     },
                 }),
                 metadata: None,
@@ -5385,23 +5409,23 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "文件夹图标",
-                description: "是否在项目面板中为目录显示文件夹图标或箭头。",
+                title: "文件夹指示器",
+                description: "项目面板中的目录显示方式。"
                 field: Box::new(SettingField {
                     organization_override: None,
-                    json_path: Some("project_panel.folder_icons"),
+                    json_path: Some("project_panel.folder_indicator"),
                     pick: |settings_content| {
                         settings_content
                             .project_panel
                             .as_ref()?
-                            .folder_icons
+                            .folder_indicator
                             .as_ref()
                     },
                     write: |settings_content, value, _| {
                         settings_content
                             .project_panel
                             .get_or_insert_default()
-                            .folder_icons = value;
+                            .folder_indicator = value;
                     },
                 }),
                 metadata: None,
@@ -6077,23 +6101,23 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "文件夹图标",
-                description: "是否在大纲面板中为目录显示文件夹图标或箭头。",
+                title: "文件夹指示器",
+                description: "大纲面板中的目录显示方式。"
                 field: Box::new(SettingField {
                     organization_override: None,
-                    json_path: Some("outline_panel.folder_icons"),
+                    json_path: Some("outline_panel.folder_indicator"),
                     pick: |settings_content| {
                         settings_content
                             .outline_panel
                             .as_ref()?
-                            .folder_icons
+                            .folder_indicator
                             .as_ref()
                     },
                     write: |settings_content, value, _| {
                         settings_content
                             .outline_panel
                             .get_or_insert_default()
-                            .folder_icons = value;
+                            .folder_indicator = value;
                     },
                 }),
                 metadata: None,
@@ -6415,19 +6439,23 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "文件夹图标",
-                description: "是否在 Git 面板中为目录显示文件夹图标或箭头。",
+                title: "文件夹指示器",
+                description: "Git 面板中的目录显示方式。"
                 field: Box::new(SettingField {
                     organization_override: None,
-                    json_path: Some("git_panel.folder_icons"),
+                    json_path: Some("git_panel.folder_indicator"),
                     pick: |settings_content| {
-                        settings_content.git_panel.as_ref()?.folder_icons.as_ref()
+                        settings_content
+                            .git_panel
+                            .as_ref()?
+                            .folder_indicator
+                            .as_ref()
                     },
                     write: |settings_content, value, _| {
                         settings_content
                             .git_panel
                             .get_or_insert_default()
-                            .folder_icons = value;
+                            .folder_indicator = value;
                     },
                 }),
                 metadata: None,

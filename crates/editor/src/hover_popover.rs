@@ -1550,7 +1550,12 @@ impl DiagnosticPopover {
                             ),
                     )
                     .child(div().absolute().top_1().right_1().child({
-                        let message = self.local_diagnostic.diagnostic.message.clone();
+                        let message = self
+                            .local_diagnostic
+                            .diagnostic
+                            .message
+                            .as_shared_string()
+                            .clone();
                         CopyButton::new("copy-diagnostic", message).tooltip_label("复制诊断信息")
                     }))
                     .custom_scrollbars(

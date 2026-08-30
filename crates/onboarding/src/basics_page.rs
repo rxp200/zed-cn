@@ -527,7 +527,7 @@ fn render_import_settings_section(tab_index: &mut isize, cx: &mut App) -> impl I
             v_flex()
                 .gap_0p5()
                 .max_w_5_6()
-                .child(Label::new("Import Settings"))
+                .child(Label::new("导入设置"))
                 .child(
                     Label::new("自动从其他编辑器导入设置")
                         .color(Color::Muted),
@@ -616,7 +616,7 @@ fn render_zed_agent_button(user_store: &Entity<UserStore>, cx: &mut App) -> impl
     let is_signed_in = !is_signed_out;
 
     let state_element = if is_signed_out {
-        Label::new("Sign In")
+        Label::new("登录")
             .size(LabelSize::XSmall)
             .color(Color::Muted)
             .into_any_element()

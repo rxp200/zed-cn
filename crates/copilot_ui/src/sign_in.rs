@@ -395,7 +395,7 @@ impl CopilotCodeVerification {
             .text_center()
             .justify_center()
             .child(
-                Headline::new("You must have an active GitHub Copilot subscription.")
+                Headline::new("你必须拥有有效的 GitHub Copilot 订阅。")
                     .size(HeadlineSize::Large),
             )
             .child(Label::new(description).color(Color::Warning))
@@ -419,7 +419,7 @@ impl CopilotCodeVerification {
             .gap_2()
             .text_center()
             .justify_center()
-            .child(Headline::new("An Error Happened").size(HeadlineSize::Large))
+            .child(Headline::new("发生错误").size(HeadlineSize::Large))
             .child(Label::new(ERROR_LABEL).color(Color::Muted))
             .child(
                 Button::new("copilot-subscribe-button", "重新安装 Copilot 编辑预测并登录")
@@ -601,14 +601,14 @@ impl CopilotChatCodeVerification {
             .gap_2p5()
             .items_center()
             .text_center()
-            .child(Headline::new("Use GitHub Copilot Chat in Zed").size(HeadlineSize::Large))
+            .child(Headline::new("在 Zed 中使用 GitHub Copilot Chat").size(HeadlineSize::Large))
             .child(
-                Label::new("Using Copilot Chat requires an active subscription on GitHub.")
+                Label::new("使用 Copilot Chat 需要有效的 GitHub 订阅。")
                     .color(Color::Muted),
             )
             .child(Self::render_device_code(&device_flow.user_code, cx))
             .child(
-                Label::new("Paste this code into GitHub after clicking the button below.")
+                Label::new("点击下方按钮后，将此代码粘贴到 GitHub。")
                     .color(Color::Muted),
             )
             .child(
@@ -660,7 +660,7 @@ impl CopilotChatCodeVerification {
             .gap_2()
             .text_center()
             .justify_center()
-            .child(Headline::new("An Error Happened").size(HeadlineSize::Large))
+            .child(Headline::new("发生错误").size(HeadlineSize::Large))
             .child(Label::new(message.to_owned()).color(Color::Muted))
             .child(
                 Button::new("copilot-chat-error-cancel-button", "Cancel")

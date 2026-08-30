@@ -598,7 +598,7 @@ pub(crate) fn render_mermaid_diagram(
                 let rasterized_scale = cached.map_or(1.0, |cached| cached.rasterized_scale);
                 let image_element =
                     img(ImageSource::Render(render_image.clone())).with_fallback(|| {
-                        Label::new("Failed to Load Mermaid Diagram").into_any_element()
+                        Label::new("无法加载 Mermaid 图表").into_any_element()
                     });
                 let scroll_handle = markdown.update(cx, |markdown, _| {
                     markdown.mermaid_scroll_handle(source_offset)
@@ -659,7 +659,7 @@ pub(crate) fn render_mermaid_diagram(
                 let fallback_element =
                     img(ImageSource::Render(fallback.clone())).with_fallback(|| {
                         div()
-                            .child(Label::new("Failed to load mermaid diagram"))
+                            .child(Label::new("无法加载 Mermaid 图表"))
                             .into_any_element()
                     });
                 let scroll_handle = markdown.update(cx, |markdown, _| {
@@ -901,7 +901,7 @@ fn render_mermaid_zoom_indicator(
             )
             .icon_size(IconSize::Small)
             .icon_color(Color::Muted)
-            .tooltip(Tooltip::text("Reset Zoom"))
+            .tooltip(Tooltip::text("重置缩放"))
             .on_click(move |_event, window, cx| {
                 let zoom_changed = markdown.update(cx, |markdown, cx| {
                     let current_zoom = markdown.mermaid_zoom_level(source_offset);

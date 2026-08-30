@@ -14,8 +14,8 @@ use git::{
         AskPassDelegate, Branch, CommitData, CommitDataReader, CommitDetails, CommitOptions,
         CreateWorktreeTarget, FetchOptions, FileHistoryChangedFileSets, GRAPH_CHUNK_SIZE,
         GitRepository, GitRepositoryCheckpoint, InitialGraphCommitData, LogOrder, LogSource,
-        PushOptions, RefEdit, Remote, RepoPath, ResetMode, SearchCommitArgs, Worktree,
-        commit_hash_search_query,
+        AUTHOR_SEARCH_QUERY_PREFIX, PushOptions, RefEdit, Remote, RepoPath, ResetMode,
+        SearchCommitArgs, Worktree, commit_hash_search_query,
     },
     stash::GitStash,
     status::{
@@ -180,9 +180,16 @@ impl GitRepository for FakeGitRepository {
     fn load_commit(
         &self,
         _commit: String,
+        _ignore_shallow_boundary: bool,
         _cx: AsyncApp,
     ) -> BoxFuture<'_, Result<git::repository::CommitDiff>> {
-        async { Ok(git::repository::CommitDiff { files: Vec::new() }) }.boxed()
+        async {
+            Ok(git::repository::CommitDiff {
+                files: Vec::new(),
+                is_shallow_boundary: false,
+            })
+        }
+        .boxed()
     }
 
     fn set_index_text(
@@ -1567,12 +1574,19 @@ impl GitRepository for FakeGitRepository {
         request_tx: Sender<Oid>,
     ) -> BoxFuture<'_, Result<()>> {
         async move {
-            let hash_query = commit_hash_search_query(search_args.query.as_str())
-                .map(|query| query.to_ascii_lowercase());
-            let message_query = if search_args.case_sensitive {
-                search_args.query.to_string()
+            let author_query = search_args.query.strip_prefix(AUTHOR_SEARCH_QUERY_PREFIX);
+            let hash_query = author_query
+                .is_none()
+                .then(|| {
+                    commit_hash_search_query(search_args.query.as_str())
+                        .map(|query| query.to_ascii_lowercase())
+                })
+                .flatten();
+            let normalized_query = author_query.unwrap_or(search_args.query.as_str());
+            let normalized_query = if search_args.case_sensitive {
+                normalized_query.to_string()
             } else {
-                search_args.query.to_lowercase()
+                normalized_query.to_lowercase()
             };
 
             let matching_shas = self.fs.with_git_state(&self.dot_git_path, false, |state| {
@@ -1590,12 +1604,17 @@ impl GitRepository for FakeGitRepository {
                                 .starts_with(hash_query)
                                 .then_some(*sha);
                         }
-                        let message = if search_args.case_sensitive {
-                            commit_data.message.to_string()
+                        let candidate = if author_query.is_some() {
+                            commit_data.author_email.as_ref()
                         } else {
-                            commit_data.message.to_lowercase()
+                            commit_data.message.as_ref()
                         };
-                        message.contains(&message_query).then_some(*sha)
+                        let candidate = if search_args.case_sensitive {
+                            candidate.to_string()
+                        } else {
+                            candidate.to_lowercase()
+                        };
+                        candidate.contains(&normalized_query).then_some(*sha)
                     })
                     .collect::<Vec<_>>()
             })?;
