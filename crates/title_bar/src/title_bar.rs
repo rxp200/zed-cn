@@ -464,6 +464,9 @@ impl TitleBar {
                 cx.notify()
             }),
         );
+        if let Some(remote_client) = project.read(cx).remote_client() {
+            subscriptions.push(cx.observe(&remote_client, |_, _, cx| cx.notify()));
+        }
 
         subscriptions.push(cx.observe(&active_call, |this, _, cx| this.active_call_changed(cx)));
         subscriptions.push(
@@ -613,7 +616,9 @@ impl TitleBar {
 
         let nickname = nickname.unwrap_or_else(|| host.clone());
 
-        let (indicator_color, meta) = match self.project.read(cx).remote_connection_state(cx)? {
+        let connection_state = self.project.read(cx).remote_connection_state(cx)?;
+        let show_reconnect_button = connection_state.can_reconnect_manually();
+        let (indicator_color, meta) = match connection_state {
             remote::ConnectionState::Connecting => (Color::Info, format!("Connecting to: {host}")),
             remote::ConnectionState::Connected => (Color::Success, format!("Connected to: {host}")),
             remote::ConnectionState::HeartbeatMissed => (
@@ -629,7 +634,7 @@ impl TitleBar {
             }
         };
 
-        let icon_color = match self.project.read(cx).remote_connection_state(cx)? {
+        let icon_color = match connection_state {
             remote::ConnectionState::Connecting => Color::Info,
             remote::ConnectionState::Connected => Color::Default,
             remote::ConnectionState::HeartbeatMissed => Color::Warning,
@@ -669,7 +674,40 @@ impl TitleBar {
                                     ))
                                     .into_any_element(),
                                 )
-                                .child(Label::new(nickname).size(LabelSize::Small).truncate()),
+                                .child(Label::new(nickname).size(LabelSize::Small).truncate())
+                                .when(show_reconnect_button, |this| {
+                                    let project = self.project.downgrade();
+                                    this.child(
+                                        IconButton::new(
+                                            "manual-remote-reconnect",
+                                            IconName::RotateCw,
+                                        )
+                                        .shape(IconButtonShape::Square)
+                                        .size(ButtonSize::None)
+                                        .icon_size(IconSize::XSmall)
+                                        .icon_color(Color::Warning)
+                                        .aria_label("立即重新连接远程服务器")
+                                        .tooltip(Tooltip::text("立即重新连接"))
+                                        .on_click(
+                                            move |_, _, cx| {
+                                                cx.stop_propagation();
+                                                let Some(project) = project.upgrade() else {
+                                                    return;
+                                                };
+                                                let Some(remote_client) =
+                                                    project.read(cx).remote_client()
+                                                else {
+                                                    return;
+                                                };
+                                                remote_client
+                                                    .update(cx, |remote_client, cx| {
+                                                        remote_client.reconnect_now(cx)
+                                                    })
+                                                    .log_err();
+                                            },
+                                        ),
+                                    )
+                                }),
                         ),
                     move |_window, cx| {
                         Tooltip::with_meta(
