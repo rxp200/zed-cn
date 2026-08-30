@@ -329,6 +329,12 @@ pub enum ConnectionState {
     Disconnected,
 }
 
+impl ConnectionState {
+    pub fn can_reconnect_manually(self) -> bool {
+        matches!(self, Self::HeartbeatMissed | Self::Reconnecting)
+    }
+}
+
 impl From<&State> for ConnectionState {
     fn from(value: &State) -> Self {
         match value {
@@ -350,6 +356,7 @@ pub struct RemoteClient {
     platform: RemotePlatform,
     os_version: Option<String>,
     state: Option<State>,
+    reconnect_cancellation: Option<oneshot::Sender<()>>,
 }
 
 #[derive(Debug)]
@@ -496,6 +503,7 @@ impl RemoteClient {
                     platform,
                     os_version: os_version.clone(),
                     state: Some(State::Connecting),
+                    reconnect_cancellation: None,
                 });
 
                 let io_task = remote_connection.start_proxy(
@@ -718,99 +726,117 @@ impl RemoteClient {
 
         let unique_identifier = self.unique_identifier.clone();
         let client = self.client.clone();
+        let (reconnect_cancellation_tx, reconnect_cancellation_rx) = oneshot::channel();
+        self.reconnect_cancellation = Some(reconnect_cancellation_tx);
+        let cancelled_remote_connection = remote_connection.clone();
+        let cancelled_delegate = delegate.clone();
         let reconnect_task = cx.spawn(async move |this, cx| {
-            if !retry_delay.is_zero() {
+            let reconnect_attempt = async {
+                if !retry_delay.is_zero() {
+                    delegate.set_status(
+                        Some(&format!(
+                            "网络连接中断，{} 秒后进行第 {} 次重连",
+                            retry_delay.as_secs(),
+                            attempts
+                        )),
+                        cx,
+                    );
+                    cx.background_executor().timer(retry_delay).await;
+                }
+
                 delegate.set_status(
                     Some(&format!(
-                        "网络连接中断，{} 秒后进行第 {} 次重连",
-                        retry_delay.as_secs(),
-                        attempts
+                        "正在重新连接远程开发服务（第 {}/{} 次）",
+                        attempts, MAX_RECONNECT_ATTEMPTS
                     )),
                     cx,
                 );
-                cx.background_executor().timer(retry_delay).await;
-            }
 
-            delegate.set_status(
-                Some(&format!(
-                    "正在重新连接远程开发服务（第 {}/{} 次）",
-                    attempts, MAX_RECONNECT_ATTEMPTS
-                )),
-                cx,
-            );
-
-            macro_rules! failed {
-                ($error:expr, $attempts:expr, $remote_connection:expr, $delegate:expr) => {
-                    delegate.set_status(Some(&format!("{error:#}", error = $error)), cx);
-                    return State::ReconnectFailed {
-                        error: anyhow!($error),
-                        attempts: $attempts,
-                        remote_connection: $remote_connection,
-                        delegate: $delegate,
+                macro_rules! failed {
+                    ($error:expr, $attempts:expr, $remote_connection:expr, $delegate:expr) => {
+                        delegate.set_status(Some(&format!("{error:#}", error = $error)), cx);
+                        return State::ReconnectFailed {
+                            error: anyhow!($error),
+                            attempts: $attempts,
+                            remote_connection: $remote_connection,
+                            delegate: $delegate,
+                        };
                     };
-                };
-            }
+                }
 
-            if let Err(error) = remote_connection
-                .kill()
-                .await
-                .context("Failed to kill remote_connection process")
-            {
-                failed!(error, attempts, remote_connection, delegate);
-            };
-
-            let connection_options = remote_connection.connection_options();
-
-            let (outgoing_tx, outgoing_rx) = mpsc::unbounded::<Envelope>();
-            let (incoming_tx, incoming_rx) = mpsc::unbounded::<Envelope>();
-            let (connection_activity_tx, connection_activity_rx) = mpsc::channel::<()>(1);
-
-            let (remote_connection, io_task) = match async {
-                let remote_connection = cx
-                    .update_global(|pool: &mut ConnectionPool, cx| {
-                        pool.connect(connection_options, delegate.clone(), cx)
-                    })
+                if let Err(error) = remote_connection
+                    .kill()
                     .await
-                    .map_err(|error| error.cloned())?;
-
-                let io_task = remote_connection.start_proxy(
-                    unique_identifier,
-                    true,
-                    incoming_tx,
-                    outgoing_rx,
-                    connection_activity_tx,
-                    delegate.clone(),
-                    cx,
-                );
-                anyhow::Ok((remote_connection, io_task))
-            }
-            .await
-            {
-                Ok((remote_connection, io_task)) => (remote_connection, io_task),
-                Err(error) => {
+                    .context("Failed to kill remote_connection process")
+                {
                     failed!(error, attempts, remote_connection, delegate);
+                };
+
+                let connection_options = remote_connection.connection_options();
+
+                let (outgoing_tx, outgoing_rx) = mpsc::unbounded::<Envelope>();
+                let (incoming_tx, incoming_rx) = mpsc::unbounded::<Envelope>();
+                let (connection_activity_tx, connection_activity_rx) = mpsc::channel::<()>(1);
+
+                let (remote_connection, io_task) = match async {
+                    let remote_connection = cx
+                        .update_global(|pool: &mut ConnectionPool, cx| {
+                            pool.connect(connection_options, delegate.clone(), cx)
+                        })
+                        .await
+                        .map_err(|error| error.cloned())?;
+
+                    let io_task = remote_connection.start_proxy(
+                        unique_identifier,
+                        true,
+                        incoming_tx,
+                        outgoing_rx,
+                        connection_activity_tx,
+                        delegate.clone(),
+                        cx,
+                    );
+                    anyhow::Ok((remote_connection, io_task))
+                }
+                .await
+                {
+                    Ok((remote_connection, io_task)) => (remote_connection, io_task),
+                    Err(error) => {
+                        failed!(error, attempts, remote_connection, delegate);
+                    }
+                };
+
+                let multiplex_task = Self::monitor(this.clone(), io_task, cx);
+                client.reconnect(incoming_rx, outgoing_tx, cx);
+
+                if let Err(error) = client.resync(HEARTBEAT_TIMEOUT).await {
+                    failed!(error, attempts, remote_connection, delegate);
+                };
+
+                delegate.set_status(Some("远程开发连接已恢复"), cx);
+                State::Connected {
+                    remote_connection,
+                    delegate,
+                    multiplex_task,
+                    heartbeat_task: Self::heartbeat(this.clone(), connection_activity_rx, cx),
                 }
             };
-
-            let multiplex_task = Self::monitor(this.clone(), io_task, cx);
-            client.reconnect(incoming_rx, outgoing_tx, cx);
-
-            if let Err(error) = client.resync(HEARTBEAT_TIMEOUT).await {
-                failed!(error, attempts, remote_connection, delegate);
-            };
-
-            delegate.set_status(Some("远程开发连接已恢复"), cx);
-            State::Connected {
-                remote_connection,
-                delegate,
-                multiplex_task,
-                heartbeat_task: Self::heartbeat(this.clone(), connection_activity_rx, cx),
+            futures::pin_mut!(reconnect_attempt);
+            futures::pin_mut!(reconnect_cancellation_rx);
+            select! {
+                new_state = reconnect_attempt.fuse() => new_state,
+                _ = reconnect_cancellation_rx.fuse() => State::ReconnectFailed {
+                    remote_connection: cancelled_remote_connection,
+                    delegate: cancelled_delegate,
+                    error: anyhow!("manual reconnect requested"),
+                    attempts: 0,
+                },
             }
         });
 
         cx.spawn(async move |this, cx| {
             let new_state = reconnect_task.await;
             this.update(cx, |this, cx| {
+                this.reconnect_cancellation.take();
                 this.try_set_state(cx, |old_state| {
                     if old_state.is_reconnecting() {
                         match &new_state {
@@ -1101,6 +1127,22 @@ impl RemoteClient {
             .as_ref()
             .map(ConnectionState::from)
             .unwrap_or(ConnectionState::Disconnected)
+    }
+
+    pub fn reconnect_now(&mut self, cx: &mut Context<Self>) -> Result<()> {
+        match self.connection_state() {
+            ConnectionState::HeartbeatMissed => self.reconnect(cx),
+            ConnectionState::Reconnecting => {
+                let cancellation = self
+                    .reconnect_cancellation
+                    .take()
+                    .context("no active reconnect attempt to restart")?;
+                cancellation
+                    .send(())
+                    .map_err(|_| anyhow!("active reconnect attempt already completed"))
+            }
+            state => anyhow::bail!("cannot reconnect manually while connection is {state:?}"),
+        }
     }
 
     pub fn is_disconnected(&self) -> bool {
@@ -1458,6 +1500,15 @@ mod tests {
     use super::*;
     use gpui::TestAppContext;
     use rpc::{ErrorCodeExt, proto::ErrorCode};
+
+    #[test]
+    fn manual_reconnect_is_available_only_for_warning_states() {
+        assert!(ConnectionState::HeartbeatMissed.can_reconnect_manually());
+        assert!(ConnectionState::Reconnecting.can_reconnect_manually());
+        assert!(!ConnectionState::Connecting.can_reconnect_manually());
+        assert!(!ConnectionState::Connected.can_reconnect_manually());
+        assert!(!ConnectionState::Disconnected.can_reconnect_manually());
+    }
 
     #[test]
     fn reconnect_uses_capped_exponential_backoff() {
