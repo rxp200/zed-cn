@@ -284,7 +284,7 @@ impl Render for KeyContextView {
             })
             .when_some(key_equivalents, |el, key_equivalents| {
                 el.child(Label::new("按键等效项").mt_4().size(LabelSize::Large))
-                    .child(Label::new("Shortcuts defined using some characters have been remapped so that shortcuts can be typed without holding option."))
+                    .child(Label::new("使用某些字符定义的快捷键已重新映射，因此无需按住 Option 键即可输入快捷键。"))
                     .children(
                         key_equivalents
                             .iter()

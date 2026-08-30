@@ -272,17 +272,49 @@ jobs:
           $PSNativeCommandUseErrorActionPreference = $false
 
           $notesPath = "target/release-notes.md"
-          @"
-          由个人仓库自动构建的 Zed CN Windows x86_64 安装包。
+          $currentRevision = [int]$env:RELEASE_REVISION
+          $previousTag = git tag --list "zed-cn-v$env:RELEASE_VERSION-r*" --sort=-version:refname |
+              Where-Object {
+                  $_ -ne $env:RELEASE_TAG -and
+                  $_ -match '^zed-cn-v\d+\.\d+\.\d+-r(?<revision>\d+)$' -and
+                  [int]$Matches.revision -lt $currentRevision
+              } |
+              Select-Object -First 1
 
-          - Zed 版本：$env:RELEASE_VERSION
-          - 定制修订：r$env:RELEASE_REVISION
-          - 源码提交：$env:SOURCE_SHA
-          - 发布渠道：stable
-          - 代码签名：无
+          if ($previousTag) {
+              $changeSubjects = @(git log --format='%s' "$previousTag..$env:RELEASE_TAG")
+              $changeLines = @($changeSubjects | ForEach-Object {
+                  $subject = $_ -replace '^[a-zA-Z0-9_-]+:\s*', ''
+                  "- $subject"
+              })
+              if ($changeLines.Count -eq 0) {
+                  $changeLines = @("- 重新构建并更新 Windows 安装包。")
+              }
+              $comparison = "与 [$previousTag](https://github.com/${{ github.repository }}/releases/tag/$previousTag) 相比："
+          } else {
+              $changeLines = @("- 首次发布基于 Zed $env:RELEASE_VERSION 的 Zed CN Windows 安装包。")
+              $comparison = "本次发布内容："
+          }
 
-          安装包的 SHA-256 见 `SHA256SUMS.txt`。由于没有 Windows 代码签名，SmartScreen 可能显示警告。
-          "@ | Set-Content $notesPath -Encoding utf8NoBOM
+          $notes = @(
+              "## 本次更新"
+              ""
+              $comparison
+              ""
+          ) + $changeLines + @(
+              ""
+              "## 构建信息"
+              ""
+              "- Zed 版本：$env:RELEASE_VERSION"
+              "- 定制修订：r$env:RELEASE_REVISION"
+              "- 源码提交：``$env:SOURCE_SHA``"
+              "- 平台：Windows x86_64"
+              "- 发布渠道：stable"
+              "- 代码签名：无"
+              ""
+              "安装包的 SHA-256 见 ``SHA256SUMS.txt``。由于没有 Windows 代码签名，SmartScreen 可能显示警告。"
+          )
+          $notes | Set-Content $notesPath -Encoding utf8NoBOM
 
           gh release view $env:RELEASE_TAG --repo "${{ github.repository }}" *> $null
           if ($LASTEXITCODE -ne 0) {
@@ -299,6 +331,14 @@ jobs:
               & gh @arguments
               if ($LASTEXITCODE -ne 0) {
                   throw "Failed to create GitHub Release $env:RELEASE_TAG"
+              }
+          } else {
+              gh release edit $env:RELEASE_TAG `
+                  --repo "${{ github.repository }}" `
+                  --title "Zed CN $env:RELEASE_VERSION r$env:RELEASE_REVISION" `
+                  --notes-file $notesPath
+              if ($LASTEXITCODE -ne 0) {
+                  throw "Failed to update GitHub Release $env:RELEASE_TAG"
               }
           }
 

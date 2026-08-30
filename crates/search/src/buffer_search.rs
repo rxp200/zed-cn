@@ -119,9 +119,9 @@ impl Render for BufferSearchBar {
                 .map(|editor: Entity<Editor>| editor.read(cx).has_any_buffer_folded(cx))
                 .unwrap_or_default();
             let (icon, tooltip_label) = if is_collapsed {
-                (IconName::ChevronUpDown, "Expand All Files")
+                (IconName::ChevronUpDown, "展开所有文件")
             } else {
-                (IconName::ChevronDownUp, "Collapse All Files")
+                (IconName::ChevronDownUp, "折叠所有文件")
             };
 
             let collapse_expand_icon_button = |id| {
@@ -270,7 +270,7 @@ impl Render for BufferSearchBar {
                     "buffer-search-bar-toggle",
                     IconName::Replace,
                     self.replace_enabled.then_some(ActionButtonState::Toggled),
-                    "Toggle Replace",
+                    "切换替换",
                     &ToggleReplace,
                     focus_handle.clone(),
                 ))
@@ -294,7 +294,7 @@ impl Render for BufferSearchBar {
                         let focus_handle = focus_handle.clone();
                         move |_window, cx| {
                             Tooltip::for_action_in(
-                                "Toggle Search Selection",
+                                "切换在选区中搜索",
                                 &ToggleSelection,
                                 &focus_handle,
                                 cx,
@@ -316,7 +316,7 @@ impl Render for BufferSearchBar {
                         self.active_match_index
                             .is_none()
                             .then_some(ActionButtonState::Disabled),
-                        "Select Previous Match",
+                        "选择上一个匹配项",
                         &SelectPreviousMatch,
                         query_focus.clone(),
                     ))
@@ -326,7 +326,7 @@ impl Render for BufferSearchBar {
                         self.active_match_index
                             .is_none()
                             .then_some(ActionButtonState::Disabled),
-                        "Select Next Match",
+                        "选择下一个匹配项",
                         &SelectNextMatch,
                         query_focus.clone(),
                     ))
@@ -347,7 +347,7 @@ impl Render for BufferSearchBar {
                         "buffer-search-nav-button",
                         IconName::SelectAll,
                         Default::default(),
-                        "Select All Matches",
+                        "选择所有匹配项",
                         &SelectAllMatches,
                         query_focus.clone(),
                     ))
@@ -359,7 +359,7 @@ impl Render for BufferSearchBar {
                     "buffer-search",
                     IconName::Close,
                     Default::default(),
-                    "Close Search Bar",
+                    "关闭搜索栏",
                     &Dismiss,
                     focus_handle.clone(),
                 ))
@@ -393,7 +393,7 @@ impl Render for BufferSearchBar {
                     "buffer-search-replace-button",
                     IconName::ReplaceNext,
                     Default::default(),
-                    "Replace Next Match",
+                    "替换下一个匹配项",
                     &ReplaceNext,
                     focus_handle.clone(),
                 ))
@@ -401,7 +401,7 @@ impl Render for BufferSearchBar {
                     "buffer-search-replace-button",
                     IconName::ReplaceAll,
                     Default::default(),
-                    "Replace All Matches",
+                    "替换所有匹配项",
                     &ReplaceAll,
                     focus_handle,
                 ));
@@ -446,7 +446,7 @@ impl Render for BufferSearchBar {
                                 "buffer-search",
                                 IconName::Close,
                                 Default::default(),
-                                "Close Search Bar",
+                                "关闭搜索栏",
                                 &Dismiss,
                                 focus_handle.clone(),
                             )),
@@ -3044,7 +3044,7 @@ mod tests {
         });
 
         // Focus on the editor instead of the search bar, as we want to ensure
-        // that pressing the "Replace Next Match" button will work, even if the
+        // that pressing the "替换下一个匹配项" button will work, even if the
         // search bar is not focused.
         cx.focus(&editor);
 
@@ -3976,6 +3976,7 @@ mod tests {
                 include_ignored: false,
                 regex: false,
                 center_on_match: false,
+                search_on_type: false,
             },
             cx,
         );
@@ -4039,6 +4040,7 @@ mod tests {
                 include_ignored: false,
                 regex: false,
                 center_on_match: false,
+                search_on_type: false,
             },
             cx,
         );
@@ -4077,6 +4079,7 @@ mod tests {
                 include_ignored: false,
                 regex: false,
                 center_on_match: false,
+                search_on_type: false,
             },
             cx,
         );
@@ -4305,6 +4308,7 @@ mod tests {
                         include_ignored: Some(search_settings.include_ignored),
                         regex: Some(search_settings.regex),
                         center_on_match: Some(search_settings.center_on_match),
+                        search_on_type: Some(search_settings.search_on_type),
                     });
                 });
             });

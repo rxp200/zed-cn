@@ -1098,7 +1098,7 @@ impl TerminalView {
                 .size(ButtonSize::Compact)
                 .icon_color(Color::Default)
                 .shape(ui::IconButtonShape::Square)
-                .tooltip(move |_window, cx| Tooltip::for_action("Rerun task", &RerunTask, cx))
+                .tooltip(move |_window, cx| Tooltip::for_action("重新运行任务", &RerunTask, cx))
                 .on_click(move |_, window, cx| {
                     window.dispatch_action(Box::new(terminal_rerun_override(&task_id)), cx);
                 }),
@@ -1879,7 +1879,6 @@ impl SerializableItem for TerminalView {
         _workspace: &mut Workspace,
         item_id: workspace::ItemId,
         _closing: bool,
-        _: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<Task<anyhow::Result<()>>> {
         let terminal = self.terminal().read(cx);

@@ -762,7 +762,7 @@ impl Render for AcpTools {
                             .size_full()
                             .justify_center()
                             .items_center()
-                            .child("No messages recorded yet")
+                            .child("尚未记录消息")
                             .into_any()
                     } else {
                         div()
@@ -794,7 +794,7 @@ impl Render for AcpTools {
                         .size_full()
                         .justify_center()
                         .items_center()
-                        .child("No active connection")
+                        .child("没有活动连接")
                         .into_any(),
                 },
             })

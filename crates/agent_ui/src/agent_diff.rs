@@ -709,7 +709,7 @@ impl Render for AgentDiffPane {
                     v_flex()
                         .items_center()
                         .gap_2()
-                        .child("No changes to review")
+                        .child("没有要审查的更改")
                         .child(
                             Button::new("continue-iterating", "继续迭代")
                                 .style(ButtonStyle::Filled)

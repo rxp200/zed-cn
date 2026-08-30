@@ -266,7 +266,7 @@ impl Render for ReplSessionsPage {
         if sessions.is_empty() {
             let instructions = "To run code in a Jupyter kernel, select some code and use the 'repl::Run' command.";
 
-            return ReplSessionsContainer::new("No Jupyter Kernel Sessions").child(
+            return ReplSessionsContainer::new("没有 Jupyter 内核会话").child(
                 v_flex()
                     .child(Label::new(instructions))
                     .child(KeyBinding::for_action(&Run, cx)),

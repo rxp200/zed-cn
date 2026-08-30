@@ -103,7 +103,7 @@ pub(crate) fn render_add_llm_provider_popover(
         .menu(move |window, cx| {
             let settings_window = settings_window.clone();
             Some(ContextMenu::build(window, cx, move |menu, _window, _cx| {
-                menu.header("Compatible APIs")
+                menu.header("兼容 API")
                     .entry("OpenAI", None, {
                         let settings_window = settings_window.clone();
                         move |window, cx| {

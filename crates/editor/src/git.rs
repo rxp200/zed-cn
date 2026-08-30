@@ -1669,7 +1669,7 @@ impl Editor {
                 .ok();
             }
             Err(err) => {
-                let message = format!("Failed to copy permalink: {err}");
+                let message = format!("复制此行的永久链接失败：{err}");
 
                 anyhow::Result::<()>::Err(err).log_err();
 
@@ -1710,7 +1710,7 @@ impl Editor {
                 .ok();
             }
             Err(err) => {
-                let message = format!("Failed to open permalink: {err}");
+                let message = format!("打开此行的永久链接失败：{err}");
 
                 anyhow::Result::<()>::Err(err).log_err();
 

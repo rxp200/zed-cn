@@ -2570,7 +2570,7 @@ impl Sidebar {
                 window,
                 cx,
                 move |mut menu, _window, cx| {
-                    menu = menu.header("New Thread In…");
+                    menu = menu.header("在此新建线程…");
 
                     for (workspace, labels) in open_workspaces
                         .iter()
@@ -2947,7 +2947,7 @@ impl Sidebar {
                         let menu = if open_workspaces.is_empty() {
                             menu
                         } else {
-                            let mut menu = menu.separator().header("Open Worktrees");
+                            let mut menu = menu.separator().header("打开工作树");
 
                             for (
                                 workspace_index,

@@ -403,7 +403,7 @@ impl ComponentPreview {
                 let selected = self.active_page == PreviewPage::AllComponents;
 
                 ListItem::new(ix)
-                    .child(Label::new("All Components"))
+                    .child(Label::new("所有组件"))
                     .selectable(true)
                     .toggle_state(selected)
                     .inset(true)
@@ -546,7 +546,7 @@ impl ComponentPreview {
                 .size_full()
                 .items_center()
                 .justify_center()
-                .child("Component not found")
+                .child("未找到组件")
                 .into_any_element()
         }
     }
@@ -863,7 +863,6 @@ impl SerializableItem for ComponentPreview {
         _workspace: &mut Workspace,
         item_id: ItemId,
         _closing: bool,
-        _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<Task<anyhow::Result<()>>> {
         let active_page = self.active_page_id(cx);

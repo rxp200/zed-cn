@@ -445,8 +445,8 @@ impl TitleBar {
                                     .gap_0p5()
                                     .child(stat_row("Latency", latency))
                                     .child(stat_row("Jitter", jitter))
-                                    .child(stat_row("Packet loss", packet_loss))
-                                    .child(stat_row("Input lag", input_lag)),
+                                    .child(stat_row("丢包率", packet_loss))
+                                    .child(stat_row("输入延迟", input_lag)),
                             )
                             .into_any_element()
                     }))

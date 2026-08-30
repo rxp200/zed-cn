@@ -572,6 +572,7 @@ fn init_renderers(cx: &mut App) {
         .add_basic_renderer::<settings::ActivateOnClose>(render_dropdown)
         .add_basic_renderer::<settings::ShowDiagnostics>(render_dropdown)
         .add_basic_renderer::<settings::ShowCloseButton>(render_dropdown)
+        .add_basic_renderer::<settings::FolderIndicator>(render_dropdown)
         .add_basic_renderer::<settings::ProjectPanelEntrySpacing>(render_dropdown)
         .add_basic_renderer::<settings::ProjectPanelSortMode>(render_dropdown)
         .add_basic_renderer::<settings::ProjectPanelSortOrder>(render_dropdown)
@@ -1004,6 +1005,15 @@ struct SearchIndex {
     key_lut: Vec<SearchKeyLUTEntry>,
 }
 
+fn search_document_matches(document: &SearchDocument, query_words: &[&str]) -> bool {
+    query_words.iter().all(|query_word| {
+        document
+            .words
+            .iter()
+            .any(|document_word| document_word.contains(query_word))
+    })
+}
+
 struct SearchKeyLUTEntry {
     page_index: usize,
     header_index: usize,
@@ -1108,6 +1118,7 @@ impl SettingsPageItem {
         cx: &mut Context<SettingsWindow>,
     ) -> AnyElement {
         let file = settings_window.current_file.clone();
+        let search_query = settings_window.search_bar.read(cx).text(cx);
 
         let apply_padding = |element: Stateful<Div>| -> Stateful<Div> {
             let element = element.pt_4();
@@ -1178,7 +1189,9 @@ impl SettingsPageItem {
 
         match self {
             SettingsPageItem::SectionHeader(header) => {
-                SettingsSectionHeader::new(SharedString::new_static(header)).into_any_element()
+                SettingsSectionHeader::new(SharedString::new_static(header))
+                    .highlight_ranges(search_highlight_ranges(header, &search_query))
+                    .into_any_element()
             }
             SettingsPageItem::SettingItem(setting_item) => {
                 let (field_with_padding, _) =
@@ -1206,15 +1219,23 @@ impl SettingsPageItem {
                                 .relative()
                                 .w_full()
                                 .max_w_1_2()
-                                .child(Label::new(sub_page_link.title.clone()))
+                                .child(render_search_highlighted_label(
+                                    sub_page_link.title.clone(),
+                                    &search_query,
+                                    None,
+                                    None,
+                                    false,
+                                ))
                                 .when_some(
                                     sub_page_link.description.as_ref(),
                                     |this, description| {
-                                        this.child(
-                                            Label::new(description.clone())
-                                                .size(LabelSize::Small)
-                                                .color(Color::Muted),
-                                        )
+                                        this.child(render_search_highlighted_label(
+                                            description.clone(),
+                                            &search_query,
+                                            Some(LabelSize::Small),
+                                            Some(Color::Muted),
+                                            false,
+                                        ))
                                     },
                                 ),
                         )
@@ -1342,15 +1363,23 @@ impl SettingsPageItem {
                                 .relative()
                                 .w_full()
                                 .max_w_1_2()
-                                .child(Label::new(action_link.title.clone()))
+                                .child(render_search_highlighted_label(
+                                    action_link.title.clone(),
+                                    &search_query,
+                                    None,
+                                    None,
+                                    false,
+                                ))
                                 .when_some(
                                     action_link.description.as_ref(),
                                     |this, description| {
-                                        this.child(
-                                            Label::new(description.clone())
-                                                .size(LabelSize::Small)
-                                                .color(Color::Muted),
-                                        )
+                                        this.child(render_search_highlighted_label(
+                                            description.clone(),
+                                            &search_query,
+                                            Some(LabelSize::Small),
+                                            Some(Color::Muted),
+                                            false,
+                                        ))
                                     },
                                 ),
                         )
@@ -1385,6 +1414,71 @@ impl SettingsPageItem {
 ///
 /// Renders title + description on the left, control on the right, with
 /// optional reset button and copy-link icon.
+fn search_highlight_ranges(text: &str, query: &str) -> Vec<Range<usize>> {
+    let mut normalized_text = String::new();
+    let mut source_ranges = Vec::new();
+
+    for (start, character) in text.char_indices() {
+        let end = start + character.len_utf8();
+        for normalized_character in character.to_lowercase() {
+            let normalized_start = normalized_text.len();
+            normalized_text.push(normalized_character);
+            source_ranges.extend((normalized_start..normalized_text.len()).map(|_| start..end));
+        }
+    }
+
+    let mut ranges = query
+        .split_whitespace()
+        .map(str::to_lowercase)
+        .filter(|word| !word.is_empty())
+        .flat_map(|word| {
+            normalized_text
+                .match_indices(&word)
+                .filter_map(|(start, matched)| {
+                    let end = start + matched.len();
+                    Some(source_ranges.get(start)?.start..source_ranges.get(end - 1)?.end)
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    ranges.sort_unstable_by_key(|range| (range.start, range.end));
+    ranges.dedup();
+    ranges
+}
+
+fn render_search_highlighted_label(
+    text: impl Into<SharedString>,
+    query: &str,
+    size: Option<LabelSize>,
+    color: Option<Color>,
+    render_code_spans: bool,
+) -> AnyElement {
+    let text = text.into();
+    let ranges = search_highlight_ranges(&text, query);
+    if ranges.is_empty() {
+        let label = Label::new(text);
+        return match (size, color, render_code_spans) {
+            (Some(size), Some(color), true) => label
+                .size(size)
+                .color(color)
+                .render_code_spans()
+                .into_any_element(),
+            (Some(size), Some(color), false) => label.size(size).color(color).into_any_element(),
+            (Some(size), None, _) => label.size(size).into_any_element(),
+            (None, Some(color), _) => label.color(color).into_any_element(),
+            (None, None, _) => label.into_any_element(),
+        };
+    }
+
+    let label = HighlightedLabel::from_ranges(text, ranges);
+    match (size, color) {
+        (Some(size), Some(color)) => label.size(size).color(color).into_any_element(),
+        (Some(size), None) => label.size(size).into_any_element(),
+        (None, Some(color)) => label.color(color).into_any_element(),
+        (None, None) => label.into_any_element(),
+    }
+}
+
 fn render_settings_item_layout(
     settings_window: &SettingsWindow,
     title: &'static str,
@@ -1396,6 +1490,8 @@ fn render_settings_item_layout(
     sub_field: bool,
     cx: &mut Context<'_, SettingsWindow>,
 ) -> Stateful<Div> {
+    let search_query = settings_window.search_bar.read(cx).text(cx);
+
     // Note: the row itself is intentionally not exposed as a labeled group.
     // Each control names and describes itself (via the setting title and
     // description), so adding a group with the same label here would make
@@ -1414,7 +1510,13 @@ fn render_settings_item_layout(
                     h_flex()
                         .w_full()
                         .gap_1()
-                        .child(Label::new(SharedString::new_static(title)))
+                        .child(render_search_highlighted_label(
+                            SharedString::new_static(title),
+                            &search_query,
+                            None,
+                            None,
+                            false,
+                        ))
                         .when_some(reset_fn, |this, reset_to_default| {
                             this.child(
                                 IconButton::new("reset-to-default-btn", IconName::Undo)
@@ -1435,12 +1537,13 @@ fn render_settings_item_layout(
                             )
                         }),
                 )
-                .child(
-                    Label::new(SharedString::new_static(description))
-                        .size(LabelSize::Small)
-                        .color(Color::Muted)
-                        .render_code_spans(),
-                ),
+                .child(render_search_highlighted_label(
+                    SharedString::new_static(description),
+                    &search_query,
+                    Some(LabelSize::Small),
+                    Some(Color::Muted),
+                    true,
+                )),
         )
         .child(control)
         .when(settings_window.sub_page_stack.is_empty(), |this| {
@@ -2323,13 +2426,7 @@ impl SettingsWindow {
                     search_index
                         .documents
                         .iter()
-                        .filter(|doc| {
-                            query_words.iter().all(|query_word| {
-                                doc.words
-                                    .iter()
-                                    .any(|doc_word| doc_word.starts_with(query_word))
-                            })
-                        })
+                        .filter(|document| search_document_matches(document, &query_words))
                         .map(|doc| doc.id)
                         .collect::<Vec<usize>>()
                 }
@@ -3210,6 +3307,10 @@ impl SettingsWindow {
                                             ("settings-ui-navbar-entry", entry_index),
                                             entry.title,
                                         )
+                                        .highlight_ranges(search_highlight_ranges(
+                                            entry.title,
+                                            &this.search_bar.read(cx).text(cx),
+                                        ))
                                         .track_focus(&entry.focus_handle)
                                         .root_item(entry.is_root)
                                         .toggle_state(this.is_navbar_entry_selected(entry_index))
@@ -3891,8 +3992,11 @@ impl SettingsWindow {
                         "您的设置已过时，需要进行更新。",
                         match &self.current_file {
                             SettingsUiFile::User => "可以自动迁移到最新版本。",
-                            SettingsUiFile::Server(_) | SettingsUiFile::Project(_)  => "必须手动迁移到最新版本。"
-                        }.to_string(),
+                            SettingsUiFile::Server(_) | SettingsUiFile::Project(_) => {
+                                "必须手动迁移到最新版本。"
+                            }
+                        }
+                        .to_string(),
                         &mut self.shown_errors,
                         cx,
                     )),
@@ -5291,10 +5395,9 @@ fn render_translation_model_picker(
     cx: &mut App,
 ) -> AnyElement {
     let store = SettingsStore::global(cx);
-    let (_, provider_value) = store.get_value_from_file(
-        file.to_settings(),
-        |content| content.hover_translation.as_ref()?.provider.as_ref(),
-    );
+    let (_, provider_value) = store.get_value_from_file(file.to_settings(), |content| {
+        content.hover_translation.as_ref()?.provider.as_ref()
+    });
     let provider_id: SharedString = provider_value
         .map(|provider| provider.0.as_str().into())
         .unwrap_or_default();
@@ -5337,9 +5440,7 @@ fn render_translation_model_picker(
                             move |settings, app| {
                                 (field.write)(
                                     settings,
-                                    Some(settings::TranslationModelSetting(
-                                        model_id.to_string(),
-                                    )),
+                                    Some(settings::TranslationModelSetting(model_id.to_string())),
                                     app,
                                 );
                             },
@@ -5551,6 +5652,30 @@ pub mod test {
                 skill_creator_page: None,
             }
         }
+    }
+
+    #[test]
+    fn settings_search_matches_substrings() {
+        let document = SearchDocument {
+            id: 0,
+            words: vec!["无障碍".to_string(), "模式".to_string()],
+        };
+
+        assert!(search_document_matches(&document, &["障碍"]));
+        assert!(search_document_matches(&document, &["模式"]));
+        assert!(!search_document_matches(&document, &["显示"]));
+    }
+
+    #[test]
+    fn settings_search_highlights_case_insensitive_substrings() {
+        assert_eq!(
+            search_highlight_ranges("无障碍模式", "障碍 模式"),
+            vec![3..9, 9..15]
+        );
+        assert_eq!(
+            search_highlight_ranges("Accessibility Mode", "BILITY mode"),
+            vec![7..13, 14..18]
+        );
     }
 
     impl PartialEq for NavBarEntry {

@@ -248,6 +248,8 @@ pub fn app_menus(cx: &mut App) -> Vec<Menu> {
                     "查找所有引用",
                     editor::actions::FindAllReferences::default(),
                 ),
+                MenuItem::action("Show Incoming Calls", call_hierarchy::ShowIncomingCalls),
+                MenuItem::action("Show Outgoing Calls", call_hierarchy::ShowOutgoingCalls),
                 MenuItem::separator(),
                 MenuItem::action("下一个问题", editor::actions::GoToDiagnostic::default()),
                 MenuItem::action(
