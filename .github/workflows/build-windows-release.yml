@@ -29,6 +29,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
+  CARGO_BUILD_JOBS: "3"
   CARGO_INCREMENTAL: "0"
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: "1"
@@ -147,7 +148,7 @@ jobs:
           $ErrorActionPreference = "Stop"
 
           rustup show
-          Write-Host "Cargo will automatically use all $env:NUMBER_OF_PROCESSORS logical processors available on this runner"
+          Write-Host "Cargo build jobs: $env:CARGO_BUILD_JOBS of $env:NUMBER_OF_PROCESSORS logical processors"
 
           $vsWhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
           $visualStudioPath = (& $vsWhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath).Trim()
