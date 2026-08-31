@@ -11,8 +11,8 @@ use windows::{
         Globalization::u_strlen,
         System::{
             Com::{
-                DVASPECT_CONTENT, FORMATETC, IBindCtx, IClassFactory, IClassFactory_Impl, IDataObject,
-                TYMED_HGLOBAL,
+                DVASPECT_CONTENT, FORMATETC, IBindCtx, IClassFactory, IClassFactory_Impl,
+                IDataObject, TYMED_HGLOBAL,
             },
             LibraryLoader::GetModuleFileNameW,
             Ole::CF_HDROP,
@@ -21,7 +21,7 @@ use windows::{
         },
         UI::{
             Shell::{
-                Common::ITEMIDLIST, CMF_DEFAULTONLY, CMINVOKECOMMANDINFO, CMINVOKECOMMANDINFOEX,
+                CMF_DEFAULTONLY, CMINVOKECOMMANDINFO, CMINVOKECOMMANDINFOEX, Common::ITEMIDLIST,
                 DragFinish, DragQueryFileW, ECF_DEFAULT, ECS_ENABLED, GCS_HELPTEXTW, GCS_VERBW,
                 HDROP, IContextMenu, IContextMenu_Impl, IEnumExplorerCommand, IExplorerCommand,
                 IExplorerCommand_Impl, IShellExtInit, IShellExtInit_Impl, IShellItemArray,
@@ -30,7 +30,7 @@ use windows::{
             WindowsAndMessaging::{AppendMenuW, HMENU, MF_BYPOSITION, MF_STRING},
         },
     },
-    core::{implement, BOOL, GUID, HRESULT, HSTRING, Interface, PCWSTR, PSTR, Ref, Result},
+    core::{BOOL, GUID, HRESULT, HSTRING, Interface, PCWSTR, PSTR, Ref, Result, implement},
 };
 
 // Command mask passed in `CMINVOKECOMMANDINFO::fMask` when the struct is actually
@@ -184,9 +184,20 @@ impl IContextMenu_Impl for ExplorerCommandInjector_Impl {
         }
 
         let title = retrieve_command_description().unwrap_or(HSTRING::from("Open with Zed"));
-        let title: Vec<u16> = title.to_string_lossy().encode_utf16().chain(std::iter::once(0)).collect();
-        unsafe { AppendMenuW(hmenu, MF_STRING | MF_BYPOSITION, idcmdfirst as usize, PCWSTR(title.as_ptr())) }
-            .ok();
+        let title: Vec<u16> = title
+            .to_string_lossy()
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+        unsafe {
+            AppendMenuW(
+                hmenu,
+                MF_STRING | MF_BYPOSITION,
+                idcmdfirst as usize,
+                PCWSTR(title.as_ptr()),
+            )
+        }
+        .ok();
         HRESULT(1)
     }
 
@@ -237,7 +248,8 @@ fn invoked_our_command(info: &CMINVOKECOMMANDINFO) -> bool {
         return (verb & 0xFFFF) == 0;
     }
     if info.fMask & CMIC_MASK_UNICODE != 0 {
-        let info = unsafe { &*(info as *const CMINVOKECOMMANDINFO as *const CMINVOKECOMMANDINFOEX) };
+        let info =
+            unsafe { &*(info as *const CMINVOKECOMMANDINFO as *const CMINVOKECOMMANDINFOEX) };
         if !info.lpVerbW.0.is_null() {
             return wide_str_eq(info.lpVerbW.0, "OpenWithZed");
         }

@@ -632,12 +632,7 @@ impl DebugPanel {
                 .tooltip({
                     let focus_handle = focus_handle.clone();
                     move |_window, cx| {
-                        Tooltip::for_action_in(
-                            "开始调试会话",
-                            &crate::Start,
-                            &focus_handle,
-                            cx,
-                        )
+                        Tooltip::for_action_in("开始调试会话", &crate::Start, &focus_handle, cx)
                     }
                 })
         };
@@ -1829,27 +1824,24 @@ impl Render for DebugPanel {
                                 .on_click(|_, _, cx| cx.open_url("https://zed.dev/docs/debugger")),
                         )
                         .child(
-                            Button::new(
-                                "spawn-new-session-install-extensions",
-                                "调试器扩展",
-                            )
-                            .start_icon(
-                                Icon::new(IconName::Blocks)
-                                    .size(IconSize::Small)
-                                    .color(Color::Muted),
-                            )
-                            .on_click(|_, window, cx| {
-                                window.dispatch_action(
-                                    zed_actions::Extensions {
-                                        category_filter: Some(
-                                            zed_actions::ExtensionCategoryFilter::DebugAdapters,
-                                        ),
-                                        id: None,
-                                    }
-                                    .boxed_clone(),
-                                    cx,
-                                );
-                            }),
+                            Button::new("spawn-new-session-install-extensions", "调试器扩展")
+                                .start_icon(
+                                    Icon::new(IconName::Blocks)
+                                        .size(IconSize::Small)
+                                        .color(Color::Muted),
+                                )
+                                .on_click(|_, window, cx| {
+                                    window.dispatch_action(
+                                        zed_actions::Extensions {
+                                            category_filter: Some(
+                                                zed_actions::ExtensionCategoryFilter::DebugAdapters,
+                                            ),
+                                            id: None,
+                                        }
+                                        .boxed_clone(),
+                                        cx,
+                                    );
+                                }),
                         );
 
                     let has_breakpoints = self

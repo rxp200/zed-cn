@@ -69,7 +69,8 @@ impl Render for ApiKeysWithProviders {
             .border_color(cx.theme().colors().border.opacity(0.5))
             .bg(cx.theme().colors().background.alpha(0.5))
             .shadow(vec![
-                gpui::BoxShadow::new(px(1.), px(-1.), gpui::black().opacity(0.15)).blur_radius(px(3.)),
+                gpui::BoxShadow::new(px(1.), px(-1.), gpui::black().opacity(0.15))
+                    .blur_radius(px(3.)),
             ])
             .child(
                 h_flex()
@@ -90,18 +91,16 @@ impl Render for ApiKeysWithProviders {
                             .child(
                                 Icon::new(IconName::Info)
                                     .size(IconSize::XSmall)
-                                    .color(Color::Muted)
+                                    .color(Color::Muted),
                             )
                             .child(
-                                div()
-                                    .w_full()
-                                    .child(
-                                        Label::new("立即使用你环境中的 API 密钥开始使用以下提供商：")
-                                            .color(Color::Muted)
-                                    )
-                            )
+                                div().w_full().child(
+                                    Label::new("立即使用你环境中的 API 密钥开始使用以下提供商：")
+                                        .color(Color::Muted),
+                                ),
+                            ),
                     )
-                    .children(configured_providers_list)
+                    .children(configured_providers_list),
             )
     }
 }

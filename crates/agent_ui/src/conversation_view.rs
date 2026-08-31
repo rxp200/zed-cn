@@ -1769,12 +1769,7 @@ impl ConversationView {
                     });
                 }
                 if !is_subagent {
-                    self.notify_with_sound(
-                        "Agent 因错误而停止",
-                        IconName::Warning,
-                        window,
-                        cx,
-                    );
+                    self.notify_with_sound("Agent 因错误而停止", IconName::Warning, window, cx);
                 }
             }
             AcpThreadEvent::LoadError(error) => {

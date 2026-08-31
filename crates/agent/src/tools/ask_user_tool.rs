@@ -58,9 +58,7 @@ pub enum AskUserToolOutput {
 impl From<AskUserToolOutput> for LanguageModelToolResultContent {
     fn from(value: AskUserToolOutput) -> Self {
         match value {
-            AskUserToolOutput::Answered { selected } => {
-                format!("用户选择了：{selected}").into()
-            }
+            AskUserToolOutput::Answered { selected } => format!("用户选择了：{selected}").into(),
             AskUserToolOutput::Error { error } => error.into(),
         }
     }
@@ -105,9 +103,10 @@ impl AgentTool for AskUserTool {
 
             if !input.allow_free_text && input.options.len() < 2 {
                 return Err(AskUserToolOutput::Error {
-                    error: "`ask_user` 工具需要至少两个 `options`，或将 `allow_free_text` 设为 true。\
+                    error:
+                        "`ask_user` 工具需要至少两个 `options`，或将 `allow_free_text` 设为 true。\
                             请改用自然语言提出开放式问题。"
-                        .to_string(),
+                            .to_string(),
                 });
             }
 
@@ -126,8 +125,7 @@ impl AgentTool for AskUserTool {
                     string_field(&content, OTHER_FIELD)
                         .or_else(|| string_field(&content, CHOICE_FIELD))
                         .ok_or_else(|| AskUserToolOutput::Error {
-                            error: "用户提交了表单但没有提供答案。"
-                                .to_string(),
+                            error: "用户提交了表单但没有提供答案。".to_string(),
                         })?
                 }
                 acp::ElicitationAction::Decline => {

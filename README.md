@@ -1,6 +1,3 @@
-> [!IMPORTANT]
-> Remove this line to confirm you've reviewed this PR before submitting.
-
 # Zed CN
 
 [![Upstream: Zed](https://img.shields.io/badge/upstream-Zed-084CCF)](https://github.com/zed-industries/zed)

@@ -20,8 +20,7 @@ pub use settings::{
     EditPredictionDataCollectionChoice, EditPredictionPromptFormatContent, EditPredictionProvider,
     EditPredictionsMode, FormatOnSave, Formatter, FormatterList, InlayHintKind,
     LanguageSettingsContent, LineEndingSetting, LspInsertMode, OpenAiCompatibleApiTypeContent,
-    REST_OF_LANGUAGE_SERVERS, RewrapBehavior, ShowWhitespaceSetting, SoftWrap,
-    WordsCompletionMode,
+    REST_OF_LANGUAGE_SERVERS, RewrapBehavior, ShowWhitespaceSetting, SoftWrap, WordsCompletionMode,
 };
 use settings::{RegisterSetting, Settings, SettingsLocation, SettingsStore, merge_from::MergeFrom};
 use shellexpand;

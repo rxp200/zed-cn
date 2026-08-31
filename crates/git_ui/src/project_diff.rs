@@ -943,11 +943,7 @@ impl Render for ProjectDiffToolbar {
             .child(Divider::vertical())
             .child(
                 Button::new("commit", "提交")
-                    .tooltip(Tooltip::for_action_title_in(
-                        "提交",
-                        &Commit,
-                        &focus_handle,
-                    ))
+                    .tooltip(Tooltip::for_action_title_in("提交", &Commit, &focus_handle))
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.dispatch_action(&Commit, window, cx);
                     })),

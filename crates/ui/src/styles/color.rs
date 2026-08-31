@@ -196,9 +196,7 @@ impl Component for Color {
                         .description(Color::Error.get_variant_docs()),
                         single_example(
                             "Info",
-                            Label::new("信息状态")
-                                .color(Color::Info)
-                                .into_any_element(),
+                            Label::new("信息状态").color(Color::Info).into_any_element(),
                         )
                         .description(Color::Info.get_variant_docs()),
                     ],

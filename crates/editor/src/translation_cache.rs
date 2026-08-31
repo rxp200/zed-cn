@@ -146,9 +146,7 @@ impl TranslationDiskCache {
                     if entry.translation.len() > self.max_bytes {
                         continue;
                     }
-                    self.total_bytes = self
-                        .total_bytes
-                        .saturating_add(entry_bytes(&key, &entry));
+                    self.total_bytes = self.total_bytes.saturating_add(entry_bytes(&key, &entry));
                     self.entries.insert(key, entry);
                 }
                 self.enforce_budget();
@@ -267,9 +265,8 @@ impl TranslationDiskCache {
             match victim {
                 Some(key) => {
                     if let Some(entry) = self.entries.remove(&key) {
-                        self.total_bytes = self
-                            .total_bytes
-                            .saturating_sub(entry_bytes(&key, &entry));
+                        self.total_bytes =
+                            self.total_bytes.saturating_sub(entry_bytes(&key, &entry));
                     }
                 }
                 None => break,
@@ -303,7 +300,11 @@ mod tests {
     use super::*;
 
     fn test_cache(max_bytes: usize) -> TranslationDiskCache {
-        TranslationDiskCache::new(PathBuf::from("/tmp/translation_cache_test.json"), max_bytes, true)
+        TranslationDiskCache::new(
+            PathBuf::from("/tmp/translation_cache_test.json"),
+            max_bytes,
+            true,
+        )
     }
 
     fn entry(translation: &str) -> TranslationCacheEntry {
@@ -320,11 +321,19 @@ mod tests {
         loaded.load_from_bytes(&cache.serialize());
         assert!(loaded.loaded);
         assert_eq!(
-            loaded.entries.get("provider:model:中文:abc").unwrap().translation,
+            loaded
+                .entries
+                .get("provider:model:中文:abc")
+                .unwrap()
+                .translation,
             "你好世界"
         );
         assert_eq!(
-            loaded.entries.get("provider:model:中文:def").unwrap().translation,
+            loaded
+                .entries
+                .get("provider:model:中文:def")
+                .unwrap()
+                .translation,
             "解析代码块"
         );
     }

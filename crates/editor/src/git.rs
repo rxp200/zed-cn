@@ -3150,12 +3150,7 @@ pub fn render_diff_hunk_controls(
                     .tooltip({
                         let focus_handle = editor.focus_handle(cx);
                         move |_window, cx| {
-                            Tooltip::for_action_in(
-                                "恢复块",
-                                &::git::Restore,
-                                &focus_handle,
-                                cx,
-                            )
+                            Tooltip::for_action_in("恢复块", &::git::Restore, &focus_handle, cx)
                         }
                     })
                     .on_click({

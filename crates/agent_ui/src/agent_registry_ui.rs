@@ -416,12 +416,7 @@ impl AgentRegistryPage {
             )
             .icon_size(IconSize::Small)
             .tooltip(move |_, cx| {
-                Tooltip::with_meta(
-                    "访问 Agent 仓库",
-                    None,
-                    repository_for_tooltip.clone(),
-                    cx,
-                )
+                Tooltip::with_meta("访问 Agent 仓库", None, repository_for_tooltip.clone(), cx)
             })
             .on_click(move |_, _, cx| {
                 cx.open_url(&repository_for_click);
@@ -436,9 +431,7 @@ impl AgentRegistryPage {
                 IconName::Link,
             )
             .icon_size(IconSize::Small)
-            .tooltip(move |_, cx| {
-                Tooltip::with_meta("访问 Agent 网站", None, website.clone(), cx)
-            })
+            .tooltip(move |_, cx| Tooltip::with_meta("访问 Agent 网站", None, website.clone(), cx))
             .on_click(move |_, _, cx| {
                 cx.open_url(&website_for_click);
             })

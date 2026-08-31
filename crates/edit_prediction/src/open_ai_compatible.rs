@@ -149,9 +149,7 @@ pub(crate) async fn send_custom_server_request(
                 language_name,
             } = prompt
             else {
-                return Err(anyhow!(
-                    "chat completions API requires a chat FIM prompt"
-                ));
+                return Err(anyhow!("chat completions API requires a chat FIM prompt"));
             };
             let mut user_message = String::new();
             if let Some(language_name) = language_name {
@@ -184,8 +182,8 @@ pub(crate) async fn send_custom_server_request(
             if !status.is_success() {
                 anyhow::bail!("custom server error: {} - {}", status, body);
             }
-            let parsed: ChatCompletionResponse = serde_json::from_str(&body)
-                .context("Failed to parse chat completion response")?;
+            let parsed: ChatCompletionResponse =
+                serde_json::from_str(&body).context("Failed to parse chat completion response")?;
             let text = parsed
                 .choices
                 .into_iter()

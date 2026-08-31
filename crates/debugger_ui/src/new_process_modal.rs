@@ -1520,7 +1520,11 @@ impl PickerDelegate for DebugDelegate {
                 } else {
                     this.child({
                         let is_recent_selected = self.divider_index >= Some(self.selected_index);
-                        let run_entry_label = if is_recent_selected { "重新运行" } else { "启动" };
+                        let run_entry_label = if is_recent_selected {
+                            "重新运行"
+                        } else {
+                            "启动"
+                        };
 
                         Button::new("spawn", run_entry_label)
                             .key_binding(KeyBinding::for_action(&menu::Confirm, cx))

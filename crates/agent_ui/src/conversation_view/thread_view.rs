@@ -187,11 +187,7 @@ impl ThreadFeedbackState {
                 window,
                 cx,
             );
-            editor.set_placeholder_text(
-                "出了什么问题？分享您的反馈以便我们改进。",
-                window,
-                cx,
-            );
+            editor.set_placeholder_text("出了什么问题？分享您的反馈以便我们改进。", window, cx);
             editor
         });
 
@@ -1867,8 +1863,7 @@ impl ThreadView {
                 ThreadError::PaymentRequired => (
                     "payment_required",
                     None,
-                    "您已达到免费使用限制。升级到 Zed Pro 以获取更多提示。"
-                        .into(),
+                    "您已达到免费使用限制。升级到 Zed Pro 以获取更多提示。".into(),
                 ),
                 ThreadError::Refusal => {
                     let model_or_agent_name = self.current_model_name(cx);
@@ -1936,9 +1931,7 @@ impl ThreadView {
                     None,
                     "模型已达到其最大输出长度。".into(),
                 ),
-                ThreadError::NoModelSelected => {
-                    ("no_model_selected", None, "未选择模型。".into())
-                }
+                ThreadError::NoModelSelected => ("no_model_selected", None, "未选择模型。".into()),
                 ThreadError::ApiError { provider } => (
                     "api_error",
                     None,
@@ -4103,19 +4096,16 @@ impl ThreadView {
                     .map(|this| {
                         if pending_edits {
                             this.child(
-                                Label::new(format!(
-                                    "正在编辑 {} 个文件…",
-                                    changed_buffers.len(),
-                                ))
-                                .color(Color::Muted)
-                                .size(LabelSize::Small)
-                                .with_animation(
-                                    "edit-label",
-                                    Animation::new(Duration::from_secs(2))
-                                        .repeat()
-                                        .with_easing(pulsating_between(0.3, 0.7)),
-                                    |label, delta| label.alpha(delta),
-                                ),
+                                Label::new(format!("正在编辑 {} 个文件…", changed_buffers.len(),))
+                                    .color(Color::Muted)
+                                    .size(LabelSize::Small)
+                                    .with_animation(
+                                        "edit-label",
+                                        Animation::new(Duration::from_secs(2))
+                                            .repeat()
+                                            .with_easing(pulsating_between(0.3, 0.7)),
+                                        |label, delta| label.alpha(delta),
+                                    ),
                             )
                         } else {
                             let stats = DiffStats::all_files(changed_buffers.iter().cloned(), cx);
@@ -5149,11 +5139,7 @@ impl ThreadView {
         let thinking = thread.thinking_enabled();
 
         let (tooltip_label, icon, color) = if thinking {
-            (
-                "退出思考模式",
-                IconName::ThinkingMode,
-                Color::Accent,
-            )
+            ("退出思考模式", IconName::ThinkingMode, Color::Accent)
         } else {
             (
                 "启用思考模式",
@@ -5479,12 +5465,7 @@ impl ThreadView {
                     .icon_color(Color::Muted),
                 {
                     move |_window, cx| {
-                        Tooltip::for_action_in(
-                            "添加上下文",
-                            &OpenAddContextMenu,
-                            &focus_handle,
-                            cx,
-                        )
+                        Tooltip::for_action_in("添加上下文", &OpenAddContextMenu, &focus_handle, cx)
                     }
                 },
             )
@@ -6006,8 +5987,7 @@ fn sandbox_section(title: &str, policy: &SandboxPolicyDisplay, show_empty: bool)
     let mut section = SandboxSection::new(title.to_string());
 
     if show_empty || !write_empty {
-        section =
-            section.group(SandboxGroup::new("写入访问").rows(sandbox_fs_rows(&policy.fs)));
+        section = section.group(SandboxGroup::new("写入访问").rows(sandbox_fs_rows(&policy.fs)));
     }
 
     if show_empty || !network_empty {
@@ -6040,9 +6020,9 @@ fn network_grants_nothing(network: &SandboxNetPolicy) -> bool {
 /// row per granted path.
 fn sandbox_fs_rows(fs: &SandboxFsDisplay) -> Vec<SandboxRow> {
     match fs {
-        SandboxFsDisplay::Unrestricted => vec![SandboxRow::message(
-            "除受保护的 Git 元数据外的所有路径",
-        )],
+        SandboxFsDisplay::Unrestricted => {
+            vec![SandboxRow::message("除受保护的 Git 元数据外的所有路径")]
+        }
         SandboxFsDisplay::Restricted(entries) if entries.is_empty() => {
             vec![SandboxRow::message("无")]
         }
@@ -6477,7 +6457,9 @@ impl ThreadView {
                                 ),
                         )
                         .child(Divider::horizontal())
-                        .tooltip(Tooltip::text("此行以下的所有内容均由此子Agent发送给主Agent。")),
+                        .tooltip(Tooltip::text(
+                            "此行以下的所有内容均由此子Agent发送给主Agent。",
+                        )),
                 )
                 .child(primary)
                 .into_any_element()
@@ -6845,8 +6827,7 @@ impl ThreadView {
             .then(|| {
                 (self.is_subagent() && self.is_thread_feedback_enabled(cx)).then(|| {
                     let feedback = self.thread_feedback.feedback;
-                    let tooltip_meta =
-                        "对线程进行评分会将您当前的所有对话发送给 Zed 团队。";
+                    let tooltip_meta = "对线程进行评分会将您当前的所有对话发送给 Zed 团队。";
 
                     h_flex()
                         .child(
@@ -6860,15 +6841,14 @@ impl ThreadView {
                                     Some(ThreadFeedback::Positive) => {
                                         Tooltip::text("感谢您的反馈！")(window, cx)
                                     }
-                                    _ => Tooltip::with_meta(
-                                        "有帮助的响应",
-                                        None,
-                                        tooltip_meta,
-                                        cx,
-                                    ),
+                                    _ => Tooltip::with_meta("有帮助的响应", None, tooltip_meta, cx),
                                 })
                                 .on_click(cx.listener(move |this, _, window, cx| {
-                                    this.handle_feedback_click(ThreadFeedback::Positive, window, cx);
+                                    this.handle_feedback_click(
+                                        ThreadFeedback::Positive,
+                                        window,
+                                        cx,
+                                    );
                                 })),
                         )
                         .child(
@@ -6879,20 +6859,19 @@ impl ThreadView {
                                     _ => Color::Muted,
                                 })
                                 .tooltip(move |window, cx| match feedback {
-                                    Some(ThreadFeedback::Negative) => Tooltip::text(
-                                        "我们感谢您的反馈，并将利用它来改进未来的产品。",
-                                    )(
-                                        window, cx
-                                    ),
-                                    _ => Tooltip::with_meta(
-                                        "无帮助的响应",
-                                        None,
-                                        tooltip_meta,
-                                        cx,
-                                    ),
+                                    Some(ThreadFeedback::Negative) => {
+                                        Tooltip::text(
+                                            "我们感谢您的反馈，并将利用它来改进未来的产品。",
+                                        )(window, cx)
+                                    }
+                                    _ => Tooltip::with_meta("无帮助的响应", None, tooltip_meta, cx),
                                 })
                                 .on_click(cx.listener(move |this, _, window, cx| {
-                                    this.handle_feedback_click(ThreadFeedback::Negative, window, cx);
+                                    this.handle_feedback_click(
+                                        ThreadFeedback::Negative,
+                                        window,
+                                        cx,
+                                    );
                                 })),
                         )
                 })
@@ -7587,8 +7566,8 @@ impl ThreadView {
                         })
                     });
 
-                    let copy_this_agent_response =
-                        ContextMenuEntry::new("复制此 Agent 响应").handler({
+                    let copy_this_agent_response = ContextMenuEntry::new("复制此 Agent 响应")
+                        .handler({
                             let entity = entity.clone();
                             move |_, cx| {
                                 entity.update(cx, |this, cx| {
@@ -8037,9 +8016,7 @@ impl ThreadView {
                                 error.user_facing_message()
                             ))
                         })
-                        .unwrap_or_else(|| {
-                            "此线程的其余部分允许非沙箱执行。".into()
-                        });
+                        .unwrap_or_else(|| "此线程的其余部分允许非沙箱执行。".into());
                     let docs_section = thread_error.as_ref().map(|error| error.docs_section());
                     ("在无沙箱下运行".into(), detail, docs_section)
                 }
@@ -11058,9 +11035,7 @@ impl ThreadView {
             ThreadError::NoCredentials { provider } => {
                 let message = Self::provider_by_name(provider, cx)
                     .map(|provider| provider.missing_credentials_error_message())
-                    .unwrap_or_else(|| {
-                        format!("未为 {provider} 配置凭据。").into()
-                    });
+                    .unwrap_or_else(|| format!("未为 {provider} 配置凭据。").into());
                 self.render_error_callout("缺少凭据", message, false, true, cx)
             }
             ThreadError::StreamError { provider } => self.render_error_callout(
@@ -11165,8 +11140,7 @@ impl ThreadView {
     }
 
     fn render_payment_required_error(&self, cx: &mut Context<Self>) -> Callout {
-        const ERROR_MESSAGE: &str =
-            "您已达到免费使用限制。升级到 Zed Pro 以获取更多提示。";
+        const ERROR_MESSAGE: &str = "您已达到免费使用限制。升级到 Zed Pro 以获取更多提示。";
 
         Callout::new()
             .severity(Severity::Error)
@@ -11227,15 +11201,13 @@ impl ThreadView {
                     {
                         if !provider.is_authenticated(cx) {
                             (
-                                format!("无法使用 {} 提供者进行认证", provider.name())
-                                    .into(),
+                                format!("无法使用 {} 提供者进行认证", provider.name()).into(),
                                 "打开设置以配置所选提供者".into(),
                             )
                         } else {
                             (
                                 format!("未找到模型 {}", selected_model.model.0).into(),
-                                "您可能需要为此提供者重新配置认证"
-                                    .into(),
+                                "您可能需要为此提供者重新配置认证".into(),
                             )
                         }
                     } else {
@@ -11249,14 +11221,10 @@ impl ThreadView {
                     if has_authenticated_provider {
                         (
                             "未选择模型".into(),
-                            "选择其他模型或配置其他提供商以开始使用"
-                                .into(),
+                            "选择其他模型或配置其他提供商以开始使用".into(),
                         )
                     } else {
-                        (
-                            "未选择模型".into(),
-                            "配置提供商以开始使用".into(),
-                        )
+                        ("未选择模型".into(), "配置提供商以开始使用".into())
                     }
                 }
             };
@@ -11556,9 +11524,7 @@ impl ThreadView {
                 let title = match issue.kind {
                     SkillLoadingIssueKind::LoadFailed => "技能加载失败",
                     SkillLoadingIssueKind::DescriptionTooLong => unreachable!(),
-                    SkillLoadingIssueKind::CatalogBudgetExceeded => {
-                        "技能已从模型目录中省略"
-                    }
+                    SkillLoadingIssueKind::CatalogBudgetExceeded => "技能已从模型目录中省略",
                 };
 
                 Callout::new()
@@ -11759,11 +11725,7 @@ impl ThreadView {
                 .severity(Severity::Warning)
                 .icon(IconName::Warning)
                 .title("This agent doesn't currently support multi-root workspaces")
-                .description(format!(
-                    "它目前默认只在以下位置操作：\"{}\"",
-
-                    active_dir
-                ))
+                .description(format!("它目前默认只在以下位置操作：\"{}\"", active_dir))
                 .border_position(self.callout_border_position())
                 .dismiss_action(
                     IconButton::new("dismiss-multi-root-callout", IconName::Close)
@@ -11844,16 +11806,12 @@ impl ThreadView {
 
         let (severity, icon, title) = match ratio {
             acp_thread::TokenUsageRatio::Normal => return None,
-            acp_thread::TokenUsageRatio::Warning => (
-                Severity::Warning,
-                IconName::Warning,
-                "线程即将达到令牌限制",
-            ),
-            acp_thread::TokenUsageRatio::Exceeded => (
-                Severity::Error,
-                IconName::XCircle,
-                "线程已达到令牌限制",
-            ),
+            acp_thread::TokenUsageRatio::Warning => {
+                (Severity::Warning, IconName::Warning, "线程即将达到令牌限制")
+            }
+            acp_thread::TokenUsageRatio::Exceeded => {
+                (Severity::Error, IconName::XCircle, "线程已达到令牌限制")
+            }
         };
 
         let description = "要继续，请运行 /compact 或启动新线程并 @提及此线程";

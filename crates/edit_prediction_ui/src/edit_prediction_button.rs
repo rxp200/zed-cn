@@ -250,12 +250,7 @@ impl Render for EditPredictionButton {
                                         ))
                                 }),
                             move |_window, cx| {
-                                Tooltip::with_meta(
-                                    "编辑预测",
-                                    Some(&ToggleMenu),
-                                    tooltip_meta,
-                                    cx,
-                                )
+                                Tooltip::with_meta("编辑预测", Some(&ToggleMenu), tooltip_meta, cx)
                             },
                         )
                         .with_handle(self.popover_menu_handle.clone()),
@@ -333,12 +328,7 @@ impl Render for EditPredictionButton {
                                     }
                                 };
 
-                                Tooltip::with_meta(
-                                    "编辑预测",
-                                    Some(&ToggleMenu),
-                                    tooltip_meta,
-                                    cx,
-                                )
+                                Tooltip::with_meta("编辑预测", Some(&ToggleMenu), tooltip_meta, cx)
                             },
                         )
                         .with_handle(self.popover_menu_handle.clone()),
@@ -473,12 +463,7 @@ impl Render for EditPredictionButton {
                                 "Enable to Use"
                             };
 
-                            Tooltip::with_meta(
-                                "编辑预测",
-                                Some(&ToggleMenu),
-                                description,
-                                cx,
-                            )
+                            Tooltip::with_meta("编辑预测", Some(&ToggleMenu), description, cx)
                         })
                     });
 
@@ -629,8 +614,7 @@ impl EditPredictionButton {
                         .disabled(is_disabled_zed_provider)
                         .when(is_disabled_zed_provider, |item| {
                             item.documentation_aside(DocumentationSide::Left, move |_cx| {
-                                Label::new("此组织的编辑预测已被禁用。")
-                                    .into_any_element()
+                                Label::new("此组织的编辑预测已被禁用。").into_any_element()
                             })
                         })
                         .handler(move |_, cx| {
@@ -749,11 +733,8 @@ impl EditPredictionButton {
                     menu = menu.item(entry.disabled(true).documentation_aside(
                         DocumentationSide::Left,
                         move |_cx| {
-                            Label::new(format!(
-                                "已对 {} 禁用编辑预测",
-                                language.name()
-                            ))
-                            .into_any_element()
+                            Label::new(format!("已对 {} 禁用编辑预测", language.name()))
+                                .into_any_element()
                         },
                     ));
                 }
@@ -799,44 +780,44 @@ impl EditPredictionButton {
         let eager_mode = matches!(current_mode, EditPredictionsMode::Eager);
 
         menu = menu
-                .separator()
-                .header("显示模式")
-                .item(
-                    ContextMenuEntry::new("即时")
-                        .toggleable(IconPosition::Start, eager_mode)
-                        .documentation_aside(DocumentationSide::Left, move |_| {
-                            Label::new("当没有语言服务器补全可用时内联显示预测。").into_any_element()
-                        })
-                        .handler({
-                            let fs = fs.clone();
-                            move |_, cx| {
-                                telemetry::event!(
-                                    "Edit Prediction Setting Changed",
-                                    setting = "mode",
-                                    value = "eager",
-                                );
-                                toggle_edit_prediction_mode(fs.clone(), EditPredictionsMode::Eager, cx)
-                            }
-                        }),
-                )
-                .item(
-                    ContextMenuEntry::new("按键触发")
-                        .toggleable(IconPosition::Start, subtle_mode)
-                        .documentation_aside(DocumentationSide::Left, move |_| {
-                            Label::new("仅在按住修饰键时内联显示预测（默认 alt）。").into_any_element()
-                        })
-                        .handler({
-                            let fs = fs.clone();
-                            move |_, cx| {
-                                telemetry::event!(
-                                    "Edit Prediction Setting Changed",
-                                    setting = "mode",
-                                    value = "subtle",
-                                );
-                                toggle_edit_prediction_mode(fs.clone(), EditPredictionsMode::Subtle, cx)
-                            }
-                        }),
-                );
+            .separator()
+            .header("显示模式")
+            .item(
+                ContextMenuEntry::new("即时")
+                    .toggleable(IconPosition::Start, eager_mode)
+                    .documentation_aside(DocumentationSide::Left, move |_| {
+                        Label::new("当没有语言服务器补全可用时内联显示预测。").into_any_element()
+                    })
+                    .handler({
+                        let fs = fs.clone();
+                        move |_, cx| {
+                            telemetry::event!(
+                                "Edit Prediction Setting Changed",
+                                setting = "mode",
+                                value = "eager",
+                            );
+                            toggle_edit_prediction_mode(fs.clone(), EditPredictionsMode::Eager, cx)
+                        }
+                    }),
+            )
+            .item(
+                ContextMenuEntry::new("按键触发")
+                    .toggleable(IconPosition::Start, subtle_mode)
+                    .documentation_aside(DocumentationSide::Left, move |_| {
+                        Label::new("仅在按住修饰键时内联显示预测（默认 alt）。").into_any_element()
+                    })
+                    .handler({
+                        let fs = fs.clone();
+                        move |_, cx| {
+                            telemetry::event!(
+                                "Edit Prediction Setting Changed",
+                                setting = "mode",
+                                value = "subtle",
+                            );
+                            toggle_edit_prediction_mode(fs.clone(), EditPredictionsMode::Subtle, cx)
+                        }
+                    }),
+            );
 
         menu = menu.separator().header("隐私");
 

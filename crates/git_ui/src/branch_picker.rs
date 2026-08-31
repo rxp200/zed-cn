@@ -1251,9 +1251,7 @@ impl PickerDelegate for BranchListDelegate {
 
     fn no_matches_text(&self, _window: &mut Window, _cx: &mut App) -> Option<SharedString> {
         match self.state {
-            PickerState::CreateRemote(_) => {
-                Some(SharedString::new_static("远程名称不能为空"))
-            }
+            PickerState::CreateRemote(_) => Some(SharedString::new_static("远程名称不能为空")),
             _ => None,
         }
     }
@@ -1572,12 +1570,7 @@ impl PickerDelegate for BranchListDelegate {
 
                     anyhow::Ok(())
                 })
-                .detach_and_prompt_err(
-                    "切换分支失败",
-                    window,
-                    cx,
-                    |_, _, _| None,
-                );
+                .detach_and_prompt_err("切换分支失败", window, cx, |_, _, _| None);
             }
             Entry::NewUrl { url } => {
                 self.state = PickerState::CreateRemote(url.clone().into());

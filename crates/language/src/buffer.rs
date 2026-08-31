@@ -115,6 +115,7 @@ pub struct Buffer {
     was_dirty_before_starting_transaction: Option<bool>,
     reload_task: Option<Task<Result<()>>>,
     language: Option<Arc<Language>>,
+    content_language_detection_enabled: bool,
     autoindent_requests: Vec<Arc<AutoindentRequest>>,
     wait_for_autoindent_txs: Vec<oneshot::Sender<()>>,
     pending_autoindent: Option<Task<()>>,
@@ -1161,6 +1162,7 @@ impl Buffer {
             wait_for_autoindent_txs: Default::default(),
             pending_autoindent: Default::default(),
             language: None,
+            content_language_detection_enabled: false,
             remote_selections: Default::default(),
             diagnostics: Default::default(),
             diagnostics_timestamp: Lamport::MIN,
@@ -1310,6 +1312,7 @@ impl Buffer {
                     merged_operations: Default::default(),
                 }),
                 language: self.language.clone(),
+                content_language_detection_enabled: self.content_language_detection_enabled,
                 has_conflict: self.has_conflict,
                 has_unsaved_edits: Cell::new(self.has_unsaved_edits.get_mut().clone()),
                 _subscriptions: vec![cx.subscribe(&this, Self::on_base_buffer_event)],
@@ -1491,6 +1494,14 @@ impl Buffer {
     /// Sets whether the buffer has a Byte Order Mark.
     pub fn set_has_bom(&mut self, has_bom: bool) {
         self.has_bom = has_bom;
+    }
+
+    pub fn set_content_language_detection_enabled(&mut self, enabled: bool) {
+        self.content_language_detection_enabled = enabled;
+    }
+
+    pub fn content_language_detection_enabled(&self) -> bool {
+        self.content_language_detection_enabled
     }
 
     /// Assign a language to the buffer.
@@ -4113,11 +4124,7 @@ impl BufferSnapshot {
                 skips.push(start..start + line_len);
             }
         }
-        if skips.is_empty() {
-            None
-        } else {
-            Some(skips)
-        }
+        if skips.is_empty() { None } else { Some(skips) }
     }
 
     pub fn highlighted_text_for_range<T: ToOffset>(
@@ -5672,11 +5679,10 @@ impl<'a> Iterator for BufferChunks<'a> {
             // truncated at the end of the skip range so that highlighting
             // resumes right after it; once the iteration leaves the range,
             // the capture cursor is re-seeked to the current position.
-            let current_skip = self.skip_highlights.as_ref().and_then(|skips| {
-                skips
-                    .iter()
-                    .find(|skip| skip.contains(&self.range.start))
-            });
+            let current_skip = self
+                .skip_highlights
+                .as_ref()
+                .and_then(|skips| skips.iter().find(|skip| skip.contains(&self.range.start)));
             if let Some(skip) = current_skip {
                 highlights.stack.clear();
                 highlights.next_capture = None;

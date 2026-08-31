@@ -896,9 +896,10 @@ impl Render for ConfigurationView {
 
         let api_key_section = v_flex()
             .on_action(cx.listener(Self::save_api_key))
-            .child(Label::new(
-                "要在 Zed 中使用 OpenCode 模型，您需要一个 API 密钥：",
-            ).color(Color::Muted))
+            .child(
+                Label::new("要在 Zed 中使用 OpenCode 模型，您需要一个 API 密钥：")
+                    .color(Color::Muted),
+            )
             .child(
                 List::new()
                     .child(
@@ -910,9 +911,10 @@ impl Render for ConfigurationView {
                             )),
                     )
                     .when(is_editing, |this| {
-                        this.child(ListBulletItem::new(
-                            "在下方粘贴您的 API 密钥并按回车开始使用 OpenCode",
-                        ).label_color(Color::Muted))
+                        this.child(
+                            ListBulletItem::new("在下方粘贴您的 API 密钥并按回车开始使用 OpenCode")
+                                .label_color(Color::Muted),
+                        )
                     }),
             )
             .child(api_key_control)
@@ -921,7 +923,8 @@ impl Render for ConfigurationView {
                     "您也可以设置 {API_KEY_ENV_VAR_NAME} 环境变量并重新启动 Zed。"
                 ))
                 .size(LabelSize::Small)
-                .color(Color::Muted).mt_1p5(),
+                .color(Color::Muted)
+                .mt_1p5(),
             )
             .into_any_element();
 

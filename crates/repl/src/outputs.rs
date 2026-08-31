@@ -781,9 +781,7 @@ impl Render for ExecutionView {
             ExecutionStatus::Shutdown => Label::new("内核已关闭")
                 .color(Color::Muted)
                 .into_any_element(),
-            ExecutionStatus::Queued => Label::new("排队中…")
-                .color(Color::Muted)
-                .into_any_element(),
+            ExecutionStatus::Queued => Label::new("排队中…").color(Color::Muted).into_any_element(),
             ExecutionStatus::KernelErrored(error) => Label::new(format!("Kernel error: {}", error))
                 .color(Color::Error)
                 .into_any_element(),

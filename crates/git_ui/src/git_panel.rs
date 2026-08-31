@@ -315,7 +315,11 @@ fn git_panel_context_menu(
         context_menu
             .context(focus_handle.clone())
             .action_disabled_when(!has_unstaged_changes, "全部暂存", StageAll.boxed_clone())
-            .action_disabled_when(!has_staged_changes, "取消全部暂存", UnstageAll.boxed_clone())
+            .action_disabled_when(
+                !has_staged_changes,
+                "取消全部暂存",
+                UnstageAll.boxed_clone(),
+            )
             .action_disabled_when(
                 !has_staged_tracked_changes,
                 "恢复所有更改",
@@ -2275,10 +2279,7 @@ impl GitPanel {
                 let (message, confirm_text) = if entry.status.is_deleted() {
                     ("您确定要恢复 ", "恢复文件")
                 } else {
-                    (
-                        "您确定要放弃对 ",
-                        "放弃更改",
-                    )
+                    ("您确定要放弃对 ", "放弃更改")
                 };
                 let prompt = window.prompt(
                     PromptLevel::Warning,
@@ -6465,11 +6466,7 @@ impl GitPanel {
                             IconButton::new("git-graph-button", IconName::GitGraph)
                                 .icon_size(IconSize::Small)
                                 .tooltip(|_window, cx| {
-                                    Tooltip::for_action(
-                                        "打开 Git 图",
-                                        &crate::git_graph::Open,
-                                        cx,
-                                    )
+                                    Tooltip::for_action("打开 Git 图", &crate::git_graph::Open, cx)
                                 })
                                 .on_click(|_, window, cx| {
                                     window.dispatch_action(crate::git_graph::Open.boxed_clone(), cx)
@@ -6554,12 +6551,10 @@ impl GitPanel {
         v_flex().flex_1().size_full().overflow_hidden().map(|this| {
             let has_repo = self.active_repository.is_some();
             match &self.commit_history {
-                _ if !has_repo => {
-                    this.child(Self::render_history_placeholder("未找到仓库"))
+                _ if !has_repo => this.child(Self::render_history_placeholder("未找到仓库")),
+                CommitHistory::Error(_) => {
+                    this.child(Self::render_history_placeholder("加载提交历史失败"))
                 }
-                CommitHistory::Error(_) => this.child(Self::render_history_placeholder(
-                    "加载提交历史失败",
-                )),
                 CommitHistory::Loading => {
                     this.child(Self::render_history_placeholder("正在加载提交历史…"))
                 }
@@ -9265,7 +9260,6 @@ impl Component for PanelRepoFooter {
     }
 }
 
-
 pub(crate) fn commit_title_exceeds_limit(title: &str, max_length: usize) -> bool {
     max_length > 0 && title.chars().count() > max_length
 }
@@ -10185,10 +10179,7 @@ mod tests {
             .pending_prompt()
             .expect("discard should show a confirmation prompt");
 
-        assert_eq!(
-            message,
-            "您确定要放弃对 `__somefile__` 的更改吗？"
-        );
+        assert_eq!(message, "您确定要放弃对 `__somefile__` 的更改吗？");
     }
 
     #[gpui::test]

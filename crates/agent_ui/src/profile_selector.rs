@@ -752,8 +752,7 @@ impl PickerDelegate for ProfilePickerDelegate {
                                                 .color(Color::Warning),
                                         )
                                         .child(
-                                            Label::new("在受限模式下已禁用")
-                                                .size(LabelSize::Small),
+                                            Label::new("在受限模式下已禁用").size(LabelSize::Small),
                                         ),
                                 )
                                 .children(forbidden_tools.iter().map(|tool| {

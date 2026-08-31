@@ -531,11 +531,10 @@ impl Render for SyntaxTreeView {
                         .max_w_3_5()
                         .map(|this| {
                             if editor_state.is_some_and(|state| !state.has_language()) {
-                                this.child(Label::new("当前编辑器没有关联的语言"))
-                                    .child(
-                                        Label::new("尝试指定一种语言或切换到其他缓冲区")
+                                this.child(Label::new("当前编辑器没有关联的语言")).child(
+                                    Label::new("尝试指定一种语言或切换到其他缓冲区")
                                         .size(LabelSize::Small),
-                                    )
+                                )
                             } else {
                                 this.child(Label::new("未附加到编辑器")).child(
                                     Label::new("聚焦一个编辑器以显示新的树视图")

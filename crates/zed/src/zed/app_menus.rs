@@ -18,10 +18,7 @@ pub fn app_menus(cx: &mut App) -> Vec<Menu> {
             "重置缩放",
             zed_actions::ResetBufferFontSize { persist: false },
         ),
-        MenuItem::action(
-            "重置所有缩放",
-            zed_actions::ResetAllZoom { persist: false },
-        ),
+        MenuItem::action("重置所有缩放", zed_actions::ResetAllZoom { persist: false }),
         MenuItem::separator(),
         MenuItem::action("切换左侧面板", workspace::ToggleLeftDock),
         MenuItem::action("切换右侧面板", workspace::ToggleRightDock),
@@ -51,10 +48,7 @@ pub fn app_menus(cx: &mut App) -> Vec<Menu> {
     ];
 
     if ReleaseChannel::try_global(cx) == Some(ReleaseChannel::Dev) {
-        view_items.push(MenuItem::action(
-            "切换 GPUI 调试器",
-            dev::ToggleInspector,
-        ));
+        view_items.push(MenuItem::action("切换 GPUI 调试器", dev::ToggleInspector));
         view_items.push(MenuItem::separator());
     }
 
@@ -77,10 +71,7 @@ pub fn app_menus(cx: &mut App) -> Vec<Menu> {
                     MenuItem::action("打开键位映射文件", zed_actions::OpenKeymapFile),
                     MenuItem::action("打开默认键位绑定", zed_actions::OpenDefaultKeymap),
                     MenuItem::separator(),
-                    MenuItem::action(
-                        "选择主题…",
-                        zed_actions::theme_selector::Toggle::default(),
-                    ),
+                    MenuItem::action("选择主题…", zed_actions::theme_selector::Toggle::default()),
                     MenuItem::action(
                         "选择图标主题…",
                         zed_actions::icon_theme_selector::Toggle::default(),
@@ -156,21 +147,14 @@ pub fn app_menus(cx: &mut App) -> Vec<Menu> {
                 MenuItem::action("查找", search::buffer_search::Deploy::find()),
                 MenuItem::action("在项目中查找", workspace::DeploySearch::default()),
                 MenuItem::separator(),
-                MenuItem::action(
-                    "切换行注释",
-                    editor::actions::ToggleComments::default(),
-                ),
+                MenuItem::action("切换行注释", editor::actions::ToggleComments::default()),
             ],
         },
         Menu {
             name: "选择".into(),
             disabled: false,
             items: vec![
-                MenuItem::os_action(
-                    "全选",
-                    editor::actions::SelectAll,
-                    OsAction::SelectAll,
-                ),
+                MenuItem::os_action("全选", editor::actions::SelectAll, OsAction::SelectAll),
                 MenuItem::action("扩大选择", editor::actions::SelectLargerSyntaxNode),
                 MenuItem::action("缩小选择", editor::actions::SelectSmallerSyntaxNode),
                 MenuItem::action("选择下一个兄弟节点", editor::actions::SelectNextSyntaxNode),
@@ -226,20 +210,11 @@ pub fn app_menus(cx: &mut App) -> Vec<Menu> {
                 MenuItem::separator(),
                 MenuItem::action("转到文件…", workspace::ToggleFileFinder::default()),
                 // MenuItem::action("Go to Symbol in Project", project_symbols::Toggle),
-                MenuItem::action(
-                    "转到编辑器中的符号…",
-                    zed_actions::outline::ToggleOutline,
-                ),
+                MenuItem::action("转到编辑器中的符号…", zed_actions::outline::ToggleOutline),
                 MenuItem::action("转到行/列…", editor::actions::ToggleGoToLine),
                 MenuItem::separator(),
-                MenuItem::action(
-                    "转到定义",
-                    editor::actions::GoToDefinition::default(),
-                ),
-                MenuItem::action(
-                    "转到声明",
-                    editor::actions::GoToDeclaration::default(),
-                ),
+                MenuItem::action("转到定义", editor::actions::GoToDefinition::default()),
+                MenuItem::action("转到声明", editor::actions::GoToDeclaration::default()),
                 MenuItem::action(
                     "转到类型定义",
                     editor::actions::GoToTypeDefinition::default(),
@@ -296,10 +271,7 @@ pub fn app_menus(cx: &mut App) -> Vec<Menu> {
             name: "帮助".into(),
             disabled: false,
             items: vec![
-                MenuItem::action(
-                    "查看本地发布说明",
-                    auto_update_ui::ViewReleaseNotesLocally,
-                ),
+                MenuItem::action("查看本地发布说明", auto_update_ui::ViewReleaseNotesLocally),
                 MenuItem::action("查看遥测", zed_actions::OpenTelemetryLog),
                 MenuItem::action("查看依赖许可证", zed_actions::OpenLicenses),
                 MenuItem::action("显示欢迎页面", onboarding::ShowWelcome),

@@ -534,35 +534,27 @@ pub(crate) fn shallow_boundary_notice(
             )
             .when(can_fetch, |this| {
                 this.child(
-                    h_flex()
-                        .gap_2()
-                        .child(div().w(avatar_width))
-                        .child(
-                            Button::new(
-                                "fetch-unshallow",
-                                if in_flight {
-                                    "正在获取…"
-                                } else {
-                                    "获取缺失的历史记录"
-                                },
-                            )
-                            .style(ButtonStyle::Outlined)
-                            .label_size(LabelSize::Small)
-                            .disabled(in_flight)
-                            .tooltip(Tooltip::text(
-                                "运行 `git fetch --unshallow` 下载完整历史记录",
-                            ))
-                            .on_click(move |_, window, cx| {
-                                cx.stop_propagation();
-                                fetch_unshallow(
-                                    repository.clone(),
-                                    workspace.clone(),
-                                    window,
-                                    cx,
-                                )
+                    h_flex().gap_2().child(div().w(avatar_width)).child(
+                        Button::new(
+                            "fetch-unshallow",
+                            if in_flight {
+                                "正在获取…"
+                            } else {
+                                "获取缺失的历史记录"
+                            },
+                        )
+                        .style(ButtonStyle::Outlined)
+                        .label_size(LabelSize::Small)
+                        .disabled(in_flight)
+                        .tooltip(Tooltip::text(
+                            "运行 `git fetch --unshallow` 下载完整历史记录",
+                        ))
+                        .on_click(move |_, window, cx| {
+                            cx.stop_propagation();
+                            fetch_unshallow(repository.clone(), workspace.clone(), window, cx)
                                 .detach_and_log_err(cx);
-                            }),
-                        ),
+                        }),
+                    ),
                 )
             }),
     )
