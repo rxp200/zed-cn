@@ -3117,9 +3117,7 @@ impl Render for ProjectSearchBar {
             .child(
                 IconButton::new("project-search-filter-button", IconName::Filter)
                     .shape(IconButtonShape::Square)
-                    .tooltip(|_window, cx| {
-                        Tooltip::for_action("切换筛选器", &ToggleFilters, cx)
-                    })
+                    .tooltip(|_window, cx| Tooltip::for_action("切换筛选器", &ToggleFilters, cx))
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.toggle_filters(window, cx);
                     }))
@@ -3132,12 +3130,7 @@ impl Render for ProjectSearchBar {
                     .tooltip({
                         let focus_handle = focus_handle.clone();
                         move |_window, cx| {
-                            Tooltip::for_action_in(
-                                "切换筛选器",
-                                &ToggleFilters,
-                                &focus_handle,
-                                cx,
-                            )
+                            Tooltip::for_action_in("切换筛选器", &ToggleFilters, &focus_handle, cx)
                         }
                     }),
             )

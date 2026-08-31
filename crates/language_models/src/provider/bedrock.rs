@@ -44,9 +44,9 @@ use language_model::{
     LanguageModelCompletionError, LanguageModelCompletionEvent, LanguageModelEffortLevel,
     LanguageModelId, LanguageModelName, LanguageModelProvider, LanguageModelProviderId,
     LanguageModelProviderName, LanguageModelProviderState, LanguageModelRequest,
-    LanguageModelToolChoice, LanguageModelToolResultContent, LanguageModelToolSchemaFormat,
-    LanguageModelToolUse, MessageContent, ProviderErrorCategory, ProviderSettingsView, RateLimiter,
-    Role, SubPageProviderSettings, TokenUsage, env_var,
+    LanguageModelToolChoice, LanguageModelToolResultContent, LanguageModelToolUse, MessageContent,
+    ProviderErrorCategory, ProviderSettingsView, RateLimiter, Role, SubPageProviderSettings,
+    TokenUsage, env_var,
 };
 use open_ai::responses::Request as OpenAiResponseRequest;
 use open_ai::responses::{ResponseOutputItem, StreamEvent as OpenAiResponseStreamEvent};
@@ -1862,10 +1862,6 @@ impl LanguageModel for BedrockMantleModel {
         self.model.supports_tools()
     }
 
-    fn tool_input_format(&self) -> LanguageModelToolSchemaFormat {
-        LanguageModelToolSchemaFormat::JsonSchemaSubset
-    }
-
     fn supports_images(&self) -> bool {
         self.model.supports_images()
     }
@@ -2714,9 +2710,7 @@ impl Render for ConfigurationView {
         }
 
         let configured_label = match &auth {
-            Some(BedrockAuth::Automatic) => {
-                "使用自动凭据（AWS 默认链）".into()
-            }
+            Some(BedrockAuth::Automatic) => "使用自动凭据（AWS 默认链）".into(),
             Some(BedrockAuth::NamedProfile { profile_name }) => {
                 format!("使用 AWS 配置文件：{profile_name}")
             }
@@ -2758,10 +2752,7 @@ impl Render for ConfigurationView {
                 ZED_BEDROCK_BEARER_TOKEN_VAR.name
             ))
         } else if is_settings_derived {
-            Some(
-                "认证方法已在设置中配置。编辑 settings.json 以更改。"
-                    .to_string(),
-            )
+            Some("认证方法已在设置中配置。编辑 settings.json 以更改。".to_string())
         } else {
             None
         };

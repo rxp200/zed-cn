@@ -2553,10 +2553,7 @@ impl CollabPanel {
     ) {
         let channel_store = self.channel_store.clone();
         if let Some(channel) = channel_store.read(cx).channel_for_id(channel_id) {
-            let prompt_message = format!(
-                "确定要移除频道 \"{}\" 吗？",
-                channel.name
-            );
+            let prompt_message = format!("确定要移除频道 \"{}\" 吗？", channel.name);
             let answer = window.prompt(
                 PromptLevel::Warning,
                 &prompt_message,

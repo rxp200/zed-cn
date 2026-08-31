@@ -997,9 +997,7 @@ impl RatePredictionsModal {
                             )
                             .into_any_element()
                         } else {
-                            div()
-                                .child("没有活动的补全".to_string())
-                                .into_any_element()
+                            div().child("没有活动的补全".to_string()).into_any_element()
                         }),
                 )
                 .id("raw-input-view"),

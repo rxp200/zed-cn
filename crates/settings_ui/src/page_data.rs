@@ -274,6 +274,20 @@ fn general_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
+                title: "已打开时显示",
+                description: "启用后，Zed 会优先显示已经打开的缓冲区。",
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("reveal_if_open"),
+                    pick: |settings_content| settings_content.workspace.reveal_if_open.as_ref(),
+                    write: |settings_content, value, _| {
+                        settings_content.workspace.reveal_if_open = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
                 title: "默认打开行为",
                 description: "项目从 UI 默认打开的方式。",
                 field: Box::new(SettingField {
@@ -5410,7 +5424,7 @@ fn panels_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: "文件夹指示器",
-                description: "项目面板中的目录显示方式。"
+                description: "项目面板中的目录显示方式。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.folder_indicator"),
@@ -6102,7 +6116,7 @@ fn panels_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: "文件夹指示器",
-                description: "大纲面板中的目录显示方式。"
+                description: "大纲面板中的目录显示方式。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("outline_panel.folder_indicator"),
@@ -6440,7 +6454,7 @@ fn panels_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: "文件夹指示器",
-                description: "Git 面板中的目录显示方式。"
+                description: "Git 面板中的目录显示方式。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git_panel.folder_indicator"),
@@ -10187,9 +10201,23 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
         ]
     }
 
-    fn miscellaneous_section() -> [SettingsPageItem; 7] {
+    fn miscellaneous_section() -> [SettingsPageItem; 8] {
         [
             SettingsPageItem::SectionHeader("Miscellaneous"),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: "语言检测",
+                description: "是否为未保存的缓冲区启用自动语言检测。",
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("language_detection"),
+                    pick: |settings_content| settings_content.editor.language_detection.as_ref(),
+                    write: |settings_content, value, _| {
+                        settings_content.editor.language_detection = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: "启用词语差异",
                 description: "是否在编辑器中启用词语差异高亮。启用后，修改行内更改的词语会被高亮显示以精确展示更改内容。",

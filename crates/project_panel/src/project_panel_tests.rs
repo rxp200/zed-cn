@@ -11666,10 +11666,7 @@ async fn test_delete_prompt_escapes_markdown_in_file_name(cx: &mut gpui::TestApp
         .pending_prompt()
         .expect("delete should show a confirmation prompt");
 
-    assert_eq!(
-        message,
-        "您确定要永久删除 `__somefile__`?"
-    );
+    assert_eq!(message, "您确定要永久删除 `__somefile__`?");
 }
 
 #[gpui::test]

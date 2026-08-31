@@ -136,11 +136,9 @@ impl Render for ProjectSharedNotification {
                 Button::new("open", "打开").on_click(cx.listener(move |this, _event, _, cx| {
                     this.join(cx);
                 })),
-                Button::new("dismiss", "关闭").on_click(cx.listener(
-                    move |this, _event, _, cx| {
-                        this.dismiss(cx);
-                    },
-                )),
+                Button::new("dismiss", "关闭").on_click(cx.listener(move |this, _event, _, cx| {
+                    this.dismiss(cx);
+                })),
             )
             .child(Label::new(main_label))
             .when(!no_worktree_root_names, |this| {

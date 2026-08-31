@@ -18,7 +18,8 @@ use crate::{
 };
 use anyhow::Result;
 use collections::HashMap;
-use futures::{StreamExt as _, channel::oneshot};use gpui::{
+use futures::{StreamExt as _, channel::oneshot};
+use gpui::{
     App, AppContext as _, AsyncApp, Context, Entity, Global, ScrollHandle, SharedString, Task,
     Window,
 };
@@ -226,7 +227,9 @@ impl TranslationService {
         let key = cache_key(&model, &target_language, &text);
 
         // Keep the persistent cache in sync with the current settings.
-        service.update(cx, |service, _| service.disk_cache.configure(persist, max_bytes));
+        service.update(cx, |service, _| {
+            service.disk_cache.configure(persist, max_bytes)
+        });
 
         // Fast in-memory hit.
         if let Some(cached) = service.read(cx).cache.get(&key).cloned() {
@@ -267,12 +270,9 @@ impl TranslationService {
                 in_flight.waiters.push(tx);
                 return false;
             }
-            service.in_flight.insert(
-                key.clone(),
-                InFlightTranslation {
-                    waiters: vec![tx],
-                },
-            );
+            service
+                .in_flight
+                .insert(key.clone(), InFlightTranslation { waiters: vec![tx] });
             true
         });
 
@@ -597,9 +597,7 @@ mod tests {
     }
 
     #[gpui::test]
-    async fn test_in_flight_translation_survives_dropped_caller(
-        cx: &mut gpui::TestAppContext,
-    ) {
+    async fn test_in_flight_translation_survives_dropped_caller(cx: &mut gpui::TestAppContext) {
         init_test_without_persistent_cache(cx);
         let model = setup_fake_model(cx);
 

@@ -1247,10 +1247,7 @@ impl ProjectPanel {
                             .when(is_dir && !is_root, |menu| {
                                 menu.separator()
                                     .action("全部展开", Box::new(ExpandSelectedEntryAndChildren))
-                                    .action(
-                                        "全部折叠",
-                                        Box::new(CollapseSelectedEntryAndChildren),
-                                    )
+                                    .action("全部折叠", Box::new(CollapseSelectedEntryAndChildren))
                             })
                             .when(is_dir && is_root, |menu| {
                                 menu.separator()
@@ -2617,11 +2614,7 @@ impl ProjectPanel {
     {
         let (message_start, confirmation_label, detail) = match kind {
             RemovalKind::Trash => ("您确定要移到废纸篓", "移到废纸篓", None),
-            RemovalKind::Delete => (
-                "您确定要永久删除",
-                "删除",
-                Some("此操作无法撤销。"),
-            ),
+            RemovalKind::Delete => ("您确定要永久删除", "删除", Some("此操作无法撤销。")),
         };
 
         let mut message = match names {

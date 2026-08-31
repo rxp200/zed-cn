@@ -669,9 +669,8 @@ impl DevContainerModal {
                 .p_1()
                 .child(
                     div().track_focus(&self.focus_handle).child(
-                        ModalHeader::new().child(
-                            Headline::new("创建开发容器").size(HeadlineSize::XSmall),
-                        ),
+                        ModalHeader::new()
+                            .child(Headline::new("创建开发容器").size(HeadlineSize::XSmall)),
                     ),
                 )
                 .child(ListSeparator)
@@ -764,9 +763,7 @@ impl DevContainerModal {
                         .track_focus(&self.focus_handle)
                         .child(
                             ModalHeader::new()
-                                .child(
-                                    Headline::new("模板选项：").size(HeadlineSize::XSmall),
-                                )
+                                .child(Headline::new("模板选项：").size(HeadlineSize::XSmall))
                                 .child(
                                     Headline::new(&next_option_entries.option_name)
                                         .size(HeadlineSize::XSmall),
@@ -886,10 +883,7 @@ impl DevContainerModal {
                     div().track_focus(&self.focus_handle).child(
                         ModalHeader::new()
                             .icon(Icon::new(IconName::Warning).color(Color::Warning))
-                            .child(
-                                Headline::new("覆盖现有配置？")
-                                    .size(HeadlineSize::XSmall),
-                            ),
+                            .child(Headline::new("覆盖现有配置？").size(HeadlineSize::XSmall)),
                     ),
                 )
                 .child(
@@ -960,9 +954,8 @@ impl DevContainerModal {
             div()
                 .child(
                     div().track_focus(&self.focus_handle).child(
-                        ModalHeader::new().child(
-                            Headline::new("创建开发容器").size(HeadlineSize::XSmall),
-                        ),
+                        ModalHeader::new()
+                            .child(Headline::new("创建开发容器").size(HeadlineSize::XSmall)),
                     ),
                 )
                 .child(ListSeparator)
@@ -1012,9 +1005,8 @@ impl DevContainerModal {
             div()
                 .child(
                     div().track_focus(&self.focus_handle).child(
-                        ModalHeader::new().child(
-                            Headline::new("创建开发容器").size(HeadlineSize::XSmall),
-                        ),
+                        ModalHeader::new()
+                            .child(Headline::new("创建开发容器").size(HeadlineSize::XSmall)),
                     ),
                 )
                 .child(ListSeparator)

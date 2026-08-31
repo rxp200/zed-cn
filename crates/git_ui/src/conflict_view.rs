@@ -656,12 +656,7 @@ impl Render for MergeConflictIndicator {
                             .child(Label::new(message).size(LabelSize::Small)),
                     )
                     .tooltip(move |_, cx| {
-                        Tooltip::with_meta(
-                            tooltip_label.clone(),
-                            None,
-                            "点击使用 Agent 解决",
-                            cx,
-                        )
+                        Tooltip::with_meta(tooltip_label.clone(), None, "点击使用 Agent 解决", cx)
                     })
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.resolve_with_agent(window, cx);

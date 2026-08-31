@@ -5467,10 +5467,12 @@ async fn test_chunks_skip_highlighting_for_very_long_lines(cx: &mut TestAppConte
             ("comment".to_string(), gpui::rgba(0x00ff00ff).into()),
         ]));
         let long_line = "x".repeat(MAX_HIGHLIGHTED_LINE_LEN);
-        let text = format!("fn main() {{
+        let text = format!(
+            "fn main() {{
 //{long_line}
 fn foo() {{}}
-");
+"
+        );
         let buffer = Buffer::local(text, cx).with_language(lang, cx);
         buffer.check_invariants();
         buffer
@@ -5515,11 +5517,15 @@ fn foo() {{}}
 
         // Normal lines are still syntax-highlighted.
         assert!(
-            row_chunks(0).iter().any(|c| c.syntax_highlight_id.is_some()),
+            row_chunks(0)
+                .iter()
+                .any(|c| c.syntax_highlight_id.is_some()),
             "first line should be highlighted"
         );
         assert!(
-            row_chunks(2).iter().any(|c| c.syntax_highlight_id.is_some()),
+            row_chunks(2)
+                .iter()
+                .any(|c| c.syntax_highlight_id.is_some()),
             "last line should be highlighted"
         );
         // The very long line is rendered as plain text (no highlight).
@@ -5590,7 +5596,10 @@ async fn test_chunks_skip_highlighting_resumes_after_long_line(cx: &mut TestAppC
         }
 
         // The very long line is rendered as plain text...
-        assert!(!long_line_highlighted, "long line should not be highlighted");
+        assert!(
+            !long_line_highlighted,
+            "long line should not be highlighted"
+        );
         // ...and highlighting resumes correctly after it.
         assert!(
             row_after_long_line_highlighted,
@@ -5598,5 +5607,3 @@ async fn test_chunks_skip_highlighting_resumes_after_long_line(cx: &mut TestAppC
         );
     });
 }
-
-

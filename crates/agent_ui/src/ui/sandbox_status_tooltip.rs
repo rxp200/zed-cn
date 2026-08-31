@@ -231,13 +231,11 @@ impl Component for SandboxStatusTooltip {
             .group(SandboxGroup::new("网络访问").row(SandboxRow::message("无")));
 
         let unrestricted_section = SandboxSection::new("在您的设置中定义：")
-            .group(SandboxGroup::new("写入访问").row(SandboxRow::message(
-                "除受保护的 Git 元数据外的所有路径",
-            )))
             .group(
-                SandboxGroup::new("网络访问")
-                    .row(SandboxRow::message("所有域（无限制）")),
-            );
+                SandboxGroup::new("写入访问")
+                    .row(SandboxRow::message("除受保护的 Git 元数据外的所有路径")),
+            )
+            .group(SandboxGroup::new("网络访问").row(SandboxRow::message("所有域（无限制）")));
 
         let container = || div().p_2().elevation_2(cx).max_w_112();
 

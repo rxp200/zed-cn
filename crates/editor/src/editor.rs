@@ -30,7 +30,6 @@ mod highlight_matching_bracket;
 pub mod hover_links;
 pub mod hover_popover;
 pub mod hover_translation;
-mod translation_cache;
 mod indent_guides;
 mod inlays;
 pub mod items;
@@ -47,6 +46,7 @@ mod selections_collection;
 pub mod semantic_tokens;
 mod split;
 pub mod split_editor_view;
+mod translation_cache;
 
 mod bookmarks;
 #[cfg(test)]
@@ -188,8 +188,9 @@ use language::{
         self, AllLanguageSettings, LanguageSettings, LspInsertMode, RewrapBehavior,
         WordsCompletionMode, all_language_settings,
     },
-    point_from_lsp, point_to_lsp, text_diff_with_options,
+    point_to_lsp, text_diff_with_options,
 };
+use language_detection::detect_language;
 use linked_editing_ranges::refresh_linked_ranges;
 use lsp::{
     CodeActionKind, CompletionItemKind, CompletionTriggerKind, InsertTextFormat, InsertTextMode,
@@ -297,6 +298,8 @@ const CURSOR_BLINK_INTERVAL: Duration = Duration::from_millis(500);
 const MAX_LINE_LEN: usize = 1024;
 const MIN_NAVIGATION_HISTORY_ROW_DELTA: i64 = 10;
 const MAX_SELECTION_HISTORY_LEN: usize = 1024;
+const MIN_LANGUAGE_DETECTION_LEN: usize = 20;
+const LANGUAGE_DETECTION_DEBOUNCE_TIMEOUT: Duration = Duration::from_millis(200);
 pub(crate) const CURSORS_VISIBLE_FOR: Duration = Duration::from_millis(2000);
 #[doc(hidden)]
 pub const CODE_ACTIONS_DEBOUNCE_TIMEOUT: Duration = Duration::from_millis(250);
@@ -1157,6 +1160,7 @@ pub struct Editor {
     next_scroll_position: NextScrollCursorCenterTopBottom,
     addons: TypeIdHashMap<Box<dyn Addon>>,
     registered_buffers: HashMap<BufferId, OpenLspBufferHandle>,
+    language_detection_task: Task<()>,
     load_diff_task: Option<Shared<Task<()>>>,
     diff_hunk_delegate: Option<Arc<dyn DiffHunkDelegate>>,
     selection_mark_mode: bool,
@@ -2500,6 +2504,7 @@ impl Editor {
             next_scroll_position: NextScrollCursorCenterTopBottom::default(),
             addons: Default::default(),
             registered_buffers: HashMap::default(),
+            language_detection_task: Task::ready(()),
             _scroll_cursor_center_top_bottom_task: Task::ready(()),
             selection_mark_mode: false,
             toggle_fold_multiple_buffers: Task::ready(()),
@@ -2933,6 +2938,9 @@ impl Editor {
 
         cx.spawn_in(window, async move |workspace, cx| {
             let buffer = create.await?;
+            buffer.update(cx, |buffer, _| {
+                buffer.set_content_language_detection_enabled(true);
+            });
             workspace.update_in(cx, |workspace, window, cx| {
                 let editor =
                     cx.new(|cx| Editor::for_buffer(buffer, Some(project.clone()), window, cx));
@@ -2980,6 +2988,9 @@ impl Editor {
 
         cx.spawn_in(window, async move |workspace, cx| {
             let buffer = create.await?;
+            buffer.update(cx, |buffer, _| {
+                buffer.set_content_language_detection_enabled(true);
+            });
             workspace.update_in(cx, move |workspace, window, cx| {
                 workspace.split_item(
                     direction,
@@ -9862,8 +9873,9 @@ impl Editor {
                         cx.emit(EditorEvent::TitleChanged);
                     }
 
+                    let buffer_id = buffer.read(cx).remote_id();
+
                     if self.project.is_some() {
-                        let buffer_id = buffer.read(cx).remote_id();
                         self.register_buffer(buffer_id, cx);
                         self.update_lsp_data(Some(buffer_id), window, cx);
                         self.refresh_inlay_hints(
@@ -9871,6 +9883,8 @@ impl Editor {
                             cx,
                         );
                     }
+
+                    self.detect_buffer_language(buffer_id, cx);
                 }
 
                 cx.emit(EditorEvent::BufferEdited);
@@ -10446,7 +10460,7 @@ impl Editor {
                                 let allow_new_preview = PreviewTabsSettings::get_global(cx)
                                     .enable_preview_from_multibuffer;
                                 workspace.open_project_item::<Self>(
-                                    pane.clone(),
+                                    split.then_some(pane.clone()),
                                     buffer,
                                     true,
                                     true,
@@ -10798,14 +10812,25 @@ impl Editor {
         &mut self,
         listener: impl Fn(&A, &mut Window, &mut App) + 'static,
     ) -> Subscription {
+        self.register_action_erased(
+            TypeId::of::<A>(),
+            Arc::new(move |action, window, cx| {
+                listener(action.downcast_ref().unwrap(), window, cx)
+            }),
+        )
+    }
+
+    fn register_action_erased(
+        &mut self,
+        action_type: TypeId,
+        listener: Arc<dyn Fn(&dyn Any, &mut Window, &mut App)>,
+    ) -> Subscription {
         let id = self.next_editor_action_id.post_inc();
-        let listener = Arc::new(listener);
         self.editor_actions.borrow_mut().insert(
             id,
             Box::new(move |_, window, _| {
                 let listener = listener.clone();
-                window.on_action(TypeId::of::<A>(), move |action, phase, window, cx| {
-                    let action = action.downcast_ref().unwrap();
+                window.on_action(action_type, move |action, phase, window, cx| {
                     if phase == DispatchPhase::Bubble {
                         listener(action, window, cx)
                     }
@@ -11126,6 +11151,55 @@ impl Editor {
         self.refresh_folding_ranges(for_buffer, window, cx);
         self.refresh_code_lenses(for_buffer, window, cx);
         self.refresh_document_symbols(for_buffer, cx);
+    }
+
+    fn is_eligible_for_language_detection(buffer: &Buffer) -> bool {
+        buffer.file().is_none()
+            && buffer.content_language_detection_enabled()
+            && buffer.len() >= MIN_LANGUAGE_DETECTION_LEN
+    }
+
+    fn detect_buffer_language(&mut self, buffer_id: BufferId, cx: &mut Context<Self>) {
+        self.language_detection_task = Task::ready(());
+        if !EditorSettings::get_global(cx).language_detection {
+            return;
+        }
+        let Some(buffer_entity) = self.buffer().read(cx).buffer(buffer_id) else {
+            return;
+        };
+        let buffer = buffer_entity.read(cx);
+        if !Self::is_eligible_for_language_detection(buffer) {
+            return;
+        }
+        self.language_detection_task = cx.spawn(async move |_, cx| {
+            cx.background_executor()
+                .timer(LANGUAGE_DETECTION_DEBOUNCE_TIMEOUT)
+                .await;
+            let Some((buffer_snapshot, language_registry)) =
+                buffer_entity.read_with(cx, |buffer, cx| {
+                    if !EditorSettings::get_global(cx).language_detection
+                        || !Self::is_eligible_for_language_detection(buffer)
+                    {
+                        return None;
+                    }
+                    Some((buffer.snapshot(), buffer.language_registry()?))
+                })
+            else {
+                return;
+            };
+            let buffer_version = buffer_snapshot.version().clone();
+            let detected_language =
+                cx.update(|cx| detect_language(buffer_snapshot, language_registry, cx));
+            if let Some(detected_language) = detected_language.await {
+                buffer_entity.update(cx, |buffer, cx| {
+                    if !buffer.version().changed_since(&buffer_version)
+                        && Self::is_eligible_for_language_detection(buffer)
+                    {
+                        buffer.set_language(Some(detected_language), cx);
+                    }
+                });
+            }
+        });
     }
 
     fn register_visible_buffers(&mut self, cx: &mut Context<Self>) {

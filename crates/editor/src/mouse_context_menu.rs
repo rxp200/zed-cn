@@ -258,18 +258,9 @@ pub fn deploy_context_menu(
                 )
                 .action("转到定义", Box::new(GoToDefinition::default()))
                 .action("转到声明", Box::new(GoToDeclaration::default()))
-                .action(
-                    "转到类型定义",
-                    Box::new(GoToTypeDefinition::default()),
-                )
-                .action(
-                    "转到实现",
-                    Box::new(GoToImplementation::default()),
-                )
-                .action(
-                    "查找所有引用",
-                    Box::new(FindAllReferences::default()),
-                )
+                .action("转到类型定义", Box::new(GoToTypeDefinition::default()))
+                .action("转到实现", Box::new(GoToImplementation::default()))
+                .action("查找所有引用", Box::new(FindAllReferences::default()))
                 .action(
                     "Show Incoming Calls",
                     Box::new(zed_actions::ShowIncomingCalls),
@@ -311,21 +302,13 @@ pub fn deploy_context_menu(
                 .when(is_svg, |builder| {
                     builder.action("打开SVG预览", Box::new(OpenSvgPreview))
                 })
-                .action_disabled_when(
-                    !has_reveal_target,
-                    "在终端中打开",
-                    Box::new(OpenInTerminal),
-                )
+                .action_disabled_when(!has_reveal_target, "在终端中打开", Box::new(OpenInTerminal))
                 .action_disabled_when(
                     !has_git_repo,
                     "复制此行的永久链接",
                     Box::new(CopyPermalinkToLine),
                 )
-                .action_disabled_when(
-                    !has_git_repo,
-                    "查看文件历史",
-                    Box::new(git::FileHistory),
-                );
+                .action_disabled_when(!has_git_repo, "查看文件历史", Box::new(git::FileHistory));
             match focus {
                 Some(focus) => builder.context(focus),
                 None => builder,

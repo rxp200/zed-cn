@@ -11,11 +11,11 @@ use git::{
     Oid, RunHook,
     blame::Blame,
     repository::{
-        AskPassDelegate, Branch, CommitData, CommitDataReader, CommitDetails, CommitOptions,
-        CreateWorktreeTarget, FetchOptions, FileHistoryChangedFileSets, GRAPH_CHUNK_SIZE,
-        GitRepository, GitRepositoryCheckpoint, InitialGraphCommitData, LogOrder, LogSource,
-        AUTHOR_SEARCH_QUERY_PREFIX, PushOptions, RefEdit, Remote, RepoPath, ResetMode,
-        SearchCommitArgs, Worktree, commit_hash_search_query,
+        AUTHOR_SEARCH_QUERY_PREFIX, AskPassDelegate, Branch, CommitData, CommitDataReader,
+        CommitDetails, CommitOptions, CreateWorktreeTarget, FetchOptions,
+        FileHistoryChangedFileSets, GRAPH_CHUNK_SIZE, GitRepository, GitRepositoryCheckpoint,
+        InitialGraphCommitData, LogOrder, LogSource, PushOptions, RefEdit, Remote, RepoPath,
+        ResetMode, SearchCommitArgs, Worktree, commit_hash_search_query,
     },
     stash::GitStash,
     status::{

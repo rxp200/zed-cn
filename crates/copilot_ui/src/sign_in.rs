@@ -282,19 +282,13 @@ impl CopilotCodeVerification {
             .gap_2p5()
             .items_center()
             .text_center()
-            .child(
-                Headline::new("在 Zed 中使用 GitHub Copilot 编辑预测")
-                    .size(HeadlineSize::Large),
-            )
+            .child(Headline::new("在 Zed 中使用 GitHub Copilot 编辑预测").size(HeadlineSize::Large))
             .child(
                 Label::new("使用 Copilot 编辑预测需要在 GitHub 上拥有有效订阅。")
                     .color(Color::Muted),
             )
             .child(Self::render_device_code(data, cx))
-            .child(
-                Label::new("点击下方按钮后，将此代码粘贴到 GitHub 中。")
-                    .color(Color::Muted),
-            )
+            .child(Label::new("点击下方按钮后，将此代码粘贴到 GitHub 中。").color(Color::Muted))
             .child(
                 v_flex()
                     .w_full()
@@ -370,9 +364,7 @@ impl CopilotCodeVerification {
             .text_center()
             .justify_center()
             .child(Headline::new("已启用 Copilot 编辑预测！").size(HeadlineSize::Large))
-            .child(
-                Label::new("您已准备好使用 Copilot 编辑预测了。").color(Color::Muted),
-            )
+            .child(Label::new("您已准备好使用 Copilot 编辑预测了。").color(Color::Muted))
             .child(
                 Button::new("copilot-enabled-done-button", "完成")
                     .full_width()
@@ -395,8 +387,7 @@ impl CopilotCodeVerification {
             .text_center()
             .justify_center()
             .child(
-                Headline::new("你必须拥有有效的 GitHub Copilot 订阅。")
-                    .size(HeadlineSize::Large),
+                Headline::new("你必须拥有有效的 GitHub Copilot 订阅。").size(HeadlineSize::Large),
             )
             .child(Label::new(description).color(Color::Warning))
             .child(
@@ -422,7 +413,10 @@ impl CopilotCodeVerification {
             .child(Headline::new("发生错误").size(HeadlineSize::Large))
             .child(Label::new(ERROR_LABEL).color(Color::Muted))
             .child(
-                Button::new("copilot-subscribe-button", "重新安装 Copilot 编辑预测并登录")
+                Button::new(
+                    "copilot-subscribe-button",
+                    "重新安装 Copilot 编辑预测并登录",
+                )
                 .full_width()
                 .style(ButtonStyle::Outlined)
                 .size(ButtonSize::Medium)
@@ -602,15 +596,9 @@ impl CopilotChatCodeVerification {
             .items_center()
             .text_center()
             .child(Headline::new("在 Zed 中使用 GitHub Copilot Chat").size(HeadlineSize::Large))
-            .child(
-                Label::new("使用 Copilot Chat 需要有效的 GitHub 订阅。")
-                    .color(Color::Muted),
-            )
+            .child(Label::new("使用 Copilot Chat 需要有效的 GitHub 订阅。").color(Color::Muted))
             .child(Self::render_device_code(&device_flow.user_code, cx))
-            .child(
-                Label::new("点击下方按钮后，将此代码粘贴到 GitHub。")
-                    .color(Color::Muted),
-            )
+            .child(Label::new("点击下方按钮后，将此代码粘贴到 GitHub。").color(Color::Muted))
             .child(
                 v_flex()
                     .w_full()

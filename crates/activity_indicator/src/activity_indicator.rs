@@ -731,7 +731,9 @@ impl ActivityIndicator {
         Some(Content {
             icon: ActivityIcon::Icon(IconName::Info),
             message: "部分文件按需索引".to_string(),
-            tooltip_message: Some("Git 仓库之外、且深度超过 `file_scan_depth` 设置值的目录将按需索引。".to_string()),
+            tooltip_message: Some(
+                "Git 仓库之外、且深度超过 `file_scan_depth` 设置值的目录将按需索引。".to_string(),
+            ),
             on_click: Some(Arc::new(|this, _, cx| {
                 this.deferred_scan_message = DeferredScanMessage::Dismissed;
                 cx.notify();

@@ -1193,7 +1193,7 @@ impl KeymapEditor {
                     }))
             } else {
                 base_button_style(index, IconName::Info)
-                    .tooltip(|_window, cx|  {
+                    .tooltip(|_window, cx| {
                         Tooltip::with_meta(
                             "显示匹配的快捷键绑定",
                             Some(&ShowMatchingKeybinds),
@@ -1241,9 +1241,7 @@ impl KeymapEditor {
                     "未找到冲突的快捷键绑定"
                 }
             }
-            (FilterState::All, SearchMode::KeyStroke { .. }) => {
-                "未找到与输入按键匹配的快捷键绑定"
-            }
+            (FilterState::All, SearchMode::KeyStroke { .. }) => "未找到与输入按键匹配的快捷键绑定",
             (FilterState::All, SearchMode::Normal) => "未找到与查询匹配的结果",
         };
 
@@ -1959,11 +1957,7 @@ impl Render for KeymapEditor {
         if let SearchMode::KeyStroke { exact_match } = self.search_mode {
             let button = IconButton::new("keystrokes-exact-match", IconName::CaseSensitive)
                 .tooltip(move |_window, cx| {
-                    Tooltip::for_action(
-                        "切换精确匹配模式",
-                        &ToggleExactKeystrokeMatching,
-                        cx,
-                    )
+                    Tooltip::for_action("切换精确匹配模式", &ToggleExactKeystrokeMatching, cx)
                 })
                 .shape(IconButtonShape::Square)
                 .toggle_state(exact_match)
@@ -2740,9 +2734,7 @@ impl KeybindingEditorModal {
 
         let value = action_arguments
             .as_ref()
-            .map(|args| {
-                serde_json::from_str(args).context("无法将操作参数解析为 JSON")
-            })
+            .map(|args| serde_json::from_str(args).context("无法将操作参数解析为 JSON"))
             .transpose()?;
 
         cx.build_action(action_name, value)
@@ -2802,45 +2794,52 @@ impl KeybindingEditorModal {
                 self.creating.not().then_some(self.editing_keybind_idx),
             );
 
-        conflicting_indices.map(|KeybindConflict {
-            first_conflict_index,
-            remaining_conflict_amount,
-        }|
-        {
-            let conflicting_action_name = self
-                .keymap_editor
-                .read(cx)
-                .keybindings
-                .get(first_conflict_index)
-                .map(|keybind| keybind.action().name);
+        conflicting_indices
+            .map(
+                |KeybindConflict {
+                     first_conflict_index,
+                     remaining_conflict_amount,
+                 }| {
+                    let conflicting_action_name = self
+                        .keymap_editor
+                        .read(cx)
+                        .keybindings
+                        .get(first_conflict_index)
+                        .map(|keybind| keybind.action().name);
 
-            let warning_message = match conflicting_action_name {
-                Some(name) => {
-                     if remaining_conflict_amount > 0 {
-                        format!(
-                            "您的快捷键绑定与\"{}\"操作及{}个其他绑定冲突",
-                            name, remaining_conflict_amount
-                        )
+                    let warning_message = match conflicting_action_name {
+                        Some(name) => {
+                            if remaining_conflict_amount > 0 {
+                                format!(
+                                    "您的快捷键绑定与\"{}\"操作及{}个其他绑定冲突",
+                                    name, remaining_conflict_amount
+                                )
+                            } else {
+                                format!("您的快捷键绑定与\"{}\"操作冲突", name)
+                            }
+                        }
+                        None => {
+                            log::info!(
+                                "Could not find action in keybindings with index {}",
+                                first_conflict_index
+                            );
+                            "您的快捷键绑定与其他操作冲突".to_string()
+                        }
+                    };
+
+                    let warning = InputError::warning(warning_message);
+                    if self
+                        .error
+                        .as_ref()
+                        .is_some_and(|old_error| *old_error == warning)
+                    {
+                        Ok(())
                     } else {
-                        format!("您的快捷键绑定与\"{}\"操作冲突", name)
+                        Err(warning)
                     }
-                }
-                None => {
-                    log::info!(
-                        "Could not find action in keybindings with index {}",
-                        first_conflict_index
-                    );
-                    "您的快捷键绑定与其他操作冲突".to_string()
-                }
-            };
-
-            let warning = InputError::warning(warning_message);
-            if self.error.as_ref().is_some_and(|old_error| *old_error == warning) {
-                Ok(())
-           } else {
-                Err(warning)
-            }
-        }).unwrap_or(Ok(()))?;
+                },
+            )
+            .unwrap_or(Ok(()))?;
 
         let create = self.creating;
         let keyboard_mapper = cx.keyboard_mapper().clone();

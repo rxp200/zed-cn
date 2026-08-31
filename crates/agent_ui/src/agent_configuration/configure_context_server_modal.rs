@@ -887,12 +887,7 @@ impl ConfigureContextServerModal {
                             .tooltip({
                                 let repository_url = repository_url.clone();
                                 move |_window, cx| {
-                                    Tooltip::with_meta(
-                                        "打开仓库",
-                                        None,
-                                        repository_url.clone(),
-                                        cx,
-                                    )
+                                    Tooltip::with_meta("打开仓库", None, repository_url.clone(), cx)
                                 }
                             })
                             .on_click({

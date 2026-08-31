@@ -342,19 +342,17 @@ impl PickerDelegate for IconThemeSelectorDelegate {
                             cx.open_url("https://zed.dev/docs/icon-themes");
                         }),
                 )
-                .child(
-                    Button::new("more-icon-themes", "安装图标主题").on_click(
-                        move |_event, window, cx| {
-                            window.dispatch_action(
-                                Box::new(Extensions {
-                                    category_filter: Some(ExtensionCategoryFilter::IconThemes),
-                                    id: None,
-                                }),
-                                cx,
-                            );
-                        },
-                    ),
-                )
+                .child(Button::new("more-icon-themes", "安装图标主题").on_click(
+                    move |_event, window, cx| {
+                        window.dispatch_action(
+                            Box::new(Extensions {
+                                category_filter: Some(ExtensionCategoryFilter::IconThemes),
+                                id: None,
+                            }),
+                            cx,
+                        );
+                    },
+                ))
                 .into_any_element(),
         )
     }

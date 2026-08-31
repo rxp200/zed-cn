@@ -686,7 +686,8 @@ struct ConfigurationView {
 
 impl ConfigurationView {
     pub fn new(state: Entity<State>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let api_key_editor = cx.new(|cx| InputField::new(window, cx, "63e02e...").label("API 密钥"));
+        let api_key_editor =
+            cx.new(|cx| InputField::new(window, cx, "63e02e...").label("API 密钥"));
 
         let api_url_editor = cx.new(|cx| {
             let input = InputField::new(window, cx, OLLAMA_API_URL).label("API 地址");
@@ -905,23 +906,25 @@ impl ConfigurationView {
                 .disabled(env_var_set)
                 .on_click(cx.listener(|this, _, window, cx| this.reset_api_key(window, cx)))
                 .when(env_var_set, |this| {
-                    this.tooltip_label(format!("要重置您的 API 密钥，请取消设置 {API_KEY_ENV_VAR_NAME} 环境变量。"))
+                    this.tooltip_label(format!(
+                        "要重置您的 API 密钥，请取消设置 {API_KEY_ENV_VAR_NAME} 环境变量。"
+                    ))
                 })
                 .into_any_element()
         };
 
         v_flex()
-          .on_action(cx.listener(Self::save_api_key))
-          .child(api_key_control)
-          .gap_1p5()
-          .mb_2()
-          .child(
-              Label::new(
-                  format!("您也可以设置 {API_KEY_ENV_VAR_NAME} 环境变量并重新启动 Zed。")
-              )
-              .size(LabelSize::Small)
-              .color(Color::Muted),
-          )
+            .on_action(cx.listener(Self::save_api_key))
+            .child(api_key_control)
+            .gap_1p5()
+            .mb_2()
+            .child(
+                Label::new(format!(
+                    "您也可以设置 {API_KEY_ENV_VAR_NAME} 环境变量并重新启动 Zed。"
+                ))
+                .size(LabelSize::Small)
+                .color(Color::Muted),
+            )
     }
 
     fn render_context_window_editor(&self, cx: &Context<Self>) -> Div {

@@ -852,10 +852,7 @@ impl Render for MemoryView {
         let (icon, tooltip_text) = if self.is_writing_memory {
             (IconName::Pencil, "Edit Memory at a Selected Address")
         } else {
-            (
-                IconName::LocationEdit,
-                "更改当前查看的内存地址",
-            )
+            (IconName::LocationEdit, "更改当前查看的内存地址")
         };
 
         v_flex()

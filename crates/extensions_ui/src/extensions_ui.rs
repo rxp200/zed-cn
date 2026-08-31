@@ -292,8 +292,6 @@ pub fn init(cx: &mut App) {
     .detach();
 }
 
-
-
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
 enum ExtensionFilter {
     All,
@@ -697,8 +695,6 @@ impl ExtensionsPage {
             .collect()
     }
 
-
-
     fn render_remote_extension(
         &self,
         extension: &ExtensionMetadata,
@@ -775,8 +771,6 @@ impl ExtensionsPage {
         })
         .detach_and_log_err(cx);
     }
-
-
 
     fn render_search(&self, cx: &mut Context<Self>) -> Div {
         let mut key_context = KeyContext::new_with_defaults();

@@ -1,8 +1,6 @@
 use crate::{
     EditPredictionId, EditPredictionInputs, EditPredictionModelInput, cursor_excerpt,
-    open_ai_compatible::{
-        self, FimRequestPrompt, load_open_ai_compatible_api_key_if_needed,
-    },
+    open_ai_compatible::{self, FimRequestPrompt, load_open_ai_compatible_api_key_if_needed},
     prediction::EditPredictionResult,
 };
 use anyhow::{Context as _, Result, anyhow};

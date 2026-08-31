@@ -6366,12 +6366,7 @@ mod tests {
         });
 
         git_graph.update_in(cx, |graph, window, cx| {
-            graph.show_author_commits(
-                "Author".into(),
-                "author@example.com".into(),
-                window,
-                cx,
-            );
+            graph.show_author_commits("Author".into(), "author@example.com".into(), window, cx);
         });
         cx.run_until_parked();
 
@@ -6380,10 +6375,7 @@ mod tests {
                 graph.search_matches_for_test(),
                 vec![first_sha, target_sha, third_sha]
             );
-            assert_eq!(
-                graph.search_state.editor.read(cx).text(cx),
-                "作者：Author"
-            );
+            assert_eq!(graph.search_state.editor.read(cx).text(cx), "作者：Author");
             assert_eq!(
                 graph
                     .search_state
