@@ -6036,7 +6036,7 @@ fn panels_page() -> SettingsPage {
         ]
     }
 
-    fn outline_panel_section() -> [SettingsPageItem; 11] {
+    fn outline_panel_section() -> [SettingsPageItem; 12] {
         [
             SettingsPageItem::SectionHeader("Outline Panel"),
             SettingsPageItem::SettingItem(SettingItem {
@@ -6251,6 +6251,29 @@ fn panels_page() -> SettingsPage {
                     },
                 }),
                 metadata: None,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: "在多缓冲区中隐藏符号",
+                description: "多缓冲区视图处于活动状态时，是否在大纲面板中隐藏符号、摘录和搜索匹配项。",
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("outline_panel.multi_buffer_hide_symbols"),
+                    pick: |settings_content| {
+                        settings_content
+                            .outline_panel
+                            .as_ref()?
+                            .multi_buffer_hide_symbols
+                            .as_ref()
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content
+                            .outline_panel
+                            .get_or_insert_default()
+                            .multi_buffer_hide_symbols = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
             }),
         ]
     }
