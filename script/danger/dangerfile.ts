@@ -1,4 +1,4 @@
-import { danger, message, warn, fail } from "danger";
+import { danger, message, warn, fail, schedule } from "danger";
 const { prHygiene } = require("danger-plugin-pr-hygiene");
 
 prHygiene({
