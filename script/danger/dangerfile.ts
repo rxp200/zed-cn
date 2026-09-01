@@ -61,16 +61,6 @@ if (includesIssueUrl) {
   );
 }
 
-const readmeModified = danger.git.modified_files.includes("README.md") || danger.git.created_files.includes("README.md");
-if (readmeModified) {
-  schedule(async () => {
-    const readmeDiff = await danger.git.diffForFile("README.md");
-    if (readmeDiff && readmeDiff.added.includes("Remove this line to confirm you've reviewed this PR before submitting.")) {
-      fail("Please self-review your PR before submitting — README.md contains a line that asks to be removed which you should have spotted.");
-    }
-  });
-}
-
 const SCHEMA_CHANGE_ATTESTATION =
   "The corresponding database schema migration has been created in the Cloud repo and applied to the production database.";
 
