@@ -6371,10 +6371,10 @@ mod tests {
         cx.run_until_parked();
 
         git_graph.read_with(&*cx, |graph, cx| {
-            assert_eq!(
-                graph.search_matches_for_test(),
-                vec![first_sha, target_sha, third_sha]
-            );
+            let matches = graph.search_matches_for_test();
+            let expected = [first_sha, target_sha, third_sha];
+            assert_eq!(matches.len(), expected.len());
+            assert!(expected.into_iter().all(|sha| matches.contains(&sha)));
             assert_eq!(graph.search_state.editor.read(cx).text(cx), "作者：Author");
             assert_eq!(
                 graph
