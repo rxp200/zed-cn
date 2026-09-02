@@ -123,6 +123,15 @@ pub struct TouchEvent {
     pub phase: TouchPhase,
     /// The position of the touch in window coordinates.
     pub position: Point<Pixels>,
+    /// Where the platform predicts the touch will be roughly one frame from
+    /// now, in the same coordinate space as `position`, when the platform
+    /// offers a prediction for a [`TouchPhase::Moved`] event.
+    ///
+    /// Best-effort latency compensation only: it may influence how far a
+    /// recognized pan scrolls within a frame, but never hit testing, gesture
+    /// classification, or velocity estimation, and any error it introduces
+    /// must be corrected by later events for the same touch.
+    pub predicted_position: Option<Point<Pixels>>,
     /// Normalized touch force in `0.0..=1.0`, if the hardware reports it.
     pub force: Option<f32>,
 }
@@ -818,6 +827,25 @@ impl PlatformInput {
             PlatformInput::Pinch(_) => None,
             PlatformInput::FileDrop(_) => None,
             PlatformInput::Touch(_) => None,
+        }
+    }
+
+    /// A short static name for this input's variant, for diagnostics and
+    /// telemetry.
+    pub fn kind_name(&self) -> &'static str {
+        match self {
+            PlatformInput::KeyDown(_) => "key_down",
+            PlatformInput::KeyUp(_) => "key_up",
+            PlatformInput::ModifiersChanged(_) => "modifiers_changed",
+            PlatformInput::MouseDown(_) => "mouse_down",
+            PlatformInput::MouseUp(_) => "mouse_up",
+            PlatformInput::MousePressure(_) => "mouse_pressure",
+            PlatformInput::MouseMove(_) => "mouse_move",
+            PlatformInput::MouseExited(_) => "mouse_exited",
+            PlatformInput::ScrollWheel(_) => "scroll_wheel",
+            PlatformInput::Pinch(_) => "pinch",
+            PlatformInput::FileDrop(_) => "file_drop",
+            PlatformInput::Touch(_) => "touch",
         }
     }
 

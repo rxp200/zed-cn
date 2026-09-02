@@ -1,5 +1,7 @@
+use std::borrow::Cow;
 use std::ops::Range;
 
+use crate::utils::replace_control_characters;
 use crate::{LabelLike, prelude::*};
 use gpui::{HighlightStyle, StyleRefinement, StyledText};
 
@@ -239,7 +241,9 @@ impl LabelCommon for Label {
     }
 
     fn single_line(mut self) -> Self {
-        self.label = SharedString::from(self.label.replace('\n', "⏎"));
+        if let Cow::Owned(replaced) = replace_control_characters(&self.label) {
+            self.label = SharedString::from(replaced);
+        }
         self.base = self.base.single_line();
         self
     }
@@ -328,6 +332,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_single_line_replaces_control_characters() {
+        // File names are allowed to contain these, and rendering them verbatim
+        // breaks the layout of tabs and project panel entries.
+        let label = Label::new("a\nb\rc\td").single_line();
+        assert_eq!(label.label, "a⏎b␍c␉d");
+    }
+
+    #[test]
+    fn test_single_line_leaves_printable_text_alone() {
+        let label = Label::new("main.rs").single_line();
+        assert_eq!(label.label, "main.rs");
+    }
+
+    #[test]
     fn test_parse_backtick_spans_no_backticks() {
         assert_eq!(parse_backtick_spans("plain text"), None);
     }
@@ -377,27 +395,27 @@ impl Component for Label {
                     example_group_with_title(
                         "Sizes",
                         vec![
-                            single_example("Default", Label::new("Project Explorer").into_any_element()),
+                            single_example("Default", Label::new("项目浏览器").into_any_element()),
                             single_example("Small", Label::new("File: main.rs").size(LabelSize::Small).into_any_element()),
-                            single_example("Large", Label::new("Welcome to Zed").size(LabelSize::Large).into_any_element()),
+                            single_example("Large", Label::new("欢迎使用 Zed").size(LabelSize::Large).into_any_element()),
                         ],
                     ),
                     example_group_with_title(
                         "Colors",
                         vec![
                             single_example("Default", Label::new("Status: Ready").into_any_element()),
-                            single_example("Accent", Label::new("New Update Available").color(Color::Accent).into_any_element()),
-                            single_example("Error", Label::new("Build Failed").color(Color::Error).into_any_element()),
+                            single_example("Accent", Label::new("新更新可用").color(Color::Accent).into_any_element()),
+                            single_example("Error", Label::new("构建失败").color(Color::Error).into_any_element()),
                         ],
                     ),
                     example_group_with_title(
                         "Styles",
                         vec![
-                            single_example("Default", Label::new("Normal Text").into_any_element()),
-                            single_example("Bold", Label::new("Important Notice").weight(gpui::FontWeight::BOLD).into_any_element()),
-                            single_example("Italic", Label::new("Code Comment").italic().into_any_element()),
-                            single_example("Strikethrough", Label::new("Deprecated Feature").strikethrough().into_any_element()),
-                            single_example("Underline", Label::new("Clickable Link").underline().into_any_element()),
+                            single_example("Default", Label::new("普通文本").into_any_element()),
+                            single_example("Bold", Label::new("重要通知").weight(gpui::FontWeight::BOLD).into_any_element()),
+                            single_example("Italic", Label::new("代码注释").italic().into_any_element()),
+                            single_example("Strikethrough", Label::new("已弃用功能").strikethrough().into_any_element()),
+                            single_example("Underline", Label::new("可点击链接").underline().into_any_element()),
                             single_example("Inline Code", Label::new("fn main() {}").inline_code(cx).into_any_element()),
                         ],
                     ),

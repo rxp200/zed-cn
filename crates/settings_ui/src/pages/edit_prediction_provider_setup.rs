@@ -31,7 +31,9 @@ pub(crate) fn render_edit_prediction_setup_page(
 ) -> AnyElement {
     let providers = [
         Some(render_provider_dropdown(window, cx)),
-        render_github_copilot_provider(window, cx).map(IntoElement::into_any_element),
+        Some(render_zed_provider(settings_window, window, cx).into_any_element()),
+        render_github_copilot_provider(settings_window, window, cx)
+            .map(IntoElement::into_any_element),
         Some(
             render_api_key_provider(
                 IconName::Inception,
@@ -41,7 +43,16 @@ pub(crate) fn render_edit_prediction_setup_page(
                 },
                 mercury_api_token(cx),
                 |_cx| MERCURY_CREDENTIALS_URL,
-                None,
+                Some(
+                    settings_window
+                        .render_sub_page_items_section(
+                            mercury_settings().iter().enumerate(),
+                            true,
+                            window,
+                            cx,
+                        )
+                        .into_any_element(),
+                ),
                 window,
                 cx,
             )
@@ -77,7 +88,7 @@ pub(crate) fn render_edit_prediction_setup_page(
                 IconName::AiOpenAiCompat,
                 "OpenAI Compatible API",
                 ApiKeyDocs::Custom {
-                    message: "The API key sent as Authorization: Bearer {key}.".into(),
+                    message: "API 密钥将通过 Authorization: Bearer {key} 发送。".into(),
                 },
                 open_ai_compatible_api_token(cx),
                 |cx| open_ai_compatible_api_url(cx),
@@ -144,7 +155,7 @@ fn render_provider_dropdown(window: &mut Window, cx: &mut App) -> AnyElement {
         .id("provider-selector")
         .min_w_0()
         .gap_1p5()
-        .child(SettingsSectionHeader::new("Active Provider").no_padding(true))
+        .child(SettingsSectionHeader::new("当前提供商").no_padding(true))
         .child(
             h_flex()
                 .pt_2p5()
@@ -156,9 +167,9 @@ fn render_provider_dropdown(window: &mut Window, cx: &mut App) -> AnyElement {
                         .w_full()
                         .min_w_0()
                         .max_w_1_2()
-                        .child(Label::new("Provider"))
+                        .child(Label::new("提供者"))
                         .child(
-                            Label::new("Select which provider to use for edit predictions.")
+                            Label::new("选择用于编辑预测的提供者。")
                                 .size(LabelSize::Small)
                                 .color(Color::Muted),
                         ),
@@ -250,7 +261,7 @@ fn render_api_key_provider(
             .flex_wrap()
             .gap_0p5()
             .child(
-                Label::new("Visit the")
+                Label::new("访问")
                     .size(LabelSize::Small)
                     .color(Color::Muted),
             )
@@ -261,7 +272,7 @@ fn render_api_key_provider(
                     .label_color(Color::Muted),
             )
             .child(
-                Label::new("to generate an API key.")
+                Label::new("以生成 API 密钥。")
                     .size(LabelSize::Small)
                     .color(Color::Muted),
             ),
@@ -304,12 +315,12 @@ fn render_api_key_provider(
                         .min_w_0()
                         .max_w_1_2()
                         .gap_0p5()
-                        .child(Label::new("API Key"))
+                        .child(Label::new("API 密钥"))
                         .child(description)
                         .when_some(env_var_name, |this, env_var_name| {
                             this.child({
                                 let label = format!(
-                                    "Or set the {} env var and restart Zed.",
+                                    "或设置 {} 环境变量并重启 Zed。",
                                     env_var_name.as_ref()
                                 );
                                 Label::new(label).size(LabelSize::Small).color(Color::Muted)
@@ -366,8 +377,8 @@ fn render_ollama_provider(
 fn ollama_settings() -> Box<[SettingsPageItem]> {
     Box::new([
         SettingsPageItem::SettingItem(SettingItem {
-            title: "API URL",
-            description: "The base URL of your Ollama server.",
+            title: "API 地址",
+            description: "您的 Ollama 服务器的基础 URL。",
             field: Box::new(SettingField {
                 organization_override: None,
                 pick: |settings| {
@@ -400,8 +411,8 @@ fn ollama_settings() -> Box<[SettingsPageItem]> {
             files: USER,
         }),
         SettingsPageItem::SettingItem(SettingItem {
-            title: "Model",
-            description: "The Ollama model to use for edit predictions.",
+            title: "模型",
+            description: "用于编辑预测的 Ollama 模型。",
             field: Box::new(SettingField {
                 organization_override: None,
                 pick: |settings| {
@@ -434,8 +445,8 @@ fn ollama_settings() -> Box<[SettingsPageItem]> {
             files: USER,
         }),
         SettingsPageItem::SettingItem(SettingItem {
-            title: "Prompt Format",
-            description: "The prompt format to use when requesting predictions. Set to Infer to have the format inferred based on the model name.",
+            title: "提示格式",
+            description: "请求预测时使用的提示格式。设置为 Infer，以根据模型名称推断格式。",
             field: Box::new(SettingField {
                 organization_override: None,
                 pick: |settings| {
@@ -465,8 +476,8 @@ fn ollama_settings() -> Box<[SettingsPageItem]> {
             metadata: None,
         }),
         SettingsPageItem::SettingItem(SettingItem {
-            title: "Max Output Tokens",
-            description: "The maximum number of tokens to generate.",
+            title: "最大输出令牌数",
+            description: "要生成的最大令牌数。",
             field: Box::new(SettingField {
                 organization_override: None,
                 pick: |settings| {
@@ -495,14 +506,45 @@ fn ollama_settings() -> Box<[SettingsPageItem]> {
             metadata: None,
             files: USER,
         }),
+        SettingsPageItem::SettingItem(SettingItem {
+            title: "预测防抖延迟",
+            description: "停止输入后自动请求预测前的延迟（毫秒）。设为 0 可立即请求预测。",
+            field: Box::new(SettingField {
+                organization_override: None,
+                pick: |settings| {
+                    settings
+                        .project
+                        .all_languages
+                        .edit_predictions
+                        .as_ref()?
+                        .ollama
+                        .as_ref()?
+                        .prediction_debounce
+                        .as_ref()
+                },
+                write: |settings, value, _app: &App| {
+                    settings
+                        .project
+                        .all_languages
+                        .edit_predictions
+                        .get_or_insert_default()
+                        .ollama
+                        .get_or_insert_default()
+                        .prediction_debounce = value;
+                },
+                json_path: Some("edit_predictions.ollama.prediction_debounce"),
+            }),
+            metadata: None,
+            files: USER,
+        }),
     ])
 }
 
 fn open_ai_compatible_settings() -> Box<[SettingsPageItem]> {
     Box::new([
         SettingsPageItem::SettingItem(SettingItem {
-            title: "API URL",
-            description: "The URL of your OpenAI-compatible server's completions API.",
+            title: "API 地址",
+            description: "您的 OpenAI 兼容服务器的补全 API 的 URL。",
             field: Box::new(SettingField {
                 organization_override: None,
                 pick: |settings| {
@@ -535,8 +577,8 @@ fn open_ai_compatible_settings() -> Box<[SettingsPageItem]> {
             files: USER,
         }),
         SettingsPageItem::SettingItem(SettingItem {
-            title: "Model",
-            description: "The model string to pass to the OpenAI-compatible server.",
+            title: "模型",
+            description: "传递给 OpenAI 兼容服务器的模型字符串。",
             field: Box::new(SettingField {
                 organization_override: None,
                 pick: |settings| {
@@ -569,8 +611,8 @@ fn open_ai_compatible_settings() -> Box<[SettingsPageItem]> {
             files: USER,
         }),
         SettingsPageItem::SettingItem(SettingItem {
-            title: "Prompt Format",
-            description: "The prompt format to use when requesting predictions. Set to Infer to have the format inferred based on the model name.",
+            title: "提示格式",
+            description: "请求预测时使用的提示格式。设置为 Infer，以根据模型名称推断格式。",
             field: Box::new(SettingField {
                 organization_override: None,
                 pick: |settings| {
@@ -600,8 +642,39 @@ fn open_ai_compatible_settings() -> Box<[SettingsPageItem]> {
             metadata: None,
         }),
         SettingsPageItem::SettingItem(SettingItem {
-            title: "Max Output Tokens",
-            description: "The maximum number of tokens to generate.",
+            title: "API 类型",
+            description: "Completions：文本补全接口（/v1/completions），适用于原生 FIM 模型；Chat Completions：对话补全接口（/v1/chat/completions），适用于聊天模型，Zed 会自动构造填空提示词。使用 Chat Completions 时，API 地址需指向 chat/completions 端点。",
+            field: Box::new(SettingField {
+                organization_override: None,
+                pick: |settings| {
+                    settings
+                        .project
+                        .all_languages
+                        .edit_predictions
+                        .as_ref()?
+                        .open_ai_compatible_api
+                        .as_ref()?
+                        .api_type
+                        .as_ref()
+                },
+                write: |settings, value, _app: &App| {
+                    settings
+                        .project
+                        .all_languages
+                        .edit_predictions
+                        .get_or_insert_default()
+                        .open_ai_compatible_api
+                        .get_or_insert_default()
+                        .api_type = value;
+                },
+                json_path: Some("edit_predictions.open_ai_compatible_api.api_type"),
+            }),
+            files: USER,
+            metadata: None,
+        }),
+        SettingsPageItem::SettingItem(SettingItem {
+            title: "最大输出令牌数",
+            description: "要生成的最大令牌数。",
             field: Box::new(SettingField {
                 organization_override: None,
                 pick: |settings| {
@@ -630,14 +703,45 @@ fn open_ai_compatible_settings() -> Box<[SettingsPageItem]> {
             metadata: None,
             files: USER,
         }),
+        SettingsPageItem::SettingItem(SettingItem {
+            title: "预测防抖延迟",
+            description: "停止输入后自动请求预测前的延迟（毫秒）。设为 0 可立即请求预测。",
+            field: Box::new(SettingField {
+                organization_override: None,
+                pick: |settings| {
+                    settings
+                        .project
+                        .all_languages
+                        .edit_predictions
+                        .as_ref()?
+                        .open_ai_compatible_api
+                        .as_ref()?
+                        .prediction_debounce
+                        .as_ref()
+                },
+                write: |settings, value, _app: &App| {
+                    settings
+                        .project
+                        .all_languages
+                        .edit_predictions
+                        .get_or_insert_default()
+                        .open_ai_compatible_api
+                        .get_or_insert_default()
+                        .prediction_debounce = value;
+                },
+                json_path: Some("edit_predictions.open_ai_compatible_api.prediction_debounce"),
+            }),
+            metadata: None,
+            files: USER,
+        }),
     ])
 }
 
 fn codestral_settings() -> Box<[SettingsPageItem]> {
     Box::new([
         SettingsPageItem::SettingItem(SettingItem {
-            title: "API URL",
-            description: "The API URL to use for Codestral.",
+            title: "API 地址",
+            description: "用于 Codestral 的 API 地址。",
             field: Box::new(SettingField {
                 organization_override: None,
                 pick: |settings| {
@@ -670,8 +774,8 @@ fn codestral_settings() -> Box<[SettingsPageItem]> {
             files: USER,
         }),
         SettingsPageItem::SettingItem(SettingItem {
-            title: "Max Tokens",
-            description: "The maximum number of tokens to generate.",
+            title: "最大令牌数",
+            description: "要生成的最大令牌数。",
             field: Box::new(SettingField {
                 organization_override: None,
                 pick: |settings| {
@@ -701,8 +805,8 @@ fn codestral_settings() -> Box<[SettingsPageItem]> {
             files: USER,
         }),
         SettingsPageItem::SettingItem(SettingItem {
-            title: "Model",
-            description: "The Codestral model id to use.",
+            title: "模型",
+            description: "要使用的 Codestral 模型 ID。",
             field: Box::new(SettingField {
                 organization_override: None,
                 pick: |settings| {
@@ -734,10 +838,170 @@ fn codestral_settings() -> Box<[SettingsPageItem]> {
             })),
             files: USER,
         }),
+        SettingsPageItem::SettingItem(SettingItem {
+            title: "预测防抖延迟",
+            description: "停止输入后自动请求预测前的延迟（毫秒）。设为 0 可立即请求预测。",
+            field: Box::new(SettingField {
+                organization_override: None,
+                pick: |settings| {
+                    settings
+                        .project
+                        .all_languages
+                        .edit_predictions
+                        .as_ref()?
+                        .codestral
+                        .as_ref()?
+                        .prediction_debounce
+                        .as_ref()
+                },
+                write: |settings, value, _app: &App| {
+                    settings
+                        .project
+                        .all_languages
+                        .edit_predictions
+                        .get_or_insert_default()
+                        .codestral
+                        .get_or_insert_default()
+                        .prediction_debounce = value;
+                },
+                json_path: Some("edit_predictions.codestral.prediction_debounce"),
+            }),
+            metadata: None,
+            files: USER,
+        }),
     ])
 }
 
-fn render_github_copilot_provider(window: &mut Window, cx: &mut App) -> Option<impl IntoElement> {
+fn mercury_settings() -> Box<[SettingsPageItem]> {
+    Box::new([SettingsPageItem::SettingItem(SettingItem {
+        title: "预测防抖延迟",
+        description: "停止输入后自动请求预测前的延迟（毫秒）。设为 0 可立即请求预测。",
+        field: Box::new(SettingField {
+            organization_override: None,
+            pick: |settings| {
+                settings
+                    .project
+                    .all_languages
+                    .edit_predictions
+                    .as_ref()?
+                    .mercury
+                    .as_ref()?
+                    .prediction_debounce
+                    .as_ref()
+            },
+            write: |settings, value, _app: &App| {
+                settings
+                    .project
+                    .all_languages
+                    .edit_predictions
+                    .get_or_insert_default()
+                    .mercury
+                    .get_or_insert_default()
+                    .prediction_debounce = value;
+            },
+            json_path: Some("edit_predictions.mercury.prediction_debounce"),
+        }),
+        metadata: None,
+        files: USER,
+    })])
+}
+
+fn zed_settings() -> Box<[SettingsPageItem]> {
+    Box::new([SettingsPageItem::SettingItem(SettingItem {
+        title: "预测防抖延迟",
+        description: "停止输入后自动请求预测前的延迟（毫秒）。设为 0 可立即请求预测。",
+        field: Box::new(SettingField {
+            organization_override: None,
+            pick: |settings| {
+                settings
+                    .project
+                    .all_languages
+                    .edit_predictions
+                    .as_ref()?
+                    .zed
+                    .as_ref()?
+                    .prediction_debounce
+                    .as_ref()
+            },
+            write: |settings, value, _app: &App| {
+                settings
+                    .project
+                    .all_languages
+                    .edit_predictions
+                    .get_or_insert_default()
+                    .zed
+                    .get_or_insert_default()
+                    .prediction_debounce = value;
+            },
+            json_path: Some("edit_predictions.zed.prediction_debounce"),
+        }),
+        metadata: None,
+        files: USER,
+    })])
+}
+
+fn render_zed_provider(
+    settings_window: &SettingsWindow,
+    window: &mut Window,
+    cx: &mut Context<SettingsWindow>,
+) -> impl IntoElement {
+    let zed_settings = zed_settings();
+    let additional_fields = settings_window
+        .render_sub_page_items_section(zed_settings.iter().enumerate(), true, window, cx)
+        .into_any_element();
+
+    v_flex()
+        .id("zed")
+        .min_w_0()
+        .pt_8()
+        .gap_1p5()
+        .child(
+            SettingsSectionHeader::new("Zed 编辑预测")
+                .icon(IconName::ZedPredict)
+                .no_padding(true),
+        )
+        .child(div().px_neg_8().child(additional_fields))
+}
+
+fn copilot_settings() -> Box<[SettingsPageItem]> {
+    Box::new([SettingsPageItem::SettingItem(SettingItem {
+        title: "预测防抖延迟",
+        description: "停止输入后自动请求预测前的延迟（毫秒）。设为 0 可立即请求预测。",
+        field: Box::new(SettingField {
+            organization_override: None,
+            pick: |settings| {
+                settings
+                    .project
+                    .all_languages
+                    .edit_predictions
+                    .as_ref()?
+                    .copilot
+                    .as_ref()?
+                    .prediction_debounce
+                    .as_ref()
+            },
+            write: |settings, value, _app: &App| {
+                settings
+                    .project
+                    .all_languages
+                    .edit_predictions
+                    .get_or_insert_default()
+                    .copilot
+                    .get_or_insert_default()
+                    .prediction_debounce = value;
+            },
+            json_path: Some("edit_predictions.copilot.prediction_debounce"),
+        }),
+        metadata: None,
+        files: USER,
+    })])
+}
+
+fn render_github_copilot_provider(
+    settings_window: &SettingsWindow,
+    window: &mut Window,
+    cx: &mut Context<SettingsWindow>,
+) -> Option<impl IntoElement> {
     let configuration_view = window.use_state(cx, |_, cx| {
         copilot_ui::ConfigurationView::new(
             move |cx| {
@@ -750,6 +1014,10 @@ fn render_github_copilot_provider(window: &mut Window, cx: &mut App) -> Option<i
         )
     });
 
+    let additional_fields = settings_window
+        .render_sub_page_items_section(copilot_settings().iter().enumerate(), true, window, cx)
+        .into_any_element();
+
     Some(
         v_flex()
             .id("github-copilot")
@@ -761,6 +1029,7 @@ fn render_github_copilot_provider(window: &mut Window, cx: &mut App) -> Option<i
                     .icon(IconName::Copilot)
                     .no_padding(true),
             )
-            .child(configuration_view),
+            .child(configuration_view)
+            .child(div().px_neg_8().child(additional_fields)),
     )
 }

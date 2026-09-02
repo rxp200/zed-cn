@@ -73,10 +73,11 @@ use util::{
 };
 use workspace::{
     DraggedSelection, OpenInTerminal, OpenMode, OpenOptions, OpenVisible, PreviewTabsSettings,
-    SelectedEntry, SplitDirection, Workspace, WorkspaceSettings,
+    SelectedEntry, SplitDirection, Workspace, WorkspaceSettings, copy_file_permalink,
     dock::{DockPosition, Panel, PanelEvent},
     focus_follows_mouse::FocusFollowsMouse as _,
     notifications::{DetachAndPromptErr, NotifyResultExt, NotifyTaskExt},
+    open_file_permalink,
 };
 use worktree::CreatedEntry;
 use zed_actions::{
@@ -268,6 +269,7 @@ impl DiagnosticCount {
 #[derive(Debug, PartialEq, Eq, Clone)]
 struct EntryDetails {
     filename: String,
+    chevron: Option<SharedString>,
     icon: Option<SharedString>,
     path: Arc<RelPath>,
     depth: usize,
@@ -282,11 +284,25 @@ struct EntryDetails {
     sticky: Option<StickyDetails>,
     filename_text_color: Color,
     diagnostic_severity: Option<DiagnosticSeverity>,
+    diagnostic_mark: Option<DiagnosticMark>,
+    reserves_chevron_slot: bool,
     diagnostic_count: Option<DiagnosticCount>,
     git_status: GitSummary,
     is_private: bool,
     worktree_id: WorktreeId,
     canonical_path: Option<Arc<Path>>,
+}
+
+/// The glyph a row's diagnostic mark decorates, and the shape of that mark.
+///
+/// A row has one indicator slot, so the mark decorates whichever glyph already fills
+/// it rather than claiming a slot of its own. `Standalone` covers rows that draw no
+/// glyph at all.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum DiagnosticMark {
+    OnIcon(IconDecorationKind),
+    OnChevron(IconDecorationKind),
+    Standalone(IconName),
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -594,6 +610,7 @@ pub enum Event {
 
 struct DraggedProjectEntryView {
     selection: SelectedEntry,
+    chevron: Option<SharedString>,
     icon: Option<SharedString>,
     filename: String,
     click_offset: Point<Pixels>,
@@ -1125,14 +1142,14 @@ impl ProjectPanel {
                 menu.context(self.focus_handle.clone()).map(|menu| {
                     if is_read_only {
                         menu.when(is_markdown, |menu| {
-                            menu.action("Open Markdown Preview", Box::new(OpenMarkdownPreview))
+                            menu.action("打开Markdown预览", Box::new(OpenMarkdownPreview))
                         })
                         .when(is_dir, |menu| {
-                            menu.action("Search Inside", Box::new(NewSearchInDirectory))
+                            menu.action("搜索内部", Box::new(NewSearchInDirectory))
                         })
                     } else {
-                        menu.action("New File", Box::new(NewFile))
-                            .action("New Folder", Box::new(NewDirectory))
+                        menu.action("新建文件", Box::new(NewFile))
+                            .action("新建文件夹", Box::new(NewDirectory))
                             .separator()
                             .when(is_local, |menu| {
                                 menu.action(
@@ -1141,94 +1158,101 @@ impl ProjectPanel {
                                 )
                             })
                             .when(is_local, |menu| {
-                                menu.action("Open in Default App", Box::new(OpenWithSystem))
+                                menu.action("在默认应用中打开", Box::new(OpenWithSystem))
                             })
-                            .action("Open in Terminal", Box::new(OpenInTerminal))
+                            .action("在终端中打开", Box::new(OpenInTerminal))
                             .when(is_markdown, |menu| {
-                                menu.action("Open Markdown Preview", Box::new(OpenMarkdownPreview))
+                                menu.action("打开Markdown预览", Box::new(OpenMarkdownPreview))
                             })
                             .when(is_dir, |menu| {
                                 menu.separator()
-                                    .action("Find in Folder…", Box::new(NewSearchInDirectory))
+                                    .action("在文件夹中查找…", Box::new(NewSearchInDirectory))
                             })
                             .when(is_unfoldable, |menu| {
-                                menu.action("Unfold Directory", Box::new(UnfoldDirectory))
+                                menu.action("展开目录", Box::new(UnfoldDirectory))
                             })
                             .when(is_foldable, |menu| {
-                                menu.action("Fold Directory", Box::new(FoldDirectory))
+                                menu.action("折叠目录", Box::new(FoldDirectory))
                             })
                             .when(should_show_compare, |menu| {
                                 menu.separator()
-                                    .action("Compare Marked Files", Box::new(CompareMarkedFiles))
+                                    .action("比较标记的文件", Box::new(CompareMarkedFiles))
                             })
                             .separator()
-                            .action("Cut", Box::new(Cut))
-                            .action("Copy", Box::new(Copy))
-                            .action("Duplicate", Box::new(Duplicate))
-                            .action_disabled_when(!has_pasteable_content, "Paste", Box::new(Paste))
+                            .action("剪切", Box::new(Cut))
+                            .action("复制", Box::new(Copy))
+                            .action("生成副本", Box::new(Duplicate))
+                            .action_disabled_when(!has_pasteable_content, "粘贴", Box::new(Paste))
                             .when(!is_collab, |menu| {
                                 let can_undo = self.undo_manager.can_undo();
                                 let can_redo = self.undo_manager.can_redo();
 
-                                menu.action_disabled_when(!can_undo, "Undo", Box::new(Undo))
-                                    .action_disabled_when(!can_redo, "Redo", Box::new(Redo))
+                                menu.action_disabled_when(!can_undo, "撤销", Box::new(Undo))
+                                    .action_disabled_when(!can_redo, "重做", Box::new(Redo))
                             })
                             .when(is_remote, |menu| {
                                 menu.separator()
-                                    .action("Download...", Box::new(DownloadFromRemote))
+                                    .action("下载...", Box::new(DownloadFromRemote))
                             })
                             .separator()
-                            .action("Copy Path", Box::new(zed_actions::workspace::CopyPath))
+                            .action("复制路径", Box::new(zed_actions::workspace::CopyPath))
                             .action(
-                                "Copy Relative Path",
+                                "复制相对路径",
                                 Box::new(zed_actions::workspace::CopyRelativePath),
                             )
                             .when(has_git_repo, |menu| {
                                 menu.separator()
                                     .when(!is_dir && self.has_git_changes(entry_id), |menu| {
                                         menu.action(
-                                            "Restore File",
+                                            "恢复文件",
                                             Box::new(git::RestoreFile { skip_prompt: false }),
                                         )
                                     })
-                                    .action("Add to .gitignore", Box::new(git::AddToGitignore))
+                                    .action("添加到.gitignore", Box::new(git::AddToGitignore))
                                     .action(
-                                        "Add to .git/info/exclude",
+                                        "添加到.git/info/exclude",
                                         Box::new(git::AddToGitInfoExclude),
                                     )
                                     .when(has_history, |menu| {
-                                        menu.action("View History", Box::new(git::FileHistory))
+                                        menu.action("查看历史", Box::new(git::FileHistory))
+                                    })
+                                    .when(!is_dir, |menu| {
+                                        menu.action(
+                                            "打开文件永久链接",
+                                            git::OpenFilePermalink.boxed_clone(),
+                                        )
+                                        .action(
+                                            "复制文件永久链接",
+                                            git::CopyFilePermalink.boxed_clone(),
+                                        )
                                     })
                             })
                             .when(!should_hide_rename, |menu| {
-                                menu.separator().action("Rename", Box::new(Rename))
+                                menu.separator().action("重命名", Box::new(Rename))
                             })
                             .when(!is_root && !is_collab, |menu| {
-                                menu.action("Trash", Box::new(Trash { skip_prompt: false }))
+                                menu.action("移至废纸篓", Box::new(Trash { skip_prompt: false }))
                             })
                             .when(!is_root, |menu| {
-                                menu.action("Delete", Box::new(Delete { skip_prompt: false }))
+                                menu.action("删除", Box::new(Delete { skip_prompt: false }))
                             })
                             .when(!is_collab && is_root, |menu| {
                                 menu.separator()
                                     .action(
-                                        "Add Folders to Project…",
+                                        "添加文件夹到项目…",
                                         Box::new(workspace::AddFolderToProject),
                                     )
-                                    .action("Remove from Project", Box::new(RemoveFromProject))
+                                    .action("从项目中移除", Box::new(RemoveFromProject))
                             })
                             .when(is_dir && !is_root, |menu| {
                                 menu.separator()
-                                    .action("Expand All", Box::new(ExpandSelectedEntryAndChildren))
-                                    .action(
-                                        "Collapse All",
-                                        Box::new(CollapseSelectedEntryAndChildren),
-                                    )
+                                    .action("全部展开", Box::new(ExpandSelectedEntryAndChildren))
+                                    .action("全部折叠", Box::new(CollapseSelectedEntryAndChildren))
                             })
                             .when(is_dir && is_root, |menu| {
                                 menu.separator()
-                                    .action("Expand All", Box::new(ExpandAllEntries))
-                                    .action("Collapse All", Box::new(CollapseAllEntries))
+                                    .action("全部展开", Box::new(ExpandAllEntries))
+                                    .action("全部折叠", Box::new(CollapseAllEntries))
                             })
                     }
                 })
@@ -1937,8 +1961,9 @@ impl ProjectPanel {
 
         let edit_task;
         let edited_entry_id;
-        let edited_entry;
         let new_project_path: ProjectPath;
+        let changes: Vec<Change>;
+
         if is_new_entry {
             self.selection = Some(SelectedEntry {
                 worktree_id,
@@ -1949,12 +1974,12 @@ impl ProjectPanel {
                 return None;
             }
 
-            edited_entry = None;
             edited_entry_id = NEW_ENTRY_ID;
             new_project_path = (worktree_id, new_path).into();
             edit_task = self.project.update(cx, |project, cx| {
                 project.create_entry(new_project_path.clone(), is_dir, cx)
             });
+            changes = vec![Change::Created(new_project_path)];
         } else {
             let new_path = if let Some(parent) = entry.path.parent() {
                 parent.join(&filename).into()
@@ -1968,11 +1993,31 @@ impl ProjectPanel {
                 return None;
             }
             edited_entry_id = entry.id;
-            edited_entry = Some(entry);
             new_project_path = (worktree_id, new_path).into();
+
+            // Before renaming, keep track of which directories will need to be
+            // created, so we can remove these when undoing.
+            let created_dirs = crate::undo::missing_parent_dirs(
+                worktree.read(cx),
+                worktree_id,
+                new_project_path.path.as_ref(),
+            );
+
             edit_task = self.project.update(cx, |project, cx| {
                 project.rename_entry(edited_entry_id, new_project_path.clone(), cx)
-            })
+            });
+
+            // Record the directory creations shallowest-first, then the rename,
+            // so undoing reverses them in the right order.
+            changes = created_dirs
+                .into_iter()
+                .rev()
+                .map(Change::DirCreated)
+                .chain(std::iter::once(Change::Renamed(
+                    (worktree_id, entry.path).into(),
+                    new_project_path,
+                )))
+                .collect();
         };
 
         if refocus {
@@ -2008,14 +2053,7 @@ impl ProjectPanel {
                         // changes in excluded paths, but that would mean updating
                         // methods that rely on `EntryId` to now rely on the actual
                         // paths.
-                        let operation = match edited_entry {
-                            Some(old_entry) => {
-                                let project_path = (worktree_id, old_entry.path).into();
-                                Change::Renamed(project_path, new_project_path)
-                            }
-                            None => Change::Created(new_project_path),
-                        };
-                        project_panel.undo_manager.record([operation]).log_err();
+                        project_panel.undo_manager.record(changes).log_err();
 
                         if let Some(selection) = &mut project_panel.selection
                             && selection.entry_id == edited_entry_id
@@ -2400,8 +2438,8 @@ impl ProjectPanel {
             let file_name = entry.path.file_name()?.to_string();
 
             let answer = if !action.skip_prompt {
-                let prompt = format!("Discard changes to {}?", MarkdownInlineCode(&file_name));
-                Some(window.prompt(PromptLevel::Info, &prompt, None, &["Restore", "Cancel"], cx))
+                let prompt = format!("确定放弃对 {} 的更改吗？", MarkdownInlineCode(&file_name));
+                Some(window.prompt(PromptLevel::Info, &prompt, None, &["恢复", "取消"], cx))
             } else {
                 None
             };
@@ -2422,7 +2460,7 @@ impl ProjectPanel {
                 if let Err(e) = task.await {
                     panel
                         .update(cx, |panel, cx| {
-                            let message = format!("Failed to restore {}: {}", file_name, e);
+                            let message = format!("无法还原 {}：{}", file_name, e);
                             let toast = StatusToast::new(message, cx, |this, _| {
                                 this.icon(
                                     Icon::new(IconName::XCircle)
@@ -2494,7 +2532,7 @@ impl ProjectPanel {
                 if let Err(e) = receiver.await? {
                     if let Some(workspace) = workspace.upgrade() {
                         cx.update(|cx| {
-                            let message = format!("Failed to add to .gitignore: {}", e);
+                            let message = format!("无法添加到 .gitignore：{}", e);
                             let toast = StatusToast::new(message, cx, |this, _| {
                                 this.icon(Icon::new(IconName::XCircle).color(Color::Error))
                                     .dismiss_button(true)
@@ -2541,7 +2579,7 @@ impl ProjectPanel {
                 if let Err(e) = receiver.await? {
                     if let Some(workspace) = workspace.upgrade() {
                         cx.update(|cx| {
-                            let message = format!("Failed to add to .git/info/exclude: {}", e);
+                            let message = format!("无法添加到 .git/info/exclude：{}", e);
                             let toast = StatusToast::new(message, cx, |this, _| {
                                 this.icon(Icon::new(IconName::XCircle).color(Color::Error))
                                     .dismiss_button(true)
@@ -2575,16 +2613,12 @@ impl ProjectPanel {
         S: AsRef<str>,
     {
         let (message_start, confirmation_label, detail) = match kind {
-            RemovalKind::Trash => ("Do you want to trash", "Trash", None),
-            RemovalKind::Delete => (
-                "Are you sure you want to permanently delete",
-                "Delete",
-                Some("This cannot be undone."),
-            ),
+            RemovalKind::Trash => ("您确定要移到废纸篓", "移到废纸篓", None),
+            RemovalKind::Delete => ("您确定要永久删除", "删除", Some("此操作无法撤销。")),
         };
 
         let mut message = match names {
-            [name] => format!("{message_start} {}?", MarkdownInlineCode(name.as_ref())),
+            [name] => format!("{message_start} {}？", MarkdownInlineCode(name.as_ref())),
             _ => {
                 const CUTOFF_POINT: usize = 10;
                 let mut listed_names = names
@@ -2594,13 +2628,13 @@ impl ProjectPanel {
                     .collect::<Vec<_>>();
                 let omitted_count = names.len().saturating_sub(CUTOFF_POINT);
                 if omitted_count == 1 {
-                    listed_names.push(".. 1 file not shown".into());
+                    listed_names.push(".. 未显示 1 个文件".into());
                 } else if omitted_count > 1 {
-                    listed_names.push(format!(".. {omitted_count} files not shown"));
+                    listed_names.push(format!(".. 未显示 {omitted_count} 个文件"));
                 }
 
                 format!(
-                    "{message_start} the following {} files?\n{}",
+                    "{message_start} 以下 {} 个文件？\n{}",
                     names.len(),
                     listed_names.join("\n")
                 )
@@ -2609,14 +2643,14 @@ impl ProjectPanel {
         match dirty_buffers {
             0 => {}
             1 if names.len() == 1 => {
-                message.push_str("\n\nIt has unsaved changes, which will be lost.");
+                message.push_str("\n\n它含有未保存的更改，这些更改将丢失。");
             }
             1 => {
-                message.push_str("\n\n1 of these has unsaved changes, which will be lost.");
+                message.push_str("\n\n其中有 1 个含有未保存的更改，这些更改将丢失。");
             }
             dirty_buffers => {
                 message.push_str(&format!(
-                    "\n\n{dirty_buffers} of these have unsaved changes, which will be lost."
+                    "\n\n其中有 {dirty_buffers} 个含有未保存的更改，这些更改将丢失。"
                 ));
             }
         }
@@ -2683,7 +2717,7 @@ impl ProjectPanel {
                     PromptLevel::Info,
                     &prompt.message,
                     prompt.detail,
-                    &[prompt.confirmation_label, "Cancel"],
+                    &[prompt.confirmation_label, "取消"],
                     cx,
                 ))
             } else {
@@ -2769,10 +2803,10 @@ impl ProjectPanel {
         cx: &mut Context<Self>,
     ) {
         let message = match (trash, total_count) {
-            (true, 1) => format!("Failed to trash {failed_count} of {total_count} file."),
-            (true, _) => format!("Failed to trash {failed_count} of {total_count} files."),
-            (false, 1) => format!("Failed to delete {failed_count} of {total_count} file."),
-            (false, _) => format!("Failed to delete {failed_count} of {total_count} files."),
+            (true, 1) => format!("无法将 {failed_count}/{total_count} 个文件移入回收站。"),
+            (true, _) => format!("无法将 {failed_count}/{total_count} 个文件移入回收站。"),
+            (false, 1) => format!("无法删除 {failed_count}/{total_count} 个文件。"),
+            (false, _) => format!("无法删除 {failed_count}/{total_count} 个文件。"),
         };
 
         let toast = StatusToast::new(message, cx, |this, _| {
@@ -3776,6 +3810,53 @@ impl ProjectPanel {
         }
     }
 
+    fn open_file_permalink(
+        &mut self,
+        _: &git::OpenFilePermalink,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(project_path) = self.selected_file_project_path(cx) else {
+            return;
+        };
+        open_file_permalink(
+            self.project.clone(),
+            project_path,
+            self.workspace.clone(),
+            window,
+            cx,
+        );
+    }
+
+    fn copy_file_permalink(
+        &mut self,
+        _: &git::CopyFilePermalink,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(project_path) = self.selected_file_project_path(cx) else {
+            return;
+        };
+        copy_file_permalink(
+            self.project.clone(),
+            project_path,
+            self.workspace.clone(),
+            window,
+            cx,
+        );
+    }
+
+    fn selected_file_project_path(&self, cx: &App) -> Option<ProjectPath> {
+        let (worktree, entry) = self.selected_sub_entry(cx)?;
+        if entry.is_dir() {
+            return None;
+        }
+        Some(ProjectPath {
+            worktree_id: worktree.read(cx).id(),
+            path: entry.path.clone(),
+        })
+    }
+
     fn reveal_in_finder(
         &mut self,
         _: &RevealInFileManager,
@@ -4669,7 +4750,7 @@ impl ProjectPanel {
                                 PromptLevel::Info,
                                 &prompt_message,
                                 None,
-                                &["Replace", "Cancel"],
+                                &["替换", "取消"],
                                 cx,
                             )
                         })?
@@ -5679,6 +5760,7 @@ impl ProjectPanel {
 
         let file_name = details.filename.clone();
 
+        let chevron = details.chevron.clone();
         let mut icon = details.icon.clone();
         if settings.file_icons && show_editor && details.kind.is_file() {
             let filename = self.filename_editor.read(cx).text(cx);
@@ -5689,6 +5771,8 @@ impl ProjectPanel {
 
         let filename_text_color = details.filename_text_color;
         let diagnostic_severity = details.diagnostic_severity;
+        let diagnostic_mark = details.diagnostic_mark;
+        let reserves_chevron_slot = details.reserves_chevron_slot;
         let diagnostic_count = details.diagnostic_count;
         let item_colors = get_item_color(is_sticky, cx);
 
@@ -5985,6 +6069,7 @@ impl ProjectPanel {
                                 .as_ref()
                                 .unwrap_or_else(|| &details.filename);
                             cx.new(|_| DraggedProjectEntryView {
+                                chevron: details.chevron.clone(),
                                 icon: details.icon.clone(),
                                 filename: filename.clone(),
                                 click_offset,
@@ -6208,55 +6293,88 @@ impl ProjectPanel {
                             )
                         },
                     )
-                    .child(if let Some(icon) = &icon {
-                        if let Some((_, decoration_color)) =
+                    .map(|this| {
+                        let decoration_color =
                             entry_diagnostic_aware_icon_decoration_and_color(diagnostic_severity)
-                        {
-                            let is_warning = diagnostic_severity
-                                .map(|severity| matches!(severity, DiagnosticSeverity::WARNING))
-                                .unwrap_or(false);
-                            div().child(
-                                DecoratedIcon::new(
-                                    Icon::from_path(icon.clone()).color(Color::Muted),
-                                    Some(
-                                        IconDecoration::new(
-                                            if kind.is_file() {
-                                                if is_warning {
-                                                    IconDecorationKind::Triangle
-                                                } else {
-                                                    IconDecorationKind::X
-                                                }
-                                            } else {
-                                                IconDecorationKind::Dot
-                                            },
-                                            bg_color,
-                                            cx,
-                                        )
+                                .map(|(_, color)| color);
+                        let decorated = |glyph: SharedString,
+                                         decoration_kind: IconDecorationKind,
+                                         color: Color| {
+                            DecoratedIcon::new(
+                                Icon::from_path(glyph).color(Color::Muted),
+                                Some(
+                                    IconDecoration::new(decoration_kind, bg_color, cx)
                                         .group_name(Some(GROUP_NAME.into()))
                                         .knockout_hover_color(bg_hover_color)
-                                        .color(decoration_color.color(cx))
+                                        .color(color.color(cx))
                                         .position(Point {
                                             x: px(-2.),
                                             y: px(-2.),
                                         }),
-                                    ),
-                                )
-                                .into_any_element(),
+                                ),
                             )
+                            .into_any_element()
+                        };
+
+                        let icon_slot = if let Some(icon) = &icon {
+                            Some(match diagnostic_mark.zip(decoration_color) {
+                                Some((DiagnosticMark::OnIcon(decoration_kind), color)) => {
+                                    div().child(decorated(icon.clone(), decoration_kind, color))
+                                }
+                                _ => h_flex()
+                                    .child(Icon::from_path(icon.to_string()).color(Color::Muted)),
+                            })
+                        } else if let Some(DiagnosticMark::Standalone(icon_name)) = diagnostic_mark
+                        {
+                            let color =
+                                entry_diagnostic_aware_icon_name_and_color(diagnostic_severity)
+                                    .map_or(Color::Error, |(_, color)| color);
+                            Some(
+                                h_flex()
+                                    .size(IconSize::default().rems())
+                                    .child(Icon::new(icon_name).color(color).size(IconSize::Small)),
+                            )
+                        } else if chevron.is_some() {
+                            // The chevron already fills this slot; a spacer would double its width.
+                            None
                         } else {
-                            h_flex().child(Icon::from_path(icon.to_string()).color(Color::Muted))
+                            Some(
+                                h_flex()
+                                    .size(IconSize::default().rems())
+                                    .invisible()
+                                    .flex_none(),
+                            )
+                        };
+
+                        let chevron =
+                            chevron.map(|chevron| match diagnostic_mark.zip(decoration_color) {
+                                Some((DiagnosticMark::OnChevron(decoration_kind), color)) => {
+                                    decorated(chevron, decoration_kind, color)
+                                }
+                                _ => Icon::from_path(chevron)
+                                    .color(Color::Muted)
+                                    .into_any_element(),
+                            });
+
+                        match (chevron, icon_slot) {
+                            (Some(chevron), Some(icon_slot)) => {
+                                this.child(h_flex().gap_0p5().child(chevron).child(icon_slot))
+                            }
+                            (Some(chevron), None) => this.child(h_flex().child(chevron)),
+                            (None, Some(icon_slot)) if reserves_chevron_slot => this.child(
+                                h_flex()
+                                    .gap_0p5()
+                                    .child(
+                                        h_flex()
+                                            .size(IconSize::default().rems())
+                                            .invisible()
+                                            .flex_none(),
+                                    )
+                                    .child(icon_slot),
+                            ),
+                            (None, Some(icon_slot)) => this.child(icon_slot),
+                            (None, None) => this,
                         }
-                    } else if let Some((icon_name, color)) =
-                        entry_diagnostic_aware_icon_name_and_color(diagnostic_severity)
-                    {
-                        h_flex()
-                            .size(IconSize::default().rems())
-                            .child(Icon::new(icon_name).color(color).size(IconSize::Small))
-                    } else {
-                        h_flex()
-                            .size(IconSize::default().rems())
-                            .invisible()
-                            .flex_none()
                     })
                     .child(if show_editor {
                         h_flex().h_6().w_full().child(self.filename_editor.clone())
@@ -6552,9 +6670,9 @@ impl ProjectPanel {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> EntryDetails {
-        let (show_file_icons, show_folder_icons) = {
+        let (show_file_icons, folder_indicator) = {
             let settings = ProjectPanelSettings::get_global(cx);
-            (settings.file_icons, settings.folder_icons)
+            (settings.file_icons, settings.folder_indicator)
         };
 
         let expanded_entry_ids = self
@@ -6565,20 +6683,23 @@ impl ProjectPanel {
             .unwrap_or(&[]);
         let is_expanded = expanded_entry_ids.binary_search(&entry.id).is_ok();
 
-        let icon = match entry.kind {
+        let (chevron, icon) = match entry.kind {
             EntryKind::File => {
-                if show_file_icons {
+                let icon = if show_file_icons {
                     FileIcons::get_icon(entry.path.as_std_path(), cx)
                 } else {
                     None
-                }
+                };
+                (None, icon)
             }
             _ => {
-                if show_folder_icons {
-                    FileIcons::get_folder_icon(is_expanded, entry.path.as_std_path(), cx)
-                } else {
-                    FileIcons::get_chevron_icon(is_expanded, cx)
-                }
+                let indicator = FileIcons::get_folder_indicators(
+                    folder_indicator,
+                    is_expanded,
+                    entry.path.as_std_path(),
+                    cx,
+                );
+                (indicator.chevron, indicator.icon)
             }
         };
 
@@ -6618,6 +6739,31 @@ impl ProjectPanel {
             .get(&(worktree_id, entry.path.clone()))
             .copied();
 
+        let diagnostic_mark = if icon.is_some() || chevron.is_some() {
+            entry_diagnostic_aware_icon_decoration_and_color(diagnostic_severity).map(
+                |(kind, _)| {
+                    let kind = if entry.kind.is_file() {
+                        kind
+                    } else {
+                        IconDecorationKind::Dot
+                    };
+                    if icon.is_some() {
+                        DiagnosticMark::OnIcon(kind)
+                    } else {
+                        DiagnosticMark::OnChevron(kind)
+                    }
+                },
+            )
+        } else {
+            entry_diagnostic_aware_icon_name_and_color(diagnostic_severity)
+                .map(|(name, _)| DiagnosticMark::Standalone(name))
+        };
+
+        // Only `both` makes a directory two glyphs wide, leaving file icons under the
+        // folder chevrons unless files hold that width open too.
+        let reserves_chevron_slot =
+            chevron.is_none() && folder_indicator.shows_chevron() && folder_indicator.shows_icon();
+
         let filename_text_color =
             entry_git_aware_label_color(git_status, entry.is_ignored, is_marked);
 
@@ -6628,6 +6774,7 @@ impl ProjectPanel {
 
         EntryDetails {
             filename,
+            chevron,
             icon,
             path: entry.path.clone(),
             depth,
@@ -6642,6 +6789,8 @@ impl ProjectPanel {
             sticky,
             filename_text_color,
             diagnostic_severity,
+            diagnostic_mark,
+            reserves_chevron_slot,
             diagnostic_count,
             git_status,
             is_private: entry.is_private,
@@ -7087,6 +7236,8 @@ impl Render for ProjectPanel {
                 .on_action(cx.listener(Self::cancel))
                 .on_action(cx.listener(Self::copy_path))
                 .on_action(cx.listener(Self::copy_relative_path))
+                .on_action(cx.listener(Self::open_file_permalink))
+                .on_action(cx.listener(Self::copy_file_permalink))
                 .on_action(cx.listener(Self::new_search_in_directory))
                 .on_action(cx.listener(Self::unfold_directory))
                 .on_action(cx.listener(Self::fold_directory))
@@ -7623,11 +7774,16 @@ impl Render for DraggedProjectEntryView {
                         if self.selections.len() > 1 && self.selections.contains(&self.selection) {
                             this.child(Label::new(format!("{} entries", self.selections.len())))
                         } else {
-                            this.child(if let Some(icon) = &self.icon {
-                                div().child(Icon::from_path(icon.clone()))
-                            } else {
-                                div()
-                            })
+                            this.child(
+                                h_flex()
+                                    .gap_0p5()
+                                    .when_some(self.chevron.clone(), |this, chevron| {
+                                        this.child(Icon::from_path(chevron))
+                                    })
+                                    .when_some(self.icon.clone(), |this, icon| {
+                                        this.child(Icon::from_path(icon))
+                                    }),
+                            )
                             .child(Label::new(self.filename.clone()))
                         }
                     }),
