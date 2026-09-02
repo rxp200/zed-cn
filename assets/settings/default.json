@@ -188,6 +188,8 @@
   //
   // Default: true
   "restore_on_file_reopen": true,
+  // Whether to reveal an already open file in an existing pane instead of opening it in the active pane.
+  "reveal_if_open": false,
   // Whether to automatically close files that have been deleted on disk.
   "close_on_file_delete": false,
   // Whether toggling a panel (e.g. with its keyboard shortcut) also closes
@@ -381,6 +383,9 @@
   "minimum_split_diff_width": 100,
   // Show method signatures in the editor, when inside parentheses.
   "auto_signature_help": false,
+  // Whether to automatically detect the language of an untitled buffer from its contents.
+  // Languages explicitly selected from the language selector are not changed.
+  "language_detection": true,
   // Whether to show the signature help after completion or a bracket pair inserted.
   // If `auto_signature_help` is enabled, this setting will be treated as enabled also.
   "show_signature_help_after_edits": false,
@@ -581,6 +586,29 @@
     // The layout of window control buttons in the title bar (Linux only).
     "button_layout": "platform_default",
   },
+  "hover_translation": {
+    // Whether to automatically translate non-Chinese hover documentation
+    // into the target language (shown underlined below the original text).
+    "enabled": false,
+    // The language model provider used for translation, matching one of the
+    // providers configured under `language_models`. `null` means the default
+    // fast model is used.
+    "provider": null,
+    // The model used for translation. `null` means the provider's default.
+    "model": null,
+    // The target language to translate into.
+    "target_language": "中文",
+    // Maximum number of documentation characters sent for translation.
+    "max_chars": 4000,
+    // Whether translations are persisted to an on-disk cache reused across
+    // sessions, so repeatedly translating the same documentation does not
+    // call the model again.
+    "cache_persist": true,
+    // Maximum size of the on-disk translation cache, in bytes. When the cache
+    // grows beyond this limit, the least useful entries (least
+    // recently/frequently viewed and largest) are evicted.
+    "cache_max_bytes": 5242880,
+  },
   "audio": {
     // Select specific output audio device.
     // `null` means use system default.
@@ -767,6 +795,8 @@
     "regex": false,
     // Whether to center the cursor on each search match when navigating.
     "center_on_match": false,
+    // Start searching as you type in project search, without pressing Enter.
+    "search_on_type": true,
   },
   // When to populate a new search's query based on the text under the cursor.
   // This setting can take the following three values:
@@ -828,8 +858,15 @@
     "entry_spacing": "comfortable",
     // Whether to show file icons in the project panel.
     "file_icons": true,
-    // Whether to show folder icons or chevrons for directories in the project panel.
-    "folder_icons": true,
+    // What to show for directories in the project panel.
+    //
+    // 1. A folder icon:
+    //   "icon"
+    // 2. A disclosure chevron:
+    //   "chevron"
+    // 3. A disclosure chevron followed by a folder icon:
+    //   "both"
+    "folder_indicator": "icon",
     // Whether to show the git status in the project panel.
     "git_status": true,
     // Amount of indentation for nested items.
@@ -943,8 +980,15 @@
     "dock": "right",
     // Whether to show file icons in the outline panel.
     "file_icons": true,
-    // Whether to show folder icons or chevrons for directories in the outline panel.
-    "folder_icons": true,
+    // What to show for directories in the outline panel.
+    //
+    // 1. A folder icon:
+    //   "icon"
+    // 2. A disclosure chevron:
+    //   "chevron"
+    // 3. A disclosure chevron followed by a folder icon:
+    //   "both"
+    "folder_indicator": "icon",
     // Whether to show the git status in the outline panel.
     "git_status": true,
     // Amount of indentation for nested items.
@@ -987,6 +1031,11 @@
     // Default depth to expand outline items in the current file.
     // Set to 0 to collapse all items that have children, 1 or higher to collapse items at that depth or deeper.
     "expand_outlines_with_depth": 100,
+    // Whether to hide symbols, excerpts and search matches in the outline panel
+    // when a multi-buffer view (e.g. a diff or search results) is active,
+    // showing only files and directories.
+    // Does not affect single-file views.
+    "multi_buffer_hide_symbols": false,
   },
   "collaboration_panel": {
     // Whether to show the collaboration panel button in the status bar.
@@ -1012,10 +1061,17 @@
     //
     // Default: false
     "file_icons": false,
-    // Whether to show folder icons or chevrons for directories in the git panel.
+    // What to show for directories in the git panel.
     //
-    // Default: true
-    "folder_icons": true,
+    // 1. A folder icon:
+    //   "icon"
+    // 2. A disclosure chevron:
+    //   "chevron"
+    // 3. A disclosure chevron followed by a folder icon:
+    //   "both"
+    //
+    // Default: icon
+    "folder_indicator": "icon",
     // What branch name to use if `init.defaultBranch` is not set
     //
     // Default: main
@@ -1427,6 +1483,13 @@
     // If `enable_preview_file_from_code_navigation` or `enable_preview_multibuffer_from_code_navigation` is also true, the new tab may replace the existing one.
     "enable_keep_preview_on_code_navigation": false,
   },
+  // Settings related to the call hierarchy picker.
+  "call_hierarchy": {
+    // Determines how much space the call hierarchy picker can take up in relation to the available window width.
+    //
+    // Default: medium
+    "modal_max_width": "medium",
+  },
   // Settings related to the file finder.
   "file_finder": {
     // Whether to show file icons in the file finder.
@@ -1796,42 +1859,61 @@
       "/**/zed/settings.json", // zed user settings
       "/**/zed/keymap.json",
     ],
-    // When to show edit predictions previews in buffer.
+    // When to request and show edit prediction previews in buffer.
     // This setting takes two possible values:
-    // 1. Display predictions inline when there are no language server completions available.
+    // 1. Request predictions automatically and display them inline when there are no language server completions available.
     //     "mode": "eager"
-    // 2. Display predictions inline only when holding a modifier key (alt by default).
+    // 2. Request and display predictions only when holding a modifier key (alt by default).
     //     "mode": "subtle"
     "mode": "eager",
     // Copilot-specific settings
     // "copilot": {
     //   "enterprise_uri": "",
     //   "proxy": "",
-    //   "proxy_no_verify": false
-    //   "enable_next_edit_suggestions": true
+    //   "proxy_no_verify": false,
+    //   "enable_next_edit_suggestions": true,
+    //   // The debounce delay in milliseconds before automatically requesting a prediction.
+    //   // Set to 0 to request predictions immediately.
+    //   "prediction_debounce": 75
     // },
     "copilot": {
       "enterprise_uri": null,
       "proxy": null,
       "proxy_no_verify": null,
       "enable_next_edit_suggestions": true,
+      "prediction_debounce": 75,
     },
     "codestral": {
       "api_url": "https://codestral.mistral.ai",
       "model": "codestral-latest",
       "max_tokens": 150,
+      "prediction_debounce": 150,
     },
     "ollama": {
       "api_url": "http://localhost:11434",
       "model": "qwen2.5-coder:7b-base",
       "prompt_format": "infer",
       "max_output_tokens": 64,
+      "prediction_debounce": 0,
     },
     "open_ai_compatible_api": {
       "api_url": "",
       "model": "",
       "prompt_format": "infer",
       "max_output_tokens": 64,
+      // The API type used for edit predictions:
+      // - "completions": text completion API (e.g. /v1/completions), for native FIM models;
+      // - "chat_completions": chat completion API (e.g. /v1/chat/completions), for chat
+      //   models. Zed builds an instruction-based fill-in-the-middle prompt, so chat
+      //   models without native FIM support can be used for edit predictions.
+      "api_type": "completions",
+      "prediction_debounce": 0,
+    },
+    "zed": {
+      "prediction_debounce": 0,
+    },
+    "mercury": {
+      "prediction_debounce": 0,
     },
     // Controls whether Zed may collect training data when using Zed's Edit Predictions.
     // Data is only captured when the project is detected as open source.
@@ -2456,7 +2538,7 @@
       },
     },
     "SystemVerilog": {
-      "language_servers": ["!slang", "..."],
+      "language_servers": ["slang", "!verible", "!veridian", "!svls", "..."],
       "use_on_type_format": false,
     },
     "Vue.js": {
@@ -2783,6 +2865,9 @@
   "ssh_connections": [],
   // Whether to read ~/.ssh/config for ssh connection sources.
   "read_ssh_config": true,
+  // 中国服务器适配。启用后，SSH 远程开发服务将直接由本机通过已配置的代理下载，
+  // 再经 SSH 上传到远程主机，不会先尝试由远程主机直接下载。
+  "china_server_adaptation": false,
   // Default timeout in seconds for all context server tool calls.
   // Individual servers can override this in their configuration.
   // Examples:

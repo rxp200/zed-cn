@@ -769,7 +769,7 @@ impl Editor {
         // Create the prompt editor for the review input
         let prompt_editor = cx.new(|cx| {
             let mut editor = Editor::single_line(window, cx);
-            editor.set_placeholder_text("Add a review comment...", window, cx);
+            editor.set_placeholder_text("添加审阅评论…", window, cx);
             editor
         });
 
@@ -1189,7 +1189,7 @@ impl Editor {
                     .border_color(icon_color.opacity(0.5))
             })
             .child(Icon::new(IconName::Plus).size(IconSize::Small))
-            .tooltip(Tooltip::text("Add Review (drag to select multiple lines)"))
+            .tooltip(Tooltip::text("添加审查（拖动以选择多行）"))
             .on_mouse_down(
                 gpui::MouseButton::Left,
                 cx.listener(move |editor, _event: &gpui::MouseDownEvent, window, cx| {
@@ -1669,7 +1669,7 @@ impl Editor {
                 .ok();
             }
             Err(err) => {
-                let message = format!("Failed to copy permalink: {err}");
+                let message = format!("复制此行的永久链接失败：{err}");
 
                 anyhow::Result::<()>::Err(err).log_err();
 
@@ -1710,7 +1710,7 @@ impl Editor {
                 .ok();
             }
             Err(err) => {
-                let message = format!("Failed to open permalink: {err}");
+                let message = format!("打开此行的永久链接失败：{err}");
 
                 anyhow::Result::<()>::Err(err).log_err();
 
@@ -2310,32 +2310,40 @@ impl Editor {
         Some((blame_entry, repository))
     }
 
+    pub(crate) fn blame_revision_target(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<(RepoPath, Oid, Entity<Repository>)> {
+        let (blame_entry, repository) = self.blame_entry_at_cursor(window, cx)?;
+        let highlighted_sha = self
+            .blame
+            .as_ref()
+            .and_then(|blame| blame.read(cx).highlighted_sha());
+        let (revision, path) = blame_entry.revision_target(highlighted_sha)?;
+        Some((path, revision, repository))
+    }
+
+    pub(crate) fn blame_previous_revision_target(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<(RepoPath, Oid, Entity<Repository>)> {
+        let (blame_entry, repository) = self.blame_entry_at_cursor(window, cx)?;
+        let (revision, path) = blame_entry.previous_revision_target()?;
+        Some((path, revision, repository))
+    }
+
     pub(super) fn blame_revision(
         &mut self,
         _: &BlameRevision,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some((blame_entry, repository)) = self.blame_entry_at_cursor(window, cx) else {
-            self.show_blame_revision_toast("No blame entry for this line", cx);
+        let Some((path, revision, repository)) = self.blame_revision_target(window, cx) else {
             return;
         };
-        if blame_entry.sha.is_zero() {
-            self.show_blame_revision_toast("Cannot blame revision: the line is not committed", cx);
-            return;
-        }
-        if self
-            .blame
-            .as_ref()
-            .is_some_and(|blame| blame.read(cx).highlighted_sha() == Some(blame_entry.sha))
-        {
-            self.show_blame_revision_toast("Already blaming at this revision", cx);
-            return;
-        }
-        let Some(path) = RepoPath::new(&blame_entry.filename).log_err() else {
-            return;
-        };
-        self.open_blame_revision(path, blame_entry.sha, repository, window, cx);
+        self.open_blame_revision(path, revision, repository, window, cx);
     }
 
     pub(super) fn blame_previous_revision(
@@ -2344,15 +2352,8 @@ impl Editor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some((blame_entry, repository)) = self.blame_entry_at_cursor(window, cx) else {
-            self.show_blame_revision_toast("No blame entry for this line", cx);
-            return;
-        };
-        let Some((revision, filename)) = blame_entry.previous_sha_and_filename() else {
-            self.show_blame_revision_toast("No previous revision for this line", cx);
-            return;
-        };
-        let Some(path) = RepoPath::new(filename).log_err() else {
+        let Some((path, revision, repository)) = self.blame_previous_revision_target(window, cx)
+        else {
             return;
         };
         self.open_blame_revision(path, revision, repository, window, cx);
@@ -2378,21 +2379,6 @@ impl Editor {
             window,
             cx,
         );
-    }
-
-    fn show_blame_revision_toast(&self, message: &str, cx: &mut Context<Self>) {
-        struct BlameRevisionToast;
-        if let Some(workspace) = self.workspace() {
-            workspace.update(cx, |workspace, cx| {
-                workspace.show_toast(
-                    Toast::new(
-                        NotificationId::unique::<BlameRevisionToast>(),
-                        message.to_owned(),
-                    ),
-                    cx,
-                );
-            });
-        }
     }
 
     fn has_blame_entries(&self, cx: &App) -> bool {
@@ -2682,7 +2668,7 @@ impl Editor {
                                 IconButton::new("diff-review-close", IconName::Close)
                                     .icon_color(ui::Color::Muted)
                                     .icon_size(action_icon_size)
-                                    .tooltip(Tooltip::text("Close"))
+                                    .tooltip(Tooltip::text("关闭"))
                                     .on_click(|_, window, cx| {
                                         window
                                             .dispatch_action(Box::new(crate::actions::Cancel), cx);
@@ -2692,7 +2678,7 @@ impl Editor {
                                 IconButton::new("diff-review-add", IconName::Return)
                                     .icon_color(ui::Color::Muted)
                                     .icon_size(action_icon_size)
-                                    .tooltip(Tooltip::text("Add comment"))
+                                    .tooltip(Tooltip::text("添加评论"))
                                     .on_click(|_, window, cx| {
                                         window.dispatch_action(
                                             Box::new(crate::actions::SubmitDiffReviewComment),
@@ -2852,7 +2838,7 @@ impl Editor {
                         )
                         .icon_color(ui::Color::Muted)
                         .icon_size(action_icon_size)
-                        .tooltip(Tooltip::text("Cancel"))
+                        .tooltip(Tooltip::text("取消"))
                         .on_click(move |_, window, cx| {
                             window.dispatch_action(
                                 Box::new(crate::actions::CancelEditReviewComment {
@@ -2869,7 +2855,7 @@ impl Editor {
                         )
                         .icon_color(ui::Color::Muted)
                         .icon_size(action_icon_size)
-                        .tooltip(Tooltip::text("Confirm"))
+                        .tooltip(Tooltip::text("确认"))
                         .on_click(move |_, window, cx| {
                             window.dispatch_action(
                                 Box::new(crate::actions::ConfirmEditReviewComment {
@@ -3103,13 +3089,13 @@ pub fn render_diff_hunk_controls(
         .shadow_md()
         .when(show_stage_restore, |el| {
             el.child(if status.has_secondary_hunk() {
-                Button::new(("stage", row as u64), "Stage")
+                Button::new(("stage", row as u64), "暂存")
                     .alpha(if status.is_pending() { 0.66 } else { 1.0 })
                     .tooltip({
                         let focus_handle = editor.focus_handle(cx);
                         move |_window, cx| {
                             Tooltip::for_action_in(
-                                "Stage Hunk",
+                                "暂存块",
                                 &::git::ToggleStaged,
                                 &focus_handle,
                                 cx,
@@ -3130,13 +3116,13 @@ pub fn render_diff_hunk_controls(
                         }
                     })
             } else {
-                Button::new(("unstage", row as u64), "Unstage")
+                Button::new(("unstage", row as u64), "取消暂存")
                     .alpha(if status.is_pending() { 0.66 } else { 1.0 })
                     .tooltip({
                         let focus_handle = editor.focus_handle(cx);
                         move |_window, cx| {
                             Tooltip::for_action_in(
-                                "Unstage Hunk",
+                                "取消暂存块",
                                 &::git::ToggleStaged,
                                 &focus_handle,
                                 cx,
@@ -3160,16 +3146,11 @@ pub fn render_diff_hunk_controls(
         })
         .when(show_stage_restore, |el| {
             el.child(
-                Button::new(("restore", row as u64), "Restore")
+                Button::new(("restore", row as u64), "恢复")
                     .tooltip({
                         let focus_handle = editor.focus_handle(cx);
                         move |_window, cx| {
-                            Tooltip::for_action_in(
-                                "Restore Hunk",
-                                &::git::Restore,
-                                &focus_handle,
-                                cx,
-                            )
+                            Tooltip::for_action_in("恢复块", &::git::Restore, &focus_handle, cx)
                         }
                     })
                     .on_click({
@@ -3196,7 +3177,7 @@ pub fn render_diff_hunk_controls(
                         .tooltip({
                             let focus_handle = editor.focus_handle(cx);
                             move |_window, cx| {
-                                Tooltip::for_action_in("Next Hunk", &GoToHunk, &focus_handle, cx)
+                                Tooltip::for_action_in("下一个块", &GoToHunk, &focus_handle, cx)
                             }
                         })
                         .on_click({
@@ -3228,7 +3209,7 @@ pub fn render_diff_hunk_controls(
                             let focus_handle = editor.focus_handle(cx);
                             move |_window, cx| {
                                 Tooltip::for_action_in(
-                                    "Previous Hunk",
+                                    "上一个块",
                                     &GoToPreviousHunk,
                                     &focus_handle,
                                     cx,

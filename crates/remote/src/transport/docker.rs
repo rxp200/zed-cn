@@ -218,8 +218,7 @@ impl DockerExecConnection {
                 let commit = commit.map(|s| s.full()).unwrap_or_default();
                 format!("{}-{}", version, commit)
             }
-            ReleaseChannel::Dev => "build".to_string(),
-            _ => version.to_string(),
+            _ => super::remote_server_version(release_channel, &version),
         };
         let binary_name = format!(
             "zed-remote-server-{}-{}",
@@ -436,6 +435,7 @@ impl DockerExecConnection {
         dst_path: String,
     ) -> Result<()> {
         let mut command = util::command::new_command(&docker_cli);
+        command.kill_on_drop(true);
         command.arg("cp");
         command.arg("-a");
         command.arg(&src_path);
@@ -455,6 +455,7 @@ impl DockerExecConnection {
         }
 
         let mut chown_command = util::command::new_command(&docker_cli);
+        chown_command.kill_on_drop(true);
         chown_command.arg("exec");
         chown_command.arg(connection_options.container_id);
         chown_command.arg("chown");

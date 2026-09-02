@@ -34,7 +34,6 @@
       "ctrl-alt-,": "zed::OpenSettingsFile",
       "ctrl-q": "zed::Quit",
       "f4": "debugger::Start",
-      "f11": "zed::ToggleFullScreen",
       "ctrl-alt-z": "edit_prediction::RatePredictions",
       "ctrl-alt-shift-i": "edit_prediction::ToggleMenu",
       "ctrl-alt-l": "lsp_tool::ToggleMenu",
@@ -66,6 +65,7 @@
       "shift-tab": "editor::Backtab",
       "ctrl-k ctrl-q": "editor::Rewrap",
       "ctrl-k q": "editor::Rewrap",
+      "ctrl-alt-t": "editor::TranslateSelection",
       "ctrl-backspace": ["editor::DeleteToPreviousWordStart", { "ignore_newlines": false, "ignore_brackets": false }],
       "ctrl-delete": ["editor::DeleteToNextWordEnd", { "ignore_newlines": false, "ignore_brackets": false }],
       "cut": "editor::Cut",
@@ -127,6 +127,8 @@
       "ctrl-alt-shift-e": "editor::ToggleEditPrediction",
       "f9": "editor::ToggleBreakpoint",
       "shift-f9": "editor::EditLogBreakpoint",
+      // Runs the nearest runnable task at the cursor, same as the gutter run button.
+      "ctrl-alt-n": "editor::SpawnNearestTask",
     },
   },
   {
@@ -570,6 +572,7 @@
       "shift-f12": "editor::GoToImplementation",
       "alt-ctrl-f12": "editor::GoToTypeDefinitionSplit",
       "alt-shift-f12": "editor::FindAllReferences",
+      "ctrl-k ctrl-h": "call_hierarchy::ShowIncomingCalls",
       "ctrl-m": "editor::MoveToEnclosingBracket", // from jetbrains
       "ctrl-|": "editor::MoveToEnclosingBracket",
       "ctrl-{": "editor::Fold",
@@ -616,6 +619,14 @@
     },
   },
   {
+    "context": "Editor && (extension == csv || extension == tsv || extension == ssv || extension == psv)",
+    "use_key_equivalents": true,
+    "bindings": {
+      "ctrl-k v": "tabular_data::OpenPreviewToTheSide",
+      "ctrl-shift-v": "tabular_data::OpenPreview",
+    },
+  },
+  {
     "context": "Editor && mode == full",
     "bindings": {
       "ctrl-shift-o": "outline::Toggle",
@@ -633,6 +644,7 @@
       "shift-f6": "workspace::FocusPreviousPart",
       "ctrl-f6": "workspace::FocusNextPart",
       "alt-open": "projects::OpenRecent",
+      "f11": "zed::ToggleFullScreen",
       // Change the default action on `menu::Confirm` by setting the parameter
       // "alt-ctrl-o": ["projects::OpenRecent", { "create_new_window": true }],
       "alt-ctrl-o": "projects::OpenRecent",
@@ -722,6 +734,9 @@
       "alt-t": "task::Rerun",
       "alt-shift-t": "task::Spawn",
       "alt-shift-r": ["task::Spawn", { "reveal_target": "center" }],
+      // Spawns the task tagged "run-current" (e.g. a "run current file" task);
+      // falls back to the task picker when no matching task is found.
+      "ctrl-alt-m": ["task::Spawn", { "task_tag": "run-current" }],
       // also possible to spawn tasks by name:
       // "foo-bar": ["task::Spawn", { "task_name": "MyTask", "reveal_target": "dock" }]
       // or by tag:
@@ -774,6 +789,11 @@
     "context": "Workspace && debugger_stopped",
     "bindings": {
       "f5": "debugger::Continue",
+      "f7": "debugger::StepOver",
+      "f10": "debugger::StepOver",
+      "f11": "debugger::StepInto",
+      "ctrl-f11": "debugger::StepInto",
+      "shift-f11": "debugger::StepOut",
     },
   },
   {
@@ -1109,18 +1129,16 @@
     },
   },
   {
-    // While a debug session is live, debugger controls take over their F-keys.
-    // `f6` becomes Pause (region navigation stays on `ctrl-f6` / `shift-f6`),
-    // and step/stop/rerun are scoped here so they're inert when not debugging.
+    // While a debug session is live, `Pause`/`Stop`/`RerunSession` take over their F-keys
+    // (region navigation stays on `ctrl-f6` / `shift-f6`), so they're inert when not debugging.
+    // Step commands and `Continue` are scoped to `debugger_stopped` instead, since they only
+    // make sense while execution is actually paused.
     // `debugger::Start` stays global so a session can be started from anywhere.
     "context": "Workspace && debugger_session",
     "bindings": {
       "f6": "debugger::Pause",
       "shift-f5": "debugger::Stop",
       "ctrl-shift-f5": "debugger::RerunSession",
-      "f7": "debugger::StepOver",
-      "ctrl-f11": "debugger::StepInto",
-      "shift-f11": "debugger::StepOut",
     },
   },
   {
@@ -1179,6 +1197,14 @@
     "context": "ChannelModal",
     "bindings": {
       "tab": "channel_modal::ToggleMode",
+    },
+  },
+  {
+    "context": "CallHierarchyPicker > Picker > Editor",
+    "bindings": {
+      "ctrl-k ctrl-h": "call_hierarchy::ToggleDirection",
+      "ctrl-k right": "menu::SelectChild",
+      "ctrl-k left": "menu::SelectParent",
     },
   },
   {

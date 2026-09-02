@@ -439,7 +439,7 @@ impl LspLogView {
                     }),
             )
             .collect::<Vec<_>>();
-        rows.sort_by_key(|row| row.server_id);
+        rows.sort_unstable_by_key(|row| row.server_id);
         rows.dedup_by_key(|row| row.server_id);
         Some(rows)
     }
@@ -1272,7 +1272,7 @@ impl Render for LspLogToolbarItemView {
                     ),
             )
             .child(
-                Button::new("clear_log_button", "Clear").on_click(cx.listener(
+                Button::new("clear_log_button", "清除").on_click(cx.listener(
                     |this, _, window, cx| {
                         if let Some(log_view) = this.log_view.as_ref() {
                             log_view.update(cx, |log_view, cx| {

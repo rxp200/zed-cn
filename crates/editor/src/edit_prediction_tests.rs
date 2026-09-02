@@ -20,6 +20,7 @@ use std::{
         Arc,
         atomic::{self, AtomicUsize},
     },
+    time::Duration,
 };
 use text::{Point, ToOffset};
 use ui::prelude::*;
@@ -689,6 +690,73 @@ async fn test_hidden_edit_prediction_opens_snippet_menu_for_strong_prefix_match(
                 .any(|entry| { entry.as_match().is_some_and(|m| m.string == "Theta") })
         );
     });
+}
+
+#[gpui::test]
+async fn test_subtle_edit_prediction_requests_only_while_preview_modifier_is_held(
+    cx: &mut gpui::TestAppContext,
+) {
+    init_test(cx, |_| {});
+    load_default_keymap(cx);
+    update_test_language_settings(cx, &|settings| {
+        settings.edit_predictions.get_or_insert_default().mode = Some(EditPredictionsMode::Subtle);
+    });
+
+    let mut cx = EditorTestContext::new(cx).await;
+    let provider = cx.new(|_| FakeEditPredictionDelegate::default());
+    assign_editor_completion_provider(provider.clone(), &mut cx);
+    cx.set_state("let x = ˇ;");
+
+    cx.simulate_input("4");
+    cx.run_until_parked();
+
+    assert_eq!(
+        provider.read_with(&cx.cx, |provider, _| {
+            provider.refresh_count.load(atomic::Ordering::SeqCst)
+        }),
+        0,
+        "editing in subtle mode should not request a prediction before the preview modifier is held"
+    );
+
+    let preview_modifiers = cx.update_editor(|editor, window, cx| {
+        *editor
+            .preview_edit_prediction_keystroke(window, cx)
+            .expect("default keymap should have an edit prediction preview binding")
+            .modifiers()
+    });
+    cx.simulate_modifiers_change(preview_modifiers);
+    cx.run_until_parked();
+
+    assert_eq!(
+        provider.read_with(&cx.cx, |provider, _| {
+            provider.refresh_count.load(atomic::Ordering::SeqCst)
+        }),
+        1,
+        "holding the preview modifier in subtle mode should request a prediction"
+    );
+
+    cx.simulate_modifiers_change(Modifiers::none());
+    cx.simulate_input("2");
+    cx.run_until_parked();
+
+    assert_eq!(
+        provider.read_with(&cx.cx, |provider, _| {
+            provider.refresh_count.load(atomic::Ordering::SeqCst)
+        }),
+        1,
+        "editing after releasing the preview modifier should not request another prediction"
+    );
+
+    cx.simulate_modifiers_change(preview_modifiers);
+    cx.run_until_parked();
+
+    assert_eq!(
+        provider.read_with(&cx.cx, |provider, _| {
+            provider.refresh_count.load(atomic::Ordering::SeqCst)
+        }),
+        2,
+        "holding the preview modifier again should request a prediction for the latest edit"
+    );
 }
 
 #[gpui::test]
@@ -1797,7 +1865,7 @@ impl EditPredictionDelegate for FakeEditPredictionDelegate {
         &mut self,
         _buffer: gpui::Entity<language::Buffer>,
         _cursor_position: language::Anchor,
-        _debounce: bool,
+        _debounce_duration: Duration,
         _trigger: edit_prediction_types::EditPredictionRequestTrigger,
         _cx: &mut gpui::Context<Self>,
     ) {
@@ -1876,7 +1944,7 @@ impl EditPredictionDelegate for FakeNonZedEditPredictionDelegate {
         &mut self,
         _buffer: gpui::Entity<language::Buffer>,
         _cursor_position: language::Anchor,
-        _debounce: bool,
+        _debounce_duration: Duration,
         _trigger: edit_prediction_types::EditPredictionRequestTrigger,
         _cx: &mut gpui::Context<Self>,
     ) {

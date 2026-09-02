@@ -172,6 +172,14 @@ pub trait PickerDelegate: Sized + 'static {
     fn separators_after_indices(&self) -> Vec<usize> {
         Vec::new()
     }
+    fn set_hovered_index(
+        &mut self,
+        ix: usize,
+        window: &mut Window,
+        cx: &mut Context<Picker<Self>>,
+    ) {
+        self.set_selected_index(ix, window, cx);
+    }
     fn set_selected_index(
         &mut self,
         ix: usize,
@@ -213,7 +221,7 @@ pub trait PickerDelegate: Sized + 'static {
     }
     fn placeholder_text(&self, _window: &mut Window, _cx: &mut App) -> Arc<str>;
     fn no_matches_text(&self, _window: &mut Window, _cx: &mut App) -> Option<SharedString> {
-        Some("No matches".into())
+        Some("无匹配项".into())
     }
     fn update_matches(
         &mut self,
@@ -797,6 +805,32 @@ impl<D: PickerDelegate> Picker<D> {
         self.focus_handle(cx).focus(window, cx);
     }
 
+    pub fn set_hovered_index(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let match_count = self.delegate.match_count();
+        if match_count == 0 {
+            return;
+        }
+
+        if !self.delegate.can_select(ix, window, cx) {
+            return;
+        }
+
+        let previous_index = self.delegate.selected_index();
+        self.delegate.set_hovered_index(ix, window, cx);
+        let current_index = self.delegate.selected_index();
+
+        if previous_index != current_index {
+            if let Some(action) = self.delegate.selected_index_changed(ix, window, cx) {
+                action(window, cx);
+            }
+            if let Some(preview) = &mut self.preview
+                && let Some(update) = self.delegate.try_get_preview_data_for_match(cx)
+            {
+                preview.update(update, window, cx);
+            }
+        }
+    }
+
     /// Handles the selecting an index, and passing the change to the delegate.
     /// If `fallback_direction` is set to `None`, the index will not be selected
     /// if the element at that index cannot be selected.
@@ -1367,14 +1401,14 @@ impl<D: PickerDelegate> Picker<D> {
                                     &focus_handle,
                                     cx,
                                 ))
-                                .child(Label::new("Select")),
+                                .child(Label::new("选择")),
                         )
                         .child(Divider::vertical())
                         .child(
                             h_flex()
                                 .gap_1()
                                 .child(KeyBinding::for_action_in(&menu::Confirm, &focus_handle, cx))
-                                .child(Label::new("Open")),
+                                .child(Label::new("打开")),
                         )
                         .into_any_element()
                 }))
@@ -1414,7 +1448,7 @@ impl<D: PickerDelegate> Picker<D> {
             .when(self.delegate.select_on_hover(), |this| {
                 this.on_hover(cx.listener(move |this, hovered: &bool, window, cx| {
                     if *hovered {
-                        this.set_selected_index(ix, None, false, window, cx);
+                        this.set_hovered_index(ix, window, cx);
                         cx.notify();
                     }
                 }))

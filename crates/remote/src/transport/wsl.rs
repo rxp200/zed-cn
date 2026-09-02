@@ -194,10 +194,7 @@ impl WslRemoteConnection {
         version: Version,
         cx: &mut AsyncApp,
     ) -> Result<Arc<RelPath>> {
-        let version_str = match release_channel {
-            ReleaseChannel::Dev => "build".to_string(),
-            _ => version.to_string(),
-        };
+        let version_str = super::remote_server_version(release_channel, &version);
 
         let binary_name = format!(
             "zed-remote-server-{}-{}",
@@ -491,12 +488,13 @@ impl RemoteConnection for WslRemoteConnection {
             let options = self.connection_options.clone();
             async move {
                 let wsl_src = windows_path_to_wsl_path_impl(&options, &src_path).await?;
-                let command = wsl_command_impl(
+                let mut command = wsl_command_impl(
                     &options,
                     "cp",
                     &["-r", &wsl_src, &dest_path.to_string()],
                     true,
                 );
+                command.kill_on_drop(true);
                 run_wsl_command_impl(command).await.map_err(|e| {
                     anyhow!(
                         "failed to upload directory {} -> {}: {}",
