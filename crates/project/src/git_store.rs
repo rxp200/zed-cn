@@ -34,12 +34,12 @@ use git::{
     blame::Blame,
     parse_git_remote_url,
     repository::{
-        Branch, BranchesScanResult, CommitData, CommitDetails, CommitFileStatus, CommitOptions,
-        CreateWorktreeTarget, DiffStatType, DiffType, FetchOptions, FileHistoryChangedFileSets,
-        GitCommitTemplate, GitRepository, GitRepositoryCheckpoint, InitialGraphCommitData,
-        LogOrder, LogSource, PushOptions, Remote, RemoteCommandOutput, RepoPath, ResetMode,
-        SearchCommitArgs, UpstreamTrackingStatus, Worktree as GitWorktree, delete_branch_flag,
-        is_binary_content,
+        AUTHOR_SEARCH_QUERY_PREFIX, Branch, BranchesScanResult, CommitData, CommitDetails,
+        CommitFileStatus, CommitOptions, CreateWorktreeTarget, DiffStatType, DiffType,
+        FetchOptions, FileHistoryChangedFileSets, GitCommitTemplate, GitRepository,
+        GitRepositoryCheckpoint, InitialGraphCommitData, LogOrder, LogSource, PushOptions, Remote,
+        RemoteCommandOutput, RepoPath, ResetMode, SearchCommitArgs, UpstreamTrackingStatus,
+        Worktree as GitWorktree, delete_branch_flag, is_binary_content,
     },
     stash::{GitStash, StashEntry},
     status::{
@@ -95,6 +95,14 @@ use worktree::{
     UpdatedGitRepositoriesSet, UpdatedGitRepository, Worktree, WorktreeSettings,
 };
 use zeroize::Zeroize;
+
+fn author_matches_query(author_email: &str, query: &str, case_sensitive: bool) -> bool {
+    if case_sensitive {
+        author_email.contains(query)
+    } else {
+        author_email.to_lowercase().contains(&query.to_lowercase())
+    }
+}
 
 pub struct GitStore {
     state: GitStoreState,
@@ -7188,6 +7196,25 @@ impl Repository {
                 }
 
                 Ok(RepositoryState::Remote(RemoteRepositoryState { client, project_id })) => {
+                    if let Some(author_query) =
+                        search_args.query.strip_prefix(AUTHOR_SEARCH_QUERY_PREFIX)
+                    {
+                        let result = Self::search_remote_commits_by_author(
+                            client,
+                            project_id,
+                            repository_id,
+                            log_source,
+                            author_query,
+                            search_args.case_sensitive,
+                            request_tx,
+                        )
+                        .await;
+                        if let Err(error) = result {
+                            log::error!("failed to search remote commits by author: {error:?}");
+                        }
+                        return;
+                    }
+
                     let result = client
                         .request_stream(proto::SearchCommits {
                             project_id: project_id.to_proto(),
@@ -7233,6 +7260,52 @@ impl Repository {
             };
         })
         .detach();
+    }
+
+    async fn search_remote_commits_by_author(
+        client: AnyProtoClient,
+        project_id: ProjectId,
+        repository_id: RepositoryId,
+        log_source: LogSource,
+        author_query: &str,
+        case_sensitive: bool,
+        request_tx: async_channel::Sender<Oid>,
+    ) -> Result<()> {
+        let mut graph_stream = client
+            .request_stream(proto::GetInitialGraphData {
+                project_id: project_id.to_proto(),
+                repository_id: repository_id.to_proto(),
+                log_source: Some(log_source_to_proto(&log_source)),
+                log_order: log_order_to_proto(LogOrder::DateOrder),
+            })
+            .await?;
+
+        while let Some(response) = graph_stream.next().await {
+            let response = response?;
+            for commit_chunk in response.commits.chunks(64) {
+                let response = client
+                    .request(proto::GetCommitData {
+                        project_id: project_id.to_proto(),
+                        repository_id: repository_id.to_proto(),
+                        shas: commit_chunk
+                            .iter()
+                            .map(|commit| commit.sha.clone())
+                            .collect(),
+                    })
+                    .await?;
+
+                for commit in response.commits {
+                    if author_matches_query(&commit.author_email, author_query, case_sensitive)
+                        && let Ok(oid) = Oid::from_str(&commit.sha)
+                        && request_tx.send(oid).await.is_err()
+                    {
+                        return Ok(());
+                    }
+                }
+            }
+        }
+
+        Ok(())
     }
 
     pub fn graph_data(
@@ -11284,6 +11357,19 @@ mod tests {
     use serde_json::json;
     use settings::SettingsStore;
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn test_author_matches_query() {
+        let email = "79969964+rxp200@users.noreply.github.com";
+
+        assert!(author_matches_query(email, email, true));
+        assert!(author_matches_query(
+            email,
+            "79969964+RXP200@USERS.NOREPLY.GITHUB.COM",
+            false
+        ));
+        assert!(!author_matches_query(email, "another@example.com", false));
+    }
 
     fn init_test(cx: &mut TestAppContext) {
         cx.update(|cx| {

@@ -5,8 +5,8 @@ use collections::HashMap;
 use editor::Editor;
 use futures::{FutureExt as _, channel::oneshot, select};
 use gpui::{
-    App, Context, DismissEvent, Entity, EventEmitter, FocusHandle, Focusable, IntoElement, Render,
-    Task, WeakEntity, Window,
+    App, ClipboardItem, Context, DismissEvent, Entity, EventEmitter, FocusHandle, Focusable,
+    IntoElement, Render, Task, WeakEntity, Window,
 };
 use menu::{Cancel, Confirm};
 use project::Project;
@@ -28,6 +28,12 @@ static LISTENING_PORT_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
         .expect("valid listening port detection regex")
 });
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ForwardDirection {
+    RemoteToLocal,
+    LocalToRemote,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ForwardSource {
     Automatic,
@@ -42,6 +48,7 @@ pub enum ForwardStatus {
 }
 
 struct ForwardEntry {
+    direction: ForwardDirection,
     remote_port: u16,
     local_port: Option<u16>,
     source: ForwardSource,
@@ -52,6 +59,7 @@ struct ForwardEntry {
 
 #[derive(Clone)]
 pub struct ForwardSnapshot {
+    pub direction: ForwardDirection,
     pub remote_port: u16,
     pub local_port: Option<u16>,
     pub source: ForwardSource,
@@ -59,7 +67,7 @@ pub struct ForwardSnapshot {
 }
 
 pub struct PortForwardManager {
-    entries: HashMap<u16, ForwardEntry>,
+    entries: HashMap<(ForwardDirection, u16), ForwardEntry>,
     automatically_seen: HashSet<u16>,
     next_generation: u64,
     _tasks: Vec<Task<()>>,
@@ -80,13 +88,19 @@ impl PortForwardManager {
             .entries
             .values()
             .map(|entry| ForwardSnapshot {
+                direction: entry.direction,
                 remote_port: entry.remote_port,
                 local_port: entry.local_port,
                 source: entry.source,
                 status: entry.status.clone(),
             })
             .collect::<Vec<_>>();
-        snapshots.sort_by_key(|entry| entry.remote_port);
+        snapshots.sort_by_key(|entry| {
+            (
+                entry.direction != ForwardDirection::RemoteToLocal,
+                entry.remote_port,
+            )
+        });
         snapshots
     }
 
@@ -98,25 +112,34 @@ impl PortForwardManager {
     ) {
         for remote_port in detected_ports(output) {
             if self.automatically_seen.insert(remote_port)
-                && !self.entries.contains_key(&remote_port)
+                && !self
+                    .entries
+                    .contains_key(&(ForwardDirection::RemoteToLocal, remote_port))
             {
-                self.start(remote_port, ForwardSource::Automatic, project.clone(), cx);
+                self.start(
+                    ForwardDirection::RemoteToLocal,
+                    remote_port,
+                    ForwardSource::Automatic,
+                    project.clone(),
+                    cx,
+                );
             }
         }
     }
 
     pub fn add_manual(
         &mut self,
-        remote_port: u16,
+        direction: ForwardDirection,
+        port: u16,
         project: Entity<Project>,
         cx: &mut Context<Self>,
     ) {
-        self.stop(remote_port, cx);
-        self.start(remote_port, ForwardSource::Manual, project, cx);
+        self.stop(direction, port, cx);
+        self.start(direction, port, ForwardSource::Manual, project, cx);
     }
 
-    pub fn stop(&mut self, remote_port: u16, cx: &mut Context<Self>) {
-        if let Some(mut entry) = self.entries.remove(&remote_port)
+    pub fn stop(&mut self, direction: ForwardDirection, port: u16, cx: &mut Context<Self>) {
+        if let Some(mut entry) = self.entries.remove(&(direction, port))
             && let Some(cancellation) = entry.cancellation.take()
         {
             cancellation.send(()).ok();
@@ -126,7 +149,8 @@ impl PortForwardManager {
 
     fn start(
         &mut self,
-        remote_port: u16,
+        direction: ForwardDirection,
+        port: u16,
         source: ForwardSource,
         project: Entity<Project>,
         cx: &mut Context<Self>,
@@ -140,10 +164,11 @@ impl PortForwardManager {
         let generation = self.next_generation;
         let (cancellation, cancellation_receiver) = oneshot::channel();
         self.entries.insert(
-            remote_port,
+            (direction, port),
             ForwardEntry {
-                remote_port,
-                local_port: None,
+                direction,
+                remote_port: port,
+                local_port: (direction == ForwardDirection::LocalToRemote).then_some(port),
                 source,
                 status: ForwardStatus::Starting,
                 generation,
@@ -155,7 +180,8 @@ impl PortForwardManager {
         let task = cx.spawn(async move |manager, cx| {
             let result = run_forward(
                 remote_client,
-                remote_port,
+                direction,
+                port,
                 cancellation_receiver,
                 manager.clone(),
                 generation,
@@ -165,7 +191,7 @@ impl PortForwardManager {
             if let Err(error) = result {
                 manager
                     .update(cx, |manager, cx| {
-                        if let Some(entry) = manager.entries.get_mut(&remote_port)
+                        if let Some(entry) = manager.entries.get_mut(&(direction, port))
                             && entry.generation == generation
                         {
                             entry.status = ForwardStatus::Failed(format!("{error:#}"));
@@ -195,7 +221,8 @@ fn ssh_remote_client(project: &Entity<Project>, cx: &App) -> Option<Entity<Remot
 
 async fn run_forward(
     remote_client: Entity<RemoteClient>,
-    remote_port: u16,
+    direction: ForwardDirection,
+    port: u16,
     cancellation: oneshot::Receiver<()>,
     manager: WeakEntity<PortForwardManager>,
     generation: u64,
@@ -203,18 +230,26 @@ async fn run_forward(
 ) -> Result<()> {
     let mut last_error = None;
     let mut cancellation = cancellation.fuse();
-    let mut next_local_port =
-        available_local_port(Some(remote_port)).or_else(|_| available_local_port(None))?;
+    let mut next_local_port = match direction {
+        ForwardDirection::RemoteToLocal => {
+            available_local_port(Some(port)).or_else(|_| available_local_port(None))?
+        }
+        ForwardDirection::LocalToRemote => port,
+    };
 
     for attempt in 0..5 {
         let local_port = next_local_port;
-        let command_template = remote_client.read_with(cx, |client, _| {
-            client.build_forward_ports_command(vec![(
-                local_port,
-                "localhost".to_string(),
-                remote_port,
-            )])
-        })?;
+        let command_template =
+            remote_client.read_with(cx, |client, _| match direction {
+                ForwardDirection::RemoteToLocal => client.build_forward_ports_command(vec![(
+                    local_port,
+                    "localhost".to_string(),
+                    port,
+                )]),
+                ForwardDirection::LocalToRemote => client.build_reverse_forward_ports_command(
+                    vec![(port, "127.0.0.1".to_string(), local_port)],
+                ),
+            })?;
 
         let mut command = new_command(&command_template.program);
         command
@@ -244,14 +279,16 @@ async fn run_forward(
             } else {
                 anyhow!(stderr)
             });
-            if attempt < 4 {
+            if attempt < 4 && direction == ForwardDirection::RemoteToLocal {
                 next_local_port = available_local_port(None)?;
+            } else {
+                break;
             }
             continue;
         }
 
         manager.update(cx, |manager, cx| {
-            if let Some(entry) = manager.entries.get_mut(&remote_port)
+            if let Some(entry) = manager.entries.get_mut(&(direction, port))
                 && entry.generation == generation
             {
                 entry.local_port = Some(local_port);
@@ -271,7 +308,10 @@ async fn run_forward(
         }
     }
 
-    Err(last_error.unwrap_or_else(|| anyhow!("无法分配本地端口")))
+    Err(last_error.unwrap_or_else(|| match direction {
+        ForwardDirection::RemoteToLocal => anyhow!("无法分配本地端口"),
+        ForwardDirection::LocalToRemote => anyhow!("无法建立反向 SSH 端口转发"),
+    }))
 }
 
 fn available_local_port(preferred: Option<u16>) -> Result<u16> {
@@ -304,6 +344,7 @@ pub struct PortForwardModal {
     manager: Entity<PortForwardManager>,
     project: Entity<Project>,
     editor: Entity<Editor>,
+    direction: ForwardDirection,
     error: Option<String>,
 }
 
@@ -316,7 +357,7 @@ impl PortForwardModal {
     ) -> Self {
         let editor = cx.new(|cx| {
             let mut editor = Editor::single_line(window, cx);
-            editor.set_placeholder_text("远程端口，例如 9999", window, cx);
+            editor.set_placeholder_text("端口，例如 9999", window, cx);
             editor
         });
         cx.observe(&manager, |_, _, cx| cx.notify()).detach();
@@ -324,6 +365,7 @@ impl PortForwardModal {
             manager,
             project,
             editor,
+            direction: ForwardDirection::RemoteToLocal,
             error: None,
         }
     }
@@ -331,7 +373,7 @@ impl PortForwardModal {
     fn confirm(&mut self, _: &Confirm, window: &mut Window, cx: &mut Context<Self>) {
         let text = self.editor.read(cx).text(cx).trim().to_string();
         let Ok(port) = text.parse::<u16>() else {
-            self.error = Some("请输入 1 到 65535 之间的远程端口号".to_string());
+            self.error = Some("请输入 1 到 65535 之间的端口号".to_string());
             cx.notify();
             return;
         };
@@ -341,7 +383,7 @@ impl PortForwardModal {
             return;
         }
         self.manager.update(cx, |manager, cx| {
-            manager.add_manual(port, self.project.clone(), cx)
+            manager.add_manual(self.direction, port, self.project.clone(), cx)
         });
         self.editor
             .update(cx, |editor, cx| editor.set_text("", window, cx));
@@ -370,7 +412,7 @@ impl Render for PortForwardModal {
             .on_action(cx.listener(Self::cancel))
             .on_action(cx.listener(Self::confirm))
             .elevation_2(cx)
-            .w(rems(38.))
+            .w(rems(42.))
             .max_h(rems(32.))
             .p_3()
             .gap_3()
@@ -390,6 +432,34 @@ impl Render for PortForwardModal {
             )
             .child(
                 h_flex()
+                    .gap_1()
+                    .child(
+                        Button::new("remote-to-local-direction", "远程 → 本地")
+                            .style(if self.direction == ForwardDirection::RemoteToLocal {
+                                ButtonStyle::Filled
+                            } else {
+                                ButtonStyle::Subtle
+                            })
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.direction = ForwardDirection::RemoteToLocal;
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        Button::new("local-to-remote-direction", "本地 → 远程")
+                            .style(if self.direction == ForwardDirection::LocalToRemote {
+                                ButtonStyle::Filled
+                            } else {
+                                ButtonStyle::Subtle
+                            })
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.direction = ForwardDirection::LocalToRemote;
+                                cx.notify();
+                            })),
+                    ),
+            )
+            .child(
+                h_flex()
                     .gap_2()
                     .child(div().flex_1().child(self.editor.clone()))
                     .child(
@@ -404,15 +474,24 @@ impl Render for PortForwardModal {
                 this.child(Label::new(error).size(LabelSize::Small).color(Color::Error))
             })
             .child(div().gap_1().children(entries.into_iter().map(|entry| {
+                let direction = entry.direction;
                 let remote_port = entry.remote_port;
                 let source = match entry.source {
                     ForwardSource::Automatic => "自动",
                     ForwardSource::Manual => "手动",
                 };
+                let local_port = entry.local_port.unwrap_or_default();
                 let (address, status_color) = match &entry.status {
                     ForwardStatus::Starting => ("正在启动…".to_string(), Color::Muted),
                     ForwardStatus::Active => (
-                        format!("127.0.0.1:{}", entry.local_port.unwrap_or_default()),
+                        match direction {
+                            ForwardDirection::RemoteToLocal => {
+                                format!("http://127.0.0.1:{local_port}")
+                            }
+                            ForwardDirection::LocalToRemote => {
+                                format!("远程 localhost:{remote_port} → 本地 127.0.0.1:{local_port}")
+                            }
+                        },
                         Color::Success,
                     ),
                     ForwardStatus::Failed(error) => (format!("失败：{error}"), Color::Error),
@@ -426,14 +505,57 @@ impl Render for PortForwardModal {
                         v_flex()
                             .gap_0p5()
                             .child(
-                                Label::new(format!("远程端口 {remote_port}"))
-                                    .size(LabelSize::Small),
+                                Label::new(match direction {
+                                    ForwardDirection::RemoteToLocal => {
+                                        format!("远程端口 {remote_port} → 本地")
+                                    }
+                                    ForwardDirection::LocalToRemote => {
+                                        format!("本地端口 {local_port} → 远程")
+                                    }
+                                })
+                                .size(LabelSize::Small),
                             )
-                            .child(
+                            .child(if direction == ForwardDirection::RemoteToLocal
+                                && matches!(entry.status, ForwardStatus::Active)
+                            {
+                                let address_for_click = address.clone();
+                                div()
+                                    .id((
+                                        match direction {
+                                            ForwardDirection::RemoteToLocal => {
+                                                "remote-forward-address"
+                                            }
+                                            ForwardDirection::LocalToRemote => {
+                                                "reverse-forward-address"
+                                            }
+                                        },
+                                        u64::from(remote_port),
+                                    ))
+                                    .cursor_pointer()
+                                    .tooltip(ui::Tooltip::text(
+                                        "单击复制链接；Ctrl+单击在默认浏览器打开",
+                                    ))
+                                    .child(
+                                        Label::new(address)
+                                            .size(LabelSize::Small)
+                                            .color(status_color),
+                                    )
+                                    .on_click(move |event, _, cx| {
+                                        if event.modifiers().control {
+                                            cx.open_url(&address_for_click);
+                                        } else {
+                                            cx.write_to_clipboard(ClipboardItem::new_string(
+                                                address_for_click.clone(),
+                                            ));
+                                        }
+                                    })
+                                    .into_any_element()
+                            } else {
                                 Label::new(address)
                                     .size(LabelSize::Small)
-                                    .color(status_color),
-                            ),
+                                    .color(status_color)
+                                    .into_any_element()
+                            }),
                     )
                     .child(
                         h_flex()
@@ -445,15 +567,26 @@ impl Render for PortForwardModal {
                             )
                             .child(
                                 IconButton::new(
-                                    ("stop-port-forward", u64::from(remote_port)),
+                                    (
+                                        match direction {
+                                            ForwardDirection::RemoteToLocal => {
+                                                "stop-remote-port-forward"
+                                            }
+                                            ForwardDirection::LocalToRemote => {
+                                                "stop-reverse-port-forward"
+                                            }
+                                        },
+                                        u64::from(remote_port),
+                                    ),
                                     IconName::Stop,
                                 )
                                 .tooltip(ui::Tooltip::text("停止转发"))
                                 .on_click({
                                     let manager = self.manager.clone();
                                     move |_, _, cx| {
-                                        manager
-                                            .update(cx, |manager, cx| manager.stop(remote_port, cx))
+                                        manager.update(cx, |manager, cx| {
+                                            manager.stop(direction, remote_port, cx)
+                                        })
                                     }
                                 }),
                             ),
@@ -461,7 +594,7 @@ impl Render for PortForwardModal {
             })))
             .when(self.manager.read(cx).snapshots().is_empty(), |this| {
                 this.child(
-                    Label::new("暂无转发。远程终端中出现 localhost 端口时会自动添加。")
+                    Label::new("暂无转发。可手动选择方向添加；远程终端中出现 localhost 端口时会自动转发到本地。")
                         .size(LabelSize::Small)
                         .color(Color::Muted),
                 )

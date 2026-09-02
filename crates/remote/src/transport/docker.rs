@@ -847,6 +847,15 @@ impl RemoteConnection for DockerExecConnection {
         Err(anyhow::anyhow!("Not currently supported for docker_exec"))
     }
 
+    fn build_reverse_forward_ports_command(
+        &self,
+        _forwards: Vec<(u16, String, u16)>,
+    ) -> Result<CommandTemplate> {
+        Err(anyhow::anyhow!(
+            "Reverse port forwarding is not currently supported for docker_exec"
+        ))
+    }
+
     fn connection_options(&self) -> RemoteConnectionOptions {
         RemoteConnectionOptions::Docker(self.connection_options.clone())
     }
