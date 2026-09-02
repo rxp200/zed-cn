@@ -183,7 +183,15 @@ jobs:
               Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction Continue
           }
 
-          docker system prune --all --force 2>$null
+          $docker = Get-Command "docker" -ErrorAction SilentlyContinue
+          if ($docker) {
+              docker system prune --all --force 2>$null
+              if ($LASTEXITCODE -ne 0) {
+                  Write-Warning "Docker cleanup failed with exit code $LASTEXITCODE; continuing with the disk-space check."
+              }
+          }
+
+          $global:LASTEXITCODE = 0
           $drive = Get-PSDrive C
           $drive | Format-Table -AutoSize
           if ($drive.Free -lt 30GB) {
