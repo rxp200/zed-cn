@@ -288,10 +288,30 @@ pub struct Dock {
     active_panel_index: Option<usize>,
     focus_handle: FocusHandle,
     focus_follows_mouse: FocusFollowsMouse,
-    pub(crate) serialized_dock: Option<DockData>,
+    restoration: DockRestoreState,
     zoom_layer_open: bool,
     modal_layer: Entity<ModalLayer>,
     _subscriptions: [Subscription; 2],
+}
+
+enum DockRestoreState {
+    Restoring { pending: Option<DockData> },
+    Finished,
+}
+
+impl DockRestoreState {
+    fn pending(&self) -> Option<&DockData> {
+        match self {
+            Self::Restoring { pending } => pending.as_ref(),
+            Self::Finished => None,
+        }
+    }
+
+    fn discard_pending(&mut self) {
+        if let Self::Restoring { pending } = self {
+            *pending = None;
+        }
+    }
 }
 
 impl Focusable for Dock {
@@ -340,9 +360,9 @@ impl From<TerminalDockPosition> for DockPosition {
 impl DockPosition {
     fn label(&self) -> &'static str {
         match self {
-            Self::Left => "Left",
-            Self::Bottom => "Bottom",
-            Self::Right => "Right",
+            Self::Left => "左侧",
+            Self::Bottom => "底部",
+            Self::Right => "右侧",
         }
     }
 
@@ -436,7 +456,7 @@ impl Dock {
                 focus_handle: focus_handle.clone(),
                 focus_follows_mouse: WorkspaceSettings::get_global(cx).focus_follows_mouse,
                 _subscriptions: [focus_subscription, zoom_subscription],
-                serialized_dock: None,
+                restoration: DockRestoreState::Restoring { pending: None },
                 zoom_layer_open: false,
                 modal_layer,
             }
@@ -556,6 +576,13 @@ impl Dock {
     }
 
     pub fn set_open(&mut self, open: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if open != self.is_open {
+            self.restoration.discard_pending();
+        }
+        self.set_open_internal(open, window, cx);
+    }
+
+    fn set_open_internal(&mut self, open: bool, window: &mut Window, cx: &mut Context<Self>) {
         if open != self.is_open {
             self.is_open = open;
             if let Some(active_panel) = self.active_panel_entry() {
@@ -787,34 +814,82 @@ impl Dock {
             },
         );
 
-        self.restore_state(window, cx);
+        self.replay_pending_serialized_state(window, cx);
 
         if panel.read(cx).starts_open(window, cx) {
-            self.activate_panel(index, window, cx);
-            self.set_open(true, window, cx);
+            self.activate_panel_internal(index, window, cx);
+            self.set_open_internal(true, window, cx);
         }
 
         cx.notify();
         index
     }
 
-    pub fn restore_state(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        if let Some(serialized) = self.serialized_dock.clone() {
-            if let Some(active_panel) = serialized.active_panel.filter(|_| serialized.visible)
-                && let Some(idx) = self.panel_index_for_persistent_name(active_panel.as_str(), cx)
-            {
-                self.activate_panel(idx, window, cx);
+    pub(crate) fn restore_serialized_state(
+        &mut self,
+        serialized: DockData,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match &mut self.restoration {
+            DockRestoreState::Restoring { pending } => {
+                *pending = Some(serialized);
+                self.replay_pending_serialized_state(window, cx);
             }
-
-            if serialized.zoom
-                && let Some(panel) = self.active_panel()
-            {
-                panel.set_zoomed(true, window, cx)
+            DockRestoreState::Finished => {
+                let active_panel_missing = serialized
+                    .active_panel
+                    .as_deref()
+                    .filter(|_| serialized.visible)
+                    .is_some_and(|name| self.panel_index_for_persistent_name(name, cx).is_none());
+                if !active_panel_missing {
+                    self.apply_serialized_state(&serialized, window, cx);
+                }
             }
-            self.set_open(serialized.visible, window, cx);
-            return true;
         }
-        false
+    }
+
+    fn replay_pending_serialized_state(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(serialized) = self.restoration.pending().cloned() else {
+            return;
+        };
+        let waiting_for_active_panel = serialized
+            .active_panel
+            .as_deref()
+            .filter(|_| serialized.visible)
+            .is_some_and(|name| self.panel_index_for_persistent_name(name, cx).is_none());
+        if waiting_for_active_panel {
+            self.set_open_internal(serialized.visible, window, cx);
+        } else {
+            self.apply_serialized_state(&serialized, window, cx);
+            self.restoration.discard_pending();
+        }
+    }
+
+    fn apply_serialized_state(
+        &mut self,
+        serialized: &DockData,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(active_panel) = serialized
+            .active_panel
+            .as_deref()
+            .filter(|_| serialized.visible)
+            && let Some(idx) = self.panel_index_for_persistent_name(active_panel, cx)
+        {
+            self.activate_panel_internal(idx, window, cx);
+        }
+        if serialized.zoom
+            && let Some(panel) = self.active_panel()
+        {
+            panel.set_zoomed(true, window, cx)
+        }
+        self.set_open_internal(serialized.visible, window, cx);
+    }
+
+    pub(crate) fn finish_restoration(&mut self) {
+        self.restoration = DockRestoreState::Finished;
     }
 
     pub fn remove_panel<T: Panel>(
@@ -861,6 +936,18 @@ impl Dock {
     }
 
     pub fn activate_panel(&mut self, panel_ix: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if Some(panel_ix) != self.active_panel_index {
+            self.restoration.discard_pending();
+        }
+        self.activate_panel_internal(panel_ix, window, cx);
+    }
+
+    fn activate_panel_internal(
+        &mut self,
+        panel_ix: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if Some(panel_ix) != self.active_panel_index {
             if let Some(active_panel) = self.active_panel_entry() {
                 active_panel.panel.set_active(false, window, cx);
@@ -1389,7 +1476,7 @@ impl Render for PanelButtons {
                                     let dock_for_flex = dock_for_menu.clone();
                                     let workspace_for_flex = workspace_for_menu.clone();
                                     menu = menu.toggleable_entry(
-                                        "Flex Width",
+                                        "弹性宽度",
                                         currently_flexible,
                                         IconPosition::Start,
                                         None,
@@ -1412,7 +1499,7 @@ impl Render for PanelButtons {
                                     let dock_for_fixed = dock_for_menu.clone();
                                     let workspace_for_fixed = workspace_for_menu.clone();
                                     menu = menu.toggleable_entry(
-                                        "Fixed Width",
+                                        "固定宽度",
                                         !currently_flexible,
                                         IconPosition::Start,
                                         None,

@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     collections::HashMap,
     sync::{
         Arc,
@@ -13,7 +14,7 @@ use gpui::{
 use picker::{Picker, PickerDelegate};
 use ui::{
     Color, GradientFade, HighlightedLabel, Icon, IconButton, IconName, IconSize, Label, LabelSize,
-    ListItem, ListItemSpacing, PopoverMenu, Tooltip, prelude::*,
+    ListItem, ListItemSpacing, PopoverMenu, Tooltip, prelude::*, utils::replace_control_characters,
 };
 
 use crate::{
@@ -499,7 +500,7 @@ impl PickerDelegate for ColumnFilterDelegate {
                         .id("table-filter-clear-all")
                         .cursor_pointer()
                         .child(
-                            Label::new("Clear all")
+                            Label::new("清除全部")
                                 .size(LabelSize::Small)
                                 .color(Color::Accent),
                         )
@@ -560,12 +561,19 @@ impl TabularDataPreviewPane {
                     .min_w_0()
                     .overflow_hidden()
                     .whitespace_nowrap();
+                // Column names come from the file being previewed, so they may
+                // hold control characters. Show stand-ins for those, but keep
+                // the real name for copying.
+                let displayed_header = match replace_control_characters(&header_text) {
+                    Cow::Borrowed(_) => header_text.clone(),
+                    Cow::Owned(replaced) => SharedString::from(replaced),
+                };
                 with_copy_on_right_click(
                     header_text_cell,
-                    header_text.clone(),
+                    header_text,
                     "Right click to copy column name",
                 )
-                .child(header_text)
+                .child(displayed_header)
             })
             .child(
                 GradientFade::new(base_bg, base_bg, base_bg)
@@ -661,7 +669,7 @@ impl TabularDataPreviewPane {
         .trigger_with_tooltip(
             IconButton::new(
                 ElementId::NamedInteger("filter-button".into(), col.get() as u64),
-                IconName::Filter,
+                IconName::FilterFunnel,
             )
             .icon_size(IconSize::Small)
             .style(if has_active_filters {
@@ -671,7 +679,7 @@ impl TabularDataPreviewPane {
             })
             .toggle_state(has_active_filters),
             Tooltip::text(if has_active_filters {
-                "Column has active filters. Click to manage"
+                "该列存在活动筛选条件。点击管理"
             } else {
                 "No filters applied. Click to add filters"
             }),

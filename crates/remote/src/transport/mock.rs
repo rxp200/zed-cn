@@ -228,6 +228,21 @@ impl RemoteConnection for MockRemoteConnection {
         })
     }
 
+    fn build_reverse_forward_ports_command(
+        &self,
+        forwards: Vec<(u16, String, u16)>,
+    ) -> Result<CommandTemplate> {
+        Ok(CommandTemplate {
+            program: "mock".into(),
+            args: std::iter::once("-N".to_owned())
+                .chain(forwards.into_iter().map(|(remote_port, host, local_port)| {
+                    format!("-R{remote_port}:{host}:{local_port}")
+                }))
+                .collect(),
+            env: Default::default(),
+        })
+    }
+
     fn upload_directory(
         &self,
         _src_path: PathBuf,

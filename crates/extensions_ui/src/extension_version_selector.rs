@@ -202,9 +202,7 @@ impl PickerDelegate for ExtensionVersionSelectorDelegate {
     }
 
     fn dismissed(&mut self, _: &mut Window, cx: &mut Context<Picker<Self>>) {
-        self.selector
-            .update(cx, |_, cx| cx.emit(DismissEvent))
-            .log_err();
+        self.selector.update(cx, |_, cx| cx.emit(DismissEvent)).ok();
     }
 
     fn render_match(
@@ -238,7 +236,7 @@ impl PickerDelegate for ExtensionVersionSelectorDelegate {
                     h_flex()
                         .gap_2()
                         .when(!is_version_compatible, |this| {
-                            this.child(Label::new("Incompatible").color(Color::Muted))
+                            this.child(Label::new("不兼容").color(Color::Muted))
                         })
                         .child(
                             Label::new(

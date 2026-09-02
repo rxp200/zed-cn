@@ -350,7 +350,7 @@ impl Delegate {
             .get(&project.downgrade())
             .cloned();
 
-        let search = cx.new(|cx| ProjectSearch::new(project, cx));
+        let search = cx.new(|cx| ProjectSearch::new(project, weak_workspace.clone(), cx));
         let project_search =
             cx.new(|cx| ProjectSearchView::new(weak_workspace, search, window, cx, settings));
         cx.spawn(async move |_, cx| Self::new_from_project_search(project_search, cx).await)
@@ -713,9 +713,9 @@ pub(crate) async fn matches_to_multibuffer(
     PopulateProjectSearch::Completed
 }
 
-const SEARCH_DEBOUNCE_MS: u64 = 100;
-const CLICK_THRESHOLD_MS: u128 = 50;
-const DOUBLE_CLICK_THRESHOLD_MS: u128 = 300;
+const SEARCH_DEBOUNCE: Duration = Duration::from_millis(100);
+const CLICK_THRESHOLD: Duration = Duration::from_millis(50);
+const DOUBLE_CLICK_THRESHOLD: Duration = Duration::from_millis(300);
 const SEARCH_RESULTS_BATCH_SIZE: usize = 256;
 const MAX_MATCH_CONTEXT_BYTES: usize = 512;
 
@@ -727,7 +727,7 @@ impl PickerDelegate for Delegate {
     }
 
     fn placeholder_text(&self, _window: &mut Window, _cx: &mut App) -> Arc<str> {
-        "Search all files…".into()
+        "搜索所有文件…".into()
     }
 
     fn searchbar_trailer(
@@ -805,13 +805,13 @@ impl PickerDelegate for Delegate {
             picker::PickerAction::separator(),
             picker::PickerAction::button(
                 if self.selected_matches.len() > 1 {
-                    "Open Multiple"
+                    "打开多个文件"
                 } else {
-                    "Open File"
+                    "打开文件"
                 },
                 menu::Confirm.boxed_clone(),
             ),
-            picker::PickerAction::button("Open as Tab", super::ToProjectSearch.boxed_clone()),
+            picker::PickerAction::button("在标签页中打开", super::ToProjectSearch.boxed_clone()),
         ]
     }
 
@@ -894,9 +894,7 @@ impl PickerDelegate for Delegate {
         let (signal_done, match_updating_done) = futures::channel::oneshot::channel();
         self.in_progress_search =
             InProgressSearch::Connected(cx.spawn_in(window, async move |picker, cx| {
-                cx.background_executor()
-                    .timer(Duration::from_millis(SEARCH_DEBOUNCE_MS))
-                    .await;
+                cx.background_executor().timer(SEARCH_DEBOUNCE).await;
 
                 if cancel_flag.load(std::sync::atomic::Ordering::SeqCst) {
                     return None;
@@ -934,15 +932,14 @@ impl PickerDelegate for Delegate {
         let now = std::time::Instant::now();
         let is_click = self
             .last_selection_change_time
-            .map(|t| now.duration_since(t).as_millis() < CLICK_THRESHOLD_MS)
+            .map(|t| now.duration_since(t) < CLICK_THRESHOLD)
             .unwrap_or(false);
 
         if is_click {
             let is_double_click = self
                 .last_click
                 .map(|(ix, t)| {
-                    ix == self.selected_index
-                        && now.duration_since(t).as_millis() < DOUBLE_CLICK_THRESHOLD_MS
+                    ix == self.selected_index && now.duration_since(t) < DOUBLE_CLICK_THRESHOLD
                 })
                 .unwrap_or(false);
             self.last_click = Some((self.selected_index, now));
@@ -1564,7 +1561,7 @@ mod tests {
 
         // Search is debounced; advance past the debounce and let results stream in.
         cx.executor()
-            .advance_clock(std::time::Duration::from_millis(SEARCH_DEBOUNCE_MS + 50));
+            .advance_clock(SEARCH_DEBOUNCE + Duration::from_millis(50));
         cx.run_until_parked();
 
         picker.read_with(cx, |picker, _| {

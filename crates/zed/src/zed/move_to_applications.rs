@@ -105,7 +105,7 @@ impl MoveToApplicationsRequest {
                         PromptLevel::Critical,
                         "Failed to move Zed to Applications",
                         Some(&error.to_string()),
-                        &["OK"],
+                        &["确定"],
                     )
                     .await
                     .log_err();
@@ -178,7 +178,7 @@ impl Render for InstallingZedModal {
                     .py_3()
                     .border_b_1()
                     .border_color(theme.colors().border_variant)
-                    .child(Label::new("Installing Zed…")),
+                    .child(Label::new("正在安装 Zed…")),
             )
             .child(
                 h_flex()
@@ -196,9 +196,9 @@ impl Render for InstallingZedModal {
                     .child(
                         v_flex()
                             .gap_1()
-                            .child(Label::new("Moving Zed to Applications"))
+                            .child(Label::new("正在将 Zed 移动到应用程序文件夹"))
                             .child(
-                                Label::new("Zed will reopen when installation is complete.")
+                                Label::new("安装完成后 Zed 将重新打开。")
                                     .size(LabelSize::Small)
                                     .color(Color::Muted),
                             ),
@@ -214,7 +214,7 @@ fn should_offer_to_move(app_path: &Path) -> bool {
 
 async fn move_to_applications(app_path: &Path, cx: &mut AsyncWindowContext) -> Result<()> {
     let destination_path = install_destination(app_path).await?;
-    restart_into(destination_path, cx)
+    restart_into(destination_path, cx).await
 }
 
 async fn install_destination(app_path: &Path) -> Result<PathBuf> {
@@ -305,7 +305,18 @@ async fn copy_app_bundle(source: &Path, destination: &Path) -> Result<()> {
     Ok(())
 }
 
-fn restart_into(app_path: PathBuf, cx: &mut AsyncWindowContext) -> Result<()> {
+async fn restart_into(app_path: PathBuf, cx: &mut AsyncWindowContext) -> Result<()> {
+    let workspace_windows = cx
+        .update(|_window, cx| {
+            cx.windows()
+                .into_iter()
+                .filter_map(|window| window.downcast::<MultiWorkspace>())
+                .collect::<Vec<_>>()
+        })
+        .context("collecting workspace windows before restarting")?;
+    if !workspace::prepare_windows_to_quit(&workspace_windows, cx).await {
+        return Ok(());
+    }
     cx.update(|_window, cx| {
         cx.set_restart_path(app_path);
         cx.restart();
