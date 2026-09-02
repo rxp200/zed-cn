@@ -402,7 +402,7 @@ impl MemoryView {
         if !self.is_writing_memory {
             self.query_editor.update(cx, |this, cx| {
                 this.clear(window, cx);
-                this.set_placeholder_text("Write to Selected Memory Range", window, cx);
+                this.set_placeholder_text("写入选中的内存范围", window, cx);
             });
             self.is_writing_memory = true;
             self.query_editor.focus_handle(cx).focus(window, cx);
@@ -632,14 +632,14 @@ impl MemoryView {
 
             let mut menu = menu.action_disabled_when(
                 range_too_large || *memory_unreadable,
-                "Go To Selected Address",
+                "转到选中地址",
                 GoToSelectedAddress.boxed_clone(),
             );
 
             if supports_data_breakpoints {
                 menu = menu.action_disabled_when(
                     *memory_unreadable,
-                    "Set Data Breakpoint",
+                    "设置数据断点",
                     ToggleDataBreakpoint { access_type: None }.boxed_clone(),
                 );
             }
@@ -852,10 +852,7 @@ impl Render for MemoryView {
         let (icon, tooltip_text) = if self.is_writing_memory {
             (IconName::Pencil, "Edit Memory at a Selected Address")
         } else {
-            (
-                IconName::LocationEdit,
-                "Change Address of Currently Viewed Memory",
-            )
+            (IconName::LocationEdit, "更改当前查看的内存地址")
         };
 
         v_flex()

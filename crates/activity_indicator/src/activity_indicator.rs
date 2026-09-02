@@ -147,7 +147,7 @@ impl ActivityIndicator {
                             let status = match &status_update.status {
                                 Some(proto::status_update::Status::Binary(binary_status)) => {
                                     if let Some(binary_status) =
-                                        proto::ServerBinaryStatus::from_i32(*binary_status)
+                                        proto::ServerBinaryStatus::try_from(*binary_status).ok()
                                     {
                                         let binary_status = match binary_status {
                                             proto::ServerBinaryStatus::None => BinaryStatus::None,
@@ -181,7 +181,7 @@ impl ActivityIndicator {
                                 }
                                 Some(proto::status_update::Status::Health(health_status)) => {
                                     if let Some(health) =
-                                        proto::ServerHealth::from_i32(*health_status)
+                                        proto::ServerHealth::try_from(*health_status).ok()
                                     {
                                         let health = match health {
                                             proto::ServerHealth::Ok => ServerHealth::Ok,
@@ -730,8 +730,10 @@ impl ActivityIndicator {
         }
         Some(Content {
             icon: ActivityIcon::Icon(IconName::Info),
-            message: "Partial file index".to_string(),
-            tooltip_message: Some("Directories outside of git repositories and deeper than the `file_scan_depth` setting will be indexed on demand.".to_string()),
+            message: "部分文件按需索引".to_string(),
+            tooltip_message: Some(
+                "Git 仓库之外、且深度超过 `file_scan_depth` 设置值的目录将按需索引。".to_string(),
+            ),
             on_click: Some(Arc::new(|this, _, cx| {
                 this.deferred_scan_message = DeferredScanMessage::Dismissed;
                 cx.notify();

@@ -296,7 +296,7 @@ impl CommitModal {
                             })
                             .when(has_previous_commit, |this| {
                                 this.toggleable_entry(
-                                    "Amend",
+                                    "修正提交",
                                     amend_enabled,
                                     IconPosition::Start,
                                     Some(Box::new(Amend)),
@@ -313,7 +313,7 @@ impl CommitModal {
                                 )
                             })
                             .toggleable_entry(
-                                "Signoff",
+                                "签字确认",
                                 signoff_enabled,
                                 IconPosition::Start,
                                 Some(Box::new(Signoff)),

@@ -14,7 +14,7 @@ pub use platform_title_bar::{
     self, DraggedWindowTab, MergeAllWindows, MoveTabToNewWindow, PlatformTitleBar,
     ShowNextWindowTab, ShowPreviousWindowTab,
 };
-use project::{linked_worktree_short_name, repo_identity_path};
+use project::{linked_worktree_short_name, repo_identity_path, repo_identity_path_if_local};
 
 #[cfg(not(target_os = "macos"))]
 use crate::application_menu::{
@@ -41,13 +41,15 @@ use remote::RemoteConnectionOptions;
 use settings::{Settings as _, SettingsStore};
 
 use std::any::TypeId;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use theme::ActiveTheme;
 use title_bar_settings::TitleBarSettings;
 use ui::{
-    Avatar, ButtonLike, ContextMenu, ContextMenuEntry, IconWithIndicator, Indicator, PopoverMenu,
-    PopoverMenuHandle, TintColor, Tooltip, prelude::*, utils::platform_title_bar_height,
+    Avatar, ButtonLike, ContextMenu, ContextMenuEntry, IconButtonShape, IconWithIndicator,
+    Indicator, PopoverMenu, PopoverMenuHandle, TintColor, Tooltip, prelude::*,
+    utils::platform_title_bar_height,
 };
 use update_version::UpdateVersion;
 use util::ResultExt;
@@ -63,6 +65,18 @@ pub use onboarding_banner::restore_banner;
 const MAX_PROJECT_NAME_LENGTH: usize = 40;
 const MAX_BRANCH_NAME_LENGTH: usize = 40;
 const MAX_SHORT_SHA_LENGTH: usize = 8;
+
+fn linked_worktree_name_anchor<'a>(
+    main_worktree_path: Option<&'a Path>,
+    repository_identity_path: Option<&'a Path>,
+    is_linked_worktree: bool,
+) -> Option<&'a Path> {
+    main_worktree_path.or_else(|| {
+        is_linked_worktree
+            .then_some(repository_identity_path)
+            .flatten()
+    })
+}
 
 actions!(
     collab,
@@ -245,21 +259,25 @@ impl Render for TitleBar {
                 .map(|name| SharedString::from(name.to_string()));
             if let Some(repo) = &repository {
                 let repo = repo.read(cx);
-                linked_worktree_name = repo
-                    .main_worktree_abs_path()
-                    .and_then(|main_worktree_path| {
-                        linked_worktree_short_name(
-                            main_worktree_path,
-                            repo.work_directory_abs_path.as_ref(),
-                        )
-                    })
-                    .or_else(|| {
-                        repo.is_linked_worktree()
-                            .then_some(project_name.clone())
-                            .flatten()
-                    });
-
                 let identity = repo_identity_path(&repo.common_dir_abs_path, repo.path_style);
+                let identity_fallback =
+                    repo_identity_path_if_local(&repo.common_dir_abs_path, repo.path_style);
+                linked_worktree_name = linked_worktree_name_anchor(
+                    repo.main_worktree_abs_path(),
+                    identity_fallback,
+                    repo.is_linked_worktree(),
+                )
+                .and_then(|name_anchor_path| {
+                    linked_worktree_short_name(
+                        name_anchor_path,
+                        repo.work_directory_abs_path.as_ref(),
+                    )
+                })
+                .or_else(|| {
+                    repo.is_linked_worktree()
+                        .then_some(project_name.clone())
+                        .flatten()
+                });
 
                 let display_name = if identity.extension() == Some(std::ffi::OsStr::new("git")) {
                     identity.file_stem().and_then(|n| n.to_str())
@@ -374,7 +392,7 @@ impl Render for TitleBar {
                 )
                 .when(is_signing_in, |this| {
                     this.child(
-                        Label::new("Signing in…")
+                        Label::new("正在登录...")
                             .size(LabelSize::Small)
                             .color(Color::Muted)
                             .with_animation(
@@ -464,6 +482,9 @@ impl TitleBar {
                 cx.notify()
             }),
         );
+        if let Some(remote_client) = project.read(cx).remote_client() {
+            subscriptions.push(cx.observe(&remote_client, |_, _, cx| cx.notify()));
+        }
 
         subscriptions.push(cx.observe(&active_call, |this, _, cx| this.active_call_changed(cx)));
         subscriptions.push(
@@ -613,7 +634,9 @@ impl TitleBar {
 
         let nickname = nickname.unwrap_or_else(|| host.clone());
 
-        let (indicator_color, meta) = match self.project.read(cx).remote_connection_state(cx)? {
+        let connection_state = self.project.read(cx).remote_connection_state(cx)?;
+        let show_reconnect_button = connection_state.can_reconnect_manually();
+        let (indicator_color, meta) = match connection_state {
             remote::ConnectionState::Connecting => (Color::Info, format!("Connecting to: {host}")),
             remote::ConnectionState::Connected => (Color::Success, format!("Connected to: {host}")),
             remote::ConnectionState::HeartbeatMissed => (
@@ -629,7 +652,7 @@ impl TitleBar {
             }
         };
 
-        let icon_color = match self.project.read(cx).remote_connection_state(cx)? {
+        let icon_color = match connection_state {
             remote::ConnectionState::Connecting => Color::Info,
             remote::ConnectionState::Connected => Color::Default,
             remote::ConnectionState::HeartbeatMissed => Color::Warning,
@@ -669,7 +692,40 @@ impl TitleBar {
                                     ))
                                     .into_any_element(),
                                 )
-                                .child(Label::new(nickname).size(LabelSize::Small).truncate()),
+                                .child(Label::new(nickname).size(LabelSize::Small).truncate())
+                                .when(show_reconnect_button, |this| {
+                                    let project = self.project.downgrade();
+                                    this.child(
+                                        IconButton::new(
+                                            "manual-remote-reconnect",
+                                            IconName::RotateCw,
+                                        )
+                                        .shape(IconButtonShape::Square)
+                                        .size(ButtonSize::None)
+                                        .icon_size(IconSize::XSmall)
+                                        .icon_color(Color::Warning)
+                                        .aria_label("立即重新连接远程服务器")
+                                        .tooltip(Tooltip::text("立即重新连接"))
+                                        .on_click(
+                                            move |_, _, cx| {
+                                                cx.stop_propagation();
+                                                let Some(project) = project.upgrade() else {
+                                                    return;
+                                                };
+                                                let Some(remote_client) =
+                                                    project.read(cx).remote_client()
+                                                else {
+                                                    return;
+                                                };
+                                                remote_client
+                                                    .update(cx, |remote_client, cx| {
+                                                        remote_client.reconnect_now(cx)
+                                                    })
+                                                    .log_err();
+                                            },
+                                        ),
+                                    )
+                                }),
                         ),
                     move |_window, cx| {
                         Tooltip::with_meta(
@@ -692,7 +748,7 @@ impl TitleBar {
             return None;
         }
 
-        let button = Button::new("restricted_mode_trigger", "Restricted Mode")
+        let button = Button::new("restricted_mode_trigger", "受限模式")
             .style(ButtonStyle::Tinted(TintColor::Warning))
             .label_size(LabelSize::Small)
             .color(Color::Warning)
@@ -734,7 +790,7 @@ impl TitleBar {
 
         if self.project.read(cx).is_disconnected(cx) {
             return Some(
-                Button::new("disconnected", "Disconnected")
+                Button::new("disconnected", "已断开")
                     .disabled(true)
                     .color(Color::Disabled)
                     .label_size(LabelSize::Small)
@@ -1025,7 +1081,7 @@ impl TitleBar {
                 };
 
                 let trigger = if is_detached_head {
-                    Button::new("project_branch_trigger", "Create Branch")
+                    Button::new("project_branch_trigger", "创建分支")
                         .selected_style(ButtonStyle::Tinted(TintColor::Accent))
                         .label_size(LabelSize::Small)
                         .tab_index(0isize)
@@ -1144,7 +1200,7 @@ impl TitleBar {
                 div()
                     .id("disconnected")
                     .child(Icon::new(IconName::Disconnected).size(IconSize::Small))
-                    .tooltip(Tooltip::text("Disconnected"))
+                    .tooltip(Tooltip::text("已断开"))
                     .into_any_element(),
             ),
             client::Status::UpgradeRequired => {
@@ -1181,7 +1237,7 @@ impl TitleBar {
     pub fn render_sign_in_button(&mut self, _: &mut Context<Self>) -> Button {
         let client = self.client.clone();
         let workspace = self.workspace.clone();
-        Button::new("sign_in", "Sign In")
+        Button::new("sign_in", "登录")
             .label_size(LabelSize::Small)
             .tab_index(0isize)
             .on_click(move |_, window, cx| {
@@ -1300,7 +1356,7 @@ impl TitleBar {
                                     .w_full()
                                     .gap_1()
                                     .justify_between()
-                                    .child(Label::new("Restart to update Zed").color(Color::Accent))
+                                    .child(Label::new("重新启动以更新 Zed").color(Color::Accent))
                                     .child(
                                         Icon::new(IconName::Download)
                                             .size(IconSize::Small)
@@ -1368,8 +1424,8 @@ impl TitleBar {
 
                         this.separator()
                     })
-                    .action("Settings", zed_actions::OpenSettings.boxed_clone())
-                    .action("Keymap", Box::new(zed_actions::OpenKeymap))
+                    .action("设置", zed_actions::OpenSettings.boxed_clone())
+                    .action("键位映射", Box::new(zed_actions::OpenKeymap))
                     .action(
                         "Themes…",
                         zed_actions::theme_selector::Toggle::default().boxed_clone(),
@@ -1414,11 +1470,56 @@ impl TitleBar {
                     })
                     .when(is_signed_in, |this| {
                         this.separator()
-                            .action("Sign Out", client::SignOut.boxed_clone())
+                            .action("登出", client::SignOut.boxed_clone())
                     })
                 })
                 .into()
             })
             .anchor(Anchor::TopRight)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use util::paths::PathStyle;
+
+    #[test]
+    fn test_foreign_path_style_does_not_use_repository_identity_as_name_anchor() {
+        let (common_dir, foreign_path_style) = match PathStyle::local() {
+            PathStyle::Unix => (Path::new(r"C:\repos\zed"), PathStyle::Windows),
+            PathStyle::Windows => (Path::new("/repos/zed"), PathStyle::Unix),
+        };
+        let repository_identity_path = repo_identity_path_if_local(common_dir, foreign_path_style);
+
+        assert_eq!(
+            linked_worktree_name_anchor(None, repository_identity_path, true),
+            None
+        );
+    }
+
+    #[test]
+    fn test_local_path_style_uses_bare_repository_worktree_name() {
+        let (repository_identity_path, work_directory_path) = match PathStyle::local() {
+            PathStyle::Unix => (
+                Path::new("/repos/zed"),
+                Path::new("/worktrees/zed/plum-warbler/zed"),
+            ),
+            PathStyle::Windows => (
+                Path::new(r"C:\repos\zed"),
+                Path::new(r"C:\worktrees\zed\plum-warbler\zed"),
+            ),
+        };
+
+        let repository_identity_path =
+            repo_identity_path_if_local(repository_identity_path, PathStyle::local());
+        let name_anchor_path = linked_worktree_name_anchor(None, repository_identity_path, true);
+
+        assert_eq!(
+            name_anchor_path.and_then(|name_anchor_path| {
+                linked_worktree_short_name(name_anchor_path, work_directory_path)
+            }),
+            Some("plum-warbler".into())
+        );
     }
 }

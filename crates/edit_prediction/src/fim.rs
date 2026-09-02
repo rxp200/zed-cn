@@ -1,13 +1,13 @@
 use crate::{
     EditPredictionId, EditPredictionInputs, EditPredictionModelInput, cursor_excerpt,
-    open_ai_compatible::{self, load_open_ai_compatible_api_key_if_needed},
+    open_ai_compatible::{self, FimRequestPrompt, load_open_ai_compatible_api_key_if_needed},
     prediction::EditPredictionResult,
 };
 use anyhow::{Context as _, Result, anyhow};
 use gpui::{App, AppContext as _, Entity, Task};
 use language::{
     Anchor, Buffer, BufferSnapshot, EditPredictionPromptFormat, ToOffset, ToPoint as _,
-    language_settings::all_language_settings,
+    language_settings::{OpenAiCompatibleApiType, all_language_settings},
 };
 use std::{path::Path, sync::Arc, time::Instant};
 use zeta_prompt::{Zeta2PromptInput, compute_editable_and_context_ranges};
@@ -97,7 +97,20 @@ pub fn request_prediction(
         let cursor_in_editable = cursor_offset_in_excerpt.saturating_sub(editable_range.start);
         let prefix = editable_text[..cursor_in_editable].to_string();
         let suffix = editable_text[cursor_in_editable..].to_string();
-        let prompt = format_fim_prompt(prompt_format, &prefix, &suffix);
+        let prompt = if provider == settings::EditPredictionProvider::OpenAiCompatibleApi
+            && settings.api_type == OpenAiCompatibleApiType::ChatCompletions
+        {
+            let language_name = snapshot
+                .language()
+                .map(|language| language.name().to_string());
+            FimRequestPrompt::Chat {
+                prefix,
+                suffix,
+                language_name,
+            }
+        } else {
+            FimRequestPrompt::Completion(format_fim_prompt(prompt_format, &prefix, &suffix))
+        };
         let stop_tokens = get_fim_stop_tokens();
 
         let max_tokens = settings.max_output_tokens;

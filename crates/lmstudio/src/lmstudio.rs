@@ -276,6 +276,10 @@ pub struct Usage {
 pub struct Capabilities(Vec<String>);
 
 impl Capabilities {
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
     pub fn supports_tool_calls(&self) -> bool {
         self.0.iter().any(|cap| cap == "tool_use")
     }
@@ -314,12 +318,17 @@ pub struct ListModelsResponse {
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct ModelEntry {
     pub id: String,
+    #[serde(default)]
     pub object: String,
+    #[serde(default)]
     pub r#type: ModelType,
+    #[serde(default)]
     pub publisher: String,
     pub arch: Option<String>,
+    #[serde(default)]
     pub compatibility_type: CompatibilityType,
     pub quantization: Option<String>,
+    #[serde(default)]
     pub state: ModelState,
     pub max_context_length: Option<u64>,
     pub loaded_context_length: Option<u64>,
@@ -327,25 +336,46 @@ pub struct ModelEntry {
     pub capabilities: Capabilities,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+impl Default for ModelEntry {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            object: "model".to_string(),
+            r#type: ModelType::default(),
+            publisher: String::new(),
+            arch: None,
+            compatibility_type: CompatibilityType::default(),
+            quantization: None,
+            state: ModelState::default(),
+            max_context_length: None,
+            loaded_context_length: None,
+            capabilities: Capabilities::default(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum ModelType {
+    #[default]
     Llm,
     Embeddings,
     Vlm,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "kebab-case")]
 pub enum ModelState {
+    #[default]
     Loaded,
     Loading,
     NotLoaded,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum CompatibilityType {
+    #[default]
     Gguf,
     Mlx,
 }
@@ -512,6 +542,28 @@ mod tests {
         // Verify the structure matches what LM Studio expects
         let expected_structure = r#"{"type":"image_url","image_url":{"url":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="}}"#;
         assert_eq!(json, expected_structure);
+    }
+
+    #[test]
+    fn parse_openai_compatible_models_response() {
+        let body = r#"{
+            "object": "list",
+            "data": [
+                {
+                    "id": "qwen2.5-coder-7b-instruct",
+                    "object": "model"
+                }
+            ]
+        }"#;
+        let response: ListModelsResponse = serde_json::from_str(body).unwrap();
+        assert_eq!(response.data.len(), 1);
+        let entry = &response.data[0];
+        assert_eq!(entry.id, "qwen2.5-coder-7b-instruct");
+        assert_eq!(entry.object, "model");
+        assert_eq!(entry.r#type, ModelType::Llm);
+        assert_eq!(entry.state, ModelState::Loaded);
+        assert_eq!(entry.compatibility_type, CompatibilityType::Gguf);
+        assert!(entry.capabilities.is_empty());
     }
 
     #[test]

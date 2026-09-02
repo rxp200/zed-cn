@@ -840,15 +840,15 @@ impl Component for ElicitationCardPreview {
             .gap_6()
             .children([
                 example_group_with_title(
-                    "Form Requests",
+                    "表单请求",
                     vec![
                         single_example(
-                            "Pending Form",
+                            "待处理表单",
                             render_form_preview(0, pending_status(), &[], window, cx),
                         )
                         .width(px(640.)),
                         single_example(
-                            "Validation Errors",
+                            "验证错误",
                             render_form_preview(
                                 1,
                                 pending_status(),
@@ -867,10 +867,10 @@ impl Component for ElicitationCardPreview {
                 .vertical()
                 .into_any_element(),
                 example_group_with_title(
-                    "URL Requests",
+                    "URL 请求",
                     vec![
                         single_example(
-                            "URL Consent",
+                            "URL 授权",
                             render_url_preview(3, pending_status(), window, cx),
                         )
                         .width(px(640.)),
@@ -879,15 +879,15 @@ impl Component for ElicitationCardPreview {
                 .vertical()
                 .into_any_element(),
                 example_group_with_title(
-                    "Terminal States",
+                    "终端状态",
                     vec![
                         single_example(
-                            "Declined",
+                            "已拒绝",
                             render_form_preview(6, ElicitationStatus::Declined, &[], window, cx),
                         )
                         .width(px(640.)),
                         single_example(
-                            "Canceled",
+                            "已取消",
                             render_form_preview(7, ElicitationStatus::Canceled, &[], window, cx),
                         )
                         .width(px(640.)),
@@ -1464,7 +1464,7 @@ impl<'a> ElicitationCard<'a> {
             (ElicitationStatus::Accepted, acp::ElicitationMode::Url(_))
         );
         let (status_label, status_icon, status_color) = match &self.elicitation.status {
-            ElicitationStatus::Pending { .. } => ("Waiting for input", IconName::Info, Color::Info),
+            ElicitationStatus::Pending { .. } => ("等待输入", IconName::Info, Color::Info),
             ElicitationStatus::Accepted if is_accepted_url => {
                 ("Waiting for completion", IconName::Info, Color::Info)
             }
@@ -1513,7 +1513,7 @@ impl<'a> ElicitationCard<'a> {
                                     .color(status_color),
                             )
                             .child(
-                                Label::new(format!("Input Requested by {}", self.requester_name))
+                                Label::new(format!("{} 请求输入", self.requester_name))
                                     .size(LabelSize::Custom(tool_name_font_size))
                                     .truncate(),
                             ),
@@ -1884,7 +1884,7 @@ impl<'a> ElicitationCard<'a> {
                             h_flex()
                                 .gap_1()
                                 .child(
-                                    Label::new("Destination")
+                                    Label::new("目标")
                                         .size(LabelSize::Small)
                                         .color(Color::Muted),
                                 )
@@ -1950,11 +1950,11 @@ impl<'a> ElicitationCard<'a> {
             open_url.is_some() && matches!(self.elicitation.status, ElicitationStatus::Accepted);
         let is_submitting = self.form_state.is_some_and(|state| state.is_submitting);
         let (accept_label, accept_icon, accept_icon_color) = if is_accepted_url {
-            ("Open Again", IconName::ArrowUpRight, Color::Muted)
+            ("再次打开", IconName::ArrowUpRight, Color::Muted)
         } else if open_url.is_some() {
-            ("Open", IconName::ArrowUpRight, Color::Muted)
+            ("打开", IconName::ArrowUpRight, Color::Muted)
         } else {
-            ("Submit", IconName::Check, Color::Success)
+            ("提交", IconName::Check, Color::Success)
         };
         let border_color = cx.theme().colors().border.opacity(0.8);
         let on_submit = self.handlers.on_submit.clone();
@@ -1996,7 +1996,7 @@ impl<'a> ElicitationCard<'a> {
             )
             .when(!is_accepted_url, |this| {
                 this.child(
-                    Button::new(("elicitation-decline", self.entry_ix), "Decline")
+                    Button::new(("elicitation-decline", self.entry_ix), "拒绝")
                         .start_icon(
                             Icon::new(IconName::Close)
                                 .size(IconSize::XSmall)
@@ -2008,7 +2008,7 @@ impl<'a> ElicitationCard<'a> {
                         }),
                 )
                 .child(
-                    Button::new(("elicitation-cancel", self.entry_ix), "Cancel")
+                    Button::new(("elicitation-cancel", self.entry_ix), "取消")
                         .label_size(LabelSize::Small)
                         .on_click(move |_, window, cx| {
                             on_cancel(cancel_id.clone(), window, cx);
@@ -2017,7 +2017,7 @@ impl<'a> ElicitationCard<'a> {
             })
             .when(is_accepted_url, |this| {
                 this.child(
-                    Button::new(("elicitation-dismiss-url", self.entry_ix), "Cancel")
+                    Button::new(("elicitation-dismiss-url", self.entry_ix), "取消")
                         .label_size(LabelSize::Small)
                         .on_click(move |_, window, cx| {
                             on_dismiss_url(dismiss_id.clone(), window, cx);

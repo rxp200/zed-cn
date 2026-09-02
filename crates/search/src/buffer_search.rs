@@ -119,9 +119,9 @@ impl Render for BufferSearchBar {
                 .map(|editor: Entity<Editor>| editor.read(cx).has_any_buffer_folded(cx))
                 .unwrap_or_default();
             let (icon, tooltip_label) = if is_collapsed {
-                (IconName::ChevronUpDown, "Expand All Files")
+                (IconName::ChevronUpDown, "展开所有文件")
             } else {
-                (IconName::ChevronDownUp, "Collapse All Files")
+                (IconName::ChevronDownUp, "折叠所有文件")
             };
 
             let collapse_expand_icon_button = |id| {
@@ -177,12 +177,12 @@ impl Render for BufferSearchBar {
 
         self.query_editor.update(cx, |query_editor, cx| {
             if query_editor.placeholder_text(cx).is_none() {
-                query_editor.set_placeholder_text("Search…", window, cx);
+                query_editor.set_placeholder_text("搜索…", window, cx);
             }
         });
 
         self.replacement_editor.update(cx, |editor, cx| {
-            editor.set_placeholder_text("Replace with…", window, cx);
+            editor.set_placeholder_text("替换为…", window, cx);
         });
 
         let mut color_override = None;
@@ -270,7 +270,7 @@ impl Render for BufferSearchBar {
                     "buffer-search-bar-toggle",
                     IconName::Replace,
                     self.replace_enabled.then_some(ActionButtonState::Toggled),
-                    "Toggle Replace",
+                    "切换替换",
                     &ToggleReplace,
                     focus_handle.clone(),
                 ))
@@ -294,7 +294,7 @@ impl Render for BufferSearchBar {
                         let focus_handle = focus_handle.clone();
                         move |_window, cx| {
                             Tooltip::for_action_in(
-                                "Toggle Search Selection",
+                                "切换在选区中搜索",
                                 &ToggleSelection,
                                 &focus_handle,
                                 cx,
@@ -316,7 +316,7 @@ impl Render for BufferSearchBar {
                         self.active_match_index
                             .is_none()
                             .then_some(ActionButtonState::Disabled),
-                        "Select Previous Match",
+                        "选择上一个匹配项",
                         &SelectPreviousMatch,
                         query_focus.clone(),
                     ))
@@ -326,7 +326,7 @@ impl Render for BufferSearchBar {
                         self.active_match_index
                             .is_none()
                             .then_some(ActionButtonState::Disabled),
-                        "Select Next Match",
+                        "选择下一个匹配项",
                         &SelectNextMatch,
                         query_focus.clone(),
                     ))
@@ -347,7 +347,7 @@ impl Render for BufferSearchBar {
                         "buffer-search-nav-button",
                         IconName::SelectAll,
                         Default::default(),
-                        "Select All Matches",
+                        "选择所有匹配项",
                         &SelectAllMatches,
                         query_focus.clone(),
                     ))
@@ -359,7 +359,7 @@ impl Render for BufferSearchBar {
                     "buffer-search",
                     IconName::Close,
                     Default::default(),
-                    "Close Search Bar",
+                    "关闭搜索栏",
                     &Dismiss,
                     focus_handle.clone(),
                 ))
@@ -393,7 +393,7 @@ impl Render for BufferSearchBar {
                     "buffer-search-replace-button",
                     IconName::ReplaceNext,
                     Default::default(),
-                    "Replace Next Match",
+                    "替换下一个匹配项",
                     &ReplaceNext,
                     focus_handle.clone(),
                 ))
@@ -401,7 +401,7 @@ impl Render for BufferSearchBar {
                     "buffer-search-replace-button",
                     IconName::ReplaceAll,
                     Default::default(),
-                    "Replace All Matches",
+                    "替换所有匹配项",
                     &ReplaceAll,
                     focus_handle,
                 ));
@@ -446,7 +446,7 @@ impl Render for BufferSearchBar {
                                 "buffer-search",
                                 IconName::Close,
                                 Default::default(),
-                                "Close Search Bar",
+                                "关闭搜索栏",
                                 &Dismiss,
                                 focus_handle.clone(),
                             )),
@@ -3044,7 +3044,7 @@ mod tests {
         });
 
         // Focus on the editor instead of the search bar, as we want to ensure
-        // that pressing the "Replace Next Match" button will work, even if the
+        // that pressing the "替换下一个匹配项" button will work, even if the
         // search bar is not focused.
         cx.focus(&editor);
 
@@ -3172,6 +3172,83 @@ mod tests {
             for "find" or "find and replace" operations on strings, or for input validation.
             "#
             .unindent(),
+        })
+        .await;
+    }
+
+    #[gpui::test]
+    async fn test_replace_with_lookaround(cx: &mut TestAppContext) {
+        let (editor, search_bar, cx) = init_test(cx);
+
+        editor.update_in(cx, |editor, window, cx| {
+            editor.set_text("316227766016837933199\n", window, cx)
+        });
+
+        run_replacement_test(ReplacementTestParams {
+            editor: &editor,
+            search_bar: &search_bar,
+            cx,
+            search_text: r"(\d)(?=(\d{4})+$)",
+            search_options: Some(SearchOptions::REGEX),
+            replacement_text: "$1,",
+            replace_all: true,
+            expected_text: "3,1622,7766,0168,3793,3199\n".to_string(),
+        })
+        .await;
+
+        editor.update_in(cx, |editor, window, cx| {
+            editor.set_text("Xfoo\nbar\n", window, cx)
+        });
+
+        run_replacement_test(ReplacementTestParams {
+            editor: &editor,
+            search_bar: &search_bar,
+            cx,
+            search_text: r"foo\n(?<=Xfoo\n)bar",
+            search_options: Some(SearchOptions::REGEX),
+            replacement_text: "BAZ",
+            replace_all: true,
+            expected_text: "Xfoo\nbar\n".to_string(),
+        })
+        .await;
+
+        editor.update_in(cx, |editor, window, cx| {
+            editor.set_text("food: bar\nfoo: bar\n", window, cx)
+        });
+
+        run_replacement_test(ReplacementTestParams {
+            editor: &editor,
+            search_bar: &search_bar,
+            cx,
+            search_text: r"(?<=foo: )bar",
+            search_options: Some(SearchOptions::REGEX),
+            replacement_text: "BAZ",
+            replace_all: false,
+            expected_text: "food: bar\nfoo: BAZ\n".to_string(),
+        })
+        .await;
+    }
+
+    #[gpui::test]
+    async fn test_replace_with_lookaround_in_multibuffer(cx: &mut TestAppContext) {
+        let (editor, search_bar, cx) = init_multibuffer_test(cx);
+
+        run_replacement_test(ReplacementTestParams {
+            editor: &editor,
+            search_bar: &search_bar,
+            cx,
+            search_text: r"\w+(?= expression)",
+            search_options: Some(SearchOptions::REGEX),
+            replacement_text: "SOME",
+            replace_all: true,
+            expected_text: r#"
+            A SOME expression (shortened as regex or regexp;[1] also referred to as
+            SOME expression[2][3]) is a sequence of characters that specifies a search
+            pattern in text. Usually such patterns are used by string-searching algorithms
+            for "find" or "find and replace" operations on strings, or for input validation.
+            Some Additional text with the term SOME expression in it.
+            There two lines."#
+                .unindent(),
         })
         .await;
     }
@@ -3899,6 +3976,7 @@ mod tests {
                 include_ignored: false,
                 regex: false,
                 center_on_match: false,
+                search_on_type: false,
             },
             cx,
         );
@@ -3962,6 +4040,7 @@ mod tests {
                 include_ignored: false,
                 regex: false,
                 center_on_match: false,
+                search_on_type: false,
             },
             cx,
         );
@@ -4000,6 +4079,7 @@ mod tests {
                 include_ignored: false,
                 regex: false,
                 center_on_match: false,
+                search_on_type: false,
             },
             cx,
         );
@@ -4228,6 +4308,7 @@ mod tests {
                         include_ignored: Some(search_settings.include_ignored),
                         regex: Some(search_settings.regex),
                         center_on_match: Some(search_settings.center_on_match),
+                        search_on_type: Some(search_settings.search_on_type),
                     });
                 });
             });

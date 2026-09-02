@@ -13,7 +13,7 @@ use editor::{
 };
 use git::{Commit, StageAll, StageAndNext, ToggleStaged, UnstageAll, UnstageAndNext};
 use gpui::{
-    Action, AnyElement, App, AppContext as _, Entity, EventEmitter, FocusHandle, Focusable, Render,
+    Action, App, AppContext as _, Entity, EventEmitter, FocusHandle, Focusable, Render,
     Subscription, Task, WeakEntity, actions,
 };
 use language::Capability;
@@ -34,7 +34,7 @@ use ui::{DiffStat, Divider, Tooltip, prelude::*};
 use workspace::{
     ItemNavHistory, SerializableItem, ToolbarItemEvent, ToolbarItemLocation, ToolbarItemView,
     Workspace,
-    item::{Item, ItemEvent, ItemHandle, SaveOptions, TabContentParams},
+    item::{Item, ItemEvent, ItemHandle, SaveOptions},
     searchable::SearchableItemHandle,
 };
 use zed_actions::git as git_actions;
@@ -48,6 +48,8 @@ actions!(
         Diff,
         /// Shows working changes relative to HEAD.
         DiffHead,
+        /// Toggles the git diff base between HEAD and the default branch.
+        ToggleDiffBase,
         /// Adds files to the git staging area.
         Add,
         /// Opens a new agent thread with the branch diff for review.
@@ -76,6 +78,19 @@ impl ProjectDiff {
         workspace.register_action(Self::deploy);
         workspace.register_action(|workspace, _: &DiffHead, window, cx| {
             Self::deploy_at(workspace, None, window, cx);
+        });
+        workspace.register_action(|workspace, _: &ToggleDiffBase, _window, cx| {
+            settings::update_settings_file(
+                workspace.app_state().fs.clone(),
+                cx,
+                move |settings, _| {
+                    let git = settings.git.get_or_insert_default();
+                    git.diff_base = Some(match git.diff_base.unwrap_or_default() {
+                        GitDiffBaseSetting::Head => GitDiffBaseSetting::DefaultBranch,
+                        GitDiffBaseSetting::DefaultBranch => GitDiffBaseSetting::Head,
+                    });
+                },
+            );
         });
         workspace.register_action(
             |workspace, _: &git_actions::ViewUncommittedChanges, window, cx| {
@@ -423,16 +438,6 @@ impl Item for ProjectDiff {
         Some(self.tab_content_text(0, cx))
     }
 
-    fn tab_content(&self, params: TabContentParams, _window: &Window, cx: &App) -> AnyElement {
-        Label::new(self.tab_content_text(0, cx))
-            .color(if params.selected {
-                Color::Default
-            } else {
-                Color::Muted
-            })
-            .into_any_element()
-    }
-
     fn tab_content_text(&self, _detail: usize, _cx: &App) -> SharedString {
         "Uncommitted Changes".into()
     }
@@ -617,7 +622,6 @@ impl SerializableItem for ProjectDiff {
         _: &mut Workspace,
         _: workspace::ItemId,
         _: bool,
-        _: &mut Window,
         _: &mut Context<Self>,
     ) -> Option<Task<Result<()>>> {
         Some(Task::ready(Ok(())))
@@ -861,7 +865,7 @@ impl Render for ProjectDiffToolbar {
                 h_group_sm()
                     .when(button_states.selection, |this| {
                         this.child(
-                            Button::new("stage", "Toggle Staged")
+                            Button::new("stage", "切换暂存状态")
                                 .tooltip(Tooltip::for_action_title_in(
                                     "Toggle Staged",
                                     &ToggleStaged,
@@ -875,7 +879,7 @@ impl Render for ProjectDiffToolbar {
                     })
                     .when(!button_states.selection, |this| {
                         this.child(
-                            Button::new("stage", "Stage")
+                            Button::new("stage", "暂存")
                                 .disabled(!button_states.stage)
                                 .tooltip(Tooltip::for_action_title_in(
                                     "Stage and Go to Next Hunk",
@@ -887,7 +891,7 @@ impl Render for ProjectDiffToolbar {
                                 })),
                         )
                         .child(
-                            Button::new("unstage", "Unstage")
+                            Button::new("unstage", "取消暂存")
                                 .disabled(!button_states.unstage)
                                 .tooltip(Tooltip::for_action_title_in(
                                     "Unstage and Go to Next Hunk",
@@ -905,7 +909,7 @@ impl Render for ProjectDiffToolbar {
                 button_states.unstage_all && !button_states.stage_all,
                 |this| {
                     this.child(
-                        Button::new("unstage-all", "Unstage All")
+                        Button::new("unstage-all", "取消全部暂存")
                             .width(stage_all_button_width)
                             .tooltip(Tooltip::for_action_title_in(
                                 "Unstage All Changes",
@@ -922,7 +926,7 @@ impl Render for ProjectDiffToolbar {
                 !button_states.unstage_all || button_states.stage_all,
                 |this| {
                     this.child(
-                        Button::new("stage-all", "Stage All")
+                        Button::new("stage-all", "全部暂存")
                             .width(stage_all_button_width)
                             .disabled(!button_states.stage_all)
                             .tooltip(Tooltip::for_action_title_in(
@@ -938,12 +942,8 @@ impl Render for ProjectDiffToolbar {
             )
             .child(Divider::vertical())
             .child(
-                Button::new("commit", "Commit")
-                    .tooltip(Tooltip::for_action_title_in(
-                        "Commit",
-                        &Commit,
-                        &focus_handle,
-                    ))
+                Button::new("commit", "提交")
+                    .tooltip(Tooltip::for_action_title_in("提交", &Commit, &focus_handle))
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.dispatch_action(&Commit, window, cx);
                     })),
@@ -1126,6 +1126,33 @@ mod tests {
                 GitDiffBaseSetting::DefaultBranch
             );
         });
+
+        cx.update(|window, cx| {
+            window.dispatch_action(ToggleDiffBase.boxed_clone(), cx);
+        });
+        cx.run_until_parked();
+        project.read_with(cx, |project, cx| {
+            assert_eq!(
+                project.git_store().read(cx).diff_base(),
+                GitDiffBaseSetting::DefaultBranch
+            );
+        });
+
+        cx.update(|window, cx| {
+            window.dispatch_action(ToggleDiffBase.boxed_clone(), cx);
+        });
+        cx.run_until_parked();
+        project.read_with(cx, |project, cx| {
+            assert_eq!(
+                project.git_store().read(cx).diff_base(),
+                GitDiffBaseSetting::Head
+            );
+        });
+
+        cx.update(|window, cx| {
+            window.dispatch_action(ToggleDiffBase.boxed_clone(), cx);
+        });
+        cx.run_until_parked();
 
         cx.update(|window, cx| {
             window.dispatch_action(Diff.boxed_clone(), cx);
