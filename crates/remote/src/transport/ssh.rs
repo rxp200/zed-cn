@@ -147,6 +147,15 @@ fn sftp_put_command(source_path: &str, destination_path: &str) -> String {
     format!("put {source} {destination}\n")
 }
 
+fn reverse_forward_spec(remote_port: u16, host: &str, local_port: u16) -> String {
+    format!(
+        "localhost:{}:{}:{}",
+        remote_port,
+        bracket_ipv6(host),
+        local_port
+    )
+}
+
 #[derive(Debug, Default, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct SshConnectionOptions {
     pub host: SshConnectionHost,
@@ -408,6 +417,26 @@ impl RemoteConnection for SshRemoteConnection {
                 bracket_ipv6(&host),
                 remote_port
             ));
+        }
+        args.push(socket.connection_options.ssh_destination());
+        Ok(CommandTemplate {
+            program: "ssh".into(),
+            args,
+            env: socket.envs.clone(),
+        })
+    }
+
+    fn build_reverse_forward_ports_command(
+        &self,
+        forwards: Vec<(u16, String, u16)>,
+    ) -> Result<CommandTemplate> {
+        let Self { socket, .. } = self;
+        let mut args = socket.ssh_command_options_without_port_forwards();
+        args.extend(["-o".into(), "ExitOnForwardFailure=yes".into()]);
+        args.push("-N".into());
+        for (remote_port, host, local_port) in forwards {
+            args.push("-R".into());
+            args.push(reverse_forward_spec(remote_port, &host, local_port));
         }
         args.push(socket.connection_options.ssh_destination());
         Ok(CommandTemplate {
@@ -2448,6 +2477,18 @@ mod tests {
                 ".zed_server/remote_server",
             ),
             "put \"C:\\\\Users\\\\Smit\\\\Zed Repro\\\\remote_server\" \".zed_server/remote_server\"\n"
+        );
+    }
+
+    #[test]
+    fn reverse_forward_spec_uses_loopback_endpoints() {
+        assert_eq!(
+            reverse_forward_spec(4000, "127.0.0.1", 3000),
+            "localhost:4000:127.0.0.1:3000"
+        );
+        assert_eq!(
+            reverse_forward_spec(4000, "::1", 3000),
+            "localhost:4000:[::1]:3000"
         );
     }
 

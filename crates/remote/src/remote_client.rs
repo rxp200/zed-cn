@@ -1098,6 +1098,16 @@ impl RemoteClient {
         connection.build_forward_ports_command(forwards)
     }
 
+    pub fn build_reverse_forward_ports_command(
+        &self,
+        forwards: Vec<(u16, String, u16)>,
+    ) -> Result<CommandTemplate> {
+        let Some(connection) = self.remote_connection() else {
+            return Err(anyhow!("no remote connection"));
+        };
+        connection.build_reverse_forward_ports_command(forwards)
+    }
+
     pub fn upload_directory(
         &self,
         src_path: PathBuf,
@@ -1824,6 +1834,10 @@ pub trait RemoteConnection: Send + Sync {
         interactive: Interactive,
     ) -> Result<CommandTemplate>;
     fn build_forward_ports_command(
+        &self,
+        forwards: Vec<(u16, String, u16)>,
+    ) -> Result<CommandTemplate>;
+    fn build_reverse_forward_ports_command(
         &self,
         forwards: Vec<(u16, String, u16)>,
     ) -> Result<CommandTemplate>;
