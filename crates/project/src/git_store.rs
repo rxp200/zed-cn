@@ -7279,32 +7279,73 @@ impl Repository {
                 log_order: log_order_to_proto(LogOrder::DateOrder),
             })
             .await?;
+        const COMMIT_BATCH_SIZE: usize = 64;
+        const MAX_CONCURRENT_COMMIT_REQUESTS: usize = 4;
 
-        while let Some(response) = graph_stream.next().await {
-            let response = response?;
-            for commit_chunk in response.commits.chunks(64) {
-                let response = client
-                    .request(proto::GetCommitData {
-                        project_id: project_id.to_proto(),
-                        repository_id: repository_id.to_proto(),
-                        shas: commit_chunk
-                            .iter()
-                            .map(|commit| commit.sha.clone())
-                            .collect(),
-                    })
-                    .await?;
+        let (commit_batch_tx, commit_batch_rx) =
+            async_channel::bounded::<Vec<String>>(MAX_CONCURRENT_COMMIT_REQUESTS);
 
-                for commit in response.commits {
-                    if author_matches_query(&commit.author_email, author_query, case_sensitive)
-                        && let Ok(oid) = Oid::from_str(&commit.sha)
-                        && request_tx.send(oid).await.is_err()
-                    {
+        let collect_commit_shas = {
+            let request_tx = request_tx.clone();
+            async move {
+                while let Some(response) = graph_stream.next().await {
+                    if request_tx.is_closed() {
                         return Ok(());
                     }
-                }
-            }
-        }
 
+                    let response = response?;
+                    for commit_chunk in response.commits.chunks(COMMIT_BATCH_SIZE) {
+                        let shas = commit_chunk
+                            .iter()
+                            .map(|commit| commit.sha.clone())
+                            .collect();
+                        if commit_batch_tx.send(shas).await.is_err() {
+                            return Ok(());
+                        }
+                    }
+                }
+
+                Ok::<_, anyhow::Error>(())
+            }
+        };
+
+        let fetch_and_match_authors =
+            future::try_join_all((0..MAX_CONCURRENT_COMMIT_REQUESTS).map(|_| {
+                let client = client.clone();
+                let commit_batch_rx = commit_batch_rx.clone();
+                let request_tx = request_tx.clone();
+                async move {
+                    while let Ok(shas) = commit_batch_rx.recv().await {
+                        if request_tx.is_closed() {
+                            return Ok(());
+                        }
+
+                        let response = client
+                            .request(proto::GetCommitData {
+                                project_id: project_id.to_proto(),
+                                repository_id: repository_id.to_proto(),
+                                shas,
+                            })
+                            .await?;
+
+                        for commit in response.commits {
+                            if author_matches_query(
+                                &commit.author_email,
+                                author_query,
+                                case_sensitive,
+                            ) && let Ok(oid) = Oid::from_str(&commit.sha)
+                                && request_tx.send(oid).await.is_err()
+                            {
+                                return Ok(());
+                            }
+                        }
+                    }
+
+                    Ok::<_, anyhow::Error>(())
+                }
+            }));
+
+        future::try_join(collect_commit_shas, fetch_and_match_authors).await?;
         Ok(())
     }
 

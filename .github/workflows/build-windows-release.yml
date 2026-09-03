@@ -1,4 +1,4 @@
-name: Build Windows release
+name: Build multiplatform release
 
 on:
   workflow_dispatch:
@@ -24,21 +24,27 @@ permissions:
   contents: write
 
 concurrency:
-  group: windows-release-${{ github.event_name == 'push' && github.ref_name || inputs.release_tag }}
+  group: multiplatform-release-${{ github.event_name == 'push' && github.ref_name || inputs.release_tag }}
   cancel-in-progress: false
 
 env:
-  CARGO_BUILD_JOBS: "3"
   CARGO_INCREMENTAL: "0"
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: "1"
 
 jobs:
-  build_windows_x86_64:
-    name: Build Windows x86_64 installer
-    runs-on: windows-2022
-    timeout-minutes: 360
-
+  validate_source:
+    name: Validate release source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    outputs:
+      source_ref: ${{ steps.inputs.outputs.source_ref }}
+      release_tag: ${{ steps.inputs.outputs.release_tag }}
+      release_version: ${{ steps.inputs.outputs.release_version }}
+      release_revision: ${{ steps.inputs.outputs.release_revision }}
+      draft: ${{ steps.inputs.outputs.draft }}
+      source_sha: ${{ steps.source.outputs.source_sha }}
+      public_main_sha: ${{ steps.source.outputs.public_main_sha }}
     steps:
       - name: Resolve build inputs
         id: inputs
@@ -150,23 +156,202 @@ jobs:
 
           "source_sha=$sourceSha" >> $env:GITHUB_OUTPUT
           "public_main_sha=$publicMainSha" >> $env:GITHUB_OUTPUT
-          "channel=$channel" >> $env:GITHUB_OUTPUT
-          "version=$manifestVersion" >> $env:GITHUB_OUTPUT
-
-          "ZED_COMMIT_SHA=$sourceSha" >> $env:GITHUB_ENV
-          "ZED_WORKSPACE=$env:GITHUB_WORKSPACE" >> $env:GITHUB_ENV
-          "RELEASE_VERSION=$manifestVersion" >> $env:GITHUB_ENV
-
           Write-Host "Source SHA: $sourceSha"
           Write-Host "Release channel: $channel"
           Write-Host "Version: $manifestVersion"
+
+  bundle_linux:
+    name: Build Linux ${{ matrix.arch }}
+    needs: validate_source
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-22.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    env:
+      CARGO_BUILD_JOBS: "2"
+      ZED_COMMIT_SHA: ${{ needs.validate_source.outputs.source_sha }}
+    steps:
+      - name: Check out release source
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          ref: ${{ needs.validate_source.outputs.source_ref }}
+          clean: true
+
+      - name: Free runner disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/local/.ghcup /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          df -h /
+
+      - name: Install Linux build dependencies
+        run: ./script/linux
+
+      - name: Download WASI SDK
+        run: ./script/download-wasi-sdk
+
+      - name: Build Linux bundle and Remote Server
+        run: ./script/bundle-linux
+
+      - name: Verify Linux build
+        env:
+          EXPECTED_SHA: ${{ needs.validate_source.outputs.source_sha }}
+          EXPECTED_VERSION: ${{ needs.validate_source.outputs.release_version }}
+        run: |
+          cli="target/$(rustc --version --verbose | awk '/^host:/ { print $2 }')/release/cli"
+          cli_version="$($cli --version)"
+          echo "CLI: $cli_version"
+          grep -F "$EXPECTED_VERSION" <<<"$cli_version"
+          grep -F "$EXPECTED_SHA" <<<"$cli_version"
+          test -f "target/release/zed-linux-${{ matrix.arch }}.tar.gz"
+          test -f "target/zed-remote-server-linux-${{ matrix.arch }}.gz"
+
+      - name: Upload Linux desktop bundle
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: release-zed-linux-${{ matrix.arch }}.tar.gz
+          path: target/release/zed-linux-${{ matrix.arch }}.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload Linux Remote Server
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: release-zed-remote-server-linux-${{ matrix.arch }}.gz
+          path: target/zed-remote-server-linux-${{ matrix.arch }}.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  build_static_bwrap:
+    name: Build static bwrap Linux ${{ matrix.arch }}
+    needs: validate_source
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-22.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    steps:
+      - name: Install Nix
+        uses: cachix/install-nix-action@02a151ada4993995686f9ed4f1be7cfbb229e56f
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build static bubblewrap
+        run: |
+          nix build nixpkgs#pkgsStatic.bubblewrap -L
+          cp result/bin/bwrap "bwrap-linux-${{ matrix.arch }}"
+          chmod 755 "bwrap-linux-${{ matrix.arch }}"
+          gzip --stdout --best "bwrap-linux-${{ matrix.arch }}" > "bwrap-linux-${{ matrix.arch }}.gz"
+
+      - name: Upload static bubblewrap
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: release-bwrap-linux-${{ matrix.arch }}.gz
+          path: bwrap-linux-${{ matrix.arch }}.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  bundle_macos:
+    name: Build macOS ${{ matrix.arch }}
+    needs: validate_source
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: aarch64
+            target: aarch64-apple-darwin
+            runner: macos-15
+          - arch: x86_64
+            target: x86_64-apple-darwin
+            runner: macos-15-intel
+    env:
+      CARGO_BUILD_JOBS: "3"
+      ZED_COMMIT_SHA: ${{ needs.validate_source.outputs.source_sha }}
+    steps:
+      - name: Check out release source
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          ref: ${{ needs.validate_source.outputs.source_ref }}
+          clean: true
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: "24"
+          check-latest: true
+          package-manager-cache: false
+
+      - name: Build macOS DMG and Remote Server
+        run: ./script/bundle-mac ${{ matrix.target }}
+
+      - name: Verify macOS build
+        env:
+          EXPECTED_SHA: ${{ needs.validate_source.outputs.source_sha }}
+          EXPECTED_VERSION: ${{ needs.validate_source.outputs.release_version }}
+        run: |
+          cli_version="$(target/${{ matrix.target }}/release/cli --version)"
+          echo "CLI: $cli_version"
+          grep -F "$EXPECTED_VERSION" <<<"$cli_version"
+          grep -F "$EXPECTED_SHA" <<<"$cli_version"
+          test -f "target/${{ matrix.target }}/release/Zed-${{ matrix.arch }}.dmg"
+          test -f "target/zed-remote-server-macos-${{ matrix.arch }}.gz"
+
+      - name: Upload macOS desktop bundle
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: release-Zed-${{ matrix.arch }}.dmg
+          path: target/${{ matrix.target }}/release/Zed-${{ matrix.arch }}.dmg
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload macOS Remote Server
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: release-zed-remote-server-macos-${{ matrix.arch }}.gz
+          path: target/zed-remote-server-macos-${{ matrix.arch }}.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  bundle_windows:
+    name: Build Windows ${{ matrix.arch }}
+    needs: validate_source
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: windows-2022
+          - arch: aarch64
+            runner: windows-2022
+    env:
+      CARGO_BUILD_JOBS: "3"
+      ZED_COMMIT_SHA: ${{ needs.validate_source.outputs.source_sha }}
+      ZED_WORKSPACE: ${{ github.workspace }}
+      RELEASE_VERSION: ${{ needs.validate_source.outputs.release_version }}
+    steps:
+      - name: Check out release source
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          ref: ${{ needs.validate_source.outputs.source_ref }}
+          clean: true
 
       - name: Free runner disk space
         shell: pwsh
         run: |
           $ErrorActionPreference = "Continue"
-
-          Get-PSDrive C | Format-Table -AutoSize
           $paths = @(
               $env:ANDROID_HOME,
               $env:ANDROID_NDK_ROOT,
@@ -177,20 +362,10 @@ jobs:
               "C:\Program Files\Microsoft SQL Server",
               "C:\Program Files (x86)\Microsoft SQL Server"
           ) | Where-Object { $_ -and (Test-Path $_) } | Select-Object -Unique
-
           foreach ($path in $paths) {
               Write-Host "Removing unused runner component: $path"
               Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction Continue
           }
-
-          $docker = Get-Command "docker" -ErrorAction SilentlyContinue
-          if ($docker) {
-              docker system prune --all --force 2>$null
-              if ($LASTEXITCODE -ne 0) {
-                  Write-Warning "Docker cleanup failed with exit code $LASTEXITCODE; continuing with the disk-space check."
-              }
-          }
-
           $global:LASTEXITCODE = 0
           $drive = Get-PSDrive C
           $drive | Format-Table -AutoSize
@@ -203,218 +378,179 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-
           rustup show
-          Write-Host "Cargo build jobs: $env:CARGO_BUILD_JOBS of $env:NUMBER_OF_PROCESSORS logical processors"
 
-          $vsWhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-          $visualStudioPath = (& $vsWhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath).Trim()
-          if (-not $visualStudioPath) {
-              throw "Visual Studio C++ build tools were not found"
-          }
-
-          $devShell = Join-Path $visualStudioPath "Common7\Tools\Launch-VsDevShell.ps1"
-          $windowsKitsBin = "${env:ProgramFiles(x86)}\Windows Kits\10\bin"
-          $sdkPath = Get-ChildItem -Path $windowsKitsBin -Directory |
-              Where-Object { Test-Path (Join-Path $_.FullName "x64\makeappx.exe") } |
-              Sort-Object { [version]$_.Name } -Descending |
-              Select-Object -First 1 -ExpandProperty FullName
-          if (-not $sdkPath) {
-              throw "A Windows SDK containing makeappx.exe was not found"
-          }
-          $sdkPath = Join-Path $sdkPath "x64"
-
-          $innoSetupCommand = Get-Command "ISCC.exe" -ErrorAction SilentlyContinue
-          $innoSetupPath = if ($innoSetupCommand) {
-              $innoSetupCommand.Source
-          } else {
-              @(
-                  "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
-                  "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe"
-              ) | Where-Object { Test-Path $_ } | Select-Object -First 1
-          }
+          $innoSetupPath = @(
+              "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+              "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe"
+          ) | Where-Object { Test-Path $_ } | Select-Object -First 1
           if (-not $innoSetupPath) {
               choco install innosetup --yes --no-progress
               if ($LASTEXITCODE -ne 0) {
                   throw "Failed to install Inno Setup 6"
               }
-              $innoSetupPath = @(
-                  "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
-                  "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe"
-              ) | Where-Object { Test-Path $_ } | Select-Object -First 1
-          }
-          if (-not $innoSetupPath) {
-              throw "Inno Setup 6 was not found after installation"
           }
 
-          # Older custom Stable branches used fixed local paths. Replacing only these
-          # tool paths keeps the selected source code and product version unchanged.
-          $bundlePath = "script/bundle-windows.ps1"
-          $bundle = Get-Content $bundlePath -Raw
-          $bundle = $bundle.Replace(
-              "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\Tools\Launch-VsDevShell.ps1",
-              $devShell
-          )
-          $bundle = $bundle.Replace(
-              "C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64",
-              $sdkPath
-          )
-          $bundle = $bundle.Replace(
-              "C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
-              $innoSetupPath
-          )
-          Set-Content -Path $bundlePath -Value $bundle -Encoding utf8NoBOM
-
-          "ZED_RC_TOOLKIT_PATH=$sdkPath" >> $env:GITHUB_ENV
-          Write-Host "Visual Studio: $visualStudioPath"
-          Write-Host "Windows SDK tools: $sdkPath"
-          Write-Host "Inno Setup: $innoSetupPath"
-
-      - name: Build installer
+      - name: Build Windows installer and Remote Server
         shell: pwsh
-        run: script/bundle-windows.ps1 -Architecture x86_64
+        run: script/bundle-windows.ps1 -Architecture ${{ matrix.arch }}
 
-      - name: Verify build
-        id: artifact
+      - name: Verify Windows build
         shell: pwsh
         env:
-          EXPECTED_SHA: ${{ steps.source.outputs.source_sha }}
-          EXPECTED_VERSION: ${{ steps.source.outputs.version }}
+          EXPECTED_SHA: ${{ needs.validate_source.outputs.source_sha }}
+          EXPECTED_VERSION: ${{ needs.validate_source.outputs.release_version }}
         run: |
           $ErrorActionPreference = "Stop"
-
-          $installer = (Resolve-Path "target/Zed-x86_64.exe").Path
-          $remoteServer = (Resolve-Path "target/zed-remote-server-windows-x86_64.zip").Path
-          $cli = (Resolve-Path "target/x86_64-pc-windows-msvc/release/cli.exe").Path
+          $installer = Resolve-Path "target/Zed-${{ matrix.arch }}.exe"
+          $remoteServer = Resolve-Path "target/zed-remote-server-windows-${{ matrix.arch }}.zip"
+          $cli = Resolve-Path "target/${{ matrix.arch }}-pc-windows-msvc/release/cli.exe"
           $cliVersion = (& $cli --version | Out-String).Trim()
-
           if ($cliVersion -notmatch [regex]::Escape($env:EXPECTED_VERSION)) {
-              throw "CLI version does not contain the expected version $env:EXPECTED_VERSION`: $cliVersion"
+              throw "CLI version does not contain expected version $env:EXPECTED_VERSION`: $cliVersion"
           }
           if ($cliVersion -notmatch [regex]::Escape($env:EXPECTED_SHA)) {
-              throw "CLI version does not contain the expected source SHA $env:EXPECTED_SHA`: $cliVersion"
+              throw "CLI version does not contain expected source SHA $env:EXPECTED_SHA`: $cliVersion"
           }
-
-          $installerHash = (Get-FileHash $installer -Algorithm SHA256).Hash.ToLowerInvariant()
-          $remoteServerHash = (Get-FileHash $remoteServer -Algorithm SHA256).Hash.ToLowerInvariant()
-          @(
-              "$installerHash  Zed-x86_64.exe"
-              "$remoteServerHash  zed-remote-server-windows-x86_64.zip"
-          ) | Set-Content "target/SHA256SUMS.txt" -Encoding ascii
-
           Write-Host "CLI: $cliVersion"
-          Get-Content "target/SHA256SUMS.txt"
+          Write-Host "Installer: $installer"
+          Write-Host "Remote Server: $remoteServer"
 
-      - name: Upload workflow artifacts
+      - name: Upload Windows installer
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: Zed-CN-${{ steps.source.outputs.version }}-windows-x86_64
-          path: |
-            target/Zed-x86_64.exe
-            target/zed-remote-server-windows-x86_64.zip
-            target/SHA256SUMS.txt
+          name: release-Zed-${{ matrix.arch }}.exe
+          path: target/Zed-${{ matrix.arch }}.exe
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload Windows Remote Server
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: release-zed-remote-server-windows-${{ matrix.arch }}.zip
+          path: target/zed-remote-server-windows-${{ matrix.arch }}.zip
+          if-no-files-found: error
+          retention-days: 7
+
+  publish_release:
+    name: Publish GitHub Release assets
+    needs:
+      - validate_source
+      - bundle_linux
+      - build_static_bwrap
+      - bundle_macos
+      - bundle_windows
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out release source
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          ref: ${{ needs.validate_source.outputs.source_ref }}
+          fetch-depth: 0
+          clean: true
+
+      - name: Download all release assets
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: release-*
+          path: release-artifacts
+          merge-multiple: true
+
+      - name: Validate assets and generate checksums
+        run: |
+          expected_assets=(
+            bwrap-linux-aarch64.gz
+            bwrap-linux-x86_64.gz
+            Zed-aarch64.dmg
+            Zed-aarch64.exe
+            zed-linux-aarch64.tar.gz
+            zed-linux-x86_64.tar.gz
+            zed-remote-server-linux-aarch64.gz
+            zed-remote-server-linux-x86_64.gz
+            zed-remote-server-macos-aarch64.gz
+            zed-remote-server-macos-x86_64.gz
+            zed-remote-server-windows-aarch64.zip
+            zed-remote-server-windows-x86_64.zip
+            Zed-x86_64.dmg
+            Zed-x86_64.exe
+          )
+          for asset in "${expected_assets[@]}"; do
+            test -s "release-artifacts/$asset" || {
+              echo "Missing or empty release asset: $asset" >&2
+              exit 1
+            }
+          done
+          actual_count="$(find release-artifacts -maxdepth 1 -type f | wc -l)"
+          test "$actual_count" -eq "${#expected_assets[@]}" || {
+            echo "Expected ${#expected_assets[@]} assets, found $actual_count" >&2
+            find release-artifacts -maxdepth 1 -type f -print
+            exit 1
+          }
+          (cd release-artifacts && sha256sum "${expected_assets[@]}" | sort -k2 > SHA256SUMS.txt)
+          cat release-artifacts/SHA256SUMS.txt
+
+      - name: Upload consolidated workflow artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: Zed-CN-${{ needs.validate_source.outputs.release_version }}-all-platforms
+          path: release-artifacts/*
           if-no-files-found: error
           retention-days: 7
 
       - name: Create or update GitHub Release
-        shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ steps.inputs.outputs.release_tag }}
-          RELEASE_VERSION: ${{ steps.source.outputs.version }}
-          RELEASE_REVISION: ${{ steps.inputs.outputs.release_revision }}
-          SOURCE_SHA: ${{ steps.source.outputs.source_sha }}
-          CREATE_DRAFT: ${{ steps.inputs.outputs.draft }}
+          RELEASE_TAG: ${{ needs.validate_source.outputs.release_tag }}
+          RELEASE_VERSION: ${{ needs.validate_source.outputs.release_version }}
+          RELEASE_REVISION: ${{ needs.validate_source.outputs.release_revision }}
+          SOURCE_SHA: ${{ needs.validate_source.outputs.source_sha }}
+          CREATE_DRAFT: ${{ needs.validate_source.outputs.draft }}
         run: |
-          $ErrorActionPreference = "Stop"
-          $PSNativeCommandUseErrorActionPreference = $false
+          notes_path="release-notes.md"
+          commit_body="$(git show -s --format=%B HEAD)"
+          detailed_notes="$(printf '%s\n' "$commit_body" | sed -n '/^Zed-CN-Release-Notes:$/,/^Zed-CN-Release-Notes-End$/p' | sed '1d;$d')"
+          if [[ -z "$detailed_notes" ]]; then
+            echo "Detailed Zed CN release notes were not found in the Stable source commit." >&2
+            exit 1
+          fi
 
-          $notesPath = "target/release-notes.md"
-          $previousTag = git tag --list "zed-cn-v*-r*" --sort=-version:refname |
-              Where-Object { $_ -ne $env:RELEASE_TAG } |
-              Select-Object -First 1
+          cat > "$notes_path" <<EOF
+          $detailed_notes
 
-          $commitBody = git show -s --format=%B HEAD | Out-String
-          $releaseNotesMatch = [regex]::Match(
-              $commitBody,
-              '(?ms)^Zed-CN-Release-Notes:\s*\r?\n(?<notes>.+?)\r?\nZed-CN-Release-Notes-End(?=\r?\n|$)'
-          )
-          if (-not $releaseNotesMatch.Success) {
-              throw "Detailed Zed CN release notes were not found in the Stable source commit."
-          }
-          $detailedNotes = $releaseNotesMatch.Groups['notes'].Value.Trim()
-          $publicMainSha = "${{ steps.source.outputs.public_main_sha }}"
-          $previousPublicMainSha = $null
-          if ($previousTag) {
-              $previousBody = git show -s --format=%B $previousTag | Out-String
-              $previousSourceMatch = [regex]::Match(
-                  $previousBody,
-                  '(?m)^Public-Main-Source:\s*(?<sha>[0-9a-f]{40})\s*$'
-              )
-              if ($previousSourceMatch.Success) {
-                  $previousPublicMainSha = $previousSourceMatch.Groups['sha'].Value
-              }
-          }
+          ## 构建信息
 
-          if ($previousPublicMainSha) {
-              $publicMainCommitCount = (git rev-list --count "$previousPublicMainSha..$publicMainSha").Trim()
-              $sourceComparison = "公开 main 源码范围：``$previousPublicMainSha..$publicMainSha``（$publicMainCommitCount 个提交）"
-          } else {
-              $sourceComparison = "公开 main 源码提交：``$publicMainSha``（当前 Stable 发布流程首次记录完整源码范围）"
-          }
+          - Zed 版本：$RELEASE_VERSION
+          - 定制修订：r$RELEASE_REVISION
+          - 源码提交：\`$SOURCE_SHA\`
+          - 桌面客户端：Linux、macOS、Windows（x86_64 与 aarch64）
+          - Remote Server：Linux、macOS、Windows（x86_64 与 aarch64）
+          - Linux 沙箱辅助程序：静态 bwrap（x86_64 与 aarch64）
+          - 发布渠道：stable
+          - 代码签名：Windows 未签名，macOS 使用临时签名且未公证
 
-          $notes = @(
-              $detailedNotes
-              ""
-              "## 源码范围"
-              ""
-              $sourceComparison
-              ""
-              "## 构建信息"
-              ""
-              "- Zed 版本：$env:RELEASE_VERSION"
-              "- 定制修订：r$env:RELEASE_REVISION"
-              "- 源码提交：``$env:SOURCE_SHA``"
-              "- 平台：Windows x86_64"
-              "- 发布渠道：stable"
-              "- 代码签名：无"
-              ""
-              "安装包的 SHA-256 见 ``SHA256SUMS.txt``。由于没有 Windows 代码签名，SmartScreen 可能显示警告。"
-          )
-          $notes | Set-Content $notesPath -Encoding utf8NoBOM
+          所有文件的 SHA-256 见 \`SHA256SUMS.txt\`。Windows SmartScreen 和 macOS Gatekeeper 可能显示警告。
+          EOF
 
-          gh release view $env:RELEASE_TAG --repo "${{ github.repository }}" *> $null
-          if ($LASTEXITCODE -ne 0) {
-              $arguments = @(
-                  "release", "create", $env:RELEASE_TAG,
-                  "--repo", "${{ github.repository }}",
-                  "--target", $env:SOURCE_SHA,
-                  "--title", "Zed CN $env:RELEASE_VERSION r$env:RELEASE_REVISION",
-                  "--notes-file", $notesPath
-              )
-              if ($env:CREATE_DRAFT -eq "true") {
-                  $arguments += "--draft"
-              }
-              & gh @arguments
-              if ($LASTEXITCODE -ne 0) {
-                  throw "Failed to create GitHub Release $env:RELEASE_TAG"
-              }
-          } else {
-              gh release edit $env:RELEASE_TAG `
-                  --repo "${{ github.repository }}" `
-                  --title "Zed CN $env:RELEASE_VERSION r$env:RELEASE_REVISION" `
-                  --notes-file $notesPath
-              if ($LASTEXITCODE -ne 0) {
-                  throw "Failed to update GitHub Release $env:RELEASE_TAG"
-              }
-          }
+          if gh release view "$RELEASE_TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release edit "$RELEASE_TAG" \
+              --repo "${{ github.repository }}" \
+              --title "Zed CN $RELEASE_VERSION r$RELEASE_REVISION" \
+              --notes-file "$notes_path"
+          else
+            arguments=(
+              release create "$RELEASE_TAG"
+              --repo "${{ github.repository }}"
+              --target "$SOURCE_SHA"
+              --title "Zed CN $RELEASE_VERSION r$RELEASE_REVISION"
+              --notes-file "$notes_path"
+            )
+            if [[ "$CREATE_DRAFT" == "true" ]]; then
+              arguments+=(--draft)
+            fi
+            gh "${arguments[@]}"
+          fi
 
-          gh release upload $env:RELEASE_TAG `
-              "target/Zed-x86_64.exe" `
-              "target/zed-remote-server-windows-x86_64.zip" `
-              "target/SHA256SUMS.txt" `
-              --repo "${{ github.repository }}" `
-              --clobber
-          if ($LASTEXITCODE -ne 0) {
-              throw "Failed to upload assets to GitHub Release $env:RELEASE_TAG"
-          }
+          gh release upload "$RELEASE_TAG" release-artifacts/* \
+            --repo "${{ github.repository }}" \
+            --clobber

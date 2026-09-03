@@ -9,7 +9,8 @@ use collections::HashMap;
 use git::{
     Oid,
     repository::{
-        CommitData, GitCommitTemplate, InitialGraphCommitData, RepoPath, Worktree as GitWorktree,
+        AUTHOR_SEARCH_QUERY_PREFIX, CommitData, GitCommitTemplate, InitialGraphCommitData,
+        RepoPath, SearchCommitArgs, Worktree as GitWorktree,
     },
     status::{DiffStat, FileStatus, StatusCode, TrackedStatus},
 };
@@ -906,6 +907,24 @@ async fn test_remote_git_graph_data_and_search(
     assert_initial_graph_commits_eq(&remote_initial_graph_data, &local_initial_graph_data);
     assert!(!local_search_results.is_empty());
     assert_eq!(remote_search_results, local_search_results);
+
+    let remote_repository = cx_b.update(|cx| project_b.read(cx).active_repository(cx).unwrap());
+    let (author_result_tx, author_result_rx) = async_channel::unbounded();
+    remote_repository.update(cx_b, |repository, cx| {
+        repository.search_commits(
+            Default::default(),
+            SearchCommitArgs {
+                query: format!("{AUTHOR_SEARCH_QUERY_PREFIX}author4@example.com").into(),
+                case_sensitive: false,
+            },
+            author_result_tx,
+            cx,
+        );
+    });
+    cx_b.run_until_parked();
+
+    assert_eq!(author_result_rx.recv().await.unwrap(), commits[4].sha);
+    assert!(author_result_rx.recv().await.is_err());
 }
 
 #[gpui::test]
