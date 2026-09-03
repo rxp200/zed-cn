@@ -1,4 +1,4 @@
-use std::{collections::HashSet, net::TcpListener, process::Stdio, sync::LazyLock, time::Duration};
+use std::{collections::HashSet, net::TcpListener, sync::LazyLock, time::Duration};
 
 use anyhow::{Context as _, Result, anyhow};
 use collections::HashMap;
@@ -16,7 +16,10 @@ use ui::{
     Button, ButtonStyle, Color, Headline, HeadlineSize, Icon, IconButton, IconName, IconSize,
     Label, LabelSize, prelude::*,
 };
-use util::{ResultExt as _, command::new_command};
+use util::{
+    ResultExt as _,
+    command::{Stdio, new_command},
+};
 use workspace::{ModalView, Workspace};
 
 static URL_PORT_PATTERN: LazyLock<Regex> = LazyLock::new(|| {

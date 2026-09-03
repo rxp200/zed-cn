@@ -2480,6 +2480,68 @@ mod tests {
     }
 
     #[gpui::test]
+    async fn test_split_restore_reinstalls_terminal_tab_bar_buttons(cx: &mut TestAppContext) {
+        cx.executor().allow_parking();
+        init_test(cx);
+
+        let (window_handle, terminal_panel) = init_workspace_with_panel(cx).await;
+        terminal_panel.update(cx, |panel, cx| panel.set_assistant_enabled(true, cx));
+        window_handle
+            .update(cx, |_, window, cx| {
+                terminal_panel.update(cx, |panel, cx| {
+                    panel.add_terminal_shell(false, None, RevealStrategy::Always, window, cx)
+                })
+            })
+            .unwrap()
+            .await
+            .unwrap();
+
+        let restored_items = window_handle
+            .update(cx, |multi_workspace, window, cx| {
+                let workspace = multi_workspace.workspace().clone();
+                let project = workspace.read(cx).project().clone();
+                deserialize_terminal_panel(
+                    workspace.downgrade(),
+                    project,
+                    WorkspaceId::default(),
+                    SerializedTerminalPanel {
+                        items: SerializedItems::WithSplits(SerializedPaneGroup::Pane(
+                            SerializedPane {
+                                active: true,
+                                children: vec![12345],
+                                active_item: Some(12345),
+                                pinned_count: 0,
+                            },
+                        )),
+                        active_item_id: None,
+                    },
+                    terminal_panel.downgrade(),
+                    window,
+                    cx,
+                )
+            })
+            .unwrap()
+            .await
+            .unwrap();
+        assert_eq!(restored_items, 1);
+
+        window_handle
+            .update(cx, |_, window, cx| {
+                terminal_panel.update(cx, |panel, cx| {
+                    panel.active_pane.focus_handle(cx).focus(window, cx);
+                });
+            })
+            .unwrap();
+        let cx = &mut VisualTestContext::from_window(window_handle.into(), cx);
+        cx.run_until_parked();
+
+        assert!(
+            cx.debug_bounds("ICON-ZedAssistant").is_some(),
+            "a restored terminal pane must retain the terminal tab-bar button renderer"
+        );
+    }
+
+    #[gpui::test]
     async fn test_local_terminal_in_local_project(cx: &mut TestAppContext) {
         cx.executor().allow_parking();
         init_test(cx);

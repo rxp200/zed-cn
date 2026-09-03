@@ -5,7 +5,7 @@ pub mod job_debug_queue;
 pub mod pending_op;
 
 use crate::{
-    ProjectEnvironment, ProjectItem, ProjectPath,
+    Project, ProjectEnvironment, ProjectItem, ProjectPath,
     buffer_store::{BufferStore, BufferStoreEvent},
     project_settings::ProjectSettings,
     trusted_worktrees::{
@@ -15,7 +15,9 @@ use crate::{
 };
 use anyhow::{Context as _, Result, anyhow, bail};
 use askpass::{AskPassDelegate, EncryptedPassword, IKnowWhatIAmDoingAndIHaveReadTheDocs};
-use buffer_diff::{BufferDiff, DiffHunk, DiffHunkSecondaryStatus, PendingHunk, PendingSense};
+use buffer_diff::{
+    BufferDiff, DiffHunk, DiffHunkSecondaryStatus, DiffOperations, PendingHunk, PendingSense,
+};
 use client::ProjectId;
 use collections::HashMap;
 pub use conflict_set::{ConflictRegion, ConflictSet, ConflictSetSnapshot, ConflictSetUpdate};
@@ -106,6 +108,7 @@ fn author_matches_query(author_email: &str, query: &str, case_sensitive: bool) -
 
 pub struct GitStore {
     state: GitStoreState,
+    project: Option<WeakEntity<Project>>,
     buffer_store: Entity<BufferStore>,
     worktree_store: Entity<WorktreeStore>,
     repositories: HashMap<RepositoryId, Entity<Repository>>,
@@ -316,6 +319,68 @@ enum DiffKind {
     Staged,
     Uncommitted,
     SinceOid(Option<git::Oid>),
+}
+
+struct GitDiffOperations {
+    project: WeakEntity<Project>,
+    kind: DiffKind,
+}
+
+impl DiffOperations for GitDiffOperations {
+    fn supports_staging(&self) -> bool {
+        matches!(self.kind, DiffKind::Unstaged | DiffKind::Uncommitted)
+    }
+
+    fn supports_unstaging(&self) -> bool {
+        matches!(self.kind, DiffKind::Staged | DiffKind::Uncommitted)
+    }
+
+    fn supports_restore(&self) -> bool {
+        matches!(self.kind, DiffKind::Unstaged | DiffKind::Uncommitted)
+    }
+
+    fn stage(
+        &self,
+        diff: Entity<BufferDiff>,
+        buffer: Option<Entity<Buffer>>,
+        buffer_ranges: Vec<Range<Anchor>>,
+        cx: &mut App,
+    ) {
+        let result = self.project.update(cx, |project, cx| match self.kind {
+            DiffKind::Unstaged => {
+                let buffer = buffer.context("unstaged diff has no worktree buffer")?;
+                project.stage_hunks(buffer, diff, buffer_ranges, cx)
+            }
+            DiffKind::Uncommitted => {
+                let buffer = buffer.context("uncommitted diff has no worktree buffer")?;
+                let secondary_diff = diff
+                    .read(cx)
+                    .secondary_diff()
+                    .context("diff has no unstaged secondary")?;
+                project.stage_hunks(buffer, secondary_diff, buffer_ranges, cx)
+            }
+            _ => Ok(()),
+        });
+        result.and_then(|result| result).log_err();
+    }
+
+    fn unstage(
+        &self,
+        diff: Entity<BufferDiff>,
+        buffer: Option<Entity<Buffer>>,
+        buffer_ranges: Vec<Range<Anchor>>,
+        cx: &mut App,
+    ) {
+        let result = self.project.update(cx, |project, cx| match self.kind {
+            DiffKind::Staged => project.unstage_staged_hunks(diff, buffer_ranges, cx),
+            DiffKind::Uncommitted => {
+                let buffer = buffer.context("uncommitted diff has no worktree buffer")?;
+                project.unstage_uncommitted_hunks(buffer, diff, buffer_ranges, cx)
+            }
+            _ => Ok(()),
+        });
+        result.and_then(|result| result).log_err();
+    }
 }
 
 struct IndexTextFile {
@@ -950,6 +1015,7 @@ impl GitStore {
         let diff_base_setting = ProjectSettings::get_global(cx).git.diff_base;
         GitStore {
             state,
+            project: None,
             buffer_store,
             worktree_store,
             repositories: HashMap::default(),
@@ -964,6 +1030,10 @@ impl GitStore {
             diffs: HashMap::default(),
             buffer_ids_by_index_text_buffer_id: HashMap::default(),
         }
+    }
+
+    pub(crate) fn set_project(&mut self, project: WeakEntity<Project>) {
+        self.project = Some(project);
     }
 
     pub fn init(client: &AnyProtoClient) {
@@ -1636,7 +1706,6 @@ impl GitStore {
                             &buffer_snapshot,
                             buffer_snapshot.language().cloned(),
                             language_registry,
-                            buffer_diff::DiffBaseKind::Oid,
                             cx,
                         )
                     });
@@ -1809,10 +1878,11 @@ impl GitStore {
             this.loading_diffs.remove(&(buffer_id, kind));
 
             let git_store = cx.weak_entity();
+            let project = this.project.clone();
             let diff_state = this
                 .diffs
                 .entry(buffer_id)
-                .or_insert_with(|| cx.new(|cx| BufferGitState::new(git_store, cx)));
+                .or_insert_with(|| cx.new(|cx| BufferGitState::new(git_store.clone(), cx)));
 
             let existing_unstaged_diff = diff_state.read(cx).unstaged_diff();
 
@@ -1828,12 +1898,15 @@ impl GitStore {
                             diff_state.get_or_create_index_text_buffer(index_text_file.clone(), cx)
                         });
                         cx.new(|cx| {
-                            BufferDiff::new_with_base_text_buffer(
+                            let mut diff = BufferDiff::new_with_base_text_buffer(
                                 &text_snapshot,
                                 base_text_buffer,
-                                buffer_diff::DiffBaseKind::Index,
                                 cx,
-                            )
+                            );
+                            if let Some(project) = project.clone() {
+                                diff.set_operations(Arc::new(GitDiffOperations { project, kind }));
+                            }
+                            diff
                         })
                     }
                     DiffKind::Staged => {
@@ -1856,12 +1929,15 @@ impl GitStore {
                         let index_text_snapshot = index_text_buffer.read(cx).text_snapshot();
                         staged_index_text_buffer = Some(index_text_buffer);
                         cx.new(|cx| {
-                            BufferDiff::new_with_base_text_buffer(
+                            let mut diff = BufferDiff::new_with_base_text_buffer(
                                 &index_text_snapshot,
                                 base_text_buffer,
-                                buffer_diff::DiffBaseKind::Head,
                                 cx,
-                            )
+                            );
+                            if let Some(project) = project.clone() {
+                                diff.set_operations(Arc::new(GitDiffOperations { project, kind }));
+                            }
+                            diff
                         })
                     }
                     DiffKind::Uncommitted => {
@@ -1869,12 +1945,15 @@ impl GitStore {
                             diff_state.get_or_create_head_text_buffer(cx)
                         });
                         cx.new(|cx| {
-                            BufferDiff::new_with_base_text_buffer(
+                            let mut diff = BufferDiff::new_with_base_text_buffer(
                                 &text_snapshot,
                                 base_text_buffer,
-                                buffer_diff::DiffBaseKind::Head,
                                 cx,
-                            )
+                            );
+                            if let Some(project) = project.clone() {
+                                diff.set_operations(Arc::new(GitDiffOperations { project, kind }));
+                            }
+                            diff
                         })
                     }
                     DiffKind::SinceOid(_) => {
@@ -1909,12 +1988,18 @@ impl GitStore {
                             let base_text_buffer =
                                 diff_state.get_or_create_index_text_buffer(index_text_file, cx);
                             let unstaged_diff = cx.new(|cx| {
-                                BufferDiff::new_with_base_text_buffer(
+                                let mut diff = BufferDiff::new_with_base_text_buffer(
                                     &text_snapshot,
                                     base_text_buffer,
-                                    buffer_diff::DiffBaseKind::Index,
                                     cx,
-                                )
+                                );
+                                if let Some(project) = project.clone() {
+                                    diff.set_operations(Arc::new(GitDiffOperations {
+                                        project,
+                                        kind: DiffKind::Unstaged,
+                                    }));
+                                }
+                                diff
                             });
                             diff_state.unstaged_diff = Some(unstaged_diff.downgrade());
                             unstaged_diff
