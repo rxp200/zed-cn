@@ -65,6 +65,7 @@
       "shift-tab": "editor::Backtab",
       "ctrl-k ctrl-q": "editor::Rewrap",
       "ctrl-k q": "editor::Rewrap",
+      "ctrl-alt-t": "editor::TranslateSelection",
       "ctrl-backspace": ["editor::DeleteToPreviousWordStart", { "ignore_newlines": false, "ignore_brackets": false }],
       "ctrl-delete": ["editor::DeleteToNextWordEnd", { "ignore_newlines": false, "ignore_brackets": false }],
       "cut": "editor::Cut",
@@ -126,6 +127,8 @@
       "ctrl-alt-shift-e": "editor::ToggleEditPrediction",
       "f9": "editor::ToggleBreakpoint",
       "shift-f9": "editor::EditLogBreakpoint",
+      // Runs the nearest runnable task at the cursor, same as the gutter run button.
+      "ctrl-alt-n": "editor::SpawnNearestTask",
     },
   },
   {
@@ -569,6 +572,7 @@
       "shift-f12": "editor::GoToImplementation",
       "alt-ctrl-f12": "editor::GoToTypeDefinitionSplit",
       "alt-shift-f12": "editor::FindAllReferences",
+      "ctrl-k ctrl-h": "call_hierarchy::ShowIncomingCalls",
       "ctrl-m": "editor::MoveToEnclosingBracket", // from jetbrains
       "ctrl-|": "editor::MoveToEnclosingBracket",
       "ctrl-{": "editor::Fold",
@@ -612,6 +616,14 @@
     "bindings": {
       "ctrl-k v": "svg::OpenPreviewToTheSide",
       "ctrl-shift-v": "svg::OpenPreview",
+    },
+  },
+  {
+    "context": "Editor && (extension == csv || extension == tsv || extension == ssv || extension == psv)",
+    "use_key_equivalents": true,
+    "bindings": {
+      "ctrl-k v": "tabular_data::OpenPreviewToTheSide",
+      "ctrl-shift-v": "tabular_data::OpenPreview",
     },
   },
   {
@@ -722,6 +734,9 @@
       "alt-t": "task::Rerun",
       "alt-shift-t": "task::Spawn",
       "alt-shift-r": ["task::Spawn", { "reveal_target": "center" }],
+      // Spawns the task tagged "run-current" (e.g. a "run current file" task);
+      // falls back to the task picker when no matching task is found.
+      "ctrl-alt-m": ["task::Spawn", { "task_tag": "run-current" }],
       // also possible to spawn tasks by name:
       // "foo-bar": ["task::Spawn", { "task_name": "MyTask", "reveal_target": "dock" }]
       // or by tag:
@@ -823,6 +838,12 @@
     "context": "Editor && renaming",
     "bindings": {
       "enter": "editor::ConfirmRename",
+    },
+  },
+  {
+    "context": "Editor && inline_input",
+    "bindings": {
+      "enter": "menu::Confirm",
     },
   },
   {
@@ -1027,6 +1048,8 @@
       "right": "git_panel::ExpandSelectedEntry",
       "up": "git_panel::PreviousEntry",
       "down": "git_panel::NextEntry",
+      "shift-up": "menu::SelectPrevious",
+      "shift-down": "menu::SelectNext",
       "enter": "menu::Confirm",
       "alt-y": "git::StageFile",
       "alt-shift-y": "git::UnstageFile",
@@ -1039,7 +1062,7 @@
       "alt-ctrl-shift-c": "workspace::CopyRelativePath",
       "tab": "git_panel::FocusEditor",
       "shift-tab": "git_panel::FocusEditor",
-      "escape": "git_panel::ToggleFocus",
+      "escape": "menu::Cancel",
       "alt-enter": "menu::SecondaryConfirm",
       "delete": ["git::RestoreFile", { "skip_prompt": false }],
       "backspace": ["git::RestoreFile", { "skip_prompt": false }],
@@ -1182,6 +1205,14 @@
     "context": "ChannelModal",
     "bindings": {
       "tab": "channel_modal::ToggleMode",
+    },
+  },
+  {
+    "context": "CallHierarchyPicker > Picker > Editor",
+    "bindings": {
+      "ctrl-k ctrl-h": "call_hierarchy::ToggleDirection",
+      "ctrl-k right": "menu::SelectChild",
+      "ctrl-k left": "menu::SelectParent",
     },
   },
   {

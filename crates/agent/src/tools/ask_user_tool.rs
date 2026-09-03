@@ -58,9 +58,7 @@ pub enum AskUserToolOutput {
 impl From<AskUserToolOutput> for LanguageModelToolResultContent {
     fn from(value: AskUserToolOutput) -> Self {
         match value {
-            AskUserToolOutput::Answered { selected } => {
-                format!("The user selected: {selected}").into()
-            }
+            AskUserToolOutput::Answered { selected } => format!("用户选择了：{selected}").into(),
             AskUserToolOutput::Error { error } => error.into(),
         }
     }
@@ -85,7 +83,7 @@ impl AgentTool for AskUserTool {
     ) -> SharedString {
         match input {
             Ok(input) if !input.question.is_empty() => SharedString::from(input.question),
-            _ => "Asking a question".into(),
+            _ => "正在询问问题".into(),
         }
     }
 
@@ -105,10 +103,10 @@ impl AgentTool for AskUserTool {
 
             if !input.allow_free_text && input.options.len() < 2 {
                 return Err(AskUserToolOutput::Error {
-                    error: "The `ask_user` tool needs at least two `options`, or \
-                            `allow_free_text` set to true. Ask an open-ended question \
-                            in prose instead."
-                        .to_string(),
+                    error:
+                        "`ask_user` 工具需要至少两个 `options`，或将 `allow_free_text` 设为 true。\
+                            请改用自然语言提出开放式问题。"
+                            .to_string(),
                 });
             }
 
@@ -127,29 +125,28 @@ impl AgentTool for AskUserTool {
                     string_field(&content, OTHER_FIELD)
                         .or_else(|| string_field(&content, CHOICE_FIELD))
                         .ok_or_else(|| AskUserToolOutput::Error {
-                            error: "The user submitted the form without providing an answer."
-                                .to_string(),
+                            error: "用户提交了表单但没有提供答案。".to_string(),
                         })?
                 }
                 acp::ElicitationAction::Decline => {
                     return Err(AskUserToolOutput::Error {
-                        error: "The user declined to answer the question.".to_string(),
+                        error: "用户拒绝回答该问题。".to_string(),
                     });
                 }
                 acp::ElicitationAction::Cancel => {
                     return Err(AskUserToolOutput::Error {
-                        error: "The user cancelled the question without answering.".to_string(),
+                        error: "用户未作答即取消了问题。".to_string(),
                     });
                 }
                 _ => {
                     return Err(AskUserToolOutput::Error {
-                        error: "The question was dismissed without an answer.".to_string(),
+                        error: "问题在未得到回答时被关闭。".to_string(),
                     });
                 }
             };
 
             event_stream.update_fields(
-                acp::ToolCallUpdateFields::new().title(format!("Answered: {selected}")),
+                acp::ToolCallUpdateFields::new().title(format!("已回答：{selected}")),
             );
 
             Ok(AskUserToolOutput::Answered { selected })
@@ -174,7 +171,7 @@ fn build_schema(options: &[String], allow_free_text: bool) -> acp::ElicitationSc
         schema = schema.property(
             CHOICE_FIELD,
             acp::StringPropertySchema::new()
-                .title("Choose an option")
+                .title("选择一个选项")
                 .one_of(enum_options),
             !allow_free_text,
         );
@@ -182,9 +179,9 @@ fn build_schema(options: &[String], allow_free_text: bool) -> acp::ElicitationSc
 
     if allow_free_text {
         let title = if options.is_empty() {
-            "Your answer"
+            "你的回答"
         } else {
-            "Or type your own answer"
+            "或输入你自己的回答"
         };
         schema = schema.property(
             OTHER_FIELD,
@@ -351,7 +348,7 @@ mod tests {
 
         match task.await {
             Err(AskUserToolOutput::Error { error }) => {
-                assert!(error.contains("declined"), "got: {error}");
+                assert!(error.contains("拒绝"), "got: {error}");
             }
             other => panic!("expected an error, got {other:?}"),
         }
@@ -377,7 +374,7 @@ mod tests {
 
         match result {
             Err(AskUserToolOutput::Error { error }) => {
-                assert!(error.contains("at least two"), "got: {error}");
+                assert!(error.contains("至少两个"), "got: {error}");
             }
             other => panic!("expected an error, got {other:?}"),
         }

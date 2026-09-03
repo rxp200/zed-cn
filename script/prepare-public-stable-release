@@ -1,0 +1,233 @@
+#!/usr/bin/env python3
+
+import argparse
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+
+PROTECTED_STABLE_PATHS = [".rules", "AGENTS.md"]
+STABLE_OVERLAY_PATHS = [
+    ".rules",
+    "AGENTS.md",
+    "Cargo.lock",
+    "crates/zed/Cargo.toml",
+    "crates/zed/RELEASE_CHANNEL",
+]
+PROTOCOL_AUDIT_PATHS = [
+    "crates/proto",
+    "crates/rpc",
+    "crates/remote",
+    "crates/remote_server",
+    "crates/project",
+    "crates/terminal",
+    "crates/lsp",
+    "crates/dap",
+    "crates/dap_adapters",
+    "crates/debugger_tools",
+    "crates/debugger_ui",
+    "crates/project/src/debugger",
+    "crates/agent",
+]
+
+
+def git(*arguments: str, capture: bool = True) -> str:
+    result = subprocess.run(
+        ["git", *arguments],
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE if capture else None,
+        stderr=subprocess.PIPE if capture else None,
+    )
+    if result.returncode != 0:
+        detail = result.stderr.strip() if capture else ""
+        raise RuntimeError(f"git {' '.join(arguments)} failed: {detail}")
+    return result.stdout.strip() if capture else ""
+
+
+def git_object(reference: str) -> str:
+    return git("rev-parse", "--verify", f"{reference}^{{commit}}")
+
+
+def replace_manifest_version(path: Path, version: str) -> None:
+    text = path.read_text()
+    updated, count = re.subn(
+        r'(?m)^version\s*=\s*"[^"]+"',
+        f'version = "{version}"',
+        text,
+        count=1,
+    )
+    if count != 1:
+        raise RuntimeError(f"expected one package version in {path}")
+    path.write_text(updated)
+
+
+def replace_lockfile_zed_version(path: Path, version: str) -> None:
+    text = path.read_text()
+    package_pattern = re.compile(
+        r'(?ms)(\[\[package\]\]\nname = "zed"\nversion = ")[^"]+("\n)'
+    )
+    updated, count = package_pattern.subn(rf"\g<1>{version}\g<2>", text, count=1)
+    if count != 1:
+        raise RuntimeError(f"expected one zed package entry in {path}")
+    path.write_text(updated)
+
+
+def changed_protocol_paths(stable_commit: str) -> list[str]:
+    output = git(
+        "diff",
+        "--cached",
+        "--name-only",
+        stable_commit,
+        "--",
+        *PROTOCOL_AUDIT_PATHS,
+    )
+    return output.splitlines() if output else []
+
+
+def write_release_commit_message(source_commit: str, version: str) -> Path:
+    target = Path("target")
+    target.mkdir(exist_ok=True)
+    path = target / "stable-release-commit-message.md"
+    path.write_text(
+        f"""准备 Zed CN {version} Stable 发布
+
+Zed-CN-Release-Notes:
+## 本次更新
+
+<!-- 用一段中文概括本次发布最重要的用户可见变化。 -->
+
+## 功能
+
+- <!-- 逐项描述新增功能、相关设置或操作方式；没有则写“无”。 -->
+
+## 改进
+
+- <!-- 逐项描述体验、性能、兼容性或汉化改进；没有则写“无”。 -->
+
+## 错误修复
+
+- <!-- 逐项描述修复的问题及用户影响；没有则写“无”。 -->
+
+## 重大变更与通知
+
+- <!-- 描述兼容性、键位、设置迁移、签名或远程开发注意事项；没有则写“无”。 -->
+Zed-CN-Release-Notes-End
+
+Public-Main-Source: {source_commit}
+"""
+    )
+    return path
+
+
+def validate_generated_tree(source_commit: str, stable_commit: str) -> None:
+    unexpected = git(
+        "diff",
+        "--name-only",
+        source_commit,
+        "--",
+        ":(exclude)" + STABLE_OVERLAY_PATHS[0],
+        ":(exclude)" + STABLE_OVERLAY_PATHS[1],
+        ":(exclude)" + STABLE_OVERLAY_PATHS[2],
+        ":(exclude)" + STABLE_OVERLAY_PATHS[3],
+        ":(exclude)" + STABLE_OVERLAY_PATHS[4],
+    )
+    if unexpected:
+        raise RuntimeError(
+            "generated Stable tree differs from public main outside the approved "
+            f"Stable overlay paths:\n{unexpected}"
+        )
+
+    for path in PROTECTED_STABLE_PATHS:
+        generated_blob = git("rev-parse", f":{path}")
+        stable_blob = git("rev-parse", f"{stable_commit}:{path}")
+        if generated_blob != stable_blob:
+            raise RuntimeError(f"{path} does not match the official Stable baseline")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Generate a public Stable release tree from the complete public main tree "
+            "while retaining the official Stable version, channel, and protected rules."
+        )
+    )
+    parser.add_argument("--source-ref", default="github/main")
+    parser.add_argument("--stable-tag", required=True)
+    parser.add_argument(
+        "--protocol-audit-approved",
+        action="store_true",
+        help="confirm that all reported protocol-sensitive differences were reviewed",
+    )
+    arguments = parser.parse_args()
+
+    root = Path(git("rev-parse", "--show-toplevel"))
+    if Path.cwd().resolve() != root.resolve():
+        raise RuntimeError("run this script from the repository root")
+    if git("status", "--porcelain"):
+        raise RuntimeError("the Stable worktree must be clean before generation")
+
+    tag_match = re.fullmatch(r"v(\d+\.\d+\.\d+)", arguments.stable_tag)
+    if tag_match is None:
+        raise RuntimeError("--stable-tag must be a formal Stable tag such as v1.17.2")
+    version = tag_match.group(1)
+    source_commit = git_object(arguments.source_ref)
+    stable_commit = git_object(arguments.stable_tag)
+
+    stable_channel = git("show", f"{stable_commit}:crates/zed/RELEASE_CHANNEL").strip()
+    stable_manifest = git("show", f"{stable_commit}:crates/zed/Cargo.toml")
+    stable_version_match = re.search(r'(?m)^version\s*=\s*"([^"]+)"', stable_manifest)
+    if stable_channel != "stable" or stable_version_match is None:
+        raise RuntimeError("the selected official tag is not a valid Stable source")
+    if stable_version_match.group(1) != version:
+        raise RuntimeError(
+            f"tag version {version} does not match its Zed manifest version "
+            f"{stable_version_match.group(1)}"
+        )
+
+    if subprocess.run(
+        ["git", "merge-base", "--is-ancestor", stable_commit, "HEAD"], check=False
+    ).returncode != 0:
+        raise RuntimeError(
+            "the current Stable branch must descend from the selected official Stable tag"
+        )
+
+    git("read-tree", "--reset", "-u", source_commit, capture=False)
+    git("checkout", stable_commit, "--", *PROTECTED_STABLE_PATHS, capture=False)
+
+    Path("crates/zed/RELEASE_CHANNEL").write_text("stable\n")
+    replace_manifest_version(Path("crates/zed/Cargo.toml"), version)
+    replace_lockfile_zed_version(Path("Cargo.lock"), version)
+    git("add", "--all", capture=False)
+
+    validate_generated_tree(source_commit, stable_commit)
+    protocol_paths = changed_protocol_paths(stable_commit)
+    if protocol_paths:
+        print("Protocol-sensitive differences from the official Stable baseline:")
+        for path in protocol_paths:
+            print(f"  {path}")
+        if not arguments.protocol_audit_approved:
+            print(
+                "\nReview these differences for official Remote Server compatibility, "
+                "then rerun with --protocol-audit-approved if the audit passes.",
+                file=sys.stderr,
+            )
+            return 2
+
+    print(f"Prepared Stable tree from public main: {source_commit}")
+    print(f"Official Stable baseline: {arguments.stable_tag} ({stable_commit})")
+    commit_message_path = write_release_commit_message(source_commit, version)
+    print(f"Release identity: stable/{version}")
+    print("The index contains the complete generated release tree.")
+    print(f"Write detailed Chinese release notes in {commit_message_path}, then commit with:")
+    print(f"  git commit -F {commit_message_path}")
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except RuntimeError as error:
+        print(f"error: {error}", file=sys.stderr)
+        raise SystemExit(1)
