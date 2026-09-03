@@ -29,9 +29,10 @@ use util::ResultExt;
 use crate::provider::anthropic::{AnthropicEventMapper, into_anthropic};
 use crate::provider::google::{GoogleEventMapper, into_google};
 use crate::provider::open_ai::{
-    ChatCompletionMaxTokensParameter, OpenAiEventMapper, OpenAiResponseEventMapper, into_open_ai,
+    ChatCompletionMaxTokensParameter, OpenAiResponseEventMapper, into_open_ai,
     into_open_ai_response,
 };
+use language_model::chat_completion::{ChatCompletionEventMapper, ResponseStreamEvent};
 
 fn normalize_reasoning_effort(effort: &str) -> Option<ReasoningEffort> {
     match effort.trim().to_ascii_lowercase().as_str() {
@@ -300,7 +301,7 @@ impl LanguageModelProvider for OpenCodeLanguageModelProvider {
                     .into()
             })
             .description(InlineDescription::Text(
-                "To use OpenCode models in Zed, you need an API key.".into(),
+                "要在 Zed 中使用 OpenCode 模型，您需要一个 API 密钥。".into(),
             )),
         ))
     }
@@ -423,10 +424,8 @@ impl OpenCodeLanguageModel {
         http_client: Arc<dyn HttpClient>,
         extra_headers: CustomHeaders,
         cx: &AsyncApp,
-    ) -> BoxFuture<
-        'static,
-        Result<futures::stream::BoxStream<'static, Result<open_ai::ResponseStreamEvent>>>,
-    > {
+    ) -> BoxFuture<'static, Result<futures::stream::BoxStream<'static, Result<ResponseStreamEvent>>>>
+    {
         // OpenAI crate appends /chat/completions to api_url, so we pass base + "/v1"
         let base_url = self.base_api_url(cx);
         let api_url: SharedString = format!("{base_url}/v1").into();
@@ -670,9 +669,13 @@ impl LanguageModel for OpenCodeLanguageModel {
                 };
                 let stream =
                     self.stream_anthropic(anthropic_request, http_client, extra_headers, cx);
+                let executor = cx.background_executor().clone();
                 async move {
                     let mapper = AnthropicEventMapper::new(PROVIDER_NAME, PROVIDER_ID);
-                    Ok(mapper.map_stream(stream.await?).boxed())
+                    Ok(language_model::stream_in_background(
+                        mapper.map_stream(stream.await?).boxed(),
+                        executor,
+                    ))
                 }
                 .boxed()
             }
@@ -700,9 +703,13 @@ impl LanguageModel for OpenCodeLanguageModel {
                 };
                 let stream =
                     self.stream_openai_chat(openai_request, http_client, extra_headers, cx);
+                let executor = cx.background_executor().clone();
                 async move {
-                    let mapper = OpenAiEventMapper::new();
-                    Ok(mapper.map_stream(stream.await?).boxed())
+                    let mapper = ChatCompletionEventMapper::new();
+                    Ok(language_model::stream_in_background(
+                        mapper.map_stream(stream.await?).boxed(),
+                        executor,
+                    ))
                 }
                 .boxed()
             }
@@ -726,9 +733,13 @@ impl LanguageModel for OpenCodeLanguageModel {
                 };
                 let stream =
                     self.stream_openai_response(response_request, http_client, extra_headers, cx);
+                let executor = cx.background_executor().clone();
                 async move {
                     let mapper = OpenAiResponseEventMapper::new(PROVIDER_ID);
-                    Ok(mapper.map_stream(stream.await?).boxed())
+                    Ok(language_model::stream_in_background(
+                        mapper.map_stream(stream.await?).boxed(),
+                        executor,
+                    ))
                 }
                 .boxed()
             }
@@ -764,7 +775,7 @@ struct ConfigurationView {
 impl ConfigurationView {
     fn new(state: Entity<State>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let api_key_editor = cx.new(|cx| {
-            InputField::new(window, cx, "sk-00000000000000000000000000000000").label("API key")
+            InputField::new(window, cx, "sk-00000000000000000000000000000000").label("API 密钥")
         });
 
         cx.observe(&state, |_, _, cx| {
@@ -856,13 +867,13 @@ impl Render for ConfigurationView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let env_var_set = self.state.read(cx).api_key_state.is_from_env_var();
         let configured_card_label = if env_var_set {
-            format!("API key set in {API_KEY_ENV_VAR_NAME} environment variable")
+            format!("API 密钥已在 {API_KEY_ENV_VAR_NAME} 环境变量中设置")
         } else {
             let api_url = OpenCodeLanguageModelProvider::api_url(cx);
             if api_url == OPENCODE_API_URL {
-                "API key configured".to_string()
+                "API 密钥已配置".to_string()
             } else {
-                format!("API key configured for {}", api_url)
+                format!("已为 {} 配置 API 密钥", api_url)
             }
         };
 
@@ -875,7 +886,7 @@ impl Render for ConfigurationView {
                 .disabled(env_var_set)
                 .when(env_var_set, |this| {
                     this.tooltip_label(format!(
-                        "To reset your API key, unset the {API_KEY_ENV_VAR_NAME} environment variable."
+                        "要重置您的 API 密钥，请取消设置 {API_KEY_ENV_VAR_NAME} 环境变量。"
                     ))
                 })
                 .on_click(cx.listener(|this, _, window, cx| this.reset_api_key(window, cx)))
@@ -884,37 +895,40 @@ impl Render for ConfigurationView {
 
         let api_key_section = v_flex()
             .on_action(cx.listener(Self::save_api_key))
-            .child(Label::new(
-                "To use OpenCode models in Zed, you need an API key:",
-            ).color(Color::Muted))
+            .child(
+                Label::new("要在 Zed 中使用 OpenCode 模型，您需要一个 API 密钥：")
+                    .color(Color::Muted),
+            )
             .child(
                 List::new()
                     .child(
                         ListBulletItem::new("")
-                            .child(Label::new("Sign in and get your key at").color(Color::Muted))
+                            .child(Label::new("登录并获取您的密钥于").color(Color::Muted))
                             .child(ButtonLink::new(
-                                "OpenCode Console",
+                                "OpenCode 控制台",
                                 "https://opencode.ai/auth",
                             )),
                     )
                     .when(is_editing, |this| {
-                        this.child(ListBulletItem::new(
-                            "Paste your API key below and hit enter to start using OpenCode",
-                        ).label_color(Color::Muted))
+                        this.child(
+                            ListBulletItem::new("在下方粘贴您的 API 密钥并按回车开始使用 OpenCode")
+                                .label_color(Color::Muted),
+                        )
                     }),
             )
             .child(api_key_control)
             .child(
                 Label::new(format!(
-                    "You can also set the {API_KEY_ENV_VAR_NAME} environment variable and restart Zed."
+                    "您也可以设置 {API_KEY_ENV_VAR_NAME} 环境变量并重新启动 Zed。"
                 ))
                 .size(LabelSize::Small)
-                .color(Color::Muted).mt_1p5(),
+                .color(Color::Muted)
+                .mt_1p5(),
             )
             .into_any_element();
 
         if self.load_credentials_task.is_some() {
-            Label::new("Loading Credentials…").into_any_element()
+            Label::new("正在加载凭据…").into_any_element()
         } else {
             let settings = OpenCodeLanguageModelProvider::settings(cx);
             let show_zen = settings.show_zen_models;
@@ -922,11 +936,11 @@ impl Render for ConfigurationView {
 
             let subscription_toggles = v_flex()
                 .gap_2()
-                .child(Label::new("Subscriptions"))
+                .child(Label::new("订阅"))
                 .child(
                     Switch::new("opencode-show-zen-models", show_zen.into())
                         .full_width(true)
-                        .label("Show Zen models")
+                        .label("显示 Zen 模型")
                         .label_position(SwitchLabelPosition::Start)
                         .on_click(cx.listener(|this, state, window, cx| {
                             this.set_subscription_enabled(
@@ -941,7 +955,7 @@ impl Render for ConfigurationView {
                 .child(
                     Switch::new("opencode-show-go-models", show_go.into())
                         .full_width(true)
-                        .label("Show Go models")
+                        .label("显示 Go 模型")
                         .label_position(SwitchLabelPosition::Start)
                         .on_click(cx.listener(|this, state, window, cx| {
                             this.set_subscription_enabled(
@@ -955,7 +969,7 @@ impl Render for ConfigurationView {
 
             let no_subscriptions_warning = if !show_zen && !show_go {
                 Some(Banner::new().severity(Severity::Warning).child(Label::new(
-                    "No subscriptions enabled. Enable at least one subscription to use OpenCode.",
+                    "未启用任何订阅。请启用至少一个订阅以使用 OpenCode。",
                 )))
             } else {
                 None

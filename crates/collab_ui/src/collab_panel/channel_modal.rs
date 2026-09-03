@@ -174,12 +174,12 @@ impl Render for ChannelModal {
                                         ui::ToggleState::Unselected
                                     },
                                 )
-                                .label("Public")
+                                .label("公开")
                                 .on_click(cx.listener(Self::set_channel_visibility)),
                             )
                             .children(
                                 (visibility == ChannelVisibility::Public).then_some(
-                                    Button::new("copy-link", "Copy Link")
+                                    Button::new("copy-link", "复制链接")
                                         .label_size(LabelSize::Small)
                                         .on_click(cx.listener(move |this, _, _, cx| {
                                             if let Some(channel) = this
@@ -207,7 +207,7 @@ impl Render for ChannelModal {
                                     .when(mode == Mode::ManageMembers, |this| {
                                         this.border_color(cx.theme().colors().border)
                                     })
-                                    .child(Label::new("Manage Members"))
+                                    .child(Label::new("管理成员"))
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.set_mode(Mode::ManageMembers, window, cx);
                                     })),
@@ -222,7 +222,7 @@ impl Render for ChannelModal {
                                     .when(mode == Mode::InviteMembers, |this| {
                                         this.border_color(cx.theme().colors().border)
                                     })
-                                    .child(Label::new("Invite Members"))
+                                    .child(Label::new("邀请成员"))
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.set_mode(Mode::InviteMembers, window, cx);
                                     })),
@@ -262,7 +262,7 @@ impl PickerDelegate for ChannelModalDelegate {
     }
 
     fn placeholder_text(&self, _window: &mut Window, _cx: &mut App) -> Arc<str> {
-        "Search collaborator by username...".into()
+        "按用户名搜索协作者...".into()
     }
 
     fn match_count(&self) -> usize {
@@ -428,14 +428,14 @@ impl PickerDelegate for ChannelModalDelegate {
                         Mode::ManageMembers => slot
                             .children(
                                 if request_status == Some(proto::channel_member::Kind::Invitee) {
-                                    Some(Label::new("Invited"))
+                                    Some(Label::new("已邀请"))
                                 } else {
                                     None
                                 },
                             )
                             .children(match membership.map(|m| m.role) {
-                                Some(ChannelRole::Admin) => Some(Label::new("Admin")),
-                                Some(ChannelRole::Guest) => Some(Label::new("Guest")),
+                                Some(ChannelRole::Admin) => Some(Label::new("管理员")),
+                                Some(ChannelRole::Guest) => Some(Label::new("访客")),
                                 _ => None,
                             })
                             .when(!is_me, |el| {
@@ -458,10 +458,10 @@ impl PickerDelegate for ChannelModalDelegate {
                             ),
                         Mode::InviteMembers => match request_status {
                             Some(proto::channel_member::Kind::Invitee) => {
-                                slot.children(Some(Label::new("Invited")))
+                                slot.children(Some(Label::new("已邀请")))
                             }
                             Some(proto::channel_member::Kind::Member) => {
-                                slot.children(Some(Label::new("Member")))
+                                slot.children(Some(Label::new("成员")))
                             }
                             _ => slot,
                         },
@@ -531,7 +531,7 @@ impl ChannelModalDelegate {
                 cx.notify();
             })
         })
-        .detach_and_prompt_err("Failed to update role", window, cx, |_, _, _| None);
+        .detach_and_prompt_err("更新角色失败", window, cx, |_, _, _| None);
         Some(())
     }
 
@@ -572,7 +572,7 @@ impl ChannelModalDelegate {
                 cx.notify();
             })
         })
-        .detach_and_prompt_err("Failed to remove member", window, cx, |_, _, _| None);
+        .detach_and_prompt_err("移除成员失败", window, cx, |_, _, _| None);
         Some(())
     }
 
@@ -603,7 +603,7 @@ impl ChannelModalDelegate {
                 cx.notify();
             })
         })
-        .detach_and_prompt_err("Failed to invite member", window, cx, |_, _, _| None);
+        .detach_and_prompt_err("邀请成员失败", window, cx, |_, _, _| None);
     }
 
     fn show_context_menu(
@@ -622,7 +622,7 @@ impl ChannelModalDelegate {
 
             if role == ChannelRole::Admin || role == ChannelRole::Member {
                 let picker = picker.clone();
-                menu = menu.entry("Demote to Guest", None, move |window, cx| {
+                menu = menu.entry("降级为访客", None, move |window, cx| {
                     picker.update(cx, |picker, cx| {
                         picker
                             .delegate
@@ -634,9 +634,9 @@ impl ChannelModalDelegate {
             if role == ChannelRole::Admin || role == ChannelRole::Guest {
                 let picker = picker.clone();
                 let label = if role == ChannelRole::Guest {
-                    "Promote to Member"
+                    "提升为成员"
                 } else {
-                    "Demote to Member"
+                    "降级为成员"
                 };
 
                 menu = menu.entry(label, None, move |window, cx| {
@@ -650,7 +650,7 @@ impl ChannelModalDelegate {
 
             if role == ChannelRole::Member || role == ChannelRole::Guest {
                 let picker = picker.clone();
-                menu = menu.entry("Promote to Admin", None, move |window, cx| {
+                menu = menu.entry("提升为管理员", None, move |window, cx| {
                     picker.update(cx, |picker, cx| {
                         picker
                             .delegate
@@ -660,7 +660,7 @@ impl ChannelModalDelegate {
             };
 
             menu = menu.separator();
-            menu = menu.entry("Remove from Channel", None, {
+            menu = menu.entry("从频道移除", None, {
                 let picker = picker.clone();
                 move |window, cx| {
                     picker.update(cx, |picker, cx| {

@@ -5,7 +5,7 @@ use crate::{
 use anyhow::{Context as _, Result};
 use buffer_diff::DiffHunkStatus;
 use editor::{
-    DiffHunkDelegate, Editor, EditorEvent, ResolvedDiffHunks, SplittableEditor,
+    DiffHunkRenderer, Editor, EditorEvent, SplittableEditor,
     actions::{GoToHunk, GoToPreviousHunk},
 };
 use git::{Commit, UnstageAll, UnstageAndNext};
@@ -26,7 +26,6 @@ use std::{
     sync::Arc,
 };
 use ui::{DiffStat, Divider, Icon, Tooltip, Window, prelude::*};
-use util::ResultExt as _;
 use workspace::{
     ItemNavHistory, SerializableItem, ToolbarItemEvent, ToolbarItemLocation, ToolbarItemView,
     Workspace,
@@ -34,50 +33,9 @@ use workspace::{
     searchable::SearchableItemHandle,
 };
 
-pub(crate) struct StagedDiffDelegate;
+pub(crate) struct StagedDiffHunkRenderer;
 
-impl DiffHunkDelegate for StagedDiffDelegate {
-    fn toggle(
-        &self,
-        hunks: Vec<ResolvedDiffHunks>,
-        editor: &mut Editor,
-        window: &mut Window,
-        cx: &mut Context<Editor>,
-    ) {
-        self.stage_or_unstage(false, hunks, editor, window, cx);
-    }
-
-    fn stage_or_unstage(
-        &self,
-        stage: bool,
-        hunks: Vec<ResolvedDiffHunks>,
-        editor: &mut Editor,
-        _window: &mut Window,
-        cx: &mut Context<Editor>,
-    ) {
-        if stage {
-            return;
-        }
-        let Some(project) = editor.project().cloned() else {
-            return;
-        };
-        for hunks in hunks {
-            let index_ranges = hunks
-                .hunks
-                .into_iter()
-                .map(|hunk| hunk.buffer_range)
-                .collect::<Vec<_>>();
-            if index_ranges.is_empty() {
-                continue;
-            }
-            project
-                .update(cx, |project, cx| {
-                    project.unstage_staged_hunks(hunks.diff, index_ranges, cx)
-                })
-                .log_err();
-        }
-    }
-
+impl DiffHunkRenderer for StagedDiffHunkRenderer {
     fn render_hunk_controls(
         &self,
         row: u32,
@@ -110,9 +68,9 @@ impl DiffHunkDelegate for StagedDiffDelegate {
             .block_mouse_except_scroll()
             .shadow_md()
             .child(
-                Button::new(("unstage", row as u64), "Unstage")
+                Button::new(("unstage", row as u64), "取消暂存")
                     .alpha(if status.is_pending() { 0.66 } else { 1.0 })
-                    .tooltip(Tooltip::text("Unstage Hunk"))
+                    .tooltip(Tooltip::text("取消暂存代码块"))
                     .on_click({
                         let editor = editor.clone();
                         move |_event, window, cx| {
@@ -226,9 +184,9 @@ impl StagedDiff {
             DiffMultibuffer::new(
                 branch_diff,
                 Capability::ReadOnly,
-                "No staged changes",
+                "没有暂存的更改",
                 move |editor, cx| {
-                    editor.set_diff_hunk_delegate(Some(Arc::new(StagedDiffDelegate)), cx);
+                    editor.set_diff_hunk_renderer(Some(Arc::new(StagedDiffHunkRenderer)), cx);
                     editor.rhs_editor().update(cx, |rhs_editor, _cx| {
                         rhs_editor.set_read_only(true);
                         rhs_editor.register_addon(GitPanelAddon {
@@ -514,7 +472,6 @@ impl SerializableItem for StagedDiff {
         _: &mut Workspace,
         _: workspace::ItemId,
         _: bool,
-        _: &mut Window,
         _: &mut Context<Self>,
     ) -> Option<Task<Result<()>>> {
         Some(Task::ready(Ok(())))
@@ -676,9 +633,9 @@ impl Render for StagedDiffToolbar {
                 h_group_sm()
                     .when(button_states.selection, |this| {
                         this.child(
-                            Button::new("unstage", "Unstage")
+                            Button::new("unstage", "取消暂存")
                                 .disabled(!button_states.unstage)
-                                .tooltip(Tooltip::text("Unstage Selected Hunks"))
+                                .tooltip(Tooltip::text("取消暂存选中的代码块"))
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.unstage_selected_staged_hunks(false, window, cx)
                                 })),
@@ -686,7 +643,7 @@ impl Render for StagedDiffToolbar {
                     })
                     .when(!button_states.selection, |this| {
                         this.child(
-                            Button::new("unstage", "Unstage")
+                            Button::new("unstage", "取消暂存")
                                 .disabled(!button_states.unstage)
                                 .tooltip(Tooltip::for_action_title_in(
                                     "Unstage and Go to Next Hunk",
@@ -701,7 +658,7 @@ impl Render for StagedDiffToolbar {
             )
             .child(Divider::vertical())
             .child(
-                Button::new("unstage-all", "Unstage All")
+                Button::new("unstage-all", "取消全部暂存")
                     .width(rems_from_px(80_f32))
                     .disabled(!button_states.unstage_all)
                     .tooltip(Tooltip::for_action_title_in(
@@ -713,7 +670,7 @@ impl Render for StagedDiffToolbar {
             )
             .child(Divider::vertical())
             .child(
-                Button::new("commit", "Commit")
+                Button::new("commit", "提交")
                     .tooltip(Tooltip::for_action_title_in(
                         "Commit",
                         &Commit,

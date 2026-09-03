@@ -1,5 +1,8 @@
 # Contributing to Zed
 
+> [!IMPORTANT]
+> This document is inherited from the official [Zed](https://github.com/zed-industries/zed) project and describes Zed Industries' upstream contribution process, including its CLA, community programs, review policy, and maintainer expectations. Zed CN is an unofficial community fork and is not operated, sponsored, or endorsed by Zed Industries. For changes submitted to Zed CN, use this repository's issues and pull requests; the upstream CLA and official maintainer policies apply only when contributing to `zed-industries/zed`.
+
 Thank you for helping us make Zed better!
 
 All activity in Zed forums is subject to our [Code of

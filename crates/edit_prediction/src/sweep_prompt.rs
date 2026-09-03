@@ -140,7 +140,7 @@ pub fn request_prediction(
         let (response_text, request_id) = open_ai_compatible::send_custom_server_request(
             provider,
             &custom_settings,
-            prompt,
+            open_ai_compatible::FimRequestPrompt::Completion(prompt),
             custom_settings.max_output_tokens,
             RESERVED_SWEEP_TOKENS.map(str::to_string).to_vec(),
             api_key,

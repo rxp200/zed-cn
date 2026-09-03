@@ -2,8 +2,9 @@ use crate::{
     AnyWindowHandle, AtlasKey, AtlasTextureId, AtlasTile, Bounds, DevicePixels,
     DispatchEventResult, GpuSpecs, Pixels, PlatformAtlas, PlatformDisplay,
     PlatformHeadlessRenderer, PlatformInput, PlatformInputHandler, PlatformWindow, Point,
-    PromptButton, RequestFrameOptions, Scene, Size, TestPlatform, TileId, WindowAppearance,
-    WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowParams,
+    PromptButton, RequestFrameOptions, Scene, Size, TestPlatform, TextInputConfiguration,
+    TextInputStateChange, TileId, WindowAppearance, WindowBackgroundAppearance, WindowBounds,
+    WindowControlArea, WindowParams,
 };
 use collections::HashMap;
 use gpui_util::ResultExt as _;
@@ -42,6 +43,8 @@ pub(crate) struct TestWindowState {
     frame_scheduled: bool,
     frame_callback_pending: bool,
     input_handler: Option<PlatformInputHandler>,
+    text_input_configurations: Vec<TextInputConfiguration>,
+    text_input_state_changes: Vec<TextInputStateChange>,
     is_fullscreen: bool,
     appearance: WindowAppearance,
     external_drag_files: Vec<(PathBuf, bool)>,
@@ -104,6 +107,8 @@ impl TestWindow {
             frame_scheduled: false,
             frame_callback_pending: false,
             input_handler: None,
+            text_input_configurations: Vec::new(),
+            text_input_state_changes: Vec::new(),
             is_fullscreen: false,
             appearance: WindowAppearance::Light,
             external_drag_files: Vec::new(),
@@ -131,6 +136,15 @@ impl TestWindow {
 
     pub fn frame_scheduled(&self) -> bool {
         self.0.lock().frame_scheduled
+    }
+
+    /// Every [`TextInputConfiguration`] forwarded to this window, in order.
+    pub fn text_input_configurations(&self) -> Vec<TextInputConfiguration> {
+        self.0.lock().text_input_configurations.clone()
+    }
+
+    pub fn text_input_state_changes(&self) -> Vec<TextInputStateChange> {
+        self.0.lock().text_input_state_changes.clone()
     }
 
     pub fn simulate_resize(&mut self, size: Size<Pixels>) {
@@ -256,6 +270,14 @@ impl PlatformWindow for TestWindow {
 
     fn take_input_handler(&mut self) -> Option<PlatformInputHandler> {
         self.0.lock().input_handler.take()
+    }
+
+    fn set_text_input_configuration(&mut self, configuration: TextInputConfiguration) {
+        self.0.lock().text_input_configurations.push(configuration);
+    }
+
+    fn text_input_state_changed(&self, change: TextInputStateChange) {
+        self.0.lock().text_input_state_changes.push(change);
     }
 
     fn prompt(

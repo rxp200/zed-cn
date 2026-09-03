@@ -585,7 +585,7 @@ impl<T: NumberFieldType> RenderOnce for NumberField<T> {
                 this.child(
                     IconButton::new("reset", IconName::RotateCcw)
                         .icon_size(IconSize::Small)
-                        .aria_label("Reset to Default")
+                        .aria_label("重置为默认值")
                         .when_some(self.tab_index, |this, _| this.tab_index(0isize))
                         .on_click(on_reset),
                 )
@@ -610,7 +610,7 @@ impl<T: NumberFieldType> RenderOnce for NumberField<T> {
                             base_button(IconName::Dash)
                                 .id((self.id.clone(), "decrement_button"))
                                 .role(Role::Button)
-                                .aria_label("Decrement")
+                                .aria_label("递减")
                                 .rounded_tl_sm()
                                 .rounded_bl_sm()
                                 .when_some(self.tab_index, |this, _| this.tab_index(0isize))
@@ -800,8 +800,8 @@ impl<T: NumberFieldType> RenderOnce for NumberField<T> {
                                         })
                                         .child(editor)
                                         .on_action::<menu::Confirm>({
-                                            move |_, window, _| {
-                                                window.blur();
+                                            move |_, window, cx| {
+                                                window.blur(cx);
                                             }
                                         })
                                         .into_any_element()
@@ -826,7 +826,7 @@ impl<T: NumberFieldType> RenderOnce for NumberField<T> {
                             base_button(IconName::Plus)
                                 .id((self.id.clone(), "increment_button"))
                                 .role(Role::Button)
-                                .aria_label("Increment")
+                                .aria_label("递增")
                                 .rounded_tr_sm()
                                 .rounded_br_sm()
                                 .when_some(self.tab_index, |this, _| this.tab_index(0isize))

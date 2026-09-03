@@ -2,18 +2,16 @@ use anyhow::Result;
 use collections::{HashMap, HashSet};
 use credentials_provider::CredentialsProvider;
 use fs::Fs;
-use futures::Stream;
 use futures::{FutureExt, StreamExt, future::BoxFuture, stream::BoxStream};
 use gpui::{App, AsyncApp, Context, Entity, Task, TaskExt};
 use http_client::{CustomHeaders, HttpClient};
-use language_model::util::parse_tool_arguments;
 use language_model::{
     ApiKeyState, AuthenticateError, EnvVar, IconOrSvg, InlineDescription, LanguageModel,
     LanguageModelCompletionError, LanguageModelCompletionEvent, LanguageModelId, LanguageModelName,
     LanguageModelProvider, LanguageModelProviderId, LanguageModelProviderName,
     LanguageModelProviderState, LanguageModelRequest, LanguageModelToolChoice,
-    LanguageModelToolResultContent, LanguageModelToolUse, MessageContent, ProviderSettingsView,
-    RateLimiter, Role, StopReason, SubPageProviderSettings, TokenUsage, env_var,
+    LanguageModelToolResultContent, MessageContent, ProviderSettingsView, RateLimiter, Role,
+    SubPageProviderSettings, env_var,
 };
 use llama_cpp::{
     LLAMA_CPP_API_URL, ModelEntry, Props, get_models, get_props, stream_chat_completion,
@@ -21,7 +19,6 @@ use llama_cpp::{
 };
 pub use settings::LlamaCppAvailableModel as AvailableModel;
 use settings::{Settings, SettingsStore, update_settings_file};
-use std::pin::Pin;
 use std::sync::LazyLock;
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::Duration;
@@ -32,6 +29,7 @@ use ui_input::InputField;
 use util::ResultExt;
 
 use crate::AllLanguageModelSettings;
+use language_model::chat_completion::ChatCompletionEventMapper;
 
 const LLAMA_CPP_DOWNLOAD_URL: &str = "https://llama.app";
 const LLAMA_CPP_MODELS_URL: &str = "https://huggingface.co/models?library=gguf&sort=trending";
@@ -422,11 +420,13 @@ fn model_from_entry(entry: &ModelEntry, props: Option<&Props>) -> llama_cpp::Mod
         .or_else(|| entry.meta.as_ref().and_then(|meta| meta.n_ctx))
         .or_else(|| entry.meta.as_ref().and_then(|meta| meta.n_ctx_train))
         .unwrap_or(ASSUMED_UNLOADED_CONTEXT);
-    // Trust `/props` when present. Without it, assume tools for an unloaded model
-    // (re-discovery corrects on load) but not for a loaded model whose probe failed.
+    // Trust `/props` when present. If the server doesn't expose `/props` (e.g.
+    // LM Studio or other OpenAI-compatible servers), assume the loaded model
+    // supports tools; modern local instruct models commonly do, and users can
+    // override in settings if needed.
     let supports_tools = match props {
         Some(props) => props.supports_tools(),
-        None => !entry.is_loaded(),
+        None => true,
     };
     let supports_images = props.is_some_and(Props::supports_images) || entry.supports_images_hint();
     let supports_thinking = props.is_some_and(Props::supports_thinking);
@@ -605,7 +605,7 @@ impl LanguageModelProvider for LlamaCppLanguageModelProvider {
                     .into()
             })
             .description(InlineDescription::Text(
-                "Run local models on your machine with LlamaCpp.".into(),
+                "使用 LlamaCpp 在您的机器上运行本地模型。".into(),
             )),
         ))
     }
@@ -942,145 +942,11 @@ impl LanguageModel for LlamaCppLanguageModel {
         };
         let completions = self.stream_completion(request, cx);
         async move {
-            let mapper = LlamaCppEventMapper::new();
+            let mapper = ChatCompletionEventMapper::new();
             Ok(mapper.map_stream(completions.await?).boxed())
         }
         .boxed()
     }
-}
-
-struct LlamaCppEventMapper {
-    tool_calls_by_index: HashMap<usize, RawToolCall>,
-}
-
-impl LlamaCppEventMapper {
-    fn new() -> Self {
-        Self {
-            tool_calls_by_index: HashMap::default(),
-        }
-    }
-
-    pub fn map_stream(
-        mut self,
-        events: Pin<Box<dyn Send + Stream<Item = Result<llama_cpp::ResponseStreamEvent>>>>,
-    ) -> impl Stream<Item = Result<LanguageModelCompletionEvent, LanguageModelCompletionError>>
-    {
-        events.flat_map(move |event| {
-            futures::stream::iter(match event {
-                Ok(event) => self.map_event(event),
-                Err(error) => vec![Err(LanguageModelCompletionError::from(error))],
-            })
-        })
-    }
-
-    pub fn map_event(
-        &mut self,
-        event: llama_cpp::ResponseStreamEvent,
-    ) -> Vec<Result<LanguageModelCompletionEvent, LanguageModelCompletionError>> {
-        let mut events = Vec::new();
-
-        if let Some(usage) = event.usage {
-            events.push(Ok(LanguageModelCompletionEvent::UsageUpdate(TokenUsage {
-                input_tokens: usage.prompt_tokens,
-                output_tokens: usage.completion_tokens,
-                cache_creation_input_tokens: 0,
-                cache_read_input_tokens: 0,
-            })));
-        }
-
-        if let Some(choice) = event.choices.into_iter().next() {
-            if let Some(reasoning_content) = choice.delta.reasoning_content {
-                events.push(Ok(LanguageModelCompletionEvent::Thinking {
-                    text: reasoning_content,
-                    signature: None,
-                }));
-            }
-
-            if let Some(content) = choice.delta.content {
-                if !content.is_empty() {
-                    events.push(Ok(LanguageModelCompletionEvent::Text(content)));
-                }
-            }
-
-            if let Some(tool_calls) = choice.delta.tool_calls {
-                for tool_call in tool_calls {
-                    let entry = self.tool_calls_by_index.entry(tool_call.index).or_default();
-
-                    if let Some(tool_id) = tool_call.id {
-                        entry.id = tool_id;
-                    }
-
-                    if let Some(function) = tool_call.function {
-                        if let Some(name) = function.name {
-                            // Only the first chunk carries the function name;
-                            // later chunks send an empty name with arguments.
-                            if !name.is_empty() {
-                                entry.name = name;
-                            }
-                        }
-
-                        if let Some(arguments) = function.arguments {
-                            entry.arguments.push_str(&arguments);
-                        }
-                    }
-                }
-            }
-
-            if let Some(finish_reason) = choice.finish_reason.as_deref() {
-                match finish_reason {
-                    "stop" => {
-                        events.push(Ok(LanguageModelCompletionEvent::Stop(StopReason::EndTurn)));
-                    }
-                    "tool_calls" => {
-                        events.extend(self.tool_calls_by_index.drain().map(|(_, tool_call)| {
-                            match parse_tool_arguments(&tool_call.arguments) {
-                                Ok(input) => Ok(LanguageModelCompletionEvent::ToolUse(
-                                    LanguageModelToolUse {
-                                        id: tool_call.id.into(),
-                                        name: tool_call.name.into(),
-                                        is_input_complete: true,
-                                        input: language_model::LanguageModelToolUseInput::Json(
-                                            input,
-                                        ),
-                                        raw_input: tool_call.arguments,
-                                        thought_signature: None,
-                                    },
-                                )),
-                                Err(error) => {
-                                    Ok(LanguageModelCompletionEvent::ToolUseJsonParseError {
-                                        id: tool_call.id.into(),
-                                        tool_name: tool_call.name.into(),
-                                        raw_input: tool_call.arguments.into(),
-                                        json_parse_error: error.to_string(),
-                                    })
-                                }
-                            }
-                        }));
-
-                        events.push(Ok(LanguageModelCompletionEvent::Stop(StopReason::ToolUse)));
-                    }
-                    "length" => {
-                        events.push(Ok(LanguageModelCompletionEvent::Stop(
-                            StopReason::MaxTokens,
-                        )));
-                    }
-                    unexpected => {
-                        log::warn!("Unexpected llama.cpp finish_reason: {unexpected:?}");
-                        events.push(Ok(LanguageModelCompletionEvent::Stop(StopReason::EndTurn)));
-                    }
-                }
-            }
-        }
-
-        events
-    }
-}
-
-#[derive(Default)]
-struct RawToolCall {
-    id: String,
-    name: String,
-    arguments: String,
 }
 
 fn add_message_content_part(
@@ -1180,16 +1046,16 @@ struct ConfigurationView {
 
 impl ConfigurationView {
     pub fn new(state: Entity<State>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let api_key_editor = cx.new(|cx| InputField::new(window, cx, "sk-...").label("API key"));
+        let api_key_editor = cx.new(|cx| InputField::new(window, cx, "sk-...").label("API 密钥"));
 
         let api_url_editor = cx.new(|cx| {
-            let input = InputField::new(window, cx, LLAMA_CPP_API_URL).label("API URL");
+            let input = InputField::new(window, cx, LLAMA_CPP_API_URL).label("API 地址");
             input.set_text(&LlamaCppLanguageModelProvider::api_url(cx), window, cx);
             input
         });
 
         let context_window_editor = cx.new(|cx| {
-            let input = InputField::new(window, cx, "8192").label("Context Window");
+            let input = InputField::new(window, cx, "8192").label("上下文窗口");
             if let Some(context_window) = LlamaCppLanguageModelProvider::settings(cx).context_window
             {
                 input.set_text(&context_window.to_string(), window, cx);
@@ -1348,37 +1214,35 @@ impl ConfigurationView {
             .gap_2()
             .child(
                 Label::new(
-                    "Run open models locally with llama.cpp's built-in server, or connect to a \
-                remote llama.cpp server.",
+                    "使用 llama.cpp 的内置服务器在本地运行开放模型，或连接到远程 llama.cpp 服务器。",
                 )
                 .color(Color::Muted),
             )
-            .child(Label::new("To use a local llama.cpp server:").color(Color::Muted))
+            .child(Label::new("要使用本地 llama.cpp 服务器：").color(Color::Muted))
             .child(
                 List::new()
                     .child(
                         ListBulletItem::new("")
-                            .child(Label::new("Install llama.cpp from").color(Color::Muted))
+                            .child(Label::new("从以下位置安装 llama.cpp").color(Color::Muted))
                             .child(ButtonLink::new("llama.app", LLAMA_CPP_DOWNLOAD_URL)),
                     )
                     .child(
                         ListBulletItem::new("")
                             .child(
-                                Label::new("Start the server in router mode:").color(Color::Muted),
+                                Label::new("以路由模式启动服务器：").color(Color::Muted),
                             )
                             .child(Label::new("llama serve").inline_code(cx)),
                     )
                     .child(
                         ListBulletItem::new(
-                            "Click 'Connect' below to start using llama.cpp in Zed",
+                            "点击下方的'连接'开始在 Zed 中使用 llama.cpp",
                         )
                         .label_color(Color::Muted),
                     ),
             )
             .child(
                 Label::new(
-                    "Alternatively, you can connect to a remote llama.cpp server by specifying its \
-                URL and API key (set with --api-key, may not be required):",
+                    "或者，您可以通过指定远程 llama.cpp 服务器的 URL 和 API 密钥（通过 --api-key 设置，可能不需要）进行连接：",
                 )
                 .color(Color::Muted),
             )
@@ -1388,9 +1252,9 @@ impl ConfigurationView {
         let state = self.state.read(cx);
         let env_var_set = state.api_key_state.is_from_env_var();
         let configured_card_label = if env_var_set {
-            format!("API key set in {API_KEY_ENV_VAR_NAME} environment variable.")
+            format!("API 密钥已在 {API_KEY_ENV_VAR_NAME} 环境变量中设置。")
         } else {
-            "API key configured".to_string()
+            "API 密钥已配置".to_string()
         };
 
         let api_key_control = if !state.api_key_state.has_key() {
@@ -1401,7 +1265,7 @@ impl ConfigurationView {
                 .on_click(cx.listener(|this, _, window, cx| this.reset_api_key(window, cx)))
                 .when(env_var_set, |this| {
                     this.tooltip_label(format!(
-                        "To reset your API key, unset the {API_KEY_ENV_VAR_NAME} environment variable."
+                        "要重置您的 API 密钥，请取消设置 {API_KEY_ENV_VAR_NAME} 环境变量。"
                     ))
                 })
                 .into_any_element()
@@ -1414,7 +1278,7 @@ impl ConfigurationView {
             .mb_2()
             .child(
                 Label::new(format!(
-                    "You can also set the {API_KEY_ENV_VAR_NAME} environment variable and restart Zed."
+                    "您也可以设置 {API_KEY_ENV_VAR_NAME} 环境变量并重新启动 Zed。"
                 ))
                 .size(LabelSize::Small)
                 .color(Color::Muted),
@@ -1438,12 +1302,12 @@ impl ConfigurationView {
                         .gap_1()
                         .child(Icon::new(IconName::Check).color(Color::Success))
                         .child(Label::new(format!(
-                            "Context Window: {}",
+                            "上下文窗口：{}",
                             settings.context_window.unwrap_or_default()
                         ))),
                 )
                 .child(
-                    Button::new("reset-context-window", "Reset")
+                    Button::new("reset-context-window", "重置")
                         .style(ButtonStyle::Outlined)
                         .label_size(LabelSize::Small)
                         .start_icon(Icon::new(IconName::Undo).size(IconSize::Small))
@@ -1463,7 +1327,7 @@ impl ConfigurationView {
                 .child(self.context_window_editor.clone())
                 .gap_1p5()
                 .child(
-                    Label::new("Default: Discovered from the server")
+                    Label::new("默认：从服务器发现")
                         .size(LabelSize::Small)
                         .color(Color::Muted),
                 )
@@ -1489,7 +1353,7 @@ impl ConfigurationView {
                         .child(Label::new(api_url)),
                 )
                 .child(
-                    Button::new("reset-api-url", "Reset API URL")
+                    Button::new("reset-api-url", "重置API URL")
                         .style(ButtonStyle::Outlined)
                         .label_size(LabelSize::Small)
                         .start_icon(Icon::new(IconName::Undo).size(IconSize::Small))
@@ -1534,7 +1398,7 @@ impl Render for ConfigurationView {
                             .map(|this| {
                                 if is_authenticated {
                                     this.child(
-                                        Button::new("llama-cpp-webui", "Open WebUI")
+                                        Button::new("llama-cpp-webui", "打开WebUI")
                                             .style(ButtonStyle::OutlinedGhost)
                                             .size(ButtonSize::Medium)
                                             .end_icon(
@@ -1565,7 +1429,7 @@ impl Render for ConfigurationView {
                                     )
                                 } else {
                                     this.child(
-                                        Button::new("download_llama_cpp_button", "Get llama.cpp")
+                                        Button::new("download_llama_cpp_button", "获取llama.cpp")
                                             .style(ButtonStyle::OutlinedGhost)
                                             .size(ButtonSize::Medium)
                                             .end_icon(
@@ -1581,7 +1445,7 @@ impl Render for ConfigurationView {
                                 }
                             })
                             .child(
-                                Button::new("view-models", "Browse GGUF Models")
+                                Button::new("view-models", "浏览GGUF模型")
                                     .style(ButtonStyle::OutlinedGhost)
                                     .size(ButtonSize::Medium)
                                     .end_icon(
@@ -1601,12 +1465,12 @@ impl Render for ConfigurationView {
                                         h_flex()
                                             .gap_1()
                                             .child(Icon::new(IconName::Check).color(Color::Success))
-                                            .child(Label::new("Connected")),
+                                            .child(Label::new("已连接")),
                                     )
                                     .child(
                                         IconButton::new("refresh-models", IconName::RotateCcw)
                                             .icon_size(IconSize::Small)
-                                            .tooltip(Tooltip::text("Refresh Models"))
+                                            .tooltip(Tooltip::text("刷新模型"))
                                             .on_click(cx.listener(|this, _, window, cx| {
                                                 this.state.update(cx, |state, _| {
                                                     state.fetched_models.clear();
@@ -1617,7 +1481,7 @@ impl Render for ConfigurationView {
                             )
                         } else {
                             this.child(
-                                Button::new("retry_llama_cpp_models", "Connect")
+                                Button::new("retry_llama_cpp_models", "连接")
                                     .style(ButtonStyle::Outlined)
                                     .size(ButtonSize::Medium)
                                     .start_icon(
@@ -1638,6 +1502,7 @@ mod tests {
     use super::*;
     use gpui::TestAppContext;
     use http_client::FakeHttpClient;
+    use language_model::LanguageModelToolUse;
     use parking_lot::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -1726,7 +1591,9 @@ mod tests {
         assert!(model.supports_thinking);
 
         // Unprobed: falls back to the listing's runtime context, then trained
-        // context. Tools are assumed supported until the model loads.
+        // context. Tools are assumed supported when the server does not expose
+        // `/props` (e.g. LM Studio or other OpenAI-compatible servers), since modern
+        // local instruct models commonly support tools.
         let model = model_from_entry(&entry("m", Some(4096), Some(131072)), None);
         assert_eq!(model.max_tokens, 4096);
         assert!(model.supports_tools);
@@ -1757,6 +1624,29 @@ mod tests {
         assert!(model.supports_images);
         // Unprobed router models optimistically advertise tools until loaded.
         assert!(model.supports_tools);
+    }
+
+    #[test]
+    fn loaded_router_entry_without_props_advertises_tools() {
+        let router_entry = ModelEntry {
+            id: "qwen2.5-coder".to_string(),
+            meta: Some(llama_cpp::ModelMeta {
+                n_ctx: Some(32768),
+                n_ctx_train: Some(131072),
+            }),
+            architecture: Some(llama_cpp::Architecture {
+                input_modalities: vec!["text".to_string()],
+            }),
+            status: Some(llama_cpp::ModelStatus {
+                value: "loaded".to_string(),
+            }),
+        };
+        let model = model_from_entry(&router_entry, None);
+        // Servers that don't expose `/props` (e.g. LM Studio) still get tool
+        // support advertised for loaded models, since modern local instruct
+        // models commonly support tools and users can override in settings.
+        assert!(model.supports_tools);
+        assert!(!model.supports_images);
     }
 
     #[test]
@@ -1962,90 +1852,6 @@ mod tests {
             }
             message => panic!("unexpected message: {message:?}"),
         }
-    }
-
-    #[test]
-    fn usage_event_precedes_stop_event() {
-        let mut mapper = LlamaCppEventMapper::new();
-        let events = mapper.map_event(llama_cpp::ResponseStreamEvent {
-            model: "test-model".to_string(),
-            object: "chat.completion.chunk".to_string(),
-            choices: vec![llama_cpp::ChoiceDelta {
-                index: 0,
-                delta: llama_cpp::ResponseMessageDelta {
-                    content: None,
-                    reasoning_content: None,
-                    tool_calls: None,
-                },
-                finish_reason: Some("stop".to_string()),
-            }],
-            usage: Some(llama_cpp::Usage {
-                prompt_tokens: 11,
-                completion_tokens: 7,
-                total_tokens: 18,
-            }),
-        });
-
-        assert!(matches!(
-            events.as_slice(),
-            [
-                Ok(LanguageModelCompletionEvent::UsageUpdate(TokenUsage {
-                    input_tokens: 11,
-                    output_tokens: 7,
-                    cache_creation_input_tokens: 0,
-                    cache_read_input_tokens: 0,
-                })),
-                Ok(LanguageModelCompletionEvent::Stop(StopReason::EndTurn)),
-            ]
-        ));
-    }
-
-    #[test]
-    fn usage_event_precedes_tool_use_stop_event() {
-        let mut mapper = LlamaCppEventMapper::new();
-        let events = mapper.map_event(llama_cpp::ResponseStreamEvent {
-            model: "test-model".to_string(),
-            object: "chat.completion.chunk".to_string(),
-            choices: vec![llama_cpp::ChoiceDelta {
-                index: 0,
-                delta: llama_cpp::ResponseMessageDelta {
-                    content: None,
-                    reasoning_content: None,
-                    tool_calls: Some(vec![llama_cpp::ToolCallChunk {
-                        index: 0,
-                        id: Some("tool-call-id".to_string()),
-                        function: Some(llama_cpp::FunctionChunk {
-                            name: Some("test_tool".to_string()),
-                            arguments: Some(r#"{"value":1}"#.to_string()),
-                        }),
-                    }]),
-                },
-                finish_reason: Some("tool_calls".to_string()),
-            }],
-            usage: Some(llama_cpp::Usage {
-                prompt_tokens: 13,
-                completion_tokens: 5,
-                total_tokens: 18,
-            }),
-        });
-
-        assert!(matches!(
-            events.as_slice(),
-            [
-                Ok(LanguageModelCompletionEvent::UsageUpdate(TokenUsage {
-                    input_tokens: 13,
-                    output_tokens: 5,
-                    cache_creation_input_tokens: 0,
-                    cache_read_input_tokens: 0,
-                })),
-                Ok(LanguageModelCompletionEvent::ToolUse(LanguageModelToolUse {
-                    id,
-                    name,
-                    ..
-                })),
-                Ok(LanguageModelCompletionEvent::Stop(StopReason::ToolUse)),
-            ] if id.to_string() == "tool-call-id" && name.as_ref() == "test_tool"
-        ));
     }
 
     #[gpui::test]
