@@ -163,6 +163,7 @@ jobs:
   bundle_linux:
     name: Build Linux ${{ matrix.arch }}
     needs: validate_source
+    continue-on-error: true
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 360
     strategy:
@@ -229,6 +230,7 @@ jobs:
   build_static_bwrap:
     name: Build static bwrap Linux ${{ matrix.arch }}
     needs: validate_source
+    continue-on-error: true
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     strategy:
@@ -263,6 +265,7 @@ jobs:
   bundle_macos:
     name: Build macOS ${{ matrix.arch }}
     needs: validate_source
+    continue-on-error: true
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 360
     strategy:
@@ -326,6 +329,7 @@ jobs:
   bundle_windows:
     name: Build Windows ${{ matrix.arch }}
     needs: validate_source
+    continue-on-error: true
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 360
     strategy:
@@ -390,6 +394,45 @@ jobs:
                   throw "Failed to install Inno Setup 6"
               }
           }
+
+      - name: Download WebRTC with retries
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $metadata = cargo metadata --format-version 1 | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) {
+              throw "Failed to resolve Cargo metadata before downloading WebRTC"
+          }
+          $webrtcPackage = @($metadata.packages | Where-Object { $_.name -eq "webrtc-sys" })
+          if ($webrtcPackage.Count -ne 1) {
+              throw "Expected exactly one webrtc-sys package, found $($webrtcPackage.Count)"
+          }
+          $webrtcBuildSource = Join-Path (Split-Path $webrtcPackage[0].manifest_path) "build/src/lib.rs"
+          $tagMatch = [regex]::Match((Get-Content $webrtcBuildSource -Raw), 'pub const WEBRTC_TAG:\s*&str\s*=\s*"(?<tag>[^"]+)";')
+          if (-not $tagMatch.Success) {
+              throw "Could not determine WEBRTC_TAG from $webrtcBuildSource"
+          }
+          $webrtcTag = $tagMatch.Groups['tag'].Value
+          $webrtcArch = if ("${{ matrix.arch }}" -eq "x86_64") { "x64" } else { "arm64" }
+          $archiveName = "webrtc-win-$webrtcArch-release.zip"
+          $downloadUrl = "https://github.com/zed-industries/livekit-rust-sdks/releases/download/$webrtcTag/$archiveName"
+          $downloadDirectory = Join-Path $env:RUNNER_TEMP "livekit-webrtc"
+          $archivePath = Join-Path $downloadDirectory $archiveName
+          $extractDirectory = Join-Path $downloadDirectory $webrtcTag
+          $webrtcDirectory = Join-Path $extractDirectory "win-$webrtcArch-release"
+
+          New-Item -ItemType Directory -Force -Path $downloadDirectory | Out-Null
+          curl.exe --fail --location --retry 8 --retry-all-errors --retry-delay 5 --connect-timeout 30 --output $archivePath $downloadUrl
+          if ($LASTEXITCODE -ne 0) {
+              throw "Failed to download WebRTC after retries: $downloadUrl"
+          }
+          Expand-Archive -LiteralPath $archivePath -DestinationPath $extractDirectory -Force
+          if (-not (Test-Path (Join-Path $webrtcDirectory "webrtc.ninja")) -or
+              -not (Test-Path (Join-Path $webrtcDirectory "desktop_capture.ninja")) -or
+              -not (Test-Path (Join-Path $webrtcDirectory "lib"))) {
+              throw "Downloaded WebRTC archive does not contain the expected win-$webrtcArch-release layout"
+          }
+          "LK_CUSTOM_WEBRTC=$webrtcDirectory" >> $env:GITHUB_ENV
 
       - name: Build Windows installer and Remote Server
         shell: pwsh
@@ -457,6 +500,7 @@ jobs:
       - build_static_bwrap
       - bundle_macos
       - bundle_windows
+    if: ${{ always() && needs.validate_source.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -474,7 +518,7 @@ jobs:
           path: release-artifacts
           merge-multiple: true
 
-      - name: Validate assets and generate checksums
+      - name: Validate available assets and generate checksums
         run: |
           expected_assets=(
             bwrap-linux-aarch64.gz
@@ -492,19 +536,28 @@ jobs:
             Zed-x86_64.dmg
             Zed-x86_64.exe
           )
-          for asset in "${expected_assets[@]}"; do
+          mapfile -t actual_assets < <(find release-artifacts -maxdepth 1 -type f -printf '%f\n' | sort)
+          test "${#actual_assets[@]}" -gt 0 || {
+            echo "No release assets were produced by successful build jobs." >&2
+            exit 1
+          }
+          for asset in "${actual_assets[@]}"; do
+            [[ " ${expected_assets[*]} " == *" $asset "* ]] || {
+              echo "Unexpected release asset: $asset" >&2
+              exit 1
+            }
             test -s "release-artifacts/$asset" || {
-              echo "Missing or empty release asset: $asset" >&2
+              echo "Empty release asset: $asset" >&2
               exit 1
             }
           done
-          actual_count="$(find release-artifacts -maxdepth 1 -type f | wc -l)"
-          test "$actual_count" -eq "${#expected_assets[@]}" || {
-            echo "Expected ${#expected_assets[@]} assets, found $actual_count" >&2
-            find release-artifacts -maxdepth 1 -type f -print
-            exit 1
-          }
-          (cd release-artifacts && sha256sum "${expected_assets[@]}" | sort -k2 > SHA256SUMS.txt)
+          : > release-artifacts/MISSING-ASSETS.txt
+          for asset in "${expected_assets[@]}"; do
+            if [[ ! -s "release-artifacts/$asset" ]]; then
+              echo "$asset" | tee -a release-artifacts/MISSING-ASSETS.txt
+            fi
+          done
+          (cd release-artifacts && sha256sum "${actual_assets[@]}" | sort -k2 > SHA256SUMS.txt)
           cat release-artifacts/SHA256SUMS.txt
 
       - name: Upload consolidated workflow artifact
@@ -540,14 +593,22 @@ jobs:
           - Zed 版本：$RELEASE_VERSION
           - 定制修订：r$RELEASE_REVISION
           - 源码提交：\`$SOURCE_SHA\`
-          - 桌面客户端：Linux、macOS、Windows（x86_64 与 aarch64）
-          - Remote Server：Linux、macOS、Windows（x86_64 与 aarch64）
-          - Linux 沙箱辅助程序：静态 bwrap（x86_64 与 aarch64）
           - 发布渠道：stable
           - 代码签名：Windows 未签名，macOS 使用临时签名且未公证
 
-          所有文件的 SHA-256 见 \`SHA256SUMS.txt\`。Windows SmartScreen 和 macOS Gatekeeper 可能显示警告。
+          本次 Release 包含所有成功完成构建并通过验证的产物。失败平台的产物不会阻止其他平台发布，也不会作为空文件上传。所有已发布二进制的 SHA-256 见 \`SHA256SUMS.txt\`。Windows SmartScreen 和 macOS Gatekeeper 可能显示警告。
           EOF
+
+          if [[ -s release-artifacts/MISSING-ASSETS.txt ]]; then
+            {
+              echo
+              echo "## 本次未生成的产物"
+              echo
+              while IFS= read -r asset; do
+                echo "- \`$asset\`"
+              done < release-artifacts/MISSING-ASSETS.txt
+            } >> "$notes_path"
+          fi
 
           if gh release view "$RELEASE_TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
             gh release edit "$RELEASE_TAG" \
@@ -568,6 +629,7 @@ jobs:
             gh "${arguments[@]}"
           fi
 
+          rm -f release-artifacts/MISSING-ASSETS.txt
           gh release upload "$RELEASE_TAG" release-artifacts/* \
             --repo "${{ github.repository }}" \
             --clobber
