@@ -1110,7 +1110,7 @@ impl NotebookEditor {
                                     cx,
                                 )
                                 .tooltip(move |window, cx| {
-                                    Tooltip::for_action("Execute all cells", &RunAll, cx)
+                                    Tooltip::for_action("执行所有单元格", &RunAll, cx)
                                 })
                                 .on_click(|_, window, cx| {
                                     window.dispatch_action(Box::new(RunAll), cx);
@@ -1125,7 +1125,7 @@ impl NotebookEditor {
                                 )
                                 .disabled(!has_outputs)
                                 .tooltip(move |window, cx| {
-                                    Tooltip::for_action("Clear all outputs", &ClearOutputs, cx)
+                                    Tooltip::for_action("清除所有输出", &ClearOutputs, cx)
                                 })
                                 .on_click(|_, window, cx| {
                                     window.dispatch_action(Box::new(ClearOutputs), cx);
@@ -1142,7 +1142,7 @@ impl NotebookEditor {
                                     cx,
                                 )
                                 .tooltip(move |window, cx| {
-                                    Tooltip::for_action("Move cell up", &MoveCellUp, cx)
+                                    Tooltip::for_action("上移单元格", &MoveCellUp, cx)
                                 })
                                 .on_click(|_, window, cx| {
                                     window.dispatch_action(Box::new(MoveCellUp), cx);
@@ -1156,7 +1156,7 @@ impl NotebookEditor {
                                     cx,
                                 )
                                 .tooltip(move |window, cx| {
-                                    Tooltip::for_action("Move cell down", &MoveCellDown, cx)
+                                    Tooltip::for_action("下移单元格", &MoveCellDown, cx)
                                 })
                                 .on_click(|_, window, cx| {
                                     window.dispatch_action(Box::new(MoveCellDown), cx);
@@ -1173,7 +1173,7 @@ impl NotebookEditor {
                                     cx,
                                 )
                                 .tooltip(move |window, cx| {
-                                    Tooltip::for_action("Add markdown block", &AddMarkdownBlock, cx)
+                                    Tooltip::for_action("添加 Markdown 块", &AddMarkdownBlock, cx)
                                 })
                                 .on_click(|_, window, cx| {
                                     window.dispatch_action(Box::new(AddMarkdownBlock), cx);
@@ -1187,7 +1187,7 @@ impl NotebookEditor {
                                     cx,
                                 )
                                 .tooltip(move |window, cx| {
-                                    Tooltip::for_action("Add code block", &AddCodeBlock, cx)
+                                    Tooltip::for_action("添加代码块", &AddCodeBlock, cx)
                                 })
                                 .on_click(|_, window, cx| {
                                     window.dispatch_action(Box::new(AddCodeBlock), cx);
@@ -1218,7 +1218,7 @@ impl NotebookEditor {
                     .items_center()
                     .child(
                         Self::render_notebook_control("more-menu", IconName::Ellipsis, window, cx)
-                            .tooltip(move |window, cx| (Tooltip::text("More options"))(window, cx)),
+                            .tooltip(move |window, cx| (Tooltip::text("更多选项"))(window, cx)),
                     )
                     .child(Self::button_group(window, cx).child({
                         let kernel_status = self.kernel.status();
@@ -1339,7 +1339,7 @@ impl NotebookEditor {
                         IconButton::new("restart-kernel", IconName::RotateCw)
                             .icon_size(IconSize::Small)
                             .tooltip(|window, cx| {
-                                Tooltip::for_action("Restart Kernel", &RestartKernel, cx)
+                                Tooltip::for_action("重启内核", &RestartKernel, cx)
                             })
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.restart_kernel(&RestartKernel, window, cx);
@@ -1350,7 +1350,7 @@ impl NotebookEditor {
                             .icon_size(IconSize::Small)
                             .disabled(!matches!(kernel_status, KernelStatus::Busy))
                             .tooltip(|window, cx| {
-                                Tooltip::for_action("Interrupt Kernel", &InterruptKernel, cx)
+                                Tooltip::for_action("中断内核", &InterruptKernel, cx)
                             })
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.interrupt_kernel(&InterruptKernel, window, cx);
@@ -1377,12 +1377,12 @@ impl NotebookEditor {
             .items_center()
             .justify_center()
             .gap_3()
-            .child(Label::new("This notebook is empty.").color(Color::Muted))
+            .child(Label::new("此笔记本为空。").color(Color::Muted))
             .child(
                 h_flex()
                     .gap_2()
                     .child(
-                        Button::new("empty-state-add-code", "Add code cell")
+                        Button::new("empty-state-add-code", "添加代码单元格")
                             .start_icon(Icon::new(IconName::Code))
                             .key_binding(KeyBinding::for_action_in(
                                 &AddCodeBlock,
@@ -1394,7 +1394,7 @@ impl NotebookEditor {
                             ),
                     )
                     .child(
-                        Button::new("empty-state-add-markdown", "Add markdown cell")
+                        Button::new("empty-state-add-markdown", "添加Markdown单元格")
                             .style(ButtonStyle::Subtle)
                             .start_icon(Icon::new(IconName::FileMarkdown))
                             .key_binding(KeyBinding::for_action_in(

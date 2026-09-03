@@ -437,7 +437,7 @@ pub fn register(editor: &mut Editor, cx: &mut Context<Vim>) {
                                 Some(
                                     "A file or folder with the same name already exists. Replacing it will overwrite its current contents.",
                                 ),
-                                &["Replace", "Cancel"],
+                                &["替换", "取消"],
                                 cx
                             )
                         });
@@ -518,7 +518,7 @@ pub fn register(editor: &mut Editor, cx: &mut Context<Vim>) {
                         "A file or folder with the same name already exists. \
                         Replacing it will overwrite its current contents.",
                     ),
-                    &["Replace", "Cancel"],
+                    &["替换", "取消"],
                     cx,
                 );
                 cx.spawn_in(window, async move |editor, cx| {
@@ -2752,7 +2752,7 @@ mod test {
         // conflict!
         cx.simulate_keystrokes("i @ escape");
         cx.simulate_keystrokes(": w enter");
-        cx.simulate_prompt_answer("Cancel");
+        cx.simulate_prompt_answer("取消");
 
         assert_eq!(fs.load(path).await.unwrap().replace("\r\n", "\n"), "oops\n");
         assert!(!cx.has_pending_prompt());
@@ -3002,7 +3002,7 @@ mod test {
         cx.simulate_keystrokes(": w space dir/file.rs");
         cx.simulate_keystrokes("enter");
 
-        cx.simulate_prompt_answer("Replace");
+        cx.simulate_prompt_answer("替换");
         cx.run_until_parked();
 
         cx.workspace(|workspace, _, cx| {

@@ -7246,10 +7246,7 @@ pub async fn decode_file_text(
 
     let (file_first_bytes, reached_eof) = read_file_header(&mut *file, abs_path)?;
     let (_, byte_content) = decode_byte_header(&file_first_bytes);
-    anyhow::ensure!(
-        byte_content != ByteContent::Binary,
-        "Binary files are not supported"
-    );
+    anyhow::ensure!(byte_content != ByteContent::Binary, "不支持二进制文件");
 
     // If the file is eligible for opening, read the rest of the file.
     let mut content = file_first_bytes;
@@ -7274,10 +7271,7 @@ pub async fn decode_file_text_to_rope(
 
     let (prefix, reached_eof) = read_file_header(&mut *file, abs_path)?;
     let (bom_encoding, byte_content) = decode_byte_header(&prefix);
-    anyhow::ensure!(
-        byte_content != ByteContent::Binary,
-        "Binary files are not supported"
-    );
+    anyhow::ensure!(byte_content != ByteContent::Binary, "不支持二进制文件");
 
     // Only BOM-less, non-UTF-16 files are candidates for streaming: everything
     // else needs the whole byte buffer in hand to decode or to detect encoding.

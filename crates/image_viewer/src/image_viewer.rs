@@ -737,7 +737,6 @@ impl SerializableItem for ImageView {
         workspace: &mut Workspace,
         item_id: ItemId,
         _closing: bool,
-        _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<Task<anyhow::Result<()>>> {
         let workspace_id = workspace.database_id()?;
@@ -945,7 +944,7 @@ impl Render for ImageViewToolbarControls {
             .child(
                 IconButton::new("zoom-out", IconName::Dash)
                     .icon_size(IconSize::Small)
-                    .tooltip(|_window, cx| Tooltip::for_action("Zoom Out", &ZoomOut, cx))
+                    .tooltip(|_window, cx| Tooltip::for_action("缩小", &ZoomOut, cx))
                     .on_click({
                         let image_view = image_view.downgrade();
                         move |_, window, cx| {
@@ -985,8 +984,8 @@ impl Render for ImageViewToolbarControls {
                     })
                     .child(editor.clone())
                     .on_action::<menu::Confirm>({
-                        move |_: &menu::Confirm, window, _| {
-                            window.blur();
+                        move |_: &menu::Confirm, window, cx| {
+                            window.blur(cx);
                         }
                     })
                     .on_action(cx.listener(|this, _: &menu::Cancel, _, cx| {
@@ -1022,7 +1021,7 @@ impl Render for ImageViewToolbarControls {
             .child(
                 IconButton::new("zoom-in", IconName::Plus)
                     .icon_size(IconSize::Small)
-                    .tooltip(|_, cx| Tooltip::for_action("Zoom In", &ZoomIn, cx))
+                    .tooltip(|_, cx| Tooltip::for_action("放大", &ZoomIn, cx))
                     .on_click({
                         let image_view = image_view.downgrade();
                         move |_, window, cx| {
@@ -1037,7 +1036,7 @@ impl Render for ImageViewToolbarControls {
             .child(
                 IconButton::new("fit-to-view", IconName::Maximize)
                     .icon_size(IconSize::Small)
-                    .tooltip(|_window, cx| Tooltip::for_action("Fit to View", &FitToView, cx))
+                    .tooltip(|_window, cx| Tooltip::for_action("适应视图", &FitToView, cx))
                     .on_click({
                         let image_view = image_view.downgrade();
                         move |_, window, cx| {

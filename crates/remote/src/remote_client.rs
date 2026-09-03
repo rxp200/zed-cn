@@ -36,6 +36,7 @@ use rpc::{
     proto::{self, Envelope, EnvelopedMessage, PeerId, RequestMessage, build_typed_envelope},
 };
 use semver::Version;
+use settings::{RegisterSetting, Settings};
 use std::{
     collections::VecDeque,
     fmt,
@@ -163,7 +164,22 @@ const HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(5);
 const INITIAL_CONNECTION_TIMEOUT: Duration =
     Duration::from_secs(if cfg!(debug_assertions) { 5 } else { 60 });
 
-pub const MAX_RECONNECT_ATTEMPTS: usize = 3;
+/// Keep retrying long enough for temporary network outages to recover instead of
+/// exhausting all attempts while the network is still unavailable.
+pub const MAX_RECONNECT_ATTEMPTS: usize = 30;
+const INITIAL_RECONNECT_DELAY: Duration = Duration::from_secs(1);
+const MAX_RECONNECT_DELAY: Duration = Duration::from_secs(30);
+
+fn reconnect_delay(attempt: usize) -> Duration {
+    if attempt <= 1 {
+        return Duration::ZERO;
+    }
+
+    let exponent = attempt.saturating_sub(2).min(5) as u32;
+    INITIAL_RECONNECT_DELAY
+        .saturating_mul(1_u32 << exponent)
+        .min(MAX_RECONNECT_DELAY)
+}
 
 enum State {
     Connecting,
@@ -313,6 +329,12 @@ pub enum ConnectionState {
     Disconnected,
 }
 
+impl ConnectionState {
+    pub fn can_reconnect_manually(self) -> bool {
+        matches!(self, Self::HeartbeatMissed | Self::Reconnecting)
+    }
+}
+
 impl From<&State> for ConnectionState {
     fn from(value: &State) -> Self {
         match value {
@@ -334,11 +356,13 @@ pub struct RemoteClient {
     platform: RemotePlatform,
     os_version: Option<String>,
     state: Option<State>,
+    reconnect_cancellation: Option<oneshot::Sender<()>>,
 }
 
 #[derive(Debug)]
 pub enum RemoteClientEvent {
     Disconnected { server_not_running: bool },
+    Reconnected,
 }
 
 impl EventEmitter<RemoteClientEvent> for RemoteClient {}
@@ -377,11 +401,47 @@ impl ConnectionIdentifier {
     }
 }
 
+#[derive(Clone, Copy, Debug, RegisterSetting)]
+struct RemoteServerDownloadSettings {
+    china_server_adaptation: bool,
+}
+
+impl Settings for RemoteServerDownloadSettings {
+    fn from_settings(content: &settings::SettingsContent) -> Self {
+        Self {
+            china_server_adaptation: content.remote.china_server_adaptation.unwrap(),
+        }
+    }
+}
+
+fn apply_remote_server_download_settings(
+    mut connection_options: RemoteConnectionOptions,
+    china_server_adaptation: bool,
+) -> RemoteConnectionOptions {
+    if china_server_adaptation
+        && let RemoteConnectionOptions::Ssh(options) = &mut connection_options
+    {
+        options.upload_binary_over_ssh = true;
+    }
+    connection_options
+}
+
+fn connection_options_with_settings(
+    connection_options: RemoteConnectionOptions,
+    cx: &App,
+) -> RemoteConnectionOptions {
+    let china_server_adaptation = RemoteServerDownloadSettings::try_get(cx)
+        .is_some_and(|settings| settings.china_server_adaptation);
+    apply_remote_server_download_settings(connection_options, china_server_adaptation)
+}
+
 pub async fn connect(
     connection_options: RemoteConnectionOptions,
     delegate: Arc<dyn RemoteClientDelegate>,
     cx: &mut AsyncApp,
 ) -> Result<Arc<dyn RemoteConnection>> {
+    let connection_options =
+        cx.update(|cx| connection_options_with_settings(connection_options, cx));
     cx.update(|cx| {
         cx.update_default_global(|pool: &mut ConnectionPool, cx| {
             pool.connect(connection_options.clone(), delegate.clone(), cx)
@@ -396,9 +456,10 @@ pub async fn connect(
 /// whether to show interactive UI (e.g., a password modal) before
 /// connecting.
 pub fn has_active_connection(opts: &RemoteConnectionOptions, cx: &App) -> bool {
+    let opts = connection_options_with_settings(opts.clone(), cx);
     cx.try_global::<ConnectionPool>().is_some_and(|pool| {
         matches!(
-            pool.connections.get(opts),
+            pool.connections.get(&opts),
             Some(ConnectionPoolEntry::Connected(remote))
                 if remote.upgrade().is_some_and(|r| !r.has_been_killed())
         )
@@ -443,6 +504,7 @@ impl RemoteClient {
                     platform,
                     os_version: os_version.clone(),
                     state: Some(State::Connecting),
+                    reconnect_cancellation: None,
                 });
 
                 let io_task = remote_connection.start_proxy(
@@ -455,6 +517,7 @@ impl RemoteClient {
                     cx,
                 );
 
+                delegate.set_status(Some("正在等待远程开发服务响应"), cx);
                 let ready = client
                     .wait_for_remote_started()
                     .with_timeout(INITIAL_CONNECTION_TIMEOUT, cx.background_executor())
@@ -501,6 +564,7 @@ impl RemoteClient {
 
                 let heartbeat_task = Self::heartbeat(this.downgrade(), connection_activity_rx, cx);
 
+                delegate.set_status(Some("远程开发连接已建立"), cx);
                 this.update(cx, |this, _| {
                     this.state = Some(State::Connected {
                         remote_connection,
@@ -634,10 +698,10 @@ impl RemoteClient {
             | State::ServerNotRunning => unreachable!(),
         };
 
-        let attempts = attempts + 1;
+        let attempts = attempts.saturating_add(1);
         if attempts > MAX_RECONNECT_ATTEMPTS {
             log::error!(
-                "Failed to reconnect to after {} attempts, giving up",
+                "Failed to reconnect after {} attempts, giving up",
                 MAX_RECONNECT_ATTEMPTS
             );
             self.set_state(State::ReconnectExhausted, cx);
@@ -646,85 +710,136 @@ impl RemoteClient {
 
         self.set_state(State::Reconnecting, cx);
 
-        log::info!(
-            "Trying to reconnect to remote server... Attempt {}",
-            attempts
-        );
+        let retry_delay = reconnect_delay(attempts);
+        if retry_delay.is_zero() {
+            log::info!(
+                "Trying to reconnect to remote server... Attempt {}",
+                attempts
+            );
+        } else {
+            log::info!(
+                "Retrying remote server connection in {:?}... Attempt {} of {}",
+                retry_delay,
+                attempts,
+                MAX_RECONNECT_ATTEMPTS
+            );
+        }
 
         let unique_identifier = self.unique_identifier.clone();
         let client = self.client.clone();
+        let (reconnect_cancellation_tx, reconnect_cancellation_rx) = oneshot::channel();
+        self.reconnect_cancellation = Some(reconnect_cancellation_tx);
+        let cancelled_remote_connection = remote_connection.clone();
+        let cancelled_delegate = delegate.clone();
         let reconnect_task = cx.spawn(async move |this, cx| {
-            macro_rules! failed {
-                ($error:expr, $attempts:expr, $remote_connection:expr, $delegate:expr) => {
-                    delegate.set_status(Some(&format!("{error:#}", error = $error)), cx);
-                    return State::ReconnectFailed {
-                        error: anyhow!($error),
-                        attempts: $attempts,
-                        remote_connection: $remote_connection,
-                        delegate: $delegate,
-                    };
-                };
-            }
+            let reconnect_attempt = async {
+                if !retry_delay.is_zero() {
+                    delegate.set_status(
+                        Some(&format!(
+                            "网络连接中断，{} 秒后进行第 {} 次重连",
+                            retry_delay.as_secs(),
+                            attempts
+                        )),
+                        cx,
+                    );
+                    cx.background_executor().timer(retry_delay).await;
+                }
 
-            if let Err(error) = remote_connection
-                .kill()
-                .await
-                .context("Failed to kill remote_connection process")
-            {
-                failed!(error, attempts, remote_connection, delegate);
-            };
-
-            let connection_options = remote_connection.connection_options();
-
-            let (outgoing_tx, outgoing_rx) = mpsc::unbounded::<Envelope>();
-            let (incoming_tx, incoming_rx) = mpsc::unbounded::<Envelope>();
-            let (connection_activity_tx, connection_activity_rx) = mpsc::channel::<()>(1);
-
-            let (remote_connection, io_task) = match async {
-                let remote_connection = cx
-                    .update_global(|pool: &mut ConnectionPool, cx| {
-                        pool.connect(connection_options, delegate.clone(), cx)
-                    })
-                    .await
-                    .map_err(|error| error.cloned())?;
-
-                let io_task = remote_connection.start_proxy(
-                    unique_identifier,
-                    true,
-                    incoming_tx,
-                    outgoing_rx,
-                    connection_activity_tx,
-                    delegate.clone(),
+                delegate.set_status(
+                    Some(&format!(
+                        "正在重新连接远程开发服务（第 {}/{} 次）",
+                        attempts, MAX_RECONNECT_ATTEMPTS
+                    )),
                     cx,
                 );
-                anyhow::Ok((remote_connection, io_task))
-            }
-            .await
-            {
-                Ok((remote_connection, io_task)) => (remote_connection, io_task),
-                Err(error) => {
+
+                macro_rules! failed {
+                    ($error:expr, $attempts:expr, $remote_connection:expr, $delegate:expr) => {
+                        delegate.set_status(Some(&format!("{error:#}", error = $error)), cx);
+                        return State::ReconnectFailed {
+                            error: anyhow!($error),
+                            attempts: $attempts,
+                            remote_connection: $remote_connection,
+                            delegate: $delegate,
+                        };
+                    };
+                }
+
+                if let Err(error) = remote_connection
+                    .kill()
+                    .await
+                    .context("Failed to kill remote_connection process")
+                {
                     failed!(error, attempts, remote_connection, delegate);
+                };
+
+                let connection_options = remote_connection.connection_options();
+
+                let (outgoing_tx, outgoing_rx) = mpsc::unbounded::<Envelope>();
+                let (incoming_tx, incoming_rx) = mpsc::unbounded::<Envelope>();
+                let (connection_activity_tx, connection_activity_rx) = mpsc::channel::<()>(1);
+
+                let (remote_connection, io_task) = match async {
+                    let remote_connection = cx
+                        .update_global(|pool: &mut ConnectionPool, cx| {
+                            pool.connect(connection_options, delegate.clone(), cx)
+                        })
+                        .await
+                        .map_err(|error| error.cloned())?;
+
+                    let io_task = remote_connection.start_proxy(
+                        unique_identifier,
+                        true,
+                        incoming_tx,
+                        outgoing_rx,
+                        connection_activity_tx,
+                        delegate.clone(),
+                        cx,
+                    );
+                    anyhow::Ok((remote_connection, io_task))
+                }
+                .await
+                {
+                    Ok((remote_connection, io_task)) => (remote_connection, io_task),
+                    Err(error) => {
+                        failed!(error, attempts, remote_connection, delegate);
+                    }
+                };
+
+                let multiplex_task = Self::monitor(this.clone(), io_task, cx);
+                client.reconnect(incoming_rx, outgoing_tx, cx);
+
+                if let Err(error) = client.resync(HEARTBEAT_TIMEOUT).await {
+                    failed!(error, attempts, remote_connection, delegate);
+                };
+
+                delegate.set_status(Some("远程开发连接已恢复"), cx);
+                State::Connected {
+                    remote_connection,
+                    delegate,
+                    multiplex_task,
+                    heartbeat_task: Self::heartbeat(this.clone(), connection_activity_rx, cx),
                 }
             };
-
-            let multiplex_task = Self::monitor(this.clone(), io_task, cx);
-            client.reconnect(incoming_rx, outgoing_tx, cx);
-
-            if let Err(error) = client.resync(HEARTBEAT_TIMEOUT).await {
-                failed!(error, attempts, remote_connection, delegate);
-            };
-
-            State::Connected {
-                remote_connection,
-                delegate,
-                multiplex_task,
-                heartbeat_task: Self::heartbeat(this.clone(), connection_activity_rx, cx),
+            futures::pin_mut!(reconnect_attempt);
+            futures::pin_mut!(reconnect_cancellation_rx);
+            select! {
+                new_state = reconnect_attempt.fuse() => new_state,
+                _ = reconnect_cancellation_rx.fuse() => State::ReconnectFailed {
+                    remote_connection: cancelled_remote_connection,
+                    delegate: cancelled_delegate,
+                    error: anyhow!("manual reconnect requested"),
+                    attempts: 0,
+                },
             }
         });
 
         cx.spawn(async move |this, cx| {
             let new_state = reconnect_task.await;
             this.update(cx, |this, cx| {
+                this.reconnect_cancellation.take();
+                let reconnected = this.state_is(State::is_reconnecting)
+                    && matches!(&new_state, State::Connected { .. });
                 this.try_set_state(cx, |old_state| {
                     if old_state.is_reconnecting() {
                         match &new_state {
@@ -753,6 +868,10 @@ impl RemoteClient {
                         None
                     }
                 });
+
+                if reconnected {
+                    cx.emit(RemoteClientEvent::Reconnected);
+                }
 
                 if this.state_is(State::is_reconnect_failed) {
                     this.reconnect(cx)
@@ -979,6 +1098,16 @@ impl RemoteClient {
         connection.build_forward_ports_command(forwards)
     }
 
+    pub fn build_reverse_forward_ports_command(
+        &self,
+        forwards: Vec<(u16, String, u16)>,
+    ) -> Result<CommandTemplate> {
+        let Some(connection) = self.remote_connection() else {
+            return Err(anyhow!("no remote connection"));
+        };
+        connection.build_reverse_forward_ports_command(forwards)
+    }
+
     pub fn upload_directory(
         &self,
         src_path: PathBuf,
@@ -1015,6 +1144,22 @@ impl RemoteClient {
             .as_ref()
             .map(ConnectionState::from)
             .unwrap_or(ConnectionState::Disconnected)
+    }
+
+    pub fn reconnect_now(&mut self, cx: &mut Context<Self>) -> Result<()> {
+        match self.connection_state() {
+            ConnectionState::HeartbeatMissed => self.reconnect(cx),
+            ConnectionState::Reconnecting => {
+                let cancellation = self
+                    .reconnect_cancellation
+                    .take()
+                    .context("no active reconnect attempt to restart")?;
+                cancellation
+                    .send(())
+                    .map_err(|_| anyhow!("active reconnect attempt already completed"))
+            }
+            state => anyhow::bail!("cannot reconnect manually while connection is {state:?}"),
+        }
     }
 
     pub fn is_disconnected(&self) -> bool {
@@ -1233,7 +1378,7 @@ impl ConnectionPool {
                 if let Some(task) = task.upgrade() {
                     log::debug!("Connecting task is still alive");
                     cx.spawn(async move |cx| {
-                        delegate.set_status(Some("Waiting for existing connection attempt"), cx)
+                        delegate.set_status(Some("正在等待已有的连接任务"), cx)
                     })
                     .detach();
                     return task;
@@ -1372,6 +1517,76 @@ mod tests {
     use super::*;
     use gpui::TestAppContext;
     use rpc::{ErrorCodeExt, proto::ErrorCode};
+
+    #[test]
+    fn manual_reconnect_is_available_only_for_warning_states() {
+        assert!(ConnectionState::HeartbeatMissed.can_reconnect_manually());
+        assert!(ConnectionState::Reconnecting.can_reconnect_manually());
+        assert!(!ConnectionState::Connecting.can_reconnect_manually());
+        assert!(!ConnectionState::Connected.can_reconnect_manually());
+        assert!(!ConnectionState::Disconnected.can_reconnect_manually());
+    }
+
+    #[test]
+    fn reconnect_uses_capped_exponential_backoff() {
+        assert_eq!(reconnect_delay(1), Duration::ZERO);
+        assert_eq!(reconnect_delay(2), Duration::from_secs(1));
+        assert_eq!(reconnect_delay(3), Duration::from_secs(2));
+        assert_eq!(reconnect_delay(4), Duration::from_secs(4));
+        assert_eq!(reconnect_delay(6), Duration::from_secs(16));
+        assert_eq!(reconnect_delay(7), Duration::from_secs(30));
+        assert_eq!(
+            reconnect_delay(MAX_RECONNECT_ATTEMPTS),
+            Duration::from_secs(30)
+        );
+    }
+
+    #[test]
+    fn china_server_adaptation_forces_local_remote_server_download_for_ssh() {
+        let options = RemoteConnectionOptions::Ssh(SshConnectionOptions {
+            upload_binary_over_ssh: false,
+            ..Default::default()
+        });
+
+        let RemoteConnectionOptions::Ssh(options) =
+            apply_remote_server_download_settings(options, true)
+        else {
+            panic!("SSH options should remain SSH options");
+        };
+
+        assert!(options.upload_binary_over_ssh);
+    }
+
+    #[test]
+    fn disabled_china_server_adaptation_preserves_per_connection_setting() {
+        for upload_binary_over_ssh in [false, true] {
+            let options = RemoteConnectionOptions::Ssh(SshConnectionOptions {
+                upload_binary_over_ssh,
+                ..Default::default()
+            });
+
+            let RemoteConnectionOptions::Ssh(options) =
+                apply_remote_server_download_settings(options, false)
+            else {
+                panic!("SSH options should remain SSH options");
+            };
+
+            assert_eq!(options.upload_binary_over_ssh, upload_binary_over_ssh);
+        }
+    }
+
+    #[test]
+    fn china_server_adaptation_does_not_change_non_ssh_connections() {
+        let options = RemoteConnectionOptions::Wsl(WslConnectionOptions {
+            distro_name: "Ubuntu".to_string(),
+            user: None,
+        });
+
+        assert_eq!(
+            apply_remote_server_download_settings(options.clone(), true),
+            options
+        );
+    }
 
     #[test]
     fn test_ssh_display_name_prefers_nickname() {
@@ -1619,6 +1834,10 @@ pub trait RemoteConnection: Send + Sync {
         interactive: Interactive,
     ) -> Result<CommandTemplate>;
     fn build_forward_ports_command(
+        &self,
+        forwards: Vec<(u16, String, u16)>,
+    ) -> Result<CommandTemplate>;
+    fn build_reverse_forward_ports_command(
         &self,
         forwards: Vec<(u16, String, u16)>,
     ) -> Result<CommandTemplate>;
