@@ -92,11 +92,14 @@ jobs:
 
           $sourceSha = (git rev-parse HEAD).Trim()
           $channel = (Get-Content "crates/zed/RELEASE_CHANNEL" -Raw).Trim()
-          $manifestVersion = cargo metadata --no-deps --format-version 1 |
-              ConvertFrom-Json |
-              Select-Object -ExpandProperty packages |
-              Where-Object { $_.name -eq "zed" } |
-              Select-Object -ExpandProperty version
+          $metadataJson = cargo metadata --no-deps --format-version 1
+          if ($LASTEXITCODE -ne 0) {
+              throw "Failed to resolve Cargo metadata while validating the release source"
+          }
+          $metadata = $metadataJson | ConvertFrom-Json -AsHashtable
+          $manifestVersion = $metadata["packages"] |
+              Where-Object { $_["name"] -eq "zed" } |
+              ForEach-Object { $_["version"] }
           $commitBody = git show -s --format=%B HEAD | Out-String
           $publicMainMatch = [regex]::Match(
               $commitBody,
@@ -399,15 +402,16 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $metadata = cargo metadata --format-version 1 | ConvertFrom-Json
+          $metadataJson = cargo metadata --format-version 1
           if ($LASTEXITCODE -ne 0) {
               throw "Failed to resolve Cargo metadata before downloading WebRTC"
           }
-          $webrtcPackage = @($metadata.packages | Where-Object { $_.name -eq "webrtc-sys" })
+          $metadata = $metadataJson | ConvertFrom-Json -AsHashtable
+          $webrtcPackage = @($metadata["packages"] | Where-Object { $_["name"] -eq "webrtc-sys" })
           if ($webrtcPackage.Count -ne 1) {
               throw "Expected exactly one webrtc-sys package, found $($webrtcPackage.Count)"
           }
-          $webrtcBuildSource = Join-Path (Split-Path $webrtcPackage[0].manifest_path) "build/src/lib.rs"
+          $webrtcBuildSource = Join-Path (Split-Path $webrtcPackage[0]["manifest_path"]) "build/src/lib.rs"
           $tagMatch = [regex]::Match((Get-Content $webrtcBuildSource -Raw), 'pub const WEBRTC_TAG:\s*&str\s*=\s*"(?<tag>[^"]+)";')
           if (-not $tagMatch.Success) {
               throw "Could not determine WEBRTC_TAG from $webrtcBuildSource"
