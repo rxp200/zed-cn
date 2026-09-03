@@ -307,6 +307,7 @@ pub fn translate_action_name(name: &str) -> Option<&'static str> {
         "editor::UnwrapSyntaxNode" => Some("编辑器: 展开语法节点"),
         "editor::ViewBookmarks" => Some("编辑器: 查看书签"),
         "editor::WrapSelectionsInTag" => Some("编辑器: 用标签包裹选区"),
+        "editor::WrapWithAbbreviation" => Some("编辑器: 用 Emmet 缩写包裹选区"),
         // === project_panel ===
         "project_panel::CollapseAllEntries" => Some("项目面板: 折叠所有条目"),
         "project_panel::CollapseSelectedEntry" => Some("项目面板: 折叠选中条目"),

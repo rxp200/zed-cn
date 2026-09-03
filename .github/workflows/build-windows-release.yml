@@ -405,14 +405,31 @@ jobs:
           $installer = Resolve-Path "target/Zed-${{ matrix.arch }}.exe"
           $remoteServer = Resolve-Path "target/zed-remote-server-windows-${{ matrix.arch }}.zip"
           $cli = Resolve-Path "target/${{ matrix.arch }}-pc-windows-msvc/release/cli.exe"
-          $cliVersion = (& $cli --version | Out-String).Trim()
-          if ($cliVersion -notmatch [regex]::Escape($env:EXPECTED_VERSION)) {
-              throw "CLI version does not contain expected version $env:EXPECTED_VERSION`: $cliVersion"
+          if ("${{ matrix.arch }}" -eq "x86_64") {
+              $cliVersion = (& $cli --version | Out-String).Trim()
+              if ($cliVersion -notmatch [regex]::Escape($env:EXPECTED_VERSION)) {
+                  throw "CLI version does not contain expected version $env:EXPECTED_VERSION`: $cliVersion"
+              }
+              if ($cliVersion -notmatch [regex]::Escape($env:EXPECTED_SHA)) {
+                  throw "CLI version does not contain expected source SHA $env:EXPECTED_SHA`: $cliVersion"
+              }
+              Write-Host "CLI: $cliVersion"
+          } else {
+              $cliBytes = [System.IO.File]::ReadAllBytes($cli)
+              $peOffset = [BitConverter]::ToInt32($cliBytes, 0x3c)
+              $machine = [BitConverter]::ToUInt16($cliBytes, $peOffset + 4)
+              if ($machine -ne 0xAA64) {
+                  throw "CLI PE machine is 0x$($machine.ToString('X4')); expected ARM64 (0xAA64)"
+              }
+              $cliContents = [Text.Encoding]::ASCII.GetString($cliBytes)
+              if (-not $cliContents.Contains($env:EXPECTED_VERSION)) {
+                  throw "ARM64 CLI does not contain expected version $env:EXPECTED_VERSION"
+              }
+              if (-not $cliContents.Contains($env:EXPECTED_SHA)) {
+                  throw "ARM64 CLI does not contain expected source SHA $env:EXPECTED_SHA"
+              }
+              Write-Host "ARM64 CLI architecture and embedded build identity verified"
           }
-          if ($cliVersion -notmatch [regex]::Escape($env:EXPECTED_SHA)) {
-              throw "CLI version does not contain expected source SHA $env:EXPECTED_SHA`: $cliVersion"
-          }
-          Write-Host "CLI: $cliVersion"
           Write-Host "Installer: $installer"
           Write-Host "Remote Server: $remoteServer"
 
