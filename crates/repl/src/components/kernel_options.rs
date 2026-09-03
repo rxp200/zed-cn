@@ -385,14 +385,14 @@ impl PickerDelegate for KernelPickerDelegate {
                                                 )
                                                 .when(*is_recommended, |flex| {
                                                     flex.child(
-                                                        Label::new("Recommended")
+                                                        Label::new("推荐")
                                                             .size(LabelSize::XSmall)
                                                             .color(Color::Accent),
                                                     )
                                                 })
                                                 .when(!has_ipykernel, |flex| {
                                                     flex.child(
-                                                        Label::new("ipykernel not installed")
+                                                        Label::new("未安装 ipykernel")
                                                             .size(LabelSize::XSmall)
                                                             .color(Color::Warning),
                                                     )
@@ -434,7 +434,7 @@ impl PickerDelegate for KernelPickerDelegate {
                 .p_1()
                 .gap_4()
                 .child(
-                    Button::new("kernel-docs", "Kernel Docs")
+                    Button::new("kernel-docs", "内核文档")
                         .end_icon(
                             Icon::new(IconName::ArrowUpRight)
                                 .size(IconSize::Small)

@@ -797,7 +797,10 @@ impl LanguageModel for OpenAiSubscribedLanguageModel {
                 })
                 .await?;
             let mapper = OpenAiResponseEventMapper::new(PROVIDER_ID);
-            let mut event_stream = mapper.map_stream(response_stream.boxed());
+            let mut event_stream = language_model::stream_in_background(
+                mapper.map_stream(response_stream.boxed()).boxed(),
+                cx.background_executor().clone(),
+            );
             let mut compacted_context = None;
             let mut usage = language_model::TokenUsage::default();
 
@@ -808,7 +811,7 @@ impl LanguageModel for OpenAiSubscribedLanguageModel {
                     ) => {
                         if compacted_context.replace(context).is_some() {
                             return Err(LanguageModelCompletionError::Other(anyhow!(
-                                "ChatGPT subscription compaction returned multiple replacement contexts"
+                                "ChatGPT 订阅的上下文压缩返回了多个替换上下文"
                             )));
                         }
                     }
@@ -821,7 +824,7 @@ impl LanguageModel for OpenAiSubscribedLanguageModel {
 
             let context = compacted_context.ok_or_else(|| {
                 LanguageModelCompletionError::Other(anyhow!(
-                    "ChatGPT subscription compaction returned no replacement context"
+                    "ChatGPT 订阅的上下文压缩未返回替换上下文"
                 ))
             })?;
             Ok(CompactionResult { context, usage })
@@ -889,6 +892,7 @@ impl LanguageModel for OpenAiSubscribedLanguageModel {
         let state = self.state.downgrade();
         let http_client = self.http_client.clone();
         let request_limiter = self.request_limiter.clone();
+        let executor = cx.background_executor().clone();
 
         let future = cx.spawn(async move |cx| {
             let creds = get_fresh_credentials(&state, &http_client, cx).await?;
@@ -914,7 +918,10 @@ impl LanguageModel for OpenAiSubscribedLanguageModel {
 
         async move {
             let mapper = OpenAiResponseEventMapper::new(PROVIDER_ID);
-            Ok(mapper.map_stream(future.await?.boxed()).boxed())
+            Ok(language_model::stream_in_background(
+                mapper.map_stream(future.await?.boxed()).boxed(),
+                executor,
+            ))
         }
         .boxed()
     }

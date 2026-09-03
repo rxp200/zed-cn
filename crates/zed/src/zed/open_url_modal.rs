@@ -106,7 +106,7 @@ impl Render for OpenUrlModal {
                     })
                     .when(self.last_error.is_none(), |this| {
                         this.child(
-                            Label::new("Paste a URL to open.")
+                            Label::new("粘贴 URL 以打开。")
                                 .color(Color::Muted)
                                 .size(LabelSize::Small),
                         )

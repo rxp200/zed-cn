@@ -16,6 +16,7 @@ use gpui::{
 };
 
 use language::Buffer;
+use language_model::{LanguageModelProviderId, LanguageModelRegistry};
 use platform_title_bar::PlatformTitleBar;
 use project::{Project, ProjectPath, Worktree, WorktreeId};
 use release_channel::ReleaseChannel;
@@ -37,9 +38,9 @@ use std::{
 };
 use theme_settings::ThemeSettings;
 use ui::{
-    Banner, ContextMenu, Divider, DropdownMenu, DropdownStyle, IconButtonShape, KeyBinding,
-    KeybindingHint, PopoverMenu, Scrollbars, Switch, Tooltip, TreeViewItem, WithScrollbar,
-    prelude::*,
+    Banner, ContextMenu, Divider, DropdownMenu, DropdownStyle, HighlightedLabel, IconButtonShape,
+    KeyBinding, KeybindingHint, PopoverMenu, Scrollbars, Switch, Tooltip, TreeViewItem,
+    WithScrollbar, prelude::*,
 };
 
 use util::{ResultExt as _, paths::PathStyle, rel_path::RelPath};
@@ -55,7 +56,7 @@ use zed_actions::{
 use crate::components::{
     EnumVariantDropdown, NumberField, NumberFieldMode, NumberFieldType, SettingsInputField,
     SettingsSectionHeader, font_picker, icon_theme_picker, render_ollama_model_picker,
-    text_field_a11y_state, theme_picker,
+    text_field_a11y_state, theme_picker, translation_picker,
 };
 use crate::pages::{
     CustomAgentForm, LlmProviderForm, McpServerForm, render_input_audio_device_dropdown,
@@ -354,33 +355,52 @@ impl SettingFieldRenderer {
         ) -> Stateful<Div>
         + 'static,
     ) -> &mut Self {
-        let key = TypeId::of::<T>();
-        let renderer = Box::new(
-            move |settings_window: &SettingsWindow,
-                  item: &SettingItem,
-                  settings_file: SettingsUiFile,
-                  metadata: Option<&SettingsFieldMetadata>,
-                  sub_field: bool,
-                  window: &mut Window,
-                  cx: &mut Context<SettingsWindow>| {
-                let field = *item
-                    .field
-                    .as_ref()
-                    .as_any()
-                    .downcast_ref::<SettingField<T>>()
-                    .unwrap();
-                renderer(
-                    settings_window,
-                    item,
-                    field,
-                    settings_file,
-                    metadata,
-                    sub_field,
-                    window,
-                    cx,
-                )
-            },
-        );
+        self.add_renderer_erased(
+            TypeId::of::<T>(),
+            Box::new(
+                move |settings_window: &SettingsWindow,
+                      item: &SettingItem,
+                      settings_file: SettingsUiFile,
+                      metadata: Option<&SettingsFieldMetadata>,
+                      sub_field: bool,
+                      window: &mut Window,
+                      cx: &mut Context<SettingsWindow>| {
+                    let field = *item
+                        .field
+                        .as_ref()
+                        .as_any()
+                        .downcast_ref::<SettingField<T>>()
+                        .unwrap();
+                    renderer(
+                        settings_window,
+                        item,
+                        field,
+                        settings_file,
+                        metadata,
+                        sub_field,
+                        window,
+                        cx,
+                    )
+                },
+            ),
+        )
+    }
+
+    fn add_renderer_erased(
+        &mut self,
+        key: TypeId,
+        renderer: Box<
+            dyn Fn(
+                &SettingsWindow,
+                &SettingItem,
+                SettingsUiFile,
+                Option<&SettingsFieldMetadata>,
+                bool,
+                &mut Window,
+                &mut Context<SettingsWindow>,
+            ) -> Stateful<Div>,
+        >,
+    ) -> &mut Self {
         self.renderers.borrow_mut().insert(key, renderer);
         self
     }
@@ -511,7 +531,7 @@ fn init_renderers(cx: &mut App) {
                     settings_window,
                     item,
                     settings_file,
-                    Button::new("open-in-settings-file", "Edit in settings.json")
+                    Button::new("open-in-settings-file", "在settings.json中编辑")
                         .style(ButtonStyle::Outlined)
                         .size(ButtonSize::Medium)
                         .tab_index(0_isize)
@@ -571,6 +591,7 @@ fn init_renderers(cx: &mut App) {
         .add_basic_renderer::<settings::ActivateOnClose>(render_dropdown)
         .add_basic_renderer::<settings::ShowDiagnostics>(render_dropdown)
         .add_basic_renderer::<settings::ShowCloseButton>(render_dropdown)
+        .add_basic_renderer::<settings::FolderIndicator>(render_dropdown)
         .add_basic_renderer::<settings::ProjectPanelEntrySpacing>(render_dropdown)
         .add_basic_renderer::<settings::ProjectPanelSortMode>(render_dropdown)
         .add_basic_renderer::<settings::ProjectPanelSortOrder>(render_dropdown)
@@ -589,6 +610,7 @@ fn init_renderers(cx: &mut App) {
         .add_basic_renderer::<settings::TerminalBlink>(render_dropdown)
         .add_basic_renderer::<settings::CursorShapeContent>(render_dropdown)
         .add_basic_renderer::<settings::EditPredictionPromptFormatContent>(render_dropdown)
+        .add_basic_renderer::<settings::OpenAiCompatibleApiTypeContent>(render_dropdown)
         .add_basic_renderer::<settings::EditPredictionDataCollectionChoice>(render_dropdown)
         .add_basic_renderer::<f32>(render_editable_number_field)
         .add_basic_renderer::<settings::AutoCompactThreshold>(render_text_field)
@@ -648,6 +670,8 @@ fn init_renderers(cx: &mut App) {
         .add_basic_renderer::<settings::ScanSymlinksSetting>(render_dropdown)
         .add_basic_renderer::<settings::FontSize>(render_editable_number_field)
         .add_basic_renderer::<settings::OllamaModelName>(render_ollama_model_picker)
+        .add_basic_renderer::<settings::TranslationProviderSetting>(render_translation_provider_picker)
+        .add_basic_renderer::<settings::TranslationModelSetting>(render_translation_model_picker)
         .add_basic_renderer::<settings::SemanticTokens>(render_dropdown)
         .add_basic_renderer::<settings::DocumentFoldingRanges>(render_dropdown)
         .add_basic_renderer::<settings::DocumentSymbols>(render_dropdown)
@@ -1000,6 +1024,15 @@ struct SearchIndex {
     key_lut: Vec<SearchKeyLUTEntry>,
 }
 
+fn search_document_matches(document: &SearchDocument, query_words: &[&str]) -> bool {
+    query_words.iter().all(|query_word| {
+        document
+            .words
+            .iter()
+            .any(|document_word| document_word.contains(query_word))
+    })
+}
+
 struct SearchKeyLUTEntry {
     page_index: usize,
     header_index: usize,
@@ -1104,6 +1137,7 @@ impl SettingsPageItem {
         cx: &mut Context<SettingsWindow>,
     ) -> AnyElement {
         let file = settings_window.current_file.clone();
+        let search_query = settings_window.search_bar.read(cx).text(cx);
 
         let apply_padding = |element: Stateful<Div>| -> Stateful<Div> {
             let element = element.pt_4();
@@ -1174,7 +1208,9 @@ impl SettingsPageItem {
 
         match self {
             SettingsPageItem::SectionHeader(header) => {
-                SettingsSectionHeader::new(SharedString::new_static(header)).into_any_element()
+                SettingsSectionHeader::new(SharedString::new_static(header))
+                    .highlight_ranges(search_highlight_ranges(header, &search_query))
+                    .into_any_element()
             }
             SettingsPageItem::SettingItem(setting_item) => {
                 let (field_with_padding, _) =
@@ -1202,15 +1238,23 @@ impl SettingsPageItem {
                                 .relative()
                                 .w_full()
                                 .max_w_1_2()
-                                .child(Label::new(sub_page_link.title.clone()))
+                                .child(render_search_highlighted_label(
+                                    sub_page_link.title.clone(),
+                                    &search_query,
+                                    None,
+                                    None,
+                                    false,
+                                ))
                                 .when_some(
                                     sub_page_link.description.as_ref(),
                                     |this, description| {
-                                        this.child(
-                                            Label::new(description.clone())
-                                                .size(LabelSize::Small)
-                                                .color(Color::Muted),
-                                        )
+                                        this.child(render_search_highlighted_label(
+                                            description.clone(),
+                                            &search_query,
+                                            Some(LabelSize::Small),
+                                            Some(Color::Muted),
+                                            false,
+                                        ))
                                     },
                                 ),
                         )
@@ -1338,15 +1382,23 @@ impl SettingsPageItem {
                                 .relative()
                                 .w_full()
                                 .max_w_1_2()
-                                .child(Label::new(action_link.title.clone()))
+                                .child(render_search_highlighted_label(
+                                    action_link.title.clone(),
+                                    &search_query,
+                                    None,
+                                    None,
+                                    false,
+                                ))
                                 .when_some(
                                     action_link.description.as_ref(),
                                     |this, description| {
-                                        this.child(
-                                            Label::new(description.clone())
-                                                .size(LabelSize::Small)
-                                                .color(Color::Muted),
-                                        )
+                                        this.child(render_search_highlighted_label(
+                                            description.clone(),
+                                            &search_query,
+                                            Some(LabelSize::Small),
+                                            Some(Color::Muted),
+                                            false,
+                                        ))
                                     },
                                 ),
                         )
@@ -1381,6 +1433,71 @@ impl SettingsPageItem {
 ///
 /// Renders title + description on the left, control on the right, with
 /// optional reset button and copy-link icon.
+fn search_highlight_ranges(text: &str, query: &str) -> Vec<Range<usize>> {
+    let mut normalized_text = String::new();
+    let mut source_ranges = Vec::new();
+
+    for (start, character) in text.char_indices() {
+        let end = start + character.len_utf8();
+        for normalized_character in character.to_lowercase() {
+            let normalized_start = normalized_text.len();
+            normalized_text.push(normalized_character);
+            source_ranges.extend((normalized_start..normalized_text.len()).map(|_| start..end));
+        }
+    }
+
+    let mut ranges = query
+        .split_whitespace()
+        .map(str::to_lowercase)
+        .filter(|word| !word.is_empty())
+        .flat_map(|word| {
+            normalized_text
+                .match_indices(&word)
+                .filter_map(|(start, matched)| {
+                    let end = start + matched.len();
+                    Some(source_ranges.get(start)?.start..source_ranges.get(end - 1)?.end)
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    ranges.sort_unstable_by_key(|range| (range.start, range.end));
+    ranges.dedup();
+    ranges
+}
+
+fn render_search_highlighted_label(
+    text: impl Into<SharedString>,
+    query: &str,
+    size: Option<LabelSize>,
+    color: Option<Color>,
+    render_code_spans: bool,
+) -> AnyElement {
+    let text = text.into();
+    let ranges = search_highlight_ranges(&text, query);
+    if ranges.is_empty() {
+        let label = Label::new(text);
+        return match (size, color, render_code_spans) {
+            (Some(size), Some(color), true) => label
+                .size(size)
+                .color(color)
+                .render_code_spans()
+                .into_any_element(),
+            (Some(size), Some(color), false) => label.size(size).color(color).into_any_element(),
+            (Some(size), None, _) => label.size(size).into_any_element(),
+            (None, Some(color), _) => label.color(color).into_any_element(),
+            (None, None, _) => label.into_any_element(),
+        };
+    }
+
+    let label = HighlightedLabel::from_ranges(text, ranges);
+    match (size, color) {
+        (Some(size), Some(color)) => label.size(size).color(color).into_any_element(),
+        (Some(size), None) => label.size(size).into_any_element(),
+        (None, Some(color)) => label.color(color).into_any_element(),
+        (None, None) => label.into_any_element(),
+    }
+}
+
 fn render_settings_item_layout(
     settings_window: &SettingsWindow,
     title: &'static str,
@@ -1392,6 +1509,8 @@ fn render_settings_item_layout(
     sub_field: bool,
     cx: &mut Context<'_, SettingsWindow>,
 ) -> Stateful<Div> {
+    let search_query = settings_window.search_bar.read(cx).text(cx);
+
     // Note: the row itself is intentionally not exposed as a labeled group.
     // Each control names and describes itself (via the setting title and
     // description), so adding a group with the same label here would make
@@ -1410,14 +1529,20 @@ fn render_settings_item_layout(
                     h_flex()
                         .w_full()
                         .gap_1()
-                        .child(Label::new(SharedString::new_static(title)))
+                        .child(render_search_highlighted_label(
+                            SharedString::new_static(title),
+                            &search_query,
+                            None,
+                            None,
+                            false,
+                        ))
                         .when_some(reset_fn, |this, reset_to_default| {
                             this.child(
                                 IconButton::new("reset-to-default-btn", IconName::Undo)
                                     .icon_color(Color::Muted)
                                     .icon_size(IconSize::Small)
                                     .aria_label("Reset to Default")
-                                    .tooltip(Tooltip::text("Reset to Default"))
+                                    .tooltip(Tooltip::text("重置为默认值"))
                                     .on_click(move |_, window, cx| {
                                         reset_to_default(window, cx);
                                     }),
@@ -1431,12 +1556,13 @@ fn render_settings_item_layout(
                             )
                         }),
                 )
-                .child(
-                    Label::new(SharedString::new_static(description))
-                        .size(LabelSize::Small)
-                        .color(Color::Muted)
-                        .render_code_spans(),
-                ),
+                .child(render_search_highlighted_label(
+                    SharedString::new_static(description),
+                    &search_query,
+                    Some(LabelSize::Small),
+                    Some(Color::Muted),
+                    true,
+                )),
         )
         .child(control)
         .when(settings_window.sub_page_stack.is_empty(), |this| {
@@ -1549,7 +1675,7 @@ fn render_settings_item_link(
                 .icon_size(IconSize::Small)
                 .shape(IconButtonShape::Square)
                 .aria_label("Copy Link")
-                .tooltip(Tooltip::text("Copy Link"))
+                .tooltip(Tooltip::text("复制链接"))
                 .when_some(json_path, |this, path| {
                     this.on_click(cx.listener(move |this, _, _, cx| {
                         let link = format!("zed://settings/{}", path);
@@ -1772,7 +1898,7 @@ impl SettingsWindow {
         let current_file = SettingsUiFile::User;
         let search_bar = cx.new(|cx| {
             let mut editor = Editor::single_line(window, cx);
-            editor.set_placeholder_text("Search settings…", window, cx);
+            editor.set_placeholder_text("搜索设置…", window, cx);
             editor
         });
         cx.subscribe(&search_bar, |this, _, event: &EditorEvent, cx| {
@@ -2319,13 +2445,7 @@ impl SettingsWindow {
                     search_index
                         .documents
                         .iter()
-                        .filter(|doc| {
-                            query_words.iter().all(|query_word| {
-                                doc.words
-                                    .iter()
-                                    .any(|doc_word| doc_word.starts_with(query_word))
-                            })
-                        })
+                        .filter(|document| search_document_matches(document, &query_words))
                         .map(|doc| doc.id)
                         .collect::<Vec<usize>>()
                 }
@@ -2914,7 +3034,7 @@ impl SettingsWindow {
                                         }),
                                     )
                                     .style(DropdownStyle::Subtle)
-                                    .trigger_tooltip(Tooltip::text("View Other Projects"))
+                                    .trigger_tooltip(Tooltip::text("查看其他项目"))
                                     .trigger_icon(IconName::ChevronDown)
                                     .attach(gpui::Anchor::BottomLeft)
                                     .offset(gpui::Point {
@@ -2927,7 +3047,7 @@ impl SettingsWindow {
                     }),
             )
             .child(
-                Button::new(edit_in_json_id, "Edit in settings.json")
+                Button::new(edit_in_json_id, "在settings.json中编辑")
                     .tab_index(0_isize)
                     .style(ButtonStyle::OutlinedGhost)
                     .tooltip(Tooltip::for_action_title_in(
@@ -2999,7 +3119,7 @@ impl SettingsWindow {
         h_flex()
             .id("settings-ui-search")
             .role(Role::SearchInput)
-            .aria_label("Search Settings")
+            .aria_label("搜索设置")
             .aria_value(a11y_value)
             .track_focus(&self.search_bar.focus_handle(cx))
             .a11y_synthetic_children(a11y_text_runs)
@@ -3020,7 +3140,7 @@ impl SettingsWindow {
                     IconButton::new("clear-btn", IconName::Close)
                         .icon_color(Color::Muted)
                         .icon_size(IconSize::Small)
-                        .tooltip(Tooltip::text("Clear"))
+                        .tooltip(Tooltip::text("清除"))
                         .on_click(cx.listener(|settings_window, _, window, cx| {
                             settings_window.clear_search(window, cx);
                         })),
@@ -3206,6 +3326,10 @@ impl SettingsWindow {
                                             ("settings-ui-navbar-entry", entry_index),
                                             entry.title,
                                         )
+                                        .highlight_ranges(search_highlight_ranges(
+                                            entry.title,
+                                            &this.search_bar.read(cx).text(cx),
+                                        ))
                                         .track_focus(&entry.focus_handle)
                                         .root_item(entry.is_root)
                                         .toggle_state(this.is_navbar_entry_selected(entry_index))
@@ -3470,7 +3594,7 @@ impl SettingsWindow {
                 "sub-page-scope-picker",
                 scope_name,
                 ContextMenu::build(window, cx, move |mut menu, _, _| {
-                    menu = menu.header("Scope");
+                    menu = menu.header("作用域");
 
                     for ix in allowed_file_indices {
                         let (file, focus_handle) = &self.files[ix];
@@ -3500,7 +3624,7 @@ impl SettingsWindow {
                 }),
             )
             .style(DropdownStyle::Subtle)
-            .trigger_tooltip(Tooltip::text("Change Scope"))
+            .trigger_tooltip(Tooltip::text("更改范围"))
             .attach(gpui::Anchor::BottomLeft)
             .offset(gpui::Point {
                 x: px(0.0),
@@ -3547,7 +3671,7 @@ impl SettingsWindow {
             .items_center()
             .justify_center()
             .gap_1()
-            .child(Label::new("No Results"))
+            .child(Label::new("无结果"))
             .child(
                 Label::new(format!("No settings match \"{}\"", search_query))
                     .size(LabelSize::Small)
@@ -3783,7 +3907,7 @@ impl SettingsWindow {
                         .flex_shrink_0()
                         .when(current_sub_page.link.in_json, |this| {
                             this.child(
-                                Button::new("open-in-settings-file", "Edit in settings.json")
+                                Button::new("open-in-settings-file", "在settings.json中编辑")
                                     .tab_index(0_isize)
                                     .style(ButtonStyle::OutlinedGhost)
                                     .tooltip(Tooltip::for_action_title_in(
@@ -3801,7 +3925,7 @@ impl SettingsWindow {
                         })
                         .when(is_skills_page, |this| {
                             this.child(
-                                Button::new("open-skill-creator", "Create Skill")
+                                Button::new("open-skill-creator", "创建技能")
                                     .tab_index(0_isize)
                                     .style(ButtonStyle::OutlinedGhost)
                                     .on_click(cx.listener(|this, _, window, cx| {
@@ -3859,7 +3983,7 @@ impl SettingsWindow {
                     )
                     .action_slot(
                         div().pr_1().pb_1().child(
-                            Button::new("fix-in-json", "Fix in settings.json")
+                            Button::new("fix-in-json", "在settings.json中修复")
                                 .tab_index(0_isize)
                                 .style(ButtonStyle::Tinted(ui::TintColor::Warning))
                                 .on_click(cx.listener(|this, _, window, cx| {
@@ -3876,7 +4000,7 @@ impl SettingsWindow {
                 .gap_2()
                 .when_some(parse_error, |this, err| {
                     this.child(banner(
-                        "Failed to load your settings. Some values may be incorrect and changes may be lost.",
+                        "无法加载您的设置。某些值可能不正确，更改可能会丢失。",
                         err,
                         &mut self.shown_errors,
                         cx,
@@ -3884,17 +4008,20 @@ impl SettingsWindow {
                 })
                 .map(|this| match &error.migration_status {
                     settings::MigrationStatus::Succeeded => this.child(banner(
-                        "Your settings are out of date, and need to be updated.",
+                        "您的设置已过时，需要进行更新。",
                         match &self.current_file {
-                            SettingsUiFile::User => "They can be automatically migrated to the latest version.",
-                            SettingsUiFile::Server(_) | SettingsUiFile::Project(_)  => "They must be manually migrated to the latest version."
-                        }.to_string(),
+                            SettingsUiFile::User => "可以自动迁移到最新版本。",
+                            SettingsUiFile::Server(_) | SettingsUiFile::Project(_) => {
+                                "必须手动迁移到最新版本。"
+                            }
+                        }
+                        .to_string(),
                         &mut self.shown_errors,
                         cx,
                     )),
                     settings::MigrationStatus::Failed { error: err } if !parse_failed => this
                         .child(banner(
-                            "Your settings file is out of date, automatic migration failed",
+                            "您的设置文件已过时，自动迁移失败",
                             err.clone(),
                             &mut self.shown_errors,
                             cx,
@@ -3926,7 +4053,7 @@ impl SettingsWindow {
                         v_flex()
                             .my_0p5()
                             .gap_0p5()
-                            .child(Label::new("Restricted Mode"))
+                            .child(Label::new("受限模式"))
                             .child(
                                 Label::new(
                                     "This project is in restricted mode. Some project settings may not apply.",
@@ -3937,7 +4064,7 @@ impl SettingsWindow {
                     )
                     .action_slot(
                         div().pr_2().pb_1().child(
-                            Button::new("manage-trust", "Manage Trust")
+                            Button::new("manage-trust", "管理信任")
                                 .style(ButtonStyle::Tinted(ui::TintColor::Warning))
                                 .on_click(cx.listener(move |_this, _, window, cx| {
                                     if let Some(original_window) = original_window {
@@ -4306,7 +4433,7 @@ impl SettingsWindow {
         self.skill_creator_page = Some((page.clone(), subscription));
 
         let sub_page_link = SubPageLink {
-            title: "Create Skill".into(),
+            title: "创建技能".into(),
             r#type: SubPageType::SkillCreator,
             description: None,
             search_aliases: &[],
@@ -5162,6 +5289,197 @@ fn render_font_picker(
         .into_any_element()
 }
 
+/// The language model providers configured under `language_models`, limited to
+/// those that are currently usable (authenticated, or reachable local
+/// servers). Returns `(provider_id, display_name)` pairs.
+fn translation_provider_options(cx: &App) -> Vec<(SharedString, SharedString)> {
+    let Some(registry) = LanguageModelRegistry::try_read_global(cx) else {
+        return Vec::new();
+    };
+    registry
+        .visible_providers()
+        .into_iter()
+        .filter(|provider| provider.is_authenticated(cx))
+        .map(|provider| {
+            (
+                SharedString::from(provider.id().0.as_ref()),
+                SharedString::from(provider.name().0.as_ref()),
+            )
+        })
+        .collect()
+}
+
+/// The models provided by the given translation provider, as `(model_id,
+/// display_name)` pairs.
+fn translation_model_options(cx: &App, provider_id: &str) -> Vec<(SharedString, SharedString)> {
+    if provider_id.is_empty() {
+        return Vec::new();
+    }
+    let Some(registry) = LanguageModelRegistry::try_read_global(cx) else {
+        return Vec::new();
+    };
+    let Some(provider) = registry.provider(&LanguageModelProviderId(provider_id.into())) else {
+        return Vec::new();
+    };
+    provider
+        .provided_models(cx)
+        .into_iter()
+        .map(|model| {
+            (
+                SharedString::from(model.id().0.as_ref()),
+                SharedString::from(model.name().0.as_ref()),
+            )
+        })
+        .collect()
+}
+
+fn render_translation_provider_picker(
+    field: SettingField<settings::TranslationProviderSetting>,
+    file: SettingsUiFile,
+    _metadata: Option<&SettingsFieldMetadata>,
+    title: &'static str,
+    description: &'static str,
+    _window: &mut Window,
+    cx: &mut App,
+) -> AnyElement {
+    let (_, value) = SettingsStore::global(cx).get_value_from_file(file.to_settings(), field.pick);
+    let current_value: SharedString = value
+        .map(|provider| provider.0.as_str().into())
+        .unwrap_or_default();
+
+    let trigger_value: SharedString = if current_value.is_empty() {
+        "选择一个渠道…".into()
+    } else {
+        current_value.clone()
+    };
+
+    PopoverMenu::new("translation-provider-picker")
+        .trigger(
+            render_picker_trigger_button(
+                "translation_provider_picker_trigger".into(),
+                trigger_value,
+            )
+            .aria_label(title)
+            .when(!description.is_empty(), |this| {
+                this.aria_description(description)
+            }),
+        )
+        .menu(move |window, cx| {
+            let file = file.clone();
+            let current_value = current_value.clone();
+            let options = translation_provider_options(cx);
+            Some(cx.new(move |cx| {
+                translation_picker(
+                    options,
+                    current_value,
+                    move |provider_id, window, cx| {
+                        update_settings_file(
+                            file.clone(),
+                            field.json_path,
+                            window,
+                            cx,
+                            move |settings, app| {
+                                (field.write)(
+                                    settings,
+                                    Some(settings::TranslationProviderSetting(
+                                        provider_id.to_string(),
+                                    )),
+                                    app,
+                                );
+                            },
+                        )
+                        .log_err();
+                    },
+                    window,
+                    cx,
+                )
+            }))
+        })
+        .anchor(gpui::Anchor::TopLeft)
+        .offset(gpui::Point {
+            x: px(0.0),
+            y: px(2.0),
+        })
+        .with_handle(ui::PopoverMenuHandle::default())
+        .into_any_element()
+}
+
+fn render_translation_model_picker(
+    field: SettingField<settings::TranslationModelSetting>,
+    file: SettingsUiFile,
+    _metadata: Option<&SettingsFieldMetadata>,
+    title: &'static str,
+    description: &'static str,
+    _window: &mut Window,
+    cx: &mut App,
+) -> AnyElement {
+    let store = SettingsStore::global(cx);
+    let (_, provider_value) = store.get_value_from_file(file.to_settings(), |content| {
+        content.hover_translation.as_ref()?.provider.as_ref()
+    });
+    let provider_id: SharedString = provider_value
+        .map(|provider| provider.0.as_str().into())
+        .unwrap_or_default();
+
+    let (_, value) = store.get_value_from_file(file.to_settings(), field.pick);
+    let current_value: SharedString = value
+        .map(|model| model.0.as_str().into())
+        .unwrap_or_default();
+
+    let trigger_value: SharedString = if provider_id.is_empty() {
+        "请先选择翻译渠道…".into()
+    } else if current_value.is_empty() {
+        "选择一个模型…".into()
+    } else {
+        current_value.clone()
+    };
+
+    PopoverMenu::new("translation-model-picker")
+        .trigger(
+            render_picker_trigger_button("translation_model_picker_trigger".into(), trigger_value)
+                .aria_label(title)
+                .when(!description.is_empty(), |this| {
+                    this.aria_description(description)
+                }),
+        )
+        .menu(move |window, cx| {
+            let file = file.clone();
+            let current_value = current_value.clone();
+            let options = translation_model_options(cx, provider_id.as_ref());
+            Some(cx.new(move |cx| {
+                translation_picker(
+                    options,
+                    current_value,
+                    move |model_id, window, cx| {
+                        update_settings_file(
+                            file.clone(),
+                            field.json_path,
+                            window,
+                            cx,
+                            move |settings, app| {
+                                (field.write)(
+                                    settings,
+                                    Some(settings::TranslationModelSetting(model_id.to_string())),
+                                    app,
+                                );
+                            },
+                        )
+                        .log_err();
+                    },
+                    window,
+                    cx,
+                )
+            }))
+        })
+        .anchor(gpui::Anchor::TopLeft)
+        .offset(gpui::Point {
+            x: px(0.0),
+            y: px(2.0),
+        })
+        .with_handle(ui::PopoverMenuHandle::default())
+        .into_any_element()
+}
+
 fn render_theme_picker(
     field: SettingField<settings::ThemeName>,
     file: SettingsUiFile,
@@ -5353,6 +5671,30 @@ pub mod test {
                 skill_creator_page: None,
             }
         }
+    }
+
+    #[test]
+    fn settings_search_matches_substrings() {
+        let document = SearchDocument {
+            id: 0,
+            words: vec!["无障碍".to_string(), "模式".to_string()],
+        };
+
+        assert!(search_document_matches(&document, &["障碍"]));
+        assert!(search_document_matches(&document, &["模式"]));
+        assert!(!search_document_matches(&document, &["显示"]));
+    }
+
+    #[test]
+    fn settings_search_highlights_case_insensitive_substrings() {
+        assert_eq!(
+            search_highlight_ranges("无障碍模式", "障碍 模式"),
+            vec![3..9, 9..15]
+        );
+        assert_eq!(
+            search_highlight_ranges("Accessibility Mode", "BILITY mode"),
+            vec![7..13, 14..18]
+        );
     }
 
     impl PartialEq for NavBarEntry {
@@ -6265,7 +6607,7 @@ pub mod test {
                 1,
                 "Skills sub-page should stay open when switching scope"
             );
-            assert_eq!(settings_window.sub_page_stack[0].link.title, "Skills");
+            assert_eq!(settings_window.sub_page_stack[0].link.title, "技能");
             assert_eq!(
                 displayed_skill_names(settings_window, cx),
                 ["project-skill"]
@@ -6362,7 +6704,7 @@ pub mod test {
                 .collect();
             assert_eq!(
                 titles,
-                ["Skills", "Create Skill"],
+                ["技能", "创建技能"],
                 "skill creator should be pushed on top of the skills page"
             );
             assert!(
@@ -6455,7 +6797,7 @@ pub mod test {
                     .collect();
                 assert_eq!(
                     titles,
-                    ["Skills", "Create Skill"],
+                    ["技能", "创建技能"],
                     "skill creator should be pushed on top of the skills page"
                 );
             })

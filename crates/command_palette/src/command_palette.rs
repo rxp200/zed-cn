@@ -1,3 +1,4 @@
+mod action_translations;
 mod persistence;
 
 use std::{
@@ -187,6 +188,12 @@ struct Command {
     action: Box<dyn Action>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct CommandUsage {
+    last_invoked: i64,
+    invocations: u16,
+}
+
 #[derive(Default)]
 struct QueryHistory {
     history: Option<VecDeque<String>>,
@@ -353,11 +360,19 @@ impl CommandPaletteDelegate {
     /// Hit count for each command in the palette.
     /// We only account for commands triggered directly via command palette and not by e.g. keystrokes because
     /// if a user already knows a keystroke for a command, they are unlikely to use a command palette to look for it.
-    fn hit_counts(&self, cx: &App) -> HashMap<String, u16> {
+    fn command_usage(&self, cx: &App) -> HashMap<String, CommandUsage> {
         if let Ok(commands) = CommandPaletteDB::global(cx).list_commands_used() {
             commands
                 .into_iter()
-                .map(|command| (command.command_name, command.invocations))
+                .map(|command| {
+                    (
+                        command.command_name,
+                        CommandUsage {
+                            last_invoked: command.last_invoked.unix_timestamp(),
+                            invocations: command.invocations,
+                        },
+                    )
+                })
                 .collect()
         } else {
             HashMap::new()
@@ -392,7 +407,7 @@ impl PickerDelegate for CommandPaletteDelegate {
     }
 
     fn placeholder_text(&self, _window: &mut Window, _cx: &mut App) -> Arc<str> {
-        "Execute a command...".into()
+        "执行命令…".into()
     }
 
     fn select_history(
@@ -470,14 +485,14 @@ impl PickerDelegate for CommandPaletteDelegate {
 
         let task = cx.background_spawn({
             let mut commands = self.all_commands.clone();
-            let hit_counts = self.hit_counts(cx);
+            let command_usage = self.command_usage(cx);
             let executor = cx.background_executor().clone();
             let query = normalize_action_query(query_str);
             let query_for_link = query_str.to_string();
             async move {
                 commands.sort_by_key(|action| {
                     (
-                        Reverse(hit_counts.get(&action.name).cloned()),
+                        Reverse(command_usage.get(&action.name).copied()),
                         action.name.clone(),
                     )
                 });
@@ -488,7 +503,7 @@ impl PickerDelegate for CommandPaletteDelegate {
                     .map(|(ix, command)| StringMatchCandidate::new(ix, &command.name))
                     .collect::<Vec<_>>();
 
-                let matches = fuzzy_nucleo::match_strings_async(
+                let mut matches = fuzzy_nucleo::match_strings_async(
                     &candidates,
                     &query,
                     fuzzy_nucleo::Case::Smart,
@@ -498,6 +513,18 @@ impl PickerDelegate for CommandPaletteDelegate {
                     executor,
                 )
                 .await;
+
+                let used_commands = commands
+                    .iter()
+                    .take_while(|command| command_usage.contains_key(&command.name))
+                    .count();
+                matches.sort_by_key(|string_match| {
+                    if string_match.candidate_id < used_commands {
+                        string_match.candidate_id
+                    } else {
+                        usize::MAX
+                    }
+                });
 
                 let intercept_result = if is_zed_link {
                     CommandInterceptResult {
@@ -666,7 +693,7 @@ impl PickerDelegate for CommandPaletteDelegate {
 
         let focus_handle = &self.previous_focus_handle;
         let keybinding_buttons = if keybind.has_binding(window) {
-            Button::new("change", "Change Keybinding…")
+            Button::new("change", "更改键绑定…")
                 .key_binding(
                     KeyBinding::for_action_in(&menu::SecondaryConfirm, focus_handle, cx)
                         .map(|kb| kb.size(rems_from_px(12_f32))),
@@ -675,7 +702,7 @@ impl PickerDelegate for CommandPaletteDelegate {
                     window.dispatch_action(menu::SecondaryConfirm.boxed_clone(), cx);
                 })
         } else {
-            Button::new("add", "Add Keybinding…")
+            Button::new("add", "添加键绑定…")
                 .key_binding(
                     KeyBinding::for_action_in(&menu::SecondaryConfirm, focus_handle, cx)
                         .map(|kb| kb.size(rems_from_px(12_f32))),
@@ -695,7 +722,7 @@ impl PickerDelegate for CommandPaletteDelegate {
                 .border_color(cx.theme().colors().border_variant)
                 .child(keybinding_buttons)
                 .child(
-                    Button::new("run-action", "Run")
+                    Button::new("run-action", "运行")
                         .key_binding(
                             KeyBinding::for_action_in(&menu::Confirm, &focus_handle, cx)
                                 .map(|kb| kb.size(rems_from_px(12_f32))),
@@ -710,6 +737,10 @@ impl PickerDelegate for CommandPaletteDelegate {
 }
 
 pub fn humanize_action_name(name: &str) -> String {
+    if let Some(translated) = action_translations::translate_action_name(name) {
+        return translated.to_string();
+    }
+
     let chars = name.chars().collect::<Vec<_>>();
     let capacity = name.len() + chars.iter().filter(|c| c.is_uppercase()).count();
     let mut result = String::with_capacity(capacity);
@@ -773,6 +804,15 @@ pub fn humanize_action_name(name: &str) -> String {
         }
     }
 
+    // 翻译未收录 action 的命名空间前缀（冒号左边部分）
+    if let Some((namespace, _)) = name.split_once("::")
+        && let Some(translated_namespace) =
+            action_translations::translate_action_namespace(namespace)
+        && let Some(colon_ix) = result.find(':')
+    {
+        return format!("{}{}", translated_namespace, &result[colon_ix..]);
+    }
+
     result
 }
 
@@ -801,28 +841,22 @@ mod tests {
     fn test_humanize_action_name() {
         assert_eq!(
             humanize_action_name("editor::GoToDefinition"),
-            "editor: go to definition"
+            "编辑器: 转到定义"
         );
-        assert_eq!(
-            humanize_action_name("editor::Backspace"),
-            "editor: backspace"
-        );
-        assert_eq!(
-            humanize_action_name("go_to_line::Deploy"),
-            "go to line: deploy"
-        );
+        assert_eq!(humanize_action_name("editor::Backspace"), "编辑器: 退格");
+        assert_eq!(humanize_action_name("go_to_line::Deploy"), "转到行: deploy");
         assert_eq!(
             humanize_action_name("agent::OpenGlobalAGENTS.mdRules"),
-            "agent: open global AGENTS.md rules"
+            "Agent: open global AGENTS.md rules"
         );
         assert_eq!(
             humanize_action_name("agent::OpenProjectAGENTS.mdRules"),
-            "agent: open project AGENTS.md rules"
+            "Agent: open project AGENTS.md rules"
         );
-        assert_eq!(humanize_action_name("editor::OpenURL"), "editor: open URL");
+        assert_eq!(humanize_action_name("editor::OpenUrl"), "编辑器: 打开 URL");
         assert_eq!(
-            humanize_action_name("editor::OpenURLParser"),
-            "editor: open URL parser"
+            humanize_action_name("editor::ToggleGoToLine"),
+            "编辑器: 转到行"
         );
     }
 
@@ -901,10 +935,10 @@ mod tests {
             assert!(is_sorted(&palette.delegate.commands));
         });
 
-        cx.simulate_input("bcksp");
+        cx.simulate_input("退格");
 
         palette.read_with(cx, |palette, _| {
-            assert_eq!(palette.delegate.matches[0].string, "editor: backspace");
+            assert_eq!(palette.delegate.matches[0].string, "编辑器: 退格");
         });
 
         cx.simulate_keystrokes("enter");
@@ -934,6 +968,126 @@ mod tests {
         });
         palette.read_with(cx, |palette, _| {
             assert!(palette.delegate.matches.is_empty())
+        });
+    }
+
+    #[gpui::test]
+    async fn test_commands_sorted_by_recency(cx: &mut TestAppContext) {
+        let app_state = init_test(cx);
+        cx.update(|cx| cx.set_global(db::AppDatabase::test_new()));
+        let db = cx.update(|cx| persistence::CommandPaletteDB::global(cx));
+
+        db.write_command_invocation("editor: backspace", "")
+            .await
+            .unwrap();
+        db.write_command_invocation("editor: backspace", "")
+            .await
+            .unwrap();
+        db.write_command_invocation("go to line: toggle", "")
+            .await
+            .unwrap();
+        db.set_last_invoked(100, "editor: backspace".to_string())
+            .await
+            .unwrap();
+        db.set_last_invoked(200, "go to line: toggle".to_string())
+            .await
+            .unwrap();
+
+        let project = Project::test(app_state.fs.clone(), [], cx).await;
+        let (multi_workspace, cx) =
+            cx.add_window_view(|window, cx| MultiWorkspace::test_new(project.clone(), window, cx));
+        let workspace = multi_workspace.read_with(cx, |mw, _| mw.workspace().clone());
+
+        cx.simulate_keystrokes("cmd-n");
+        cx.simulate_keystrokes("cmd-shift-p");
+
+        let palette = workspace.update(cx, |workspace, cx| {
+            workspace
+                .active_modal::<CommandPalette>(cx)
+                .unwrap()
+                .read(cx)
+                .picker
+                .clone()
+        });
+
+        palette.read_with(cx, |palette, _| {
+            let names = palette
+                .delegate
+                .commands
+                .iter()
+                .map(|command| command.name.as_str())
+                .collect::<Vec<_>>();
+            assert_eq!(names[0], "go to line: toggle");
+            assert_eq!(names[1], "editor: backspace");
+            assert!(
+                names[2..].windows(2).all(|pair| pair[0] <= pair[1]),
+                "unused commands should stay alphabetical"
+            );
+        });
+    }
+
+    #[gpui::test]
+    async fn test_used_commands_rank_above_unused_when_filtering(cx: &mut TestAppContext) {
+        let app_state = init_test(cx);
+        cx.update(|cx| cx.set_global(db::AppDatabase::test_new()));
+        let db = cx.update(|cx| persistence::CommandPaletteDB::global(cx));
+
+        let project = Project::test(app_state.fs.clone(), [], cx).await;
+        let (multi_workspace, cx) =
+            cx.add_window_view(|window, cx| MultiWorkspace::test_new(project.clone(), window, cx));
+        let workspace = multi_workspace.read_with(cx, |mw, _| mw.workspace().clone());
+
+        cx.simulate_keystrokes("cmd-n");
+        cx.simulate_keystrokes("cmd-shift-p");
+
+        let palette = workspace.update(cx, |workspace, cx| {
+            workspace.active_modal::<CommandPalette>(cx).unwrap()
+        });
+        let picker = palette.read_with(cx, |palette, _| palette.picker.clone());
+
+        palette.update_in(cx, |palette, window, cx| {
+            palette.set_query("toggle", window, cx)
+        });
+        cx.run_until_parked();
+
+        let (worst_match, second_worst_match, match_count) = picker.read_with(cx, |picker, _| {
+            let matches = &picker.delegate.matches;
+            (
+                matches[matches.len() - 1].string.to_string(),
+                matches[matches.len() - 2].string.to_string(),
+                matches.len(),
+            )
+        });
+        assert!(match_count > 2);
+
+        db.write_command_invocation(second_worst_match.clone(), "")
+            .await
+            .unwrap();
+        db.write_command_invocation(worst_match.clone(), "")
+            .await
+            .unwrap();
+        db.set_last_invoked(100, second_worst_match.clone())
+            .await
+            .unwrap();
+        db.set_last_invoked(200, worst_match.clone()).await.unwrap();
+
+        palette.update_in(cx, |palette, window, cx| palette.set_query("", window, cx));
+        cx.run_until_parked();
+        palette.update_in(cx, |palette, window, cx| {
+            palette.set_query("toggle", window, cx)
+        });
+        cx.run_until_parked();
+
+        picker.read_with(cx, |picker, _| {
+            let names = picker
+                .delegate
+                .matches
+                .iter()
+                .map(|string_match| string_match.string.to_string())
+                .collect::<Vec<_>>();
+            assert_eq!(names[0], worst_match);
+            assert_eq!(names[1], second_worst_match);
+            assert_eq!(names.len(), match_count);
         });
     }
 
@@ -994,9 +1148,9 @@ mod tests {
                 .clone()
         });
 
-        cx.simulate_input("Editor::    Backspace");
+        cx.simulate_input("编辑器::    退格");
         palette.read_with(cx, |palette, _| {
-            assert_eq!(palette.delegate.matches[0].string, "editor: backspace");
+            assert_eq!(palette.delegate.matches[0].string, "编辑器: 退格");
         });
     }
 
@@ -1018,7 +1172,7 @@ mod tests {
         });
 
         cx.simulate_keystrokes("cmd-shift-p");
-        cx.simulate_input("go to line: Toggle");
+        cx.simulate_input("转到行");
         cx.simulate_keystrokes("enter");
 
         workspace.update(cx, |workspace, cx| {
@@ -1053,7 +1207,7 @@ mod tests {
 
         for _ in 0..2 {
             cx.simulate_keystrokes("cmd-shift-p");
-            cx.simulate_input("go to line: Toggle");
+            cx.simulate_input("转到行");
             cx.simulate_keystrokes("enter");
 
             workspace.update(cx, |workspace, cx| {
@@ -1190,10 +1344,10 @@ mod tests {
             cx.add_window_view(|window, cx| MultiWorkspace::test_new(project.clone(), window, cx));
         let workspace = multi_workspace.read_with(cx, |mw, _| mw.workspace().clone());
 
-        let palette = open_palette_with_history(&workspace, &["editor: close", "editor: open"], cx);
+        let palette = open_palette_with_history(&workspace, &["编辑器: 关闭", "编辑器: 打开"], cx);
 
         // Open palette with a query that has multiple matches
-        cx.simulate_input("editor");
+        cx.simulate_input("编辑器");
         cx.background_executor.run_until_parked();
 
         // Should have multiple matches, selected_ix should be 0
@@ -1217,11 +1371,11 @@ mod tests {
         });
 
         // Press up again at top - should enter history mode and show previous query
-        // that matches the "editor" prefix
+        // that matches the "编辑器" prefix
         cx.simulate_keystrokes("up");
         cx.background_executor.run_until_parked();
         palette.read_with(cx, |palette, cx| {
-            assert_eq!(palette.query(cx), "editor: open");
+            assert_eq!(palette.query(cx), "编辑器: 打开");
         });
     }
 

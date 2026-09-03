@@ -292,6 +292,11 @@ impl EditorElement {
         register_action(editor, window, Editor::select_page_up);
         register_action(editor, window, Editor::cancel);
         register_action(editor, window, Editor::blame_hover);
+        register_action(
+            editor,
+            window,
+            crate::hover_translation::translate_selection,
+        );
         register_action(editor, window, Editor::next_snippet_tabstop);
         register_action(editor, window, Editor::previous_snippet_tabstop);
         register_action(editor, window, Editor::copy);
@@ -2727,7 +2732,7 @@ impl EditorElement {
                         });
                     })
                     .tooltip(Tooltip::for_action_title(
-                        "Expand Excerpt",
+                        "展开摘要",
                         &crate::actions::ExpandExcerpts::default(),
                     ))
                     .into_any_element();
@@ -6858,7 +6863,7 @@ pub fn render_breadcrumb_text(
                                     h_flex()
                                         .gap_1()
                                         .justify_between()
-                                        .child(Label::new("Show Symbol Outline"))
+                                        .child(Label::new("显示符号大纲"))
                                         .child(ui::KeyBinding::for_action_in(
                                             &zed_actions::outline::ToggleOutline,
                                             &focus_handle,
@@ -6873,7 +6878,7 @@ pub fn render_breadcrumb_text(
                                             .pt_1()
                                             .border_t_1()
                                             .border_color(cx.theme().colors().border_variant)
-                                            .child(Label::new("Right-Click to Copy Path")),
+                                            .child(Label::new("右键复制路径")),
                                     )
                                 })
                                 .into_any_element()
@@ -7251,6 +7256,16 @@ impl LineWithInvisibles {
                         if row == max_line_count {
                             return layouts;
                         }
+                    }
+
+                    // The current display line has already exceeded the maximum
+                    // display length. Skip the rest of its chunks without
+                    // processing them (the visible prefix has been laid out
+                    // already, and any further text is not displayed). This
+                    // keeps rendering cost bounded for very long lines (e.g.
+                    // minified JSON), regardless of the line's length.
+                    if line_exceeded_max_len {
+                        continue;
                     }
 
                     if !line_chunk.is_empty() && !line_exceeded_max_len {
@@ -8215,9 +8230,13 @@ impl Element for EditorElement {
                         )
                     };
 
-                    let mut highlighted_rows = self
-                        .editor
-                        .update(cx, |editor, cx| editor.highlighted_display_rows(window, cx));
+                    let mut highlighted_rows =
+                        self.editor.read(cx).highlighted_display_rows_in_range(
+                            start_anchor..end_anchor,
+                            start_row..end_row,
+                            &snapshot.display_snapshot,
+                            cx,
+                        );
 
                     let mut highlighted_ranges = self
                         .editor_with_selections(cx)
@@ -9058,14 +9077,39 @@ impl Element for EditorElement {
                         cx,
                     );
 
+                    let frozen_scroll_state = if self.editor.read(cx).search_results_hold.is_some()
+                    {
+                        let is_rewrapping =
+                            self.editor.read(cx).display_map.read(cx).is_rewrapping(cx);
+                        self.editor.update(cx, |editor, _| {
+                            editor.frozen_scroll_range(
+                                is_rewrapping,
+                                scrollbar_layout_information.scroll_range,
+                                editor_width,
+                                scrollbar_layout_information.editor_bounds.size,
+                            )
+                        })
+                    } else {
+                        None
+                    };
+                    let effective_scrollbar_layout_information =
+                        frozen_scroll_state.map_or(scrollbar_layout_information, |settled| {
+                            ScrollbarLayoutInformation {
+                                scroll_range: settled.range,
+                                ..scrollbar_layout_information
+                            }
+                        });
+                    let effective_editor_width =
+                        frozen_scroll_state.map_or(editor_width, |settled| settled.editor_width);
+
                     let scrollbars_layout = self.layout_scrollbars(
                         &snapshot,
-                        &scrollbar_layout_information,
+                        &effective_scrollbar_layout_information,
                         content_offset,
                         scroll_position,
                         non_visible_cursors,
                         right_margin,
-                        editor_width,
+                        effective_editor_width,
                         window,
                         cx,
                     );
@@ -9289,7 +9333,7 @@ impl Element for EditorElement {
                             &snapshot,
                             minimap_width,
                             scroll_position,
-                            &scrollbar_layout_information,
+                            &effective_scrollbar_layout_information,
                             scrollbars_layout.as_ref(),
                             window,
                             cx,
@@ -9597,6 +9641,7 @@ struct ContextMenuLayout {
 }
 
 /// Holds information required for layouting the editor scrollbars.
+#[derive(Clone, Copy)]
 struct ScrollbarLayoutInformation {
     /// The bounds of the editor area (excluding the content offset).
     editor_bounds: Bounds<Pixels>,
@@ -10654,9 +10699,24 @@ pub fn register_action<T: Action>(
     window: &mut Window,
     listener: impl Fn(&mut Editor, &T, &mut Window, &mut Context<Editor>) + 'static,
 ) {
+    register_action_erased(
+        editor,
+        window,
+        TypeId::of::<T>(),
+        Box::new(move |editor, action, window, cx| {
+            listener(editor, action.downcast_ref().unwrap(), window, cx)
+        }),
+    )
+}
+
+fn register_action_erased(
+    editor: &Entity<Editor>,
+    window: &mut Window,
+    action_type: TypeId,
+    listener: Box<dyn Fn(&mut Editor, &dyn std::any::Any, &mut Window, &mut Context<Editor>)>,
+) {
     let editor = editor.clone();
-    window.on_action(TypeId::of::<T>(), move |action, phase, window, cx| {
-        let action = action.downcast_ref().unwrap();
+    window.on_action(action_type, move |action, phase, window, cx| {
         if phase == DispatchPhase::Bubble {
             editor.update(cx, |editor, cx| {
                 listener(editor, action, window, cx);
@@ -11121,6 +11181,7 @@ mod tests {
                         summary: None,
                         previous: None,
                         filename: String::new(),
+                        boundary: false,
                     }],
                     ..Default::default()
                 },
@@ -11807,7 +11868,7 @@ mod tests {
                 );
 
                 // Blur the editor so that it displays placeholder text.
-                window.blur();
+                window.blur(cx);
             })
             .unwrap();
 

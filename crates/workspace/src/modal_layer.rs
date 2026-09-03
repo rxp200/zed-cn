@@ -157,17 +157,15 @@ impl ModalLayer {
         // Opening a modal explicitly supersedes any reveal that was waiting for the
         // layer to become free.
         self.reveal_stash_when_free = false;
-        let mut previous_focus_handle = window.focused(cx);
         if let Some(active_modal) = &self.active_modal {
             let should_close = active_modal.modal.view().downcast::<V>().is_ok();
-            previous_focus_handle = active_modal.previous_focus_handle.clone();
             let did_close = self.hide_modal(window, cx);
             if should_close || !did_close {
                 return;
             }
         }
         let new_modal = cx.new(|cx| build_view(window, cx));
-        self.show_modal(Box::new(new_modal), previous_focus_handle, window, cx);
+        self.show_modal(Box::new(new_modal), window, cx);
         cx.emit(ModalOpenedEvent);
     }
 
@@ -176,7 +174,6 @@ impl ModalLayer {
     fn show_modal(
         &mut self,
         modal: Box<dyn ModalViewHandle>,
-        previous_focus_handle: Option<FocusHandle>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -193,7 +190,7 @@ impl ModalLayer {
                     }
                 }),
             ],
-            previous_focus_handle,
+            previous_focus_handle: window.focused(cx),
             focus_handle,
         });
         cx.defer_in(window, move |_, window, cx| {
@@ -217,8 +214,7 @@ impl ModalLayer {
         let Some(modal) = self.stashed_modal.take() else {
             return false;
         };
-        let previous_focus_handle = window.focused(cx);
-        self.show_modal(modal, previous_focus_handle, window, cx);
+        self.show_modal(modal, window, cx);
         cx.emit(ModalOpenedEvent);
         true
     }
