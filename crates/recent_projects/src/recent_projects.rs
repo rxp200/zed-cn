@@ -1168,31 +1168,48 @@ impl PickerDelegate for RecentProjectsDelegate {
                         } else {
                             let path_list = key.path_list().clone();
                             let host = key.host();
-                            if let Some(task) = handle
+                            if let Some((task, modal_workspace)) = handle
                                 .update(cx, |multi_workspace, window, cx| {
                                     let modal_workspace = multi_workspace.workspace().clone();
-                                    multi_workspace.find_or_create_workspace(
+                                    let task = multi_workspace.find_or_create_workspace(
                                         path_list,
                                         host,
                                         Some(key.clone()),
-                                        move |options, window, cx| {
-                                            connect_with_modal(
-                                                &modal_workspace,
-                                                options,
-                                                window,
-                                                cx,
-                                            )
+                                        {
+                                            let modal_workspace = modal_workspace.clone();
+                                            move |options, window, cx| {
+                                                connect_with_modal(
+                                                    &modal_workspace,
+                                                    options,
+                                                    window,
+                                                    cx,
+                                                )
+                                            }
                                         },
                                         None,
                                         OpenMode::Activate,
                                         None,
                                         window,
                                         cx,
-                                    )
+                                    );
+                                    (task, modal_workspace)
                                 })
                                 .log_err()
                             {
-                                task.detach_and_log_err(cx);
+                                cx.spawn(async move |cx| {
+                                    let result = task.await;
+                                    modal_workspace
+                                        .update(cx, |workspace, cx| {
+                                            if let Some(modal) =
+                                                workspace.active_modal::<RemoteConnectionModal>(cx)
+                                            {
+                                                modal.update(cx, |modal, cx| modal.finished(cx));
+                                            }
+                                        })
+                                        .log_err();
+                                    result
+                                })
+                                .detach_and_log_err(cx);
                             }
                         }
                     });
@@ -3196,6 +3213,12 @@ mod tests {
         assert!(
             !has_local,
             "remote project group confirm should not create a local workspace"
+        );
+        assert!(
+            workspace.read_with(cx, |workspace, cx| workspace
+                .active_modal::<RemoteConnectionModal>(cx)
+                .is_none()),
+            "remote connection modal should be dismissed after the open attempt"
         );
     }
 

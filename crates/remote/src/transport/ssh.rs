@@ -1253,9 +1253,11 @@ impl SshRemoteConnection {
             tmp_path,
             size / 1024
         );
-        self.upload_file(src_path, tmp_path)
+        delegate.set_transfer_progress(Some(0.0), cx);
+        self.upload_file(src_path, tmp_path, size, delegate, cx)
             .await
             .context("failed to upload server binary")?;
+        delegate.set_transfer_progress(Some(1.0), cx);
         log::info!("uploaded remote development server in {:?}", t0.elapsed());
         Ok(())
     }
@@ -1397,7 +1399,14 @@ impl SshRemoteConnection {
         command
     }
 
-    async fn upload_file(&self, src_path: &Path, dest_path: &RelPath) -> Result<()> {
+    async fn upload_file(
+        &self,
+        src_path: &Path,
+        dest_path: &RelPath,
+        total_bytes: u64,
+        delegate: &Arc<dyn RemoteClientDelegate>,
+        cx: &mut AsyncApp,
+    ) -> Result<()> {
         log::debug!("uploading file {:?} to {:?}", src_path, dest_path);
 
         let src_path_display = src_path.display().to_string();
@@ -1421,7 +1430,9 @@ impl SshRemoteConnection {
                 stdin.flush().await?;
             }
 
-            let output = child.output().await?;
+            let output = self
+                .wait_for_upload(child, dest_path, total_bytes, delegate, cx)
+                .await?;
             if output.status.success() {
                 return Ok(());
             }
@@ -1433,8 +1444,13 @@ impl SshRemoteConnection {
         }
 
         log::debug!("using SCP for file upload");
+        delegate.set_transfer_progress(Some(0.0), cx);
         let mut command = self.build_scp_command(src_path, &dest_path_str, None);
-        let output = command.output().await?;
+        command.kill_on_drop(true);
+        let child = command.spawn()?;
+        let output = self
+            .wait_for_upload(child, dest_path, total_bytes, delegate, cx)
+            .await?;
 
         if output.status.success() {
             return Ok(());
@@ -1450,6 +1466,66 @@ impl SshRemoteConnection {
             dest_path_str,
             stderr,
         );
+    }
+
+    async fn wait_for_upload(
+        &self,
+        child: Child,
+        dest_path: &RelPath,
+        total_bytes: u64,
+        delegate: &Arc<dyn RemoteClientDelegate>,
+        cx: &mut AsyncApp,
+    ) -> Result<std::process::Output> {
+        let output = child.output().fuse();
+        futures::pin_mut!(output);
+        loop {
+            select_biased! {
+                output = output => return Ok(output?),
+                _ = cx.background_executor().timer(Duration::from_millis(250)).fuse() => {
+                    if total_bytes == 0 {
+                        continue;
+                    }
+                    let uploaded_bytes = self.remote_file_size(dest_path, cx).await;
+                    if let Some(uploaded_bytes) = uploaded_bytes {
+                        let progress = (uploaded_bytes as f32 / total_bytes as f32).clamp(0.0, 1.0);
+                        delegate.set_transfer_progress(Some(progress), cx);
+                    }
+                }
+            }
+        }
+    }
+
+    async fn remote_file_size(&self, path: &RelPath, cx: &mut AsyncApp) -> Option<u64> {
+        let path = path.display(self.path_style());
+        let result = if self.ssh_platform.os.is_windows() {
+            let path = ShellKind::Pwsh.try_quote(&path)?;
+            self.socket
+                .run_command_with_timeout(
+                    self.ssh_shell_kind,
+                    "powershell",
+                    &[
+                        "-NoProfile",
+                        "-Command",
+                        &format!("(Get-Item -LiteralPath {path} -ErrorAction Stop).Length"),
+                    ],
+                    true,
+                    Duration::from_secs(5),
+                    cx,
+                )
+                .await
+        } else {
+            self.socket
+                .run_command_with_timeout(
+                    self.ssh_shell_kind,
+                    "wc",
+                    &["-c", path.as_ref()],
+                    true,
+                    Duration::from_secs(5),
+                    cx,
+                )
+                .await
+        };
+        result.ok()?.split_whitespace().next()?.parse().ok()
     }
 
     async fn is_sftp_available() -> bool {
