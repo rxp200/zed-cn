@@ -1198,15 +1198,13 @@ impl PickerDelegate for RecentProjectsDelegate {
                             {
                                 cx.spawn(async move |cx| {
                                     let result = task.await;
-                                    modal_workspace
-                                        .update(cx, |workspace, cx| {
-                                            if let Some(modal) =
-                                                workspace.active_modal::<RemoteConnectionModal>(cx)
-                                            {
-                                                modal.update(cx, |modal, cx| modal.finished(cx));
-                                            }
-                                        })
-                                        .log_err();
+                                    modal_workspace.update(cx, |workspace, cx| {
+                                        if let Some(modal) =
+                                            workspace.active_modal::<RemoteConnectionModal>(cx)
+                                        {
+                                            modal.update(cx, |modal, cx| modal.finished(cx));
+                                        }
+                                    });
                                     result
                                 })
                                 .detach_and_log_err(cx);
