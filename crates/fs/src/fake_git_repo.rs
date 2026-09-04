@@ -1604,17 +1604,27 @@ impl GitRepository for FakeGitRepository {
                                 .starts_with(hash_query)
                                 .then_some(*sha);
                         }
-                        let candidate = if author_query.is_some() {
-                            commit_data.author_email.as_ref()
+                        if author_query.is_some() {
+                            let author_name = if search_args.case_sensitive {
+                                commit_data.author_name.to_string()
+                            } else {
+                                commit_data.author_name.to_lowercase()
+                            };
+                            let author_email = if search_args.case_sensitive {
+                                commit_data.author_email.to_string()
+                            } else {
+                                commit_data.author_email.to_lowercase()
+                            };
+                            return (author_name.contains(&normalized_query)
+                                || author_email.contains(&normalized_query))
+                            .then_some(*sha);
+                        }
+                        let message = if search_args.case_sensitive {
+                            commit_data.message.to_string()
                         } else {
-                            commit_data.message.as_ref()
+                            commit_data.message.to_lowercase()
                         };
-                        let candidate = if search_args.case_sensitive {
-                            candidate.to_string()
-                        } else {
-                            candidate.to_lowercase()
-                        };
-                        candidate.contains(&normalized_query).then_some(*sha)
+                        message.contains(&normalized_query).then_some(*sha)
                     })
                     .collect::<Vec<_>>()
             })?;

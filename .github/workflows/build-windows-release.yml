@@ -306,10 +306,24 @@ jobs:
           EXPECTED_SHA: ${{ needs.validate_source.outputs.source_sha }}
           EXPECTED_VERSION: ${{ needs.validate_source.outputs.release_version }}
         run: |
-          cli_version="$(target/${{ matrix.target }}/release/cli --version)"
+          bundle_directory="target/${{ matrix.target }}/release/dmg"
+          app_bundle=""
+          for candidate in "$bundle_directory"/*.app; do
+            test -d "$candidate" || continue
+            test -z "$app_bundle"
+            app_bundle="$candidate"
+          done
+          test -n "$app_bundle"
+
+          cli="$app_bundle/Contents/MacOS/cli"
+          zed="$app_bundle/Contents/MacOS/zed"
+          test -x "$cli"
+          test -x "$zed"
+
+          cli_version="$("$cli" --version)"
           echo "CLI: $cli_version"
           grep -F "$EXPECTED_VERSION" <<<"$cli_version"
-          grep -F "$EXPECTED_SHA" <<<"$cli_version"
+          grep -aFq "$EXPECTED_SHA" "$zed"
           test -f "target/${{ matrix.target }}/release/Zed-${{ matrix.arch }}.dmg"
           test -f "target/zed-remote-server-macos-${{ matrix.arch }}.gz"
 

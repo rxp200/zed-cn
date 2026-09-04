@@ -156,6 +156,7 @@ pub trait RemoteClientDelegate: Send + Sync {
         cx: &mut AsyncApp,
     ) -> Task<Result<PathBuf>>;
     fn set_status(&self, status: Option<&str>, cx: &mut AsyncApp);
+    fn set_transfer_progress(&self, _progress: Option<f32>, _cx: &mut AsyncApp) {}
 }
 
 const MAX_MISSED_HEARTBEATS: usize = 5;
