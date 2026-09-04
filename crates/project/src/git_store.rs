@@ -98,11 +98,17 @@ use worktree::{
 };
 use zeroize::Zeroize;
 
-fn author_matches_query(author_email: &str, query: &str, case_sensitive: bool) -> bool {
+fn author_matches_query(
+    author_name: &str,
+    author_email: &str,
+    query: &str,
+    case_sensitive: bool,
+) -> bool {
     if case_sensitive {
-        author_email.contains(query)
+        author_name.contains(query) || author_email.contains(query)
     } else {
-        author_email.to_lowercase().contains(&query.to_lowercase())
+        let query = query.to_lowercase();
+        author_name.to_lowercase().contains(&query) || author_email.to_lowercase().contains(&query)
     }
 }
 
@@ -7415,6 +7421,7 @@ impl Repository {
 
                         for commit in response.commits {
                             if author_matches_query(
+                                &commit.author_name,
                                 &commit.author_email,
                                 author_query,
                                 case_sensitive,
@@ -11488,13 +11495,20 @@ mod tests {
     fn test_author_matches_query() {
         let email = "79969964+rxp200@users.noreply.github.com";
 
-        assert!(author_matches_query(email, email, true));
+        assert!(author_matches_query("Author", email, email, true));
         assert!(author_matches_query(
+            "Author",
             email,
             "79969964+RXP200@USERS.NOREPLY.GITHUB.COM",
             false
         ));
-        assert!(!author_matches_query(email, "another@example.com", false));
+        assert!(author_matches_query("Author", email, "author", false));
+        assert!(!author_matches_query(
+            "Author",
+            email,
+            "another@example.com",
+            false
+        ));
     }
 
     fn init_test(cx: &mut TestAppContext) {
