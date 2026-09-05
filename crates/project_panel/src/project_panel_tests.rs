@@ -2379,6 +2379,84 @@ async fn test_paste_external_paths(cx: &mut gpui::TestAppContext) {
 }
 
 #[gpui::test]
+async fn test_paste_clipboard_images(cx: &mut gpui::TestAppContext) {
+    init_test(cx);
+
+    let fs = FakeFs::new(cx.executor());
+    fs.insert_tree(
+        path!("/root"),
+        json!({
+            "subdir": {
+                "existing.txt": ""
+            }
+        }),
+    )
+    .await;
+
+    let project = Project::test(fs.clone(), [path!("/root").as_ref()], cx).await;
+    let window = cx.add_window(|window, cx| MultiWorkspace::test_new(project.clone(), window, cx));
+    let workspace = window
+        .read_with(cx, |mw, _| mw.workspace().clone())
+        .unwrap();
+    let cx = &mut VisualTestContext::from_window(window.into(), cx);
+    let panel = workspace.update_in(cx, ProjectPanel::new);
+    cx.run_until_parked();
+
+    toggle_expand_dir(&panel, "root/subdir", cx);
+    let first_image_bytes = vec![1, 2, 3, 4];
+    cx.write_to_clipboard(ClipboardItem::new_image(&gpui::Image::from_bytes(
+        gpui::ImageFormat::Png,
+        first_image_bytes.clone(),
+    )));
+    panel.update_in(cx, |panel, window, cx| {
+        assert!(panel.has_pasteable_content(cx));
+        panel.paste(&Default::default(), window, cx);
+    });
+    cx.run_until_parked();
+
+    assert_eq!(
+        fs.read_file_sync(path!("/root/subdir/image.png")).unwrap(),
+        first_image_bytes
+    );
+    assert_eq!(
+        visible_entries_as_strings(&panel, 0..50, cx),
+        &[
+            "v root",
+            "    v subdir",
+            "          existing.txt",
+            "          image.png  <== selected"
+        ],
+    );
+
+    select_path(&panel, "root/subdir/existing.txt", cx);
+    let second_image_bytes = vec![5, 6, 7, 8];
+    cx.write_to_clipboard(ClipboardItem::new_image(&gpui::Image::from_bytes(
+        gpui::ImageFormat::Png,
+        second_image_bytes.clone(),
+    )));
+    panel.update_in(cx, |panel, window, cx| {
+        panel.paste(&Default::default(), window, cx);
+    });
+    cx.run_until_parked();
+
+    assert_eq!(
+        fs.read_file_sync(path!("/root/subdir/image_1.png"))
+            .unwrap(),
+        second_image_bytes
+    );
+    assert_eq!(
+        visible_entries_as_strings(&panel, 0..50, cx),
+        &[
+            "v root",
+            "    v subdir",
+            "          existing.txt",
+            "          image.png",
+            "          image_1.png  <== selected",
+        ],
+    );
+}
+
+#[gpui::test]
 async fn test_copy_and_cut_write_to_system_clipboard(cx: &mut gpui::TestAppContext) {
     init_test(cx);
 

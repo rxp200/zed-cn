@@ -93,6 +93,23 @@ use crate::{
 const PROJECT_PANEL_KEY: &str = "ProjectPanel";
 const NEW_ENTRY_ID: ProjectEntryId = ProjectEntryId::MAX;
 
+fn unused_pasted_image_path(
+    target_directory: &RelPath,
+    extension: &str,
+    exists: impl Fn(&RelPath) -> bool,
+) -> Option<Arc<RelPath>> {
+    let mut filename = format!("image.{extension}");
+    let mut counter = 1usize;
+    loop {
+        let candidate = target_directory.join(RelPath::from_unix_str(&filename).ok()?);
+        if !exists(&candidate) {
+            return Some(candidate.into());
+        }
+        filename = format!("image_{counter}.{extension}");
+        counter = counter.checked_add(1)?;
+    }
+}
+
 struct VisibleEntriesForWorktree {
     worktree_id: WorktreeId,
     entries: Vec<GitEntry>,
@@ -3445,6 +3462,11 @@ impl ProjectPanel {
             return;
         }
 
+        if let Some(image) = self.image_from_system_clipboard(cx) {
+            self.paste_image(image, window, cx);
+            return;
+        }
+
         maybe!({
             let (worktree, entry) = self.selected_entry_handle(cx)?;
             let entry = entry.clone();
@@ -4263,6 +4285,72 @@ impl ProjectPanel {
         None
     }
 
+    fn image_from_system_clipboard(&self, cx: &App) -> Option<gpui::Image> {
+        cx.read_from_clipboard()?
+            .into_entries()
+            .find_map(|entry| match entry {
+                GpuiClipboardEntry::Image(image) if !image.bytes().is_empty() => Some(image),
+                _ => None,
+            })
+    }
+
+    fn paste_image(&mut self, image: gpui::Image, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((worktree, target_entry)) = self.selected_sub_entry(cx) else {
+            return;
+        };
+        let target_directory = if target_entry.is_dir() {
+            target_entry.path.clone()
+        } else if let Some(parent) = target_entry.path.parent() {
+            parent.into()
+        } else {
+            return;
+        };
+        let worktree_id = worktree.read(cx).id();
+        let snapshot = worktree.read(cx).snapshot();
+        let Some(image_path) =
+            unused_pasted_image_path(&target_directory, image.format.extension(), |path| {
+                snapshot.entry_for_path(path).is_some()
+            })
+        else {
+            return;
+        };
+        let project_path = ProjectPath {
+            worktree_id,
+            path: image_path.clone(),
+        };
+        let create_task = worktree.update(cx, |worktree, cx| {
+            worktree.create_entry(image_path, false, Some(image.bytes().to_vec()), cx)
+        });
+        let workspace = self.workspace.clone();
+
+        cx.spawn_in(window, async move |project_panel, mut cx| {
+            let Some(created_entry) = create_task
+                .await
+                .notify_workspace_async_err(workspace, &mut cx)
+            else {
+                return;
+            };
+
+            project_panel
+                .update_in(cx, |project_panel, window, cx| {
+                    if let CreatedEntry::Included(entry) = created_entry {
+                        project_panel
+                            .undo_manager
+                            .record([Change::Created(project_path)])
+                            .log_err();
+                        project_panel.selection = Some(SelectedEntry {
+                            worktree_id,
+                            entry_id: entry.id,
+                        });
+                        project_panel.marked_entries.clear();
+                        project_panel.update_visible_entries(None, false, false, window, cx);
+                    }
+                })
+                .log_err();
+        })
+        .detach();
+    }
+
     fn has_pasteable_content(&self, cx: &App) -> bool {
         if self
             .clipboard
@@ -4272,6 +4360,7 @@ impl ProjectPanel {
             return true;
         }
         self.external_paths_from_system_clipboard(cx).is_some()
+            || self.image_from_system_clipboard(cx).is_some()
     }
 
     fn selected_entry_handle<'a>(

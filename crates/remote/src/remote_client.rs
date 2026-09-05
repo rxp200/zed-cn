@@ -182,6 +182,18 @@ fn reconnect_delay(attempt: usize) -> Duration {
         .min(MAX_RECONNECT_DELAY)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReconnectMode {
+    RejoinExistingServer,
+    RestartServer,
+}
+
+impl ReconnectMode {
+    fn should_rejoin_existing_server(self) -> bool {
+        matches!(self, Self::RejoinExistingServer)
+    }
+}
+
 enum State {
     Connecting,
     Connected {
@@ -358,6 +370,7 @@ pub struct RemoteClient {
     os_version: Option<String>,
     state: Option<State>,
     reconnect_cancellation: Option<oneshot::Sender<()>>,
+    next_reconnect_mode: ReconnectMode,
 }
 
 #[derive(Debug)]
@@ -506,6 +519,7 @@ impl RemoteClient {
                     os_version: os_version.clone(),
                     state: Some(State::Connecting),
                     reconnect_cancellation: None,
+                    next_reconnect_mode: ReconnectMode::RejoinExistingServer,
                 });
 
                 let io_task = remote_connection.start_proxy(
@@ -726,6 +740,10 @@ impl RemoteClient {
             );
         }
 
+        let reconnect_mode = std::mem::replace(
+            &mut self.next_reconnect_mode,
+            ReconnectMode::RejoinExistingServer,
+        );
         let unique_identifier = self.unique_identifier.clone();
         let client = self.client.clone();
         let (reconnect_cancellation_tx, reconnect_cancellation_rx) = oneshot::channel();
@@ -790,7 +808,7 @@ impl RemoteClient {
 
                     let io_task = remote_connection.start_proxy(
                         unique_identifier,
-                        true,
+                        reconnect_mode.should_rejoin_existing_server(),
                         incoming_tx,
                         outgoing_rx,
                         connection_activity_tx,
@@ -1149,7 +1167,14 @@ impl RemoteClient {
 
     pub fn reconnect_now(&mut self, cx: &mut Context<Self>) -> Result<()> {
         match self.connection_state() {
-            ConnectionState::HeartbeatMissed => self.reconnect(cx),
+            ConnectionState::HeartbeatMissed => {
+                self.next_reconnect_mode = ReconnectMode::RestartServer;
+                if let Err(error) = self.reconnect(cx) {
+                    self.next_reconnect_mode = ReconnectMode::RejoinExistingServer;
+                    return Err(error);
+                }
+                Ok(())
+            }
             ConnectionState::Reconnecting => {
                 let cancellation = self
                     .reconnect_cancellation
@@ -1157,7 +1182,9 @@ impl RemoteClient {
                     .context("no active reconnect attempt to restart")?;
                 cancellation
                     .send(())
-                    .map_err(|_| anyhow!("active reconnect attempt already completed"))
+                    .map_err(|_| anyhow!("active reconnect attempt already completed"))?;
+                self.next_reconnect_mode = ReconnectMode::RestartServer;
+                Ok(())
             }
             state => anyhow::bail!("cannot reconnect manually while connection is {state:?}"),
         }
@@ -1518,6 +1545,12 @@ mod tests {
     use super::*;
     use gpui::TestAppContext;
     use rpc::{ErrorCodeExt, proto::ErrorCode};
+
+    #[test]
+    fn reconnect_mode_controls_remote_server_restart() {
+        assert!(ReconnectMode::RejoinExistingServer.should_rejoin_existing_server());
+        assert!(!ReconnectMode::RestartServer.should_rejoin_existing_server());
+    }
 
     #[test]
     fn manual_reconnect_is_available_only_for_warning_states() {
