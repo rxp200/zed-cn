@@ -648,6 +648,19 @@ jobs:
           fi
 
           rm -f release-artifacts/MISSING-ASSETS.txt
+          # Remove the completion marker before replacing any published binary.
+          published_assets="$(gh release view "$RELEASE_TAG" --repo "${{ github.repository }}" \
+            --json assets --jq '.assets[].name')"
+          if grep -qx 'update-metadata.json' <<< "$published_assets"; then
+            gh release delete-asset "$RELEASE_TAG" update-metadata.json \
+              --repo "${{ github.repository }}" --yes
+          fi
           gh release upload "$RELEASE_TAG" release-artifacts/* \
             --repo "${{ github.repository }}" \
             --clobber
+          python3 script/generate-update-manifest.py \
+            --release-directory release-artifacts \
+            --tag "$RELEASE_TAG" --commit "$SOURCE_SHA" \
+            --output update-metadata.json
+          gh release upload "$RELEASE_TAG" update-metadata.json \
+            --repo "${{ github.repository }}" --clobber

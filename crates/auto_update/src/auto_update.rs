@@ -12,6 +12,7 @@ use release_channel::{AppCommitSha, ReleaseChannel};
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use settings::{RegisterSetting, Settings, SettingsStore};
+use sha2::{Digest, Sha256};
 use smol::fs::File;
 use smol::{
     fs,
@@ -49,8 +50,9 @@ const NIGHTLY_POLL_INTERVAL: Duration = Duration::from_secs(15 * 60);
 const REMOTE_SERVER_CACHE_LIMIT: usize = 5;
 const REMOTE_SERVER_DOWNLOAD_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 const REMOTE_SERVER_DOWNLOAD_TOTAL_TIMEOUT: Duration = Duration::from_secs(300);
-const ZED_CN_RELEASES_URL: &str =
-    "https://api.github.com/repos/rxp200/zed-cn/releases?per_page=100";
+const ZED_CN_RELEASES_URL: &str = "https://rxp200.github.io/zed-cn/updates.json";
+const UPDATE_MANIFEST_CACHE_TTL: Duration = Duration::from_secs(60);
+const UPDATE_MANIFEST_MAX_BYTES: u64 = 8 * 1024 * 1024;
 const ZED_CN_RELEASE_TAG_PREFIX: &str = "zed-cn-v";
 
 #[cfg(target_os = "linux")]
@@ -187,6 +189,7 @@ pub struct AutoUpdater {
     update_check_type: UpdateCheckType,
     _wake_subscription: gpui::Subscription,
     dismissed_status: Option<AutoUpdateStatus>,
+    update_manifest: Option<(std::time::Instant, UpdateManifest)>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
@@ -195,7 +198,13 @@ pub struct ReleaseAsset {
     pub url: String,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Clone, Deserialize, Debug)]
+struct UpdateManifest {
+    schema_version: u32,
+    releases: Vec<GitHubRelease>,
+}
+
+#[derive(Clone, Deserialize, Debug)]
 struct GitHubRelease {
     tag_name: String,
     target_commitish: String,
@@ -204,18 +213,21 @@ struct GitHubRelease {
     assets: Vec<GitHubReleaseAsset>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Clone, Deserialize, Debug)]
 struct GitHubReleaseAsset {
     name: String,
     state: String,
     size: u64,
     browser_download_url: String,
+    #[serde(default)]
+    sha256: String,
 }
 
 struct CustomAppRelease {
     asset: ReleaseAsset,
     status_version: Version,
     target_commitish: String,
+    sha256: String,
 }
 
 struct MacOsUnmounter<'a> {
@@ -485,6 +497,7 @@ impl AutoUpdater {
             current_version,
             client,
             pending_poll: None,
+            update_manifest: None,
             quit_subscription,
             update_check_type: UpdateCheckType::Automatic,
             _wake_subscription: wake_subscription,
@@ -801,7 +814,9 @@ impl AutoUpdater {
         });
 
         let app_commit_sha = cx.update(|cx| AppCommitSha::try_global(cx).map(|sha| sha.full()));
-        let (fetched_release_data, newer_version) = if release_channel == ReleaseChannel::Stable {
+        let (fetched_release_data, newer_version, expected_sha256) = if release_channel
+            == ReleaseChannel::Stable
+        {
             let Some(custom_release) = Self::get_custom_app_release(
                 &this,
                 installed_version.clone(),
@@ -831,6 +846,7 @@ impl AutoUpdater {
             (
                 custom_release.asset,
                 should_download.then_some(custom_release.status_version),
+                Some(custom_release.sha256),
             )
         } else {
             let fetched_release_data =
@@ -843,7 +859,7 @@ impl AutoUpdater {
                 fetched_version,
                 previous_status.clone(),
             )?;
-            (fetched_release_data, newer_version)
+            (fetched_release_data, newer_version, None)
         };
 
         let Some(newer_version) = newer_version else {
@@ -891,6 +907,14 @@ impl AutoUpdater {
         )
         .await
         .with_context(|| format!("Failed to download update to {}", target_path.display()))?;
+
+        if let Some(expected_sha256) = expected_sha256 {
+            let target_path = target_path.clone();
+            cx.background_spawn(async move {
+                verify_update_checksum(&target_path, &expected_sha256).await
+            })
+            .await?;
+        }
 
         this.update(cx, |this, cx| {
             this.status = AutoUpdateStatus::Installing {
@@ -958,24 +982,47 @@ impl AutoUpdater {
             return Ok(None);
         }
 
-        let client = this.read_with(cx, |this, _| this.client.http_client());
-        let mut response = client
-            .get(ZED_CN_RELEASES_URL, Default::default(), true)
-            .await?;
-        let mut body = Vec::new();
-        response.body_mut().read_to_end(&mut body).await?;
-        anyhow::ensure!(
-            response.status().is_success(),
-            "failed to fetch Zed CN releases: {:?}",
-            String::from_utf8_lossy(&body),
-        );
-
-        let releases: Vec<GitHubRelease> = serde_json::from_slice(&body).with_context(|| {
-            format!(
-                "error deserializing Zed CN releases {:?}",
-                String::from_utf8_lossy(&body),
-            )
-        })?;
+        let cached_manifest = this.read_with(cx, |this, _| {
+            this.update_manifest
+                .as_ref()
+                .and_then(|(fetched_at, manifest)| {
+                    (cx.background_executor().now().duration_since(*fetched_at)
+                        < UPDATE_MANIFEST_CACHE_TTL)
+                        .then(|| manifest.clone())
+                })
+        });
+        let manifest = if let Some(manifest) = cached_manifest {
+            manifest
+        } else {
+            let client = this.read_with(cx, |this, _| this.client.http_client());
+            let executor = cx.background_executor().clone();
+            let mut response = client
+                .get(ZED_CN_RELEASES_URL, Default::default(), true)
+                .with_timeout(Duration::from_secs(30), &executor)
+                .await
+                .context("连接 Zed CN 更新清单超时，请稍后重试")?
+                .context("无法连接 Zed CN 更新清单，请检查网络或稍后重试；也可从 https://github.com/rxp200/zed-cn/releases 手动下载")?;
+            anyhow::ensure!(
+                response.status().is_success(),
+                "获取 Zed CN 更新清单失败（HTTP {}），请稍后重试或从 https://github.com/rxp200/zed-cn/releases 手动下载",
+                response.status(),
+            );
+            let mut body = Vec::new();
+            response
+                .body_mut()
+                .take(UPDATE_MANIFEST_MAX_BYTES + 1)
+                .read_to_end(&mut body)
+                .with_timeout(Duration::from_secs(30), &executor)
+                .await
+                .context("读取 Zed CN 更新清单超时，请稍后重试")?
+                .context("读取 Zed CN 更新清单失败")?;
+            let manifest = parse_update_manifest(&body)?;
+            this.update(cx, |this, cx| {
+                this.update_manifest = Some((cx.background_executor().now(), manifest.clone()));
+            });
+            manifest
+        };
+        let releases = manifest.releases;
         let expected_asset_name = custom_app_asset_name(os, arch)?;
         let Some((release, release_version, revision, asset)) = select_custom_app_release(
             releases,
@@ -1000,6 +1047,7 @@ impl AutoUpdater {
             },
             status_version,
             target_commitish: release.target_commitish,
+            sha256: asset.sha256,
         }))
     }
 
@@ -1288,11 +1336,79 @@ async fn cleanup_remote_server_cache(
     Ok(())
 }
 
+fn parse_update_manifest(body: &[u8]) -> Result<UpdateManifest> {
+    anyhow::ensure!(
+        body.len() as u64 <= UPDATE_MANIFEST_MAX_BYTES,
+        "Zed CN 更新清单过大"
+    );
+    let manifest: UpdateManifest =
+        serde_json::from_slice(body).context("Zed CN 更新清单格式无效，请稍后重试")?;
+    anyhow::ensure!(
+        manifest.schema_version == 1,
+        "不支持此 Zed CN 更新清单版本，请手动更新客户端"
+    );
+    for release in &manifest.releases {
+        anyhow::ensure!(
+            release.target_commitish.len() == 40
+                && release
+                    .target_commitish
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit()),
+            "Zed CN 更新清单中的源码标识无效"
+        );
+        anyhow::ensure!(
+            parse_zed_cn_release_tag(&release.tag_name).is_some(),
+            "Zed CN 更新清单中的版本无效"
+        );
+        for asset in &release.assets {
+            anyhow::ensure!(
+                asset.sha256.len() == 64
+                    && asset.sha256.bytes().all(|byte| byte.is_ascii_hexdigit()),
+                "Zed CN 更新清单中的文件校验值无效"
+            );
+            let expected_url = format!(
+                "https://github.com/rxp200/zed-cn/releases/download/{}/{}",
+                release.tag_name, asset.name
+            );
+            anyhow::ensure!(
+                !asset.name.contains(['/', '\\'])
+                    && !asset.name.contains("..")
+                    && asset.browser_download_url == expected_url,
+                "Zed CN 更新清单中的下载地址无效"
+            );
+        }
+    }
+    Ok(manifest)
+}
+
+async fn verify_update_checksum(path: &Path, expected: &str) -> Result<()> {
+    let mut file = File::open(path).await.context("无法读取下载的更新文件")?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0; 64 * 1024];
+    loop {
+        let count = file.read(&mut buffer).await?;
+        if count == 0 {
+            break;
+        }
+        hasher.update(&buffer[..count]);
+    }
+    anyhow::ensure!(
+        format!("{:x}", hasher.finalize()).eq_ignore_ascii_case(expected),
+        "Zed CN 更新文件 SHA-256 校验失败，已停止安装，请重新检查更新"
+    );
+    Ok(())
+}
+
 fn parse_zed_cn_release_tag(tag_name: &str) -> Option<(Version, u64)> {
     let (version, revision) = tag_name
         .strip_prefix(ZED_CN_RELEASE_TAG_PREFIX)?
         .rsplit_once("-r")?;
-    Some((version.parse().ok()?, revision.parse().ok()?))
+    let version: Version = version.parse().ok()?;
+    let revision: u64 = revision.parse().ok()?;
+    if !version.pre.is_empty() || !version.build.is_empty() || revision == 0 {
+        return None;
+    }
+    Some((version, revision))
 }
 
 fn select_custom_app_release(
@@ -1690,6 +1806,7 @@ mod tests {
         cx.background_executor.allow_parking();
         zlog::init_test();
         let release_available = Arc::new(AtomicBool::new(false));
+        let manifest_requests = Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
         let (dmg_tx, dmg_rx) = oneshot::channel::<String>();
 
@@ -1698,15 +1815,17 @@ mod tests {
 
             let current_version = semver::Version::new(0, 100, 0);
             release_channel::init_test(current_version, ReleaseChannel::Stable, cx);
-            AppCommitSha::set_global(AppCommitSha::new("old-commit".to_string()), cx);
+            AppCommitSha::set_global(AppCommitSha::new("a".repeat(40)), cx);
 
             let clock = Arc::new(FakeSystemClock::new());
+            let manifest_requests = manifest_requests.clone();
             let release_available = Arc::clone(&release_available);
             let expected_asset_name = custom_app_asset_name(OS, ARCH).unwrap();
             let dmg_rx = Arc::new(parking_lot::Mutex::new(Some(dmg_rx)));
             let fake_client_http = FakeHttpClient::create(move |req| {
                 let release_available = release_available.load(atomic::Ordering::Relaxed);
                 let expected_asset_name = expected_asset_name.clone();
+                let manifest_requests = manifest_requests.clone();
                 let dmg_rx = dmg_rx.clone();
                 async move {
                 if req.uri().path() == "/releases/stable/latest/asset" {
@@ -1719,11 +1838,12 @@ mod tests {
                             r#"{"version":"0.100.0","url":"https://test.example/old-download"}"#.into()
                         ).unwrap());
                     }
-                } else if req.uri().path() == "/repos/rxp200/zed-cn/releases" {
+                } else if req.uri().path() == "/zed-cn/updates.json" {
+                    manifest_requests.fetch_add(1, atomic::Ordering::SeqCst);
                     let (tag_name, target_commitish, download_url) = if release_available {
-                        ("zed-cn-v0.100.1-r2", "new-commit", "https://test.example/new-download")
+                        ("zed-cn-v0.100.1-r2", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", format!("https://github.com/rxp200/zed-cn/releases/download/zed-cn-v0.100.1-r2/{expected_asset_name}"))
                     } else {
-                        ("zed-cn-v0.100.0-r1", "old-commit", "https://test.example/old-download")
+                        ("zed-cn-v0.100.0-r1", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", format!("https://github.com/rxp200/zed-cn/releases/download/zed-cn-v0.100.0-r1/{expected_asset_name}"))
                     };
                     let release = serde_json::json!({
                         "tag_name": tag_name,
@@ -1735,12 +1855,13 @@ mod tests {
                             "state": "uploaded",
                             "size": 123,
                             "browser_download_url": download_url,
+                            "sha256": format!("{:x}", Sha256::digest(b"<fake-zed-update>")),
                         }],
                     });
                     return Ok(Response::builder().status(200).body(
-                        serde_json::json!([release]).to_string().into()
+                        serde_json::json!({"schema_version": 1, "releases": [release]}).to_string().into()
                     ).unwrap());
-                } else if req.uri().path() == "/new-download" {
+                } else if req.uri().path().contains("/releases/download/zed-cn-v0.100.1-r2/") {
                     return Ok(Response::builder().status(200).body({
                         let dmg_rx = dmg_rx.lock().take().unwrap();
                         dmg_rx.await.unwrap().into()
@@ -1761,6 +1882,11 @@ mod tests {
             assert_eq!(updater.status(), AutoUpdateStatus::Idle);
             assert_eq!(updater.current_version(), semver::Version::new(0, 100, 0));
         });
+
+        assert_eq!(manifest_requests.load(atomic::Ordering::SeqCst), 1);
+        auto_updater.update(cx, |updater, cx| updater.poll(UpdateCheckType::Manual, cx));
+        cx.background_executor.run_until_parked();
+        assert_eq!(manifest_requests.load(atomic::Ordering::SeqCst), 1);
 
         release_available.store(true, atomic::Ordering::SeqCst);
         cx.background_executor.advance_clock(POLL_INTERVAL);
@@ -1984,6 +2110,46 @@ mod tests {
 
         let downloaded_len = std::fs::metadata(&target_path).unwrap().len();
         assert_eq!(downloaded_len, content_length as u64);
+    }
+
+    #[test]
+    fn test_update_manifest_validation() {
+        let mut value = serde_json::json!({
+            "schema_version": 1,
+            "releases": [{
+                "tag_name": "zed-cn-v1.18.1-r2",
+                "target_commitish": "a".repeat(40),
+                "draft": false, "prerelease": false,
+                "assets": [{
+                    "name": "Zed-x86_64.exe", "state": "uploaded", "size": 3,
+                    "sha256": "b".repeat(64),
+                    "browser_download_url": "https://github.com/rxp200/zed-cn/releases/download/zed-cn-v1.18.1-r2/Zed-x86_64.exe"
+                }]
+            }]
+        });
+        assert!(parse_update_manifest(&serde_json::to_vec(&value).unwrap()).is_ok());
+        value["schema_version"] = 2.into();
+        assert!(parse_update_manifest(&serde_json::to_vec(&value).unwrap()).is_err());
+        value["schema_version"] = 1.into();
+        value["releases"][0]["assets"][0]["browser_download_url"] =
+            "https://example.com/payload".into();
+        assert!(parse_update_manifest(&serde_json::to_vec(&value).unwrap()).is_err());
+        assert!(parse_update_manifest(b"not json").is_err());
+        assert!(
+            parse_update_manifest(&vec![b' '; UPDATE_MANIFEST_MAX_BYTES as usize + 1]).is_err()
+        );
+    }
+
+    #[gpui::test]
+    async fn test_update_checksum(cx: &mut TestAppContext) {
+        cx.background_executor.allow_parking();
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("update");
+        fs::write(&path, b"abc").await.unwrap();
+        let checksum = format!("{:x}", Sha256::digest(b"abc"));
+        verify_update_checksum(&path, &checksum).await.unwrap();
+        fs::write(&path, b"corrupted").await.unwrap();
+        assert!(verify_update_checksum(&path, &checksum).await.is_err());
     }
 
     #[test]
