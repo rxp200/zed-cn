@@ -237,24 +237,22 @@ impl Render for MigrationBanner {
                             }),
                     ),
             )
-            .child(
-                Button::new("backup-and-migrate", "Backup and Update").on_click({
-                    let workspace = self.workspace.clone();
-                    move |_, window, cx| {
-                        let fs = <dyn Fs>::global(cx);
-                        let task = match migration_type {
-                            Some(MigrationType::Keymap) => {
-                                cx.background_spawn(write_keymap_migration(fs.clone()))
-                            }
-                            Some(MigrationType::Settings) => {
-                                cx.background_spawn(write_settings_migration(fs.clone()))
-                            }
-                            None => unreachable!(),
-                        };
-                        task.detach_and_notify_err(workspace.clone(), window, cx);
-                    }
-                }),
-            )
+            .child(Button::new("backup-and-migrate", "备份并更新").on_click({
+                let workspace = self.workspace.clone();
+                move |_, window, cx| {
+                    let fs = <dyn Fs>::global(cx);
+                    let task = match migration_type {
+                        Some(MigrationType::Keymap) => {
+                            cx.background_spawn(write_keymap_migration(fs.clone()))
+                        }
+                        Some(MigrationType::Settings) => {
+                            cx.background_spawn(write_settings_migration(fs.clone()))
+                        }
+                        None => unreachable!(),
+                    };
+                    task.detach_and_notify_err(workspace.clone(), window, cx);
+                }
+            }))
             .into_any_element()
     }
 }

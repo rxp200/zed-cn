@@ -351,23 +351,23 @@ impl Render for LanguageServerPrompt {
                                             "copy-description",
                                             request.message.clone(),
                                         )
-                                        .tooltip_label("Copy Description"),
+                                        .tooltip_label("复制描述"),
                                     )
                                     .child(
                                         IconButton::new(close_id, close_icon)
                                             .tooltip(move |_window, cx| {
                                                 if suppress {
                                                     Tooltip::with_meta(
-                                                        "Suppress",
+                                                        "屏蔽",
                                                         Some(&SuppressNotification),
-                                                        "Click to close",
+                                                        "点击关闭",
                                                         cx,
                                                     )
                                                 } else {
                                                     Tooltip::with_meta(
-                                                        "Close",
+                                                        "关闭",
                                                         Some(&menu::Cancel),
-                                                        "Suppress with shift-click",
+                                                        "按住 Shift 点击屏蔽",
                                                         cx,
                                                     )
                                                 }
@@ -986,7 +986,7 @@ pub mod simple_message_notification {
                 .when_some(copy_text, |el, text| {
                     el.child(
                         CopyButton::new("copy-notification-message", text)
-                            .tooltip_label("Copy Message"),
+                            .tooltip_label("复制消息"),
                     )
                 })
                 .when(show_close_button, |el| {
@@ -995,20 +995,20 @@ pub mod simple_message_notification {
                             .tooltip(move |_window, cx| {
                                 if suppress {
                                     Tooltip::with_meta(
-                                        "Suppress",
+                                        "屏蔽",
                                         Some(&SuppressNotification),
-                                        "Click to Close",
+                                        "点击关闭",
                                         cx,
                                     )
                                 } else if show_suppress_button {
                                     Tooltip::with_meta(
-                                        "Close",
+                                        "关闭",
                                         Some(&menu::Cancel),
-                                        "Shift-click to Suppress",
+                                        "按住 Shift 点击屏蔽",
                                         cx,
                                     )
                                 } else {
-                                    Tooltip::for_action("Close", &menu::Cancel, cx)
+                                    Tooltip::for_action("关闭", &menu::Cancel, cx)
                                 }
                             })
                             .on_click(cx.listener(move |_, _, _, cx| {
@@ -1306,7 +1306,7 @@ pub mod simple_message_notification {
                 }
                 fn primary_action(&self) -> ErrorAction {
                     ErrorAction::link(
-                        "See Docs",
+                        "查看文档",
                         "https://zed.dev/docs/linux#i-cant-open-any-files",
                     )
                 }
@@ -1323,7 +1323,7 @@ pub mod simple_message_notification {
                     ErrorSeverity::Critical
                 }
                 fn primary_action(&self) -> ErrorAction {
-                    ErrorAction::link("Update Zed", "https://zed.dev/releases")
+                    ErrorAction::link("更新 Zed", "https://zed.dev/releases")
                 }
                 fn secondary_action(&self) -> Option<ErrorAction> {
                     Some(ErrorAction::dismiss())
@@ -1346,63 +1346,63 @@ pub mod simple_message_notification {
                 .p_4()
                 .children(vec![
                     example_group_with_title(
-                        "States",
+                        "状态",
                         vec![
-                            single_example("Normal", container().child(normal).into_any_element()),
+                            single_example("普通", container().child(normal).into_any_element()),
                             single_example(
-                                "With Title",
+                                "带标题",
                                 container().child(with_title).into_any_element(),
                             ),
                             single_example(
-                                "With Primary Action (start icon)",
+                                "带主要操作（起始图标）",
                                 container().child(with_primary_action).into_any_element(),
                             ),
                             single_example(
-                                "With Primary Action (end icon)",
+                                "带主要操作（结束图标）",
                                 container().child(with_end_icon_action).into_any_element(),
                             ),
                             single_example(
-                                "Long Content + Primary Action",
+                                "长内容 + 主要操作",
                                 container()
                                     .child(with_long_content_and_action)
                                     .into_any_element(),
                             ),
                             single_example(
-                                "Error",
+                                "错误",
                                 container().child(error_state).into_any_element(),
                             ),
                         ],
                     ),
                     example_group_with_title(
-                        "Header Actions (top right)",
+                        "头部操作（右上角）",
                         vec![
                             single_example(
-                                "Close Only",
+                                "仅关闭",
                                 container().child(close_only).into_any_element(),
                             ),
                             single_example(
-                                "Copy + Close",
+                                "复制 + 关闭",
                                 container().child(copy_and_close).into_any_element(),
                             ),
                             single_example(
-                                "No Close",
+                                "无关闭",
                                 container().child(no_close).into_any_element(),
                             ),
                         ],
                     ),
                     example_group_with_title(
-                        "Workspace Errors",
+                        "工作区错误",
                         vec![
                             single_example(
-                                "Basic",
+                                "基础",
                                 container().child(basic_error).into_any_element(),
                             ),
                             single_example(
-                                "With Secondary Message",
+                                "带次要消息",
                                 container().child(detailed_error).into_any_element(),
                             ),
                             single_example(
-                                "With Documentation Link",
+                                "带文档链接",
                                 container().child(docs_error).into_any_element(),
                             ),
                             single_example(
@@ -1670,7 +1670,7 @@ where
                         display.push('.');
                     }
                     let detail = f(err, window, cx).unwrap_or(display);
-                    window.prompt(PromptLevel::Critical, &msg, Some(&detail), &["OK"], cx)
+                    window.prompt(PromptLevel::Critical, &msg, Some(&detail), &["确定"], cx)
                 }) {
                     prompt.await.ok();
                 }

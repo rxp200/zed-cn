@@ -3,6 +3,8 @@ title: Terms of Service
 slug: terms
 ---
 
+> **Upstream notice:** These are Zed Industries, Inc.'s official terms for its websites, accounts, software services, subscriptions, hosted AI, and collaboration services. They are preserved from the upstream Zed source because Zed CN can still access official services; they are not terms issued by Zed CN. Zed CN is an unofficial community fork and is not operated, sponsored, or endorsed by Zed Industries.
+
 **Last Updated**: March 2, 2026
 
 Welcome, and thank you for your interest in Zed Industries, Inc. (“**Zed**,” “**we**,” or “**us**”) and our website at [www.zed.dev](https://www.zed.dev), along with our downloadable Zed software (the “**Software**”) and related subscription service (the “**Service**”). These Terms of Service are a legally binding contract between you and Zed regarding your use of the Service.

@@ -1,4 +1,5 @@
 mod persistence;
+pub mod port_forwarding;
 pub mod terminal_element;
 pub mod terminal_panel;
 mod terminal_path_like_target;
@@ -534,33 +535,33 @@ impl TerminalView {
         let context_menu = ContextMenu::build(window, cx, |menu, _, _| {
             menu.context(self.focus_handle.clone())
                 .when(self.shows_workspace_actions(), |menu| {
-                    menu.action("New Terminal", Box::new(NewTerminal::default()))
+                    menu.action("新建终端", Box::new(NewTerminal::default()))
                         .action(
                             "New Center Terminal",
                             Box::new(NewCenterTerminal::default()),
                         )
                         .separator()
                 })
-                .action("Copy", Box::new(Copy))
+                .action("复制", Box::new(Copy))
                 .when(
                     !matches!(self.mode, TerminalMode::Embedded { .. }),
                     |menu| {
-                        menu.action("Paste", Box::new(Paste))
-                            .action("Paste Text", Box::new(PasteText))
+                        menu.action("粘贴", Box::new(Paste))
+                            .action("粘贴文本", Box::new(PasteText))
                     },
                 )
-                .action("Select All", Box::new(SelectAll))
+                .action("全选", Box::new(SelectAll))
                 .when(
                     !matches!(self.mode, TerminalMode::Embedded { .. }),
-                    |menu| menu.action("Clear", Box::new(Clear)),
+                    |menu| menu.action("清除", Box::new(Clear)),
                 )
                 .when(
                     assistant_enabled && !matches!(self.mode, TerminalMode::Embedded { .. }),
                     |menu| {
                         menu.separator()
-                            .action("Inline Assist", Box::new(InlineAssist::default()))
+                            .action("内联辅助", Box::new(InlineAssist::default()))
                             .when(has_selection && self.shows_workspace_actions(), |menu| {
-                                menu.action("Add to Agent Thread", Box::new(AddSelectionToThread))
+                                menu.action("添加到Agent线程", Box::new(AddSelectionToThread))
                             })
                     },
                 )
@@ -1097,7 +1098,7 @@ impl TerminalView {
                 .size(ButtonSize::Compact)
                 .icon_color(Color::Default)
                 .shape(ui::IconButtonShape::Square)
-                .tooltip(move |_window, cx| Tooltip::for_action("Rerun task", &RerunTask, cx))
+                .tooltip(move |_window, cx| Tooltip::for_action("重新运行任务", &RerunTask, cx))
                 .on_click(move |_, window, cx| {
                     window.dispatch_action(Box::new(terminal_rerun_override(&task_id)), cx);
                 }),
@@ -1134,6 +1135,18 @@ fn subscribe_for_terminal_events(
 
             match event {
                 Event::Wakeup => {
+                    if terminal.read(cx).is_remote_terminal() {
+                        let output = terminal.read(cx).last_n_non_empty_lines(12).join("\n");
+                        if let Some(project) = terminal_view.project.upgrade()
+                            && let Some(workspace) = terminal_view.workspace.upgrade()
+                            && let Some(terminal_panel) =
+                                workspace.read(cx).panel::<TerminalPanel>(cx)
+                        {
+                            terminal_panel.update(cx, |terminal_panel, cx| {
+                                terminal_panel.detect_ports(&output, project, cx);
+                            });
+                        }
+                    }
                     cx.notify();
                     window.invalidate_character_coordinates();
                     cx.emit(Event::Wakeup);
@@ -1288,13 +1301,6 @@ impl TerminalView {
     fn key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         self.clear_bell(cx);
         self.pause_cursor_blinking(window, cx);
-
-        if event.prefer_character_input
-            && event.keystroke.key_char.is_some()
-            && !self.terminal.read(cx).vi_mode_enabled()
-        {
-            return;
-        }
 
         if self.process_keystroke(&event.keystroke, cx) {
             cx.stop_propagation();
@@ -1873,7 +1879,6 @@ impl SerializableItem for TerminalView {
         _workspace: &mut Workspace,
         item_id: workspace::ItemId,
         _closing: bool,
-        _: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<Task<anyhow::Result<()>>> {
         let terminal = self.terminal().read(cx);
@@ -2178,7 +2183,7 @@ fn first_project_directory(workspace: &Workspace, cx: &App) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gpui::{TestAppContext, UpdateGlobal, VisualTestContext};
+    use gpui::{TestAppContext, VisualTestContext};
     use project::{Entry, Project, ProjectPath, Worktree};
     use remote::RemoteClient;
     use std::path::{Path, PathBuf};
@@ -2349,70 +2354,6 @@ mod tests {
             terminal.update(&mut cx, |terminal, _| terminal.take_input_log()),
             vec![vec![0x11]],
             "ctrl-q in a focused terminal should send 0x11 to the PTY, not trigger zed::Quit",
-        );
-    }
-
-    #[gpui::test]
-    async fn altgr_character_input_is_not_swallowed_as_meta_sequence(cx: &mut TestAppContext) {
-        let (project, _workspace, window_handle) = init_test_with_window(cx).await;
-        cx.update(|cx| {
-            SettingsStore::update_global(cx, |store, cx| {
-                store.update_user_settings(cx, |settings| {
-                    settings.terminal.get_or_insert_default().option_as_meta = Some(true);
-                });
-            });
-        });
-        let (_pane, terminal, _terminal_view) =
-            add_display_only_terminal(&project, window_handle, true, cx);
-
-        let mut cx = VisualTestContext::from_window(window_handle.into(), cx);
-        cx.update(|window, cx| {
-            let _ = window.draw(cx);
-        });
-        cx.run_until_parked();
-
-        let mut altgr_a = Keystroke::parse("ctrl-alt-a").unwrap();
-        altgr_a.key_char = Some("ą".to_string());
-
-        let propagate = cx.update(|window, cx| {
-            window
-                .dispatch_event(
-                    gpui::PlatformInput::KeyDown(KeyDownEvent {
-                        keystroke: altgr_a.clone(),
-                        is_held: false,
-                        prefer_character_input: true,
-                    }),
-                    cx,
-                )
-                .propagate
-        });
-        assert!(
-            propagate,
-            "a keystroke that produced a character must propagate so the platform can commit the text",
-        );
-        assert_eq!(
-            terminal.update(&mut cx, |terminal, _| terminal.take_input_log()),
-            Vec::<Vec<u8>>::new(),
-            "AltGr-produced characters must not be sent as meta escape sequences",
-        );
-
-        let propagate = cx.update(|window, cx| {
-            window
-                .dispatch_event(
-                    gpui::PlatformInput::KeyDown(KeyDownEvent {
-                        keystroke: altgr_a,
-                        is_held: false,
-                        prefer_character_input: false,
-                    }),
-                    cx,
-                )
-                .propagate
-        });
-        assert!(!propagate);
-        assert_eq!(
-            terminal.update(&mut cx, |terminal, _| terminal.take_input_log()),
-            vec![b"\x1b\x01".to_vec()],
-            "ctrl-alt-a without character input preference is still sent as meta ctrl-a",
         );
     }
 

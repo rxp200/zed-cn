@@ -11,7 +11,10 @@ use file_icons::FileIcons;
 use git::{
     BuildCommitPermalinkParams, GitHostingProviderRegistry, GitRemote, Oid, ParsedGitRemote,
     parse_git_remote_url,
-    repository::{InitialGraphCommitData, LogOrder, LogSource, RepoPath, SearchCommitArgs},
+    repository::{
+        AUTHOR_SEARCH_QUERY_PREFIX, InitialGraphCommitData, LogOrder, LogSource, RepoPath,
+        SearchCommitArgs,
+    },
     status::{FileStatus, StatusCode, TrackedStatus},
 };
 use gpui::{
@@ -51,14 +54,15 @@ use time::{OffsetDateTime, UtcOffset, format_description::BorrowedFormatItem};
 use ui::{
     Chip, ColumnWidthConfig, CommonAnimationExt as _, ContextMenu, DiffStat, Divider,
     HeaderResizeInfo, HighlightedLabel, IndentGuideColors, ListItem, ListItemSpacing,
-    RedistributableColumnsState, ScrollableHandle, Table, TableInteractionState,
-    TableRenderContext, TableResizeBehavior, Tooltip, WithScrollbar, bind_redistributable_columns,
-    prelude::*, redistribute_hidden_fractions, redistribute_hidden_widths,
-    render_redistributable_columns_resize_handles, render_table_header, table_row::TableRow,
+    RedistributableColumnsState, ScrollableHandle, Switch, SwitchLabelPosition, Table,
+    TableInteractionState, TableRenderContext, TableResizeBehavior, Tooltip, WithScrollbar,
+    bind_redistributable_columns, prelude::*, redistribute_hidden_fractions,
+    redistribute_hidden_widths, render_redistributable_columns_resize_handles, render_table_header,
+    table_row::TableRow,
 };
 use util::{ResultExt, debug_panic};
 use workspace::{
-    ModalView, Workspace,
+    ItemNavHistory, ModalView, Workspace,
     item::{Item, ItemEvent, TabTooltipContent},
 };
 
@@ -301,7 +305,7 @@ impl ChangedFileEntry {
                 } else {
                     format!("{}/{}", dir_path, file_name).into()
                 };
-                move |_, cx| Tooltip::with_meta("View Changes", None, meta.clone(), cx)
+                move |_, cx| Tooltip::with_meta("查看更改", None, meta.clone(), cx)
             })
             .on_click({
                 let entry = self.clone();
@@ -382,7 +386,7 @@ impl ChangedFileDirectoryEntry {
             )
             .tooltip({
                 let name = self.name.clone();
-                move |_, cx| Tooltip::with_meta("Toggle Folder", None, name.clone(), cx)
+                move |_, cx| Tooltip::with_meta("切换文件夹", None, name.clone(), cx)
             })
             .on_click(move |_, _, cx| {
                 git_graph
@@ -522,10 +526,18 @@ impl QueryState {
 
 struct SearchState {
     case_sensitive: bool,
+    only_show_matches: bool,
     editor: Entity<Editor>,
     state: QueryState,
     matches: IndexSet<Oid>,
     selected_index: Option<usize>,
+    author_filter: Option<AuthorFilter>,
+}
+
+#[derive(Clone)]
+struct AuthorFilter {
+    name: SharedString,
+    email: SharedString,
 }
 
 struct SplitState {
@@ -597,6 +609,14 @@ actions!(
 #[action(namespace = git_graph)]
 pub struct OpenAtCommit {
     pub sha: String,
+}
+
+/// Filters the Git Graph to commits by one author.
+#[derive(Clone, PartialEq, serde::Deserialize, schemars::JsonSchema, gpui::Action)]
+#[action(namespace = git_graph)]
+pub struct ShowAuthorCommits {
+    pub name: String,
+    pub email: String,
 }
 
 fn timestamp_format() -> &'static [BorrowedFormatItem<'static>] {
@@ -1329,6 +1349,7 @@ pub struct GitGraph {
     changed_files_view_mode: ChangedFilesViewMode,
     changed_files_expanded_dirs: HashMap<RepoPath, bool>,
     pending_select_sha: Option<Oid>,
+    nav_history: Option<ItemNavHistory>,
 }
 
 impl GitGraph {
@@ -1357,6 +1378,26 @@ impl GitGraph {
         (raw * scale).round() / scale
     }
 
+    fn visible_commit_indices(&self) -> Vec<usize> {
+        if self.search_state.only_show_matches
+            && matches!(self.search_state.state, QueryState::Confirmed(_))
+        {
+            self.graph_data
+                .commits
+                .iter()
+                .enumerate()
+                .filter_map(|(index, commit)| {
+                    self.search_state
+                        .matches
+                        .contains(&commit.data.sha)
+                        .then_some(index)
+                })
+                .collect()
+        } else {
+            (0..self.graph_data.commits.len()).collect()
+        }
+    }
+
     fn visible_row_count(&self, window: &Window, cx: &App) -> usize {
         let row_height = Self::row_height(window, cx);
         let viewport_height = self
@@ -1368,7 +1409,7 @@ impl GitGraph {
             .last_item_size
             .map_or(window.viewport_size().height, |size| size.item.height);
 
-        ((viewport_height / row_height).ceil() as usize).min(self.graph_data.commits.len())
+        ((viewport_height / row_height).ceil() as usize).min(self.visible_commit_indices().len())
     }
 
     fn graph_canvas_content_width(&self) -> Pixels {
@@ -1469,7 +1510,7 @@ impl GitGraph {
 
         let search_editor = cx.new(|cx| {
             let mut editor = Editor::single_line(window, cx);
-            editor.set_placeholder_text("Search commits…", window, cx);
+            editor.set_placeholder_text("搜索提交…", window, cx);
             editor
         });
 
@@ -1548,10 +1589,12 @@ impl GitGraph {
             git_store,
             search_state: SearchState {
                 case_sensitive: false,
+                only_show_matches: false,
                 editor: search_editor,
                 matches: IndexSet::default(),
                 selected_index: None,
                 state: QueryState::Empty,
+                author_filter: None,
             },
             workspace,
             graph_data: graph,
@@ -1575,6 +1618,7 @@ impl GitGraph {
             changed_files_view_mode: ChangedFilesViewMode::default(),
             changed_files_expanded_dirs: HashMap::default(),
             pending_select_sha: None,
+            nav_history: None,
         };
 
         this.fetch_initial_graph_data(cx);
@@ -1778,6 +1822,7 @@ impl GitGraph {
         cx: &mut Context<Self>,
     ) -> Vec<Vec<AnyElement>> {
         let repository = self.get_repository(cx);
+        let visible_commit_indices = self.visible_commit_indices();
 
         let head_branch_name: Option<SharedString> = repository.as_ref().and_then(|repo| {
             repo.read(cx)
@@ -1794,10 +1839,14 @@ impl GitGraph {
         if let Some(repository) = repository.as_ref() {
             const FETCH_RANGE: usize = 100;
             repository.update(cx, |repository, cx| {
-                self.graph_data.commits[range.start.saturating_sub(FETCH_RANGE)
-                    ..(range.end + FETCH_RANGE)
-                        .min(self.graph_data.commits.len().saturating_sub(1))]
+                visible_commit_indices
+                    .get(
+                        range.start.saturating_sub(FETCH_RANGE)
+                            ..(range.end + FETCH_RANGE).min(visible_commit_indices.len()),
+                    )
+                    .unwrap_or_default()
                     .iter()
+                    .filter_map(|&index| self.graph_data.commits.get(index))
                     .for_each(|commit| {
                         repository.fetch_commit_data(commit.data.sha, false, cx);
                     });
@@ -1805,7 +1854,15 @@ impl GitGraph {
         }
 
         range
-            .map(|idx| {
+            .map(|visible_index| {
+                let Some(&idx) = visible_commit_indices.get(visible_index) else {
+                    return vec![
+                        div().h(row_height).into_any_element(),
+                        div().h(row_height).into_any_element(),
+                        div().h(row_height).into_any_element(),
+                        div().h(row_height).into_any_element(),
+                    ];
+                };
                 let Some((commit, repository)) =
                     self.graph_data.commits.get(idx).zip(repository.as_ref())
                 else {
@@ -1827,14 +1884,17 @@ impl GitGraph {
                 let mut formatted_time = String::new();
                 let subject: SharedString;
                 let author_name: SharedString;
+                let author_email: SharedString;
 
                 if let CommitDataState::Loaded(ref data) = data {
                     subject = data.subject.clone();
                     author_name = data.author_name.clone();
+                    author_email = data.author_email.clone();
                     formatted_time = format_timestamp(data.commit_timestamp);
                 } else {
                     subject = "Loading…".into();
                     author_name = "".into();
+                    author_email = "".into();
                 }
 
                 let accent_colors = cx.theme().accents();
@@ -1918,7 +1978,36 @@ impl GitGraph {
                         )
                         .into_any_element(),
                     column_label(formatted_time.into()),
-                    column_label(author_name),
+                    div()
+                        .id(ElementId::NamedInteger("commit-author".into(), idx as u64))
+                        .overflow_hidden()
+                        .cursor_pointer()
+                        .tooltip({
+                            let author_name = author_name.clone();
+                            move |_, cx| {
+                                Tooltip::with_meta(
+                                    "查看该作者的全部提交",
+                                    None,
+                                    author_name.clone(),
+                                    cx,
+                                )
+                            }
+                        })
+                        .on_click({
+                            let author_name = author_name.clone();
+                            let author_email = author_email.clone();
+                            cx.listener(move |this, _, window, cx| {
+                                this.show_author_commits(
+                                    author_name.clone(),
+                                    author_email.clone(),
+                                    window,
+                                    cx,
+                                );
+                                cx.stop_propagation();
+                            })
+                        })
+                        .child(column_label(author_name))
+                        .into_any_element(),
                     column_label(short_sha.into()),
                 ]
             })
@@ -2033,7 +2122,17 @@ impl GitGraph {
             repo.search_commits(
                 self.log_source.clone(),
                 SearchCommitArgs {
-                    query: query.clone(),
+                    query: self
+                        .search_state
+                        .author_filter
+                        .as_ref()
+                        .map(|author| {
+                            SharedString::from(format!(
+                                "{AUTHOR_SEARCH_QUERY_PREFIX}{}",
+                                author.email
+                            ))
+                        })
+                        .unwrap_or_else(|| query.clone()),
                     case_sensitive: self.search_state.case_sensitive,
                 },
                 request_tx,
@@ -2078,8 +2177,72 @@ impl GitGraph {
     }
 
     fn confirm_search(&mut self, _: &menu::Confirm, _window: &mut Window, cx: &mut Context<Self>) {
-        let query = self.search_state.editor.read(cx).text(cx).into();
+        self.search_state.author_filter = None;
+        let query = self.search_state.editor.read(cx).text(cx);
+        let query = query.trim();
+        let author_query = ["作者:", "作者：", "author:"]
+            .into_iter()
+            .find_map(|prefix| query.strip_prefix(prefix));
+        let query = author_query
+            .map(|author| {
+                SharedString::from(format!("{AUTHOR_SEARCH_QUERY_PREFIX}{}", author.trim()))
+            })
+            .unwrap_or_else(|| SharedString::from(query.to_string()));
         self.search(query, cx);
+    }
+
+    fn toggle_only_show_matches(&mut self, cx: &mut Context<Self>) {
+        self.search_state.only_show_matches = !self.search_state.only_show_matches;
+        if self.search_state.only_show_matches {
+            self.table_interaction_state
+                .read(cx)
+                .scroll_handle
+                .scroll_to_item(0, ScrollStrategy::Top);
+            if let Some(&sha) = self.search_state.matches.first() {
+                self.select_commit_by_sha(sha, cx);
+            }
+        } else if let Some(selected_index) = self.selected_entry_idx {
+            self.table_interaction_state
+                .read(cx)
+                .scroll_handle
+                .scroll_to_item(selected_index, ScrollStrategy::Nearest);
+        }
+        cx.notify();
+    }
+
+    fn show_author_commits(
+        &mut self,
+        author_name: SharedString,
+        author_email: SharedString,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if author_email.is_empty() {
+            return;
+        }
+
+        self.search_state.author_filter = Some(AuthorFilter {
+            name: author_name.clone(),
+            email: author_email.clone(),
+        });
+        self.search_state.editor.update(cx, |editor, cx| {
+            editor.set_text(format!("作者：{author_name}"), window, cx);
+        });
+        self.search(author_email, cx);
+    }
+
+    fn show_author_commits_action(
+        &mut self,
+        action: &ShowAuthorCommits,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.show_author_commits(
+            action.name.clone().into(),
+            action.email.clone().into(),
+            window,
+            cx,
+        );
     }
 
     fn activate_search_editor_if_focused(&self, window: &mut Window, cx: &mut Context<Self>) {
@@ -2136,8 +2299,18 @@ impl GitGraph {
         self.changed_files_expanded_dirs.clear();
         self.changed_files_scroll_handle
             .scroll_to_item(0, ScrollStrategy::Top);
+        let visible_index = if self.search_state.only_show_matches {
+            self.visible_commit_indices()
+                .iter()
+                .position(|&commit_index| commit_index == idx)
+                .unwrap_or(0)
+        } else {
+            idx
+        };
         self.table_interaction_state.update(cx, |state, cx| {
-            state.scroll_handle.scroll_to_item(idx, scroll_strategy);
+            state
+                .scroll_handle
+                .scroll_to_item(visible_index, scroll_strategy);
             cx.notify();
         });
 
@@ -2154,7 +2327,8 @@ impl GitGraph {
 
         self.load_selected_commit_message(cx, &commit_message_handle, &repository);
 
-        let diff_receiver = repository.update(cx, |repo, _| repo.load_commit_diff(diff_handle));
+        let diff_receiver =
+            repository.update(cx, |repo, _| repo.load_commit_diff(diff_handle, false));
 
         self._commit_diff_task = Some(cx.spawn(async move |this, cx| {
             if let Ok(Ok(diff)) = diff_receiver.await {
@@ -2423,6 +2597,19 @@ impl GitGraph {
         let repository = self
             .get_repository(cx)
             .map(|repository| repository.downgrade());
+        let author = self.get_repository(cx).and_then(|repository| {
+            repository.update(cx, |repository, cx| {
+                match repository.fetch_commit_data(commit.data.sha, false, cx) {
+                    CommitDataState::Loaded(data) if !data.author_email.is_empty() => {
+                        Some(AuthorFilter {
+                            name: data.author_name.clone(),
+                            email: data.author_email.clone(),
+                        })
+                    }
+                    _ => None,
+                }
+            })
+        });
         let context_menu = commit_context_menu(
             CommitContextMenuData {
                 sha: commit.data.sha,
@@ -2432,6 +2619,8 @@ impl GitGraph {
                     .into_iter()
                     .map(|tag_name| SharedString::from(tag_name.to_string()))
                     .collect(),
+                author_name: author.as_ref().map(|author| author.name.clone()),
+                author_email: author.map(|author| author.email),
             },
             CommitContextMenuSource::GitGraph,
             ref_name,
@@ -2495,9 +2684,9 @@ impl GitGraph {
     ) {
         let is_path_history = matches!(self.log_source, LogSource::Path(_));
         let columns: &[&str] = if is_path_history {
-            &["Description", "Date", "Author", "Commit"]
+            &["描述", "日期", "作者", "提交"]
         } else {
-            &["Graph", "Description", "Date", "Author", "Commit"]
+            &["图", "描述", "日期", "作者", "提交"]
         };
 
         let filter = self.column_visibility.clone();
@@ -2510,7 +2699,7 @@ impl GitGraph {
         let focus_handle = self.focus_handle.clone();
         let git_graph = cx.entity();
         let context_menu = ContextMenu::build(window, cx, |mut context_menu, _window, _cx| {
-            context_menu = context_menu.context(focus_handle).header("Columns");
+            context_menu = context_menu.context(focus_handle).header("列");
             for (col_idx, label) in columns.iter().enumerate() {
                 let is_visible = !filter.get(col_idx).copied().unwrap_or(false);
                 // Disable hiding the last remaining visible column.
@@ -2595,8 +2784,20 @@ impl GitGraph {
             )
             .child(
                 h_flex()
-                    .min_w_64()
+                    .flex_shrink_0()
                     .gap_1()
+                    .child(
+                        Switch::new(
+                            "git-graph-only-show-matches",
+                            self.search_state.only_show_matches.into(),
+                        )
+                        .label("是否只展示搜索结果")
+                        .label_position(SwitchLabelPosition::Start)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.toggle_only_show_matches(cx);
+                        })),
+                    )
+                    .child(Divider::vertical())
                     .child({
                         let focus_handle = self.focus_handle.clone();
                         IconButton::new("git-graph-search-prev", IconName::ChevronLeft)
@@ -2604,7 +2805,7 @@ impl GitGraph {
                             .icon_size(IconSize::Small)
                             .tooltip(move |_, cx| {
                                 Tooltip::for_action_in(
-                                    "Select Previous Match",
+                                    "选择上一个匹配项",
                                     &SelectPreviousMatch,
                                     &focus_handle,
                                     cx,
@@ -2627,7 +2828,7 @@ impl GitGraph {
                             .icon_size(IconSize::Small)
                             .tooltip(move |_, cx| {
                                 Tooltip::for_action_in(
-                                    "Select Next Match",
+                                    "选择下一个匹配项",
                                     &SelectNextMatch,
                                     &focus_handle,
                                     cx,
@@ -2861,7 +3062,23 @@ impl GitGraph {
                             .w_full()
                             .items_center()
                             .child(avatar)
-                            .child(Label::new(author_name).mt_1p5())
+                            .child(
+                                Button::new("show-author-commits", author_name.clone())
+                                    .style(ButtonStyle::Subtle)
+                                    .tooltip(Tooltip::text("查看该作者的全部提交"))
+                                    .on_click({
+                                        let author_name = author_name.clone();
+                                        let author_email = author_email.clone();
+                                        cx.listener(move |this, _, window, cx| {
+                                            this.show_author_commits(
+                                                author_name.clone(),
+                                                author_email.clone(),
+                                                window,
+                                                cx,
+                                            );
+                                        })
+                                    }),
+                            )
                             .child(
                                 Label::new(date_string)
                                     .color(Color::Muted)
@@ -3155,7 +3372,7 @@ impl GitGraph {
             .child(Divider::horizontal())
             .child(
                 h_flex().p_1p5().w_full().child(
-                    Button::new("view-commit", "View Commit")
+                    Button::new("view-commit", "查看提交")
                         .full_width()
                         .start_icon(
                             Icon::new(IconName::GitCommit)
@@ -3718,7 +3935,15 @@ impl Render for GitGraph {
             self.search_state.state = QueryState::Empty;
             self.search(query, cx);
         }
-        let (commit_count, is_loading) = self.commit_count_and_loading_state(cx);
+        let (loaded_commit_count, is_loading) = self.commit_count_and_loading_state(cx);
+        let visible_commit_indices = self.visible_commit_indices();
+        let commit_count = if self.search_state.only_show_matches
+            && matches!(self.search_state.state, QueryState::Confirmed(_))
+        {
+            visible_commit_indices.len()
+        } else {
+            loaded_commit_count
+        };
 
         let error = self.get_repository(cx).and_then(|repo| {
             repo.read(cx)
@@ -3751,12 +3976,17 @@ impl Render for GitGraph {
             let header_resize_info =
                 HeaderResizeInfo::from_redistributable(&self.column_widths, cx);
 
-            let column_filter = self.column_visibility.clone();
+            let mut column_filter = self.column_visibility.clone();
+            if self.search_state.only_show_matches && !is_path_history {
+                if let Some(graph_column) = column_filter.as_mut_slice().first_mut() {
+                    *graph_column = true;
+                }
+            }
 
             // The graph column (index 0) only exists in the non-path-history layout and is
             // rendered as a separate canvas outside the table.
             let graph_visible =
-                is_path_history || !column_filter.get(0usize).copied().unwrap_or(false);
+                !is_path_history && !column_filter.get(0usize).copied().unwrap_or(false);
 
             let table_offset = if is_path_history { 0 } else { 1 };
             let table_filter = column_filter
@@ -3807,20 +4037,20 @@ impl Render for GitGraph {
                                     if !is_path_history {
                                         TableRow::from_vec(
                                             vec![
-                                                Label::new("Graph")
+                                                Label::new("图形")
                                                     .color(Color::Muted)
                                                     .truncate()
                                                     .into_any_element(),
-                                                Label::new("Description")
+                                                Label::new("描述")
                                                     .color(Color::Muted)
                                                     .into_any_element(),
-                                                Label::new("Date")
+                                                Label::new("日期")
                                                     .color(Color::Muted)
                                                     .into_any_element(),
-                                                Label::new("Author")
+                                                Label::new("作者")
                                                     .color(Color::Muted)
                                                     .into_any_element(),
-                                                Label::new("Commit")
+                                                Label::new("提交")
                                                     .color(Color::Muted)
                                                     .into_any_element(),
                                             ],
@@ -3829,16 +4059,16 @@ impl Render for GitGraph {
                                     } else {
                                         TableRow::from_vec(
                                             vec![
-                                                Label::new("Description")
+                                                Label::new("描述")
                                                     .color(Color::Muted)
                                                     .into_any_element(),
-                                                Label::new("Date")
+                                                Label::new("日期")
                                                     .color(Color::Muted)
                                                     .into_any_element(),
-                                                Label::new("Author")
+                                                Label::new("作者")
                                                     .color(Color::Muted)
                                                     .into_any_element(),
-                                                Label::new("Commit")
+                                                Label::new("提交")
                                                     .color(Color::Muted)
                                                     .into_any_element(),
                                             ],
@@ -3855,6 +4085,7 @@ impl Render for GitGraph {
                             let row_height = Self::row_height(window, cx);
                             let selected_entry_idx = self.selected_entry_idx;
                             let hovered_entry_idx = self.hovered_entry_idx;
+                            let visible_commit_indices = visible_commit_indices.clone();
                             let context_menu_target_index = self
                                 .context_menu
                                 .as_ref()
@@ -3894,7 +4125,11 @@ impl Render for GitGraph {
                                 .hide_row_hover()
                                 .width_config(table_width_config)
                                 .column_filter(table_filter)
-                                .map_row(move |(index, row), window, cx| {
+                                .map_row(move |(visible_index, row), window, cx| {
+                                    let Some(&index) = visible_commit_indices.get(visible_index)
+                                    else {
+                                        return row.into_any_element();
+                                    };
                                     let is_selected = selected_entry_idx == Some(index);
                                     let is_hovered = hovered_entry_idx == Some(index);
                                     let is_context_menu_target =
@@ -4054,6 +4289,7 @@ impl Render for GitGraph {
             }))
             .on_action(cx.listener(Self::copy_selected_commit_sha))
             .on_action(cx.listener(Self::copy_selected_commit_tag))
+            .on_action(cx.listener(Self::show_author_commits_action))
             .on_action(cx.listener(Self::cancel))
             .on_action(cx.listener(|this, _: &FocusSearch, window, cx| {
                 this.search_state
@@ -4176,6 +4412,21 @@ impl Item for GitGraph {
 
     fn to_item_events(event: &Self::Event, f: &mut dyn FnMut(ItemEvent)) {
         f(*event)
+    }
+
+    fn deactivated(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(nav_history) = self.nav_history.as_mut() {
+            nav_history.push::<()>(None, None, cx);
+        }
+    }
+
+    fn set_nav_history(
+        &mut self,
+        nav_history: ItemNavHistory,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) {
+        self.nav_history = Some(nav_history);
     }
 }
 
@@ -4306,7 +4557,6 @@ impl workspace::SerializableItem for GitGraph {
         workspace: &mut Workspace,
         item_id: workspace::ItemId,
         _closing: bool,
-        _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<Task<gpui::Result<()>>> {
         let workspace_id = workspace.database_id()?;
@@ -4571,6 +4821,20 @@ mod persistence {
 impl GitGraph {
     pub fn search_for_test(&mut self, query: SharedString, cx: &mut Context<Self>) {
         self.search(query, cx);
+    }
+
+    pub fn confirm_search_for_test(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.confirm_search(&menu::Confirm, window, cx);
+    }
+
+    pub fn set_only_show_matches_for_test(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        if self.search_state.only_show_matches != enabled {
+            self.toggle_only_show_matches(cx);
+        }
+    }
+
+    pub fn visible_commit_indices_for_test(&self) -> Vec<usize> {
+        self.visible_commit_indices()
     }
 
     pub fn search_matches_for_test(&self) -> Vec<Oid> {
@@ -6027,7 +6291,7 @@ mod tests {
             .await
             .expect("should create workspace id");
         let db = cx.read(|cx| persistence::GitGraphsDb::global(cx));
-        // Hide the "Date" column (index 2 in the non-path-history layout).
+        // Hide the "日期" column (index 2 in the non-path-history layout).
         let hidden_columns =
             persistence::serialize_hidden_columns(&[false, false, true, false, false]);
         db.save_git_graph(
@@ -6234,6 +6498,42 @@ mod tests {
 
         git_graph.read_with(&*cx, |graph, _| {
             assert_eq!(graph.search_matches_for_test(), vec![third_sha]);
+        });
+
+        git_graph.update_in(cx, |graph, window, cx| {
+            graph
+                .search_state
+                .editor
+                .update(cx, |editor, cx| editor.set_text("作者: Author", window, cx));
+            graph.confirm_search_for_test(window, cx);
+        });
+        cx.run_until_parked();
+
+        git_graph.read_with(&*cx, |graph, cx| {
+            let matches = graph.search_matches_for_test();
+            let expected = [first_sha, target_sha, third_sha];
+            assert_eq!(matches.len(), expected.len());
+            assert!(expected.into_iter().all(|sha| matches.contains(&sha)));
+            assert_eq!(graph.search_state.editor.read(cx).text(cx), "作者: Author");
+            assert!(graph.search_state.author_filter.is_none());
+        });
+
+        git_graph.update(cx, |graph, cx| {
+            graph.set_only_show_matches_for_test(true, cx);
+        });
+        git_graph.read_with(&*cx, |graph, _| {
+            assert_eq!(graph.visible_commit_indices_for_test(), vec![0, 1, 2]);
+        });
+
+        git_graph.update_in(cx, |graph, window, cx| {
+            graph.search_state.editor.update(cx, |editor, cx| {
+                editor.set_text("作者: missing", window, cx)
+            });
+            graph.confirm_search_for_test(window, cx);
+        });
+        cx.run_until_parked();
+        git_graph.read_with(&*cx, |graph, _| {
+            assert!(graph.visible_commit_indices_for_test().is_empty());
         });
     }
 
@@ -6849,6 +7149,130 @@ mod tests {
 
         git_graph.read_with(&*cx, |graph, _| {
             assert_eq!(graph.selected_entry_idx, Some(1));
+        });
+    }
+
+    #[gpui::test]
+    async fn test_go_back_from_commit_view_returns_to_git_graph(cx: &mut TestAppContext) {
+        init_test(cx);
+
+        let fs = FakeFs::new(cx.executor());
+        fs.insert_tree(
+            Path::new("/project"),
+            json!({ ".git": {}, "file.txt": "content" }),
+        )
+        .await;
+
+        let first_sha = Oid::from_bytes(&[1; 20]).expect("valid commit SHA");
+        fs.set_graph_commits(
+            Path::new("/project/.git"),
+            vec![Arc::new(InitialGraphCommitData {
+                sha: first_sha,
+                parents: smallvec![],
+                ref_names: vec!["HEAD -> main".into()],
+            })],
+        );
+        fs.set_commit_data(
+            Path::new("/project/.git"),
+            [(
+                CommitData {
+                    sha: first_sha,
+                    parents: smallvec![],
+                    author_name: "Author".into(),
+                    author_email: "author@example.com".into(),
+                    commit_timestamp: 1_700_000_000,
+                    subject: "Commit subject".into(),
+                    message: "Commit message".into(),
+                },
+                false,
+            )],
+        );
+
+        let project = Project::test(fs, [Path::new("/project")], cx).await;
+        cx.run_until_parked();
+
+        let repository = project.read_with(cx, |project, cx| {
+            project
+                .active_repository(cx)
+                .expect("should have a repository")
+        });
+
+        let (multi_workspace, cx) = cx.add_window_view(|window, cx| {
+            workspace::MultiWorkspace::test_new(project.clone(), window, cx)
+        });
+        let workspace = multi_workspace.read_with(&*cx, |multi, _| multi.workspace().clone());
+
+        // Open a file first, so there's something in nav history before the Git Graph tab.
+        let buffer = project
+            .update(cx, |project, cx| {
+                project.open_local_buffer(Path::new("/project/file.txt"), cx)
+            })
+            .await
+            .expect("file should open");
+        let buffer_editor = cx.new_window_entity(|window, cx| {
+            Editor::for_buffer(buffer, Some(project.clone()), window, cx)
+        });
+        workspace.update_in(cx, |workspace, window, cx| {
+            workspace.add_item_to_active_pane(
+                Box::new(buffer_editor.clone()),
+                None,
+                true,
+                window,
+                cx,
+            );
+        });
+        cx.run_until_parked();
+
+        let git_graph = cx.new_window_entity(|window, cx| {
+            GitGraph::new(
+                repository.read(cx).id,
+                project.read(cx).git_store().clone(),
+                workspace.downgrade(),
+                None,
+                window,
+                cx,
+            )
+        });
+        workspace.update_in(cx, |workspace, window, cx| {
+            workspace.add_item_to_active_pane(Box::new(git_graph.clone()), None, true, window, cx);
+        });
+        cx.run_until_parked();
+
+        git_graph.update(cx, |graph, cx| {
+            graph.select_commit_by_sha(first_sha, cx);
+        });
+        cx.run_until_parked();
+
+        git_graph.update_in(cx, |graph, window, cx| {
+            graph.open_selected_commit_view(window, cx);
+        });
+        cx.run_until_parked();
+
+        let pane = workspace.read_with(cx, |workspace, _| workspace.active_pane().clone());
+
+        pane.read_with(cx, |pane, _cx| {
+            assert!(
+                pane.active_item()
+                    .and_then(|item| item.downcast::<CommitView>())
+                    .is_some(),
+                "expected the commit diff view to be active after opening a commit"
+            );
+        });
+
+        pane.update_in(cx, |pane, window, cx| {
+            pane.navigate_backward(&Default::default(), window, cx);
+        });
+        cx.run_until_parked();
+
+        pane.read_with(cx, |pane, _cx| {
+            let active_git_graph = pane
+                .active_item()
+                .and_then(|item| item.downcast::<GitGraph>());
+            assert_eq!(
+                active_git_graph,
+                Some(git_graph.clone()),
+                "Go Back from the commit diff view should return to the Git Graph view"
+            );
         });
     }
 
@@ -7486,6 +7910,7 @@ mod tests {
                     new_text: Some("updated content".into()),
                     is_binary: false,
                 }],
+                is_shallow_boundary: false,
             });
             graph.selected_commit_diff_stats = Some((1, 1));
             cx.notify();

@@ -114,6 +114,7 @@ pub struct Buffer {
     was_dirty_before_starting_transaction: Option<bool>,
     reload_task: Option<Task<Result<()>>>,
     language: Option<Arc<Language>>,
+    content_language_detection_enabled: bool,
     autoindent_requests: Vec<Arc<AutoindentRequest>>,
     wait_for_autoindent_txs: Vec<oneshot::Sender<()>>,
     pending_autoindent: Option<Task<()>>,
@@ -152,6 +153,13 @@ pub struct TreeSitterData {
 }
 
 const MAX_ROWS_IN_A_CHUNK: u32 = 50;
+
+/// The maximum length (in bytes) of a line for which syntax highlighting
+/// (tree-sitter capture queries) will be computed. Lines longer than this are
+/// rendered as plain text, mirroring VS Code's
+/// `editor.maxTokenizationLineLength` (which defaults to 20,000 characters) to
+/// avoid pathological performance on very long lines (e.g. minified JSON).
+pub const MAX_HIGHLIGHTED_LINE_LEN: usize = 20_000;
 
 impl TreeSitterData {
     fn clear(&mut self, snapshot: &text::BufferSnapshot) {
@@ -532,6 +540,15 @@ pub struct BufferChunks<'a> {
     unnecessary_depth: usize,
     underline: bool,
     highlights: Option<BufferChunkHighlights<'a>>,
+    /// Byte ranges within `range` for which syntax highlighting is skipped
+    /// (very long lines, see [`MAX_HIGHLIGHTED_LINE_LEN`]). While iterating
+    /// within one of these ranges, the tree-sitter capture cursor is not
+    /// advanced, so no tokens are computed for that line.
+    skip_highlights: Option<Vec<Range<usize>>>,
+    /// Set while iterating inside a `skip_highlights` range, indicating that
+    /// the capture cursor must be re-seeked to the current position once the
+    /// iteration leaves the range.
+    needs_capture_reseek: bool,
 }
 
 /// A chunk of a buffer's text, along with its syntax highlight and
@@ -763,6 +780,7 @@ impl HighlightedTextBuilder {
             range,
             Some((captures, highlight_maps)),
             false,
+            None,
             None,
         )
     }
@@ -1027,7 +1045,9 @@ impl Buffer {
         let buffer = TextBuffer::new(replica_id, buffer_id, message.base_text);
         let mut this = Self::build(buffer, file, capability, cx);
         this.text.set_line_ending(proto::deserialize_line_ending(
-            rpc::proto::LineEnding::from_i32(message.line_ending).context("missing line_ending")?,
+            rpc::proto::LineEnding::try_from(message.line_ending)
+                .ok()
+                .context("missing line_ending")?,
         ));
         this.saved_version = proto::deserialize_version(&message.saved_version);
         this.saved_mtime = message.saved_mtime.map(|time| time.into());
@@ -1156,6 +1176,7 @@ impl Buffer {
             wait_for_autoindent_txs: Default::default(),
             pending_autoindent: Default::default(),
             language: None,
+            content_language_detection_enabled: false,
             remote_selections: Default::default(),
             diagnostics: Default::default(),
             diagnostics_timestamp: Lamport::MIN,
@@ -1335,6 +1356,7 @@ impl Buffer {
                     merged_operations: Default::default(),
                 }),
                 language: self.language.clone(),
+                content_language_detection_enabled: self.content_language_detection_enabled,
                 has_conflict: self.has_conflict,
                 has_unsaved_edits: Cell::new(self.has_unsaved_edits.get_mut().clone()),
                 _subscriptions: vec![cx.subscribe(&this, Self::on_base_buffer_event)],
@@ -1518,6 +1540,14 @@ impl Buffer {
         self.has_bom = has_bom;
     }
 
+    pub fn set_content_language_detection_enabled(&mut self, enabled: bool) {
+        self.content_language_detection_enabled = enabled;
+    }
+
+    pub fn content_language_detection_enabled(&self) -> bool {
+        self.content_language_detection_enabled
+    }
+
     /// Assign a language to the buffer.
     pub fn set_language_async(&mut self, language: Option<Arc<Language>>, cx: &mut Context<Self>) {
         self.set_language_(language, cfg!(any(test, feature = "test-support")), cx);
@@ -1665,7 +1695,7 @@ impl Buffer {
 
             anyhow::ensure!(
                 analyze_byte_content(&bytes) != ByteContent::Binary,
-                "Binary files are not supported"
+                "不支持二进制文件"
             );
 
             let is_unicode = target_encoding == encoding_rs::UTF_8
@@ -2148,7 +2178,7 @@ impl Buffer {
                                 .unwrap_or_else(|| {
                                     request
                                         .before_edit
-                                        .indent_size_for_line(suggestion.basis_row)
+                                        .logical_indent_size_for_line(suggestion.basis_row)
                                 })
                                 .with_delta(suggestion.delta, language_indent_size);
                             old_suggestions
@@ -2189,7 +2219,7 @@ impl Buffer {
                                 .copied()
                                 .map(|e| e.0)
                                 .unwrap_or_else(|| {
-                                    snapshot.indent_size_for_line(suggestion.basis_row)
+                                    snapshot.logical_indent_size_for_line(suggestion.basis_row)
                                 })
                                 .with_delta(suggestion.delta, language_indent_size);
 
@@ -3651,6 +3681,83 @@ impl BufferSnapshot {
         indent_size_for_line(self, row)
     }
 
+    /// The indentation that the block comment closed on `position`'s row belongs
+    /// at, or `None` if that row is not the closing line of a multi-line block
+    /// comment.
+    ///
+    /// A closing delimiter is conventionally indented one column past its opening
+    /// delimiter, so that it lines up with the comment's prefixes:
+    ///
+    /// ```text
+    /// /**
+    ///  * doc
+    ///  */
+    /// ```
+    ///
+    /// That extra column belongs to the comment rather than to the surrounding
+    /// code, which makes the closing row's own indentation a poor basis for
+    /// indenting whatever follows it. The opening row's indentation is used
+    /// instead.
+    ///
+    /// Requires the row to hold nothing but whitespace and the closing delimiter,
+    /// and `position` to be at or past the end of that delimiter, so that
+    /// splitting the delimiter itself is left alone. Also requires the syntax node
+    /// containing the delimiter to end there, so that a line which merely looks
+    /// like a closing delimiter is not mistaken for one.
+    pub fn block_comment_closing_indent(&self, position: Point) -> Option<IndentSize> {
+        let row = position.row;
+        let indent_len = self.indent_size_for_line(row).len;
+        let delimiter_start = Point::new(row, indent_len);
+        let language = self.language_scope_at(delimiter_start)?;
+        // A few languages describe a string literal in `block_comment` rather
+        // than a comment (Python's `"""`), so either scope is accepted. Relying
+        // on the override scope keeps this out of the business of guessing at
+        // grammar node names.
+        if !matches!(language.override_name(), Some("comment" | "string")) {
+            return None;
+        }
+
+        let delimiter_len = [language.documentation_comment(), language.block_comment()]
+            .into_iter()
+            .flatten()
+            .find_map(|config| {
+                let delimiter = config.end.trim_start();
+                if delimiter.is_empty() {
+                    return None;
+                }
+                let mut chars = self.chars_at(delimiter_start);
+                if !delimiter
+                    .chars()
+                    .all(|expected| chars.next() == Some(expected))
+                {
+                    return None;
+                }
+                if !chars.take_while(|c| *c != '\n').all(char::is_whitespace) {
+                    return None;
+                }
+                Some(delimiter.len() as u32)
+            })?;
+        if position.column < indent_len + delimiter_len {
+            return None;
+        }
+
+        let delimiter_end = Point::new(row, indent_len + delimiter_len);
+        let node = self.syntax_ancestor(delimiter_start..delimiter_end)?;
+        if Point::from_ts_point(node.end_position()) != delimiter_end {
+            return None;
+        }
+        let opening_row = Point::from_ts_point(node.start_position()).row;
+        (opening_row < row).then(|| self.indent_size_for_line(opening_row))
+    }
+
+    /// Like [`Self::indent_size_for_line`], but reports the indentation a row
+    /// logically sits at, which differs from its physical indentation on the
+    /// closing line of a block comment. See [`Self::block_comment_closing_indent`].
+    fn logical_indent_size_for_line(&self, row: u32) -> IndentSize {
+        self.block_comment_closing_indent(Point::new(row, self.line_len(row)))
+            .unwrap_or_else(|| self.indent_size_for_line(row))
+    }
+
     /// Returns [`IndentSize`] for a given position that respects user settings
     /// and language preferences.
     pub fn language_indent_size_at<T: ToOffset>(&self, position: T, cx: &App) -> IndentSize {
@@ -3682,7 +3789,7 @@ impl BufferSnapshot {
                     result
                         .get(&suggestion.basis_row)
                         .copied()
-                        .unwrap_or_else(|| self.indent_size_for_line(suggestion.basis_row))
+                        .unwrap_or_else(|| self.logical_indent_size_for_line(suggestion.basis_row))
                         .with_delta(suggestion.delta, single_indent_size)
                 } else {
                     self.indent_size_for_line(row)
@@ -4030,8 +4137,14 @@ impl BufferSnapshot {
         let range = range.start.to_offset(self)..range.end.to_offset(self);
 
         let mut syntax = None;
+        let mut skip_highlights = None;
         if language_aware.tree_sitter {
+            // Always create captures for the whole range; lines that are too
+            // long are skipped at the chunk-iteration level via
+            // `skip_highlights`, so they never advance the tree-sitter capture
+            // cursor (see [`BufferChunks::next`]).
             syntax = Some(self.get_highlights(range.clone()));
+            skip_highlights = self.long_line_highlight_skips(range.clone());
         }
         BufferChunks::new(
             self.text.as_rope(),
@@ -4039,7 +4152,30 @@ impl BufferSnapshot {
             syntax,
             language_aware.diagnostics,
             Some(self),
+            skip_highlights,
         )
+    }
+
+    /// Computes the byte ranges (within `range`) of lines that are too long to
+    /// syntax-highlight. While producing [`BufferChunks`] for these ranges,
+    /// tree-sitter capture queries are skipped so that very long lines (e.g.
+    /// minified JSON) do not incur a per-frame cost proportional to their
+    /// length. This mirrors VS Code's `editor.maxTokenizationLineLength`.
+    fn long_line_highlight_skips(&self, range: Range<usize>) -> Option<Vec<Range<usize>>> {
+        if range.is_empty() {
+            return None;
+        }
+        let start_point = self.text.offset_to_point(range.start);
+        let end_point = self.text.offset_to_point(range.end);
+        let mut skips = Vec::new();
+        for row in start_point.row..=end_point.row {
+            let line_len = self.text.line_len(row) as usize;
+            if line_len >= MAX_HIGHLIGHTED_LINE_LEN {
+                let start = self.text.point_to_offset(Point::new(row, 0));
+                skips.push(start..start + line_len);
+            }
+        }
+        if skips.is_empty() { None } else { Some(skips) }
     }
 
     pub fn highlighted_text_for_range<T: ToOffset>(
@@ -5163,13 +5299,30 @@ impl BufferSnapshot {
     where
         T: 'a + Clone + ToOffset,
     {
+        self.diagnostic_entries_in_range_with_server_id(search_range, reversed)
+            .map(|(_, entry)| entry)
+    }
+
+    /// Returns the stored entries that intersect the given range along with the
+    /// language server that produced each diagnostic.
+    pub fn diagnostic_entries_in_range_with_server_id<'a, T>(
+        &'a self,
+        search_range: Range<T>,
+        reversed: bool,
+    ) -> impl 'a + Iterator<Item = (LanguageServerId, &'a DiagnosticEntry<Anchor>)>
+    where
+        T: 'a + Clone + ToOffset,
+    {
         let mut iterators: Vec<_> = self
             .diagnostics
             .iter()
-            .map(|(_, collection)| {
-                collection
-                    .entries_in_range::<T>(search_range.clone(), self, true, reversed)
-                    .peekable()
+            .map(|(server_id, collection)| {
+                (
+                    *server_id,
+                    collection
+                        .entries_in_range::<T>(search_range.clone(), self, true, reversed)
+                        .peekable(),
+                )
             })
             .collect();
 
@@ -5177,7 +5330,7 @@ impl BufferSnapshot {
             let (next_ix, _) = iterators
                 .iter_mut()
                 .enumerate()
-                .flat_map(|(ix, iter)| Some((ix, iter.peek()?)))
+                .flat_map(|(ix, (_, iter))| Some((ix, iter.peek()?)))
                 .min_by(|(_, a), (_, b)| {
                     let cmp = a
                         .range
@@ -5189,7 +5342,9 @@ impl BufferSnapshot {
                         .then(a.diagnostic.group_id.cmp(&b.diagnostic.group_id));
                     if reversed { cmp.reverse() } else { cmp }
                 })?;
-            iterators[next_ix].next()
+            let (server_id, iterator) = iterators.get_mut(next_ix)?;
+            let server_id = *server_id;
+            iterator.next().map(|entry| (server_id, entry))
         })
     }
 
@@ -5398,6 +5553,7 @@ impl<'a> BufferChunks<'a> {
         syntax: Option<(SyntaxMapCaptures<'a>, Vec<HighlightMap>)>,
         diagnostics: bool,
         buffer_snapshot: Option<&'a BufferSnapshot>,
+        skip_highlights: Option<Vec<Range<usize>>>,
     ) -> Self {
         let mut highlights = None;
         if let Some((captures, highlight_maps)) = syntax {
@@ -5424,6 +5580,8 @@ impl<'a> BufferChunks<'a> {
             unnecessary_depth: 0,
             underline: true,
             highlights,
+            skip_highlights,
+            needs_capture_reseek: false,
         };
         this.initialize_diagnostic_endpoints();
         this
@@ -5433,6 +5591,13 @@ impl<'a> BufferChunks<'a> {
     pub fn seek(&mut self, range: Range<usize>) {
         let old_range = std::mem::replace(&mut self.range, range.clone());
         self.chunks.set_range(self.range.clone());
+        // Recompute the highlight skip ranges for the new range. Line lengths
+        // only change on edit, and edits rebuild this iterator, so it is safe
+        // to use the current buffer snapshot here.
+        if let Some(snapshot) = self.buffer_snapshot {
+            self.skip_highlights = snapshot.long_line_highlight_skips(self.range.clone());
+            self.needs_capture_reseek = false;
+        }
         if let Some(highlights) = self.highlights.as_mut() {
             if old_range.start <= self.range.start && old_range.end >= self.range.end {
                 // Reuse existing highlights stack, as the new range is a subrange of the old one.
@@ -5561,33 +5726,59 @@ impl<'a> Iterator for BufferChunks<'a> {
     fn next(&mut self) -> Option<Self::Item> {
         let mut next_capture_start = usize::MAX;
         let mut next_diagnostic_endpoint = usize::MAX;
+        let mut next_skip_end = usize::MAX;
 
         if let Some(highlights) = self.highlights.as_mut() {
-            while let Some((parent_capture_end, _)) = highlights.stack.last() {
-                if *parent_capture_end <= self.range.start {
-                    highlights.stack.pop();
-                } else {
-                    break;
+            // If the current position is inside a range for which syntax
+            // highlighting is skipped (a very long line), do not advance the
+            // capture cursor: the line is rendered as plain text. Chunks are
+            // truncated at the end of the skip range so that highlighting
+            // resumes right after it; once the iteration leaves the range,
+            // the capture cursor is re-seeked to the current position.
+            let current_skip = self
+                .skip_highlights
+                .as_ref()
+                .and_then(|skips| skips.iter().find(|skip| skip.contains(&self.range.start)));
+            if let Some(skip) = current_skip {
+                highlights.stack.clear();
+                highlights.next_capture = None;
+                self.needs_capture_reseek = true;
+                next_skip_end = skip.end;
+            } else {
+                if self.needs_capture_reseek {
+                    highlights
+                        .captures
+                        .set_byte_range(self.range.start..self.range.end);
+                    highlights.stack.clear();
+                    highlights.next_capture = None;
+                    self.needs_capture_reseek = false;
                 }
-            }
-
-            if highlights.next_capture.is_none() {
-                highlights.next_capture = highlights.captures.next();
-            }
-
-            while let Some(capture) = highlights.next_capture.as_ref() {
-                if self.range.start < capture.node.start_byte() {
-                    next_capture_start = capture.node.start_byte();
-                    break;
-                } else {
-                    let highlight_id =
-                        highlights.highlight_maps[capture.grammar_index].get(capture.index);
-                    if let Some(highlight_id) = highlight_id {
-                        highlights
-                            .stack
-                            .push((capture.node.end_byte(), highlight_id));
+                while let Some((parent_capture_end, _)) = highlights.stack.last() {
+                    if *parent_capture_end <= self.range.start {
+                        highlights.stack.pop();
+                    } else {
+                        break;
                     }
+                }
+
+                if highlights.next_capture.is_none() {
                     highlights.next_capture = highlights.captures.next();
+                }
+
+                while let Some(capture) = highlights.next_capture.as_ref() {
+                    if self.range.start < capture.node.start_byte() {
+                        next_capture_start = capture.node.start_byte();
+                        break;
+                    } else {
+                        let highlight_id =
+                            highlights.highlight_maps[capture.grammar_index].get(capture.index);
+                        if let Some(highlight_id) = highlight_id {
+                            highlights
+                                .stack
+                                .push((capture.node.end_byte(), highlight_id));
+                        }
+                        highlights.next_capture = highlights.captures.next();
+                    }
                 }
             }
         }
@@ -5617,7 +5808,8 @@ impl<'a> Iterator for BufferChunks<'a> {
             let chunk_start = self.range.start;
             let mut chunk_end = (self.chunks.offset() + chunk.len())
                 .min(next_capture_start)
-                .min(next_diagnostic_endpoint);
+                .min(next_diagnostic_endpoint)
+                .min(next_skip_end);
             let mut highlight_id = None;
             if let Some(highlights) = self.highlights.as_ref()
                 && let Some((parent_capture_end, parent_highlight_id)) = highlights.stack.last()
@@ -5857,7 +6049,7 @@ pub(crate) fn contiguous_ranges(
     })
 }
 
-#[derive(Default, Debug)]
+#[derive(Clone, Default, Debug)]
 pub struct CharClassifier {
     scope: Option<LanguageScope>,
     scope_context: Option<CharScopeContext>,

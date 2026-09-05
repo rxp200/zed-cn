@@ -15,8 +15,8 @@ use semver::Version;
 use settings::Settings;
 use theme_settings::ThemeSettings;
 use ui::{
-    ActiveTheme, CommonAnimationExt, Context, InteractiveElement, KeyBinding, ListItem, Tooltip,
-    prelude::*,
+    ActiveTheme, CommonAnimationExt, Context, InteractiveElement, KeyBinding, ListItem,
+    ProgressBar, Tooltip, prelude::*,
 };
 use ui_input::{ERASED_EDITOR_FACTORY, ErasedEditor};
 use workspace::{DismissDecision, ModalView, Workspace};
@@ -27,6 +27,7 @@ pub struct RemoteConnectionPrompt {
     is_wsl: bool,
     is_devcontainer: bool,
     status_message: Option<SharedString>,
+    transfer_progress: Option<f32>,
     prompt: Option<(Entity<Markdown>, oneshot::Sender<EncryptedPassword>)>,
     prompt_cancellation_task: Option<Task<()>>,
     cancellation: Option<oneshot::Sender<()>>,
@@ -71,6 +72,7 @@ impl RemoteConnectionPrompt {
             is_devcontainer,
             editor,
             status_message: None,
+            transfer_progress: None,
             cancellation: None,
             prompt: None,
             prompt_cancellation_task: None,
@@ -113,13 +115,19 @@ impl RemoteConnectionPrompt {
 
     pub fn set_status(&mut self, status: Option<String>, cx: &mut Context<Self>) {
         self.status_message = status.map(|s| s.into());
+        self.transfer_progress = None;
+        cx.notify();
+    }
+
+    pub fn set_transfer_progress(&mut self, progress: Option<f32>, cx: &mut Context<Self>) {
+        self.transfer_progress = progress.map(|progress| progress.clamp(0.0, 1.0));
         cx.notify();
     }
 
     pub fn confirm(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some((_, tx)) = self.prompt.take() {
             self.prompt_cancellation_task.take();
-            self.status_message = Some("Connecting".into());
+            self.status_message = Some("正在建立 SSH 连接".into());
 
             let pw = self.editor.text(cx);
             if let Ok(secure) = EncryptedPassword::try_from(pw.as_ref()) {
@@ -203,7 +211,7 @@ impl Render for RemoteConnectionPrompt {
                                     .color(Color::Muted),
                             )
                             .child(
-                                Label::new("Caps lock is on.")
+                                Label::new("大写锁定已开启。")
                                     .size(LabelSize::Small)
                                     .color(Color::Muted),
                             ),
@@ -212,24 +220,45 @@ impl Render for RemoteConnectionPrompt {
             })
             .when_some(self.status_message.clone(), |this, status_message| {
                 this.child(
-                    h_flex()
+                    v_flex()
                         .min_w_0()
                         .w_full()
                         .mt_1()
                         .gap_1()
                         .child(
-                            Icon::new(IconName::LoadCircle)
-                                .size(IconSize::Small)
-                                .color(Color::Muted)
-                                .with_rotate_animation(2),
+                            h_flex()
+                                .min_w_0()
+                                .w_full()
+                                .gap_1()
+                                .child(
+                                    Icon::new(IconName::LoadCircle)
+                                        .size(IconSize::Small)
+                                        .color(Color::Muted)
+                                        .with_rotate_animation(2),
+                                )
+                                .child(
+                                    Label::new(format!("{}…", status_message))
+                                        .size(LabelSize::Small)
+                                        .color(Color::Muted)
+                                        .truncate()
+                                        .flex_1(),
+                                )
+                                .when_some(self.transfer_progress, |this, progress| {
+                                    this.child(
+                                        Label::new(format!("{:.0}%", progress * 100.0))
+                                            .size(LabelSize::Small)
+                                            .color(Color::Muted),
+                                    )
+                                }),
                         )
-                        .child(
-                            Label::new(format!("{}…", status_message))
-                                .size(LabelSize::Small)
-                                .color(Color::Muted)
-                                .truncate()
-                                .flex_1(),
-                        ),
+                        .when_some(self.transfer_progress, |this, progress| {
+                            this.child(ProgressBar::new(
+                                "remote-server-transfer-progress",
+                                progress,
+                                1.0,
+                                cx,
+                            ))
+                        }),
                 )
             })
     }
@@ -485,6 +514,14 @@ impl remote::RemoteClientDelegate for RemoteClientDelegate {
         self.update_status(status, cx)
     }
 
+    fn set_transfer_progress(&self, progress: Option<f32>, cx: &mut AsyncApp) {
+        self.ui
+            .update(cx, |prompt, cx| {
+                prompt.set_transfer_progress(progress, cx);
+            })
+            .ok();
+    }
+
     fn download_server_binary_locally(
         &self,
         platform: RemotePlatform,
@@ -499,17 +536,21 @@ impl remote::RemoteClientDelegate for RemoteClientDelegate {
                 version.clone(),
                 platform.os.as_str(),
                 platform.arch.as_str(),
-                move |status, cx| this.set_status(Some(status), cx),
+                {
+                    let this = this.clone();
+                    move |status, cx| this.set_status(Some(status), cx)
+                },
+                move |progress, cx| this.set_transfer_progress(progress, cx),
                 cx,
             )
             .await
             .with_context(|| {
                 format!(
-                    "Downloading remote server binary (version: {}, os: {}, arch: {})",
+                    "下载远程开发服务失败（版本：{}，操作系统：{}，架构：{}）",
                     version
                         .as_ref()
                         .map(|v| format!("{}", v))
-                        .unwrap_or("unknown".to_string()),
+                        .unwrap_or("未知".to_string()),
                     platform.os,
                     platform.arch,
                 )
@@ -666,16 +707,17 @@ impl remote::RemoteClientDelegate for BackgroundRemoteClientDelegate {
                 platform.os.as_str(),
                 platform.arch.as_str(),
                 |_status, _cx| {},
+                |_progress, _cx| {},
                 cx,
             )
             .await
             .with_context(|| {
                 format!(
-                    "Downloading remote server binary (version: {}, os: {}, arch: {})",
+                    "下载远程开发服务失败（版本：{}，操作系统：{}，架构：{}）",
                     version
                         .as_ref()
                         .map(|v| format!("{v}"))
-                        .unwrap_or("unknown".to_string()),
+                        .unwrap_or("未知".to_string()),
                     platform.os,
                     platform.arch,
                 )
@@ -748,6 +790,43 @@ mod tests {
     use settings::SettingsStore;
 
     use super::*;
+
+    #[gpui::test]
+    fn clamps_and_clears_transfer_progress(cx: &mut TestAppContext) {
+        initialize_test(cx);
+
+        let window = cx.add_window(|window, cx| Editor::single_line(window, cx));
+        let prompt = window
+            .update(cx, |_, window, cx| {
+                cx.new(|cx| {
+                    RemoteConnectionPrompt::new(
+                        "example.com".to_string(),
+                        None,
+                        false,
+                        false,
+                        window,
+                        cx,
+                    )
+                })
+            })
+            .expect("test window should remain open");
+
+        prompt.update(cx, |prompt, cx| {
+            prompt.set_transfer_progress(Some(1.5), cx);
+        });
+        assert_eq!(
+            prompt.read_with(cx, |prompt, _| prompt.transfer_progress),
+            Some(1.0)
+        );
+
+        prompt.update(cx, |prompt, cx| {
+            prompt.set_status(Some("正在解压".to_string()), cx);
+        });
+        assert_eq!(
+            prompt.read_with(cx, |prompt, _| prompt.transfer_progress),
+            None
+        );
+    }
 
     #[gpui::test]
     fn clears_prompt_when_password_request_is_cancelled(cx: &mut TestAppContext) {

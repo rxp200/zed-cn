@@ -29,9 +29,10 @@ use util::ResultExt;
 use crate::provider::anthropic::{AnthropicEventMapper, into_anthropic};
 use crate::provider::google::{GoogleEventMapper, into_google};
 use crate::provider::open_ai::{
-    ChatCompletionMaxTokensParameter, OpenAiEventMapper, OpenAiResponseEventMapper, into_open_ai,
+    ChatCompletionMaxTokensParameter, OpenAiResponseEventMapper, into_open_ai,
     into_open_ai_response,
 };
+use language_model::chat_completion::{ChatCompletionEventMapper, ResponseStreamEvent};
 
 fn normalize_reasoning_effort(effort: &str) -> Option<ReasoningEffort> {
     match effort.trim().to_ascii_lowercase().as_str() {
@@ -63,8 +64,7 @@ const PROVIDER_NAME: LanguageModelProviderName = LanguageModelProviderName::new(
 
 const API_KEY_ENV_VAR_NAME: &str = "OPENCODE_API_KEY";
 static API_KEY_ENV_VAR: LazyLock<EnvVar> = env_var!(API_KEY_ENV_VAR_NAME);
-const OPENCODE_SESSION_HEADER_NAME: &str = "x-opencode-session";
-pub(crate) const RESERVED_HEADER_NAMES: &[&str] = &[OPENCODE_SESSION_HEADER_NAME];
+pub(crate) const RESERVED_HEADER_NAMES: &[&str] = &["x-opencode-session"];
 
 #[derive(Default, Clone, Debug, PartialEq)]
 pub struct OpenCodeSettings {
@@ -301,7 +301,7 @@ impl LanguageModelProvider for OpenCodeLanguageModelProvider {
                     .into()
             })
             .description(InlineDescription::Text(
-                "To use OpenCode models in Zed, you need an API key.".into(),
+                "要在 Zed 中使用 OpenCode 模型，您需要一个 API 密钥。".into(),
             )),
         ))
     }
@@ -326,11 +326,9 @@ impl HttpClient for InjectHeaderClient {
     fn user_agent(&self) -> Option<&http::HeaderValue> {
         self.inner.user_agent()
     }
-
     fn proxy(&self) -> Option<&http_client::Url> {
         self.inner.proxy()
     }
-
     fn send(
         &self,
         mut req: http::Request<AsyncBody>,
@@ -339,15 +337,6 @@ impl HttpClient for InjectHeaderClient {
             .insert(self.name.clone(), self.value.clone());
         self.inner.send(req)
     }
-}
-
-// Standalone requests do not have a conversation ID, but OpenCode requires a
-// non-empty session header.
-fn opencode_session_header_value(thread_id: Option<&str>) -> http::HeaderValue {
-    thread_id
-        .filter(|thread_id| !thread_id.is_empty())
-        .and_then(|thread_id| http::HeaderValue::from_str(thread_id).ok())
-        .unwrap_or_else(|| http::HeaderValue::from(rand::random::<u64>()))
 }
 
 impl OpenCodeLanguageModel {
@@ -435,10 +424,8 @@ impl OpenCodeLanguageModel {
         http_client: Arc<dyn HttpClient>,
         extra_headers: CustomHeaders,
         cx: &AsyncApp,
-    ) -> BoxFuture<
-        'static,
-        Result<futures::stream::BoxStream<'static, Result<open_ai::ResponseStreamEvent>>>,
-    > {
+    ) -> BoxFuture<'static, Result<futures::stream::BoxStream<'static, Result<ResponseStreamEvent>>>>
+    {
         // OpenAI crate appends /chat/completions to api_url, so we pass base + "/v1"
         let base_url = self.base_api_url(cx);
         let api_url: SharedString = format!("{base_url}/v1").into();
@@ -646,11 +633,17 @@ impl LanguageModel for OpenCodeLanguageModel {
             LanguageModelCompletionError,
         >,
     > {
-        let http_client: Arc<dyn HttpClient> = Arc::new(InjectHeaderClient {
-            inner: self.http_client.clone(),
-            name: http::HeaderName::from_static(OPENCODE_SESSION_HEADER_NAME),
-            value: opencode_session_header_value(request.thread_id.as_deref()),
-        });
+        let http_client = if let Some(ref thread_id) = request.thread_id
+            && let Ok(value) = http::HeaderValue::from_str(thread_id)
+        {
+            Arc::new(InjectHeaderClient {
+                inner: self.http_client.clone(),
+                name: http::HeaderName::from_static("x-opencode-session"),
+                value,
+            })
+        } else {
+            self.http_client.clone()
+        };
         let extra_headers = self.custom_headers(cx);
 
         match self.model.protocol(self.subscription) {
@@ -676,9 +669,13 @@ impl LanguageModel for OpenCodeLanguageModel {
                 };
                 let stream =
                     self.stream_anthropic(anthropic_request, http_client, extra_headers, cx);
+                let executor = cx.background_executor().clone();
                 async move {
                     let mapper = AnthropicEventMapper::new(PROVIDER_NAME, PROVIDER_ID);
-                    Ok(mapper.map_stream(stream.await?).boxed())
+                    Ok(language_model::stream_in_background(
+                        mapper.map_stream(stream.await?).boxed(),
+                        executor,
+                    ))
                 }
                 .boxed()
             }
@@ -706,9 +703,13 @@ impl LanguageModel for OpenCodeLanguageModel {
                 };
                 let stream =
                     self.stream_openai_chat(openai_request, http_client, extra_headers, cx);
+                let executor = cx.background_executor().clone();
                 async move {
-                    let mapper = OpenAiEventMapper::new();
-                    Ok(mapper.map_stream(stream.await?).boxed())
+                    let mapper = ChatCompletionEventMapper::new();
+                    Ok(language_model::stream_in_background(
+                        mapper.map_stream(stream.await?).boxed(),
+                        executor,
+                    ))
                 }
                 .boxed()
             }
@@ -732,9 +733,13 @@ impl LanguageModel for OpenCodeLanguageModel {
                 };
                 let stream =
                     self.stream_openai_response(response_request, http_client, extra_headers, cx);
+                let executor = cx.background_executor().clone();
                 async move {
                     let mapper = OpenAiResponseEventMapper::new(PROVIDER_ID);
-                    Ok(mapper.map_stream(stream.await?).boxed())
+                    Ok(language_model::stream_in_background(
+                        mapper.map_stream(stream.await?).boxed(),
+                        executor,
+                    ))
                 }
                 .boxed()
             }
@@ -770,7 +775,7 @@ struct ConfigurationView {
 impl ConfigurationView {
     fn new(state: Entity<State>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let api_key_editor = cx.new(|cx| {
-            InputField::new(window, cx, "sk-00000000000000000000000000000000").label("API key")
+            InputField::new(window, cx, "sk-00000000000000000000000000000000").label("API 密钥")
         });
 
         cx.observe(&state, |_, _, cx| {
@@ -862,13 +867,13 @@ impl Render for ConfigurationView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let env_var_set = self.state.read(cx).api_key_state.is_from_env_var();
         let configured_card_label = if env_var_set {
-            format!("API key set in {API_KEY_ENV_VAR_NAME} environment variable")
+            format!("API 密钥已在 {API_KEY_ENV_VAR_NAME} 环境变量中设置")
         } else {
             let api_url = OpenCodeLanguageModelProvider::api_url(cx);
             if api_url == OPENCODE_API_URL {
-                "API key configured".to_string()
+                "API 密钥已配置".to_string()
             } else {
-                format!("API key configured for {}", api_url)
+                format!("已为 {} 配置 API 密钥", api_url)
             }
         };
 
@@ -881,7 +886,7 @@ impl Render for ConfigurationView {
                 .disabled(env_var_set)
                 .when(env_var_set, |this| {
                     this.tooltip_label(format!(
-                        "To reset your API key, unset the {API_KEY_ENV_VAR_NAME} environment variable."
+                        "要重置您的 API 密钥，请取消设置 {API_KEY_ENV_VAR_NAME} 环境变量。"
                     ))
                 })
                 .on_click(cx.listener(|this, _, window, cx| this.reset_api_key(window, cx)))
@@ -890,37 +895,40 @@ impl Render for ConfigurationView {
 
         let api_key_section = v_flex()
             .on_action(cx.listener(Self::save_api_key))
-            .child(Label::new(
-                "To use OpenCode models in Zed, you need an API key:",
-            ).color(Color::Muted))
+            .child(
+                Label::new("要在 Zed 中使用 OpenCode 模型，您需要一个 API 密钥：")
+                    .color(Color::Muted),
+            )
             .child(
                 List::new()
                     .child(
                         ListBulletItem::new("")
-                            .child(Label::new("Sign in and get your key at").color(Color::Muted))
+                            .child(Label::new("登录并获取您的密钥于").color(Color::Muted))
                             .child(ButtonLink::new(
-                                "OpenCode Console",
+                                "OpenCode 控制台",
                                 "https://opencode.ai/auth",
                             )),
                     )
                     .when(is_editing, |this| {
-                        this.child(ListBulletItem::new(
-                            "Paste your API key below and hit enter to start using OpenCode",
-                        ).label_color(Color::Muted))
+                        this.child(
+                            ListBulletItem::new("在下方粘贴您的 API 密钥并按回车开始使用 OpenCode")
+                                .label_color(Color::Muted),
+                        )
                     }),
             )
             .child(api_key_control)
             .child(
                 Label::new(format!(
-                    "You can also set the {API_KEY_ENV_VAR_NAME} environment variable and restart Zed."
+                    "您也可以设置 {API_KEY_ENV_VAR_NAME} 环境变量并重新启动 Zed。"
                 ))
                 .size(LabelSize::Small)
-                .color(Color::Muted).mt_1p5(),
+                .color(Color::Muted)
+                .mt_1p5(),
             )
             .into_any_element();
 
         if self.load_credentials_task.is_some() {
-            Label::new("Loading Credentials…").into_any_element()
+            Label::new("正在加载凭据…").into_any_element()
         } else {
             let settings = OpenCodeLanguageModelProvider::settings(cx);
             let show_zen = settings.show_zen_models;
@@ -928,11 +936,11 @@ impl Render for ConfigurationView {
 
             let subscription_toggles = v_flex()
                 .gap_2()
-                .child(Label::new("Subscriptions"))
+                .child(Label::new("订阅"))
                 .child(
                     Switch::new("opencode-show-zen-models", show_zen.into())
                         .full_width(true)
-                        .label("Show Zen models")
+                        .label("显示 Zen 模型")
                         .label_position(SwitchLabelPosition::Start)
                         .on_click(cx.listener(|this, state, window, cx| {
                             this.set_subscription_enabled(
@@ -947,7 +955,7 @@ impl Render for ConfigurationView {
                 .child(
                     Switch::new("opencode-show-go-models", show_go.into())
                         .full_width(true)
-                        .label("Show Go models")
+                        .label("显示 Go 模型")
                         .label_position(SwitchLabelPosition::Start)
                         .on_click(cx.listener(|this, state, window, cx| {
                             this.set_subscription_enabled(
@@ -961,7 +969,7 @@ impl Render for ConfigurationView {
 
             let no_subscriptions_warning = if !show_zen && !show_go {
                 Some(Banner::new().severity(Severity::Warning).child(Label::new(
-                    "No subscriptions enabled. Enable at least one subscription to use OpenCode.",
+                    "未启用任何订阅。请启用至少一个订阅以使用 OpenCode。",
                 )))
             } else {
                 None
@@ -976,136 +984,6 @@ impl Render for ConfigurationView {
                 .child(subscription_toggles)
                 .children(no_subscriptions_warning)
                 .into_any()
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use http_client::{FakeHttpClient, Response};
-    use language_model::{LanguageModelRequestMessage, MessageContent, Role};
-    use parking_lot::Mutex;
-
-    #[test]
-    fn test_opencode_session_header_uses_thread_id() {
-        let value = opencode_session_header_value(Some("thread-123"));
-
-        assert_eq!(value, "thread-123");
-    }
-
-    #[test]
-    fn test_opencode_session_header_without_thread_id() {
-        let value = opencode_session_header_value(None);
-
-        assert_generated_session_id(&value);
-    }
-
-    #[test]
-    fn test_opencode_session_header_with_empty_thread_id() {
-        let value = opencode_session_header_value(Some(""));
-
-        assert_generated_session_id(&value);
-    }
-
-    #[test]
-    fn test_opencode_session_header_with_invalid_thread_id() {
-        let value = opencode_session_header_value(Some("thread\n123"));
-
-        assert_generated_session_id(&value);
-    }
-
-    #[gpui::test]
-    async fn test_stream_completion_sends_session_header_without_thread_id(
-        cx: &mut gpui::TestAppContext,
-    ) {
-        let captured_header = Arc::new(Mutex::new(None));
-        let http_client = FakeHttpClient::create({
-            let captured_header = captured_header.clone();
-            move |request| {
-                let captured_header = captured_header.clone();
-                async move {
-                    *captured_header.lock() =
-                        Some(request.headers().get(OPENCODE_SESSION_HEADER_NAME).cloned());
-                    Ok(Response::builder().status(200).body(AsyncBody::from(
-                        "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
-                    ))?)
-                }
-            }
-        });
-        let provider = cx.update(|cx| {
-            let settings_store = SettingsStore::test(cx);
-            cx.set_global(settings_store);
-            OpenCodeLanguageModelProvider::new(http_client, Arc::new(TestCredentialsProvider), cx)
-        });
-        let store_key = provider.state.update(cx, |state, cx| {
-            state.set_api_key(Some("test-key".to_string()), cx)
-        });
-        store_key.await.unwrap();
-        let model =
-            provider.create_language_model(opencode::Model::default(), OpenCodeSubscription::Go);
-        let request = LanguageModelRequest {
-            thread_id: None,
-            messages: vec![LanguageModelRequestMessage {
-                role: Role::User,
-                content: vec![MessageContent::Text("Hello".to_string())],
-                cache: false,
-                reasoning_details: None,
-            }],
-            ..Default::default()
-        };
-
-        let stream = model
-            .stream_completion(request, &cx.to_async())
-            .await
-            .unwrap();
-        drop(stream);
-
-        let captured_header = captured_header
-            .lock()
-            .take()
-            .expect("request should reach the http client")
-            .expect("request should carry the session header");
-        assert_generated_session_id(&captured_header);
-    }
-
-    fn assert_generated_session_id(value: &http::HeaderValue) {
-        value
-            .to_str()
-            .unwrap()
-            .parse::<u64>()
-            .expect("generated session id should be a u64");
-    }
-
-    struct TestCredentialsProvider;
-
-    impl CredentialsProvider for TestCredentialsProvider {
-        fn read_credentials<'a>(
-            &'a self,
-            _url: &'a str,
-            _cx: &'a AsyncApp,
-        ) -> std::pin::Pin<
-            Box<dyn std::future::Future<Output = Result<Option<(String, Vec<u8>)>>> + 'a>,
-        > {
-            Box::pin(async { Ok(None) })
-        }
-
-        fn write_credentials<'a>(
-            &'a self,
-            _url: &'a str,
-            _username: &'a str,
-            _password: &'a [u8],
-            _cx: &'a AsyncApp,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + 'a>> {
-            Box::pin(async { Ok(()) })
-        }
-
-        fn delete_credentials<'a>(
-            &'a self,
-            _url: &'a str,
-            _cx: &'a AsyncApp,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + 'a>> {
-            Box::pin(async { Ok(()) })
         }
     }
 }
