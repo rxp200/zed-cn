@@ -60,6 +60,46 @@ pub fn init(cx: &mut App) {
         |workspace: &mut Workspace, _window, _: &mut Context<Workspace>| {
             workspace.register_action(TerminalPanel::new_terminal);
             workspace.register_action(TerminalPanel::open_terminal);
+            workspace.register_action(|workspace, _: &editor::StopCode, _, cx| {
+                if let Some(panel) = workspace.panel::<TerminalPanel>(cx) {
+                    panel.update(cx, |panel, cx| {
+                        panel
+                            .deferred_tasks
+                            .retain(|id, _| !id.0.starts_with("code-runner"));
+                        let terminals = panel
+                            .center
+                            .panes()
+                            .into_iter()
+                            .cloned()
+                            .chain(workspace.panes().iter().cloned())
+                            .flat_map(|pane| {
+                                pane.read(cx)
+                                    .items()
+                                    .filter_map(|item| item.act_as::<TerminalView>(cx))
+                                    .collect::<Vec<_>>()
+                            })
+                            .map(|view| view.read(cx).terminal().clone())
+                            .collect::<Vec<_>>();
+                        for terminal in terminals {
+                            let managed = terminal.read(cx).task().is_some_and(|task| {
+                                task.spawned_task
+                                    .env
+                                    .get("CODE_RUNNER_MANAGED")
+                                    .is_some_and(|value| value == "1")
+                            });
+                            if managed {
+                                terminal.update(cx, |terminal, _| {
+                                    if terminal.is_remote_terminal() {
+                                        terminal.input(vec![3]);
+                                    } else {
+                                        terminal.kill_active_task();
+                                    }
+                                });
+                            }
+                        }
+                    });
+                }
+            });
             workspace.register_action(|workspace, _: &ManagePortForwards, window, cx| {
                 let Some(panel) = workspace.panel::<TerminalPanel>(cx) else {
                     return;
@@ -702,6 +742,23 @@ impl TerminalPanel {
         };
 
         let (existing_item_index, task_pane, existing_terminal) = existing;
+        if task
+            .env
+            .get("CODE_RUNNER_MANAGED")
+            .is_some_and(|value| value == "1")
+        {
+            let running = existing_terminal
+                .read(cx)
+                .terminal()
+                .read(cx)
+                .task()
+                .is_some_and(|task| task.status == terminal::TaskStatus::Running);
+            if running {
+                return Task::ready(Err(anyhow!(
+                    "代码仍在运行，请先停止当前任务（Ctrl+Alt+Shift+J）再重新运行。"
+                )));
+            }
+        }
         if task.allow_concurrent_runs {
             return self.replace_terminal(
                 task,
@@ -2824,6 +2881,52 @@ mod tests {
                 "the task terminal should still be added to the panel"
             );
         });
+    }
+
+    #[gpui::test]
+    async fn test_code_runner_rejects_duplicate_running_task_and_stops(cx: &mut TestAppContext) {
+        cx.executor().allow_parking();
+        init_test(cx);
+        let (window_handle, panel) = init_workspace_with_panel(cx).await;
+        let workspace = window_handle
+            .update(cx, |multi, _, _| multi.workspace().clone())
+            .expect("workspace");
+        let cx = &mut VisualTestContext::from_window(window_handle.into(), cx);
+        let mut task = echo_task();
+        task.command = Some(
+            if cfg!(windows) {
+                "ping -n 60 127.0.0.1"
+            } else {
+                "sleep 60"
+            }
+            .into(),
+        );
+        task.args.clear();
+        task.env.insert("CODE_RUNNER_MANAGED".into(), "1".into());
+        task.allow_concurrent_runs = false;
+        let terminal = panel
+            .update_in(cx, |panel, window, cx| panel.spawn_task(&task, window, cx))
+            .await
+            .expect("spawn")
+            .upgrade()
+            .expect("terminal");
+        let duplicate = panel
+            .update_in(cx, |panel, window, cx| panel.spawn_task(&task, window, cx))
+            .await;
+        assert!(duplicate.is_err());
+        let focus = workspace.read_with(cx, |workspace, cx| workspace.focus_handle(cx));
+        window_handle
+            .update(cx, |_, window, cx| {
+                focus.dispatch_action(&editor::StopCode, window, cx)
+            })
+            .expect("dispatch stop");
+        terminal
+            .update(cx, |terminal, cx| terminal.wait_for_completed_task(cx))
+            .await;
+        assert_ne!(
+            terminal.read_with(cx, |terminal, _| terminal.task().expect("task").status),
+            terminal::TaskStatus::Running
+        );
     }
 
     #[gpui::test]
