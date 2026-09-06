@@ -256,6 +256,11 @@ pub fn deploy_context_menu(
                     run_to_cursor || (evaluate_selection && has_selections),
                     |builder| builder.separator(),
                 )
+                .action("运行代码", Box::new(crate::RunCode))
+                .action("运行当前文件", Box::new(crate::RunFile))
+                .action("运行选中代码", Box::new(crate::RunSelection))
+                .action("停止运行代码", Box::new(crate::StopCode))
+                .separator()
                 .action("转到定义", Box::new(GoToDefinition::default()))
                 .action("转到声明", Box::new(GoToDeclaration::default()))
                 .action("转到类型定义", Box::new(GoToTypeDefinition::default()))

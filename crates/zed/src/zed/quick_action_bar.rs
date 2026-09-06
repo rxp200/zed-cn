@@ -141,6 +141,35 @@ impl Render for QuickActionBar {
         let code_action_enabled = editor_value.code_actions_enabled_for_toolbar(cx);
         let focus_handle = editor_value.focus_handle(cx);
 
+        let run_button =
+            (editor.buffer_kind(cx) == ItemBufferKind::Singleton && is_full).then(|| {
+                QuickActionBarButton::new(
+                    "run current file",
+                    IconName::PlayFilled,
+                    false,
+                    Box::new(editor::RunCode),
+                    focus_handle.clone(),
+                    "运行代码（选区或当前文件）",
+                    move |_, window, cx| {
+                        window.dispatch_action(Box::new(editor::RunCode), cx);
+                    },
+                )
+            });
+
+        let stop_button = is_full.then(|| {
+            QuickActionBarButton::new(
+                "stop code",
+                IconName::Stop,
+                false,
+                Box::new(editor::StopCode),
+                focus_handle.clone(),
+                "停止运行代码",
+                move |_, window, cx| {
+                    window.dispatch_action(Box::new(editor::StopCode), cx);
+                },
+            )
+        });
+
         let search_button = (editor.buffer_kind(cx) == ItemBufferKind::Singleton).then(|| {
             QuickActionBarButton::new(
                 "toggle buffer search",
@@ -740,6 +769,8 @@ impl Render for QuickActionBar {
             .gap(DynamicSpacing::Base01.rems(cx))
             .children(self.render_repl_menu(cx))
             .children(self.render_preview_button(cx))
+            .children(run_button)
+            .children(stop_button)
             .children(search_button)
             .when(
                 AgentSettings::get_global(cx).enabled(cx) && AgentSettings::get_global(cx).button,

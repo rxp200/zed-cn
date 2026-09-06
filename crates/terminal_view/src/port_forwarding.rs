@@ -617,7 +617,7 @@ pub fn show_modal(
         return;
     }
     workspace.toggle_modal(window, cx, move |window, cx| {
-        PortForwardModal::new(manager, project.clone(), window, cx)
+        PortForwardModal::new(manager, project, window, cx)
     });
 }
 

@@ -76,6 +76,7 @@ mod rewrap;
 mod selection;
 
 pub(crate) use actions::*;
+pub use actions::{RunCode, RunFile, RunSelection, StopCode};
 pub use clipboard::ClipboardSelection;
 pub use code_actions::CodeActionProvider;
 use collections::TypeIdHashMap;
