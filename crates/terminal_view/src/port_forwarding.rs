@@ -14,7 +14,7 @@ use regex::Regex;
 use remote::{RemoteClient, RemoteConnectionOptions};
 use ui::{
     Button, ButtonStyle, Color, Headline, HeadlineSize, Icon, IconButton, IconName, IconSize,
-    Label, LabelSize, prelude::*,
+    Label, LabelSize, WithScrollbar, prelude::*,
 };
 use util::{
     ResultExt as _,
@@ -74,6 +74,9 @@ pub struct PortForwardManager {
     automatically_seen: HashSet<u16>,
     next_generation: u64,
     _tasks: Vec<Task<()>>,
+    detection_task: Option<Task<()>>,
+    pending_ports: HashSet<u16>,
+    detection_error: Option<String>,
 }
 
 impl PortForwardManager {
@@ -83,6 +86,9 @@ impl PortForwardManager {
             automatically_seen: HashSet::default(),
             next_generation: 0,
             _tasks: Vec::new(),
+            detection_task: None,
+            pending_ports: HashSet::new(),
+            detection_error: None,
         }
     }
 
@@ -113,21 +119,119 @@ impl PortForwardManager {
         project: Entity<Project>,
         cx: &mut Context<Self>,
     ) {
-        for remote_port in detected_ports(output) {
-            if self.automatically_seen.insert(remote_port)
-                && !self
-                    .entries
-                    .contains_key(&(ForwardDirection::RemoteToLocal, remote_port))
-            {
-                self.start(
-                    ForwardDirection::RemoteToLocal,
-                    remote_port,
-                    ForwardSource::Automatic,
-                    project.clone(),
-                    cx,
-                );
-            }
+        self.pending_ports.extend(
+            detected_ports(output)
+                .into_iter()
+                .filter(|port| !self.automatically_seen.contains(port)),
+        );
+        if self.detection_task.is_some() {
+            return;
         }
+        let candidates = self.pending_ports.drain().collect::<Vec<_>>();
+        if candidates.is_empty() {
+            return;
+        }
+        let Some(client) = ssh_remote_client(&project, cx) else {
+            return;
+        };
+        let roots = project
+            .read(cx)
+            .visible_worktrees(cx)
+            .map(|worktree| worktree.read(cx).abs_path().to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        if roots.is_empty() {
+            return;
+        }
+        let mut args = vec![
+            "-c".to_string(),
+            include_str!("port_forwarding_probe.py").to_string(),
+            candidates
+                .iter()
+                .map(u16::to_string)
+                .collect::<Vec<_>>()
+                .join(","),
+        ];
+        args.extend(roots);
+        let template = client.read(cx).build_command(
+            Some("python3".to_string()),
+            &args,
+            &HashMap::default(),
+            None,
+            None,
+            remote::Interactive::No,
+        );
+        let Some(template) = template.log_err() else {
+            return;
+        };
+        self.detection_task = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(Duration::from_secs(1)).await;
+            let probe = cx.background_spawn(async move {
+                let mut command = new_command(&template.program);
+                command
+                    .args(&template.args)
+                    .envs(&template.env)
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .kill_on_drop(true);
+                command.output().await
+            });
+            let timeout = cx.background_executor().timer(Duration::from_secs(10));
+            let result = futures::future::select(probe, timeout).await;
+            this.update(cx, |this, cx| {
+                this.detection_task = None;
+                this.detection_error = None;
+                for port in &candidates {
+                    this.pending_ports.remove(port);
+                }
+                if let futures::future::Either::Left((result, _)) = result {
+                    match result {
+                        Ok(output) if output.status.success() => {
+                            for port in String::from_utf8_lossy(&output.stdout)
+                                .lines()
+                                .filter_map(|line| line.parse::<u16>().ok())
+                                .filter(|port| candidates.contains(port))
+                            {
+                                if this.automatically_seen.insert(port)
+                                    && !this
+                                        .entries
+                                        .contains_key(&(ForwardDirection::RemoteToLocal, port))
+                                {
+                                    this.start(
+                                        ForwardDirection::RemoteToLocal,
+                                        port,
+                                        ForwardSource::Automatic,
+                                        project.clone(),
+                                        cx,
+                                    );
+                                }
+                            }
+                        }
+                        Ok(output) => {
+                            log::warn!(
+                                "端口归属校验失败：{}",
+                                String::from_utf8_lossy(&output.stderr)
+                            );
+                            this.detection_error = Some(
+                                "自动检测失败：请确认远端为 Linux 且已安装 python3，或手动添加端口"
+                                    .into(),
+                            );
+                        }
+                        Err(error) => {
+                            log::warn!("端口归属校验失败：{error}");
+                            this.detection_error = Some("自动检测连接失败，请手动添加端口".into());
+                        }
+                    }
+                } else {
+                    this.detection_error = Some("自动检测超时，请手动添加端口".into());
+                }
+                cx.notify();
+                if !this.pending_ports.is_empty() {
+                    this.detect_from_terminal_output("", project, cx);
+                }
+            })
+            .log_err();
+        }));
     }
 
     pub fn add_manual(
@@ -349,6 +453,7 @@ pub struct PortForwardModal {
     editor: Entity<Editor>,
     direction: ForwardDirection,
     error: Option<String>,
+    scroll_handle: gpui::ScrollHandle,
 }
 
 impl PortForwardModal {
@@ -370,6 +475,7 @@ impl PortForwardModal {
             editor,
             direction: ForwardDirection::RemoteToLocal,
             error: None,
+            scroll_handle: gpui::ScrollHandle::new(),
         }
     }
 
@@ -408,7 +514,7 @@ impl Focusable for PortForwardModal {
 }
 
 impl Render for PortForwardModal {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let entries = self.manager.read(cx).snapshots();
         v_flex()
             .key_context("PortForwardModal")
@@ -416,11 +522,13 @@ impl Render for PortForwardModal {
             .on_action(cx.listener(Self::confirm))
             .elevation_2(cx)
             .w(rems(42.))
-            .max_h(rems(32.))
+            .max_h(window.viewport_size().height * 0.85)
+            .overflow_hidden()
             .p_3()
             .gap_3()
             .child(
                 h_flex()
+                    .flex_shrink_0()
                     .justify_between()
                     .child(
                         h_flex()
@@ -435,6 +543,7 @@ impl Render for PortForwardModal {
             )
             .child(
                 h_flex()
+                    .flex_shrink_0()
                     .gap_1()
                     .child(
                         Button::new("remote-to-local-direction", "远程 → 本地")
@@ -463,6 +572,7 @@ impl Render for PortForwardModal {
             )
             .child(
                 h_flex()
+                    .flex_shrink_0()
                     .gap_2()
                     .child(div().flex_1().child(self.editor.clone()))
                     .child(
@@ -473,10 +583,17 @@ impl Render for PortForwardModal {
                             })),
                     ),
             )
+            .child(Label::new("自动：仅本项目目录内的监听进程（Linux，需 python3）。无法校验时请手动添加。")
+                .size(LabelSize::XSmall).color(Color::Muted))
+            .when_some(self.manager.read(cx).detection_error.clone(), |this, error| {
+                this.child(Label::new(error).size(LabelSize::Small).color(Color::Warning))
+            })
             .when_some(self.error.clone(), |this, error| {
                 this.child(Label::new(error).size(LabelSize::Small).color(Color::Error))
             })
-            .child(div().gap_1().children(entries.into_iter().map(|entry| {
+            .child(div().id("port-forward-list").max_h(rems(24.)).min_h_0()
+                .overflow_y_scroll().track_scroll(&self.scroll_handle)
+                .children(entries.into_iter().map(|entry| {
                 let direction = entry.direction;
                 let remote_port = entry.remote_port;
                 let source = match entry.source {
@@ -594,10 +711,10 @@ impl Render for PortForwardModal {
                                 }),
                             ),
                     )
-            })))
+            })).vertical_scrollbar_for(&self.scroll_handle, window, cx))
             .when(self.manager.read(cx).snapshots().is_empty(), |this| {
                 this.child(
-                    Label::new("暂无转发。可手动选择方向添加；远程终端中出现 localhost 端口时会自动转发到本地。")
+                    Label::new("暂无转发。自动检测仅转发工作目录位于本项目内的 Linux 监听进程（需 python3）；其他端口请手动添加。")
                         .size(LabelSize::Small)
                         .color(Color::Muted),
                 )

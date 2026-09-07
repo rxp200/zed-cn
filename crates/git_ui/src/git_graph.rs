@@ -534,6 +534,14 @@ struct SearchState {
     author_filter: Option<AuthorFilter>,
 }
 
+impl SearchState {
+    fn highlights_author(&self, sha: Oid) -> bool {
+        self.matches.contains(&sha)
+            && matches!(&self.state, QueryState::Confirmed((query, _))
+                if self.author_filter.is_some() || query.starts_with(AUTHOR_SEARCH_QUERY_PREFIX))
+    }
+}
+
 #[derive(Clone)]
 struct AuthorFilter {
     name: SharedString,
@@ -1378,10 +1386,23 @@ impl GitGraph {
         (raw * scale).round() / scale
     }
 
-    fn visible_commit_indices(&self) -> Vec<usize> {
-        if self.search_state.only_show_matches
+    fn only_show_search_results(&self) -> bool {
+        self.search_state.only_show_matches
             && matches!(self.search_state.state, QueryState::Confirmed(_))
-        {
+    }
+
+    fn effective_column_visibility(&self) -> TableRow<bool> {
+        let mut visibility = self.column_visibility.clone();
+        if self.only_show_search_results() && !matches!(self.log_source, LogSource::Path(_)) {
+            if let Some(graph_column) = visibility.as_mut_slice().first_mut() {
+                *graph_column = true;
+            }
+        }
+        visibility
+    }
+
+    fn visible_commit_indices(&self) -> Vec<usize> {
+        if self.only_show_search_results() {
             self.graph_data
                 .commits
                 .iter()
@@ -1421,12 +1442,13 @@ impl GitGraph {
             .column_widths
             .read(cx)
             .preview_fractions(window.rem_size());
-        let fractions = redistribute_hidden_fractions(&raw, Some(&self.column_visibility));
+        let visibility = self.effective_column_visibility();
+        let fractions = redistribute_hidden_fractions(&raw, Some(&visibility));
 
         // Hidden columns occupy no space in the layout, so report them as zero here even though
         // the shared redistribution helper preserves their stored width for when they return.
         let value = |idx: usize| {
-            if self.column_visibility.get(idx).copied().unwrap_or(false) {
+            if visibility.get(idx).copied().unwrap_or(false) {
                 0.0
             } else {
                 fractions[idx]
@@ -1913,7 +1935,18 @@ impl GitGraph {
                         .into_any_element()
                 };
 
-                let subject_label = if is_matched {
+                let is_author_match = self.search_state.highlights_author(commit.data.sha);
+                let author_label = Label::new(author_name.clone())
+                    .color(if is_author_match {
+                        Color::Accent
+                    } else if is_selected {
+                        Color::Default
+                    } else {
+                        Color::Muted
+                    })
+                    .truncate();
+
+                let subject_label = if is_matched && !is_author_match {
                     let query = match &self.search_state.state {
                         QueryState::Confirmed((query, _)) => Some(query.clone()),
                         _ => None,
@@ -1994,8 +2027,6 @@ impl GitGraph {
                             }
                         })
                         .on_click({
-                            let author_name = author_name.clone();
-                            let author_email = author_email.clone();
                             cx.listener(move |this, _, window, cx| {
                                 this.show_author_commits(
                                     author_name.clone(),
@@ -2006,7 +2037,7 @@ impl GitGraph {
                                 cx.stop_propagation();
                             })
                         })
-                        .child(column_label(author_name))
+                        .child(author_label)
                         .into_any_element(),
                     column_label(short_sha.into()),
                 ]
@@ -3067,7 +3098,6 @@ impl GitGraph {
                                     .style(ButtonStyle::Subtle)
                                     .tooltip(Tooltip::text("查看该作者的全部提交"))
                                     .on_click({
-                                        let author_name = author_name.clone();
                                         let author_email = author_email.clone();
                                         cx.listener(move |this, _, window, cx| {
                                             this.show_author_commits(
@@ -3937,9 +3967,7 @@ impl Render for GitGraph {
         }
         let (loaded_commit_count, is_loading) = self.commit_count_and_loading_state(cx);
         let visible_commit_indices = self.visible_commit_indices();
-        let commit_count = if self.search_state.only_show_matches
-            && matches!(self.search_state.state, QueryState::Confirmed(_))
-        {
+        let commit_count = if self.only_show_search_results() {
             visible_commit_indices.len()
         } else {
             loaded_commit_count
@@ -3976,12 +4004,7 @@ impl Render for GitGraph {
             let header_resize_info =
                 HeaderResizeInfo::from_redistributable(&self.column_widths, cx);
 
-            let mut column_filter = self.column_visibility.clone();
-            if self.search_state.only_show_matches && !is_path_history {
-                if let Some(graph_column) = column_filter.as_mut_slice().first_mut() {
-                    *graph_column = true;
-                }
-            }
+            let column_filter = self.effective_column_visibility();
 
             // The graph column (index 0) only exists in the non-path-history layout and is
             // rendered as a separate canvas outside the table.
@@ -3999,7 +4022,7 @@ impl Render for GitGraph {
                 Some(&column_filter),
             );
             let header_context = TableRenderContext::for_column_widths(Some(header_widths), true)
-                .with_column_filter(Some(column_filter));
+                .with_column_filter(Some(column_filter.clone()));
 
             let [
                 graph_fraction,
@@ -4085,7 +4108,6 @@ impl Render for GitGraph {
                             let row_height = Self::row_height(window, cx);
                             let selected_entry_idx = self.selected_entry_idx;
                             let hovered_entry_idx = self.hovered_entry_idx;
-                            let visible_commit_indices = visible_commit_indices.clone();
                             let context_menu_target_index = self
                                 .context_menu
                                 .as_ref()
@@ -4254,12 +4276,12 @@ impl Render for GitGraph {
                                     )
                                     .child(render_redistributable_columns_resize_handles(
                                         &self.column_widths,
-                                        Some(&self.column_visibility),
+                                        Some(&column_filter),
                                         window,
                                         cx,
                                     )),
                                 self.column_widths.clone(),
-                                Some(self.column_visibility.clone()),
+                                Some(column_filter.clone()),
                             )
                         }),
                 )
@@ -6498,6 +6520,7 @@ mod tests {
 
         git_graph.read_with(&*cx, |graph, _| {
             assert_eq!(graph.search_matches_for_test(), vec![third_sha]);
+            assert!(!graph.search_state.highlights_author(third_sha));
         });
 
         git_graph.update_in(cx, |graph, window, cx| {
@@ -6516,13 +6539,31 @@ mod tests {
             assert!(expected.into_iter().all(|sha| matches.contains(&sha)));
             assert_eq!(graph.search_state.editor.read(cx).text(cx), "作者: Author");
             assert!(graph.search_state.author_filter.is_none());
+            assert!(
+                expected
+                    .into_iter()
+                    .all(|sha| graph.search_state.highlights_author(sha))
+            );
         });
 
         git_graph.update(cx, |graph, cx| {
             graph.set_only_show_matches_for_test(true, cx);
         });
-        git_graph.read_with(&*cx, |graph, _| {
+        git_graph.update_in(cx, |graph, window, cx| {
             assert_eq!(graph.visible_commit_indices_for_test(), vec![0, 1, 2]);
+            let visibility = graph.effective_column_visibility();
+            assert_eq!(visibility.get(0usize), Some(&true));
+            let fractions = graph.preview_column_fractions(window, cx);
+            assert_eq!(fractions[0], 0.0);
+            assert!((fractions.iter().sum::<f32>() - 1.0).abs() < 0.0001);
+            let stored_visibility = graph.column_visibility.clone();
+            graph.set_only_show_matches_for_test(false, cx);
+            assert_eq!(
+                graph.effective_column_visibility().as_slice(),
+                stored_visibility.as_slice()
+            );
+            assert!(graph.preview_column_fractions(window, cx)[0] > 0.0);
+            graph.set_only_show_matches_for_test(true, cx);
         });
 
         git_graph.update_in(cx, |graph, window, cx| {
@@ -6534,6 +6575,7 @@ mod tests {
         cx.run_until_parked();
         git_graph.read_with(&*cx, |graph, _| {
             assert!(graph.visible_commit_indices_for_test().is_empty());
+            assert!(!graph.search_state.highlights_author(first_sha));
         });
     }
 

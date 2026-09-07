@@ -1,3 +1,5 @@
+pub mod file_transfer;
+
 use auto_update::DismissMessage;
 use editor::Editor;
 use extension_host::{ExtensionOperation, ExtensionStore};
@@ -94,7 +96,47 @@ impl ActivityIndicator {
         cx: &mut Context<Workspace>,
     ) -> Entity<ActivityIndicator> {
         let project = workspace.project().clone();
+        if let Some(remote_client) = project.read(cx).remote_client() {
+            cx.subscribe(&remote_client, |workspace, remote_client, event, cx| {
+                if matches!(event, remote::RemoteClientEvent::Reconnected) {
+                    let project_name = workspace
+                        .project()
+                        .read(cx)
+                        .worktree_root_names(cx)
+                        .collect::<Vec<_>>()
+                        .join("、");
+                    let recovery = if remote_client.read(cx).was_manual_reconnect() {
+                        "重连成功"
+                    } else {
+                        "断联后自动重连成功"
+                    };
+                    let toast = notifications::status_toast::StatusToast::new(
+                        format!(
+                            "{}项目{recovery}",
+                            if project_name.is_empty() {
+                                "远程"
+                            } else {
+                                &project_name
+                            }
+                        ),
+                        cx,
+                        |this, _| {
+                            this.icon(
+                                Icon::new(IconName::Check)
+                                    .size(IconSize::Small)
+                                    .color(Color::Success),
+                            )
+                        },
+                    );
+                    workspace.toggle_status_toast(toast, cx);
+                }
+            })
+            .detach();
+        }
         let this = cx.new(|cx| {
+            if let Some(remote_client) = project.read(cx).remote_client() {
+                cx.observe(&remote_client, |_, _, cx| cx.notify()).detach();
+            }
             let fs = project.read(cx).fs().clone();
             let mut job_events = fs.subscribe_to_jobs();
             cx.spawn(async move |this, cx| {
@@ -377,6 +419,38 @@ impl ActivityIndicator {
     }
 
     fn content_to_render(&mut self, cx: &mut Context<Self>) -> Option<Content> {
+        if let Some(remote_client) = self.project.read(cx).remote_client() {
+            let remote_client = remote_client.read(cx);
+            let message = match remote_client.connection_state() {
+                remote::ConnectionState::HeartbeatMissed => {
+                    Some("连接无响应，正在检测网络；确认断联后将自动重连…".to_string())
+                }
+                remote::ConnectionState::Reconnecting => Some(
+                    remote_client
+                        .reconnect_status()
+                        .unwrap_or("正在自动重连…")
+                        .to_string(),
+                ),
+                remote::ConnectionState::Disconnected => {
+                    Some("远程连接已断开，自动恢复未成功；请重新打开远程项目".to_string())
+                }
+                _ => None,
+            };
+            if let Some(message) = message {
+                return Some(Content {
+                    icon: if remote_client.connection_state()
+                        == remote::ConnectionState::Disconnected
+                    {
+                        ActivityIcon::Icon(IconName::Warning)
+                    } else {
+                        ActivityIcon::LoadingSpinner
+                    },
+                    message,
+                    on_click: None,
+                    tooltip_message: None,
+                });
+            }
+        }
         if let Some(content) = self.primary_content(cx) {
             return Some(content);
         }

@@ -512,6 +512,7 @@ impl RemoteConnection for SshRemoteConnection {
         reconnect: bool,
         incoming_tx: UnboundedSender<Envelope>,
         outgoing_rx: UnboundedReceiver<Envelope>,
+        outgoing_progress: crate::protocol::OutgoingProgress,
         connection_activity_tx: Sender<()>,
         delegate: Arc<dyn RemoteClientDelegate>,
         cx: &mut AsyncApp,
@@ -576,6 +577,7 @@ impl RemoteConnection for SshRemoteConnection {
             ssh_proxy_process,
             incoming_tx,
             outgoing_rx,
+            outgoing_progress,
             connection_activity_tx,
             cx,
         )

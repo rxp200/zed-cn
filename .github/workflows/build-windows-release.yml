@@ -298,8 +298,31 @@ jobs:
           check-latest: true
           package-manager-cache: false
 
+      - name: Free macOS runner disk space
+        run: |
+          df -h "$GITHUB_WORKSPACE"
+          # Keep Xcode, SDKs and Rust; this job does not use Android or .NET.
+          sudo rm -rf /usr/local/share/dotnet /usr/local/share/powershell
+          rm -rf "$HOME/Library/Android" "$HOME/.android" "$HOME/Library/Caches/Homebrew"
+          df -h "$GITHUB_WORKSPACE"
+          available_kib=$(df -Pk "$GITHUB_WORKSPACE" | awk 'NR == 2 {print $4}')
+          if (( available_kib < 30 * 1024 * 1024 )); then
+            echo "::error::Less than 30 GiB free after cleanup; use a larger runner or free unused image components."
+            exit 1
+          fi
+
       - name: Build macOS DMG and Remote Server
         run: ./script/bundle-mac ${{ matrix.target }}
+
+      - name: Report macOS disk usage
+        if: always()
+        run: |
+          df -h "$GITHUB_WORKSPACE"
+          for directory in target "$HOME/.cargo" "$HOME/.rustup"; do
+            if [[ -d "$directory" ]]; then
+              du -h -d 2 "$directory" | sort -h | tail -40
+            fi
+          done
 
       - name: Verify macOS build
         env:
