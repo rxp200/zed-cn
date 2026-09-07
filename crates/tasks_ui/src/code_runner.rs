@@ -2,7 +2,7 @@ use anyhow::{Context as _, bail};
 use editor::{Editor, RunCode, RunFile, RunSelection};
 use gpui::{Context, Window};
 use project::{TaskSourceKind, trusted_worktrees::TrustedWorktrees};
-use task::{SaveStrategy, Shell, TaskContext, TaskTemplate, VariableName};
+use task::{RevealStrategy, SaveStrategy, Shell, TaskContext, TaskTemplate, VariableName};
 use util::ResultExt as _;
 use workspace::Workspace;
 
@@ -165,6 +165,7 @@ fn run(
             }
             let (source, mut resolved) = if let Some((source, mut template)) = overrides.pop() {
                 template.save = SaveStrategy::None;
+                template.reveal = RevealStrategy::NoFocus;
                 template
                     .env
                     .insert("CODE_RUNNER_MANAGED".into(), "1".into());
@@ -342,6 +343,7 @@ fn builtin_task(
                 Vec::new()
             },
         },
+        reveal: RevealStrategy::NoFocus,
         show_summary: true,
         show_command: false,
         ..TaskTemplate::default()
@@ -848,6 +850,8 @@ mod tests {
                     .contains(file)
             );
             assert_eq!(resolved.resolved.save, SaveStrategy::None);
+            assert_eq!(resolved.resolved.reveal, RevealStrategy::NoFocus);
+            assert_eq!(resolved.original_task().reveal, RevealStrategy::NoFocus);
         }
     }
 

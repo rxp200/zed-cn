@@ -1641,9 +1641,9 @@
   // Control what info is collected by Zed.
   "telemetry": {
     // Send debug info like crash reports.
-    "diagnostics": true,
+    "diagnostics": false,
     // Send anonymized usage data like what languages you're using Zed with.
-    "metrics": true,
+    "metrics": false,
     // Allow sending requests to Anthropic models that cannot be offered with
     // Zero Data Retention
     "anthropic_retention": false,
@@ -2875,7 +2875,7 @@
   "read_ssh_config": true,
   // 中国服务器适配。启用后，SSH 远程开发服务将直接由本机通过已配置的代理下载，
   // 再经 SSH 上传到远程主机，不会先尝试由远程主机直接下载。
-  "china_server_adaptation": false,
+  "china_server_adaptation": true,
   // Default timeout in seconds for all context server tool calls.
   // Individual servers can override this in their configuration.
   // Examples:
