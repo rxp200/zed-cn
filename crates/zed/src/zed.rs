@@ -603,6 +603,8 @@ pub fn initialize_workspace(app_state: Arc<AppState>, cx: &mut App) {
             cx.new(|cx| diagnostics::items::DiagnosticIndicator::new(workspace, cx));
         let active_file_name = cx.new(|_| workspace::active_file_name::ActiveFileName::new());
         let activity_indicator = activity_indicator::ActivityIndicator::new(workspace, window, cx);
+        let file_transfer_indicator =
+            activity_indicator::file_transfer::FileTransferIndicator::new(workspace, cx);
         let active_buffer_encoding =
             cx.new(|_| encoding_selector::ActiveBufferEncoding::new(workspace));
         let active_buffer_language =
@@ -636,6 +638,7 @@ pub fn initialize_workspace(app_state: Arc<AppState>, cx: &mut App) {
             status_bar.add_left_item(git_blame_status, window, cx);
             status_bar.add_left_item(merge_conflict_indicator, window, cx);
             status_bar.add_left_item(activity_indicator, window, cx);
+            status_bar.add_left_item(file_transfer_indicator, window, cx);
             status_bar.add_right_item(edit_prediction_ui, window, cx);
             status_bar.add_right_item(active_buffer_encoding, window, cx);
             status_bar.add_right_item(active_buffer_language, window, cx);

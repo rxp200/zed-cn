@@ -98,6 +98,15 @@ pub enum Worktree {
     Remote(RemoteWorktree),
 }
 
+pub enum FileTransferProgress {
+    Started(String),
+    Bytes(u64, u64),
+    Finished,
+    TotalEntries(usize),
+}
+
+pub type FileTransferObserver = Arc<dyn Fn(FileTransferProgress) + Send + Sync>;
+
 /// An entry, created in the worktree.
 #[derive(Debug)]
 pub enum CreatedEntry {
@@ -961,18 +970,39 @@ impl Worktree {
         content: Option<Vec<u8>>,
         cx: &Context<Worktree>,
     ) -> Task<Result<CreatedEntry>> {
+        self.create_entry_with_progress(path, is_directory, content, None, cx)
+    }
+
+    pub fn create_entry_with_progress(
+        &mut self,
+        path: Arc<RelPath>,
+        is_directory: bool,
+        content: Option<Vec<u8>>,
+        progress: Option<FileTransferObserver>,
+        cx: &Context<Worktree>,
+    ) -> Task<Result<CreatedEntry>> {
+        if let Some(progress) = &progress {
+            progress(FileTransferProgress::Started(path.to_string()));
+        }
         let worktree_id = self.id();
         match self {
             Worktree::Local(this) => this.create_entry(path, is_directory, content, cx),
             Worktree::Remote(this) => {
                 let project_id = this.project_id;
-                let request = this.client.request(proto::CreateProjectEntry {
-                    worktree_id: worktree_id.to_proto(),
-                    project_id,
-                    path: path.as_ref().as_unix_str().to_owned(),
-                    content,
-                    is_directory,
-                });
+                let request = this.client.request_with_progress(
+                    proto::CreateProjectEntry {
+                        worktree_id: worktree_id.to_proto(),
+                        project_id,
+                        path: path.as_ref().as_unix_str().to_owned(),
+                        content,
+                        is_directory,
+                    },
+                    Arc::new(move |written, total| {
+                        if let Some(progress) = &progress {
+                            progress(FileTransferProgress::Bytes(written, total));
+                        }
+                    }),
+                );
                 cx.spawn(async move |this, cx| {
                     let response = request.await?;
                     match response.entry {
@@ -1075,9 +1105,24 @@ impl Worktree {
         fs: Arc<dyn Fs>,
         cx: &Context<Worktree>,
     ) -> Task<Result<Vec<ProjectEntryId>>> {
+        self.copy_external_entries_with_progress(target_directory, paths, fs, None, cx)
+    }
+
+    pub fn copy_external_entries_with_progress(
+        &mut self,
+        target_directory: Arc<RelPath>,
+        paths: Vec<Arc<Path>>,
+        fs: Arc<dyn Fs>,
+        progress: Option<FileTransferObserver>,
+        cx: &Context<Worktree>,
+    ) -> Task<Result<Vec<ProjectEntryId>>> {
         match self {
-            Worktree::Local(this) => this.copy_external_entries(target_directory, paths, cx),
-            Worktree::Remote(this) => this.copy_external_entries(target_directory, paths, fs, cx),
+            Worktree::Local(this) => {
+                this.copy_external_entries(target_directory, paths, progress, cx)
+            }
+            Worktree::Remote(this) => {
+                this.copy_external_entries(target_directory, paths, fs, progress, cx)
+            }
         }
     }
 
@@ -2002,6 +2047,7 @@ impl LocalWorktree {
         &self,
         target_directory: Arc<RelPath>,
         paths: Vec<Arc<Path>>,
+        progress: Option<FileTransferObserver>,
         cx: &Context<Worktree>,
     ) -> Task<Result<Vec<ProjectEntryId>>> {
         let target_directory = self.absolutize(&target_directory);
@@ -2037,7 +2083,13 @@ impl LocalWorktree {
 
         cx.spawn(async move |this, cx| {
             cx.background_spawn(async move {
+                if let Some(progress) = &progress {
+                    progress(FileTransferProgress::TotalEntries(paths.len()));
+                }
                 for (source, target) in paths {
+                    if let Some(progress) = &progress {
+                        progress(FileTransferProgress::Started(source.display().to_string()));
+                    }
                     copy_recursive(
                         fs.as_ref(),
                         &source,
@@ -2048,14 +2100,14 @@ impl LocalWorktree {
                         },
                     )
                     .await
-                    .with_context(|| {
-                        format!("Failed to copy file from {source:?} to {target:?}")
-                    })?;
+                    .with_context(|| format!("无法从 {source:?} 复制文件到 {target:?}"))?;
+                    if let Some(progress) = &progress {
+                        progress(FileTransferProgress::Finished);
+                    }
                 }
                 anyhow::Ok(())
             })
-            .await
-            .log_err();
+            .await?;
             let mut refresh = cx.read_entity(
                 &this.upgrade().with_context(|| "Dropped worktree")?,
                 |this, _| {
@@ -2456,6 +2508,7 @@ impl RemoteWorktree {
         target_directory: Arc<RelPath>,
         paths_to_copy: Vec<Arc<Path>>,
         local_fs: Arc<dyn Fs>,
+        progress: Option<FileTransferObserver>,
         cx: &Context<Worktree>,
     ) -> Task<anyhow::Result<Vec<ProjectEntryId>>> {
         let client = self.client.clone();
@@ -2483,32 +2536,51 @@ impl RemoteWorktree {
                     else {
                         continue;
                     };
-                    let content = if is_directory {
-                        None
-                    } else {
-                        Some(local_fs.load_bytes(&abs_path).await?)
-                    };
-
                     let mut target_path = target_directory.join(filename);
                     if relative_path.file_name().is_some() {
                         target_path = target_path.join(&relative_path);
                     }
 
-                    requests.push(proto::CreateProjectEntry {
-                        project_id,
-                        worktree_id,
-                        path: target_path.as_unix_str().to_owned(),
-                        is_directory,
-                        content,
-                    });
+                    requests.push((target_path.as_unix_str().to_owned(), abs_path, is_directory));
                 }
             }
-            requests.sort_unstable_by(|a, b| a.path.cmp(&b.path));
+            requests.sort_unstable_by(|a, b| a.0.cmp(&b.0));
             requests.dedup();
 
+            if let Some(progress) = &progress {
+                progress(FileTransferProgress::TotalEntries(requests.len()));
+            }
             let mut copied_entry_ids = Vec::new();
-            for request in requests {
-                let response = client.request(request).await?;
+            for (path, source, is_directory) in requests {
+                if let Some(progress) = &progress {
+                    progress(FileTransferProgress::Started(path.clone()));
+                }
+                let content = if is_directory {
+                    None
+                } else {
+                    Some(local_fs.load_bytes(&source).await?)
+                };
+                let request = proto::CreateProjectEntry {
+                    project_id,
+                    worktree_id,
+                    path,
+                    is_directory,
+                    content,
+                };
+                let observer = progress.clone();
+                let response = client
+                    .request_with_progress(
+                        request,
+                        Arc::new(move |written, total| {
+                            if let Some(progress) = &observer {
+                                progress(FileTransferProgress::Bytes(written, total));
+                            }
+                        }),
+                    )
+                    .await?;
+                if let Some(progress) = &progress {
+                    progress(FileTransferProgress::Finished);
+                }
                 copied_entry_ids.extend(response.entry.map(|e| ProjectEntryId::from_proto(e.id)));
             }
 

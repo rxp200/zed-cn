@@ -3,7 +3,10 @@ use std::io::Write;
 use crate::{
     RemoteArch, RemoteOs, RemotePlatform,
     json_log::LogRecord,
-    protocol::{MESSAGE_LEN_SIZE, message_len_from_buffer, read_message_with_len, write_message},
+    protocol::{
+        MESSAGE_LEN_SIZE, message_len_from_buffer, read_message_with_len,
+        write_message_with_progress,
+    },
 };
 use anyhow::{Context as _, Result};
 use futures::{
@@ -144,6 +147,7 @@ fn handle_rpc_messages_over_child_process_stdio(
     mut remote_proxy_process: Child,
     incoming_tx: UnboundedSender<Envelope>,
     mut outgoing_rx: UnboundedReceiver<Envelope>,
+    outgoing_progress: crate::protocol::OutgoingProgress,
     mut connection_activity_tx: Sender<()>,
     cx: &AsyncApp,
 ) -> Task<Result<i32>> {
@@ -158,7 +162,9 @@ fn handle_rpc_messages_over_child_process_stdio(
 
     let stdin_task = cx.background_spawn(async move {
         while let Some(outgoing) = outgoing_rx.next().await {
-            write_message(&mut child_stdin, &mut stdin_buffer, outgoing).await?;
+            let progress = outgoing_progress.lock().get(&outgoing.id).cloned();
+            write_message_with_progress(&mut child_stdin, &mut stdin_buffer, outgoing, progress)
+                .await?;
         }
         anyhow::Ok(())
     });

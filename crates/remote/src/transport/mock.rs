@@ -269,6 +269,7 @@ impl RemoteConnection for MockRemoteConnection {
         _reconnect: bool,
         mut client_incoming_tx: mpsc::UnboundedSender<Envelope>,
         mut client_outgoing_rx: mpsc::UnboundedReceiver<Envelope>,
+        _outgoing_progress: crate::protocol::OutgoingProgress,
         mut connection_activity_tx: Sender<()>,
         _delegate: Arc<dyn RemoteClientDelegate>,
         cx: &mut AsyncApp,

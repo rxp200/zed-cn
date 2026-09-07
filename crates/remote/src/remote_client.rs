@@ -371,6 +371,8 @@ pub struct RemoteClient {
     state: Option<State>,
     reconnect_cancellation: Option<oneshot::Sender<()>>,
     next_reconnect_mode: ReconnectMode,
+    reconnect_status: Option<String>,
+    manual_reconnect: bool,
 }
 
 #[derive(Debug)]
@@ -520,6 +522,8 @@ impl RemoteClient {
                     state: Some(State::Connecting),
                     reconnect_cancellation: None,
                     next_reconnect_mode: ReconnectMode::RejoinExistingServer,
+                    reconnect_status: None,
+                    manual_reconnect: false,
                 });
 
                 let io_task = remote_connection.start_proxy(
@@ -527,6 +531,7 @@ impl RemoteClient {
                     false,
                     incoming_tx,
                     outgoing_rx,
+                    client.outgoing_progress.clone(),
                     connection_activity_tx,
                     delegate.clone(),
                     cx,
@@ -682,6 +687,9 @@ impl RemoteClient {
             );
         }
 
+        if self.connection_state() == ConnectionState::Connected {
+            self.manual_reconnect = false;
+        }
         let state = self.state.take().unwrap();
         let (attempts, remote_connection, delegate) = match state {
             State::Connected {
@@ -726,6 +734,17 @@ impl RemoteClient {
         self.set_state(State::Reconnecting, cx);
 
         let retry_delay = reconnect_delay(attempts);
+        self.set_reconnect_status(
+            if retry_delay.is_zero() {
+                format!("正在重连（第 {attempts}/{MAX_RECONNECT_ATTEMPTS} 次）")
+            } else {
+                format!(
+                    "连接中断，{} 秒后进行第 {attempts}/{MAX_RECONNECT_ATTEMPTS} 次重连",
+                    retry_delay.as_secs()
+                )
+            },
+            cx,
+        );
         if retry_delay.is_zero() {
             log::info!(
                 "Trying to reconnect to remote server... Attempt {}",
@@ -764,6 +783,9 @@ impl RemoteClient {
                     cx.background_executor().timer(retry_delay).await;
                 }
 
+                this.update(cx, |this, cx| {
+                    this.set_reconnect_status(format!("正在建立远程连接（第 {attempts}/{MAX_RECONNECT_ATTEMPTS} 次）"), cx);
+                }).log_err();
                 delegate.set_status(
                     Some(&format!(
                         "正在重新连接远程开发服务（第 {}/{} 次）",
@@ -811,6 +833,7 @@ impl RemoteClient {
                         reconnect_mode.should_rejoin_existing_server(),
                         incoming_tx,
                         outgoing_rx,
+                        client.outgoing_progress.clone(),
                         connection_activity_tx,
                         delegate.clone(),
                         cx,
@@ -825,6 +848,9 @@ impl RemoteClient {
                     }
                 };
 
+                this.update(cx, |this, cx| {
+                    this.set_reconnect_status(format!("正在等待远程服务响应并同步会话（第 {attempts}/{MAX_RECONNECT_ATTEMPTS} 次）"), cx);
+                }).log_err();
                 let multiplex_task = Self::monitor(this.clone(), io_task, cx);
                 client.reconnect(incoming_rx, outgoing_tx, cx);
 
@@ -982,6 +1008,9 @@ impl RemoteClient {
         missed_heartbeats: usize,
         cx: &mut Context<Self>,
     ) -> ControlFlow<()> {
+        if missed_heartbeats > 0 && self.connection_state() == ConnectionState::Connected {
+            self.manual_reconnect = false;
+        }
         let state = self.state.take().unwrap();
         let next_state = if missed_heartbeats > 0 {
             state.heartbeat_missed()
@@ -1021,7 +1050,17 @@ impl RemoteClient {
                             ProxyLaunchError::ServerNotRunning => {
                                 log::error!("failed to reconnect because server is not running");
                                 this.update(cx, |this, cx| {
-                                    this.set_state(State::ServerNotRunning, cx);
+                                    if this.state_is(State::is_reconnecting) {
+                                        // Let resync fail into the bounded retry loop instead of
+                                        // disconnecting the project before a normal launch can recover it.
+                                        this.next_reconnect_mode = ReconnectMode::RestartServer;
+                                        this.set_reconnect_status(
+                                            "远程服务未运行，将自动尝试重新启动".into(),
+                                            cx,
+                                        );
+                                    } else {
+                                        this.set_state(State::ServerNotRunning, cx);
+                                    }
                                 })?;
                             }
                         }
@@ -1067,6 +1106,9 @@ impl RemoteClient {
         self.state.replace(state);
 
         if is_reconnect_exhausted || is_server_not_running {
+            self.client.response_channels.lock().clear();
+            self.client.stream_response_channels.lock().clear();
+            self.client.outgoing_progress.lock().clear();
             cx.emit(RemoteClientEvent::Disconnected {
                 server_not_running: is_server_not_running,
             });
@@ -1165,9 +1207,23 @@ impl RemoteClient {
             .unwrap_or(ConnectionState::Disconnected)
     }
 
+    pub fn reconnect_status(&self) -> Option<&str> {
+        self.reconnect_status.as_deref()
+    }
+
+    pub fn was_manual_reconnect(&self) -> bool {
+        self.manual_reconnect
+    }
+
+    fn set_reconnect_status(&mut self, status: String, cx: &mut Context<Self>) {
+        self.reconnect_status = Some(status);
+        cx.notify();
+    }
+
     pub fn reconnect_now(&mut self, cx: &mut Context<Self>) -> Result<()> {
         match self.connection_state() {
             ConnectionState::HeartbeatMissed => {
+                self.manual_reconnect = true;
                 self.next_reconnect_mode = ReconnectMode::RestartServer;
                 if let Err(error) = self.reconnect(cx) {
                     self.next_reconnect_mode = ReconnectMode::RejoinExistingServer;
@@ -1183,7 +1239,9 @@ impl RemoteClient {
                 cancellation
                     .send(())
                     .map_err(|_| anyhow!("active reconnect attempt already completed"))?;
+                self.manual_reconnect = true;
                 self.next_reconnect_mode = ReconnectMode::RestartServer;
+                self.set_reconnect_status("已收到重连请求，正在重新建立连接…".into(), cx);
                 Ok(())
             }
             state => anyhow::bail!("cannot reconnect manually while connection is {state:?}"),
@@ -1676,6 +1734,23 @@ mod tests {
     }
 
     #[gpui::test]
+    async fn test_transfer_progress_registration_is_cleaned_up(cx: &mut TestAppContext) {
+        let (_incoming_tx, incoming_rx) = mpsc::unbounded::<Envelope>();
+        let (outgoing_tx, _outgoing_rx) = mpsc::unbounded::<Envelope>();
+        let client =
+            cx.update(|cx| ChannelClient::new(incoming_rx, outgoing_tx, cx, "test-client", false));
+        let request = client.request_dynamic(
+            proto::Ping {}.into_envelope(0, None, None),
+            "Ping",
+            true,
+            Some(Arc::new(|_, _| {})),
+        );
+        assert_eq!(client.outgoing_progress.lock().len(), 1);
+        drop(request);
+        assert!(client.outgoing_progress.lock().is_empty());
+    }
+
+    #[gpui::test]
     async fn test_channel_client_request_stream_terminates_on_error(cx: &mut TestAppContext) {
         let (incoming_tx, incoming_rx) = mpsc::unbounded::<Envelope>();
         let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded::<Envelope>();
@@ -1843,6 +1918,7 @@ pub trait RemoteConnection: Send + Sync {
         reconnect: bool,
         incoming_tx: UnboundedSender<Envelope>,
         outgoing_rx: UnboundedReceiver<Envelope>,
+        outgoing_progress: crate::protocol::OutgoingProgress,
         connection_activity_tx: Sender<()>,
         delegate: Arc<dyn RemoteClientDelegate>,
         cx: &mut AsyncApp,
@@ -1926,6 +2002,7 @@ impl<T: Send + Clone + 'static> Signal<T> {
 }
 
 pub(crate) struct ChannelClient {
+    outgoing_progress: crate::protocol::OutgoingProgress,
     next_message_id: AtomicU32,
     outgoing_tx: Mutex<mpsc::UnboundedSender<Envelope>>,
     buffer: Mutex<VecDeque<Envelope>>,
@@ -1958,6 +2035,7 @@ impl ChannelClient {
             buffer: Mutex::new(VecDeque::new()),
             name,
             executor: cx.background_executor().clone(),
+            outgoing_progress: Default::default(),
             task: Mutex::new(Self::start_handling_messages(
                 this.clone(),
                 incoming_rx,
@@ -2144,8 +2222,12 @@ impl ChannelClient {
         use_buffer: bool,
     ) -> impl 'static + Future<Output = Result<T::Response>> {
         log::debug!("remote request start. name:{}", T::NAME);
-        let response =
-            self.request_dynamic(payload.into_envelope(0, None, None), T::NAME, use_buffer);
+        let response = self.request_dynamic(
+            payload.into_envelope(0, None, None),
+            T::NAME,
+            use_buffer,
+            None,
+        );
         async move {
             let response = response.await?;
             log::debug!("remote request finish. name:{}", T::NAME);
@@ -2199,6 +2281,7 @@ impl ChannelClient {
         mut envelope: proto::Envelope,
         type_name: &'static str,
         use_buffer: bool,
+        progress: Option<rpc::RequestProgress>,
     ) -> impl 'static + Future<Output = Result<proto::Envelope>> {
         envelope.id = self.next_message_id.fetch_add(1, SeqCst);
         let (tx, rx) = oneshot::channel();
@@ -2206,12 +2289,21 @@ impl ChannelClient {
         response_channels_lock.insert(MessageId(envelope.id), tx);
         drop(response_channels_lock);
 
+        let outgoing_progress = self.outgoing_progress.clone();
+        let message_id = envelope.id;
+        if let Some(progress) = progress {
+            outgoing_progress.lock().insert(message_id, progress);
+        }
+        let cleanup_progress = util::defer(move || {
+            outgoing_progress.lock().remove(&message_id);
+        });
         let result = if use_buffer {
             self.send_buffered(envelope)
         } else {
             self.send_unbuffered(envelope)
         };
         async move {
+            let _cleanup_progress = cleanup_progress;
             if let Err(error) = &result {
                 log::error!("failed to send message: {error}");
                 anyhow::bail!("failed to send message: {error}");
@@ -2296,12 +2388,23 @@ impl ChannelClient {
 }
 
 impl ProtoClient for ChannelClient {
+    fn request_with_progress(
+        &self,
+        envelope: Envelope,
+        request_type: &'static str,
+        progress: rpc::RequestProgress,
+    ) -> BoxFuture<'static, Result<Envelope>> {
+        self.request_dynamic(envelope, request_type, true, Some(progress))
+            .boxed()
+    }
+
     fn request(
         &self,
         envelope: proto::Envelope,
         request_type: &'static str,
     ) -> BoxFuture<'static, Result<proto::Envelope>> {
-        self.request_dynamic(envelope, request_type, true).boxed()
+        self.request_dynamic(envelope, request_type, true, None)
+            .boxed()
     }
 
     fn request_stream(

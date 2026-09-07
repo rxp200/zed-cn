@@ -55,7 +55,20 @@ impl std::fmt::Debug for State {
     }
 }
 
+/// Serialized message bytes written to the local transport, not remote acknowledgement.
+/// Implementations without byte instrumentation leave the callback unused.
+pub type RequestProgress = Arc<dyn Fn(u64, u64) + Send + Sync>;
+
 pub trait ProtoClient: Send + Sync {
+    fn request_with_progress(
+        &self,
+        envelope: Envelope,
+        request_type: &'static str,
+        _progress: RequestProgress,
+    ) -> BoxFuture<'static, Result<Envelope>> {
+        self.request(envelope, request_type)
+    }
+
     fn request(
         &self,
         envelope: Envelope,
@@ -232,6 +245,22 @@ impl AnyProtoClient {
     ) -> impl Future<Output = Result<T::Response>> + use<T> {
         let envelope = request.into_envelope(0, None, None);
         let response = self.0.client.request(envelope, T::NAME);
+        async move {
+            T::Response::from_envelope(response.await?)
+                .context("received response of the wrong type")
+        }
+    }
+
+    pub fn request_with_progress<T: RequestMessage>(
+        &self,
+        request: T,
+        progress: RequestProgress,
+    ) -> impl Future<Output = Result<T::Response>> + use<T> {
+        let response = self.0.client.request_with_progress(
+            request.into_envelope(0, None, None),
+            T::NAME,
+            progress,
+        );
         async move {
             T::Response::from_envelope(response.await?)
                 .context("received response of the wrong type")

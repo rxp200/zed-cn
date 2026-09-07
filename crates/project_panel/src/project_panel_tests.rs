@@ -2454,6 +2454,14 @@ async fn test_paste_clipboard_images(cx: &mut gpui::TestAppContext) {
             "          image_1.png  <== selected",
         ],
     );
+    let transfers = panel.update(cx, |panel, cx| {
+        project::file_transfer::store(&panel.project, cx)
+    });
+    assert!(
+        transfers.read_with(cx, |transfers, _| transfers.entries().iter().all(
+            |entry| entry.finished.is_some() && !entry.error && entry.percentage() == Some(100)
+        ))
+    );
 }
 
 #[gpui::test]

@@ -3685,63 +3685,18 @@ impl ProjectPanel {
             return;
         }
 
-        let total_files = files_to_download.len();
-        let workspace = self.workspace.clone();
-
         let destination_dir = cx.prompt_for_paths(PathPromptOptions {
             files: false,
             directories: true,
             multiple: false,
-            prompt: Some("Download".into()),
+            prompt: Some("选择下载目录".into()),
         });
 
-        let fs = self.fs.clone();
-        let notification_id =
-            workspace::notifications::NotificationId::Named("download-progress".into());
         cx.spawn_in(window, async move |this, cx| {
             if let Ok(Ok(Some(mut paths))) = destination_dir.await {
                 if let Some(dest_dir) = paths.pop() {
-                    // Show initial toast
-                    workspace
-                        .update(cx, |workspace, cx| {
-                            workspace.show_toast(
-                                workspace::Toast::new(
-                                    notification_id.clone(),
-                                    format!("Downloading 0/{} files...", total_files),
-                                ),
-                                cx,
-                            );
-                        })
-                        .ok();
-
-                    for (index, (worktree_id, entry_path, relative_path)) in
-                        files_to_download.into_iter().enumerate()
-                    {
-                        // Update progress toast
-                        workspace
-                            .update(cx, |workspace, cx| {
-                                workspace.show_toast(
-                                    workspace::Toast::new(
-                                        notification_id.clone(),
-                                        format!(
-                                            "Downloading {}/{} files...",
-                                            index + 1,
-                                            total_files
-                                        ),
-                                    ),
-                                    cx,
-                                );
-                            })
-                            .ok();
-
+                    for (worktree_id, entry_path, relative_path) in files_to_download {
                         let destination_path = dest_dir.join(&relative_path);
-
-                        // Create parent directories if needed
-                        if let Some(parent) = destination_path.parent() {
-                            if !parent.exists() {
-                                fs.create_dir(parent).await.log_err();
-                            }
-                        }
 
                         let download_task = this.update(cx, |this, cx| {
                             let project = this.project.clone();
@@ -3753,19 +3708,6 @@ impl ProjectPanel {
                             task.await.log_err();
                         }
                     }
-
-                    // Show completion toast
-                    workspace
-                        .update(cx, |workspace, cx| {
-                            workspace.show_toast(
-                                workspace::Toast::new(
-                                    notification_id.clone(),
-                                    format!("Downloaded {} files", total_files),
-                                ),
-                                cx,
-                            );
-                        })
-                        .ok();
                 }
             }
         })
@@ -4318,9 +4260,35 @@ impl ProjectPanel {
             worktree_id,
             path: image_path.clone(),
         };
-        let create_task = worktree.update(cx, |worktree, cx| {
-            worktree.create_entry(image_path, false, Some(image.bytes().to_vec()), cx)
+        let transfers = project::file_transfer::store(&self.project, cx);
+        let direction = if worktree.read(cx).is_local() {
+            project::file_transfer::TransferDirection::Copy
+        } else {
+            project::file_transfer::TransferDirection::Upload
+        };
+        let progress = transfers.update(cx, |transfers, cx| {
+            transfers.start(
+                direction,
+                image_path.to_string(),
+                worktree
+                    .read(cx)
+                    .absolutize(&target_directory)
+                    .display()
+                    .to_string(),
+                cx,
+            )
         });
+        let observer = progress.clone();
+        let create_task = worktree.update(cx, |worktree, cx| {
+            worktree.create_entry_with_progress(
+                image_path,
+                false,
+                Some(image.bytes().to_vec()),
+                Some(Arc::new(move |event| observer.progress(event))),
+                cx,
+            )
+        });
+        let create_task = progress.track(create_task, cx);
         let workspace = self.workspace.clone();
 
         cx.spawn_in(window, async move |project_panel, mut cx| {
@@ -4856,11 +4824,41 @@ impl ProjectPanel {
                     return Ok(());
                 }
 
-                let (worktree_id, task) = worktree.update(cx, |worktree, cx| {
-                    (
-                        worktree.id(),
-                        worktree.copy_external_entries(target_directory, paths, fs, cx),
+                let transfers = this.update(cx, |this, cx| {
+                    project::file_transfer::store(&this.project, cx)
+                })?;
+                let direction = worktree.read_with(cx, |worktree, _| {
+                    if worktree.is_local() {
+                        project::file_transfer::TransferDirection::Copy
+                    } else {
+                        project::file_transfer::TransferDirection::Upload
+                    }
+                });
+                let progress = transfers.update(cx, |transfers, cx| {
+                    transfers.start(
+                        direction,
+                        paths
+                            .first()
+                            .map(|path| path.display().to_string())
+                            .unwrap_or_else(|| "文件".into()),
+                        worktree
+                            .read(cx)
+                            .absolutize(&target_directory)
+                            .display()
+                            .to_string(),
+                        cx,
                     )
+                });
+                let observer = progress.clone();
+                let (worktree_id, task) = worktree.update(cx, |worktree, cx| {
+                    let task = worktree.copy_external_entries_with_progress(
+                        target_directory,
+                        paths,
+                        fs,
+                        Some(Arc::new(move |event| observer.progress(event))),
+                        cx,
+                    );
+                    (worktree.id(), progress.track(task, cx))
                 });
 
                 let opened_entries: Vec<_> = task
