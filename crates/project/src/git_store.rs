@@ -7362,72 +7362,40 @@ impl Repository {
         case_sensitive: bool,
         request_tx: async_channel::Sender<Oid>,
     ) -> Result<()> {
-        let mut graph_stream = client
-            .request_stream(proto::GetInitialGraphData {
-                project_id: project_id.to_proto(),
-                repository_id: repository_id.to_proto(),
-                log_source: Some(log_source_to_proto(&log_source)),
-                log_order: log_order_to_proto(LogOrder::DateOrder),
-            })
-            .await?;
-        const COMMIT_BATCH_SIZE: usize = 64;
-        const MAX_CONCURRENT_COMMIT_REQUESTS: usize = 4;
+        let cancellation = request_tx.clone();
+        let search = async move {
+            let mut graph_stream = client
+                .request_stream(proto::GetInitialGraphData {
+                    project_id: project_id.to_proto(),
+                    repository_id: repository_id.to_proto(),
+                    log_source: Some(log_source_to_proto(&log_source)),
+                    log_order: log_order_to_proto(LogOrder::DateOrder),
+                })
+                .await?;
+            const COMMIT_BATCH_SIZE: usize = 64;
+            const MAX_CONCURRENT_COMMIT_REQUESTS: usize = 4;
 
-        let (commit_batch_tx, commit_batch_rx) =
-            async_channel::bounded::<Vec<String>>(MAX_CONCURRENT_COMMIT_REQUESTS);
+            // ChannelClient waits for each graph response to be consumed before dispatching
+            // any other response. Backpressure here would block the metadata responses
+            // that the workers need to free queue capacity. Queue only SHAs, not metadata;
+            // the worker count still bounds the expensive requests.
+            let (commit_batch_tx, commit_batch_rx) = async_channel::unbounded::<Vec<String>>();
 
-        let collect_commit_shas = {
-            let request_tx = request_tx.clone();
-            async move {
-                while let Some(response) = graph_stream.next().await {
-                    if request_tx.is_closed() {
-                        return Ok(());
-                    }
-
-                    let response = response?;
-                    for commit_chunk in response.commits.chunks(COMMIT_BATCH_SIZE) {
-                        let shas = commit_chunk
-                            .iter()
-                            .map(|commit| commit.sha.clone())
-                            .collect();
-                        if commit_batch_tx.send(shas).await.is_err() {
-                            return Ok(());
-                        }
-                    }
-                }
-
-                Ok::<_, anyhow::Error>(())
-            }
-        };
-
-        let fetch_and_match_authors =
-            future::try_join_all((0..MAX_CONCURRENT_COMMIT_REQUESTS).map(|_| {
-                let client = client.clone();
-                let commit_batch_rx = commit_batch_rx.clone();
+            let collect_commit_shas = {
                 let request_tx = request_tx.clone();
                 async move {
-                    while let Ok(shas) = commit_batch_rx.recv().await {
+                    while let Some(response) = graph_stream.next().await {
                         if request_tx.is_closed() {
                             return Ok(());
                         }
 
-                        let response = client
-                            .request(proto::GetCommitData {
-                                project_id: project_id.to_proto(),
-                                repository_id: repository_id.to_proto(),
-                                shas,
-                            })
-                            .await?;
-
-                        for commit in response.commits {
-                            if author_matches_query(
-                                &commit.author_name,
-                                &commit.author_email,
-                                author_query,
-                                case_sensitive,
-                            ) && let Ok(oid) = Oid::from_str(&commit.sha)
-                                && request_tx.send(oid).await.is_err()
-                            {
+                        let response = response?;
+                        for commit_chunk in response.commits.chunks(COMMIT_BATCH_SIZE) {
+                            let shas = commit_chunk
+                                .iter()
+                                .map(|commit| commit.sha.clone())
+                                .collect();
+                            if commit_batch_tx.send(shas).await.is_err() {
                                 return Ok(());
                             }
                         }
@@ -7435,10 +7403,52 @@ impl Repository {
 
                     Ok::<_, anyhow::Error>(())
                 }
-            }));
+            };
 
-        future::try_join(collect_commit_shas, fetch_and_match_authors).await?;
-        Ok(())
+            let fetch_and_match_authors =
+                future::try_join_all((0..MAX_CONCURRENT_COMMIT_REQUESTS).map(|_| {
+                    let client = client.clone();
+                    let commit_batch_rx = commit_batch_rx.clone();
+                    let request_tx = request_tx.clone();
+                    async move {
+                        while let Ok(shas) = commit_batch_rx.recv().await {
+                            if request_tx.is_closed() {
+                                return Ok(());
+                            }
+
+                            let response = client
+                                .request(proto::GetCommitData {
+                                    project_id: project_id.to_proto(),
+                                    repository_id: repository_id.to_proto(),
+                                    shas,
+                                })
+                                .await?;
+
+                            for commit in response.commits {
+                                if author_matches_query(
+                                    &commit.author_name,
+                                    &commit.author_email,
+                                    author_query,
+                                    case_sensitive,
+                                ) && let Ok(oid) = Oid::from_str(&commit.sha)
+                                    && request_tx.send(oid).await.is_err()
+                                {
+                                    return Ok(());
+                                }
+                            }
+                        }
+
+                        Ok::<_, anyhow::Error>(())
+                    }
+                }));
+
+            future::try_join(collect_commit_shas, fetch_and_match_authors).await?;
+            Ok(())
+        };
+        match future::select(Box::pin(search), Box::pin(cancellation.closed())).await {
+            future::Either::Left((result, _)) => result,
+            future::Either::Right(((), _)) => Ok(()),
+        }
     }
 
     pub fn graph_data(
@@ -11509,6 +11519,191 @@ mod tests {
             "another@example.com",
             false
         ));
+    }
+
+    #[gpui::test]
+    async fn test_remote_author_search_drains_graph_before_metadata(cx: &mut TestAppContext) {
+        use proto::EnvelopedMessage as _;
+
+        let (incoming_tx, incoming_rx) = mpsc::unbounded();
+        let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded();
+        let client = cx.update(|cx| {
+            remote::RemoteClient::proto_client_from_channels(
+                incoming_rx,
+                outgoing_tx,
+                cx,
+                "author-search-test",
+                false,
+            )
+        });
+        let (result_tx, result_rx) = async_channel::unbounded();
+        let search_client = client.clone();
+        let search = cx.background_executor.spawn(async move {
+            Repository::search_remote_commits_by_author(
+                search_client,
+                ProjectId(1),
+                RepositoryId(1),
+                LogSource::default(),
+                "target",
+                false,
+                result_tx,
+            )
+            .await
+        });
+        let graph_request = loop {
+            let request = outgoing_rx.next().await.expect("graph request");
+            if matches!(
+                request.payload,
+                Some(proto::envelope::Payload::RemoteStarted(_))
+            ) {
+                continue;
+            }
+            break request;
+        };
+        assert!(matches!(
+            graph_request.payload,
+            Some(proto::envelope::Payload::GetInitialGraphData(_))
+        ));
+        for chunk in 0..3 {
+            incoming_tx
+                .unbounded_send(
+                    proto::GetInitialGraphDataResponse {
+                        commits: (0..1000)
+                            .map(|index| proto::InitialGraphCommit {
+                                sha: format!("{:040x}", chunk * 1000 + index + 1),
+                                ..Default::default()
+                            })
+                            .collect(),
+                    }
+                    .into_envelope(chunk, Some(graph_request.id), None),
+                )
+                .expect("graph response");
+        }
+        incoming_tx
+            .unbounded_send(proto::EndStream {}.into_envelope(3, Some(graph_request.id), None))
+            .expect("end graph");
+        cx.run_until_parked();
+
+        // An unrelated response must pass even while all author workers await metadata.
+        let unrelated = cx.background_executor.spawn(async move {
+            client
+                .request(proto::GetCommitData {
+                    project_id: 1,
+                    repository_id: 1,
+                    shas: Vec::new(),
+                })
+                .await
+        });
+        cx.run_until_parked();
+        let mut metadata_requests = Vec::new();
+        loop {
+            let request = outgoing_rx.next().await.expect("metadata request");
+            if matches!(
+                request.payload,
+                Some(proto::envelope::Payload::RemoteStarted(_))
+            ) {
+                continue;
+            }
+            let Some(proto::envelope::Payload::GetCommitData(payload)) = &request.payload else {
+                panic!("unexpected request");
+            };
+            if payload.shas.is_empty() {
+                incoming_tx
+                    .unbounded_send(proto::GetCommitDataResponse::default().into_envelope(
+                        4,
+                        Some(request.id),
+                        None,
+                    ))
+                    .expect("unrelated response");
+                break;
+            }
+            metadata_requests.push(request);
+        }
+        assert_eq!(metadata_requests.len(), 4);
+        cx.run_until_parked();
+        assert!(
+            unrelated.is_ready(),
+            "graph backpressure blocked unrelated response"
+        );
+        unrelated.await.expect("unrelated request succeeds");
+
+        let mut processed = 0;
+        while processed < 3000 {
+            let request = if let Some(request) = metadata_requests.pop() {
+                request
+            } else {
+                outgoing_rx.next().await.expect("next metadata batch")
+            };
+            let Some(proto::envelope::Payload::GetCommitData(payload)) = request.payload else {
+                panic!("unexpected request");
+            };
+            assert!(payload.shas.len() <= 64);
+            processed += payload.shas.len();
+            incoming_tx
+                .unbounded_send(
+                    proto::GetCommitDataResponse {
+                        commits: payload
+                            .shas
+                            .into_iter()
+                            .map(|sha| proto::CommitData {
+                                sha,
+                                author_name: "Target".into(),
+                                ..Default::default()
+                            })
+                            .collect(),
+                    }
+                    .into_envelope(
+                        5 + processed as u32,
+                        Some(request.id),
+                        None,
+                    ),
+                )
+                .expect("metadata response");
+        }
+        search.await.expect("author search succeeds");
+        let mut matches = HashSet::<Oid>::default();
+        while let Ok(oid) = result_rx.recv().await {
+            matches.insert(oid);
+        }
+        assert_eq!(matches.len(), 3000);
+    }
+
+    #[gpui::test]
+    async fn test_remote_author_search_cancels_pending_stream(cx: &mut TestAppContext) {
+        let (_incoming_tx, incoming_rx) = mpsc::unbounded();
+        let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded();
+        let client = cx.update(|cx| {
+            remote::RemoteClient::proto_client_from_channels(
+                incoming_rx,
+                outgoing_tx,
+                cx,
+                "author-cancel-test",
+                false,
+            )
+        });
+        let (result_tx, result_rx) = async_channel::unbounded();
+        let search = cx.background_executor.spawn(async move {
+            Repository::search_remote_commits_by_author(
+                client,
+                ProjectId(1),
+                RepositoryId(1),
+                LogSource::default(),
+                "target",
+                false,
+                result_tx,
+            )
+            .await
+        });
+        outgoing_rx.next().await.expect("graph request");
+        cx.run_until_parked();
+        assert!(!search.is_ready());
+        drop(result_rx);
+        cx.run_until_parked();
+        assert!(
+            search.is_ready(),
+            "cancel must not wait for another graph response"
+        );
+        search.await.expect("cancel succeeds");
     }
 
     fn init_test(cx: &mut TestAppContext) {
