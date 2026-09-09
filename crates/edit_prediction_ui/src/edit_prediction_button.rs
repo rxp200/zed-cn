@@ -803,7 +803,12 @@ impl EditPredictionButton {
                 ContextMenuEntry::new("按键触发")
                     .toggleable(IconPosition::Start, subtle_mode)
                     .documentation_aside(DocumentationSide::Left, move |_| {
-                        Label::new("仅在按住修饰键时内联显示预测（默认 alt）。").into_any_element()
+                        Label::new(concat!(
+                            "仅在按住修饰键时内联显示预测（默认为 ",
+                            ui::alt_key_name!(),
+                            "）。"
+                        ))
+                        .into_any_element()
                     })
                     .handler({
                         let fs = fs.clone();

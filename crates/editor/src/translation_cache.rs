@@ -8,11 +8,18 @@
 
 use collections::HashMap;
 use gpui::{AppContext as _, Context, SharedString, Task};
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
+use settings::Settings as _;
 use std::{
     path::PathBuf,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
+use util::ResultExt as _;
 
 use crate::hover_translation::TranslationService;
 
@@ -81,8 +88,35 @@ pub struct TranslationDiskCache {
     entries: HashMap<String, TranslationCacheEntry>,
     total_bytes: usize,
     dirty: bool,
+    revision: u64,
+    writer: Arc<CacheWriter>,
     /// Background save loop; `Some` while a save is pending.
     save_task: Option<Task<()>>,
+}
+
+#[derive(Default)]
+struct CacheWriter {
+    epoch: AtomicU64,
+    // Only background writers acquire this lock. It prevents an old in-progress
+    // write from overwriting a newer generation after disable/re-enable.
+    serial: Mutex<()>,
+}
+
+impl CacheWriter {
+    fn write_if_current(
+        &self,
+        epoch: u64,
+        write: impl FnOnce() -> anyhow::Result<()>,
+    ) -> anyhow::Result<bool> {
+        let _guard = self.serial.lock();
+        if self.epoch.load(Ordering::SeqCst) != epoch {
+            return Ok(false);
+        }
+        // This check admits the write. Disabling never waits for filesystem I/O:
+        // a write admitted before disabling may still complete afterward.
+        write()?;
+        Ok(true)
+    }
 }
 
 /// Path of the on-disk translation cache file.
@@ -101,6 +135,8 @@ impl TranslationDiskCache {
             entries: HashMap::default(),
             total_bytes: 0,
             dirty: false,
+            revision: 0,
+            writer: Arc::new(CacheWriter::default()),
             save_task: None,
         }
     }
@@ -108,6 +144,12 @@ impl TranslationDiskCache {
     /// Applies the current configuration, evicting entries if the budget
     /// shrank. Cheap enough to call on every translation.
     pub fn configure(&mut self, enabled: bool, max_bytes: usize) {
+        if self.enabled != enabled {
+            self.writer.epoch.fetch_add(1, Ordering::SeqCst);
+        }
+        if !enabled {
+            self.save_task = None;
+        }
         self.enabled = enabled;
         self.max_bytes = max_bytes;
         if enabled {
@@ -115,6 +157,7 @@ impl TranslationDiskCache {
             self.enforce_budget();
             if self.entries.len() < before {
                 self.dirty = true;
+                self.revision += 1;
             }
         }
     }
@@ -184,6 +227,7 @@ impl TranslationDiskCache {
         self.entries.insert(key.to_string(), entry);
         self.enforce_budget();
         self.dirty = true;
+        self.revision += 1;
     }
 
     /// Records a view of `key`, updating its recency and frequency for future
@@ -196,42 +240,86 @@ impl TranslationDiskCache {
             entry.last_viewed_at = unix_seconds();
             entry.view_count = entry.view_count.saturating_add(1);
             self.dirty = true;
+            self.revision += 1;
         }
     }
 
     /// Schedules a debounced background save. Multiple changes within the
     /// debounce window are coalesced into a single write.
     pub fn schedule_save(&mut self, cx: &mut Context<TranslationService>) {
-        if !self.enabled || self.save_task.is_some() {
+        if !self.enabled || !self.dirty || self.save_task.is_some() {
             return;
         }
-        let path = self.path.clone();
         let task = cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor().timer(SAVE_DEBOUNCE).await;
                 let payload = this
-                    .update(cx, |service, _| {
-                        if !service.disk_cache.dirty {
+                    .update(cx, |service, cx| {
+                        let settings =
+                            crate::hover_translation::HoverTranslationSettings::get_global(cx);
+                        let cache = &service.disk_cache;
+                        if !settings.cache_persist || !cache.enabled || !cache.dirty {
                             return None;
                         }
-                        service.disk_cache.dirty = false;
-                        Some((path.clone(), service.disk_cache.serialize()))
+                        Some((
+                            cache.path.clone(),
+                            cache.serialize(),
+                            cache.revision,
+                            cache.writer.clone(),
+                            cache.writer.epoch.load(Ordering::SeqCst),
+                        ))
                     })
                     .ok()
                     .flatten();
-                match payload {
-                    Some((path, bytes)) => {
-                        let _ = cx
-                            .background_spawn(async move { std::fs::write(path, bytes) })
-                            .await;
+                let Some((path, bytes, revision, writer, epoch)) = payload else {
+                    break;
+                };
+                let Some(bytes) = bytes.log_err() else { break };
+                let result = cx
+                    .background_spawn(async move {
+                        writer.write_if_current(epoch, || {
+                            std::fs::write(&path, bytes).map_err(|error| {
+                                anyhow::anyhow!("保存翻译缓存失败 ({}): {error}", path.display())
+                            })
+                        })
+                    })
+                    .await;
+                match result {
+                    Ok(true) => {
+                        if this
+                            .update(cx, |service, _| {
+                                service.disk_cache.did_save(revision, epoch);
+                            })
+                            .is_err()
+                        {
+                            return;
+                        }
                     }
-                    None => break,
+                    Ok(false) => break,
+                    Err(error) => {
+                        log::error!("{error:#}");
+                        break;
+                    }
                 }
             }
             this.update(cx, |service, _| service.disk_cache.save_task = None)
-                .ok();
+                .log_err();
         });
         self.save_task = Some(task);
+    }
+
+    fn did_save(&mut self, revision: u64, epoch: u64) {
+        if self.enabled
+            && self.revision == revision
+            && self.writer.epoch.load(Ordering::SeqCst) == epoch
+        {
+            self.dirty = false;
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_dirty(&self) -> bool {
+        self.dirty
     }
 
     /// Returns a snapshot of all currently cached translations, for tests.
@@ -240,12 +328,11 @@ impl TranslationDiskCache {
         &self.entries
     }
 
-    fn serialize(&self) -> Vec<u8> {
+    fn serialize(&self) -> serde_json::Result<Vec<u8>> {
         serde_json::to_vec(&TranslationCacheFile {
             version: CACHE_FILE_VERSION,
             entries: self.entries.clone(),
         })
-        .unwrap_or_default()
     }
 
     /// Evicts the lowest-scoring entries until the total is within budget.
@@ -312,13 +399,85 @@ mod tests {
     }
 
     #[test]
+    fn test_blocked_writer_does_not_block_configure_or_revive_stale_epoch() {
+        let mut cache = test_cache(1024);
+        cache.store("key", "译文".into());
+        let writer = cache.writer.clone();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            writer.write_if_current(0, || {
+                started_tx.send(()).unwrap();
+                // Bound even a broken foreground-lock implementation, so the test
+                // fails rather than hanging the runner forever.
+                release_rx.recv_timeout(Duration::from_secs(5))?;
+                Ok(())
+            })
+        });
+        struct WorkerCleanup {
+            release: Option<std::sync::mpsc::Sender<()>>,
+            worker: Option<std::thread::JoinHandle<anyhow::Result<bool>>>,
+        }
+        impl Drop for WorkerCleanup {
+            fn drop(&mut self) {
+                // Disconnecting also releases the bounded receive on unwind.
+                self.release.take();
+                if let Some(worker) = self.worker.take() {
+                    match worker.join() {
+                        Ok(Ok(_)) => {}
+                        Ok(Err(error)) => log::error!("writer cleanup: {error:#}"),
+                        Err(_) => log::error!("writer panicked during cleanup"),
+                    }
+                }
+            }
+        }
+        let mut cleanup = WorkerCleanup {
+            release: Some(release_tx),
+            worker: Some(worker),
+        };
+        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        cache.configure(false, 1024);
+        cache.configure(true, 1024);
+        let released = cleanup.release.take().unwrap().send(());
+        let result = cleanup.worker.take().unwrap().join().unwrap();
+        released.unwrap();
+        assert!(result.unwrap());
+        assert!(
+            !cache
+                .writer
+                .write_if_current(0, || panic!("stale writer admitted"))
+                .unwrap()
+        );
+        cache.did_save(cache.revision, 0);
+        assert!(cache.dirty);
+        let epoch = cache.writer.epoch.load(Ordering::SeqCst);
+        assert!(cache.writer.write_if_current(epoch, || Ok(())).unwrap());
+        cache.did_save(cache.revision, epoch);
+        assert!(!cache.dirty);
+    }
+
+    #[test]
+    fn test_save_completion_preserves_newer_changes() {
+        let mut cache = test_cache(1024);
+        cache.store("key", "译文".into());
+        let revision = cache.revision;
+        cache.record_view("key");
+        cache.did_save(revision, 0);
+        assert!(cache.dirty);
+        let revision = cache.revision;
+        cache.configure(true, 0);
+        cache.did_save(revision, 0);
+        assert!(cache.dirty);
+    }
+
+    #[test]
     fn test_round_trip_serialization() {
         let mut cache = test_cache(1024 * 1024);
         cache.store("provider:model:中文:abc", "你好世界".into());
         cache.store("provider:model:中文:def", "解析代码块".into());
 
         let mut loaded = test_cache(1024 * 1024);
-        loaded.load_from_bytes(&cache.serialize());
+        loaded.load_from_bytes(&cache.serialize().unwrap());
         assert!(loaded.loaded);
         assert_eq!(
             loaded

@@ -182,7 +182,7 @@ impl SkillCreatorPage {
         });
 
         let name_editor = cx.new(|cx| {
-            InputField::new(window, cx, "我的新技能")
+            InputField::new(window, cx, "my-new-skill")
                 .label("名称")
                 .tab_index(NAME_FIELD_TAB_INDEX)
                 .tab_stop(true)
@@ -191,14 +191,10 @@ impl SkillCreatorPage {
         window.focus(&name_editor.focus_handle(cx), cx);
 
         let description_editor = cx.new(|cx| {
-            InputField::new(
-                window,
-                cx,
-                "例如：按照此模板填写 PR 描述。",
-            )
-            .label("描述")
-            .tab_index(DESCRIPTION_FIELD_TAB_INDEX)
-            .tab_stop(true)
+            InputField::new(window, cx, "例如：按照此模板填写 PR 描述。")
+                .label("描述")
+                .tab_index(DESCRIPTION_FIELD_TAB_INDEX)
+                .tab_stop(true)
         });
 
         let body_editor = cx.new(|cx| {
@@ -402,7 +398,7 @@ impl SkillCreatorPage {
 
     fn recompute_description_error(&mut self, cx: &mut Context<Self>) {
         let description = self.current_description(cx);
-        self.description_length = description.len();
+        self.description_length = description.chars().count();
         let error = validate_description(&description).err();
         self.description_error = error;
         self.description_editor
@@ -457,9 +453,7 @@ impl SkillCreatorPage {
         match parse_imported_skill(&content, "") {
             Ok(imported) => self.apply_imported_skill(imported, window, cx),
             Err(err) => {
-                self.save_error = Some(SharedString::from(format!(
-                    "无法读取共享技能：{err}"
-                )));
+                self.save_error = Some(SharedString::from(format!("无法读取共享技能：{err}")));
                 cx.notify();
             }
         }
@@ -768,10 +762,7 @@ impl SkillCreatorPage {
         SwitchField::new(
             "disable-model-invocation",
             Some("禁用模型调用"),
-            Some(
-                "从模型目录中隐藏此技能。仍可通过斜杠命令调用它。"
-                    .into(),
-            ),
+            Some("从模型目录中隐藏此技能。仍可通过斜杠命令调用它。".into()),
             toggle_state,
             cx.listener(|this, _state: &ToggleState, _window, cx| {
                 this.toggle_disable_model_invocation(cx);
@@ -835,7 +826,11 @@ impl SkillCreatorPage {
 
     fn render_footer(&self, _window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let saving = self.saving;
-        let main_action = if saving { "正在保存..." } else { "保存技能" };
+        let main_action = if saving {
+            "正在保存..."
+        } else {
+            "保存技能"
+        };
 
         v_flex()
             .w_full()
@@ -986,10 +981,7 @@ async fn fetch_imported_skill_from_url_with_github_token(
     }
 
     if body.len() > MAX_SKILL_FILE_SIZE {
-        anyhow::bail!(
-            "SKILL.md 文件超过最大大小 {}KB",
-            MAX_SKILL_FILE_SIZE / 1024
-        );
+        anyhow::bail!("SKILL.md 文件超过最大大小 {}KB", MAX_SKILL_FILE_SIZE / 1024);
     }
 
     let content = String::from_utf8(body).context("GitHub 响应不是有效的 UTF-8")?;
@@ -1044,13 +1036,9 @@ async fn fetch_skill_url(
 
 fn github_fetch_error(status: StatusCode, body: &[u8]) -> anyhow::Error {
     let mut message = if status == StatusCode::NOT_FOUND {
-        "GitHub 在获取技能时返回 404；此 URL 不存在仓库，或是私有仓库"
-            .to_string()
+        "GitHub 在获取技能时返回 404；此 URL 不存在仓库，或是私有仓库".to_string()
     } else {
-        format!(
-            "GitHub 在获取技能时返回 {}",
-            status.as_u16()
-        )
+        format!("GitHub 在获取技能时返回 {}", status.as_u16())
     };
 
     let response_text = truncated_response_body_for_error(body);
@@ -1130,7 +1118,8 @@ fn parse_imported_skill(content: &str, source_url: &str) -> Result<ImportedSkill
     }
 
     Ok(ImportedSkill {
-        name: derived_skill_name_from_url(source_url).unwrap_or_else(|| "导入的技能".into()),
+        // This value becomes both the validated name and the on-disk directory, not a UI label.
+        name: derived_skill_name_from_url(source_url).unwrap_or_else(|| "imported-skill".into()),
         description: derived_description_from_markdown(content).unwrap_or_default(),
         body: content.trim().to_string(),
         disable_model_invocation: false,
@@ -1178,15 +1167,9 @@ fn derived_description_from_markdown(content: &str) -> Option<String> {
 }
 
 fn truncate_description(description: &str) -> String {
-    if description.len() <= MAX_SKILL_DESCRIPTION_LEN {
-        return description.to_string();
-    }
-
-    let mut end = MAX_SKILL_DESCRIPTION_LEN;
-    while !description.is_char_boundary(end) {
-        end -= 1;
-    }
-    description[..end].trim().to_string()
+    util::truncate(description, MAX_SKILL_DESCRIPTION_LEN)
+        .trim()
+        .to_string()
 }
 
 /// Serialize the SKILL.md file to disk at `<skills_dir>/<name>/SKILL.md`.
@@ -1224,12 +1207,8 @@ async fn write_skill_to_disk(
         }
         Ok(None) => {}
         Err(err) => {
-            return Err(err).with_context(|| {
-                format!(
-                    "检查 {} 是否已存在时失败",
-                    skill_dir.display()
-                )
-            });
+            return Err(err)
+                .with_context(|| format!("检查 {} 是否已存在时失败", skill_dir.display()));
         }
     }
 
@@ -1257,8 +1236,8 @@ fn format_skill_file(
         description: description.to_string(),
         disable_model_invocation,
     };
-    let frontmatter = serde_yaml_ng::to_string(&metadata)
-        .context("技能前置元数据序列化为 YAML 失败")?;
+    let frontmatter =
+        serde_yaml_ng::to_string(&metadata).context("技能前置元数据序列化为 YAML 失败")?;
 
     let mut content = String::with_capacity(frontmatter.len() + body.len() + 16);
     content.push_str("---\n");
@@ -1526,6 +1505,59 @@ mod tests {
         assert!(!imported.disable_model_invocation);
     }
 
+    #[gpui::test]
+    async fn parse_imported_skill_fallback_name_can_be_saved(cx: &mut gpui::TestAppContext) {
+        let content = "# 导入的技能\n\n执行代码审查。";
+        for source_url in [
+            "",
+            "not a URL",
+            "https://github.com/owner/repo/blob/main/---.md",
+        ] {
+            let imported = parse_imported_skill(content, source_url)
+                .expect("Markdown without frontmatter should import without a usable URL name");
+            assert_eq!(imported.name, "imported-skill");
+            assert_eq!(imported.description, "导入的技能");
+            assert_eq!(imported.body, content);
+            assert!(!imported.disable_model_invocation);
+            assert_eq!(validate_name(&imported.name), Ok(()));
+            assert_eq!(validate_description(&imported.description), Ok(()));
+
+            let fs = FakeFs::new(cx.executor());
+            fs.insert_tree("/skills", serde_json::json!({})).await;
+            let path = write_skill_to_disk(
+                fs.as_ref(),
+                Path::new("/skills"),
+                &imported.name,
+                &imported.description,
+                &imported.body,
+                imported.disable_model_invocation,
+            )
+            .await
+            .expect("fallback name should save successfully");
+            assert_eq!(path, Path::new("/skills/imported-skill/SKILL.md"));
+            let written = fs.load(&path).await.expect("skill should exist");
+            let (metadata, body) = parse_skill_file_content(&written)
+                .expect("saved fallback skill should pass strict metadata validation");
+            assert_eq!(metadata.name, imported.name);
+            assert_eq!(metadata.description, imported.description);
+            assert_eq!(body.trim(), imported.body);
+        }
+    }
+
+    #[test]
+    fn parse_imported_skill_rejects_invalid_frontmatter_without_url() {
+        for content in [
+            "---\nname: 导入的技能\ndescription: 描述\n---\n内容",
+            "---\nname: [\n---\n内容",
+            "---\ndescription: 描述\n---\n内容",
+        ] {
+            assert!(
+                parse_imported_skill(content, "").is_err(),
+                "invalid frontmatter must not be hidden by a fallback: {content}"
+            );
+        }
+    }
+
     #[test]
     fn parse_imported_skill_reuses_skill_metadata_validation() {
         let error = parse_imported_skill(
@@ -1539,6 +1571,15 @@ mod tests {
             message.contains("Skill name must contain only lowercase letters"),
             "error should come from shared skill metadata validation, got: {message}"
         );
+    }
+
+    #[test]
+    fn truncate_description_counts_unicode_characters() {
+        let description = "中".repeat(MAX_SKILL_DESCRIPTION_LEN + 1);
+        let truncated = truncate_description(&description);
+
+        assert_eq!(truncated.chars().count(), MAX_SKILL_DESCRIPTION_LEN);
+        assert_eq!(truncated, "中".repeat(MAX_SKILL_DESCRIPTION_LEN));
     }
 
     #[gpui::test]

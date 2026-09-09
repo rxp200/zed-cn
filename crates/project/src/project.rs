@@ -2091,7 +2091,7 @@ impl Project {
     ) -> Entity<Project> {
         use clock::FakeSystemClock;
 
-        let fs = Arc::new(RealFs::new(None, cx.background_executor().clone()));
+        let fs = RealFs::new(None, cx.background_executor().clone());
         let languages = LanguageRegistry::test(cx.background_executor().clone());
         let clock = Arc::new(FakeSystemClock::new());
         let http_client = http_client::FakeHttpClient::with_404_response();
@@ -2291,6 +2291,16 @@ impl Project {
     #[inline]
     pub fn client(&self) -> Arc<Client> {
         self.collab_client.clone()
+    }
+
+    #[cfg(feature = "test-support")]
+    pub fn set_remote_client_for_test(
+        &mut self,
+        client: Entity<RemoteClient>,
+        cx: &mut Context<Self>,
+    ) {
+        self.remote_client = Some(client);
+        cx.notify();
     }
 
     #[inline]

@@ -883,7 +883,7 @@ impl Render for DeleteBranchTooltip {
             Tooltip::with_meta_in(
                 "删除分支",
                 Some(&branch_picker::DeleteBranch),
-                "按住 Alt 键强制删除",
+                concat!("按住 ", ui::alt_key_name!(), " 键强制删除"),
                 &self.focus_handle,
                 cx,
             )

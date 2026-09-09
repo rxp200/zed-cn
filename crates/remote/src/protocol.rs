@@ -1,6 +1,5 @@
 use anyhow::Result;
 use futures::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use prost::Message as _;
 use rpc::proto::Envelope;
 
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
@@ -23,7 +22,7 @@ pub async fn read_message_with_len<S: AsyncRead + Unpin>(
 ) -> Result<Envelope> {
     buffer.resize(message_len as usize, 0);
     stream.read_exact(buffer).await?;
-    Ok(Envelope::decode(buffer.as_slice())?)
+    Ok(Envelope::decode_from_slice(buffer.as_slice())?)
 }
 
 pub async fn read_message<S: AsyncRead + Unpin>(
@@ -52,13 +51,13 @@ pub async fn write_message_with_progress<S: AsyncWrite + Unpin>(
     message: Envelope,
     progress: Option<rpc::RequestProgress>,
 ) -> Result<()> {
-    let message_len = u32::try_from(message.encoded_len())?;
+    let message_len = u32::try_from(message.encoded_size())?;
     stream
         .write_all(message_len.to_le_bytes().as_slice())
         .await?;
     buffer.clear();
     buffer.reserve(message_len as usize);
-    message.encode(buffer)?;
+    message.encode_to_buffer(buffer)?;
     if progress.is_none() {
         stream.write_all(buffer).await?;
         return Ok(());
@@ -104,7 +103,10 @@ mod transfer_tests {
             content: Some(vec![42; 200_000]),
         }
         .into_envelope(7, None, None);
-        let expected = message.encode_to_vec();
+        let mut expected = Vec::new();
+        message
+            .encode_to_buffer(&mut expected)
+            .expect("encode fixture");
         let samples = Arc::new(Mutex::new(Vec::new()));
         let observer = samples.clone();
         let mut output = futures::io::Cursor::new(Vec::new());

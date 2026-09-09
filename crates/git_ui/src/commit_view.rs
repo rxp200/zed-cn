@@ -180,6 +180,11 @@ impl Addon for CommitDiffAddon {
 const FILE_NAMESPACE_SORT_PREFIX: u64 = 1;
 
 impl CommitView {
+    #[cfg(test)]
+    pub(crate) fn commit_sha_for_test(&self) -> &str {
+        self.commit.sha.as_ref()
+    }
+
     pub fn open(
         commit_sha: String,
         repo: WeakEntity<Repository>,
@@ -1382,6 +1387,7 @@ impl Item for CommitView {
 impl Render for CommitView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let is_stash = self.stash.is_some();
+        let editor_is_empty = self.editor.read(cx).rhs_editor().read(cx).is_empty(cx);
 
         v_flex()
             .key_context(if is_stash { "StashDiff" } else { "CommitDiff" })
@@ -1389,10 +1395,13 @@ impl Render for CommitView {
             .size_full()
             .bg(cx.theme().colors().editor_background)
             .child(self.render_header(window, cx))
-            .when(
-                !self.editor.read(cx).rhs_editor().read(cx).is_empty(cx),
-                |this| this.child(div().flex_grow(1.).child(self.editor.clone())),
-            )
+            // The advertised editor focus must remain in the tree even before diff loading completes.
+            .when(editor_is_empty, |this| {
+                this.track_focus(&self.editor.focus_handle(cx))
+            })
+            .when(!editor_is_empty, |this| {
+                this.child(div().flex_grow(1.).child(self.editor.clone()))
+            })
             .when(self.is_shallow_boundary, |this| {
                 this.child(self.render_shallow_boundary_notice(cx))
             })
@@ -1527,4 +1536,84 @@ fn stash_matches_index(sha: &str, stash_index: usize, repo: &Repository) -> bool
         .get(stash_index)
         .map(|entry| entry.oid.to_string() == sha)
         .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fs::FakeFs;
+    use gpui::TestAppContext;
+    use settings::SettingsStore;
+    use std::path::Path;
+
+    #[gpui::test]
+    async fn test_commit_view_focus_survives_diff_loading(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            let settings_store = SettingsStore::test(cx);
+            cx.set_global(settings_store);
+            theme_settings::init(theme::LoadThemes::JustBase, cx);
+            language_model::init(cx);
+            crate::init(cx);
+        });
+        let fs = FakeFs::new(cx.executor());
+        fs.insert_tree(
+            Path::new("/project"),
+            serde_json::json!({".git": {}, "file.txt": "content"}),
+        )
+        .await;
+        let project = Project::test(fs, [Path::new("/project")], cx).await;
+        cx.run_until_parked();
+        let repository = project.read_with(cx, |project, cx| {
+            project.active_repository(cx).expect("repository")
+        });
+        let (multi_workspace, cx) = cx.add_window_view(|window, cx| {
+            workspace::MultiWorkspace::test_new(project.clone(), window, cx)
+        });
+        let workspace = multi_workspace.read_with(cx, |multi, _| multi.workspace().clone());
+        let view = cx.new_window_entity(|window, cx| {
+            let view = CommitView::new(
+                CommitDetails {
+                    sha: "0101010101010101010101010101010101010101".into(),
+                    message: "Commit message".into(),
+                    ..Default::default()
+                },
+                CommitDiff {
+                    files: vec![project::git_store::CommitFile {
+                        path: RepoPath::new("file.txt").expect("path"),
+                        old_text: None,
+                        new_text: Some("content".into()),
+                        is_binary: false,
+                    }],
+                    is_shallow_boundary: false,
+                },
+                repository.clone(),
+                project.clone(),
+                workspace.clone(),
+                workspace.downgrade(),
+                None,
+                None,
+                window,
+                cx,
+            );
+            assert!(view.editor.read(cx).rhs_editor().read(cx).is_empty(cx));
+            view
+        });
+        workspace.update_in(cx, |workspace, window, cx| {
+            workspace.add_item_to_active_pane(Box::new(view.clone()), None, true, window, cx);
+        });
+        let load_task = view.update(cx, |view, _| {
+            std::mem::replace(&mut view._load_diff_task, Task::ready(Ok(())))
+        });
+        load_task.await.expect("diff should load");
+        cx.run_until_parked();
+        view.update_in(cx, |view, window, cx| {
+            let editor = view.editor.read(cx).rhs_editor();
+            assert!(!editor.read(cx).is_empty(cx));
+            assert!(view.focus_handle(cx).is_focused(window));
+        });
+        cx.run_until_parked();
+        view.update_in(cx, |view, window, cx| {
+            assert!(view.focus_handle(cx).is_focused(window))
+        });
+    }
 }

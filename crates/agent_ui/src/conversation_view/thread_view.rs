@@ -11641,7 +11641,7 @@ impl ThreadView {
                     .gap_1()
                     .child(
                         Label::new(format!(
-                            "Ensure skill descriptions are at most {MAX_SKILL_DESCRIPTION_LEN} bytes; longer ones may consume more model-context tokens."
+                            "请确保技能描述不超过 {MAX_SKILL_DESCRIPTION_LEN} 个字符；过长的描述可能消耗更多模型上下文令牌。"
                         ))
                         .size(LabelSize::Small)
                         .color(Color::Muted),

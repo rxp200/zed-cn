@@ -1254,12 +1254,19 @@ fn appearance_page() -> SettingsPage {
                 description: "Markdown 预览的字体系列。回退到 UI 字体系列。",
                 field: Box::new(SettingField {
                     organization_override: None,
-                    json_path: Some("markdown_preview_font_family"),
+                    json_path: Some("markdown_preview.font_family"),
                     pick: |settings_content| {
-                        settings_content.theme.markdown_preview_font_family.as_ref()
+                        settings_content
+                            .markdown_preview
+                            .as_ref()?
+                            .font_family
+                            .as_ref()
                     },
                     write: |settings_content, value, _| {
-                        settings_content.theme.markdown_preview_font_family = value;
+                        settings_content
+                            .markdown_preview
+                            .get_or_insert_default()
+                            .font_family = value;
                     },
                 }),
                 metadata: None,
@@ -1270,15 +1277,19 @@ fn appearance_page() -> SettingsPage {
                 description: "Markdown 预览中代码块的字体。回退到编辑器字体系列。",
                 field: Box::new(SettingField {
                     organization_override: None,
-                    json_path: Some("markdown_preview_code_font_family"),
+                    json_path: Some("markdown_preview.code_font_family"),
                     pick: |settings_content| {
                         settings_content
-                            .theme
-                            .markdown_preview_code_font_family
+                            .markdown_preview
+                            .as_ref()?
+                            .code_font_family
                             .as_ref()
                     },
                     write: |settings_content, value, _| {
-                        settings_content.theme.markdown_preview_code_font_family = value;
+                        settings_content
+                            .markdown_preview
+                            .get_or_insert_default()
+                            .code_font_family = value;
                     },
                 }),
                 metadata: None,
@@ -1289,16 +1300,19 @@ fn appearance_page() -> SettingsPage {
                 description: "Markdown 预览的字体大小。回退到编辑器字体大小。",
                 field: Box::new(SettingField {
                     organization_override: None,
-                    json_path: Some("markdown_preview_font_size"),
+                    json_path: Some("markdown_preview.font_size"),
                     pick: |settings_content| {
                         settings_content
-                            .theme
-                            .markdown_preview_font_size
+                            .markdown_preview
                             .as_ref()
+                            .and_then(|preview| preview.font_size.as_ref())
                             .or(settings_content.theme.buffer_font_size.as_ref())
                     },
                     write: |settings_content, value, _| {
-                        settings_content.theme.markdown_preview_font_size = value;
+                        settings_content
+                            .markdown_preview
+                            .get_or_insert_default()
+                            .font_size = value;
                     },
                 }),
                 metadata: None,
@@ -1329,7 +1343,7 @@ fn appearance_page() -> SettingsPage {
         ]
     }
 
-    fn cursor_section() -> [SettingsPageItem; 6] {
+    fn cursor_section() -> [SettingsPageItem; 7] {
         [
             SettingsPageItem::SectionHeader("光标"),
             SettingsPageItem::SettingItem(SettingItem {
@@ -1355,6 +1369,31 @@ fn appearance_page() -> SettingsPage {
                     pick: |settings_content| settings_content.editor.cursor_blink.as_ref(),
                     write: |settings_content, value, _| {
                         settings_content.editor.cursor_blink = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: "光标动画",
+                description: "光标在编辑器中移动时是否显示平滑动画。",
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("cursor_animation.enabled"),
+                    pick: |settings_content| {
+                        settings_content
+                            .editor
+                            .cursor_animation
+                            .as_ref()?
+                            .enabled
+                            .as_ref()
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content
+                            .editor
+                            .cursor_animation
+                            .get_or_insert_default()
+                            .enabled = value;
                     },
                 }),
                 metadata: None,
@@ -1760,7 +1799,7 @@ fn editor_page() -> SettingsPage {
             SettingsPageItem::SectionHeader("Which-key 菜单"),
             SettingsPageItem::SettingItem(SettingItem {
                 title: "显示 Which-key 菜单",
-                description: "在多键绑定待定时显示包含匹配绑定的 which-key 菜单。",
+                description: "等待多键快捷键的后续按键时，显示包含匹配绑定的 Which-key 菜单。待完成按键指示器仍然可见，但不显示其快捷键预览弹窗。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("which_key.enabled"),
@@ -4152,7 +4191,7 @@ fn search_and_files_page() -> SettingsPage {
 }
 
 fn window_and_layout_page() -> SettingsPage {
-    fn status_bar_section() -> [SettingsPageItem; 11] {
+    fn status_bar_section() -> [SettingsPageItem; 12] {
         [
             SettingsPageItem::SectionHeader("状态栏"),
             SettingsPageItem::SettingItem(SettingItem {
@@ -4261,6 +4300,29 @@ fn window_and_layout_page() -> SettingsPage {
                             .status_bar
                             .get_or_insert_default()
                             .line_endings_button = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: "待完成按键指示器",
+                description: "等待多键快捷键的后续按键时显示倒计时指示器。启用 Which-key 菜单后，不显示该指示器的快捷键预览弹窗。",
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("status_bar.pending_keystrokes_indicator"),
+                    pick: |settings_content| {
+                        settings_content
+                            .status_bar
+                            .as_ref()?
+                            .pending_keystrokes_indicator
+                            .as_ref()
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content
+                            .status_bar
+                            .get_or_insert_default()
+                            .pending_keystrokes_indicator = value;
                     },
                 }),
                 metadata: None,
@@ -4917,7 +4979,7 @@ fn window_and_layout_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: "从项目面板启用预览",
-                description: "从项目面板单击打开时是否以预览模式打开标签。",
+                description: "通过单击或“打开”操作从项目面板打开文件时，是否以预览模式打开标签。",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("preview_tabs.enable_preview_from_project_panel"),
@@ -5174,9 +5236,48 @@ fn window_and_layout_page() -> SettingsPage {
         ]
     }
 
-    fn window_section() -> [SettingsPageItem; 4] {
+    fn window_section() -> [SettingsPageItem; 6] {
         [
             SettingsPageItem::SectionHeader("Window"),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: "标题格式",
+                description: "窗口标题模板。可用变量：`${projectName}`、`${fileName}`、`${filePath}`、`${relativePath}`、`${fileStem}`、`${remoteName}`、`${remoteHost}`、`${appName}`、`${branch}` 和 `${separator}`。相邻变量为空时省略 `${separator}`，但保留普通文本。协作指示器（如有）会附加在模板生成的标题后。模板结果为空时使用默认模板。",
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("window_title_format"),
+                    pick: |settings_content| {
+                        settings_content.workspace.window_title_format.as_ref()
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content.workspace.window_title_format =
+                            value.filter(|format| !format.is_empty());
+                    },
+                }),
+                metadata: Some(Box::new(SettingsFieldMetadata {
+                    placeholder: Some("${projectName}${separator}${fileName}"),
+                    ..Default::default()
+                })),
+                files: USER,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: "标题分隔符",
+                description: "窗口标题格式中替代 `${separator}` 的文本。请在值中包含分隔符两侧所需的空格。",
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("window_title_separator"),
+                    pick: |settings_content| {
+                        settings_content.workspace.window_title_separator.as_ref()
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content.workspace.window_title_separator = value;
+                    },
+                }),
+                metadata: Some(Box::new(SettingsFieldMetadata {
+                    placeholder: Some(" — "),
+                    ..Default::default()
+                })),
+                files: USER,
+            }),
             // todo(settings_ui): Should we filter by platform.as_ref()?
             SettingsPageItem::SettingItem(SettingItem {
                 title: "使用系统窗口标签",
@@ -5372,7 +5473,7 @@ fn window_and_layout_page() -> SettingsPage {
 }
 
 fn panels_page() -> SettingsPage {
-    fn project_panel_section() -> [SettingsPageItem; 29] {
+    fn project_panel_section() -> [SettingsPageItem; 30] {
         [
             SettingsPageItem::SectionHeader("Project Panel"),
             SettingsPageItem::SettingItem(SettingItem {
@@ -5411,6 +5512,105 @@ fn panels_page() -> SettingsPage {
                 }),
                 metadata: None,
                 files: USER,
+            }),
+            SettingsPageItem::DynamicItem(DynamicItem {
+                discriminant: SettingItem {
+                    title: "项目面板标题提示延迟",
+                    description: "项目面板标题提示显示前的延迟，单位为毫秒。",
+                    field: Box::new(SettingField {
+                        organization_override: None,
+                        json_path: Some("project_panel.title_tooltip_delay$"),
+                        pick: |settings_content| {
+                            Some(
+                                &dynamic_variants::<settings::ProjectPanelTitleTooltipDelay>()
+                                    [settings_content
+                                        .project_panel
+                                        .as_ref()?
+                                        .title_tooltip_delay
+                                        .as_ref()?
+                                        .discriminant()
+                                        as usize],
+                            )
+                        },
+                        write: |settings_content, value, _| {
+                            let project_panel =
+                                settings_content.project_panel.get_or_insert_default();
+                            project_panel.title_tooltip_delay = value.map(|value| match value {
+                                settings::ProjectPanelTitleTooltipDelayDiscriminants::Default => {
+                                    settings::ProjectPanelTitleTooltipDelay::Default
+                                }
+                                settings::ProjectPanelTitleTooltipDelayDiscriminants::Disabled => {
+                                    settings::ProjectPanelTitleTooltipDelay::Disabled
+                                }
+                                settings::ProjectPanelTitleTooltipDelayDiscriminants::Custom => {
+                                    let delay = match project_panel.title_tooltip_delay {
+                                        Some(settings::ProjectPanelTitleTooltipDelay::Custom(
+                                            delay,
+                                        )) => settings::DelayMs(delay.0),
+                                        _ => settings::DelayMs(1500),
+                                    };
+                                    settings::ProjectPanelTitleTooltipDelay::Custom(delay)
+                                }
+                            });
+                        },
+                    }),
+                    metadata: None,
+                    files: USER,
+                },
+                pick_discriminant: |settings_content| {
+                    Some(
+                        settings_content
+                            .project_panel
+                            .as_ref()?
+                            .title_tooltip_delay
+                            .as_ref()?
+                            .discriminant() as usize,
+                    )
+                },
+                fields: dynamic_variants::<settings::ProjectPanelTitleTooltipDelay>()
+                    .into_iter()
+                    .map(|variant| match variant {
+                        settings::ProjectPanelTitleTooltipDelayDiscriminants::Default => vec![],
+                        settings::ProjectPanelTitleTooltipDelayDiscriminants::Disabled => vec![],
+                        settings::ProjectPanelTitleTooltipDelayDiscriminants::Custom => {
+                            vec![SettingItem {
+                                files: USER,
+                                title: "自定义延迟",
+                                description: "项目面板标题提示的延迟，单位为毫秒。",
+                                field: Box::new(SettingField {
+                                    organization_override: None,
+                                    json_path: Some("project_panel.title_tooltip_delay"),
+                                    pick: |settings_content| match settings_content
+                                        .project_panel
+                                        .as_ref()
+                                        .and_then(|project_panel| {
+                                            project_panel.title_tooltip_delay.as_ref()
+                                        }) {
+                                        Some(settings::ProjectPanelTitleTooltipDelay::Custom(
+                                            value,
+                                        )) => Some(value),
+                                        _ => None,
+                                    },
+                                    write: |settings_content, value, _| {
+                                        let Some(value) = value else {
+                                            return;
+                                        };
+                                        if let Some(
+                                            settings::ProjectPanelTitleTooltipDelay::Custom(width),
+                                        ) = settings_content.project_panel.as_mut().and_then(
+                                            |project_panel| {
+                                                project_panel.title_tooltip_delay.as_mut()
+                                            },
+                                        ) {
+                                            *width = value;
+                                        }
+                                    },
+                                }),
+                                metadata: None,
+                            }]
+                        }
+                    })
+                    .collect(),
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: "隐藏 .gitignore",
@@ -10470,7 +10670,7 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
         ]
     }
 
-    fn global_only_miscellaneous_sub_section() -> [SettingsPageItem; 3] {
+    fn global_only_miscellaneous_sub_section() -> [SettingsPageItem; 4] {
         [
             SettingsPageItem::SettingItem(SettingItem {
                 title: "图片查看器",
@@ -10486,6 +10686,29 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                     },
                     write: |settings_content, value, _| {
                         settings_content.image_viewer.get_or_insert_default().unit = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: "以预览模式打开 Markdown 文件",
+                description: "是否自动以预览模式打开 Markdown 文件。",
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("markdown_preview.open_markdown_files_in_preview"),
+                    pick: |settings_content| {
+                        settings_content
+                            .markdown_preview
+                            .as_ref()?
+                            .open_markdown_files_in_preview
+                            .as_ref()
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content
+                            .markdown_preview
+                            .get_or_insert_default()
+                            .open_markdown_files_in_preview = value;
                     },
                 }),
                 metadata: None,

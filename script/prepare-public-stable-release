@@ -6,6 +6,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from release_notes import changed_paths, make_review, resolve_previous, review_block, tag_key
+
 
 PROTECTED_STABLE_PATHS = [".rules", "AGENTS.md"]
 STABLE_OVERLAY_PATHS = [
@@ -21,6 +23,8 @@ PROTOCOL_AUDIT_PATHS = [
     "crates/remote",
     "crates/remote_server",
     "crates/project",
+    "crates/worktree",
+    "crates/auto_update",
     "crates/terminal",
     "crates/lsp",
     "crates/dap",
@@ -74,19 +78,19 @@ def replace_lockfile_zed_version(path: Path, version: str) -> None:
     path.write_text(updated)
 
 
-def changed_protocol_paths(stable_commit: str) -> list[str]:
+def changed_protocol_paths(stable_commit: str, source_commit: str) -> list[str]:
     output = git(
         "diff",
-        "--cached",
         "--name-only",
         stable_commit,
+        source_commit,
         "--",
         *PROTOCOL_AUDIT_PATHS,
     )
     return output.splitlines() if output else []
 
 
-def write_release_commit_message(source_commit: str, version: str) -> Path:
+def write_release_commit_message(source_commit: str, version: str, review: dict) -> Path:
     target = Path("target")
     target.mkdir(exist_ok=True)
     path = target / "stable-release-commit-message.md"
@@ -116,6 +120,8 @@ Zed-CN-Release-Notes:
 Zed-CN-Release-Notes-End
 
 Public-Main-Source: {source_commit}
+
+{review_block(review)}
 """
     )
     return path
@@ -155,10 +161,13 @@ def main() -> int:
     )
     parser.add_argument("--source-ref", default="github/main")
     parser.add_argument("--stable-tag", required=True)
+    parser.add_argument("--release-tag", required=True)
+    parser.add_argument("--previous-release", help="override the previous published Release")
+    parser.add_argument("--release-repository", default="rxp200/zed-cn")
     parser.add_argument(
-        "--protocol-audit-approved",
-        action="store_true",
-        help="confirm that all reported protocol-sensitive differences were reviewed",
+        "--remote-review-approved",
+        metavar="SOURCE_SHA:STABLE_SHA",
+        help="resume only after reporting remote changes and receiving explicit user approval for these exact commits",
     )
     arguments = parser.parse_args()
 
@@ -172,6 +181,8 @@ def main() -> int:
     if tag_match is None:
         raise RuntimeError("--stable-tag must be a formal Stable tag such as v1.17.2")
     version = tag_match.group(1)
+    if tag_key(arguments.release_tag)[:3] != tuple(map(int, version.split("."))):
+        raise RuntimeError("release tag version must match --stable-tag")
     source_commit = git_object(arguments.source_ref)
     stable_commit = git_object(arguments.stable_tag)
 
@@ -193,6 +204,30 @@ def main() -> int:
             "the current Stable branch must descend from the selected official Stable tag"
         )
 
+    protocol_paths = changed_protocol_paths(stable_commit, source_commit)
+    if protocol_paths:
+        print("Remote/API differences requiring review after GitHub main synchronization:")
+        for path in protocol_paths:
+            print(f"  {path}")
+        approval = f"{source_commit}:{stable_commit}"
+        if arguments.remote_review_approved != approval:
+            print(
+                "Pause before generating the Stable tree. Inspect the complete diffs, report "
+                "affected files/symbols, wire/API and runtime changes, official Stable server "
+                "compatibility (compatible/incompatible/uncertain) and evidence to the user. "
+                "Do not infer incompatibility from a path difference alone. "
+                f"Only after explicit approval resume with --remote-review-approved {approval}",
+                file=sys.stderr,
+            )
+            return 2
+        print("Resuming for the exact source/baseline pair after recorded user approval; "
+              "this option is not proof of compatibility.")
+    elif arguments.remote_review_approved:
+        raise RuntimeError("remote approval supplied but no matching remote differences exist")
+
+    previous_release, previous_commit = resolve_previous(
+        arguments.release_tag, arguments.release_repository, arguments.previous_release
+    )
     git("read-tree", "--reset", "-u", source_commit, capture=False)
     git("checkout", stable_commit, "--", *PROTECTED_STABLE_PATHS, capture=False)
 
@@ -202,25 +237,33 @@ def main() -> int:
     git("add", "--all", capture=False)
 
     validate_generated_tree(source_commit, stable_commit)
-    protocol_paths = changed_protocol_paths(stable_commit)
-    if protocol_paths:
-        print("Protocol-sensitive differences from the official Stable baseline:")
-        for path in protocol_paths:
-            print(f"  {path}")
-        if not arguments.protocol_audit_approved:
-            print(
-                "\nReview these differences for official Remote Server compatibility, "
-                "then rerun with --protocol-audit-approved if the audit passes.",
-                file=sys.stderr,
-            )
-            return 2
-
     print(f"Prepared Stable tree from public main: {source_commit}")
     print(f"Official Stable baseline: {arguments.stable_tag} ({stable_commit})")
-    commit_message_path = write_release_commit_message(source_commit, version)
+    review = make_review(arguments.release_tag, previous_release["tag_name"],
+                         previous_commit, changed_paths(previous_commit, ":index"))
+    commit_message_path = write_release_commit_message(source_commit, version, review)
+    context_path = Path("target/stable-release-review-context.md")
+    previous_message = git("show", "-s", "--format=%B", previous_commit)
+    previous_source = re.search(r"(?m)^Public-Main-Source: ([0-9a-f]{40})$", previous_message)
+    history_base = previous_source.group(1) if previous_source else previous_commit
+    context_path.write_text(
+        f"# {previous_release['tag_name']} → {arguments.release_tag}\n\n"
+        f"Baseline: {previous_commit}\n\n## Previous release notes\n\n"
+        + (previous_release.get("body") or "")
+        + "\n\n## Actual staged changes\n\n```\n"
+        + git("diff", "--cached", "--stat", previous_commit)
+        + "\n```\n\n## Commit clues (not a substitute for the diff)\n\n```\n"
+        + git("log", "--format=%h %s", f"{history_base}..{source_commit}")
+        + "\n```\n\nReview every path in the commit message. included/merged detail must quote "
+        "an exact release-note bullet; internal detail must explain exclusion. "
+        "A file may contain several changes: inspect the full diff, not only its name.\n"
+    )
+    print(f"Frozen baseline: {previous_release['tag_name']} ({previous_commit})")
+    print(f"Review context: {context_path}")
     print(f"Release identity: stable/{version}")
     print("The index contains the complete generated release tree.")
     print(f"Write detailed Chinese release notes in {commit_message_path}, then commit with:")
+    print(f"  python3 script/release_notes.py --message {commit_message_path} --target :index --release-tag {arguments.release_tag}")
     print(f"  git commit -F {commit_message_path}")
     return 0
 
@@ -228,6 +271,6 @@ def main() -> int:
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
-    except RuntimeError as error:
+    except (RuntimeError, ValueError, OSError, subprocess.CalledProcessError) as error:
         print(f"error: {error}", file=sys.stderr)
         raise SystemExit(1)

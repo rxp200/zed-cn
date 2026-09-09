@@ -74,7 +74,7 @@ const RECENTLY_OPENED_FILES_HEADING: &str = "Recently Opened Files";
 const RECENTLY_VIEWED_FILES_HEADING: &str = "Recently Viewed Files";
 const EDIT_HISTORY_HEADING: &str = "Edit History";
 const CURSOR_POSITION_HEADING: &str = "Cursor Position";
-const EXPECTED_PATCH_HEADING: &str = "预期补丁";
+const EXPECTED_PATCH_HEADING: &str = "Expected Patch";
 const REJECTED_PATCH_HEADING: &str = "Rejected Patch";
 const ACCEPTED_PREDICTION_MARKER: &str = "// User accepted prediction:";
 
@@ -331,7 +331,9 @@ impl ExampleSpec {
                         Section::EditHistory
                     } else if title.eq_ignore_ascii_case(CURSOR_POSITION_HEADING) {
                         Section::CursorPosition
-                    } else if title.eq_ignore_ascii_case(EXPECTED_PATCH_HEADING) {
+                    } else if title.eq_ignore_ascii_case(EXPECTED_PATCH_HEADING)
+                        || title == "预期补丁"
+                    {
                         Section::ExpectedPatch
                     } else if title.eq_ignore_ascii_case(REJECTED_PATCH_HEADING) {
                         Section::RejectedPatch
@@ -826,6 +828,19 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn test_expected_patch_heading_compatibility() -> anyhow::Result<()> {
+        for heading in ["Expected Patch", "expected patch", "预期补丁"] {
+            let markdown = format!(
+                "# Example\n\n## Cursor Position\n\n```src/main.rs\n<CURSOR>old\n```\n\n## {heading}\n\n```diff\n-old\n+new\n```\n"
+            );
+            let spec = ExampleSpec::from_markdown(&markdown)?;
+            assert_eq!(spec.expected_patches, vec!["-old\n+new\n"]);
+        }
+        assert_eq!(EXPECTED_PATCH_HEADING, "Expected Patch");
+        Ok(())
     }
 
     #[test]

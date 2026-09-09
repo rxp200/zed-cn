@@ -155,19 +155,21 @@ impl Render for DisconnectedOverlay {
                     .session
                     .restore_unsaved_buffers
                 {
-                    "\nUnsaved changes are stored locally."
+                    "\n未保存的更改会保存在本地。"
                 } else {
                     ""
                 };
-                let reason = if *server_not_running {
-                    "process exiting unexpectedly"
+                if *server_not_running {
+                    format!(
+                        "{} 的远程服务已退出，原项目会话无法继续使用。请点击“重新连接”重新打开项目。{autosave}",
+                        options.display_name(),
+                    )
                 } else {
-                    "not responding"
-                };
-                format!(
-                    "Your connection to {} has been lost due to the server {reason}.{autosave}",
-                    options.display_name(),
-                )
+                    format!(
+                        "{} 的远程服务未响应，连接已断开。{autosave}",
+                        options.display_name(),
+                    )
+                }
             }
         };
 

@@ -20,6 +20,38 @@ def command(*arguments):
     return subprocess.check_output(arguments, text=True)
 
 
+def resolve_tag_commit(tag):
+    if not TAG.fullmatch(tag):
+        raise ValueError("Invalid release tag")
+    reference = json.loads(command(
+        "gh", "api", f"repos/{REPOSITORY}/git/ref/tags/{tag}",
+    ))
+    if not isinstance(reference, dict) or reference.get("ref") != f"refs/tags/{tag}":
+        raise ValueError("Missing or malformed release tag reference")
+    target = reference.get("object")
+    visited = set()
+    while True:
+        if not isinstance(target, dict):
+            raise ValueError("Malformed release tag target")
+        sha = target.get("sha")
+        if not isinstance(sha, str) or not re.fullmatch(r"[0-9a-f]{40}", sha):
+            raise ValueError("Invalid release tag object SHA")
+        if target.get("type") == "commit":
+            return sha
+        if target.get("type") != "tag":
+            raise ValueError("Release tag does not resolve to a commit")
+        if sha in visited or len(visited) >= 8:
+            raise ValueError("Release tag traversal cycle or depth limit")
+        visited.add(sha)
+        # Construct fixed-repository endpoints; never follow API-supplied URLs.
+        annotated = json.loads(command(
+            "gh", "api", f"repos/{REPOSITORY}/git/tags/{sha}",
+        ))
+        if not isinstance(annotated, dict) or annotated.get("sha") != sha:
+            raise ValueError("Malformed annotated release tag")
+        target = annotated.get("object")
+
+
 def validate_release(release):
     match = TAG.fullmatch(release["tag_name"])
     if not match or int(match.group(4)) == 0:
@@ -75,6 +107,10 @@ def build_manifest(releases, load_metadata):
             raise ValueError("Metadata tag mismatch")
         if metadata["draft"] or metadata["prerelease"]:
             raise ValueError("Unexpected unpublished metadata")
+        if resolve_tag_commit(release["tag_name"]) != metadata["target_commitish"]:
+            raise ValueError("Metadata source commit differs from release tag")
+        if not metadata["assets"]:
+            continue
         for asset in metadata["assets"]:
             actual = uploaded.get(asset["name"])
             if actual is None or actual["size"] != asset["size"] or actual["browser_download_url"] != asset["browser_download_url"]:

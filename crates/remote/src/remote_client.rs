@@ -182,18 +182,6 @@ fn reconnect_delay(attempt: usize) -> Duration {
         .min(MAX_RECONNECT_DELAY)
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ReconnectMode {
-    RejoinExistingServer,
-    RestartServer,
-}
-
-impl ReconnectMode {
-    fn should_rejoin_existing_server(self) -> bool {
-        matches!(self, Self::RejoinExistingServer)
-    }
-}
-
 enum State {
     Connecting,
     Connected {
@@ -370,7 +358,6 @@ pub struct RemoteClient {
     os_version: Option<String>,
     state: Option<State>,
     reconnect_cancellation: Option<oneshot::Sender<()>>,
-    next_reconnect_mode: ReconnectMode,
     reconnect_status: Option<String>,
     manual_reconnect: bool,
 }
@@ -521,7 +508,6 @@ impl RemoteClient {
                     os_version: os_version.clone(),
                     state: Some(State::Connecting),
                     reconnect_cancellation: None,
-                    next_reconnect_mode: ReconnectMode::RejoinExistingServer,
                     reconnect_status: None,
                     manual_reconnect: false,
                 });
@@ -759,10 +745,6 @@ impl RemoteClient {
             );
         }
 
-        let reconnect_mode = std::mem::replace(
-            &mut self.next_reconnect_mode,
-            ReconnectMode::RejoinExistingServer,
-        );
         let unique_identifier = self.unique_identifier.clone();
         let client = self.client.clone();
         let (reconnect_cancellation_tx, reconnect_cancellation_rx) = oneshot::channel();
@@ -830,7 +812,9 @@ impl RemoteClient {
 
                     let io_task = remote_connection.start_proxy(
                         unique_identifier,
-                        reconnect_mode.should_rejoin_existing_server(),
+                        // Buffered requests reference the existing server's worktree and buffer IDs.
+                        // A new server requires a new project, not a transport-only resync.
+                        true,
                         incoming_tx,
                         outgoing_rx,
                         client.outgoing_progress.clone(),
@@ -1050,17 +1034,7 @@ impl RemoteClient {
                             ProxyLaunchError::ServerNotRunning => {
                                 log::error!("failed to reconnect because server is not running");
                                 this.update(cx, |this, cx| {
-                                    if this.state_is(State::is_reconnecting) {
-                                        // Let resync fail into the bounded retry loop instead of
-                                        // disconnecting the project before a normal launch can recover it.
-                                        this.next_reconnect_mode = ReconnectMode::RestartServer;
-                                        this.set_reconnect_status(
-                                            "远程服务未运行，将自动尝试重新启动".into(),
-                                            cx,
-                                        );
-                                    } else {
-                                        this.set_state(State::ServerNotRunning, cx);
-                                    }
+                                    this.set_state(State::ServerNotRunning, cx);
                                 })?;
                             }
                         }
@@ -1224,12 +1198,7 @@ impl RemoteClient {
         match self.connection_state() {
             ConnectionState::HeartbeatMissed => {
                 self.manual_reconnect = true;
-                self.next_reconnect_mode = ReconnectMode::RestartServer;
-                if let Err(error) = self.reconnect(cx) {
-                    self.next_reconnect_mode = ReconnectMode::RejoinExistingServer;
-                    return Err(error);
-                }
-                Ok(())
+                self.reconnect(cx)
             }
             ConnectionState::Reconnecting => {
                 let cancellation = self
@@ -1240,7 +1209,6 @@ impl RemoteClient {
                     .send(())
                     .map_err(|_| anyhow!("active reconnect attempt already completed"))?;
                 self.manual_reconnect = true;
-                self.next_reconnect_mode = ReconnectMode::RestartServer;
                 self.set_reconnect_status("已收到重连请求，正在重新建立连接…".into(), cx);
                 Ok(())
             }
@@ -1432,6 +1400,61 @@ impl RemoteClient {
             .unwrap()
     }
 
+    /// Builds a connected entity without a proxy, monitor or heartbeat for client UI tests.
+    #[cfg(feature = "test-support")]
+    pub async fn test_connected_ssh(client_cx: &mut gpui::TestAppContext) -> Entity<Self> {
+        let mut server_cx = client_cx.new_app();
+        let (options, _, guard) = Self::fake_server(client_cx, &mut server_cx);
+        drop(guard);
+        let connection = connect(
+            options,
+            Arc::new(crate::transport::mock::MockDelegate),
+            &mut client_cx.to_async(),
+        )
+        .await
+        .unwrap();
+        client_cx.new(|cx| {
+            let (outgoing_tx, _) = mpsc::unbounded();
+            let (_, incoming_rx) = mpsc::unbounded();
+            Self {
+                client: ChannelClient::new(incoming_rx, outgoing_tx, cx, "forwarding-test", false),
+                unique_identifier: "forwarding-test".into(),
+                connection_options: RemoteConnectionOptions::Ssh(Default::default()),
+                path_style: connection.path_style(),
+                platform: connection.remote_platform(),
+                os_version: None,
+                state: Some(State::Connected {
+                    remote_connection: connection,
+                    delegate: Arc::new(crate::transport::mock::MockDelegate),
+                    multiplex_task: Task::ready(Ok(())),
+                    heartbeat_task: Task::ready(Ok(())),
+                }),
+                reconnect_cancellation: None,
+                reconnect_status: None,
+                manual_reconnect: false,
+            }
+        })
+    }
+
+    /// Controlled connection changes for UI observers, not a production reconnect simulation.
+    #[cfg(feature = "test-support")]
+    pub fn set_connection_for_test(
+        &mut self,
+        connection: Option<Arc<dyn RemoteConnection>>,
+        cx: &mut Context<Self>,
+    ) {
+        self.state = Some(match connection {
+            Some(remote_connection) => State::Connected {
+                remote_connection,
+                delegate: Arc::new(crate::transport::mock::MockDelegate),
+                multiplex_task: Task::ready(Ok(())),
+                heartbeat_task: Task::ready(Ok(())),
+            },
+            None => State::Reconnecting,
+        });
+        cx.notify();
+    }
+
     pub fn remote_connection(&self) -> Option<Arc<dyn RemoteConnection>> {
         self.state
             .as_ref()
@@ -1596,18 +1619,121 @@ impl RemoteConnectionOptions {
             RemoteConnectionOptions::Mock(_) => "mock",
         }
     }
+
+    pub fn host(&self) -> String {
+        match self {
+            RemoteConnectionOptions::Ssh(opts) => opts.host.to_string(),
+            RemoteConnectionOptions::Wsl(opts) => opts.distro_name.clone(),
+            RemoteConnectionOptions::Docker(opts) => opts.name.clone(),
+            #[cfg(any(test, feature = "test-support"))]
+            RemoteConnectionOptions::Mock(opts) => format!("mock-{}", opts.id),
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use gpui::TestAppContext;
-    use rpc::{ErrorCodeExt, proto::ErrorCode};
+    use rpc::{ErrorCodeExt, TypedEnvelope, proto::ErrorCode};
 
-    #[test]
-    fn reconnect_mode_controls_remote_server_restart() {
-        assert!(ReconnectMode::RejoinExistingServer.should_rejoin_existing_server());
-        assert!(!ReconnectMode::RestartServer.should_rejoin_existing_server());
+    #[gpui::test]
+    async fn missing_server_during_reconnect_disconnects_old_session(
+        cx: &mut TestAppContext,
+        server_cx: &mut TestAppContext,
+    ) {
+        cx.update(|cx| release_channel::init(Version::new(0, 0, 0), cx));
+        let (options, server, guard) = RemoteClient::fake_server(cx, server_cx);
+        let handler = server_cx.new(|_| ());
+        server.add_request_handler(
+            handler.downgrade(),
+            |_, _: TypedEnvelope<proto::Ping>, _| async { Ok(proto::Ack {}) },
+        );
+        drop(guard);
+        let client = RemoteClient::connect_mock(options, cx).await;
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let _subscription = cx.update(|cx| {
+            let events = events.clone();
+            cx.subscribe(&client, move |_, event, _| {
+                events.lock().push(matches!(
+                    event,
+                    RemoteClientEvent::Disconnected {
+                        server_not_running: true
+                    }
+                ));
+            })
+        });
+        client.update(cx, |client, cx| client.set_state(State::Reconnecting, cx));
+        let channel = client.read_with(cx, |client, _| client.client.clone());
+        let pending_request = channel.request(proto::Ping {});
+        let monitor = RemoteClient::monitor(
+            client.downgrade(),
+            Task::ready(Ok(ProxyLaunchError::ServerNotRunning.to_exit_code())),
+            &cx.to_async(),
+        );
+        monitor.await.expect("proxy exit should be handled");
+        assert!(pending_request.await.is_err());
+        cx.run_until_parked();
+        client.update(cx, |client, cx| {
+            assert!(client.is_disconnected());
+            assert!(client.reconnect_now(cx).is_err());
+            assert!(client.client.response_channels.lock().is_empty());
+        });
+        assert_eq!(*events.lock(), vec![true]);
+    }
+
+    #[gpui::test]
+    async fn manual_reconnect_retains_existing_session(
+        cx: &mut TestAppContext,
+        server_cx: &mut TestAppContext,
+    ) {
+        cx.update(|cx| release_channel::init(Version::new(0, 0, 0), cx));
+        let (options, server, guard) = RemoteClient::fake_server(cx, server_cx);
+        let handler = server_cx.new(|_| ());
+        server.add_request_handler(
+            handler.downgrade(),
+            |_, _: TypedEnvelope<proto::Ping>, _| async { Ok(proto::Ack {}) },
+        );
+        drop(guard);
+        let client = RemoteClient::connect_mock(options, cx).await;
+        let reconnected = Arc::new(Mutex::new(false));
+        let _subscription = cx.update(|cx| {
+            let reconnected = reconnected.clone();
+            cx.subscribe(&client, move |_, event, _| {
+                assert!(matches!(event, RemoteClientEvent::Reconnected));
+                *reconnected.lock() = true;
+            })
+        });
+        client.update(cx, |client, cx| {
+            let Some(State::Connected {
+                remote_connection,
+                delegate,
+                multiplex_task,
+                heartbeat_task,
+            }) = client.state.take()
+            else {
+                panic!("expected a connected client");
+            };
+            client.set_state(
+                State::HeartbeatMissed {
+                    missed_heartbeats: 1,
+                    remote_connection,
+                    delegate,
+                    multiplex_task,
+                    heartbeat_task,
+                },
+                cx,
+            );
+            client
+                .reconnect_now(cx)
+                .expect("manual reconnect should start");
+        });
+        cx.run_until_parked();
+        assert!(*reconnected.lock());
+        client.read_with(cx, |client, _| {
+            assert_eq!(client.connection_state(), ConnectionState::Connected);
+            assert!(client.was_manual_reconnect());
+        });
     }
 
     #[test]
@@ -1879,6 +2005,17 @@ mod tests {
             0,
             "stream channel should be removed once the consumer has dropped the stream"
         );
+    }
+
+    #[test]
+    fn test_ssh_host_ignores_nickname() {
+        let options = RemoteConnectionOptions::Ssh(SshConnectionOptions {
+            host: "1.2.3.4".into(),
+            nickname: Some("My Cool Project".to_string()),
+            ..Default::default()
+        });
+
+        assert_eq!(options.host(), "1.2.3.4");
     }
 }
 

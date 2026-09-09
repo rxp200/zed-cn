@@ -1163,7 +1163,7 @@ impl KeymapEditor {
                         Tooltip::with_meta(
                             "查看冲突",
                             Some(&ToggleConflictFilter),
-                            "使用 Alt+点击显示所有冲突",
+                            concat!("使用 ", ui::alt_key_name!(), "+点击显示所有冲突"),
                             cx,
                         )
                     })
@@ -1197,7 +1197,11 @@ impl KeymapEditor {
                         Tooltip::with_meta(
                             "显示匹配的快捷键绑定",
                             Some(&ShowMatchingKeybinds),
-                            "此绑定已被其他绑定覆盖。\n使用 Alt+点击编辑此绑定",
+                            concat!(
+                                "此绑定已被其他绑定覆盖。\n使用 ",
+                                ui::alt_key_name!(),
+                                "+点击编辑此绑定"
+                            ),
                             cx,
                         )
                     })

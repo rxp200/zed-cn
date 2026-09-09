@@ -16,7 +16,7 @@ use crate::{
     hover_popover::{InfoPopover, hide_hover},
     translation_cache::{TranslationDiskCache, translation_cache_path},
 };
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use collections::HashMap;
 use futures::{StreamExt as _, channel::oneshot};
 use gpui::{
@@ -178,17 +178,30 @@ impl TranslationService {
         if let Some(service) = cx.try_global::<GlobalTranslationService>() {
             return service.0.clone();
         }
+        Self::create(translation_cache_path(), cx)
+    }
+
+    fn create(path: std::path::PathBuf, cx: &mut App) -> Entity<Self> {
         let settings = HoverTranslationSettings::get_global(cx);
         let persist = settings.cache_persist;
         let max_bytes = settings.cache_max_bytes;
-        let service = cx.new(|_| Self {
-            cache: HashMap::default(),
-            in_flight: HashMap::default(),
-            disk_cache: TranslationDiskCache::new(translation_cache_path(), max_bytes, persist),
+        let service = cx.new(|cx| {
+            cx.observe_global::<settings::SettingsStore>(|service: &mut Self, cx| {
+                let settings = HoverTranslationSettings::get_global(cx);
+                service
+                    .disk_cache
+                    .configure(settings.cache_persist, settings.cache_max_bytes);
+                service.disk_cache.schedule_save(cx);
+            })
+            .detach();
+            Self {
+                cache: HashMap::default(),
+                in_flight: HashMap::default(),
+                disk_cache: TranslationDiskCache::new(path.clone(), max_bytes, persist),
+            }
         });
         if persist {
             // Kick off the one-time disk load in the background.
-            let path = translation_cache_path();
             let entity = service.downgrade();
             let load_task = cx.spawn(async move |cx| {
                 let bytes = cx
@@ -218,11 +231,9 @@ impl TranslationService {
         let text = truncate_text(&text, settings.max_chars);
 
         let service = Self::global(cx);
-        let Some(model) = resolve_model(cx) else {
-            return Task::ready(Err(anyhow::anyhow!(
-                "未配置翻译模型：请在 settings.json 的 \"hover_translation\" 中填写 \
-                 \"provider\" 和 \"model\"，或先配置默认语言模型"
-            )));
+        let model = match resolve_model(cx) {
+            Ok(model) => model,
+            Err(error) => return Task::ready(Err(error)),
         };
         let key = cache_key(&model, &target_language, &text);
 
@@ -338,25 +349,33 @@ impl TranslationService {
     }
 }
 
-fn resolve_model(cx: &App) -> Option<ConfiguredModel> {
+fn resolve_model(cx: &App) -> Result<ConfiguredModel> {
     let settings = HoverTranslationSettings::get_global(cx);
     let registry = LanguageModelRegistry::read_global(cx);
-    if let (Some(provider_id), Some(model_name)) = (&settings.provider, &settings.model) {
-        if let Some(provider) = registry.provider(&LanguageModelProviderId(provider_id.clone())) {
-            if let Some(model) = provider
+    match (&settings.provider, &settings.model) {
+        (Some(provider_id), Some(model_name)) => {
+            let provider = registry
+                .provider(&LanguageModelProviderId(provider_id.clone()))
+                .with_context(|| format!("配置的翻译模型提供商不可用：{provider_id}"))?;
+            let model = provider
                 .provided_models(cx)
                 .into_iter()
                 .find(|model| model.id().0.as_ref() == model_name.as_str())
-            {
-                return Some(ConfiguredModel { provider, model });
-            }
+                .with_context(|| format!("配置的翻译模型不可用：{provider_id}/{model_name}"))?;
+            Ok(ConfiguredModel { provider, model })
         }
+        (None, None) => registry
+            .default_fast_model(cx)
+            .or_else(|| registry.default_model())
+            .context(
+                "未配置翻译模型：请在 settings.json 的 \"hover_translation\" 中填写 \
+                 \"provider\" 和 \"model\"，或先配置默认语言模型",
+            ),
+        _ => Err(anyhow::anyhow!(
+            "翻译模型配置不完整：请同时填写 \"hover_translation.provider\" 和 \
+             \"hover_translation.model\""
+        )),
     }
-    // Fall back to the default (fast) model when no provider/model is
-    // configured, or when the configured one is no longer available.
-    registry
-        .default_fast_model(cx)
-        .or_else(|| registry.default_model())
 }
 
 async fn request_translation(
@@ -646,9 +665,11 @@ mod tests {
 
     #[gpui::test]
     async fn test_translation_stored_in_disk_cache(cx: &mut gpui::TestAppContext) {
-        // This test keeps `cache_persist` enabled (the default) to verify that
-        // completed translations land in the persistent cache layer.
         init_test(cx, |_| {});
+        let directory = util::test::TempTree::new(serde_json::json!({}));
+        cx.update(|cx| {
+            TranslationService::create(directory.path().join("translation_cache.json"), cx);
+        });
         let model = setup_fake_model(cx);
 
         let task = cx.update(|cx| TranslationService::translate("hello world".into(), cx));
@@ -667,6 +688,115 @@ mod tests {
             assert_eq!(entries.len(), 1);
             assert_eq!(entries.values().next().unwrap().translation, "你好世界");
         });
+    }
+
+    #[gpui::test]
+    async fn test_persistent_cache_load_uses_injected_directory(cx: &mut gpui::TestAppContext) {
+        init_test(cx, |_| {});
+        let directory = util::test::TempTree::new(serde_json::json!({
+            "translation_cache.json": serde_json::json!({
+                "version": 1,
+                "entries": {"isolated-fixture": {"translation": "隔离译文"}}
+            }).to_string()
+        }));
+        let path = directory.path().join("translation_cache.json");
+        let service = cx.update(|cx| TranslationService::create(path.clone(), cx));
+        cx.run_until_parked();
+        service.read_with(cx, |service, _| {
+            assert_eq!(service.disk_cache.entries().len(), 1);
+            assert_eq!(
+                service
+                    .disk_cache
+                    .get("isolated-fixture")
+                    .unwrap()
+                    .translation,
+                "隔离译文"
+            );
+        });
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
+    }
+
+    #[gpui::test]
+    async fn test_disabling_persistence_cancels_scheduled_save(cx: &mut gpui::TestAppContext) {
+        init_test(cx, |_| {});
+        let directory = util::test::TempTree::new(serde_json::json!({}));
+        let path = directory.path().join("translation_cache.json");
+        let service = cx.update(|cx| TranslationService::create(path.clone(), cx));
+        cx.run_until_parked();
+        service.update(cx, |service, cx| {
+            service.disk_cache.store("key", "译文".into());
+            service.disk_cache.schedule_save(cx);
+        });
+        cx.run_until_parked();
+        cx.update(|cx| {
+            cx.update_global(|store: &mut SettingsStore, cx| {
+                store.update_user_settings(cx, |settings: &mut SettingsContent| {
+                    settings
+                        .hover_translation
+                        .get_or_insert_with(Default::default)
+                        .cache_persist = Some(false);
+                });
+            })
+        });
+        cx.run_until_parked();
+        cx.background_executor
+            .timer(std::time::Duration::from_secs(10))
+            .await;
+        cx.run_until_parked();
+        assert!(!path.exists());
+        assert!(service.read_with(cx, |service, _| service.disk_cache.is_dirty()));
+
+        cx.update(|cx| {
+            cx.update_global(|store: &mut SettingsStore, cx| {
+                store.update_user_settings(cx, |settings: &mut SettingsContent| {
+                    settings
+                        .hover_translation
+                        .get_or_insert_with(Default::default)
+                        .cache_persist = Some(true);
+                });
+            })
+        });
+        cx.run_until_parked();
+        cx.background_executor
+            .timer(std::time::Duration::from_secs(5))
+            .await;
+        cx.run_until_parked();
+        assert!(path.is_file());
+        assert!(!service.read_with(cx, |service, _| service.disk_cache.is_dirty()));
+    }
+
+    #[gpui::test]
+    async fn test_persistence_write_failure_remains_dirty_and_can_retry(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        init_test(cx, |_| {});
+        let directory = util::test::TempTree::new(serde_json::json!({}));
+        let path = directory.path().join("missing/translation_cache.json");
+        let service = cx.update(|cx| TranslationService::create(path.clone(), cx));
+        cx.run_until_parked();
+        service.update(cx, |service, cx| {
+            service.disk_cache.store("key", "译文".into());
+            service.disk_cache.schedule_save(cx);
+        });
+        cx.run_until_parked();
+        cx.background_executor
+            .timer(std::time::Duration::from_secs(5))
+            .await;
+        cx.run_until_parked();
+        assert!(!path.exists());
+        assert!(service.read_with(cx, |service, _| service.disk_cache.is_dirty()));
+        std::fs::create_dir(path.parent().unwrap()).unwrap();
+        service.update(cx, |service, cx| service.disk_cache.schedule_save(cx));
+        cx.run_until_parked();
+        cx.background_executor
+            .timer(std::time::Duration::from_secs(5))
+            .await;
+        cx.run_until_parked();
+        let bytes = std::fs::read(&path).unwrap();
+        let mut reloaded = TranslationDiskCache::new(path, 5242880, true);
+        reloaded.load_from_bytes(&bytes);
+        assert_eq!(reloaded.get("key").unwrap().translation, "译文");
+        assert!(!service.read_with(cx, |service, _| service.disk_cache.is_dirty()));
     }
 
     #[gpui::test]
@@ -691,6 +821,37 @@ mod tests {
         cx.editor(|editor, _, cx| {
             let text = popover_text(editor, cx);
             assert!(text.contains("未配置翻译模型"), "got: {text}");
+        });
+    }
+
+    #[gpui::test]
+    async fn test_configured_translation_model_does_not_fall_back(cx: &mut gpui::TestAppContext) {
+        init_test_without_persistent_cache(cx);
+        let default_model = setup_fake_model(cx);
+        cx.update(|cx| {
+            cx.update_global(|store: &mut SettingsStore, cx| {
+                store.update_user_settings(cx, |settings: &mut SettingsContent| {
+                    settings.hover_translation = Some(
+                        serde_json::from_value(serde_json::json!({
+                            "cache_persist": false,
+                            "provider": "missing-provider",
+                            "model": "missing-model"
+                        }))
+                        .unwrap(),
+                    );
+                });
+            });
+        });
+        let mut cx = EditorTestContext::new(cx).await;
+
+        cx.set_state("let «sensitive_textˇ» = 1;");
+        cx.dispatch_action(TranslateSelection);
+        cx.run_until_parked();
+
+        assert!(default_model.pending_completions().is_empty());
+        cx.editor(|editor, _, cx| {
+            let text = popover_text(editor, cx);
+            assert!(text.contains("配置的翻译模型提供商不可用"), "got: {text}");
         });
     }
 

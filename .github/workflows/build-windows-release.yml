@@ -38,7 +38,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     outputs:
-      source_ref: ${{ steps.inputs.outputs.source_ref }}
       release_tag: ${{ steps.inputs.outputs.release_tag }}
       release_version: ${{ steps.inputs.outputs.release_version }}
       release_revision: ${{ steps.inputs.outputs.release_revision }}
@@ -82,7 +81,12 @@ jobs:
           fetch-depth: 0
           clean: true
 
-      - name: Validate source version and public main completeness
+      - name: Validate release review and preview complete notes
+        env:
+          REVIEW_RELEASE_TAG: ${{ steps.inputs.outputs.release_tag }}
+        run: python3 script/release_notes.py --release-tag "$REVIEW_RELEASE_TAG"
+
+      - name: Validate source version and frozen public main source
         id: source
         shell: pwsh
         env:
@@ -184,8 +188,19 @@ jobs:
       - name: Check out release source
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
         with:
-          ref: ${{ needs.validate_source.outputs.source_ref }}
+          ref: ${{ needs.validate_source.outputs.source_sha }}
           clean: true
+
+      - name: Assert validated source checkout
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ needs.validate_source.outputs.source_sha }}
+        run: |
+          actual_sha="$(git rev-parse --verify HEAD)"
+          if [[ "$actual_sha" != "$EXPECTED_SHA" ]]; then
+            echo "::error::Checkout HEAD $actual_sha does not match validated source $EXPECTED_SHA."
+            exit 1
+          fi
 
       - name: Free runner disk space
         run: |
@@ -288,8 +303,19 @@ jobs:
       - name: Check out release source
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
         with:
-          ref: ${{ needs.validate_source.outputs.source_ref }}
+          ref: ${{ needs.validate_source.outputs.source_sha }}
           clean: true
+
+      - name: Assert validated source checkout
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ needs.validate_source.outputs.source_sha }}
+        run: |
+          actual_sha="$(git rev-parse --verify HEAD)"
+          if [[ "$actual_sha" != "$EXPECTED_SHA" ]]; then
+            echo "::error::Checkout HEAD $actual_sha does not match validated source $EXPECTED_SHA."
+            exit 1
+          fi
 
       - name: Set up Node.js
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
@@ -389,8 +415,19 @@ jobs:
       - name: Check out release source
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
         with:
-          ref: ${{ needs.validate_source.outputs.source_ref }}
+          ref: ${{ needs.validate_source.outputs.source_sha }}
           clean: true
+
+      - name: Assert validated source checkout
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ needs.validate_source.outputs.source_sha }}
+        run: |
+          actual_sha="$(git rev-parse --verify HEAD)"
+          if [[ "$actual_sha" != "$EXPECTED_SHA" ]]; then
+            echo "::error::Checkout HEAD $actual_sha does not match validated source $EXPECTED_SHA."
+            exit 1
+          fi
 
       - name: Free runner disk space
         shell: pwsh
@@ -548,9 +585,20 @@ jobs:
       - name: Check out release source
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
         with:
-          ref: ${{ needs.validate_source.outputs.source_ref }}
+          ref: ${{ needs.validate_source.outputs.source_sha }}
           fetch-depth: 0
           clean: true
+
+      - name: Assert validated source checkout
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ needs.validate_source.outputs.source_sha }}
+        run: |
+          actual_sha="$(git rev-parse --verify HEAD)"
+          if [[ "$actual_sha" != "$EXPECTED_SHA" ]]; then
+            echo "::error::Checkout HEAD $actual_sha does not match validated source $EXPECTED_SHA."
+            exit 1
+          fi
 
       - name: Download all release assets
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
@@ -617,7 +665,29 @@ jobs:
           RELEASE_REVISION: ${{ needs.validate_source.outputs.release_revision }}
           SOURCE_SHA: ${{ needs.validate_source.outputs.source_sha }}
           CREATE_DRAFT: ${{ needs.validate_source.outputs.draft }}
+          RELEASE_EVENT: ${{ github.event_name }}
+          GH_REPO: ${{ github.repository }}
         run: |
+          set -euo pipefail
+          verify_release_tag() {
+            local remote_tags tag_sha
+            remote_tags="$(git ls-remote origin "refs/tags/$RELEASE_TAG" "refs/tags/$RELEASE_TAG^{}")"
+            tag_sha="$(awk -v ref="refs/tags/$RELEASE_TAG" '$2 == ref { direct = $1 } $2 == ref "^{}" { peeled = $1 } END { print peeled ? peeled : direct }' <<< "$remote_tags")"
+            if [[ -z "$tag_sha" && "${1:-}" == "create-if-missing" && "$RELEASE_EVENT" == "workflow_dispatch" ]]; then
+              # Draft Release creation need not materialize a tag. Create only an absent ref;
+              # the API rejects a concurrent creator rather than overwriting their tag.
+              gh api --method POST "repos/$GH_REPO/git/refs" \
+                -f "ref=refs/tags/$RELEASE_TAG" -f "sha=$SOURCE_SHA"
+              verify_release_tag
+              return
+            fi
+            if [[ "$tag_sha" != "$SOURCE_SHA" ]]; then
+              echo "::error::Release tag $RELEASE_TAG peels to '$tag_sha', expected $SOURCE_SHA."
+              return 1
+            fi
+          }
+          verify_release_tag create-if-missing
+
           notes_path="release-notes.md"
           commit_body="$(git show -s --format=%B HEAD)"
           detailed_notes="$(printf '%s\n' "$commit_body" | sed -n '/^Zed-CN-Release-Notes:$/,/^Zed-CN-Release-Notes-End$/p' | sed '1d;$d')"
@@ -670,6 +740,7 @@ jobs:
             gh "${arguments[@]}"
           fi
 
+          verify_release_tag
           rm -f release-artifacts/MISSING-ASSETS.txt
           # Remove the completion marker before replacing any published binary.
           published_assets="$(gh release view "$RELEASE_TAG" --repo "${{ github.repository }}" \
@@ -678,6 +749,7 @@ jobs:
             gh release delete-asset "$RELEASE_TAG" update-metadata.json \
               --repo "${{ github.repository }}" --yes
           fi
+          verify_release_tag
           gh release upload "$RELEASE_TAG" release-artifacts/* \
             --repo "${{ github.repository }}" \
             --clobber
@@ -685,5 +757,6 @@ jobs:
             --release-directory release-artifacts \
             --tag "$RELEASE_TAG" --commit "$SOURCE_SHA" \
             --output update-metadata.json
+          verify_release_tag
           gh release upload "$RELEASE_TAG" update-metadata.json \
             --repo "${{ github.repository }}" --clobber
