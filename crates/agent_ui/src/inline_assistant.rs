@@ -278,7 +278,7 @@ impl InlineAssistant {
                             gpui::PromptLevel::Warning,
                             &error.to_string(),
                             None,
-                            &["Configure", "Cancel"],
+                            &["配置", "取消"],
                         )
                         .await
                         .ok();

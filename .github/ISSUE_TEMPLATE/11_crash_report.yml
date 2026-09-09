@@ -3,6 +3,12 @@ description: Zed is crashing or freezing or hanging.
 type: Crash
 labels: "state:needs triage"
 body:
+  - type: markdown
+    attributes:
+      value: |
+        Zed CN is an unofficial community fork and is not operated, sponsored, or endorsed by Zed Industries. Use this tracker for crashes reproduced in Zed CN. If the crash also occurs in an unmodified official Zed build, consider reporting it to [zed-industries/zed](https://github.com/zed-industries/zed/issues) as well.
+
+        Before attaching logs, crash reports, or settings, remove API keys, access tokens, source code, file paths, and other sensitive information.
   - type: textarea
     attributes:
       label: Reproduction steps

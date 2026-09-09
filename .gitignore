@@ -38,6 +38,13 @@
 DerivedData/
 Packages
 xcuserdata/
+
+# Windows packaging artifacts
+/AGS_SDK-*/
+/AGS_SDK_v*.zip
+/Microsoft.Windows.Console.ConPTY.*.nupkg
+/conpty/
+/inno/
 crates/docs_preprocessor/actions.json
 
 # Don't commit any secrets to the repo.
@@ -60,3 +67,4 @@ crates/docs_preprocessor/actions.json
 .nixos-test-history
 
 .local*
+.cache

@@ -9,7 +9,8 @@ use collections::HashMap;
 use git::{
     Oid,
     repository::{
-        CommitData, GitCommitTemplate, InitialGraphCommitData, RepoPath, Worktree as GitWorktree,
+        AUTHOR_SEARCH_QUERY_PREFIX, CommitData, GitCommitTemplate, InitialGraphCommitData,
+        RepoPath, SearchCommitArgs, Worktree as GitWorktree,
     },
     status::{DiffStat, FileStatus, StatusCode, TrackedStatus},
 };
@@ -83,6 +84,67 @@ async fn test_root_repo_common_dir_sync(
     assert_eq!(
         guest_common_dir, host_common_dir,
         "guest should see the same root_repo_common_dir as host",
+    );
+}
+
+#[gpui::test]
+async fn test_remote_file_permalink(
+    executor: BackgroundExecutor,
+    cx_a: &mut TestAppContext,
+    cx_b: &mut TestAppContext,
+) {
+    let mut server = TestServer::start(executor.clone()).await;
+    let client_a = server.create_client(cx_a, "user_a").await;
+    let client_b = server.create_client(cx_b, "user_b").await;
+    server
+        .create_room(&mut [(&client_a, cx_a), (&client_b, cx_b)])
+        .await;
+
+    let fs = client_a.fs();
+    fs.insert_tree(
+        path!("/project"),
+        json!({
+            ".git": {},
+            "tracked.txt": "tracked",
+        }),
+    )
+    .await;
+
+    let dot_git = Path::new(path!("/project/.git"));
+    let sha = "e6ebe7974deb6bb6cc0e2595c8ec31f0c71084b7";
+    fs.set_head_for_repo(dot_git, &[("tracked.txt", "tracked".into())], sha);
+    fs.set_remote_for_repo(
+        dot_git,
+        "origin",
+        "https://github.com/zed-industries/zed.git",
+    );
+
+    let (project_a, worktree_id) = client_a.build_local_project(path!("/project"), cx_a).await;
+    project_a
+        .update(cx_a, |project, cx| project.git_scans_complete(cx))
+        .await;
+
+    let active_call_a = cx_a.read(ActiveCall::global);
+    let project_id = active_call_a
+        .update(cx_a, |call, cx| call.share_project(project_a.clone(), cx))
+        .await
+        .unwrap();
+    let project_b = client_b.join_remote_project(project_id, cx_b).await;
+    executor.run_until_parked();
+
+    let tracked_path = ProjectPath {
+        worktree_id,
+        path: rel_path("tracked.txt").into(),
+    };
+    let permalink = project_b
+        .update(cx_b, |project, cx| {
+            project.get_file_permalink(&tracked_path, cx)
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        permalink.as_str(),
+        format!("https://github.com/zed-industries/zed/blob/{sha}/tracked.txt")
     );
 }
 
@@ -845,6 +907,24 @@ async fn test_remote_git_graph_data_and_search(
     assert_initial_graph_commits_eq(&remote_initial_graph_data, &local_initial_graph_data);
     assert!(!local_search_results.is_empty());
     assert_eq!(remote_search_results, local_search_results);
+
+    let remote_repository = cx_b.update(|cx| project_b.read(cx).active_repository(cx).unwrap());
+    let (author_result_tx, author_result_rx) = async_channel::unbounded();
+    remote_repository.update(cx_b, |repository, cx| {
+        repository.search_commits(
+            Default::default(),
+            SearchCommitArgs {
+                query: format!("{AUTHOR_SEARCH_QUERY_PREFIX}author4@example.com").into(),
+                case_sensitive: false,
+            },
+            author_result_tx,
+            cx,
+        );
+    });
+    cx_b.run_until_parked();
+
+    assert_eq!(author_result_rx.recv().await.unwrap(), commits[4].sha);
+    assert!(author_result_rx.recv().await.is_err());
 }
 
 #[gpui::test]

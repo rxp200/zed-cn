@@ -73,7 +73,7 @@ pub fn clone_and_open(
                         gpui::PromptLevel::Info,
                         &format!("Git Clone: {}", repo_name),
                         None,
-                        &["Add repo to project", "Open repo in new project"],
+                        &["添加到项目", "在新项目中打开仓库"],
                         cx,
                     )
                 })

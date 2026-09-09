@@ -836,12 +836,12 @@ pub fn authorize_dirty_buffer(
             vec![
                 acp::PermissionOption::new(
                     acp::PermissionOptionId::new("save"),
-                    "Save",
+                    "保存",
                     acp::PermissionOptionKind::AllowOnce,
                 ),
                 acp::PermissionOption::new(
                     acp::PermissionOptionId::new("discard"),
-                    "Discard",
+                    "丢弃",
                     acp::PermissionOptionKind::RejectOnce,
                 ),
             ],
@@ -851,12 +851,12 @@ pub fn authorize_dirty_buffer(
             vec![
                 acp::PermissionOption::new(
                     acp::PermissionOptionId::new("discard"),
-                    "Overwrite",
+                    "覆盖",
                     acp::PermissionOptionKind::AllowOnce,
                 ),
                 acp::PermissionOption::new(
                     acp::PermissionOptionId::new("keep"),
-                    "Cancel",
+                    "取消",
                     acp::PermissionOptionKind::RejectOnce,
                 ),
             ],

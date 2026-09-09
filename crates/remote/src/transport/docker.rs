@@ -220,8 +220,7 @@ impl DockerExecConnection {
                 let commit = commit.map(|s| s.full()).unwrap_or_default();
                 format!("{}-{}", version, commit)
             }
-            ReleaseChannel::Dev => "build".to_string(),
-            _ => version.to_string(),
+            _ => super::remote_server_version(release_channel, &version),
         };
         let binary_name = format!(
             "zed-remote-server-{}-{}",
@@ -438,6 +437,7 @@ impl DockerExecConnection {
         dst_path: String,
     ) -> Result<()> {
         let mut command = util::command::new_command(&docker_cli);
+        command.kill_on_drop(true);
         command.arg("cp");
         command.arg("-a");
         command.arg(&src_path);
@@ -457,6 +457,7 @@ impl DockerExecConnection {
         }
 
         let mut chown_command = util::command::new_command(&docker_cli);
+        chown_command.kill_on_drop(true);
         chown_command.arg("exec");
         chown_command.arg(connection_options.container_id);
         chown_command.arg("chown");
@@ -666,6 +667,7 @@ impl RemoteConnection for DockerExecConnection {
         reconnect: bool,
         incoming_tx: UnboundedSender<Envelope>,
         outgoing_rx: UnboundedReceiver<Envelope>,
+        outgoing_progress: crate::protocol::OutgoingProgress,
         connection_activity_tx: Sender<()>,
         delegate: Arc<dyn RemoteClientDelegate>,
         cx: &mut AsyncApp,
@@ -734,6 +736,7 @@ impl RemoteConnection for DockerExecConnection {
                 child,
                 incoming_tx,
                 outgoing_rx,
+                outgoing_progress,
                 connection_activity_tx,
                 cx,
             )
@@ -847,6 +850,15 @@ impl RemoteConnection for DockerExecConnection {
         _forwards: Vec<(u16, String, u16)>,
     ) -> Result<CommandTemplate> {
         Err(anyhow::anyhow!("Not currently supported for docker_exec"))
+    }
+
+    fn build_reverse_forward_ports_command(
+        &self,
+        _forwards: Vec<(u16, String, u16)>,
+    ) -> Result<CommandTemplate> {
+        Err(anyhow::anyhow!(
+            "Reverse port forwarding is not currently supported for docker_exec"
+        ))
     }
 
     fn connection_options(&self) -> RemoteConnectionOptions {

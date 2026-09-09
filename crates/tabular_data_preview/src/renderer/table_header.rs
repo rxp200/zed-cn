@@ -500,7 +500,7 @@ impl PickerDelegate for ColumnFilterDelegate {
                         .id("table-filter-clear-all")
                         .cursor_pointer()
                         .child(
-                            Label::new("Clear all")
+                            Label::new("清除全部")
                                 .size(LabelSize::Small)
                                 .color(Color::Accent),
                         )
@@ -669,7 +669,7 @@ impl TabularDataPreviewPane {
         .trigger_with_tooltip(
             IconButton::new(
                 ElementId::NamedInteger("filter-button".into(), col.get() as u64),
-                IconName::Filter,
+                IconName::FilterFunnel,
             )
             .icon_size(IconSize::Small)
             .style(if has_active_filters {
@@ -679,7 +679,7 @@ impl TabularDataPreviewPane {
             })
             .toggle_state(has_active_filters),
             Tooltip::text(if has_active_filters {
-                "Column has active filters. Click to manage"
+                "该列存在活动筛选条件。点击管理"
             } else {
                 "No filters applied. Click to add filters"
             }),

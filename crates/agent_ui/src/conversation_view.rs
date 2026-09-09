@@ -1663,11 +1663,11 @@ impl ConversationView {
                 self.load_subagent_session(subagent_session_id.clone(), session_id, window, cx)
             }
             AcpThreadEvent::ToolAuthorizationRequested(_) => {
-                self.notify_with_sound("Waiting for tool confirmation", IconName::Info, window, cx);
+                self.notify_with_sound("等待工具确认", IconName::Info, window, cx);
             }
             AcpThreadEvent::ToolAuthorizationReceived(_) => {}
             AcpThreadEvent::ElicitationRequested(_) => {
-                self.notify_with_sound("Waiting for input", IconName::Info, window, cx);
+                self.notify_with_sound("等待输入", IconName::Info, window, cx);
             }
             AcpThreadEvent::ElicitationResponded(_) => {}
             AcpThreadEvent::Retry(retry) => {
@@ -1769,12 +1769,7 @@ impl ConversationView {
                     });
                 }
                 if !is_subagent {
-                    self.notify_with_sound(
-                        "Agent stopped due to an error",
-                        IconName::Warning,
-                        window,
-                        cx,
-                    );
+                    self.notify_with_sound("Agent 因错误而停止", IconName::Warning, window, cx);
                 }
             }
             AcpThreadEvent::LoadError(error) => {
@@ -2338,7 +2333,7 @@ impl ConversationView {
                     .map(|this| {
                         if show_fallback_description {
                             this.child(
-                                Label::new("Choose one of the following authentication options:")
+                                Label::new("请选择以下认证方式之一：")
                                     .size(LabelSize::Small)
                                     .color(Color::Muted),
                             )
@@ -2733,23 +2728,23 @@ impl ConversationView {
             } => {
                 return self.render_unsupported(path, current_version, minimum_version, window, cx);
             }
-            LoadError::FailedToInstall(msg) => ("Failed to Install", msg.to_string()),
+            LoadError::FailedToInstall(msg) => ("安装失败", msg.to_string()),
             LoadError::Exited { status, stderr } => {
-                let mut message = format!("Server exited with status {status}");
+                let mut message = format!("服务进程已退出，状态为 {status}");
                 if let Some(stderr) = stderr {
                     message.push_str("\n");
                     message.push_str(stderr);
                 };
-                ("Failed to Launch", message)
+                ("启动失败", message)
             }
-            LoadError::Other(msg) => ("Failed to Launch", msg.to_string()),
+            LoadError::Other(msg) => ("启动失败", msg.to_string()),
         };
 
         let action_slot = h_flex()
             .gap_1()
             .child(
-                Button::new("retry-agent-launch", "Retry")
-                    .tooltip(Tooltip::text("Try to restart the agent"))
+                Button::new("retry-agent-launch", "重试")
+                    .tooltip(Tooltip::text("尝试重新启动 Agent"))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.retry_connection(window, cx);
                     })),
@@ -3236,7 +3231,7 @@ impl ConversationView {
     fn create_copy_button(&self, message: impl Into<String>) -> impl IntoElement {
         let message = message.into();
 
-        CopyButton::new("copy-error-message", message).tooltip_label("Copy Error Message")
+        CopyButton::new("copy-error-message", message).tooltip_label("复制错误消息")
     }
 
     pub(crate) fn reauthenticate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -4323,10 +4318,12 @@ pub(crate) mod tests {
                 "Conversation should transition to LoadError when an ACP thread exits"
             );
         });
+
+        release_dropped_entities(cx);
         assert_eq!(
             close_session_count.load(std::sync::atomic::Ordering::SeqCst),
             1,
-            "ConversationView should close the ACP session after a thread exit"
+            "dropping the thread views after a thread exit should close the ACP session"
         );
     }
 
@@ -6669,6 +6666,11 @@ pub(crate) mod tests {
     ) -> Entity<MessageEditor> {
         let thread = active_thread(conversation_view, cx);
         cx.read(|cx| thread.read(cx).message_editor.clone())
+    }
+
+    fn release_dropped_entities(cx: &mut VisualTestContext) {
+        cx.update(|_, _| ());
+        cx.run_until_parked();
     }
 
     #[gpui::test]

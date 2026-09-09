@@ -23,7 +23,7 @@ pub fn decode_text(bytes: Vec<u8>) -> Result<DecodedText> {
     let encoding = match analyze_byte_content(&bytes) {
         ByteContent::Utf16Le => UTF_16LE,
         ByteContent::Utf16Be => UTF_16BE,
-        ByteContent::Binary => bail!("Binary files are not supported"),
+        ByteContent::Binary => bail!("不支持二进制文件"),
         ByteContent::Unknown => {
             return match String::from_utf8(bytes) {
                 Ok(text) if !text.contains('\x1b') => Ok(DecodedText {

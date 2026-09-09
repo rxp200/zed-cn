@@ -357,7 +357,7 @@ impl<T: 'static> PromptEditor<T> {
         self.editor = cx.new(|cx| {
             let mut editor = Editor::auto_height(1, Self::MAX_LINES as usize, window, cx);
             editor.set_soft_wrap_mode(language::language_settings::SoftWrap::EditorWidth, cx);
-            editor.set_placeholder_text("Add a prompt…", window, cx);
+            editor.set_placeholder_text("添加提示…", window, cx);
             editor.set_text(prompt, window, cx);
             creases = insert_message_creases(&mut editor, &existing_creases, window, cx);
 
@@ -611,7 +611,7 @@ impl<T: 'static> PromptEditor<T> {
                 let model_info = self.model_selector.read(cx).active_model(cx);
                 let (model_id, use_streaming_tools) = {
                     let Some(configured_model) = model_info else {
-                        self.toast("No configured model", None, cx);
+                        self.toast("未配置模型", None, cx);
                         return;
                     };
                     (
@@ -674,7 +674,7 @@ impl<T: 'static> PromptEditor<T> {
                 let model_info = self.model_selector.read(cx).active_model(cx);
                 let (model_telemetry_id, use_streaming_tools) = {
                     let Some(configured_model) = model_info else {
-                        self.toast("No configured model", None, cx);
+                        self.toast("未配置模型", None, cx);
                         return;
                     };
                     (
@@ -1060,7 +1060,7 @@ impl<T: 'static> PromptEditor<T> {
                         let focus_handle = self.editor.focus_handle(cx);
                         move |_window, cx| {
                             cx.new(|cx| {
-                                let mut tooltip = Tooltip::new("Previous Alternative").key_binding(
+                                let mut tooltip = Tooltip::new("上一备选").key_binding(
                                     KeyBinding::for_action_in(
                                         &CyclePreviousInlineAssist,
                                         &focus_handle,
@@ -1101,7 +1101,7 @@ impl<T: 'static> PromptEditor<T> {
                         let focus_handle = self.editor.focus_handle(cx);
                         move |_window, cx| {
                             cx.new(|cx| {
-                                let mut tooltip = Tooltip::new("Next Alternative").key_binding(
+                                let mut tooltip = Tooltip::new("下一备选").key_binding(
                                     KeyBinding::for_action_in(
                                         &CycleNextInlineAssist,
                                         &focus_handle,

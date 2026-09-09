@@ -398,6 +398,162 @@ async fn test_language_for_file_with_custom_file_types(cx: &mut TestAppContext) 
     assert_eq!(language_name(language), "Dockerfile");
 }
 
+#[gpui::test]
+async fn test_reregistering_language_during_load_yields_current_language(cx: &mut TestAppContext) {
+    let registry = Arc::new(LanguageRegistry::test(cx.executor()));
+    let (unblock_stale_load_tx, unblock_stale_load_rx) = futures::channel::oneshot::channel::<()>();
+    let unblock_stale_load_rx = std::sync::Mutex::new(Some(unblock_stale_load_rx));
+
+    let stale_config = LanguageConfig {
+        name: LanguageName::new_static("TheLanguage"),
+        matcher: Arc::new(LanguageMatcher {
+            path_suffixes: vec!["stale".to_string()],
+            ..LanguageMatcher::default()
+        }),
+        ..LanguageConfig::default()
+    };
+    registry.register_language(
+        stale_config.name.clone(),
+        None,
+        stale_config.matcher.clone(),
+        false,
+        None,
+        Arc::new(move || {
+            let unblock_stale_load_rx = unblock_stale_load_rx
+                .lock()
+                .expect("the stale loader mutex should not be poisoned")
+                .take();
+            let stale_config = stale_config.clone();
+            async move {
+                if let Some(unblock_stale_load_rx) = unblock_stale_load_rx {
+                    unblock_stale_load_rx.await.ok();
+                }
+                Ok(LoadedLanguage {
+                    config: stale_config,
+                    queries: LanguageQueries::default(),
+                    context_provider: None,
+                    toolchain_provider: None,
+                    manifest_name: None,
+                })
+            }
+            .boxed()
+        }),
+    );
+
+    let pending_language = registry.language_for_name("TheLanguage");
+    cx.executor().run_until_parked();
+
+    registry.register_test_language(LanguageConfig {
+        name: LanguageName::new_static("TheLanguage"),
+        matcher: Arc::new(LanguageMatcher {
+            path_suffixes: vec!["fresh".to_string()],
+            ..LanguageMatcher::default()
+        }),
+        ..LanguageConfig::default()
+    });
+
+    unblock_stale_load_tx.send(()).unwrap();
+    let language = pending_language.await.unwrap();
+    assert_eq!(
+        language.config.matcher.path_suffixes,
+        vec!["fresh".to_string()],
+        "a load that races with a re-registration should resolve to the re-registered language"
+    );
+}
+
+#[gpui::test]
+async fn test_reregistering_language_during_failed_load_yields_current_language(
+    cx: &mut TestAppContext,
+) {
+    let registry = Arc::new(LanguageRegistry::test(cx.executor()));
+    let (unblock_stale_load_tx, unblock_stale_load_rx) = futures::channel::oneshot::channel::<()>();
+    let unblock_stale_load_rx = std::sync::Mutex::new(Some(unblock_stale_load_rx));
+
+    registry.register_language(
+        LanguageName::new_static("TheLanguage"),
+        None,
+        Arc::new(LanguageMatcher {
+            path_suffixes: vec!["stale".to_string()],
+            ..LanguageMatcher::default()
+        }),
+        false,
+        None,
+        Arc::new(move || {
+            let unblock_stale_load_rx = unblock_stale_load_rx
+                .lock()
+                .expect("the stale loader mutex should not be poisoned")
+                .take();
+            async move {
+                if let Some(unblock_stale_load_rx) = unblock_stale_load_rx {
+                    unblock_stale_load_rx.await.ok();
+                }
+                Err(anyhow::anyhow!("simulated load failure"))
+            }
+            .boxed()
+        }),
+    );
+
+    let pending_language = registry.language_for_name("TheLanguage");
+    cx.executor().run_until_parked();
+
+    registry.register_test_language(LanguageConfig {
+        name: LanguageName::new_static("TheLanguage"),
+        matcher: Arc::new(LanguageMatcher {
+            path_suffixes: vec!["fresh".to_string()],
+            ..LanguageMatcher::default()
+        }),
+        ..LanguageConfig::default()
+    });
+
+    unblock_stale_load_tx.send(()).unwrap();
+    let language = pending_language.await.unwrap();
+    assert_eq!(
+        language.config.matcher.path_suffixes,
+        vec!["fresh".to_string()],
+        "a failed load that races with a re-registration should resolve to the re-registered language"
+    );
+}
+
+#[gpui::test]
+async fn test_extension_grammar_cannot_shadow_native_grammar(cx: &mut TestAppContext) {
+    let registry = Arc::new(LanguageRegistry::test(cx.executor()));
+    registry.register_native_grammars([("rust", tree_sitter_rust::LANGUAGE)]);
+    registry.register_wasm_grammars(vec![(
+        Arc::from("rust"),
+        PathBuf::from("/extensions/bogus/grammars/rust.wasm"),
+    )]);
+
+    registry.register_test_language(LanguageConfig {
+        name: LanguageName::new_static("TheLanguage"),
+        grammar: Some(Arc::from("rust")),
+        matcher: Arc::new(LanguageMatcher {
+            path_suffixes: vec!["the".to_string()],
+            ..LanguageMatcher::default()
+        }),
+        ..LanguageConfig::default()
+    });
+    let language = registry.language_for_name("TheLanguage").await.unwrap();
+    assert!(
+        language.grammar().is_some(),
+        "an extension grammar must not replace a native grammar with the same name"
+    );
+
+    registry.remove_languages(&[], &[Arc::from("rust")]);
+    registry.register_test_language(LanguageConfig {
+        name: LanguageName::new_static("TheOtherLanguage"),
+        grammar: Some(Arc::from("rust")),
+        ..LanguageConfig::default()
+    });
+    let language = registry
+        .language_for_name("TheOtherLanguage")
+        .await
+        .unwrap();
+    assert!(
+        language.grammar().is_some(),
+        "removing an extension grammar must not remove the native grammar it failed to shadow"
+    );
+}
+
 fn file(path: &str) -> Arc<dyn File> {
     Arc::new(TestFile {
         path: Arc::from(rel_path(path)),
@@ -4126,7 +4282,7 @@ fn test_random_collaboration(cx: &mut App, mut rng: StdRng) {
                             DiagnosticEntry::new(
                                 range,
                                 Diagnostic {
-                                    message: post_inc(&mut next_diagnostic_id).to_string(),
+                                    message: post_inc(&mut next_diagnostic_id).to_string().into(),
                                     ..Default::default()
                                 },
                             )
@@ -5357,4 +5513,167 @@ fn test_formatted_chunks(cx: &mut gpui::App) {
             );
         }
     }
+}
+
+#[gpui::test]
+async fn test_chunks_skip_highlighting_for_very_long_lines(cx: &mut TestAppContext) {
+    let buffer = cx.new(|cx| {
+        // A line longer than `MAX_HIGHLIGHTED_LINE_LEN` should not be
+        // syntax-highlighted (mirroring VS Code's `maxTokenizationLineLength`),
+        // while the normal lines around it still are.
+        let lang = Arc::new(
+            Language::new(
+                LanguageConfig {
+                    name: "TestLang".into(),
+                    ..Default::default()
+                },
+                Some(tree_sitter_rust::LANGUAGE.into()),
+            )
+            .with_highlights_query("(identifier) @function (line_comment) @comment")
+            .unwrap(),
+        );
+        lang.set_theme(&SyntaxTheme::new([
+            ("function".to_string(), gpui::rgba(0xff0000ff).into()),
+            ("comment".to_string(), gpui::rgba(0x00ff00ff).into()),
+        ]));
+        let long_line = "x".repeat(MAX_HIGHLIGHTED_LINE_LEN);
+        let text = format!(
+            "fn main() {{
+//{long_line}
+fn foo() {{}}
+"
+        );
+        let buffer = Buffer::local(text, cx).with_language(lang, cx);
+        buffer.check_invariants();
+        buffer
+    });
+
+    cx.run_until_parked();
+
+    buffer.read_with(cx, |buffer, _cx| {
+        let snapshot = buffer.snapshot();
+        let row_chunks = |row: u32| {
+            let start = snapshot.point_to_offset(Point::new(row, 0));
+            let end = snapshot.point_to_offset(Point::new(row, snapshot.line_len(row)));
+            snapshot
+                .chunks(
+                    start..end,
+                    LanguageAwareStyling {
+                        tree_sitter: true,
+                        diagnostics: false,
+                    },
+                )
+                .collect::<Vec<_>>()
+        };
+        let row_captures = |row: u32| {
+            let start = snapshot.point_to_offset(Point::new(row, 0));
+            let end = snapshot.point_to_offset(Point::new(row, snapshot.line_len(row)));
+            snapshot
+                .captures(start..end, |grammar| {
+                    grammar
+                        .highlights_config
+                        .as_ref()
+                        .map(|config| &config.query)
+                })
+                .count()
+        };
+
+        // Sanity check: without the skip logic, the very long line would
+        // produce captures (its comment node lies fully within the row range).
+        assert!(
+            row_captures(1) > 0,
+            "sanity check failed: long line should match captures without skip"
+        );
+
+        // Normal lines are still syntax-highlighted.
+        assert!(
+            row_chunks(0)
+                .iter()
+                .any(|c| c.syntax_highlight_id.is_some()),
+            "first line should be highlighted"
+        );
+        assert!(
+            row_chunks(2)
+                .iter()
+                .any(|c| c.syntax_highlight_id.is_some()),
+            "last line should be highlighted"
+        );
+        // The very long line is rendered as plain text (no highlight).
+        assert!(
+            !row_chunks(1)
+                .iter()
+                .any(|c| c.syntax_highlight_id.is_some()),
+            "very long line should not be highlighted"
+        );
+    });
+}
+
+#[gpui::test]
+async fn test_chunks_skip_highlighting_resumes_after_long_line(cx: &mut TestAppContext) {
+    let buffer = cx.new(|cx| {
+        let lang = Arc::new(
+            Language::new(
+                LanguageConfig {
+                    name: "TestLang".into(),
+                    ..Default::default()
+                },
+                Some(tree_sitter_rust::LANGUAGE.into()),
+            )
+            .with_highlights_query("(identifier) @function (line_comment) @comment")
+            .unwrap(),
+        );
+        lang.set_theme(&SyntaxTheme::new([
+            ("function".to_string(), gpui::rgba(0xff0000ff).into()),
+            ("comment".to_string(), gpui::rgba(0x00ff00ff).into()),
+        ]));
+        let long_line = "x".repeat(MAX_HIGHLIGHTED_LINE_LEN);
+        // Row 0: `fn a() {`, Row 1: very long comment, Row 2: `fn b() {}`, Row 3: `}`
+        let text = format!("fn a() {{\n//{long_line}\nfn b() {{}}\n}}\n");
+        let buffer = Buffer::local(text, cx).with_language(lang, cx);
+        buffer.check_invariants();
+        buffer
+    });
+
+    cx.run_until_parked();
+
+    buffer.read_with(cx, |buffer, _cx| {
+        let snapshot = buffer.snapshot();
+        let long_start = snapshot.point_to_offset(Point::new(1, 0));
+        let long_end = long_start + snapshot.line_len(1) as usize;
+        let row2_start = snapshot.point_to_offset(Point::new(2, 0));
+
+        let mut offset = 0;
+        let mut long_line_highlighted = false;
+        let mut row_after_long_line_highlighted = false;
+        for chunk in snapshot.chunks(
+            0..snapshot.len(),
+            LanguageAwareStyling {
+                tree_sitter: true,
+                diagnostics: false,
+            },
+        ) {
+            let start = offset;
+            let end = offset + chunk.text.len();
+            offset = end;
+
+            let overlaps_long_line = start < long_end && end > long_start;
+            if overlaps_long_line && chunk.syntax_highlight_id.is_some() {
+                long_line_highlighted = true;
+            }
+            if start >= row2_start && chunk.syntax_highlight_id.is_some() {
+                row_after_long_line_highlighted = true;
+            }
+        }
+
+        // The very long line is rendered as plain text...
+        assert!(
+            !long_line_highlighted,
+            "long line should not be highlighted"
+        );
+        // ...and highlighting resumes correctly after it.
+        assert!(
+            row_after_long_line_highlighted,
+            "line after the long line should still be highlighted"
+        );
+    });
 }

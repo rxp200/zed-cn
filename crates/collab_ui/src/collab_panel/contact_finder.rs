@@ -6,7 +6,7 @@ use gpui::{
 use picker::{Picker, PickerDelegate};
 use std::sync::Arc;
 use ui::{Avatar, ListItem, ListItemSpacing, prelude::*};
-use util::{ResultExt as _, TryFutureExt};
+use util::TryFutureExt;
 use workspace::ModalView;
 
 pub struct ContactFinder {
@@ -38,8 +38,8 @@ impl Render for ContactFinder {
                     .bg(cx.theme().colors().element_background)
                     // HACK: Prevent the background color from overflowing the parent container.
                     .rounded_t(px(8.))
-                    .child(Label::new("Contacts"))
-                    .child(h_flex().child(Label::new("Invite new contacts"))),
+                    .child(Label::new("联系人"))
+                    .child(h_flex().child(Label::new("邀请新联系人"))),
             )
             .child(self.picker.clone())
     }
@@ -133,9 +133,7 @@ impl PickerDelegate for ContactFinderDelegate {
     }
 
     fn dismissed(&mut self, _: &mut Window, cx: &mut Context<Picker<Self>>) {
-        self.parent
-            .update(cx, |_, cx| cx.emit(DismissEvent))
-            .log_err();
+        self.parent.update(cx, |_, cx| cx.emit(DismissEvent)).ok();
     }
 
     fn render_match(

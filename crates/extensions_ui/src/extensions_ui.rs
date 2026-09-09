@@ -78,12 +78,12 @@ impl WorkspaceError for DevExtensionNotInstalledError {
             Some(extension_id) => {
                 format!("Dev extension '{extension_id}' is not installed.").into()
             }
-            None => "No dev extensions are installed.".into(),
+            None => "尚未安装开发扩展。".into(),
         }
     }
 
     fn primary_action(&self) -> ErrorAction {
-        ErrorAction::new("Install Dev Extension", InstallDevExtension)
+        ErrorAction::new("安装开发扩展", InstallDevExtension)
     }
 
     fn severity(&self) -> ErrorSeverity {
@@ -430,7 +430,7 @@ impl ExtensionsPage {
 
             let query_editor = cx.new(|cx| {
                 let mut input = Editor::single_line(window, cx);
-                input.set_placeholder_text("Search extensions...", window, cx);
+                input.set_placeholder_text("搜索扩展…", window, cx);
                 if let Some(id) = focus_extension_id {
                     input.set_text(format!("id:{id}"), window, cx);
                 }
@@ -1027,7 +1027,7 @@ impl ExtensionsPage {
         vim: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let docs_url_button = Button::new("open_docs", "View Documentation")
+        let docs_url_button = Button::new("open_docs", "查看文档")
             .end_icon(Icon::new(IconName::ArrowUpRight).size(IconSize::Small))
             .on_click({
                 move |_event, _window, cx| {
@@ -1058,7 +1058,7 @@ impl ExtensionsPage {
                                         h_flex()
                                             .pl_1()
                                             .gap_1()
-                                            .child(Label::new("Enable Vim mode"))
+                                            .child(Label::new("启用 Vim 模式"))
                                             .child(
                                                 Switch::new(
                                                     "enable-vim",
@@ -1377,7 +1377,7 @@ impl PickerDelegate for DevExtensionRebuildPickerDelegate {
     }
 
     fn no_matches_text(&self, _window: &mut Window, _cx: &mut App) -> Option<SharedString> {
-        Some("No dev extensions found".into())
+        Some("未找到开发扩展".into())
     }
 }
 
@@ -1397,9 +1397,9 @@ impl Render for ExtensionsPage {
                             .w_full()
                             .gap_1p5()
                             .justify_between()
-                            .child(Headline::new("Extensions").size(HeadlineSize::Large))
+                            .child(Headline::new("扩展").size(HeadlineSize::Large))
                             .child(
-                                Button::new("install-dev-extension", "Install Dev Extension")
+                                Button::new("install-dev-extension", "安装开发扩展")
                                     .style(ButtonStyle::Outlined)
                                     .size(ButtonSize::Medium)
                                     .on_click(|_event, window, cx| {
@@ -1468,7 +1468,7 @@ impl Render for ExtensionsPage {
                     .border_color(cx.theme().colors().border_variant)
                     .overflow_x_scroll()
                     .child(
-                        Button::new("filter-all-categories", "All")
+                        Button::new("filter-all-categories", "全部")
                             .when(self.provides_filter.is_none(), |button| {
                                 button.style(ButtonStyle::Filled)
                             })

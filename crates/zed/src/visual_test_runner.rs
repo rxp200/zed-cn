@@ -975,7 +975,7 @@ fn init_app_state(cx: &mut App) -> Arc<AppState> {
     }
 
     // Use the real filesystem instead of FakeFs so we can access actual files on disk
-    let fs: Arc<dyn Fs> = Arc::new(fs::RealFs::new(None, cx.background_executor().clone()));
+    let fs: Arc<dyn Fs> = fs::RealFs::new(None, cx.background_executor().clone());
     <dyn Fs>::set_global(fs.clone(), cx);
 
     let languages = Arc::new(language::LanguageRegistry::test(
@@ -2860,14 +2860,14 @@ impl gpui::Render for ErrorWrappingTestView {
                     .icon(IconName::XCircle)
                     .title("An Error Happened")
                     .description(long_error_message)
-                    .actions_slot(Button::new("dismiss", "Dismiss").label_size(LabelSize::Small)),
+                    .actions_slot(Button::new("dismiss", "关闭").label_size(LabelSize::Small)),
             )
             .child(
                 Callout::new()
                     .severity(Severity::Error)
                     .icon(IconName::XCircle)
                     .title(long_error_message)
-                    .actions_slot(Button::new("retry", "Retry").label_size(LabelSize::Small)),
+                    .actions_slot(Button::new("retry", "重试").label_size(LabelSize::Small)),
             )
     }
 }

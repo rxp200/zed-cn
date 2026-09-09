@@ -40,8 +40,19 @@ function Get-VSArch {
     }
 }
 
+$vsWherePath = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+if (-not (Test-Path $vsWherePath)) {
+    throw "Visual Studio Installer's vswhere.exe was not found at $vsWherePath"
+}
+
+$visualStudioPath = (& $vsWherePath -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath).Trim()
+if ([string]::IsNullOrWhiteSpace($visualStudioPath)) {
+    throw "Visual Studio with the C++ build tools was not found"
+}
+
+$devShellPath = Join-Path $visualStudioPath "Common7\Tools\Launch-VsDevShell.ps1"
 Push-Location
-& "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\Tools\Launch-VsDevShell.ps1" -Arch (Get-VSArch -Arch $Architecture) -HostArch (Get-VSArch -Arch $OSArchitecture)
+& $devShellPath -Arch (Get-VSArch -Arch $Architecture) -HostArch (Get-VSArch -Arch $OSArchitecture)
 Pop-Location
 
 $target = "$Architecture-pc-windows-msvc"
@@ -116,20 +127,20 @@ function GenerateLicenses {
 function BuildZedAndItsFriends {
     Write-Output "Building Zed and its friends, for channel: $channel"
     # Build zed.exe, cli.exe and auto_update_helper.exe
-    cargo build --release --package zed --package cli --package auto_update_helper --target $target
+    cargo --config .cargo/bundle-config.toml build --release --package zed --package cli --package auto_update_helper --target $target
     Copy-Item -Path ".\$CargoOutDir\zed.exe" -Destination "$innoDir\Zed.exe" -Force
     Copy-Item -Path ".\$CargoOutDir\cli.exe" -Destination "$innoDir\cli.exe" -Force
     Copy-Item -Path ".\$CargoOutDir\auto_update_helper.exe" -Destination "$innoDir\auto_update_helper.exe" -Force
     # Build explorer_command_injector.dll
     switch ($channel) {
         "stable" {
-            cargo build --release --features stable --no-default-features --package explorer_command_injector --target $target
+            cargo --config .cargo/bundle-config.toml build --release --features stable --no-default-features --package explorer_command_injector --target $target
         }
         "preview" {
-            cargo build --release --features preview --no-default-features --package explorer_command_injector --target $target
+            cargo --config .cargo/bundle-config.toml build --release --features preview --no-default-features --package explorer_command_injector --target $target
         }
         default {
-            cargo build --release --package explorer_command_injector --target $target
+            cargo --config .cargo/bundle-config.toml build --release --package explorer_command_injector --target $target
         }
     }
     Copy-Item -Path ".\$CargoOutDir\explorer_command_injector.dll" -Destination "$innoDir\zed_explorer_command_injector.dll" -Force
@@ -137,7 +148,7 @@ function BuildZedAndItsFriends {
 
 function BuildRemoteServer {
     Write-Output "Building remote_server for $target"
-    cargo build --release --package remote_server --target $target
+    cargo --config .cargo/bundle-config.toml build --release --package remote_server --target $target
 
     # Create zipped remote server binary
     $remoteServerSrc = (Resolve-Path ".\$CargoOutDir\remote_server.exe").Path
@@ -208,7 +219,20 @@ function MakeAppx {
     }
     Copy-Item -Path "$manifestFile" -Destination "$innoDir\make_appx\AppxManifest.xml"
     # Add makeAppx.exe to Path
-    $sdk = "C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64"
+    $sdk = $env:ZED_RC_TOOLKIT_PATH
+    if ([string]::IsNullOrWhiteSpace($sdk)) {
+        $windowsKitsBin = "${env:ProgramFiles(x86)}\Windows Kits\10\bin"
+        $sdk = Get-ChildItem -Path $windowsKitsBin -Directory |
+            Where-Object { Test-Path (Join-Path $_.FullName "x64\makeappx.exe") } |
+            Sort-Object { [version]$_.Name } -Descending |
+            Select-Object -First 1 -ExpandProperty FullName
+        if ($sdk) {
+            $sdk = Join-Path $sdk "x64"
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($sdk) -or -not (Test-Path (Join-Path $sdk "makeappx.exe"))) {
+        throw "A Windows SDK containing makeappx.exe was not found"
+    }
     $env:Path += ';' + $sdk
     makeAppx.exe pack /d "$innoDir\make_appx" /p "$innoDir\zed_explorer_command_injector.appx" /nv
 }
@@ -276,6 +300,8 @@ function BuildInstaller {
             $appUserId = "ZedIndustries.Zed"
             $appShellNameShort = "Z&ed"
             $appAppxFullName = "ZedIndustries.Zed_1.0.0.0_neutral__japxn1gcva8rg"
+            # Must match CONTEXT_MENU_CLSID in crates/explorer_command_injector (stable)
+            $appContextMenuClsid = "{ef6eda23-89b3-435f-816e-af20ff984938}"
         }
         "preview" {
             $appId = "{{F70E4811-D0E2-4D88-AC99-D63752799F95}"
@@ -290,6 +316,8 @@ function BuildInstaller {
             $appUserId = "ZedIndustries.Zed.Preview"
             $appShellNameShort = "Z&ed Preview"
             $appAppxFullName = "ZedIndustries.Zed.Preview_1.0.0.0_neutral__japxn1gcva8rg"
+            # Must match CONTEXT_MENU_CLSID in crates/explorer_command_injector (preview)
+            $appContextMenuClsid = "{755ad97e-00bf-4696-962f-6c62113db47a}"
         }
         "nightly" {
             $appId = "{{1BDB21D3-14E7-433C-843C-9C97382B2FE0}"
@@ -304,6 +332,8 @@ function BuildInstaller {
             $appUserId = "ZedIndustries.Zed.Nightly"
             $appShellNameShort = "Z&ed Editor Nightly"
             $appAppxFullName = "ZedIndustries.Zed.Nightly_1.0.0.0_neutral__japxn1gcva8rg"
+            # Must match CONTEXT_MENU_CLSID in crates/explorer_command_injector (nightly)
+            $appContextMenuClsid = "{e15a7999-ced2-428f-bb19-09567a90d65b}"
         }
         "dev" {
             $appId = "{{8357632E-24A4-4F32-BA97-E575B4D1FE5D}"
@@ -318,6 +348,8 @@ function BuildInstaller {
             $appUserId = "ZedIndustries.Zed.Dev"
             $appShellNameShort = "Z&ed Dev"
             $appAppxFullName = "ZedIndustries.Zed.Dev_1.0.0.0_neutral__japxn1gcva8rg"
+            # The dev channel builds the DLL with the default (nightly) features.
+            $appContextMenuClsid = "{e15a7999-ced2-428f-bb19-09567a90d65b}"
         }
         default {
             Write-Error "can't bundle installer for $channel."
@@ -325,10 +357,18 @@ function BuildInstaller {
         }
     }
 
-    # Windows runner 2022 default has iscc in PATH, https://github.com/actions/runner-images/blob/main/images/windows/Windows2022-Readme.md
-    # Currently, we are using Windows 2022 runner.
-    # Windows runner 2025 doesn't have iscc in PATH for now, https://github.com/actions/runner-images/issues/11228
-    $innoSetupPath = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+    $innoSetupCommand = Get-Command "ISCC.exe" -ErrorAction SilentlyContinue
+    $innoSetupPath = if ($innoSetupCommand) {
+        $innoSetupCommand.Source
+    } else {
+        @(
+            "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+            "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe"
+        ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+    }
+    if ([string]::IsNullOrWhiteSpace($innoSetupPath)) {
+        throw "Inno Setup 6 was not found"
+    }
 
     $definitions = @{
         "AppId"          = $appId
@@ -346,6 +386,7 @@ function BuildInstaller {
         "Version"        = "$env:RELEASE_VERSION"
         "SourceDir"      = "$env:ZED_WORKSPACE"
         "AppxFullName"   = $appAppxFullName
+        "ContextMenuClsid" = $appContextMenuClsid
     }
 
     $defs = @()

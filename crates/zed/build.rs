@@ -40,7 +40,7 @@ fn main() {
     }
 
     // Populate git sha environment variable if git is available
-    println!("cargo:rerun-if-changed=../../.git/logs/HEAD");
+    println!("cargo:rerun-if-env-changed=ZED_COMMIT_SHA");
     println!(
         "cargo:rustc-env=TARGET={}",
         std::env::var("TARGET").unwrap()
@@ -86,6 +86,8 @@ fn main() {
         if cfg!(target_env = "msvc") {
             // todo(windows): This is to avoid stack overflow. Remove it when solved.
             println!("cargo:rustc-link-arg=/stack:{}", 8 * 1024 * 1024);
+            println!("cargo:rustc-link-arg=/DELAYLOAD:windowsperformancerecordercontrol");
+            println!("cargo:rustc-link-lib=delayimp");
         }
 
         if cfg!(target_arch = "x86_64") || cfg!(target_arch = "aarch64") {

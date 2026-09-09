@@ -80,7 +80,7 @@ fn render_inspector(
                 .border_color(colors.border_variant)
                 .child(
                     IconButton::new("pick-mode", IconName::MagnifyingGlass)
-                        .tooltip(Tooltip::text("Start inspector pick mode"))
+                        .tooltip(Tooltip::text("启动检查器拾取模式"))
                         .selected_icon_color(Color::Selected)
                         .toggle_state(inspector.is_picking())
                         .on_click(cx.listener(|inspector, _, window, _cx| {
@@ -88,7 +88,7 @@ fn render_inspector(
                             window.refresh();
                         })),
                 )
-                .child(h_flex().justify_end().child(Label::new("GPUI Inspector"))),
+                .child(h_flex().justify_end().child(Label::new("GPUI 检查器"))),
         )
         .child(
             v_flex()
@@ -109,17 +109,18 @@ fn render_inspector_id(inspector_id: &InspectorElementId, cx: &App) -> Div {
     let source_location = inspector_id.path.source_location;
     // For unknown reasons, for some elements the path is absolute.
     let source_location_string = source_location.to_string();
-    let source_location_string = source_location_string
-        .strip_prefix(env!("ZED_REPO_DIR"))
-        .and_then(|s| s.strip_prefix("/"))
-        .map(|s| s.to_string())
+    // Resolve the checkout at runtime rather than baking it in at build time
+    // (which corgi rejects, and which would be wrong in any other worktree).
+    let source_location_string = util::dev_repo_root()
+        .and_then(|root| Path::new(&source_location_string).strip_prefix(root).ok())
+        .map(|path| path.display().to_string())
         .unwrap_or(source_location_string);
 
     v_flex()
         .child(
             h_flex()
                 .justify_between()
-                .child(Label::new("Element ID").size(LabelSize::Large))
+                .child(Label::new("元素 ID").size(LabelSize::Large))
                 .child(
                     div()
                         .id("instance-id")
@@ -139,7 +140,7 @@ fn render_inspector_id(inspector_id: &InspectorElementId, cx: &App) -> Div {
                 .font_buffer(cx)
                 .text_xs()
                 .child(source_location_string)
-                .tooltip(Tooltip::text("Click to open by running Zed CLI"))
+                .tooltip(Tooltip::text("点击以运行Zed CLI打开"))
                 .on_click(move |_, _window, cx| {
                     cx.background_spawn(open_zed_source_location(source_location))
                         .detach_and_log_err(cx);
@@ -160,7 +161,9 @@ fn render_inspector_id(inspector_id: &InspectorElementId, cx: &App) -> Div {
 async fn open_zed_source_location(
     location: &'static std::panic::Location<'static>,
 ) -> anyhow::Result<()> {
-    let mut path = Path::new(env!("ZED_REPO_DIR")).to_path_buf();
+    let mut path = util::dev_repo_root()
+        .context("locating the zed checkout to open sources from")?
+        .to_path_buf();
     path.push(Path::new(location.file()));
     let path_arg = format!(
         "{}:{}:{}",

@@ -82,6 +82,12 @@ pub use worktree_settings::WorktreeSettings;
 
 pub const FS_WATCH_LATENCY: Duration = Duration::from_millis(100);
 
+/// How often the background scanner verifies that the worktree root still
+/// exists at its recorded path. Native watchers report the root itself being
+/// renamed or deleted, but not a rename of one of its ancestors, which leaves
+/// the watcher silently attached to a path that no longer exists.
+pub const ROOT_PATH_CHECK_INTERVAL: Duration = Duration::from_secs(5);
+
 /// A set of local or remote files that are being opened as part of a project.
 /// Responsible for tracking related FS (for local)/collab (for remote) events and corresponding updates.
 /// Stores git repositories data and the diagnostics for the file(s).
@@ -97,6 +103,15 @@ pub enum Worktree {
     Local(LocalWorktree),
     Remote(RemoteWorktree),
 }
+
+pub enum FileTransferProgress {
+    Started(String),
+    Bytes(u64, u64),
+    Finished,
+    TotalEntries(usize),
+}
+
+pub type FileTransferObserver = Arc<dyn Fn(FileTransferProgress) + Send + Sync>;
 
 /// An entry, created in the worktree.
 #[derive(Debug)]
@@ -961,18 +976,39 @@ impl Worktree {
         content: Option<Vec<u8>>,
         cx: &Context<Worktree>,
     ) -> Task<Result<CreatedEntry>> {
+        self.create_entry_with_progress(path, is_directory, content, None, cx)
+    }
+
+    pub fn create_entry_with_progress(
+        &mut self,
+        path: Arc<RelPath>,
+        is_directory: bool,
+        content: Option<Vec<u8>>,
+        progress: Option<FileTransferObserver>,
+        cx: &Context<Worktree>,
+    ) -> Task<Result<CreatedEntry>> {
+        if let Some(progress) = &progress {
+            progress(FileTransferProgress::Started(path.to_string()));
+        }
         let worktree_id = self.id();
         match self {
             Worktree::Local(this) => this.create_entry(path, is_directory, content, cx),
             Worktree::Remote(this) => {
                 let project_id = this.project_id;
-                let request = this.client.request(proto::CreateProjectEntry {
-                    worktree_id: worktree_id.to_proto(),
-                    project_id,
-                    path: path.as_ref().as_unix_str().to_owned(),
-                    content,
-                    is_directory,
-                });
+                let request = this.client.request_with_progress(
+                    proto::CreateProjectEntry {
+                        worktree_id: worktree_id.to_proto(),
+                        project_id,
+                        path: path.as_ref().as_unix_str().to_owned(),
+                        content,
+                        is_directory,
+                    },
+                    Arc::new(move |written, total| {
+                        if let Some(progress) = &progress {
+                            progress(FileTransferProgress::Bytes(written, total));
+                        }
+                    }),
+                );
                 cx.spawn(async move |this, cx| {
                     let response = request.await?;
                     match response.entry {
@@ -1075,9 +1111,24 @@ impl Worktree {
         fs: Arc<dyn Fs>,
         cx: &Context<Worktree>,
     ) -> Task<Result<Vec<ProjectEntryId>>> {
+        self.copy_external_entries_with_progress(target_directory, paths, fs, None, cx)
+    }
+
+    pub fn copy_external_entries_with_progress(
+        &mut self,
+        target_directory: Arc<RelPath>,
+        paths: Vec<Arc<Path>>,
+        fs: Arc<dyn Fs>,
+        progress: Option<FileTransferObserver>,
+        cx: &Context<Worktree>,
+    ) -> Task<Result<Vec<ProjectEntryId>>> {
         match self {
-            Worktree::Local(this) => this.copy_external_entries(target_directory, paths, cx),
-            Worktree::Remote(this) => this.copy_external_entries(target_directory, paths, fs, cx),
+            Worktree::Local(this) => {
+                this.copy_external_entries(target_directory, paths, progress, cx)
+            }
+            Worktree::Remote(this) => {
+                this.copy_external_entries(target_directory, paths, fs, progress, cx)
+            }
         }
     }
 
@@ -1356,7 +1407,7 @@ impl LocalWorktree {
             let background = cx.background_executor().clone();
             async move {
                 let defer_watch =
-                    force_defer_watch || (scanning_enabled && fs::requires_poll_watcher(&abs_path));
+                    force_defer_watch || (scanning_enabled && fs.requires_poll_watcher(&abs_path));
 
                 let (events, watcher) = if scanning_enabled && !defer_watch {
                     fs.watch(&abs_path, FS_WATCH_LATENCY).await
@@ -2002,6 +2053,7 @@ impl LocalWorktree {
         &self,
         target_directory: Arc<RelPath>,
         paths: Vec<Arc<Path>>,
+        progress: Option<FileTransferObserver>,
         cx: &Context<Worktree>,
     ) -> Task<Result<Vec<ProjectEntryId>>> {
         let target_directory = self.absolutize(&target_directory);
@@ -2037,7 +2089,13 @@ impl LocalWorktree {
 
         cx.spawn(async move |this, cx| {
             cx.background_spawn(async move {
+                if let Some(progress) = &progress {
+                    progress(FileTransferProgress::TotalEntries(paths.len()));
+                }
                 for (source, target) in paths {
+                    if let Some(progress) = &progress {
+                        progress(FileTransferProgress::Started(source.display().to_string()));
+                    }
                     copy_recursive(
                         fs.as_ref(),
                         &source,
@@ -2048,14 +2106,14 @@ impl LocalWorktree {
                         },
                     )
                     .await
-                    .with_context(|| {
-                        format!("Failed to copy file from {source:?} to {target:?}")
-                    })?;
+                    .with_context(|| format!("无法从 {source:?} 复制文件到 {target:?}"))?;
+                    if let Some(progress) = &progress {
+                        progress(FileTransferProgress::Finished);
+                    }
                 }
                 anyhow::Ok(())
             })
-            .await
-            .log_err();
+            .await?;
             let mut refresh = cx.read_entity(
                 &this.upgrade().with_context(|| "Dropped worktree")?,
                 |this, _| {
@@ -2456,6 +2514,7 @@ impl RemoteWorktree {
         target_directory: Arc<RelPath>,
         paths_to_copy: Vec<Arc<Path>>,
         local_fs: Arc<dyn Fs>,
+        progress: Option<FileTransferObserver>,
         cx: &Context<Worktree>,
     ) -> Task<anyhow::Result<Vec<ProjectEntryId>>> {
         let client = self.client.clone();
@@ -2483,32 +2542,51 @@ impl RemoteWorktree {
                     else {
                         continue;
                     };
-                    let content = if is_directory {
-                        None
-                    } else {
-                        Some(local_fs.load_bytes(&abs_path).await?)
-                    };
-
                     let mut target_path = target_directory.join(filename);
                     if relative_path.file_name().is_some() {
                         target_path = target_path.join(&relative_path);
                     }
 
-                    requests.push(proto::CreateProjectEntry {
-                        project_id,
-                        worktree_id,
-                        path: target_path.as_unix_str().to_owned(),
-                        is_directory,
-                        content,
-                    });
+                    requests.push((target_path.as_unix_str().to_owned(), abs_path, is_directory));
                 }
             }
-            requests.sort_unstable_by(|a, b| a.path.cmp(&b.path));
+            requests.sort_unstable_by(|a, b| a.0.cmp(&b.0));
             requests.dedup();
 
+            if let Some(progress) = &progress {
+                progress(FileTransferProgress::TotalEntries(requests.len()));
+            }
             let mut copied_entry_ids = Vec::new();
-            for request in requests {
-                let response = client.request(request).await?;
+            for (path, source, is_directory) in requests {
+                if let Some(progress) = &progress {
+                    progress(FileTransferProgress::Started(path.clone()));
+                }
+                let content = if is_directory {
+                    None
+                } else {
+                    Some(local_fs.load_bytes(&source).await?)
+                };
+                let request = proto::CreateProjectEntry {
+                    project_id,
+                    worktree_id,
+                    path,
+                    is_directory,
+                    content,
+                };
+                let observer = progress.clone();
+                let response = client
+                    .request_with_progress(
+                        request,
+                        Arc::new(move |written, total| {
+                            if let Some(progress) = &observer {
+                                progress(FileTransferProgress::Bytes(written, total));
+                            }
+                        }),
+                    )
+                    .await?;
+                if let Some(progress) = &progress {
+                    progress(FileTransferProgress::Finished);
+                }
                 copied_entry_ids.extend(response.entry.map(|e| ProjectEntryId::from_proto(e.id)));
             }
 
@@ -4558,6 +4636,10 @@ impl BackgroundScanner {
         // Continue processing events until the worktree is dropped.
         self.phase = BackgroundScannerPhase::Events;
 
+        let root_path_check_timer = self.executor.timer(ROOT_PATH_CHECK_INTERVAL).fuse();
+        futures::pin_mut!(root_path_check_timer);
+        let mut root_path_missing = false;
+
         loop {
             select_biased! {
                 // Process any path refresh requests from the worktree. Prioritize
@@ -4611,6 +4693,20 @@ impl BackgroundScanner {
                     if let Some(path) = &global_gitignore_file {
                         self.update_global_gitignore(&path).await;
                     }
+                }
+
+                _ = root_path_check_timer => {
+                    let root_path = self.state.lock().await.snapshot.abs_path.clone();
+                    match self.fs.canonicalize(root_path.as_path()).await {
+                        Ok(_) => root_path_missing = false,
+                        Err(error) => {
+                            if !root_path_missing {
+                                root_path_missing = true;
+                                self.report_root_moved_or_deleted(&root_path, &error).await;
+                            }
+                        }
+                    }
+                    root_path_check_timer.set(self.executor.timer(ROOT_PATH_CHECK_INTERVAL).fuse());
                 }
             }
         }
@@ -4746,56 +4842,67 @@ impl BackgroundScanner {
         events
     }
 
+    /// Called when the worktree root can no longer be canonicalized. Uses the
+    /// open handle on the root to find where it moved to, and reports the new
+    /// location (or, for single-file worktrees, the deletion) to the worktree.
+    async fn report_root_moved_or_deleted(
+        &self,
+        root_path: &Arc<SanitizedPath>,
+        canonicalize_error: &anyhow::Error,
+    ) {
+        let new_path = self
+            .state
+            .lock()
+            .await
+            .snapshot
+            .root_file_handle
+            .clone()
+            .and_then(|handle| match handle.current_path(&self.fs) {
+                Ok(new_path) => Some(new_path),
+                Err(e) => {
+                    log::error!("Failed to refresh worktree root path: {e:#}");
+                    None
+                }
+            })
+            .map(|path| SanitizedPath::new_arc(&path))
+            .filter(|new_path| new_path != root_path);
+
+        if let Some(new_path) = new_path {
+            log::info!(
+                "root renamed from {:?} to {:?}",
+                root_path.as_path(),
+                new_path.as_path(),
+            );
+            self.status_updates_tx
+                .unbounded_send(ScanState::RootUpdated { new_path })
+                .ok();
+        } else {
+            log::error!("root path could not be canonicalized: {canonicalize_error:#}");
+
+            // For single-file worktrees, if we can't canonicalize and the file handle
+            // fallback also failed, the file is gone - close the worktree
+            if self.is_single_file {
+                log::info!(
+                    "single-file worktree root {:?} no longer exists, marking as deleted",
+                    root_path.as_path()
+                );
+                self.status_updates_tx
+                    .unbounded_send(ScanState::RootDeleted)
+                    .ok();
+            }
+        }
+    }
+
     async fn process_events(&self, mut events: Vec<PathEvent>) {
         let root_path = self.state.lock().await.snapshot.abs_path.clone();
-        let root_canonical_path = self.fs.canonicalize(root_path.as_path()).await;
-        let root_canonical_path = match &root_canonical_path {
-            Ok(path) => SanitizedPath::new(path),
-            Err(err) => {
-                let new_path = self
-                    .state
-                    .lock()
-                    .await
-                    .snapshot
-                    .root_file_handle
-                    .clone()
-                    .and_then(|handle| match handle.current_path(&self.fs) {
-                        Ok(new_path) => Some(new_path),
-                        Err(e) => {
-                            log::error!("Failed to refresh worktree root path: {e:#}");
-                            None
-                        }
-                    })
-                    .map(|path| SanitizedPath::new_arc(&path))
-                    .filter(|new_path| *new_path != root_path);
-
-                if let Some(new_path) = new_path {
-                    log::info!(
-                        "root renamed from {:?} to {:?}",
-                        root_path.as_path(),
-                        new_path.as_path(),
-                    );
-                    self.status_updates_tx
-                        .unbounded_send(ScanState::RootUpdated { new_path })
-                        .ok();
-                } else {
-                    log::error!("root path could not be canonicalized: {err:#}");
-
-                    // For single-file worktrees, if we can't canonicalize and the file handle
-                    // fallback also failed, the file is gone - close the worktree
-                    if self.is_single_file {
-                        log::info!(
-                            "single-file worktree root {:?} no longer exists, marking as deleted",
-                            root_path.as_path()
-                        );
-                        self.status_updates_tx
-                            .unbounded_send(ScanState::RootDeleted)
-                            .ok();
-                    }
-                }
+        let root_canonical_path = match self.fs.canonicalize(root_path.as_path()).await {
+            Ok(path) => path,
+            Err(error) => {
+                self.report_root_moved_or_deleted(&root_path, &error).await;
                 return;
             }
         };
+        let root_canonical_path = SanitizedPath::new(&root_canonical_path);
 
         {
             let state = self.state.lock().await;
@@ -7246,10 +7353,7 @@ pub async fn decode_file_text(
 
     let (file_first_bytes, reached_eof) = read_file_header(&mut *file, abs_path)?;
     let (_, byte_content) = decode_byte_header(&file_first_bytes);
-    anyhow::ensure!(
-        byte_content != ByteContent::Binary,
-        "Binary files are not supported"
-    );
+    anyhow::ensure!(byte_content != ByteContent::Binary, "不支持二进制文件");
 
     // If the file is eligible for opening, read the rest of the file.
     let mut content = file_first_bytes;
@@ -7274,10 +7378,7 @@ pub async fn decode_file_text_to_rope(
 
     let (prefix, reached_eof) = read_file_header(&mut *file, abs_path)?;
     let (bom_encoding, byte_content) = decode_byte_header(&prefix);
-    anyhow::ensure!(
-        byte_content != ByteContent::Binary,
-        "Binary files are not supported"
-    );
+    anyhow::ensure!(byte_content != ByteContent::Binary, "不支持二进制文件");
 
     // Only BOM-less, non-UTF-16 files are candidates for streaming: everything
     // else needs the whole byte buffer in hand to decode or to detect encoding.

@@ -57,7 +57,7 @@ fn render_theme_section(tab_index: &mut isize, cx: &mut App) -> impl IntoElement
     return v_flex()
         .gap_2()
         .child(
-            h_flex().justify_between().child(Label::new("Theme")).child(
+            h_flex().justify_between().child(Label::new("主题")).child(
                 ToggleButtonGroup::single_row(
                     "theme-selector-onboarding-dark-light",
                     [
@@ -342,7 +342,7 @@ fn render_base_keymap_section(tab_index: &mut isize, cx: &mut App) -> impl IntoE
         BaseKeymap::None => None,
     };
 
-    return v_flex().gap_2().child(Label::new("Base Keymap")).child(
+    return v_flex().gap_2().child(Label::new("基础快捷键映射")).child(
         ToggleButtonGroup::two_rows(
             "base_keymap_selection",
             [
@@ -527,11 +527,8 @@ fn render_import_settings_section(tab_index: &mut isize, cx: &mut App) -> impl I
             v_flex()
                 .gap_0p5()
                 .max_w_5_6()
-                .child(Label::new("Import Settings"))
-                .child(
-                    Label::new("Automatically pull your settings from other editors")
-                        .color(Color::Muted),
-                ),
+                .child(Label::new("导入设置"))
+                .child(Label::new("自动从其他编辑器导入设置").color(Color::Muted)),
         )
         .child(h_flex().gap_1().child(vscode).child(cursor))
 }
@@ -562,7 +559,7 @@ fn render_registry_agent_button(
             .color(Color::Success)
             .into_any_element()
     } else {
-        Label::new("Install")
+        Label::new("安装")
             .size(LabelSize::XSmall)
             .color(Color::Muted)
             .into_any_element()
@@ -616,12 +613,12 @@ fn render_zed_agent_button(user_store: &Entity<UserStore>, cx: &mut App) -> impl
     let is_signed_in = !is_signed_out;
 
     let state_element = if is_signed_out {
-        Label::new("Sign In")
+        Label::new("登录")
             .size(LabelSize::XSmall)
             .color(Color::Muted)
             .into_any_element()
     } else if is_signing_in {
-        Label::new("Signing In…")
+        Label::new("正在登录…")
             .size(LabelSize::XSmall)
             .color(Color::Muted)
             .with_animation(
@@ -633,7 +630,7 @@ fn render_zed_agent_button(user_store: &Entity<UserStore>, cx: &mut App) -> impl
             )
             .into_any_element()
     } else if is_signed_in && is_free {
-        Label::new("Start Free Trial")
+        Label::new("开始免费试用")
             .size(LabelSize::XSmall)
             .color(Color::Muted)
             .into_any_element()
@@ -704,11 +701,8 @@ fn render_ai_section(user_store: &Entity<UserStore>, cx: &mut App) -> impl IntoE
 
     v_flex()
         .gap_0p5()
-        .child(Label::new("Agent Setup"))
-        .child(
-            Label::new("Install your favorite agents and start your first thread.")
-                .color(Color::Muted),
-        )
+        .child(Label::new("Agent 设置"))
+        .child(Label::new("安装你喜欢的 Agent 并开始你的第一个线程。").color(Color::Muted))
         .child(grid)
 }
 

@@ -113,17 +113,17 @@ impl Component for List {
                     single_example(
                         "Simple List",
                         List::new()
-                            .child(ListItem::new("item1").child(Label::new("Item 1")))
-                            .child(ListItem::new("item2").child(Label::new("Item 2")))
-                            .child(ListItem::new("item3").child(Label::new("Item 3")))
+                            .child(ListItem::new("item1").child(Label::new("项目 1")))
+                            .child(ListItem::new("item2").child(Label::new("项目 2")))
+                            .child(ListItem::new("item3").child(Label::new("项目 3")))
                             .into_any_element(),
                     ),
                     single_example(
                         "With Header",
                         List::new()
                             .header(ListHeader::new("Section Header"))
-                            .child(ListItem::new("item1").child(Label::new("Item 1")))
-                            .child(ListItem::new("item2").child(Label::new("Item 2")))
+                            .child(ListItem::new("item1").child(Label::new("项目 1")))
+                            .child(ListItem::new("item2").child(Label::new("项目 2")))
                             .into_any_element(),
                     ),
                     single_example(

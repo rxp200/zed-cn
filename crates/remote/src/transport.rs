@@ -3,7 +3,10 @@ use std::io::Write;
 use crate::{
     RemoteArch, RemoteOs, RemotePlatform,
     json_log::LogRecord,
-    protocol::{MESSAGE_LEN_SIZE, message_len_from_buffer, read_message_with_len, write_message},
+    protocol::{
+        MESSAGE_LEN_SIZE, message_len_from_buffer, read_message_with_len,
+        write_message_with_progress,
+    },
 };
 use anyhow::{Context as _, Result};
 use futures::{
@@ -11,7 +14,9 @@ use futures::{
     channel::mpsc::{Sender, UnboundedReceiver, UnboundedSender},
 };
 use gpui::{AppContext as _, AsyncApp, Task};
+use release_channel::ReleaseChannel;
 use rpc::proto::Envelope;
+use semver::Version;
 use util::command::Child;
 
 pub mod docker;
@@ -19,6 +24,19 @@ pub mod docker;
 pub mod mock;
 pub mod ssh;
 pub mod wsl;
+
+fn remote_server_version(release_channel: ReleaseChannel, version: &Version) -> String {
+    match release_channel {
+        ReleaseChannel::Dev => "build".to_string(),
+        ReleaseChannel::Nightly => version.to_string(),
+        ReleaseChannel::Stable | ReleaseChannel::Preview => {
+            let mut version = version.clone();
+            version.pre = semver::Prerelease::EMPTY;
+            version.build = semver::BuildMetadata::EMPTY;
+            version.to_string()
+        }
+    }
+}
 
 /// Parses the output of `uname -sm` to determine the remote platform.
 /// Takes the last line to skip possible shell initialization output.
@@ -129,6 +147,7 @@ fn handle_rpc_messages_over_child_process_stdio(
     mut remote_proxy_process: Child,
     incoming_tx: UnboundedSender<Envelope>,
     mut outgoing_rx: UnboundedReceiver<Envelope>,
+    outgoing_progress: crate::protocol::OutgoingProgress,
     mut connection_activity_tx: Sender<()>,
     cx: &AsyncApp,
 ) -> Task<Result<i32>> {
@@ -143,7 +162,9 @@ fn handle_rpc_messages_over_child_process_stdio(
 
     let stdin_task = cx.background_spawn(async move {
         while let Some(outgoing) = outgoing_rx.next().await {
-            write_message(&mut child_stdin, &mut stdin_buffer, outgoing).await?;
+            let progress = outgoing_progress.lock().get(&outgoing.id).cloned();
+            write_message_with_progress(&mut child_stdin, &mut stdin_buffer, outgoing, progress)
+                .await?;
         }
         anyhow::Ok(())
     });
@@ -246,7 +267,6 @@ async fn build_remote_server_from_source(
     cx: &mut AsyncApp,
 ) -> Result<Option<std::path::PathBuf>> {
     use std::env::VarError;
-    use std::path::Path;
     use util::command::{Command, Stdio, new_command};
 
     if let Ok(path) = std::env::var("ZED_COPY_REMOTE_SERVER") {
@@ -328,7 +348,10 @@ async fn build_remote_server_from_source(
         log::info!("building remote server binary from source");
         run_cmd(
             new_command("cargo")
-                .current_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."))
+                .current_dir(
+                    util::dev_repo_root()
+                        .context("locating the zed checkout to build remote_server from source")?,
+                )
                 .args([
                     "build",
                     "--package",
@@ -374,7 +397,10 @@ async fn build_remote_server_from_source(
         log::info!("building remote binary from source for {triple} with Zig");
         run_cmd(
             new_command("cargo")
-                .current_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."))
+                .current_dir(
+                    util::dev_repo_root()
+                        .context("locating the zed checkout to build remote_server from source")?,
+                )
                 .args([
                     "zigbuild",
                     "--package",
@@ -390,7 +416,8 @@ async fn build_remote_server_from_source(
         )
         .await?;
     };
-    let bin_path = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."))
+    let bin_path = util::dev_repo_root()
+        .context("locating the zed checkout that built remote_server from source")?
         .join("target")
         .join("remote_server")
         .join(&triple)
@@ -457,6 +484,29 @@ async fn which(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_remote_server_version() {
+        let version = Version::parse("1.13.1+stable.35fda0ced3").unwrap();
+        assert_eq!(
+            remote_server_version(ReleaseChannel::Stable, &version),
+            "1.13.1"
+        );
+
+        let version = Version::parse("1.14.0-pre.2+preview.35fda0ced3").unwrap();
+        assert_eq!(
+            remote_server_version(ReleaseChannel::Preview, &version),
+            "1.14.0"
+        );
+        assert_eq!(
+            remote_server_version(ReleaseChannel::Nightly, &version),
+            version.to_string()
+        );
+        assert_eq!(
+            remote_server_version(ReleaseChannel::Dev, &version),
+            "build"
+        );
+    }
 
     #[test]
     fn test_parse_platform() {

@@ -66,6 +66,7 @@
       "shift-tab": "editor::Backtab",
       "ctrl-k ctrl-q": "editor::Rewrap",
       "ctrl-k q": "editor::Rewrap",
+      "ctrl-alt-t": "editor::TranslateSelection",
       "ctrl-backspace": ["editor::DeleteToPreviousWordStart", { "ignore_newlines": false, "ignore_brackets": false }],
       "ctrl-delete": ["editor::DeleteToNextWordEnd", { "ignore_newlines": false, "ignore_brackets": false }],
       "shift-delete": "editor::Cut",
@@ -122,6 +123,8 @@
       "ctrl-alt-e": "editor::ToggleEditPrediction",
       "f9": "editor::ToggleBreakpoint",
       "shift-f9": "editor::EditLogBreakpoint",
+      // 有选区时运行选中代码，否则保存并运行当前文件。
+      "ctrl-alt-n": "editor::RunCode",
     },
   },
   {
@@ -568,6 +571,7 @@
       "alt-f12": "editor::GoToDefinitionSplit",
       "ctrl-f12": "editor::GoToImplementation",
       "shift-alt-f12": "editor::FindAllReferences",
+      "ctrl-k ctrl-h": "call_hierarchy::ShowIncomingCalls",
       "ctrl-shift-\\": "editor::MoveToEnclosingBracket",
       "ctrl-shift-[": "editor::Fold",
       "ctrl-shift-]": "editor::UnfoldLines",
@@ -609,6 +613,14 @@
     "bindings": {
       "ctrl-k v": "svg::OpenPreviewToTheSide",
       "ctrl-shift-v": "svg::OpenPreview",
+    },
+  },
+  {
+    "context": "Editor && (extension == csv || extension == tsv || extension == ssv || extension == psv)",
+    "use_key_equivalents": true,
+    "bindings": {
+      "ctrl-k v": "tabular_data::OpenPreviewToTheSide",
+      "ctrl-shift-v": "tabular_data::OpenPreview",
     },
   },
   {
@@ -709,6 +721,10 @@
       "alt-t": "task::Rerun",
       "shift-alt-t": "task::Spawn",
       "shift-alt-r": ["task::Spawn", { "reveal_target": "center" }],
+      // Spawns the task tagged "run-current" (e.g. a "run current file" task);
+      // falls back to the task picker when no matching task is found.
+      "ctrl-alt-m": ["task::Spawn", { "task_tag": "run-current" }],
+      "ctrl-alt-shift-j": "editor::StopCode",
       // also possible to spawn tasks by name:
       // "foo-bar": ["task::Spawn", { "task_name": "MyTask", "reveal_target": "dock" }]
       // or by tag:
@@ -813,6 +829,13 @@
     "use_key_equivalents": true,
     "bindings": {
       "enter": "editor::ConfirmRename",
+    },
+  },
+  {
+    "context": "Editor && inline_input",
+    "use_key_equivalents": true,
+    "bindings": {
+      "enter": "menu::Confirm",
     },
   },
   {
@@ -1013,6 +1036,18 @@
     },
   },
   {
+    "context": "GitPanel && (ChangesList || HistoryList) && !GitBranchSelector && !GitRepositorySelector",
+    "use_key_equivalents": true,
+    "bindings": {
+      "up": "menu::SelectPrevious",
+      "down": "menu::SelectNext",
+      "shift-up": "menu::SelectPrevious",
+      "shift-down": "menu::SelectNext",
+      "enter": "menu::Confirm",
+      "escape": "menu::Cancel",
+    },
+  },
+  {
     "context": "GitPanel && ChangesList && !GitBranchSelector && !GitRepositorySelector",
     "use_key_equivalents": true,
     "bindings": {
@@ -1020,7 +1055,6 @@
       "down": "git_panel::NextEntry",
       "left": "git_panel::CollapseSelectedEntry",
       "right": "git_panel::ExpandSelectedEntry",
-      "enter": "menu::Confirm",
       "alt-y": "git::StageFile",
       "shift-alt-y": "git::UnstageFile",
       "space": "git::ToggleStaged",
@@ -1029,7 +1063,6 @@
       "ctrl-k ctrl-shift-c": "workspace::CopyRelativePath",
       "tab": "git_panel::FocusEditor",
       "shift-tab": "git_panel::FocusEditor",
-      "escape": "git_panel::ToggleFocus",
       "alt-enter": "menu::SecondaryConfirm",
       "delete": ["git::RestoreFile", { "skip_prompt": false }],
       "backspace": ["git::RestoreFile", { "skip_prompt": false }],
@@ -1185,6 +1218,15 @@
     "use_key_equivalents": true,
     "bindings": {
       "tab": "channel_modal::ToggleMode",
+    },
+  },
+  {
+    "context": "CallHierarchyPicker > Picker > Editor",
+    "use_key_equivalents": true,
+    "bindings": {
+      "ctrl-k ctrl-h": "call_hierarchy::ToggleDirection",
+      "ctrl-k right": "menu::SelectChild",
+      "ctrl-k left": "menu::SelectParent",
     },
   },
   {
