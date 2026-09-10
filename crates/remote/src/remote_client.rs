@@ -44,7 +44,7 @@ use std::{
     path::PathBuf,
     sync::{
         Arc, Weak,
-        atomic::{AtomicU32, AtomicU64, Ordering::SeqCst},
+        atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering::SeqCst},
     },
     time::{Duration, Instant},
 };
@@ -512,6 +512,23 @@ impl RemoteClient {
                     manual_reconnect: false,
                 });
 
+                let session_invalidated = client.session_invalidated.wait();
+                let weak_client = this.downgrade();
+                cx.spawn(async move |cx| {
+                    if let Some(reason) = session_invalidated.await {
+                        weak_client
+                            .update(cx, |this, cx| {
+                                log::error!(
+                                    "remote project session {} invalidated: {reason}",
+                                    this.unique_identifier
+                                );
+                                this.set_state(State::ReconnectExhausted, cx);
+                            })
+                            .log_err();
+                    }
+                })
+                .detach();
+
                 let io_task = remote_connection.start_proxy(
                     unique_identifier,
                     false,
@@ -841,6 +858,9 @@ impl RemoteClient {
                 if let Err(error) = client.resync(HEARTBEAT_TIMEOUT).await {
                     failed!(error, attempts, remote_connection, delegate);
                 };
+                if client.session_is_invalid.load(SeqCst) {
+                    return State::ReconnectExhausted;
+                }
 
                 delegate.set_status(Some("远程开发连接已恢复"), cx);
                 State::Connected {
@@ -1083,6 +1103,9 @@ impl RemoteClient {
             self.client.response_channels.lock().clear();
             self.client.stream_response_channels.lock().clear();
             self.client.outgoing_progress.lock().clear();
+            if self.client.session_is_invalid.load(SeqCst) {
+                self.client.buffer.lock().clear();
+            }
             cx.emit(RemoteClientEvent::Disconnected {
                 server_not_running: is_server_not_running,
             });
@@ -1683,6 +1706,52 @@ mod tests {
     }
 
     #[gpui::test]
+    async fn missing_worktree_disconnects_live_client(
+        cx: &mut TestAppContext,
+        server_cx: &mut TestAppContext,
+    ) {
+        cx.update(|cx| release_channel::init(Version::new(0, 0, 0), cx));
+        let (options, server, guard) = RemoteClient::fake_server(cx, server_cx);
+        let handler = server_cx.new(|_| ());
+        server.add_request_handler(
+            handler.downgrade(),
+            |_, _: TypedEnvelope<proto::Ping>, _| async { Ok(proto::Ack {}) },
+        );
+        server.add_request_handler(
+            handler.downgrade(),
+            |_, _: TypedEnvelope<proto::CreateProjectEntry>, _| async {
+                anyhow::bail!("worktree not found")
+            },
+        );
+        drop(guard);
+        let client = RemoteClient::connect_mock(options, cx).await;
+        let disconnected = Arc::new(AtomicBool::new(false));
+        let _subscription = cx.update(|cx| {
+            let disconnected = disconnected.clone();
+            cx.subscribe(&client, move |_, event, _| {
+                if matches!(event, RemoteClientEvent::Disconnected { .. }) {
+                    disconnected.store(true, SeqCst);
+                }
+            })
+        });
+        let channel = client.read_with(cx, |client, _| client.client.clone());
+        assert!(
+            channel
+                .request(proto::CreateProjectEntry::default())
+                .await
+                .is_err()
+        );
+        cx.run_until_parked();
+        assert!(disconnected.load(SeqCst));
+        client.update(cx, |client, cx| {
+            assert!(client.is_disconnected());
+            assert!(client.reconnect_now(cx).is_err());
+        });
+        assert!(channel.buffer.lock().is_empty());
+        assert!(channel.response_channels.lock().is_empty());
+    }
+
+    #[gpui::test]
     async fn manual_reconnect_retains_existing_session(
         cx: &mut TestAppContext,
         server_cx: &mut TestAppContext,
@@ -1874,6 +1943,55 @@ mod tests {
         assert_eq!(client.outgoing_progress.lock().len(), 1);
         drop(request);
         assert!(client.outgoing_progress.lock().is_empty());
+    }
+
+    #[test]
+    fn missing_worktree_errors_are_scoped_to_project_requests() {
+        assert!(is_missing_remote_worktree(
+            "OpenBufferByPath",
+            "no such worktree"
+        ));
+        assert!(is_missing_remote_worktree(
+            "CreateProjectEntry",
+            "worktree not found"
+        ));
+        assert!(!is_missing_remote_worktree(
+            "CreateProjectEntry",
+            "permission denied"
+        ));
+        assert!(!is_missing_remote_worktree("LspQuery", "no such worktree"));
+        assert!(!is_missing_remote_worktree(
+            "OpenBufferByPath",
+            "unknown buffer id 1"
+        ));
+    }
+
+    #[gpui::test]
+    async fn test_missing_worktree_invalidates_session(cx: &mut TestAppContext) {
+        let (incoming_tx, incoming_rx) = mpsc::unbounded::<Envelope>();
+        let (outgoing_tx, _outgoing_rx) = mpsc::unbounded::<Envelope>();
+        let client =
+            cx.update(|cx| ChannelClient::new(incoming_rx, outgoing_tx, cx, "test-client", false));
+        let request = client.request_dynamic(
+            proto::Ping {}.into_envelope(0, None, None),
+            "OpenBufferByPath",
+            true,
+            None,
+        );
+        incoming_tx
+            .unbounded_send(
+                ErrorCode::Internal
+                    .message("no such worktree".to_string())
+                    .to_proto()
+                    .into_envelope(100, Some(0), None),
+            )
+            .unwrap();
+        assert!(request.await.is_err());
+        assert!(client.session_is_invalid.load(SeqCst));
+        assert!(client.session_invalidated.wait().await.is_some());
+        assert!(client.resync(HEARTBEAT_TIMEOUT).await.is_err());
+        assert!(client.request(proto::Ping {}).await.is_err());
+        assert!(client.response_channels.lock().is_empty());
     }
 
     #[gpui::test]
@@ -2138,6 +2256,13 @@ impl<T: Send + Clone + 'static> Signal<T> {
     }
 }
 
+// Older official servers expose missing worktrees only as unstructured errors.
+// Buffer and entry errors can be transient, so do not invalidate on those.
+fn is_missing_remote_worktree(request_type: &str, message: &str) -> bool {
+    matches!(request_type, "OpenBufferByPath" | "CreateProjectEntry")
+        && matches!(message, "no such worktree" | "worktree not found")
+}
+
 pub(crate) struct ChannelClient {
     outgoing_progress: crate::protocol::OutgoingProgress,
     next_message_id: AtomicU32,
@@ -2150,6 +2275,8 @@ pub(crate) struct ChannelClient {
     name: &'static str,
     task: Mutex<Task<Result<()>>>,
     remote_started: Signal<()>,
+    session_invalidated: Arc<Signal<String>>,
+    session_is_invalid: Arc<AtomicBool>,
     has_wsl_interop: bool,
     executor: BackgroundExecutor,
 }
@@ -2179,6 +2306,8 @@ impl ChannelClient {
                 &cx.to_async(),
             )),
             remote_started: Signal::new(cx),
+            session_invalidated: Arc::new(Signal::new(cx)),
+            session_is_invalid: Arc::new(AtomicBool::new(false)),
             has_wsl_interop,
         })
     }
@@ -2373,6 +2502,10 @@ impl ChannelClient {
     }
 
     async fn resync(&self, timeout: Duration) -> Result<()> {
+        anyhow::ensure!(
+            !self.session_is_invalid.load(SeqCst),
+            "远程项目会话已失效，请重新打开项目"
+        );
         smol::future::or(
             async {
                 self.request_internal(proto::FlushBufferedMessages {}, false)
@@ -2426,6 +2559,8 @@ impl ChannelClient {
         response_channels_lock.insert(MessageId(envelope.id), tx);
         drop(response_channels_lock);
 
+        let session_is_invalid = self.session_is_invalid.clone();
+        let invalidation_signal = self.session_invalidated.clone();
         let outgoing_progress = self.outgoing_progress.clone();
         let message_id = envelope.id;
         if let Some(progress) = progress {
@@ -2439,6 +2574,9 @@ impl ChannelClient {
         } else {
             self.send_unbuffered(envelope)
         };
+        if result.is_err() {
+            self.response_channels.lock().remove(&MessageId(message_id));
+        }
         async move {
             let _cleanup_progress = cleanup_progress;
             if let Err(error) = &result {
@@ -2448,6 +2586,10 @@ impl ChannelClient {
 
             let response = rx.await.context("connection lost")?.0;
             if let Some(proto::envelope::Payload::Error(error)) = &response.payload {
+                if is_missing_remote_worktree(type_name, &error.message) {
+                    session_is_invalid.store(true, SeqCst);
+                    invalidation_signal.set(format!("{type_name}: {}", error.message));
+                }
                 return Err(RpcError::from_proto(error, type_name));
             }
             Ok(response)
@@ -2466,6 +2608,9 @@ impl ChannelClient {
         stream_response_channels.lock().insert(message_id, tx);
 
         let result = self.send_buffered(envelope);
+        if result.is_err() {
+            stream_response_channels.lock().remove(&message_id);
+        }
         async move {
             if let Err(error) = &result {
                 log::error!("failed to send message: {error}");
@@ -2509,6 +2654,10 @@ impl ChannelClient {
     }
 
     fn send_buffered(&self, mut envelope: proto::Envelope) -> Result<()> {
+        anyhow::ensure!(
+            !self.session_is_invalid.load(SeqCst),
+            "远程项目会话已失效，请重新打开项目"
+        );
         envelope.ack_id = Some(self.max_received.load(SeqCst));
         self.buffer.lock().push_back(envelope.clone());
         // ignore errors on send (happen while we're reconnecting)
@@ -2518,6 +2667,10 @@ impl ChannelClient {
     }
 
     fn send_unbuffered(&self, mut envelope: proto::Envelope) -> Result<()> {
+        anyhow::ensure!(
+            !self.session_is_invalid.load(SeqCst),
+            "远程项目会话已失效，请重新打开项目"
+        );
         envelope.ack_id = Some(self.max_received.load(SeqCst));
         self.outgoing_tx.lock().unbounded_send(envelope).ok();
         Ok(())

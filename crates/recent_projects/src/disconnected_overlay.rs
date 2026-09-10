@@ -166,7 +166,7 @@ impl Render for DisconnectedOverlay {
                     )
                 } else {
                     format!(
-                        "{} 的远程服务未响应，连接已断开。{autosave}",
+                        "{} 的远程连接不可用或项目会话已失效。请点击“重新连接”重新打开项目；未保存的内容请先备份。{autosave}",
                         options.display_name(),
                     )
                 }

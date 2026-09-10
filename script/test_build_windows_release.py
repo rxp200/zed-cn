@@ -96,6 +96,12 @@ subprocess.run(['git', '--git-dir', os.environ['FIXTURE_REMOTE'], 'update-ref',
         self.assertEqual(set(checked), {"bundle_linux", "bundle_macos", "bundle_windows", "publish_release"})
         self.assertNotIn("source_ref", JOBS["validate_source"]["outputs"])
 
+    def test_desktop_builds_embed_validated_custom_release_tag(self):
+        for name in ("bundle_linux", "bundle_macos", "bundle_windows"):
+            self.assertEqual(JOBS[name]["env"]["ZED_CUSTOM_RELEASE_TAG"],
+                             "${{ needs.validate_source.outputs.release_tag }}")
+            self.assertEqual(JOBS[name]["env"]["ZED_COMMIT_SHA"], SOURCE)
+
     def test_matching_lightweight_and_annotated_tags(self):
         for annotated in (False, True):
             with self.subTest(annotated=annotated):

@@ -971,17 +971,8 @@ impl AutoUpdater {
         arch: &str,
         cx: &mut AsyncApp,
     ) -> Result<Option<CustomAppRelease>> {
-        let official_release =
-            Self::get_release_asset(this, ReleaseChannel::Stable, None, "zed", os, arch, cx)
-                .await?;
-        let official_version = official_release.version.parse::<Version>()?;
-
         installed_version.pre = semver::Prerelease::EMPTY;
         installed_version.build = semver::BuildMetadata::EMPTY;
-        if official_version < installed_version {
-            return Ok(None);
-        }
-
         let cached_manifest = this.read_with(cx, |this, _| {
             this.update_manifest
                 .as_ref()
@@ -1026,13 +1017,13 @@ impl AutoUpdater {
         let expected_asset_name = custom_app_asset_name(os, arch)?;
         let Some((release, release_version, revision, asset)) = select_custom_app_release(
             releases,
-            &official_version,
+            &installed_version,
             &expected_asset_name,
             app_commit_sha.as_deref(),
         ) else {
             log::info!(
-                "no Zed CN release for version {} contains {}",
-                official_version,
+                "Zed CN 更新清单中没有适用于当前版本 {} 和平台 {} 的更新",
+                installed_version,
                 expected_asset_name
             );
             return Ok(None);
@@ -1413,18 +1404,12 @@ fn parse_zed_cn_release_tag(tag_name: &str) -> Option<(Version, u64)> {
 
 fn select_custom_app_release(
     releases: Vec<GitHubRelease>,
-    official_version: &Version,
+    installed_version: &Version,
     expected_asset_name: &str,
     installed_commit_sha: Option<&str>,
 ) -> Option<(GitHubRelease, Version, u64, GitHubReleaseAsset)> {
     let mut releases = releases;
-    releases.sort_by_key(|release| {
-        std::cmp::Reverse(
-            parse_zed_cn_release_tag(&release.tag_name)
-                .map(|(_, revision)| revision)
-                .unwrap_or_default(),
-        )
-    });
+    releases.sort_by_key(|release| std::cmp::Reverse(parse_zed_cn_release_tag(&release.tag_name)));
 
     let mut candidate = None;
     for mut release in releases {
@@ -1434,7 +1419,7 @@ fn select_custom_app_release(
         let Some((release_version, revision)) = parse_zed_cn_release_tag(&release.tag_name) else {
             continue;
         };
-        if &release_version != official_version {
+        if &release_version < installed_version {
             continue;
         }
 
@@ -1828,17 +1813,8 @@ mod tests {
                 let manifest_requests = manifest_requests.clone();
                 let dmg_rx = dmg_rx.clone();
                 async move {
-                if req.uri().path() == "/releases/stable/latest/asset" {
-                    if release_available {
-                        return Ok(Response::builder().status(200).body(
-                            r#"{"version":"0.100.1","url":"https://test.example/new-download"}"#.into()
-                        ).unwrap());
-                    } else {
-                        return Ok(Response::builder().status(200).body(
-                            r#"{"version":"0.100.0","url":"https://test.example/old-download"}"#.into()
-                        ).unwrap());
-                    }
-                } else if req.uri().path() == "/zed-cn/updates.json" {
+                assert_ne!(req.uri().host(), Some("cloud.zed.dev"), "Stable desktop updates must not query official releases");
+                if req.uri().path() == "/zed-cn/updates.json" {
                     manifest_requests.fetch_add(1, atomic::Ordering::SeqCst);
                     let (tag_name, target_commitish, download_url) = if release_available {
                         ("zed-cn-v0.100.1-r2", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", format!("https://github.com/rxp200/zed-cn/releases/download/zed-cn-v0.100.1-r2/{expected_asset_name}"))
@@ -2241,6 +2217,71 @@ mod tests {
                 Some("installed-r5"),
             )
             .is_none()
+        );
+    }
+
+    #[test]
+    fn test_custom_feed_version_ordering_and_installed_identity() {
+        let release = |tag: &str, sha: &str, has_asset: bool| -> GitHubRelease {
+            serde_json::from_value(serde_json::json!({
+                "tag_name": tag,
+                "target_commitish": sha,
+                "draft": false,
+                "prerelease": false,
+                "assets": if has_asset { vec![serde_json::json!({
+                    "name": "Zed-x86_64.exe",
+                    "state": "uploaded",
+                    "size": 123,
+                    "browser_download_url": "https://test.example/update.exe"
+                })] } else { vec![] },
+            }))
+            .expect("valid release fixture")
+        };
+        let installed = Version::new(1, 18, 1);
+        let select = |releases, version: &Version, sha| {
+            select_custom_app_release(releases, version, "Zed-x86_64.exe", sha)
+                .map(|(release, _, _, _)| release.tag_name)
+        };
+        let releases = vec![
+            release("zed-cn-v1.18.1-r5", "installed-r5", true),
+            release("zed-cn-v1.18.1-r6", "updated-r6", true),
+        ];
+        assert_eq!(
+            select(releases.clone(), &installed, Some("installed-r5")),
+            Some("zed-cn-v1.18.1-r6".into())
+        );
+        assert_eq!(
+            select(releases.clone(), &installed, Some("updated-r6")),
+            None
+        );
+        assert_eq!(
+            select(releases.clone(), &Version::new(1, 19, 0), None),
+            None
+        );
+
+        let mut releases = releases;
+        releases.push(release("zed-cn-v1.19.2-r1", "new-version", true));
+        assert_eq!(
+            select(releases.clone(), &installed, Some("installed-r5")),
+            Some("zed-cn-v1.19.2-r1".into())
+        );
+        assert_eq!(
+            select(releases, &Version::new(1, 19, 2), Some("new-version")),
+            None
+        );
+
+        let releases = vec![
+            release("zed-cn-v1.19.2-r1", "new-version", false),
+            release("zed-cn-v1.18.1-r10", "updated-r10", true),
+            release("zed-cn-v1.18.1-r9", "updated-r9", true),
+        ];
+        assert_eq!(
+            select(releases.clone(), &installed, None),
+            Some("zed-cn-v1.18.1-r10".into())
+        );
+        assert_eq!(
+            select(releases, &Version::new(1, 19, 2), Some("new-version")),
+            None
         );
     }
 

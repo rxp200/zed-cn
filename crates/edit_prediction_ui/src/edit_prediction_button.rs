@@ -596,7 +596,21 @@ impl EditPredictionButton {
             .collect();
 
         if !providers.is_empty() {
-            menu = menu.separator().header("Providers");
+            let fs = self.fs.clone();
+            menu = menu.separator().header("Providers").item(
+                ContextMenuEntry::new("关闭")
+                    .toggleable(
+                        IconPosition::Start,
+                        current_provider == EditPredictionProvider::None,
+                    )
+                    .documentation_aside(DocumentationSide::Left, move |_| {
+                        Label::new("关闭 AI 编辑预测并隐藏状态栏图标，可在设置中重新启用。")
+                            .into_any_element()
+                    })
+                    .handler(move |_, cx| {
+                        set_completion_provider(fs.clone(), cx, EditPredictionProvider::None);
+                    }),
+            );
 
             for provider in providers {
                 let Some(name) = provider.display_name() else {

@@ -1,3 +1,4 @@
+mod about_version;
 mod app_menus;
 pub mod edit_prediction_registry;
 #[cfg(target_os = "macos")]
@@ -1557,6 +1558,12 @@ fn open_about_window(cx: &mut App) {
             let release_channel_name = release_channel.display_name();
             let full_version: SharedString = AppVersion::global(cx).to_string().into();
             let version = env!("CARGO_PKG_VERSION");
+            let version = if release_channel == ReleaseChannel::Stable {
+                about_version::custom_version(version, option_env!("ZED_CUSTOM_RELEASE_TAG"))
+                    .unwrap_or(version)
+            } else {
+                version
+            };
 
             let debug = if cfg!(debug_assertions) {
                 "(debug)"
