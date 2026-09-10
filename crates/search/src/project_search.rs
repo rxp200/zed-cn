@@ -1068,7 +1068,7 @@ impl Render for ProjectSearchView {
             let page_content: Option<AnyElement> = match model.search_state {
                 SearchState::Idle => Some(self.landing_text_minor(cx).into_any_element()),
                 _ if model.search_state.no_results_so_far() => Some(
-                    Label::new("No results found in this project for the provided query")
+                    Label::new("在此项目中未找到与查询匹配的结果")
                         .size(LabelSize::Small)
                         .into_any_element(),
                 ),
@@ -1485,7 +1485,7 @@ impl ProjectSearchView {
 
         let query_editor = cx.new(|cx| {
             let mut editor = Editor::auto_height(1, 4, window, cx);
-            editor.set_placeholder_text("Search all files…", window, cx);
+            editor.set_placeholder_text("搜索所有文件…", window, cx);
             editor.set_use_autoclose(false);
             editor.set_use_selection_highlight(false);
             editor.set_text(query_text, window, cx);
@@ -2481,15 +2481,15 @@ impl ProjectSearchView {
             .gap_1()
             .child(
                 Label::new(if EditorSettings::get_global(cx).search.search_on_type {
-                    "Start typing to search. For more options:"
+                    "输入内容即可搜索。更多选项："
                 } else {
-                    "Hit enter to search. For more options:"
+                    "按回车搜索。更多选项："
                 })
                 .color(Color::Muted)
                 .mb_2(),
             )
             .child(
-                Button::new("filter-paths", "Include/exclude specific paths")
+                Button::new("filter-paths", "包含/排除特定路径")
                     .start_icon(Icon::new(IconName::Filter).size(IconSize::Small))
                     .key_binding(KeyBinding::for_action_in(&ToggleFilters, &focus_handle, cx))
                     .on_click(|_event, window, cx| {
@@ -2497,7 +2497,7 @@ impl ProjectSearchView {
                     }),
             )
             .child(
-                Button::new("find-replace", "Find and replace")
+                Button::new("find-replace", "查找和替换")
                     .start_icon(Icon::new(IconName::Replace).size(IconSize::Small))
                     .key_binding(KeyBinding::for_action_in(&ToggleReplace, &focus_handle, cx))
                     .on_click(|_event, window, cx| {
@@ -2505,7 +2505,7 @@ impl ProjectSearchView {
                     }),
             )
             .child(
-                Button::new("regex", "Match with regex")
+                Button::new("regex", "使用正则表达式匹配")
                     .start_icon(Icon::new(IconName::Regex).size(IconSize::Small))
                     .key_binding(KeyBinding::for_action_in(&ToggleRegex, &focus_handle, cx))
                     .on_click(|_event, window, cx| {
@@ -2513,7 +2513,7 @@ impl ProjectSearchView {
                     }),
             )
             .child(
-                Button::new("match-case", "Match case")
+                Button::new("match-case", "匹配大小写")
                     .start_icon(Icon::new(IconName::CaseSensitive).size(IconSize::Small))
                     .key_binding(KeyBinding::for_action_in(
                         &ToggleCaseSensitive,
@@ -2525,7 +2525,7 @@ impl ProjectSearchView {
                     }),
             )
             .child(
-                Button::new("match-whole-words", "Match whole words")
+                Button::new("match-whole-words", "匹配整个单词")
                     .start_icon(Icon::new(IconName::WholeWord).size(IconSize::Small))
                     .key_binding(KeyBinding::for_action_in(
                         &ToggleWholeWord,
@@ -3086,7 +3086,7 @@ impl Render for ProjectSearchBar {
                     .active_match_index
                     .is_none()
                     .then_some(ActionButtonState::Disabled),
-                "Select Previous Match",
+                "选择上一个匹配项",
                 &SelectPreviousMatch,
                 query_focus.clone(),
             ))
@@ -3097,7 +3097,7 @@ impl Render for ProjectSearchBar {
                     .active_match_index
                     .is_none()
                     .then_some(ActionButtonState::Disabled),
-                "Select Next Match",
+                "选择下一个匹配项",
                 &SelectNextMatch,
                 query_focus.clone(),
             ))
@@ -3139,9 +3139,7 @@ impl Render for ProjectSearchBar {
             .child(
                 IconButton::new("project-search-filter-button", IconName::Filter)
                     .shape(IconButtonShape::Square)
-                    .tooltip(|_window, cx| {
-                        Tooltip::for_action("Toggle Filters", &ToggleFilters, cx)
-                    })
+                    .tooltip(|_window, cx| Tooltip::for_action("切换筛选器", &ToggleFilters, cx))
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.toggle_filters(window, cx);
                     }))
@@ -3154,12 +3152,7 @@ impl Render for ProjectSearchBar {
                     .tooltip({
                         let focus_handle = focus_handle.clone();
                         move |_window, cx| {
-                            Tooltip::for_action_in(
-                                "Toggle Filters",
-                                &ToggleFilters,
-                                &focus_handle,
-                                cx,
-                            )
+                            Tooltip::for_action_in("切换筛选器", &ToggleFilters, &focus_handle, cx)
                         }
                     }),
             )
@@ -3170,7 +3163,7 @@ impl Render for ProjectSearchBar {
                     .as_ref()
                     .map(|search| search.read(cx).replace_enabled)
                     .and_then(|enabled| enabled.then_some(ActionButtonState::Toggled)),
-                "Toggle Replace",
+                "切换替换",
                 &ToggleReplace,
                 focus_handle.clone(),
             ))
@@ -3179,9 +3172,9 @@ impl Render for ProjectSearchBar {
         let is_collapsed = search.results_editor.read(cx).has_any_buffer_folded(cx);
 
         let (icon, tooltip_label) = if is_collapsed {
-            (IconName::ChevronUpDown, "Expand All Search Results")
+            (IconName::ChevronUpDown, "展开所有搜索结果")
         } else {
-            (IconName::ChevronDownUp, "Collapse All Search Results")
+            (IconName::ChevronDownUp, "折叠所有搜索结果")
         };
 
         let expand_button = IconButton::new("project-search-collapse-expand", icon)
@@ -3227,7 +3220,7 @@ impl Render for ProjectSearchBar {
                     "project-search-replace-button",
                     IconName::ReplaceNext,
                     is_search_underway.then_some(ActionButtonState::Disabled),
-                    "Replace Next Match",
+                    "替换下一个匹配项",
                     &ReplaceNext,
                     focus_handle.clone(),
                 ))
@@ -3235,7 +3228,7 @@ impl Render for ProjectSearchBar {
                     "project-search-replace-button",
                     IconName::ReplaceAll,
                     Default::default(),
-                    "Replace All Matches",
+                    "替换所有匹配项",
                     &ReplaceAll,
                     focus_handle,
                 ));
@@ -3272,7 +3265,7 @@ impl Render for ProjectSearchBar {
                     IconButton::new("project-search-opened-only", IconName::FolderSearch)
                         .shape(IconButtonShape::Square)
                         .toggle_state(self.is_opened_only_enabled(cx))
-                        .tooltip(Tooltip::text("Only Search Open Files"))
+                        .tooltip(Tooltip::text("仅搜索打开的文件"))
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.toggle_opened_only(window, cx);
                         })),

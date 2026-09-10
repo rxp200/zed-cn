@@ -92,31 +92,6 @@ cargo --config .cargo/bundle-config.toml build ${build_flag} --package zed --pac
 # from influencing dynamic libraries required by it.
 cargo --config .cargo/bundle-config.toml build ${build_flag} --package remote_server --target $target_triple
 
-echo "Creating application bundle"
-pushd crates/zed
-cp Cargo.toml Cargo.toml.backup
-sed \
-    -i.backup \
-    "s/package.metadata.bundle-${channel}/package.metadata.bundle/" \
-    Cargo.toml
-
-app_path=$(cargo bundle ${build_flag} --target $target_triple --select-workspace-root | xargs)
-
-mv Cargo.toml.backup Cargo.toml
-popd
-echo "Bundled ${app_path}"
-
-# DocumentTypes.plist references CFBundleTypeIconFile "Document", so the bundle must contain Document.icns.
-# We use the app icon as a placeholder document icon for now.
-document_icon_source="crates/zed/resources/Document.icns"
-document_icon_target="${app_path}/Contents/Resources/Document.icns"
-if [[ -f "${document_icon_source}" ]]; then
-    mkdir -p "$(dirname "${document_icon_target}")"
-    cp "${document_icon_source}" "${document_icon_target}"
-else
-    echo "cargo::warning=Missing ${document_icon_source}; macOS document icons may not appear in Finder."
-fi
-
 if [[ -n "${MACOS_CERTIFICATE:-}" && -n "${MACOS_CERTIFICATE_PASSWORD:-}" && -n "${APPLE_NOTARIZATION_KEY:-}" && -n "${APPLE_NOTARIZATION_KEY_ID:-}" && -n "${APPLE_NOTARIZATION_ISSUER_ID:-}" ]]; then
     can_code_sign=true
 
@@ -218,8 +193,14 @@ function sign_app_binaries() {
         # - create your own signing key, and update references to MQ55VZLNZQ to your own team ID
         # then comment out this line.
         cat crates/zed/resources/zed.entitlements | sed '/com.apple.developer.associated-domains/,+1d' > "${app_path}/Contents/Resources/zed.entitlements"
+        rm -f "${app_path}/Contents/embedded.provisionprofile"
 
-        codesign --force --deep --entitlements "${app_path}/Contents/Resources/zed.entitlements" --sign ${MACOS_SIGNING_KEY:- -} "${app_path}" -v
+        signing_key="${MACOS_SIGNING_KEY:--}"
+        codesign --force --sign "$signing_key" "${app_path}/Contents/MacOS/cli" -v
+        codesign --force --sign "$signing_key" "${app_path}/Contents/MacOS/git" -v
+        codesign --force --entitlements "${app_path}/Contents/Resources/zed.entitlements" --sign "$signing_key" "${app_path}/Contents/MacOS/zed" -v
+        codesign --force --entitlements "${app_path}/Contents/Resources/zed.entitlements" --sign "$signing_key" "${app_path}" -v
+        codesign --verify --deep --strict --verbose=4 "${app_path}"
     fi
 
     bundle_name=$(basename "$app_path")
@@ -292,24 +273,31 @@ function sign_binary() {
     fi
 }
 
+debug_symbols_extracted=false
+function extract_debug_symbols() {
+    if [ "$debug_symbols_extracted" = true ]; then
+        return
+    fi
+    debug_symbols_extracted=true
+    echo "Extracting debug symbols before bundling"
+    if ! dsymutil --flat "target/${target_triple}/${target_dir}/zed" 2> target/dsymutil.log; then
+        echo "dsymutil failed"
+        cat target/dsymutil.log
+        exit 1
+    fi
+    if ! dsymutil --flat "target/${target_triple}/${target_dir}/remote_server" 2> target/dsymutil.log; then
+        echo "dsymutil failed"
+        cat target/dsymutil.log
+        exit 1
+    fi
+}
+
 function upload_debug_symbols() {
     if [ "$local_install" = true ]; then
         echo "local install; skipping sentry upload."
     elif [[ -n "${SENTRY_AUTH_TOKEN:-}" ]]; then
         echo "Uploading zed debug symbols to sentry..."
-        exe_path="target/${target_triple}/release/Zed"
-        if ! dsymutil --flat "target/${target_triple}/${target_dir}/zed" 2> target/dsymutil.log; then
-            echo "dsymutil failed"
-            cat target/dsymutil.log
-            exit 1
-        fi
-        if ! dsymutil --flat "target/${target_triple}/${target_dir}/remote_server" 2> target/dsymutil.log; then
-            echo "dsymutil failed"
-            cat target/dsymutil.log
-            exit 1
-        fi
-        # note: this uploads the unstripped binary which is needed because it contains
-        # .eh_frame data for stack unwinding. see https://github.com/getsentry/symbolic/issues/783
+        extract_debug_symbols
         # Try uploading up to 3 times
         for attempt in 1 2 3; do
             echo "Sentry upload attempt $attempt..."
@@ -332,8 +320,48 @@ function upload_debug_symbols() {
 
 upload_debug_symbols
 
-cp target/${target_triple}/${target_dir}/zed "${app_path}/Contents/MacOS/zed"
-cp target/${target_triple}/${target_dir}/cli "${app_path}/Contents/MacOS/cli"
+# Sentry receives the extracted zed.dwarf, not the binary, so debug symbols
+# must be extracted before the binaries are stripped below. The .dwarf files
+# also keep symbols recoverable when the sentry upload is skipped.
+if [[ "$target_dir" == "release" && "$local_install" != true ]]; then
+    extract_debug_symbols
+    strip -x "target/${target_triple}/${target_dir}/zed"
+    strip -x "target/${target_triple}/${target_dir}/cli"
+    strip -x "target/${target_triple}/${target_dir}/remote_server"
+fi
+
+# Bundle only after symbol extraction and stripping to avoid an unstripped app
+# copy at peak disk usage. Rebuilding here would also undo stripping and compile
+# without the share-generics configuration used by the build above.
+echo "Creating application bundle from prepared binaries"
+pushd crates/zed
+cp Cargo.toml Cargo.toml.backup
+sed \
+    -i.backup \
+    "s/package.metadata.bundle-${channel}/package.metadata.bundle/" \
+    Cargo.toml
+
+if app_path=$(CARGO_BUNDLE_SKIP_BUILD=true cargo bundle ${build_flag} --target "$target_triple" --select-workspace-root | xargs); then
+    mv Cargo.toml.backup Cargo.toml
+else
+    mv Cargo.toml.backup Cargo.toml
+    exit 1
+fi
+popd
+echo "Bundled ${app_path}"
+
+# DocumentTypes.plist references CFBundleTypeIconFile "Document", so the bundle must contain Document.icns.
+# We use the app icon as a placeholder document icon for now.
+document_icon_source="crates/zed/resources/Document.icns"
+document_icon_target="${app_path}/Contents/Resources/Document.icns"
+if [[ -f "${document_icon_source}" ]]; then
+    mkdir -p "$(dirname "${document_icon_target}")"
+    cp "${document_icon_source}" "${document_icon_target}"
+else
+    echo "cargo::warning=Missing ${document_icon_source}; macOS document icons may not appear in Finder."
+fi
+
+cp "target/${target_triple}/${target_dir}/cli" "${app_path}/Contents/MacOS/cli"
 sign_app_binaries
 
 sign_binary "target/$target_triple/release/remote_server"

@@ -69,6 +69,7 @@
       "ctrl-y": "editor::KillRingYank",
       "cmd-k cmd-q": "editor::Rewrap",
       "cmd-k q": "editor::Rewrap",
+      "ctrl-alt-t": "editor::TranslateSelection",
       "cmd-backspace": "editor::DeleteToBeginningOfLine",
       "cmd-delete": "editor::DeleteToEndOfLine",
       "alt-backspace": ["editor::DeleteToPreviousWordStart", { "ignore_newlines": false, "ignore_brackets": false }],
@@ -146,6 +147,8 @@
       "cmd-i": "editor::ShowSignatureHelp",
       "f9": "editor::ToggleBreakpoint",
       "shift-f9": "editor::EditLogBreakpoint",
+      // 有选区时运行选中代码，否则保存并运行当前文件。
+      "ctrl-alt-n": "editor::RunCode",
       "ctrl-f12": "editor::GoToDeclaration",
       "alt-ctrl-f12": "editor::GoToDeclarationSplit",
       "ctrl-cmd-e": "editor::ToggleEditPrediction",
@@ -788,6 +791,10 @@
       // Use the `"reevaluate_context"` parameter to control this.
       "cmd-alt-r": ["task::Rerun", { "reevaluate_context": false }],
       "ctrl-alt-shift-r": ["task::Spawn", { "reveal_target": "center" }],
+      // Spawns the task tagged "run-current" (e.g. a "run current file" task);
+      // falls back to the task picker when no matching task is found.
+      "ctrl-alt-m": ["task::Spawn", { "task_tag": "run-current" }],
+      "ctrl-alt-shift-j": "editor::StopCode",
       // also possible to spawn tasks by name:
       // "foo-bar": ["task::Spawn", { "task_name": "MyTask", "reveal_target": "dock" }]
       // or by tag:
@@ -885,6 +892,13 @@
     "use_key_equivalents": true,
     "bindings": {
       "enter": "editor::ConfirmRename",
+    },
+  },
+  {
+    "context": "Editor && inline_input",
+    "use_key_equivalents": true,
+    "bindings": {
+      "enter": "menu::Confirm",
     },
   },
   {
@@ -1088,18 +1102,27 @@
     },
   },
   {
+    "context": "GitPanel && (ChangesList || HistoryList) && !GitBranchSelector && !GitRepositorySelector",
+    "use_key_equivalents": true,
+    "bindings": {
+      "up": "menu::SelectPrevious",
+      "down": "menu::SelectNext",
+      "shift-up": "menu::SelectPrevious",
+      "shift-down": "menu::SelectNext",
+      "enter": "menu::Confirm",
+      "escape": "menu::Cancel",
+    },
+  },
+  {
     "context": "GitPanel && ChangesList && !GitBranchSelector && !GitRepositorySelector",
     "use_key_equivalents": true,
     "bindings": {
       "up": "git_panel::PreviousEntry",
       "down": "git_panel::NextEntry",
-      "shift-up": "menu::SelectPrevious",
-      "shift-down": "menu::SelectNext",
       "cmd-up": "git_panel::FirstEntry",
       "cmd-down": "git_panel::LastEntry",
       "left": "git_panel::CollapseSelectedEntry",
       "right": "git_panel::ExpandSelectedEntry",
-      "enter": "menu::Confirm",
       "cmd-alt-y": "git::ToggleStaged",
       "space": "git::ToggleStaged",
       "shift-space": "git::StageRange",
@@ -1110,7 +1133,6 @@
       "alt-down": "git_panel::FocusEditor",
       "tab": "git_panel::FocusEditor",
       "shift-tab": "git_panel::FocusEditor",
-      "escape": "menu::Cancel",
       "backspace": ["git::RestoreFile", { "skip_prompt": false }],
       "delete": ["git::RestoreFile", { "skip_prompt": false }],
       "cmd-backspace": ["git::RestoreFile", { "skip_prompt": true }],
@@ -1478,6 +1500,13 @@
       "cmd-shift-c": "keymap_editor::CopyContext",
       "cmd-t": "keymap_editor::ShowMatchingKeybinds",
       "cmd-e": "zed::OpenKeymapFile",
+    },
+  },
+  {
+    "context": "KeymapEditor > BufferSearchBar",
+    "use_key_equivalents": true,
+    "bindings": {
+      "cmd-alt-f": "keymap_editor::ToggleKeystrokeSearch",
     },
   },
   {

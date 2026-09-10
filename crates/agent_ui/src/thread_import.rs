@@ -389,7 +389,7 @@ impl ThreadImportModal {
 
     fn show_imported_threads_toast(&self, imported_count: usize, cx: &mut App) {
         let status_toast = if imported_count == 0 {
-            StatusToast::new("No threads found to import.", cx, |this, _cx| {
+            StatusToast::new("未找到可导入的线程。", cx, |this, _cx| {
                 this.icon(
                     Icon::new(IconName::Info)
                         .size(IconSize::Small)
@@ -588,7 +588,7 @@ impl Render for ThreadImportModal {
                                 .when(has_agents, |this| this.children(agent_rows))
                                 .when(!has_agents, |this| {
                                     this.child(
-                                        Label::new("No external agents available.")
+                                        Label::new("没有可用的外部 Agent。")
                                             .color(Color::Muted)
                                             .size(LabelSize::Small),
                                     )
@@ -607,7 +607,7 @@ impl Render for ThreadImportModal {
                                                 .color(Color::Muted)
                                                 .with_rotate_animation(3),
                                         )
-                                        .child(Label::new("Fetching Agent Threads…")
+                                        .child(Label::new("正在获取 Agent 线程...")
                                             .size(LabelSize::Small)
                                             .color(Color::Muted))
 
@@ -622,7 +622,7 @@ impl Render for ThreadImportModal {
                                 )
                             })
                             .end_slot(
-                                Button::new("import-threads", "Import Threads")
+                                Button::new("import-threads", "导入线程")
                                     .loading(self.is_importing)
                                     .disabled(disabled_import_thread)
                                     .key_binding(
@@ -961,7 +961,7 @@ fn show_cross_channel_import_toast(
     cx: &mut App,
 ) {
     let status_toast = if imported_count == 0 {
-        StatusToast::new("No new threads found to import.", cx, |this, _cx| {
+        StatusToast::new("未找到新的可导入线程。", cx, |this, _cx| {
             this.icon(Icon::new(IconName::Info).color(Color::Muted))
                 .dismiss_button(true)
         })

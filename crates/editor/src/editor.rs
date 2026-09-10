@@ -23,14 +23,17 @@ mod document_links;
 mod document_symbols;
 mod editor_settings;
 mod element;
+mod emmet_ext;
 mod fold;
 mod folding_ranges;
 mod git;
 mod highlight_matching_bracket;
 pub mod hover_links;
 pub mod hover_popover;
+pub mod hover_translation;
 mod indent_guides;
 mod inlays;
+mod inline_input;
 pub mod items;
 mod jsx_tag_auto_close;
 mod linked_editing_ranges;
@@ -45,6 +48,7 @@ mod selections_collection;
 pub mod semantic_tokens;
 mod split;
 pub mod split_editor_view;
+mod translation_cache;
 
 mod bookmarks;
 #[cfg(test)]
@@ -63,6 +67,7 @@ mod clipboard;
 mod code_actions;
 mod completions;
 mod config;
+mod cursor_animation;
 mod diagnostics;
 mod edit_prediction;
 mod input;
@@ -72,6 +77,7 @@ mod rewrap;
 mod selection;
 
 pub(crate) use actions::*;
+pub use actions::{RunCode, RunFile, RunSelection, StopCode};
 pub use clipboard::ClipboardSelection;
 pub use code_actions::CodeActionProvider;
 use collections::TypeIdHashMap;
@@ -116,6 +122,8 @@ use git::{DiffReviewDragState, DiffReviewOverlay, InlineBlamePopover};
 pub(crate) use git::{DisplayDiffHunk, PhantomDiffReviewIndicator};
 pub use hover_popover::hover_markdown_style;
 pub use inlays::Inlay;
+pub use inline_input::InlineInputState;
+pub(crate) use inline_input::{InlineInputHistoryDirection, InlineInputPreview};
 pub use items::MAX_TAB_TITLE_LEN;
 pub use linked_editing_ranges::LinkedEdits;
 pub use lsp::CompletionContext;
@@ -142,6 +150,7 @@ use code_context_menus::{
 use code_lens::CodeLensState;
 use collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use convert_case::{Case, Casing};
+use cursor_animation::CursorAnimationStates;
 use dap::TelemetrySpawnLocation;
 use display_map::*;
 use document_colors::LspColorData;
@@ -319,9 +328,9 @@ enum ReportEditorEvent {
 impl ReportEditorEvent {
     pub fn event_type(&self) -> &'static str {
         match self {
-            Self::Saved { .. } => "Editor Saved",
-            Self::EditorOpened => "Editor Opened",
-            Self::Closed => "Editor Closed",
+            Self::Saved { .. } => "编辑器已保存",
+            Self::EditorOpened => "编辑器已打开",
+            Self::Closed => "编辑器已关闭",
         }
     }
 }
@@ -987,6 +996,7 @@ pub struct Editor {
     completion_provider: Option<Rc<dyn CompletionProvider>>,
     collaboration_hub: Option<Box<dyn CollaborationHub>>,
     blink_manager: Entity<BlinkManager>,
+    cursor_animations: CursorAnimationStates,
     show_cursor_names: bool,
     hovered_cursors: HashMap<HoveredCursor, Task<()>>,
     pub show_local_selections: bool,
@@ -1045,6 +1055,7 @@ pub struct Editor {
     linked_editing_range_task: Option<Task<Option<()>>>,
     linked_edit_ranges: linked_editing_ranges::LinkedEditingRanges,
     pending_rename: Option<RenameState>,
+    pending_inline_input: Option<InlineInputState>,
     searchable: bool,
     cursor_shape: CursorShape,
     /// Whether the cursor is offset one character to the left when something is
@@ -1564,11 +1575,17 @@ struct SnippetState {
     choices: Vec<Option<Vec<String>>>,
 }
 
+pub struct RenameTarget {
+    range: Range<text::Anchor>,
+    language_server_id: Option<LanguageServerId>,
+}
+
 #[doc(hidden)]
 pub struct RenameState {
     pub range: Range<Anchor>,
     pub old_name: Arc<str>,
     pub editor: Entity<Editor>,
+    language_server_id: Option<LanguageServerId>,
     block_id: CustomBlockId,
 }
 
@@ -1670,8 +1687,8 @@ enum GutterButtonIntent {
 impl GutterButtonIntent {
     fn as_str(&self) -> &'static str {
         match self {
-            Self::SetBookmark => "Set Bookmark",
-            Self::SetBreakpoint => "Set Breakpoint",
+            Self::SetBookmark => "设置书签",
+            Self::SetBreakpoint => "设置断点",
         }
     }
 
@@ -2326,6 +2343,7 @@ impl Editor {
             collaboration_hub: project.clone().map(|project| Box::new(project) as _),
             project,
             blink_manager: blink_manager.clone(),
+            cursor_animations: CursorAnimationStates::default(),
             show_local_selections: true,
             show_scrollbars: ScrollbarAxes {
                 horizontal: full_mode,
@@ -2385,6 +2403,7 @@ impl Editor {
             document_highlights_task: None,
             linked_editing_range_task: None,
             pending_rename: None,
+            pending_inline_input: None,
             searchable: !is_minimap,
             cursor_shape: EditorSettings::get_global(cx)
                 .cursor_shape
@@ -2734,6 +2753,9 @@ impl Editor {
         if self.pending_rename.is_some() {
             key_context.add("renaming");
         }
+        if self.pending_inline_input.is_some() {
+            key_context.add("inline_input");
+        }
 
         if let Some(snippet_stack) = self.snippet_stack.last() {
             key_context.add("in_snippet");
@@ -2911,7 +2933,7 @@ impl Editor {
         cx: &mut Context<Workspace>,
     ) {
         Self::new_in_workspace(workspace, window, cx).detach_and_prompt_err(
-            "Failed to create buffer",
+            "创建缓冲区失败",
             window,
             cx,
             |e, _, _| match e.error_code() {
@@ -2999,7 +3021,7 @@ impl Editor {
             })?;
             anyhow::Ok(())
         })
-        .detach_and_prompt_err("Failed to create buffer", window, cx, |e, _, _| {
+        .detach_and_prompt_err("创建缓冲区失败", window, cx, |e, _, _| {
             match e.error_code() {
                 ErrorCode::RemoteUpgradeRequired => Some(format!(
                 "The remote instance of Zed does not support this yet. It must be upgraded to {}",
@@ -3496,6 +3518,7 @@ impl Editor {
         let mut dismissed = false;
 
         dismissed |= self.take_rename(false, window, cx).is_some();
+        dismissed |= self.take_inline_input(window, cx).is_some();
         dismissed |= self.hide_blame_popover(true, cx);
         dismissed |= hide_hover(self, cx);
         dismissed |= self.hide_signature_help(cx, SignatureHelpHiddenBy::Escape);
@@ -4262,9 +4285,9 @@ impl Editor {
             }))
             .tooltip(move |_window, cx| {
                 Tooltip::with_meta_in(
-                    "Remove Bookmark",
+                    "移除书签",
                     Some(&ToggleBookmark),
-                    SharedString::from("Right-click for more options"),
+                    SharedString::from("右键点击查看更多选项"),
                     &focus_handle,
                     cx,
                 )
@@ -4410,10 +4433,10 @@ impl Editor {
         let toggle_state_entry: Option<(&str, Box<dyn Action>)> =
             breakpoint.as_ref().map(|bp| match bp.1.state {
                 BreakpointState::Enabled => {
-                    ("Disable", crate::actions::DisableBreakpoint.boxed_clone())
+                    ("禁用", crate::actions::DisableBreakpoint.boxed_clone())
                 }
                 BreakpointState::Disabled => {
-                    ("Enable", crate::actions::EnableBreakpoint.boxed_clone())
+                    ("启用", crate::actions::EnableBreakpoint.boxed_clone())
                 }
             });
 
@@ -4426,7 +4449,7 @@ impl Editor {
                 .when_some(
                     clear_runnable_task_status,
                     |this, (buffer_id, buffer_row)| {
-                        this.entry("Clear Run Status", None, {
+                        this.entry("清除运行状态", None, {
                             let weak_editor = weak_editor.clone();
                             move |_window, cx| {
                                 weak_editor
@@ -4442,7 +4465,7 @@ impl Editor {
                 .when(run_to_cursor, |this| {
                     let weak_editor = weak_editor.clone();
                     this.entry(
-                        "Run to Cursor",
+                        "运行到光标",
                         Some(RunToCursor.boxed_clone()),
                         move |window, cx| {
                             weak_editor
@@ -4582,7 +4605,7 @@ impl Editor {
                 })
                 .when(has_bookmark, |this| {
                     this.entry(
-                        "Edit Bookmark",
+                        "编辑书签",
                         Some(EditBookmark.boxed_clone()),
                         move |window, cx| {
                             weak_editor
@@ -4634,7 +4657,7 @@ impl Editor {
         let has_context_menu = self.has_mouse_context_menu();
 
         let meta = if is_rejected {
-            SharedString::from("No executable code is associated with this line.")
+            SharedString::from("此行没有可执行的代码。")
         } else if !breakpoint.is_disabled() {
             SharedString::from(format!(
                 "{alt_as_text}-click to disable\nright-click for more options"
@@ -4901,6 +4924,25 @@ impl Editor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<()> {
+        self.insert_snippet_with_autoindent(
+            insertion_ranges,
+            snippet,
+            Some(AutoindentMode::Block {
+                original_indent_columns: Vec::new(),
+            }),
+            window,
+            cx,
+        )
+    }
+
+    pub(crate) fn insert_snippet_with_autoindent(
+        &mut self,
+        insertion_ranges: &[Range<MultiBufferOffset>],
+        snippet: Snippet,
+        autoindent_mode: Option<AutoindentMode>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<()> {
         struct Tabstop<T> {
             is_end_tabstop: bool,
             ranges: Vec<Range<T>>,
@@ -4913,10 +4955,7 @@ impl Editor {
                 .iter()
                 .cloned()
                 .map(|range| (range, snippet_text.clone()));
-            let autoindent_mode = AutoindentMode::Block {
-                original_indent_columns: Vec::new(),
-            };
-            buffer.edit(edits, Some(autoindent_mode), cx);
+            buffer.edit(edits, autoindent_mode, cx);
 
             let snapshot = &*buffer.read(cx);
             let snippet = &snippet;
@@ -5754,21 +5793,20 @@ impl Editor {
                             .collect::<String>();
 
                         if !line_text_after_indent.is_empty() {
-                            let block_prefixes = language_scope
+                            let block_prefix = language_scope
                                 .block_comment()
-                                .into_iter()
-                                .chain(language_scope.documentation_comment())
-                                .filter(|comment| {
-                                    language_scope.override_name() == Some("comment")
-                                        && !comment.prefix.is_empty()
-                                        && !line_text_after_indent.starts_with(comment.end.as_ref())
-                                })
-                                .map(|comment| comment.prefix.as_ref());
+                                .map(|c| c.prefix.as_ref())
+                                .filter(|p| !p.is_empty());
+                            let doc_prefix = language_scope
+                                .documentation_comment()
+                                .map(|c| c.prefix.as_ref())
+                                .filter(|p| !p.is_empty());
                             let comment_prefixes = language_scope
                                 .line_comment_prefixes()
                                 .iter()
                                 .map(|p| p.as_ref())
-                                .chain(block_prefixes)
+                                .chain(block_prefix)
+                                .chain(doc_prefix)
                                 .map(|prefix| (prefix, false));
                             let all_prefixes = comment_prefixes.chain(
                                 language_scope
@@ -6143,7 +6181,7 @@ impl Editor {
             BreakpointPromptEditAction::Condition => {
                 "Condition when a breakpoint is hit. Expressions within {} are interpolated."
             }
-            BreakpointPromptEditAction::HitCondition => "How many breakpoint hits to ignore",
+            BreakpointPromptEditAction::HitCondition => "忽略多少个断点命中",
         };
 
         let breakpoint = breakpoint.clone();
@@ -7230,7 +7268,7 @@ impl Editor {
     }
 
     fn convert_text_case(text: &str, case: Case) -> String {
-        text.lines()
+        text.split('\n')
             .map(|line| {
                 let trimmed_start = line.trim_start();
                 let leading = &line[..line.len() - trimmed_start.len()];
@@ -7996,8 +8034,12 @@ impl Editor {
         drop(snapshot);
 
         Some(cx.spawn_in(window, async move |this, cx| {
-            let rename_range = prepare_rename.await?;
-            if let Some(rename_range) = rename_range {
+            let rename_target = prepare_rename.await?;
+            if let Some(RenameTarget {
+                range: rename_range,
+                language_server_id,
+            }) = rename_target
+            {
                 this.update_in(cx, |this, window, cx| {
                     let snapshot = cursor_buffer.read(cx).snapshot();
                     let rename_buffer_range = rename_range.to_offset(&snapshot);
@@ -8149,6 +8191,7 @@ impl Editor {
                         range,
                         old_name,
                         editor: rename_editor,
+                        language_server_id,
                         block_id,
                     });
                 })?;
@@ -8192,6 +8235,7 @@ impl Editor {
             &buffer,
             start,
             new_name.clone(),
+            rename.language_server_id,
             cx,
         )?;
 
@@ -10012,6 +10056,17 @@ impl Editor {
                 if !is_fresh_language {
                     self.registered_buffers.remove(&buffer_id);
                 }
+                // No event exists for a buffer detaching from a language server: a switch
+                // to a language with no server emits neither LanguageServerRemoved nor
+                // LanguageServerBufferRegistered, so the language change itself is the only
+                // signal that this buffer's server set changed. Run the same LSP data sweep
+                // as those events do, or hints and colors from the old server stay visible.
+                if self.project.is_some() {
+                    self.register_buffer(*buffer_id, cx);
+                    self.invalidate_semantic_tokens(Some(*buffer_id));
+                    self.update_lsp_data(Some(*buffer_id), window, cx);
+                    self.refresh_inlay_hints(InlayHintRefreshReason::ServerRemoved, cx);
+                }
                 jsx_tag_auto_close::refresh_enabled_in_any_buffer(self, multibuffer, cx);
                 cx.emit(EditorEvent::Reparsed(*buffer_id));
                 self.update_edit_prediction_settings(cx);
@@ -10743,6 +10798,7 @@ impl Editor {
     }
 
     fn handle_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.cursor_animations.clear();
         cx.emit(EditorEvent::Focused);
 
         if let Some(descendant) = self
@@ -10807,6 +10863,7 @@ impl Editor {
     }
 
     pub fn handle_blur(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.cursor_animations.clear();
         self.blink_manager.update(cx, BlinkManager::disable);
         self.buffer
             .update(cx, |buffer, cx| buffer.remove_active_selections(cx));
@@ -11673,13 +11730,14 @@ pub trait SemanticsProvider {
         buffer: &Entity<Buffer>,
         position: text::Anchor,
         cx: &mut App,
-    ) -> Task<Result<Option<Range<text::Anchor>>>>;
+    ) -> Task<Result<Option<RenameTarget>>>;
 
     fn perform_rename(
         &self,
         buffer: &Entity<Buffer>,
         position: text::Anchor,
         new_name: String,
+        language_server_id: Option<LanguageServerId>,
         cx: &mut App,
     ) -> Option<Task<Result<ProjectTransaction>>>;
 }
@@ -11819,7 +11877,7 @@ impl SemanticsProvider for WeakEntity<Project> {
         buffer: &Entity<Buffer>,
         position: text::Anchor,
         cx: &mut App,
-    ) -> Task<Result<Option<Range<text::Anchor>>>> {
+    ) -> Task<Result<Option<RenameTarget>>> {
         let Some(this) = self.upgrade() else {
             return Task::ready(Ok(None));
         };
@@ -11829,7 +11887,13 @@ impl SemanticsProvider for WeakEntity<Project> {
             let task = project.prepare_rename(buffer.clone(), position, cx);
             cx.spawn(async move |_, cx| {
                 Ok(match task.await? {
-                    PrepareRenameResponse::Success(range) => Some(range),
+                    PrepareRenameResponse::Success {
+                        range,
+                        language_server_id,
+                    } => Some(RenameTarget {
+                        range,
+                        language_server_id,
+                    }),
                     PrepareRenameResponse::InvalidPosition => None,
                     PrepareRenameResponse::OnlyUnpreparedRenameSupported => {
                         // Fallback on using TreeSitter info to determine identifier range
@@ -11839,10 +11903,11 @@ impl SemanticsProvider for WeakEntity<Project> {
                             if kind != Some(CharKind::Word) {
                                 return None;
                             }
-                            Some(
-                                snapshot.anchor_before(range.start)
+                            Some(RenameTarget {
+                                range: snapshot.anchor_before(range.start)
                                     ..snapshot.anchor_after(range.end),
-                            )
+                                language_server_id: None,
+                            })
                         })
                     }
                 })
@@ -11855,10 +11920,11 @@ impl SemanticsProvider for WeakEntity<Project> {
         buffer: &Entity<Buffer>,
         position: text::Anchor,
         new_name: String,
+        language_server_id: Option<LanguageServerId>,
         cx: &mut App,
     ) -> Option<Task<Result<ProjectTransaction>>> {
         self.update(cx, |project, cx| {
-            project.perform_rename(buffer.clone(), position, new_name, cx)
+            project.perform_rename(buffer.clone(), position, new_name, language_server_id, cx)
         })
         .ok()
     }
@@ -12823,7 +12889,7 @@ impl PromptEditor {
             .icon_color(Color::Muted)
             .shape(IconButtonShape::Square)
             .tooltip(move |_window, cx| {
-                Tooltip::for_action_in("Cancel", &menu::Cancel, &focus_handle, cx)
+                Tooltip::for_action_in("取消", &menu::Cancel, &focus_handle, cx)
             })
             .on_click(cx.listener(|this, _, window, cx| {
                 this.cancel(&menu::Cancel, window, cx);
@@ -12836,7 +12902,7 @@ impl PromptEditor {
             .icon_color(Color::Muted)
             .shape(IconButtonShape::Square)
             .tooltip(move |_window, cx| {
-                Tooltip::for_action_in("Confirm", &menu::Confirm, &focus_handle, cx)
+                Tooltip::for_action_in("确认", &menu::Confirm, &focus_handle, cx)
             })
             .on_click(cx.listener(|this, _, window, cx| {
                 this.confirm(&menu::Confirm, window, cx);

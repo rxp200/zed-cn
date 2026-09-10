@@ -57,6 +57,7 @@ edit_prediction_types.workspace = true
 itertools.workspace = true
 language.workspace = true
 language_detection.workspace = true
+language_model.workspace = true
 linkify.workspace = true
 log.workspace = true
 lsp.workspace = true
@@ -66,6 +67,7 @@ multi_buffer.workspace = true
 ordered-float.workspace = true
 parking_lot.workspace = true
 pretty_assertions.workspace = true
+paths.workspace = true
 project.workspace = true
 proptest = { workspace = true, optional = true }
 proptest-derive = { workspace = true, optional = true }
@@ -109,6 +111,7 @@ zlog.workspace = true
 ctor.workspace = true
 gpui = { workspace = true, features = ["test-support"] }
 language = { workspace = true, features = ["test-support"] }
+language_model = { workspace = true, features = ["test-support"] }
 languages = {workspace = true, features = ["test-support"] }
 lsp = { workspace = true, features = ["test-support"] }
 markdown = { workspace = true, features = ["test-support"] }

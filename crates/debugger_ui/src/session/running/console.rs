@@ -92,7 +92,7 @@ impl Console {
         let this = cx.weak_entity();
         let query_bar = cx.new(|cx| {
             let mut editor = Editor::single_line(window, cx);
-            editor.set_placeholder_text("Evaluate an expression", window, cx);
+            editor.set_placeholder_text("计算表达式", window, cx);
             editor.set_use_autoclose(false);
             editor.set_show_gutter(false, cx);
             editor.set_show_wrap_guides(false, cx);
@@ -363,7 +363,7 @@ impl Console {
                                 .when_some(keybinding_target.clone(), |el, keybinding_target| {
                                     el.context(keybinding_target)
                                 })
-                                .action("Watch Expression", WatchExpression.boxed_clone())
+                                .action("监视表达式", WatchExpression.boxed_clone())
                         }))
                     })
                 },
@@ -476,13 +476,13 @@ impl Render for Console {
                             })
                             .layer(ui::ElevationIndex::ModalSurface)
                             .size(ui::ButtonSize::Compact)
-                            .child(Label::new("Evaluate"))
+                            .child(Label::new("求值"))
                             .tooltip({
                                 let query_focus_handle = query_focus_handle.clone();
 
                                 move |_window, cx| {
                                     Tooltip::for_action_in(
-                                        "Evaluate",
+                                        "计算",
                                         &Confirm,
                                         &query_focus_handle,
                                         cx,

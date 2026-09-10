@@ -482,7 +482,7 @@ impl<P: LinuxClient + 'static> Platform for LinuxPlatform<P> {
                         ashpd::desktop::file_chooser::SaveFileRequest::default()
                             .identifier(identifier.await)
                             .modal(true)
-                            .title("Save File")
+                            .title("保存文件")
                             .current_folder(directory)
                             .expect("pathbuf should not be nul terminated");
 

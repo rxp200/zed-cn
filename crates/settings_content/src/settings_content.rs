@@ -302,6 +302,9 @@ pub struct SettingsContent {
 
     pub title_bar: Option<TitleBarSettingsContent>,
 
+    /// Configuration for AI-powered translation in the editor's hover popovers.
+    pub hover_translation: Option<HoverTranslationSettingsContent>,
+
     /// Whether or not to enable Vim mode.
     ///
     /// Default: false
@@ -406,7 +409,7 @@ fallible_options::flattened_deserialize!(SettingsContent {
         journal, log, line_indicator_format, language_models, outline_panel, project_panel,
         node, proxy, reduce_motion, server_url, credentials_url, session, telemetry, terminal,
         title_bar, vim_mode, calls, which_key, vim, modeline_lines, feature_flags,
-        instrumentation,
+        instrumentation, hover_translation,
     },
     defaults: {},
 });
@@ -1278,6 +1281,22 @@ pub enum LineIndicatorFormat {
 #[with_fallible_options]
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, MergeFrom, Default, PartialEq)]
 pub struct MarkdownPreviewSettingsContent {
+    /// The name of a font to use for rendering in the markdown preview.
+    /// Falls back to the UI font if unset.
+    pub font_family: Option<FontFamilyName>,
+    /// The name of a font to use for code (code blocks and inline code) in the
+    /// markdown preview. Falls back to the buffer font if unset.
+    pub code_font_family: Option<FontFamilyName>,
+    /// The font size to use for rendering in the markdown preview.
+    /// Falls back to the UI font size if unset.
+    pub font_size: Option<FontSize>,
+    /// The theme to use for the markdown preview.
+    /// Falls back to the main editor theme if unset.
+    pub theme: Option<ThemeSelection>,
+    /// Whether to automatically open Markdown files in the preview.
+    ///
+    /// Default: false
+    pub open_markdown_files_in_preview: Option<bool>,
     /// Whether to limit the width of the rendered markdown content. When
     /// enabled, content is constrained to `max_width` and centered
     /// horizontally within the preview pane, for optimal readability.
@@ -1331,6 +1350,14 @@ pub struct RemoteSettingsContent {
     pub wsl_connections: Option<Vec<WslConnection>>,
     pub dev_container_connections: Option<Vec<DevContainerConnection>>,
     pub read_ssh_config: Option<bool>,
+    /// Whether SSH remote server binaries should be downloaded by the local Zed client and then
+    /// uploaded over SSH, without first attempting a download from the remote host.
+    ///
+    /// This is useful for servers that cannot access Zed's release assets directly. The local
+    /// download uses Zed's configured proxy.
+    ///
+    /// Default: false
+    pub china_server_adaptation: Option<bool>,
     pub use_podman: Option<bool>,
     /// Whether to build dev container images with BuildKit.
     ///
@@ -1372,7 +1399,8 @@ pub struct SshConnection {
     // By default Zed will download the binary to the host directly.
     // If this is set to true, Zed will download the binary to your local machine,
     // and then upload it over the SSH connection. Useful if your SSH server has
-    // limited outbound internet access.
+    // limited outbound internet access. The global `china_server_adaptation`
+    // setting forces this behavior for every SSH connection.
     pub upload_binary_over_ssh: Option<bool>,
 
     pub port_forwards: Option<Vec<SshPortForwardOption>>,
@@ -1439,13 +1467,15 @@ pub struct ReplSettingsContent {
 /// Settings for configuring the which-key popup behaviour.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema, MergeFrom)]
 pub struct WhichKeySettingsContent {
-    /// Whether to show the which-key popup when holding down key combinations
+    /// Whether to show the which-key popup when holding down key combinations.
+    /// When enabled, the pending keystrokes indicator remains visible, but its binding preview
+    /// popover is disabled.
     ///
     /// Default: false
     pub enabled: Option<bool>,
     /// Delay in milliseconds before showing the which-key popup.
     ///
-    /// Default: 700
+    /// Default: 1000
     pub delay_ms: Option<u64>,
 }
 

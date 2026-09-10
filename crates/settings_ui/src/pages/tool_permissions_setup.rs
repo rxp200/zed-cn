@@ -15,70 +15,70 @@ use util::shell::ShellKind;
 use crate::{SettingsWindow, components::SettingsInputField};
 
 const HARDCODED_RULES_DESCRIPTION: &str =
-    "`rm -rf` commands are always blocked when run on `$HOME`, `~`, `.`, `..`, or `/`";
-const SETTINGS_DISCLAIMER: &str = "Note: custom tool permissions only apply to the Zed native agent and don’t extend to external agents connected through the Agent Client Protocol (ACP).";
+    "在 `$HOME`、`~`、`.`、`..` 或 `/` 上运行的 `rm -rf` 命令始终被阻止";
+const SETTINGS_DISCLAIMER: &str = "注意：自定义工具权限仅适用于 Zed 原生 Agent，不适用于通过 Agent 客户端协议（ACP）连接的外部 Agent。";
 
 /// Tools that support permission rules
 const TOOLS: &[ToolInfo] = &[
     ToolInfo {
         id: "terminal",
-        name: "Terminal",
-        description: "Commands executed in the terminal",
-        regex_explanation: "Patterns are matched against each command in the input. Commands chained with &&, ||, ;, or pipes are split and checked individually.",
+        name: "终端",
+        description: "在终端中执行的命令",
+        regex_explanation: "模式会针对输入中的每个命令进行匹配。使用 &&、||、; 或管道符链接的命令会被拆分并单独检查。",
     },
     ToolInfo {
         id: "edit_file",
-        name: "Edit File",
-        description: "File editing operations",
-        regex_explanation: "Patterns are matched against the file path being edited.",
+        name: "编辑文件",
+        description: "文件编辑操作",
+        regex_explanation: "模式会针对正在编辑的文件路径进行匹配。",
     },
     ToolInfo {
         id: "write_file",
-        name: "Write File",
-        description: "File creation and overwrite operations",
+        name: "写入文件",
+        description: "文件创建和覆盖操作",
         regex_explanation: "Patterns are matched against the file path being written.",
     },
     ToolInfo {
         id: "delete_path",
-        name: "Delete Path",
-        description: "File and directory deletion",
+        name: "删除路径",
+        description: "文件和目录删除",
         regex_explanation: "Patterns are matched against the path being deleted.",
     },
     ToolInfo {
         id: "copy_path",
-        name: "Copy Path",
-        description: "File and directory copying",
-        regex_explanation: "Patterns are matched independently against the source path and the destination path. Enter either path below to test.",
+        name: "复制路径",
+        description: "文件和目录复制",
+        regex_explanation: "模式会分别针对源路径和目标路径进行匹配。请在下方输入任一路径进行测试。",
     },
     ToolInfo {
         id: "move_path",
-        name: "Move Path",
-        description: "File and directory moves/renames",
-        regex_explanation: "Patterns are matched independently against the source path and the destination path. Enter either path below to test.",
+        name: "移动路径",
+        description: "文件和目录移动/重命名",
+        regex_explanation: "模式会分别针对源路径和目标路径进行匹配。请在下方输入任一路径进行测试。",
     },
     ToolInfo {
         id: "create_directory",
-        name: "Create Directory",
-        description: "Directory creation",
-        regex_explanation: "Patterns are matched against the directory path being created.",
+        name: "创建目录",
+        description: "目录创建",
+        regex_explanation: "模式会针对正在创建的目录路径进行匹配。",
     },
     ToolInfo {
         id: "fetch",
-        name: "Fetch",
-        description: "HTTP requests to URLs",
-        regex_explanation: "Patterns are matched against the URL being fetched.",
+        name: "获取",
+        description: "对 URL 的 HTTP 请求",
+        regex_explanation: "模式会针对正在获取的 URL 进行匹配。",
     },
     ToolInfo {
         id: "search_web",
-        name: "Web Search",
-        description: "Web search queries",
-        regex_explanation: "Patterns are matched against the search query.",
+        name: "网络搜索",
+        description: "网络搜索查询",
+        regex_explanation: "模式会针对搜索查询进行匹配。",
     },
     ToolInfo {
         id: "skill",
-        name: "Skill",
-        description: "Loading agent skill instructions",
-        regex_explanation: "Patterns are matched against the absolute path to the skill's SKILL.md file.",
+        name: "技能",
+        description: "加载 Agent 技能指令",
+        regex_explanation: "模式会针对技能的 SKILL.md 文件的绝对路径进行匹配。",
     },
 ];
 
@@ -274,7 +274,7 @@ fn render_tool_list_item(
         )
         .child({
             let tool_name = tool.name;
-            Button::new(format!("configure-{}", tool.id), "Configure")
+            Button::new(format!("configure-{}", tool.id), "配置")
                 .tab_index(tool_index as isize)
                 .style(ButtonStyle::OutlinedGhost)
                 .size(ButtonSize::Medium)
@@ -286,7 +286,7 @@ fn render_tool_list_item(
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.push_dynamic_sub_page(
                         tool_name,
-                        "Tool Permissions",
+                        "工具权限",
                         None,
                         true,
                         render_fn,
@@ -375,7 +375,7 @@ pub(crate) fn render_tool_config_page(
                         .severity(Severity::Warning)
                         .child(Label::new(error).size(LabelSize::Small))
                         .action_slot(
-                            Button::new("dismiss-regex-error", "Dismiss")
+                            Button::new("dismiss-regex-error", "关闭")
                                 .style(ButtonStyle::Tinted(ui::TintColor::Warning))
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.regex_validation_error = None;
@@ -395,7 +395,7 @@ pub(crate) fn render_tool_config_page(
                 .child(Divider::horizontal().color(ui::DividerColor::BorderFaded))
                 .child(render_rule_section(
                     tool.id,
-                    "Always Deny",
+                    "始终拒绝",
                     "If any of these regexes match, the tool action will be denied.",
                     ToolPermissionMode::Deny,
                     &rules.always_deny,
@@ -404,7 +404,7 @@ pub(crate) fn render_tool_config_page(
                 .child(Divider::horizontal().color(ui::DividerColor::BorderFaded))
                 .child(render_rule_section(
                     tool.id,
-                    "Always Allow",
+                    "始终允许",
                     "If any of these regexes match, the action will be approved—unless an Always Confirm or Always Deny matches.",
                     ToolPermissionMode::Allow,
                     &rules.always_allow,
@@ -413,7 +413,7 @@ pub(crate) fn render_tool_config_page(
                 .child(Divider::horizontal().color(ui::DividerColor::BorderFaded))
                 .child(render_rule_section(
                     tool.id,
-                    "Always Confirm",
+                    "始终确认",
                     "If any of these regexes match, a confirmation will be shown unless an Always Deny regex matches.",
                     ToolPermissionMode::Confirm,
                     &rules.always_confirm,
@@ -461,7 +461,7 @@ fn render_verification_section(
 
     let editor = window.use_keyed_state(input_id, cx, |window, cx| {
         let mut editor = editor::Editor::single_line(window, cx);
-        editor.set_placeholder_text("Enter a tool input to test your rules…", window, cx);
+        editor.set_placeholder_text("输入工具输入以测试规则…", window, cx);
 
         let global_settings = ThemeSettings::get_global(cx);
         editor.set_text_style_refinement(TextStyleRefinement {
@@ -536,7 +536,7 @@ fn render_verification_section(
                 .border_color(color.border_variant)
                 .rounded_sm()
                 .child(
-                    Label::new("Test Your Rules")
+                    Label::new("测试您的规则")
                         .color(Color::Muted)
                         .size(LabelSize::Small),
                 )
@@ -556,7 +556,7 @@ fn render_verification_section(
                     this.when(patterns_agree, |this| {
                         if matched_patterns.is_empty() {
                             this.child(
-                                Label::new("No regex matches, using the default action.")
+                                Label::new("没有正则表达式匹配，使用默认操作。")
                                     .size(LabelSize::Small)
                                     .color(Color::Muted),
                             )
@@ -685,9 +685,9 @@ fn render_matched_patterns(patterns: &[MatchedPattern], cx: &App) -> AnyElement 
         .gap_1()
         .children(patterns.iter().map(|pattern| {
             let (type_label, color) = match pattern.rule_type {
-                ToolPermissionMode::Deny => ("Always Deny", Color::Error),
-                ToolPermissionMode::Confirm => ("Always Confirm", Color::Warning),
-                ToolPermissionMode::Allow => ("Always Allow", Color::Success),
+                ToolPermissionMode::Deny => ("始终拒绝", Color::Error),
+                ToolPermissionMode::Confirm => ("始终确认", Color::Warning),
+                ToolPermissionMode::Allow => ("始终允许", Color::Success),
             };
 
             let type_color = if pattern.is_overridden {
@@ -770,9 +770,9 @@ fn implied_mode_from_patterns(
 
 fn mode_display_label(mode: ToolPermissionMode) -> &'static str {
     match mode {
-        ToolPermissionMode::Allow => "Allow",
-        ToolPermissionMode::Deny => "Deny",
-        ToolPermissionMode::Confirm => "Confirm",
+        ToolPermissionMode::Allow => "允许",
+        ToolPermissionMode::Deny => "拒绝",
+        ToolPermissionMode::Confirm => "确认",
     }
 }
 
@@ -788,7 +788,7 @@ fn render_verdict_label(mode: ToolPermissionMode) -> AnyElement {
     h_flex()
         .gap_1()
         .child(
-            Label::new("Result:")
+            Label::new("结果：")
                 .size(LabelSize::Small)
                 .color(Color::Muted),
         )
@@ -818,7 +818,7 @@ fn render_invalid_patterns_section(
                         .size(IconSize::Small)
                         .color(Color::Error),
                 )
-                .child(Label::new("Invalid Patterns").color(Color::Error)),
+                .child(Label::new("无效的模式").color(Color::Error)),
         )
         .child(
             Label::new(
@@ -835,9 +835,9 @@ fn render_invalid_patterns_section(
                 .gap_1p5()
                 .children(invalid_patterns.iter().map(|invalid| {
                     let rule_type_label = match invalid.rule_type.as_str() {
-                        "always_allow" => "Always Allow",
-                        "always_deny" => "Always Deny",
-                        "always_confirm" => "Always Confirm",
+                        "always_allow" => "始终允许",
+                        "always_deny" => "始终拒绝",
+                        "always_confirm" => "始终确认",
                         other => other,
                     };
 
@@ -881,7 +881,7 @@ fn render_invalid_patterns_section(
                                     IconButton::new(delete_id, IconName::Trash)
                                         .icon_size(IconSize::Small)
                                         .icon_color(Color::Muted)
-                                        .tooltip(Tooltip::text("Delete Invalid Pattern"))
+                                        .tooltip(Tooltip::text("删除无效模式"))
                                         .on_click(cx.listener(move |_, _, _, cx| {
                                             delete_pattern(
                                                 &tool_id_for_delete,
@@ -956,7 +956,7 @@ fn render_pattern_empty_state(cx: &mut Context<SettingsWindow>) -> AnyElement {
         .border_dashed()
         .border_color(cx.theme().colors().border_variant)
         .child(
-            Label::new("No patterns configured")
+            Label::new("未配置模式")
                 .size(LabelSize::Small)
                 .color(Color::Disabled),
         )
@@ -987,7 +987,7 @@ fn render_user_pattern_row(
             IconButton::new(delete_id, IconName::Trash)
                 .icon_size(IconSize::Small)
                 .icon_color(Color::Muted)
-                .tooltip(Tooltip::text("Delete Pattern"))
+                .tooltip(Tooltip::text("删除模式"))
                 .on_click(cx.listener(move |_, _, _, cx| {
                     delete_pattern(&tool_id_for_delete, rule_type, &pattern_for_delete, cx);
                 })),
@@ -1080,7 +1080,7 @@ fn render_global_default_mode_section(current_mode: ToolPermissionMode) -> AnyEl
             v_flex()
                 .w_full()
                 .min_w_0()
-                .child(Label::new("Default Permission"))
+                .child(Label::new("默认权限"))
                 .child(
                     Label::new(
                         "Controls the default behavior for all tool actions. Per-tool rules and patterns can override this.",
@@ -1100,13 +1100,13 @@ fn render_global_default_mode_section(current_mode: ToolPermissionMode) -> AnyEl
                 )
                 .menu(move |window, cx| {
                     Some(ContextMenu::build(window, cx, move |menu, _, _| {
-                        menu.entry("Confirm", None, move |_, cx| {
+                        menu.entry("确认", None, move |_, cx| {
                             set_global_default_permission(ToolPermissionMode::Confirm, cx);
                         })
-                        .entry("Allow", None, move |_, cx| {
+                        .entry("允许", None, move |_, cx| {
                             set_global_default_permission(ToolPermissionMode::Allow, cx);
                         })
-                        .entry("Deny", None, move |_, cx| {
+                        .entry("拒绝", None, move |_, cx| {
                             set_global_default_permission(ToolPermissionMode::Deny, cx);
                         })
                     }))
@@ -1122,9 +1122,9 @@ fn render_default_mode_section(
     _cx: &mut Context<SettingsWindow>,
 ) -> AnyElement {
     let mode_label = match current_mode {
-        ToolPermissionMode::Allow => "Allow",
-        ToolPermissionMode::Deny => "Deny",
-        ToolPermissionMode::Confirm => "Confirm",
+        ToolPermissionMode::Allow => "允许",
+        ToolPermissionMode::Deny => "拒绝",
+        ToolPermissionMode::Confirm => "确认",
     };
 
     let tool_id_owned = tool_id.to_string();
@@ -1136,9 +1136,9 @@ fn render_default_mode_section(
             v_flex()
                 .w_full()
                 .min_w_0()
-                .child(Label::new("Default Action"))
+                .child(Label::new("默认操作"))
                 .child(
-                    Label::new("Action to take when no patterns match.")
+                    Label::new("没有模式匹配时采取的操作。")
                         .size(LabelSize::Small)
                         .color(Color::Muted),
                 ),
@@ -1159,13 +1159,13 @@ fn render_default_mode_section(
                         let tool_id_allow = tool_id.clone();
                         let tool_id_deny = tool_id;
 
-                        menu.entry("Confirm", None, move |_, cx| {
+                        menu.entry("确认", None, move |_, cx| {
                             set_default_mode(&tool_id_confirm, ToolPermissionMode::Confirm, cx);
                         })
-                        .entry("Allow", None, move |_, cx| {
+                        .entry("允许", None, move |_, cx| {
                             set_default_mode(&tool_id_allow, ToolPermissionMode::Allow, cx);
                         })
-                        .entry("Deny", None, move |_, cx| {
+                        .entry("拒绝", None, move |_, cx| {
                             set_default_mode(&tool_id_deny, ToolPermissionMode::Deny, cx);
                         })
                     }))

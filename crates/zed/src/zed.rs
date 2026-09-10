@@ -1,3 +1,4 @@
+mod about_version;
 mod app_menus;
 pub mod edit_prediction_registry;
 #[cfg(target_os = "macos")]
@@ -572,7 +573,7 @@ pub fn initialize_workspace(app_state: Arc<AppState>, cx: &mut App) {
         .detach();
 
         #[cfg(not(any(test, target_os = "macos")))]
-        initialize_file_watcher(window, cx);
+        initialize_file_watcher(workspace.app_state().fs.as_ref(), window, cx);
 
         if let Some(specs) = window.gpu_specs() {
             log::info!("Using GPU: {:?}", specs);
@@ -602,12 +603,9 @@ pub fn initialize_workspace(app_state: Arc<AppState>, cx: &mut App) {
         let diagnostic_summary =
             cx.new(|cx| diagnostics::items::DiagnosticIndicator::new(workspace, cx));
         let active_file_name = cx.new(|_| workspace::active_file_name::ActiveFileName::new());
-        let activity_indicator = activity_indicator::ActivityIndicator::new(
-            workspace,
-            workspace.project().read(cx).languages().clone(),
-            window,
-            cx,
-        );
+        let activity_indicator = activity_indicator::ActivityIndicator::new(workspace, window, cx);
+        let file_transfer_indicator =
+            activity_indicator::file_transfer::FileTransferIndicator::new(workspace, cx);
         let active_buffer_encoding =
             cx.new(|_| encoding_selector::ActiveBufferEncoding::new(workspace));
         let active_buffer_language =
@@ -615,6 +613,8 @@ pub fn initialize_workspace(app_state: Arc<AppState>, cx: &mut App) {
         let active_toolchain_language =
             cx.new(|cx| toolchain_selector::ActiveToolchain::new(workspace, window, cx));
         let vim_mode_indicator = cx.new(|cx| vim::ModeIndicator::new(window, cx));
+        let pending_keystrokes_indicator =
+            cx.new(|cx| which_key::PendingKeystrokesIndicator::new(window, cx));
         let image_info = cx.new(|_cx| ImageInfo::new(workspace));
 
         let lsp_button_menu_handle = PopoverMenuHandle::default();
@@ -641,14 +641,17 @@ pub fn initialize_workspace(app_state: Arc<AppState>, cx: &mut App) {
             status_bar.add_left_item(git_blame_status, window, cx);
             status_bar.add_left_item(merge_conflict_indicator, window, cx);
             status_bar.add_left_item(activity_indicator, window, cx);
+            status_bar.add_left_item(file_transfer_indicator, window, cx);
             status_bar.add_right_item(edit_prediction_ui, window, cx);
             status_bar.add_right_item(active_buffer_encoding, window, cx);
             status_bar.add_right_item(active_buffer_language, window, cx);
             status_bar.add_right_item(active_toolchain_language, window, cx);
             status_bar.add_right_item(line_ending_indicator, window, cx);
-            status_bar.add_right_item(vim_mode_indicator, window, cx);
             status_bar.add_right_item(cursor_position, window, cx);
             status_bar.add_right_item(image_info, window, cx);
+            // Keep these last so they stay leftmost and can change without moving the other items.
+            status_bar.add_right_item(vim_mode_indicator, window, cx);
+            status_bar.add_right_item(pending_keystrokes_indicator, window, cx);
         });
 
         let panels_task = initialize_panels(window, cx);
@@ -664,8 +667,8 @@ pub fn initialize_workspace(app_state: Arc<AppState>, cx: &mut App) {
 
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 #[allow(unused)]
-fn initialize_file_watcher(window: &mut Window, cx: &mut Context<Workspace>) {
-    if let Err(e) = fs::fs_watcher::global(|_| {}) {
+fn initialize_file_watcher(fs: &dyn Fs, window: &mut Window, cx: &mut Context<Workspace>) {
+    if let Err(e) = fs.start_native_watcher() {
         let message = format!(
             db::indoc! {r#"
             inotify_init returned {}
@@ -695,8 +698,8 @@ fn initialize_file_watcher(window: &mut Window, cx: &mut Context<Workspace>) {
 
 #[cfg(target_os = "windows")]
 #[allow(unused)]
-fn initialize_file_watcher(window: &mut Window, cx: &mut Context<Workspace>) {
-    if let Err(e) = fs::fs_watcher::global(|_| {}) {
+fn initialize_file_watcher(fs: &dyn Fs, window: &mut Window, cx: &mut Context<Workspace>) {
+    if let Err(e) = fs.start_native_watcher() {
         let message = format!(
             db::indoc! {r#"
             ReadDirectoryChangesW initialization failed: {}
@@ -1340,24 +1343,7 @@ fn register_actions(
                     cx,
                     |workspace, window, cx| {
                         cx.activate(true);
-                        // Create buffer synchronously to avoid flicker
-                        let project = workspace.project().clone();
-                        let buffer = project.update(cx, |project, cx| {
-                            project.create_local_buffer("", None, true, cx)
-                        });
-                        buffer.update(cx, |buffer, _| {
-                            buffer.set_content_language_detection_enabled(true);
-                        });
-                        let editor = cx.new(|cx| {
-                            Editor::for_buffer(buffer, Some(project), window, cx)
-                        });
-                        workspace.add_item_to_active_pane(
-                            Box::new(editor),
-                            None,
-                            true,
-                            window,
-                            cx,
-                        );
+                        initialize_new_window(workspace, window, cx);
                     },
                 )
                 .detach();
@@ -1572,6 +1558,12 @@ fn open_about_window(cx: &mut App) {
             let release_channel_name = release_channel.display_name();
             let full_version: SharedString = AppVersion::global(cx).to_string().into();
             let version = env!("CARGO_PKG_VERSION");
+            let version = if release_channel == ReleaseChannel::Stable {
+                about_version::custom_version(version, option_env!("ZED_CUSTOM_RELEASE_TAG"))
+                    .unwrap_or(version)
+            } else {
+                version
+            };
 
             let debug = if cfg!(debug_assertions) {
                 "(debug)"
@@ -1640,14 +1632,14 @@ fn open_about_window(cx: &mut App) {
                             .child(Headline::new(self.message.clone()))
                             .when_some(self.commit.clone(), |this, commit| {
                                 this.child(
-                                    Label::new("Commit")
+                                    Label::new("提交")
                                         .color(Color::Muted)
                                         .size(LabelSize::XSmall),
                                 )
                                 .child(Label::new(commit).size(LabelSize::Small))
                             })
                             .child(
-                                Label::new("Version")
+                                Label::new("版本")
                                     .color(Color::Muted)
                                     .size(LabelSize::XSmall),
                             )
@@ -1665,7 +1657,7 @@ fn open_about_window(cx: &mut App) {
                                         window.remove_window();
                                     }))
                                     .child(
-                                        Button::new("ok", "OK")
+                                        Button::new("ok", "确定")
                                             .full_width()
                                             .style(ButtonStyle::OutlinedGhost)
                                             .toggle_state(ok_is_focused)
@@ -1685,7 +1677,7 @@ fn open_about_window(cx: &mut App) {
                                         },
                                     ))
                                     .child(
-                                        Button::new("copy", "Copy")
+                                        Button::new("copy", "复制")
                                             .full_width()
                                             .style(ButtonStyle::Tinted(TintColor::Accent))
                                             .toggle_state(copy_is_focused)
@@ -2006,12 +1998,12 @@ fn init_global_config_error_notifications(cx: &mut App) {
         cx.subscribe_self::<SettingsObserverEvent>(|_, event, cx| {
             let (result, file_kind, on_click): (_, _, fn(&mut Window, &mut App)) = match event {
                 SettingsObserverEvent::GlobalTasksUpdated(result) => {
-                    (result, "tasks", |window, cx| {
+                    (result, "任务", |window, cx| {
                         window.dispatch_action(OpenTasks.boxed_clone(), cx)
                     })
                 }
                 SettingsObserverEvent::GlobalDebugScenariosUpdated(result) => {
-                    (result, "debug scenarios", |window, cx| {
+                    (result, "调试场景", |window, cx| {
                         window.dispatch_action(OpenDebugTasks.boxed_clone(), cx)
                     })
                 }
@@ -2021,11 +2013,11 @@ fn init_global_config_error_notifications(cx: &mut App) {
             match result {
                 Ok(_) => dismiss_app_notification(&id, cx),
                 Err(error) => {
-                    let message = format!("Invalid global {file_kind} file\n{error}");
+                    let message = format!("全局 {file_kind} 文件无效\n{error}");
                     show_app_notification(id, cx, move |cx| {
                         cx.new(|cx| {
                             MessageNotification::new(message.clone(), cx)
-                                .primary_message("Open File")
+                                .primary_message("打开文件")
                                 .primary_icon(IconName::Settings)
                                 .primary_on_click(move |window, cx| {
                                     on_click(window, cx);
@@ -2160,6 +2152,10 @@ pub fn handle_keymap_file_changes(
         let new_vim_enabled = VimModeSetting::get_global(cx).0;
         let new_helix_enabled = vim_mode_setting::HelixModeSetting::get_global(cx).0;
         let new_disable_ai = DisableAiSettings::get_global(cx).disable_ai;
+
+        if new_disable_ai != old_disable_ai {
+            reload_menus(cx);
+        }
 
         if new_base_keymap != old_base_keymap
             || new_vim_enabled != old_vim_enabled
@@ -2331,6 +2327,11 @@ fn show_markdown_app_notification<F>(
     })
 }
 
+fn reload_menus(cx: &mut App) {
+    let menus = app_menus(cx);
+    cx.set_menus(menus);
+}
+
 fn reload_keymaps(cx: &mut App, mut user_key_bindings: Vec<KeyBinding>) {
     cx.clear_key_bindings();
     load_default_keymap(cx);
@@ -2339,9 +2340,7 @@ fn reload_keymaps(cx: &mut App, mut user_key_bindings: Vec<KeyBinding>) {
         key_binding.set_meta(KeybindSource::User.meta());
     }
     cx.bind_keys(filter_disabled_ai_bindings(user_key_bindings, cx));
-
-    let menus = app_menus(cx);
-    cx.set_menus(menus);
+    reload_menus(cx);
     // On Windows, this is set in the `update_jump_list` method of the `HistoryManager`.
     #[cfg(not(target_os = "windows"))]
     cx.set_dock_menu(vec![gpui::MenuItem::action(
@@ -2416,6 +2415,30 @@ fn filter_disabled_ai_bindings(bindings: Vec<KeyBinding>, cx: &App) -> Vec<KeyBi
         .into_iter()
         .filter(|binding| !is_ai_keybinding(binding))
         .collect()
+}
+
+/// Populates a freshly opened window according to the `on_new_window` setting.
+///
+/// For `EmptyTab` this opens an empty buffer. For `Launchpad` the window is left
+/// without any items so the pane falls back to displaying the Launchpad.
+fn initialize_new_window(
+    workspace: &mut Workspace,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) {
+    if WorkspaceSettings::get_global(cx).on_new_window == settings::OnNewWindow::Launchpad {
+        return;
+    }
+    // Create buffer synchronously to avoid flicker
+    let project = workspace.project().clone();
+    let buffer = project.update(cx, |project, cx| {
+        project.create_local_buffer("", None, true, cx)
+    });
+    buffer.update(cx, |buffer, _| {
+        buffer.set_content_language_detection_enabled(true);
+    });
+    let editor = cx.new(|cx| Editor::for_buffer(buffer, Some(project), window, cx));
+    workspace.add_item_to_active_pane(Box::new(editor), None, true, window, cx);
 }
 
 pub fn open_new_ssh_project_from_project(
@@ -2859,8 +2882,8 @@ mod tests {
     use extension::ExtensionHostProxy;
     use fs::FakeFs;
     use gpui::{
-        Action, AnyWindowHandle, App, AssetSource, BorrowAppContext, Modifiers, TestAppContext,
-        UpdateGlobal, VisualTestContext, WindowHandle, actions, point, px,
+        Action, AnyWindowHandle, App, AssetSource, BorrowAppContext, Modifiers, OwnedMenuItem,
+        TestAppContext, UpdateGlobal, VisualTestContext, WindowHandle, actions, point, px,
     };
     use http_client::BlockedHttpClient;
     use language::LanguageRegistry;
@@ -2941,16 +2964,15 @@ mod tests {
             cx.add_window_view(|window, cx| MultiWorkspace::test_new(project.clone(), window, cx));
         let workspace =
             multi_workspace.read_with(cx, |multi_workspace, _| multi_workspace.workspace().clone());
-        let languages = project.read_with(cx, |project, _| project.languages().clone());
         let indicator = workspace.update_in(cx, |workspace, window, cx| {
-            activity_indicator::ActivityIndicator::new(workspace, languages, window, cx)
+            activity_indicator::ActivityIndicator::new(workspace, window, cx)
         });
         cx.run_until_parked();
 
         indicator.update(cx, |indicator, cx| {
             assert_eq!(
                 indicator.message_to_render(cx),
-                Some("Partial file index".to_string())
+                Some("部分文件按需索引".to_string())
             );
         });
 
@@ -2967,7 +2989,7 @@ mod tests {
         indicator.update(cx, |indicator, cx| {
             assert_eq!(
                 indicator.message_to_render(cx),
-                Some("Partial file index".to_string())
+                Some("部分文件按需索引".to_string())
             );
         });
 
@@ -3528,7 +3550,7 @@ mod tests {
             .unwrap();
         executor.run_until_parked();
 
-        cx.simulate_prompt_answer("Don't Save");
+        cx.simulate_prompt_answer("不保存");
         close.await.unwrap();
 
         // Advance the clock to ensure that the item has been serialized and dropped from the queue
@@ -3594,7 +3616,7 @@ mod tests {
         assert_eq!(cx.update(|cx| cx.windows().len()), 1);
 
         // The window is successfully closed after the user dismisses the prompt.
-        cx.simulate_prompt_answer("Don't Save");
+        cx.simulate_prompt_answer("不保存");
         executor.run_until_parked();
         assert_eq!(cx.update(|cx| cx.windows().len()), 0);
     }
@@ -3774,6 +3796,50 @@ mod tests {
                 editor.update(cx, |editor, cx| {
                     assert!(!editor.is_dirty(cx));
                     assert_eq!(editor.title(cx), "the-new-name");
+                });
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    async fn test_new_window_launchpad_opens_without_items(cx: &mut TestAppContext) {
+        let app_state = init_test(cx);
+        cx.update(|cx| {
+            SettingsStore::update_global(cx, |store, cx| {
+                store.update_user_settings(cx, |settings| {
+                    settings.workspace.on_new_window = Some(settings::OnNewWindow::Launchpad);
+                });
+            });
+        });
+
+        cx.update(|cx| {
+            open_new(
+                Default::default(),
+                app_state.clone(),
+                cx,
+                |workspace, window, cx| initialize_new_window(workspace, window, cx),
+            )
+        })
+        .await
+        .unwrap();
+        cx.run_until_parked();
+
+        let multi_workspace = cx
+            .update(|cx| cx.windows().first().unwrap().downcast::<MultiWorkspace>())
+            .unwrap();
+
+        multi_workspace
+            .update(cx, |multi_workspace, _, cx| {
+                multi_workspace.workspace().update(cx, |workspace, cx| {
+                    assert!(
+                        workspace.active_item(cx).is_none(),
+                        "launchpad window should not open any items"
+                    );
+                    assert_eq!(
+                        workspace.active_pane().read(cx).items_len(),
+                        0,
+                        "launchpad window should have an empty pane so the launchpad is shown"
+                    );
                 });
             })
             .unwrap();
@@ -4412,7 +4478,7 @@ mod tests {
             })
             .unwrap();
         cx.background_executor.run_until_parked();
-        cx.simulate_prompt_answer("Overwrite");
+        cx.simulate_prompt_answer("覆盖");
         save_task.await.unwrap();
         window
             .update(cx, |_, _, cx| {
@@ -4738,7 +4804,7 @@ mod tests {
             close_pinned: false,
         });
         cx.background_executor.run_until_parked();
-        cx.simulate_prompt_answer("Don't Save");
+        cx.simulate_prompt_answer("不保存");
         cx.background_executor.run_until_parked();
 
         workspace.read_with(cx, |workspace, cx| {
@@ -5889,7 +5955,6 @@ mod tests {
                 "outline",
                 "outline_panel",
                 "pane",
-                "panel",
                 "picker",
                 "project_panel",
                 "project_search",
@@ -6945,7 +7010,7 @@ mod tests {
             "Case 1: Should prompt to save dirty item in active workspace"
         );
 
-        cx.simulate_prompt_answer("Cancel");
+        cx.simulate_prompt_answer("取消");
         cx.run_until_parked();
 
         assert_eq!(
@@ -6965,7 +7030,7 @@ mod tests {
             })
             .unwrap();
         cx.run_until_parked();
-        cx.simulate_prompt_answer("Don't Save");
+        cx.simulate_prompt_answer("不保存");
         close_task.await.ok();
         cx.run_until_parked();
 
@@ -7027,7 +7092,7 @@ mod tests {
             "Case 2: Should prompt to save dirty item in non-active workspace"
         );
 
-        cx.simulate_prompt_answer("Cancel");
+        cx.simulate_prompt_answer("取消");
         cx.run_until_parked();
 
         assert_eq!(
@@ -7047,7 +7112,7 @@ mod tests {
             })
             .unwrap();
         cx.run_until_parked();
-        cx.simulate_prompt_answer("Don't Save");
+        cx.simulate_prompt_answer("不保存");
         close_task.await.ok();
         cx.run_until_parked();
 
@@ -7111,7 +7176,7 @@ mod tests {
             "Case 3: Should prompt to save dirty item in non-active window"
         );
 
-        cx.simulate_prompt_answer("Cancel");
+        cx.simulate_prompt_answer("取消");
         cx.run_until_parked();
 
         assert_eq!(
@@ -8097,5 +8162,157 @@ mod tests {
         }
 
         window
+    }
+
+    #[gpui::test]
+    fn test_reload_keymaps_rebuilds_menus(cx: &mut TestAppContext) {
+        init_keymap_test(cx);
+
+        cx.update(|cx| reload_keymaps(cx, Vec::new()));
+        cx.update(|cx| {
+            assert!(
+                has_view_item(cx, "Agent 面板"),
+                "expected Agent Panel in the View menu when AI is enabled"
+            );
+            assert!(
+                has_view_item(cx, "Diagnostics"),
+                "expected Diagnostics to be in View menu"
+            );
+        });
+
+        cx.update(|cx| {
+            SettingsStore::update_global(cx, |settings_store, cx| {
+                settings_store.update_user_settings(cx, |settings| {
+                    settings.project.disable_ai = Some(SaturatingBool(true))
+                });
+            })
+        });
+        cx.update(|cx| {
+            reload_keymaps(cx, Vec::new());
+        });
+        cx.update(|cx| {
+            assert!(
+                !has_view_item(cx, "Agent 面板"),
+                "expected Agent Panel to be removed from the View menu after disabling AI"
+            );
+            assert!(
+                has_view_item(cx, "Diagnostics"),
+                "expected Diagnostics to remain in the View menu"
+            );
+        });
+
+        cx.update(|cx| {
+            SettingsStore::update_global(cx, |settings_store, cx| {
+                settings_store.update_user_settings(cx, |settings| {
+                    settings.project.disable_ai = Some(SaturatingBool(false));
+                });
+            });
+        });
+        cx.update(|cx| reload_keymaps(cx, Vec::new()));
+        cx.update(|cx| {
+            assert!(
+                has_view_item(cx, "Agent 面板"),
+                "expected Agent Panel back in the View menu after re-enabling AI"
+            );
+            assert!(
+                has_view_item(cx, "Diagnostics"),
+                "expected Diagnostics to remain in the View menu"
+            );
+        });
+    }
+
+    #[gpui::test]
+    async fn test_disable_ai_menu_update_with_malformed_keymap(cx: &mut TestAppContext) {
+        let executor = cx.executor();
+        let app_state = init_keymap_test(cx);
+        cx.update(|cx| reload_keymaps(cx, Vec::new()));
+        cx.update(|cx| {
+            assert!(
+                has_view_item(cx, "Agent 面板"),
+                "expected Agent Panel before disabling AI"
+            );
+            assert!(
+                has_view_item(cx, "Diagnostics"),
+                "expected Diagnostics in the View menu"
+            );
+        });
+
+        app_state
+            .fs
+            .save(
+                "/keymap.json".as_ref(),
+                &r#"!@!@this is not valid json"#.into(),
+                Default::default(),
+            )
+            .await
+            .expect("failed to save malformed keymap.json to the fake fs");
+        executor.run_until_parked();
+
+        cx.update(|cx| {
+            let (keymap_rx, keymap_watcher) = watch_config_file(
+                &executor,
+                app_state.fs.clone(),
+                PathBuf::from("/keymap.json"),
+            );
+            watch_settings_files(app_state.fs.clone(), cx);
+            handle_keymap_file_changes(keymap_rx, keymap_watcher, cx);
+        });
+        executor.run_until_parked();
+
+        app_state
+            .fs
+            .save(
+                paths::settings_file(),
+                &r#"{"disable_ai": true}"#.into(),
+                Default::default(),
+            )
+            .await
+            .expect("failed to save disable_ai=true to the fake settings file");
+        executor.advance_clock(Duration::from_secs(2));
+        executor.run_until_parked();
+
+        cx.update(|cx| {
+            assert!(
+                !has_view_item(cx, "Agent 面板"),
+                "expected Agent Panel removed even though the keymap file is malformed"
+            );
+            assert!(
+                has_view_item(cx, "Diagnostics"),
+                "expected Diagnostics to remain in the View menu"
+            );
+        });
+
+        app_state
+            .fs
+            .save(
+                paths::settings_file(),
+                &r#"{"disable_ai": false}"#.into(),
+                Default::default(),
+            )
+            .await
+            .expect("failed to save disable_ai=false to the fake settings file");
+        executor.run_until_parked();
+
+        cx.update(|cx| {
+            assert!(
+                has_view_item(cx, "Agent 面板"),
+                "expected Agent Panel added back even though the keymap file is malformed"
+            );
+            assert!(
+                has_view_item(cx, "Diagnostics"),
+                "expected Diagnostics to remain in the View menu"
+            );
+        });
+    }
+
+    fn has_view_item(cx: &mut App, item_name: &str) -> bool {
+        cx.get_menus()
+            .expect("reload_keymaps should populate the menu bar")
+            .iter()
+            .find(|menu| menu.name == "视图")
+            .expect("expected a View menu")
+            .items
+            .iter()
+            .any(|item| matches!(item, OwnedMenuItem::Action { name, .. } if name == item_name))
     }
 }

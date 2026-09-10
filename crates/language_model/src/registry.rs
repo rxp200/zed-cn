@@ -132,6 +132,13 @@ impl LanguageModelRegistry {
         cx.global::<GlobalLanguageModelRegistry>().0.read(cx)
     }
 
+    /// Returns the global registry if it has been initialized, without
+    /// panicking when it has not (e.g. in some test environments).
+    pub fn try_read_global(cx: &App) -> Option<&Self> {
+        cx.try_global::<GlobalLanguageModelRegistry>()
+            .map(|global| global.0.read(cx))
+    }
+
     #[cfg(any(test, feature = "test-support"))]
     pub fn test(cx: &mut App) -> Arc<crate::fake_provider::FakeLanguageModelProvider> {
         let fake_provider = Arc::new(crate::fake_provider::FakeLanguageModelProvider::default());

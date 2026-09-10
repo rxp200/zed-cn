@@ -238,7 +238,7 @@ impl RenderOnce for ModelSelectorFooter {
             .border_t_1()
             .border_color(cx.theme().colors().border_variant)
             .child(
-                Button::new("configure", "Configure")
+                Button::new("configure", "配置")
                     .full_width()
                     .style(ButtonStyle::Outlined)
                     .key_binding(
@@ -278,7 +278,7 @@ impl RenderOnce for ModelSelectorTooltip {
                 h_flex()
                     .gap_2()
                     .justify_between()
-                    .child(Label::new("Change Model"))
+                    .child(Label::new("更改模型"))
                     .child(KeyBinding::for_action(&ToggleModelSelector, cx)),
             )
             .when(self.show_cycle_row, |this| {
@@ -289,7 +289,7 @@ impl RenderOnce for ModelSelectorTooltip {
                         .border_t_1()
                         .border_color(cx.theme().colors().border_variant)
                         .justify_between()
-                        .child(Label::new("Cycle Favorite Models"))
+                        .child(Label::new("循环切换收藏模型"))
                         .child(KeyBinding::for_action(&CycleFavoriteModels, cx)),
                 )
             })

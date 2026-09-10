@@ -236,7 +236,7 @@ impl Render for EditPredictionButton {
                             IconButton::new("codestral-icon", IconName::AiMistral)
                                 .shape(IconButtonShape::Square)
                                 .tab_index(0isize)
-                                .aria_label("Edit Prediction")
+                                .aria_label("编辑预测")
                                 .when(!has_api_key, |this| {
                                     this.indicator(Indicator::dot().color(Color::Error))
                                         .indicator_border_color(Some(
@@ -250,12 +250,7 @@ impl Render for EditPredictionButton {
                                         ))
                                 }),
                             move |_window, cx| {
-                                Tooltip::with_meta(
-                                    "Edit Prediction",
-                                    Some(&ToggleMenu),
-                                    tooltip_meta,
-                                    cx,
-                                )
+                                Tooltip::with_meta("编辑预测", Some(&ToggleMenu), tooltip_meta, cx)
                             },
                         )
                         .with_handle(self.popover_menu_handle.clone()),
@@ -282,7 +277,7 @@ impl Render for EditPredictionButton {
                             IconButton::new("openai-compatible-api-icon", IconName::AiOpenAiCompat)
                                 .shape(IconButtonShape::Square)
                                 .tab_index(0isize)
-                                .aria_label("Edit Prediction")
+                                .aria_label("编辑预测")
                                 .when(!enabled, |this| {
                                     this.indicator(Indicator::dot().color(Color::Ignored))
                                         .indicator_border_color(Some(
@@ -314,7 +309,7 @@ impl Render for EditPredictionButton {
                             IconButton::new("ollama-icon", IconName::AiOllama)
                                 .shape(IconButtonShape::Square)
                                 .tab_index(0isize)
-                                .aria_label("Edit Prediction")
+                                .aria_label("编辑预测")
                                 .when(!enabled, |this| {
                                     this.indicator(Indicator::dot().color(Color::Ignored))
                                         .indicator_border_color(Some(
@@ -333,12 +328,7 @@ impl Render for EditPredictionButton {
                                     }
                                 };
 
-                                Tooltip::with_meta(
-                                    "Edit Prediction",
-                                    Some(&ToggleMenu),
-                                    tooltip_meta,
-                                    cx,
-                                )
+                                Tooltip::with_meta("编辑预测", Some(&ToggleMenu), tooltip_meta, cx)
                             },
                         )
                         .with_handle(self.popover_menu_handle.clone()),
@@ -456,7 +446,7 @@ impl Render for EditPredictionButton {
                 let icon_button = IconButton::new("zed-predict-pending-button", ep_icon)
                     .shape(IconButtonShape::Square)
                     .tab_index(0isize)
-                    .aria_label("Edit Prediction")
+                    .aria_label("编辑预测")
                     .when_some(indicator_color, |this, color| {
                         this.indicator(Indicator::dot().color(color))
                             .indicator_border_color(Some(cx.theme().colors().status_bar_background))
@@ -473,12 +463,7 @@ impl Render for EditPredictionButton {
                                 "Enable to Use"
                             };
 
-                            Tooltip::with_meta(
-                                "Edit Prediction",
-                                Some(&ToggleMenu),
-                                description,
-                                cx,
-                            )
+                            Tooltip::with_meta("编辑预测", Some(&ToggleMenu), description, cx)
                         })
                     });
 
@@ -611,7 +596,21 @@ impl EditPredictionButton {
             .collect();
 
         if !providers.is_empty() {
-            menu = menu.separator().header("Providers");
+            let fs = self.fs.clone();
+            menu = menu.separator().header("Providers").item(
+                ContextMenuEntry::new("关闭")
+                    .toggleable(
+                        IconPosition::Start,
+                        current_provider == EditPredictionProvider::None,
+                    )
+                    .documentation_aside(DocumentationSide::Left, move |_| {
+                        Label::new("关闭 AI 编辑预测并隐藏状态栏图标，可在设置中重新启用。")
+                            .into_any_element()
+                    })
+                    .handler(move |_, cx| {
+                        set_completion_provider(fs.clone(), cx, EditPredictionProvider::None);
+                    }),
+            );
 
             for provider in providers {
                 let Some(name) = provider.display_name() else {
@@ -628,8 +627,7 @@ impl EditPredictionButton {
                         .disabled(is_disabled_zed_provider)
                         .when(is_disabled_zed_provider, |item| {
                             item.documentation_aside(DocumentationSide::Left, move |_cx| {
-                                Label::new("Edit predictions are disabled for this organization.")
-                                    .into_any_element()
+                                Label::new("此组织的编辑预测已被禁用。").into_any_element()
                             })
                         })
                         .handler(move |_, cx| {
@@ -722,7 +720,7 @@ impl EditPredictionButton {
         let fs = self.fs.clone();
         let line_height = window.line_height();
 
-        menu = menu.header("Show Edit Predictions For");
+        menu = menu.header("显示编辑预测范围");
 
         let language_state = self.language.as_ref().map(|language| {
             (
@@ -732,7 +730,7 @@ impl EditPredictionButton {
         });
 
         if let Some(editor_focus_handle) = self.editor_focus_handle.clone() {
-            let entry = ContextMenuEntry::new("This Buffer")
+            let entry = ContextMenuEntry::new("当前缓冲区")
                 .toggleable(IconPosition::Start, self.editor_show_predictions)
                 .action(Box::new(editor::actions::ToggleEditPrediction))
                 .handler(move |window, cx| {
@@ -748,11 +746,8 @@ impl EditPredictionButton {
                     menu = menu.item(entry.disabled(true).documentation_aside(
                         DocumentationSide::Left,
                         move |_cx| {
-                            Label::new(format!(
-                                "Edit predictions are disabled for {}",
-                                language.name()
-                            ))
-                            .into_any_element()
+                            Label::new(format!("已对 {} 禁用编辑预测", language.name()))
+                                .into_any_element()
                         },
                     ));
                 }
@@ -784,7 +779,7 @@ impl EditPredictionButton {
         let settings = AllLanguageSettings::get_global(cx);
 
         let globally_enabled = settings.show_edit_predictions(None, cx);
-        let entry = ContextMenuEntry::new("All Files")
+        let entry = ContextMenuEntry::new("所有文件")
             .toggleable(IconPosition::Start, globally_enabled)
             .action(workspace::ToggleEditPrediction.boxed_clone())
             .handler(|window, cx| {
@@ -798,46 +793,51 @@ impl EditPredictionButton {
         let eager_mode = matches!(current_mode, EditPredictionsMode::Eager);
 
         menu = menu
-                .separator()
-                .header("Display Modes")
-                .item(
-                    ContextMenuEntry::new("Eager")
-                        .toggleable(IconPosition::Start, eager_mode)
-                        .documentation_aside(DocumentationSide::Left, move |_| {
-                            Label::new("Display predictions inline when there are no language server completions available.").into_any_element()
-                        })
-                        .handler({
-                            let fs = fs.clone();
-                            move |_, cx| {
-                                telemetry::event!(
-                                    "Edit Prediction Setting Changed",
-                                    setting = "mode",
-                                    value = "eager",
-                                );
-                                toggle_edit_prediction_mode(fs.clone(), EditPredictionsMode::Eager, cx)
-                            }
-                        }),
-                )
-                .item(
-                    ContextMenuEntry::new("Subtle")
-                        .toggleable(IconPosition::Start, subtle_mode)
-                        .documentation_aside(DocumentationSide::Left, move |_| {
-                            Label::new("Display predictions inline only when holding a modifier key (alt by default).").into_any_element()
-                        })
-                        .handler({
-                            let fs = fs.clone();
-                            move |_, cx| {
-                                telemetry::event!(
-                                    "Edit Prediction Setting Changed",
-                                    setting = "mode",
-                                    value = "subtle",
-                                );
-                                toggle_edit_prediction_mode(fs.clone(), EditPredictionsMode::Subtle, cx)
-                            }
-                        }),
-                );
+            .separator()
+            .header("显示模式")
+            .item(
+                ContextMenuEntry::new("即时")
+                    .toggleable(IconPosition::Start, eager_mode)
+                    .documentation_aside(DocumentationSide::Left, move |_| {
+                        Label::new("当没有语言服务器补全可用时内联显示预测。").into_any_element()
+                    })
+                    .handler({
+                        let fs = fs.clone();
+                        move |_, cx| {
+                            telemetry::event!(
+                                "Edit Prediction Setting Changed",
+                                setting = "mode",
+                                value = "eager",
+                            );
+                            toggle_edit_prediction_mode(fs.clone(), EditPredictionsMode::Eager, cx)
+                        }
+                    }),
+            )
+            .item(
+                ContextMenuEntry::new("按键触发")
+                    .toggleable(IconPosition::Start, subtle_mode)
+                    .documentation_aside(DocumentationSide::Left, move |_| {
+                        Label::new(concat!(
+                            "仅在按住修饰键时内联显示预测（默认为 ",
+                            ui::alt_key_name!(),
+                            "）。"
+                        ))
+                        .into_any_element()
+                    })
+                    .handler({
+                        let fs = fs.clone();
+                        move |_, cx| {
+                            telemetry::event!(
+                                "Edit Prediction Setting Changed",
+                                setting = "mode",
+                                value = "subtle",
+                            );
+                            toggle_edit_prediction_mode(fs.clone(), EditPredictionsMode::Subtle, cx)
+                        }
+                    }),
+            );
 
-        menu = menu.separator().header("Privacy");
+        menu = menu.separator().header("隐私");
 
         if matches!(provider, EditPredictionProvider::Zed) {
             if let Some(provider) = &self.edit_prediction_provider {
@@ -1015,7 +1015,7 @@ impl EditPredictionButton {
                 .context(editor_focus_handle)
                 .when(
                     cx.has_flag::<PredictEditsRatePredictionsFeatureFlag>(),
-                    |this| this.action("Rate Predictions", RatePredictions.boxed_clone()),
+                    |this| this.action("评价预测", RatePredictions.boxed_clone()),
                 );
         }
 
@@ -1075,7 +1075,7 @@ impl EditPredictionButton {
                     "Go to Copilot Settings",
                     OpenBrowser { url: settings_url }.boxed_clone(),
                 )
-                .entry("Sign Out", None, |window, cx| {
+                .entry("登出", None, |window, cx| {
                     if let Some(auth) = copilot::GlobalCopilotAuth::try_global(cx) {
                         copilot_ui::initiate_sign_out(auth.0.clone(), window, cx);
                     }
@@ -1126,7 +1126,7 @@ impl EditPredictionButton {
                             .max_w_64()
                             .h(rems_from_px(148_f32))
                             .child(render_zeta_tab_animation(cx))
-                            .child(Label::new("Edit Prediction"))
+                            .child(Label::new("编辑预测"))
                             .child(
                                 Label::new(description)
                                     .color(Color::Muted)
@@ -1238,7 +1238,7 @@ impl EditPredictionButton {
                     menu = menu
                         .custom_entry(
                             |_window, _cx| {
-                                Label::new("Your GitHub account is less than 30 days old.")
+                                Label::new("你的 GitHub 账户注册不足 30 天。")
                                     .size(LabelSize::Small)
                                     .color(Color::Warning)
                                     .into_any_element()
@@ -1258,7 +1258,7 @@ impl EditPredictionButton {
                     menu = menu
                         .custom_entry(
                             |_window, _cx| {
-                                Label::new("You have an outstanding invoice")
+                                Label::new("你有一笔未结发票")
                                     .size(LabelSize::Small)
                                     .color(Color::Warning)
                                     .into_any_element()

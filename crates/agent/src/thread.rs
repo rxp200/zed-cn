@@ -984,12 +984,12 @@ impl ToolPermissionContext {
             return acp_thread::PermissionOptions::Flat(vec![
                 acp::PermissionOption::new(
                     acp::PermissionOptionId::new("allow"),
-                    "Yes",
+                    "是",
                     acp::PermissionOptionKind::AllowOnce,
                 ),
                 acp::PermissionOption::new(
                     acp::PermissionOptionId::new("deny"),
-                    "No",
+                    "否",
                     acp::PermissionOptionKind::RejectOnce,
                 ),
             ]);
@@ -1000,12 +1000,12 @@ impl ToolPermissionContext {
             return acp_thread::PermissionOptions::Flat(vec![
                 acp::PermissionOption::new(
                     acp::PermissionOptionId::new("allow"),
-                    "Allow",
+                    "允许",
                     acp::PermissionOptionKind::AllowOnce,
                 ),
                 acp::PermissionOption::new(
                     acp::PermissionOptionId::new("deny"),
-                    "Deny",
+                    "拒绝",
                     acp::PermissionOptionKind::RejectOnce,
                 ),
             ]);
@@ -1042,12 +1042,12 @@ impl ToolPermissionContext {
                     choices.push(acp_thread::PermissionOptionChoice {
                         allow: acp::PermissionOption::new(
                             acp::PermissionOptionId::new("allow"),
-                            "Only this time",
+                            "仅此一次",
                             acp::PermissionOptionKind::AllowOnce,
                         ),
                         deny: acp::PermissionOption::new(
                             acp::PermissionOptionId::new("deny"),
-                            "Only this time",
+                            "仅此一次",
                             acp::PermissionOptionKind::RejectOnce,
                         ),
                         sub_patterns: vec![],
@@ -4531,7 +4531,7 @@ impl Thread {
             // provider's requested delay when it gave one, and fall back to
             // exponential backoff when it didn't.
             ProviderRejection { retry_after, .. } => {
-                if error.retry_delay(1).is_none() {
+                if !error.is_transient() {
                     return None;
                 }
                 Some(match retry_after {
@@ -5786,14 +5786,14 @@ impl ToolCallEventStream {
             reason,
         };
         let allow_thread_label = if self.is_subagent(cx) {
-            "Allow for this subagent"
+            "允许此子 Agent"
         } else {
-            "Allow for this thread"
+            "允许此线程"
         };
         let options = acp_thread::PermissionOptions::Flat(vec![
             acp::PermissionOption::new(
                 acp::PermissionOptionId::new(acp_thread::SandboxPermission::AllowOnce.as_id()),
-                "Allow once",
+                "允许一次",
                 acp::PermissionOptionKind::AllowOnce,
             ),
             acp::PermissionOption::new(
@@ -5803,12 +5803,12 @@ impl ToolCallEventStream {
             ),
             acp::PermissionOption::new(
                 acp::PermissionOptionId::new(acp_thread::SandboxPermission::AllowAlways.as_id()),
-                "Allow always",
+                "始终允许",
                 acp::PermissionOptionKind::AllowAlways,
             ),
             acp::PermissionOption::new(
                 acp::PermissionOptionId::new(acp_thread::SandboxPermission::Deny.as_id()),
-                "Deny",
+                "拒绝",
                 acp::PermissionOptionKind::RejectOnce,
             ),
         ]);
@@ -6186,7 +6186,7 @@ impl ToolCallEventStream {
             ),
             acp::PermissionOption::new(
                 acp::PermissionOptionId::new(acp_thread::SandboxPermission::AllowOnce.as_id()),
-                "Run without sandbox once",
+                "在沙箱外运行一次",
                 acp::PermissionOptionKind::AllowOnce,
             ),
             acp::PermissionOption::new(
@@ -6196,12 +6196,12 @@ impl ToolCallEventStream {
             ),
             acp::PermissionOption::new(
                 acp::PermissionOptionId::new(acp_thread::SandboxPermission::AllowAlways.as_id()),
-                "Always run without sandbox",
+                "始终在沙箱外运行",
                 acp::PermissionOptionKind::AllowAlways,
             ),
             acp::PermissionOption::new(
                 acp::PermissionOptionId::new(acp_thread::SandboxPermission::Deny.as_id()),
-                "Deny",
+                "拒绝",
                 acp::PermissionOptionKind::RejectOnce,
             ),
         ]);

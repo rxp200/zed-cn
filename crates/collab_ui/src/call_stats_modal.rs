@@ -155,55 +155,55 @@ fn call_diagnostics(cx: &App) -> Option<Entity<CallDiagnostics>> {
 
 fn quality_label(quality: Option<ConnectionQuality>) -> (&'static str, Color) {
     match quality {
-        Some(ConnectionQuality::Excellent) => ("Excellent", Color::Success),
-        Some(ConnectionQuality::Good) => ("Good", Color::Success),
-        Some(ConnectionQuality::Poor) => ("Poor", Color::Warning),
-        Some(ConnectionQuality::Lost) => ("Lost", Color::Error),
+        Some(ConnectionQuality::Excellent) => ("极佳", Color::Success),
+        Some(ConnectionQuality::Good) => ("良好", Color::Success),
+        Some(ConnectionQuality::Poor) => ("较差", Color::Warning),
+        Some(ConnectionQuality::Lost) => ("已断开", Color::Error),
         None => ("—", Color::Muted),
     }
 }
 
 fn metric_rating(label: &str, value_ms: f64) -> (&'static str, Color) {
     match label {
-        "Latency" => {
+        "延迟" => {
             if value_ms < 100.0 {
-                ("Normal", Color::Success)
+                ("正常", Color::Success)
             } else if value_ms < 300.0 {
-                ("High", Color::Warning)
+                ("高", Color::Warning)
             } else {
-                ("Poor", Color::Error)
+                ("差", Color::Error)
             }
         }
-        "Jitter" => {
+        "抖动" => {
             if value_ms < 30.0 {
-                ("Normal", Color::Success)
+                ("正常", Color::Success)
             } else if value_ms < 75.0 {
-                ("High", Color::Warning)
+                ("高", Color::Warning)
             } else {
-                ("Poor", Color::Error)
+                ("差", Color::Error)
             }
         }
-        _ => ("Normal", Color::Success),
+        _ => ("正常", Color::Success),
     }
 }
 
 fn input_lag_rating(value_ms: u128) -> (&'static str, Color) {
     if value_ms < 20 {
-        ("Normal", Color::Success)
+        ("正常", Color::Success)
     } else if value_ms < 50 {
-        ("High", Color::Warning)
+        ("高", Color::Warning)
     } else {
-        ("Poor", Color::Error)
+        ("差", Color::Error)
     }
 }
 
 fn packet_loss_rating(loss_pct: f64) -> (&'static str, Color) {
     if loss_pct < 1.0 {
-        ("Normal", Color::Success)
+        ("正常", Color::Success)
     } else if loss_pct < 5.0 {
-        ("High", Color::Warning)
+        ("高", Color::Warning)
     } else {
-        ("Poor", Color::Error)
+        ("差", Color::Error)
     }
 }
 
@@ -296,7 +296,7 @@ impl Render for CallStatsModal {
             .child(
                 h_flex()
                     .justify_between()
-                    .child(Label::new("Call Diagnostics").size(LabelSize::Large))
+                    .child(Label::new("通话诊断").size(LabelSize::Large))
                     .child(
                         Label::new(quality_text)
                             .size(LabelSize::Large)
@@ -307,7 +307,9 @@ impl Render for CallStatsModal {
                 this.child(
                     h_flex()
                         .justify_center()
-                        .child(Label::new("Showing diagnostics from the most recent call").color(Color::Muted)),
+                        .child(
+                            Label::new("正在显示最近一次通话的诊断信息").color(Color::Muted),
+                        ),
                 )
             })
             .when(!has_diagnostics, |this| {
@@ -315,7 +317,7 @@ impl Render for CallStatsModal {
                     h_flex()
                         .justify_center()
                         .py_4()
-                        .child(Label::new("No call diagnostics available").color(Color::Muted)),
+                        .child(Label::new("暂无通话诊断信息").color(Color::Muted)),
                 )
             })
             .when(has_diagnostics, |this| {
@@ -327,7 +329,7 @@ impl Render for CallStatsModal {
                         .overflow_y_scroll()
                         .child(
                             Label::new(format!(
-                                "{sample_count} samples · {:.0}s retained · {recent_issue_count} affected intervals in the last 60s",
+                                "{sample_count} 个样本 · 保留 {:.0} 秒 · 最近 60 秒内有 {recent_issue_count} 个受影响的时间段",
                                 retained_duration.as_secs_f64()
                             ))
                             .size(LabelSize::Small)
@@ -336,31 +338,31 @@ impl Render for CallStatsModal {
                         .child(
                             v_flex()
                                 .gap_1()
-                                .child(Label::new("Network").weight(FontWeight::SEMIBOLD))
+                                .child(Label::new("网络").weight(FontWeight::SEMIBOLD))
                                 .child(self.render_metric_row(
-                                    "Latency",
-                                    "Time for data to travel to the server",
+                                    "延迟",
+                                    "数据传输到服务器所需的时间",
                                     stats.latency_ms,
                                     |v| format!("{:.0}ms", v),
-                                    |v| metric_rating("Latency", v),
+                                    |v| metric_rating("延迟", v),
                                 ))
                                 .child(self.render_metric_row(
-                                    "Jitter",
-                                    "Variance or fluctuation in latency",
+                                    "抖动",
+                                    "延迟的变化或波动",
                                     stats.jitter_ms,
                                     |v| format!("{:.0}ms", v),
-                                    |v| metric_rating("Jitter", v),
+                                    |v| metric_rating("抖动", v),
                                 ))
                                 .child(self.render_metric_row(
-                                    "Packet loss",
-                                    "Amount of data lost during transfer",
+                                    "丢包率",
+                                    "传输过程中丢失的数据量",
                                     stats.packet_loss_pct,
                                     |v| format!("{:.1}%", v),
                                     packet_loss_rating,
                                 ))
                                 .child(self.render_metric_row(
-                                    "Input lag",
-                                    "Delay from audio capture to WebRTC",
+                                    "输入延迟",
+                                    "从音频捕获到 WebRTC 的延迟",
                                     stats.input_lag.map(|d| d.0.as_millis()),
                                     |v| format!("{}ms", v),
                                     input_lag_rating,
@@ -369,10 +371,10 @@ impl Render for CallStatsModal {
                         .child(
                             v_flex()
                                 .gap_1()
-                                .child(Label::new("Inbound audio").weight(FontWeight::SEMIBOLD))
+                                .child(Label::new("入站音频").weight(FontWeight::SEMIBOLD))
                                 .when(remote_audio.is_empty(), |this| {
                                     this.child(
-                                        Label::new("Waiting for inbound audio statistics")
+                                        Label::new("正在等待入站音频统计信息")
                                             .color(Color::Muted),
                                     )
                                 })
@@ -390,11 +392,11 @@ impl Render for CallStatsModal {
                         .justify_end()
                         .gap_2()
                         .child(
-                            Button::new("copy-call-diagnostics", "Copy Report")
+                            Button::new("copy-call-diagnostics", "复制报告")
                                 .on_click(cx.listener(|this, _, _, cx| this.copy_report(cx))),
                         )
                         .child(
-                            Button::new("save-call-diagnostics", "Save Report…")
+                            Button::new("save-call-diagnostics", "保存报告…")
                                 .on_click(cx.listener(|this, _, _, cx| this.save_report(cx))),
                         ),
                 )

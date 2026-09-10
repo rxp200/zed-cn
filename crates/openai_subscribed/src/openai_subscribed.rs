@@ -843,7 +843,7 @@ impl LanguageModel for OpenAiSubscribedLanguageModel {
                     ) => {
                         if compacted_context.replace(context).is_some() {
                             return Err(LanguageModelCompletionError::Other(anyhow!(
-                                "ChatGPT subscription compaction returned multiple replacement contexts"
+                                "ChatGPT 订阅的上下文压缩返回了多个替换上下文"
                             )));
                         }
                     }
@@ -856,7 +856,7 @@ impl LanguageModel for OpenAiSubscribedLanguageModel {
 
             let context = compacted_context.ok_or_else(|| {
                 LanguageModelCompletionError::Other(anyhow!(
-                    "ChatGPT subscription compaction returned no replacement context"
+                    "ChatGPT 订阅的上下文压缩未返回替换上下文"
                 ))
             })?;
             Ok(CompactionResult { context, usage })

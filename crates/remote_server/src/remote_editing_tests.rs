@@ -36,13 +36,14 @@ use language::{
 };
 use lsp::{
     CompletionContext, CompletionResponse, CompletionTriggerKind, DEFAULT_LSP_REQUEST_TIMEOUT,
-    LanguageServerName,
+    LanguageServerId, LanguageServerName,
 };
 use node_runtime::NodeRuntime;
 use project::{
-    ProgressToken, Project, ProjectPath,
+    LanguageServerLogType, ProgressToken, Project, ProjectPath,
     agent_server_store::AgentServerCommand,
     image_store,
+    lsp_store::log_store::{LanguageServerKind, LanguageServerLogKey, LogStore},
     search::{SearchQuery, SearchResult},
 };
 use remote::{ConnectionState, RemoteClient, RemoteClientEvent};
@@ -1110,7 +1111,7 @@ async fn test_remote_lsp(cx: &mut TestAppContext, server_cx: &mut TestAppContext
 
     project
         .update(cx, |project, cx| {
-            project.perform_rename(buffer.clone(), 3, "two".to_string(), cx)
+            project.perform_rename(buffer.clone(), 3, "two".to_string(), None, cx)
         })
         .await
         .unwrap();
@@ -2778,6 +2779,20 @@ async fn test_reconnect(cx: &mut TestAppContext, server_cx: &mut TestAppContext)
     });
 
     let client = cx.read(|cx| project.read(cx).remote_client().unwrap());
+    let reconnect_status_seen = Arc::new(AtomicBool::new(false));
+    let _status_subscription = cx.update(|cx| {
+        let reconnect_status_seen = reconnect_status_seen.clone();
+        cx.observe(&client, move |client, cx| {
+            let client = client.read(cx);
+            if client.connection_state() == remote::ConnectionState::Reconnecting
+                && client
+                    .reconnect_status()
+                    .is_some_and(|status| !status.is_empty())
+            {
+                reconnect_status_seen.store(true, Ordering::SeqCst);
+            }
+        })
+    });
     let reconnected = Arc::new(AtomicBool::new(false));
     let _subscription = cx.update(|cx| {
         let reconnected = reconnected.clone();
@@ -2808,6 +2823,8 @@ async fn test_reconnect(cx: &mut TestAppContext, server_cx: &mut TestAppContext)
         reconnected.load(Ordering::SeqCst),
         "a successful reconnect should emit RemoteClientEvent::Reconnected"
     );
+    assert!(reconnect_status_seen.load(Ordering::SeqCst));
+    client.read_with(cx, |client, _| assert!(!client.was_manual_reconnect()));
 }
 
 #[gpui::test]
@@ -2948,15 +2965,22 @@ async fn test_copy_file_into_remote_project(
         )
         .await;
 
+    let transferred_entries = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let observer = transferred_entries.clone();
     worktree
         .update(cx, |worktree, cx| {
-            worktree.copy_external_entries(
+            worktree.copy_external_entries_with_progress(
                 rel_path("src").into(),
                 vec![
                     Path::new(path!("/local-code/dir1/file1")).into(),
                     Path::new(path!("/local-code/dir1/dir2")).into(),
                 ],
                 local_fs.clone(),
+                Some(Arc::new(move |event| {
+                    if matches!(event, worktree::FileTransferProgress::Finished) {
+                        observer.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    }
+                })),
                 cx,
             )
         })
@@ -2980,6 +3004,10 @@ async fn test_copy_file_into_remote_project(
             PathBuf::from(path!("/code/project1/src/dir2/file2")),
             PathBuf::from(path!("/code/project1/src/dir2/dir3/file3")),
         ]
+    );
+    assert_eq!(
+        transferred_entries.load(std::sync::atomic::Ordering::SeqCst),
+        6
     );
     assert_eq!(
         remote_fs
@@ -4690,6 +4718,77 @@ async fn test_remote_project_creation_notifies_new_entity_observers(
         "creating a remote project should notify new-entity observers with a connected remote client exactly once"
     );
     assert!(project.read_with(cx, |project, _| project.is_remote()));
+}
+
+#[gpui::test]
+async fn test_log_store_keys_remote_events_by_primary_kind_on_supplementary_id_collision(
+    cx: &mut TestAppContext,
+    server_cx: &mut TestAppContext,
+) {
+    let server_fs = Arc::new(FakeFs::new(server_cx.executor()));
+    server_fs
+        .insert_tree(path!("/code"), json!({ "project1": { "README.md": "" } }))
+        .await;
+    let (project, _headless) = init_test(&server_fs, cx, server_cx).await;
+
+    let log_store = cx.new(|cx| LogStore::new(false, cx));
+    log_store.update(cx, |log_store, cx| log_store.add_project(&project, cx));
+
+    // A supplementary server (e.g. Copilot) allocates its ID from the local
+    // registry, which may collide numerically with a host-side server ID.
+    let server_id = LanguageServerId(42);
+    let supplementary_server_key = LanguageServerLogKey::new(
+        LanguageServerKind::Supplementary {
+            project: project.downgrade(),
+        },
+        server_id,
+    );
+    log_store.update(cx, |log_store, cx| {
+        log_store.add_language_server(
+            LanguageServerKind::Supplementary {
+                project: project.downgrade(),
+            },
+            server_id,
+            Some(LanguageServerName::new_static("copilot")),
+            None,
+            None,
+            cx,
+        );
+    });
+
+    project.update(cx, |_, cx| {
+        cx.emit(project::Event::LanguageServerLog(
+            server_id,
+            LanguageServerLogType::Log(lsp::MessageType::LOG),
+            "host server log".to_string(),
+        ));
+    });
+    cx.run_until_parked();
+
+    let remote_server_key = LanguageServerLogKey::new(
+        LanguageServerKind::Remote {
+            project: project.downgrade(),
+        },
+        server_id,
+    );
+    log_store.read_with(cx, |log_store, _| {
+        assert_eq!(
+            log_store.server_logs(&remote_server_key).map(|logs| {
+                logs.iter()
+                    .map(|log| log.as_ref().to_string())
+                    .collect::<Vec<_>>()
+            }),
+            Some(vec!["host server log".to_string()]),
+            "host server logs should be keyed by the remote server kind"
+        );
+        assert_eq!(
+            log_store
+                .server_logs(&supplementary_server_key)
+                .map(|logs| logs.len()),
+            Some(0),
+            "host server logs should not leak into the supplementary server with the same ID"
+        );
+    });
 }
 
 pub async fn init_test(

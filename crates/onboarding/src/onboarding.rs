@@ -351,11 +351,11 @@ impl Render for Onboarding {
                                             .child(
                                                 v_flex()
                                                     .child(
-                                                        Headline::new("Welcome to Zed")
+                                                        Headline::new("欢迎使用 Zed")
                                                             .size(HeadlineSize::Small),
                                                     )
                                                     .child(
-                                                        Label::new("The editor for what's next")
+                                                        Label::new("为未来而生的编辑器")
                                                             .color(Color::Muted)
                                                             .size(LabelSize::Small)
                                                             .italic(),
@@ -363,7 +363,7 @@ impl Render for Onboarding {
                                             ),
                                     )
                                     .child({
-                                        Button::new("finish_setup", "Finish Setup")
+                                        Button::new("finish_setup", "完成设置")
                                             .style(ButtonStyle::Filled)
                                             .size(ButtonSize::Medium)
                                             .width(rems_from_px(200_f32))
@@ -486,7 +486,7 @@ pub async fn handle_import_vscode_settings(
                     gpui::PromptLevel::Info,
                     &format!("Could not find or load a {source} settings file"),
                     None,
-                    &["OK"],
+                    &["确定"],
                 );
                 return;
             }
@@ -558,7 +558,7 @@ pub async fn handle_import_vscode_settings(
                                 .size(IconSize::Small)
                                 .color(Color::Error),
                         )
-                        .action("Open Log", |window, cx| {
+                        .action("打开日志", |window, cx| {
                             window.dispatch_action(workspace::OpenLog.boxed_clone(), cx)
                         })
                         .dismiss_button(true)

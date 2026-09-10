@@ -436,6 +436,24 @@ struct ZedAiConfiguration {
     sign_in_callback: Arc<dyn Fn(&mut Window, &mut App) + Send + Sync>,
 }
 
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support {
+    use super::*;
+
+    pub fn young_account_configuration() -> AnyElement {
+        ZedAiConfiguration {
+            is_connected: true,
+            plan: Some(Plan::ZedBusiness),
+            is_zed_model_provider_enabled: true,
+            eligible_for_trial: false,
+            account_too_young: true,
+            compact: true,
+            sign_in_callback: Arc::new(|_, _| {}),
+        }
+        .into_any_element()
+    }
+}
+
 fn zed_ai_description(
     is_connected: bool,
     plan: Option<Plan>,
@@ -450,9 +468,7 @@ fn zed_ai_description(
         Some(Plan::ZedPro) => {
             "You have access to Zed's hosted models through your Pro subscription."
         }
-        Some(Plan::ZedProTrial) => {
-            "Your Pro trial includes $5 of GPT Luna and unlimited edit predictions for 14 days from trial start."
-        }
+        Some(Plan::ZedProTrial) => "You have access to Zed's hosted models through your Pro trial.",
         Some(Plan::ZedStudent) => {
             "You have access to Zed's hosted models through your Student subscription."
         }
@@ -468,7 +484,7 @@ fn zed_ai_description(
         }
         Some(Plan::ZedFree) | None => {
             if eligible_for_trial {
-                "Start a free trial with $5 of GPT Luna and unlimited edit predictions for 14 days from trial start."
+                "Subscribe for access to Zed's hosted models. Start with a 14 day free trial."
             } else {
                 "Subscribe for access to Zed's hosted models."
             }
@@ -491,7 +507,7 @@ impl RenderOnce for ZedAiConfiguration {
         );
 
         let manage_subscription_buttons = if has_paid_plan {
-            Button::new("manage_settings", "Manage Subscription")
+            Button::new("manage_settings", "管理订阅")
                 .when(!self.compact, |this| {
                     this.full_width().label_size(LabelSize::Small)
                 })
@@ -500,7 +516,7 @@ impl RenderOnce for ZedAiConfiguration {
                 .on_click(|_, _, cx| cx.open_url(&zed_urls::account_url(cx)))
                 .into_any_element()
         } else if self.plan.is_none() || self.eligible_for_trial {
-            Button::new("start_trial", "Start Free Trial")
+            Button::new("start_trial", "开始14天免费Pro试用")
                 .when(!self.compact, |this| {
                     this.full_width().label_size(LabelSize::Small)
                 })
@@ -509,7 +525,7 @@ impl RenderOnce for ZedAiConfiguration {
                 .on_click(|_, _, cx| cx.open_url(&zed_urls::start_trial_url(cx)))
                 .into_any_element()
         } else {
-            Button::new("upgrade", "Upgrade to Pro")
+            Button::new("upgrade", "升级到Pro")
                 .when(!self.compact, |this| {
                     this.full_width().label_size(LabelSize::Small)
                 })
@@ -524,7 +540,7 @@ impl RenderOnce for ZedAiConfiguration {
                 .gap_2()
                 .when(!self.compact, |this| this.child(Label::new(description)))
                 .child(
-                    Button::new("sign_in", "Sign In to use Zed AI")
+                    Button::new("sign_in", "登录以使用Zed AI")
                         .start_icon(
                             Icon::new(IconName::Github)
                                 .size(IconSize::Small)
@@ -540,11 +556,14 @@ impl RenderOnce for ZedAiConfiguration {
 
         v_flex()
             .gap_2()
-            .when(!self.compact, |this| this.w_full())
+            .debug_selector(|| "zed-ai-configuration".into())
+            .when(!self.compact || self.account_too_young, |this| {
+                this.w_full()
+            })
             .map(|this| {
                 if self.account_too_young {
                     this.child(YoungAccountBanner).child(
-                        Button::new("upgrade", "Upgrade to Pro")
+                        Button::new("upgrade", "升级到Pro")
                             .style(ui::ButtonStyle::Tinted(ui::TintColor::Accent))
                             .when(!self.compact, |this| this.full_width())
                             .on_click(|_, _, cx| {
