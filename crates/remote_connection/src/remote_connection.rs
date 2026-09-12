@@ -489,6 +489,28 @@ impl RemoteClientDelegate {
 }
 
 impl remote::RemoteClientDelegate for RemoteClientDelegate {
+    fn download_custom_server_binary(
+        &self,
+        platform: RemotePlatform,
+        tag: String,
+        cx: &mut AsyncApp,
+    ) -> Task<Result<PathBuf>> {
+        let this = self.clone();
+        cx.spawn(async move |cx| {
+            AutoUpdater::download_custom_remote_server_release(
+                tag,
+                platform.os.as_str(),
+                platform.arch.as_str(),
+                {
+                    let this = this.clone();
+                    move |status, cx| this.set_status(Some(status), cx)
+                },
+                move |progress, cx| this.set_transfer_progress(progress, cx),
+                cx,
+            )
+            .await
+        })
+    }
     fn ask_password(
         &self,
         prompt: String,
@@ -678,6 +700,24 @@ pub fn connect_reusing_pool(
 struct BackgroundRemoteClientDelegate;
 
 impl remote::RemoteClientDelegate for BackgroundRemoteClientDelegate {
+    fn download_custom_server_binary(
+        &self,
+        platform: RemotePlatform,
+        tag: String,
+        cx: &mut AsyncApp,
+    ) -> Task<Result<PathBuf>> {
+        cx.spawn(async move |cx| {
+            AutoUpdater::download_custom_remote_server_release(
+                tag,
+                platform.os.as_str(),
+                platform.arch.as_str(),
+                |_, _| {},
+                |_, _| {},
+                cx,
+            )
+            .await
+        })
+    }
     fn ask_password(
         &self,
         prompt: String,

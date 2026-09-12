@@ -53,6 +53,33 @@ const REMOTE_SERVER_DOWNLOAD_TOTAL_TIMEOUT: Duration =
 /// at the "detecting remote shell" step instead of failing with an error.
 const REMOTE_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 
+fn verify_custom_server_digest(output: &str, expected: &str) -> Result<bool> {
+    let output = output.trim();
+    if output == "MISSING" {
+        return Ok(false);
+    }
+    let actual = output.split_whitespace().next().unwrap_or_default();
+    anyhow::ensure!(
+        actual.len() == 64 && actual.eq_ignore_ascii_case(expected),
+        "已有 Zed CN 远程服务与对应发布产物不一致，已停止连接；请先关闭使用该服务的工作区再处理该文件"
+    );
+    Ok(true)
+}
+
+#[test]
+fn custom_server_reuse_requires_matching_digest() {
+    let digest = "a".repeat(64);
+    assert_eq!(
+        verify_custom_server_digest("MISSING", &digest).unwrap(),
+        false
+    );
+    assert!(verify_custom_server_digest(&format!("{digest}  server\n"), &digest).unwrap());
+    assert!(verify_custom_server_digest(&digest.to_uppercase(), &digest).unwrap());
+    for invalid in ["", "1.19.2", "MISSING extra", &"b".repeat(64)] {
+        assert!(verify_custom_server_digest(invalid, &digest).is_err());
+    }
+}
+
 pub(crate) struct SshRemoteConnection {
     socket: SshSocket,
     master_process: Mutex<Option<MasterProcess>>,
@@ -168,6 +195,8 @@ pub struct SshConnectionOptions {
 
     pub nickname: Option<String>,
     pub upload_binary_over_ssh: bool,
+    #[serde(default)]
+    pub remote_server_source: settings::RemoteServerSource,
 }
 
 impl From<settings::SshConnection> for SshConnectionOptions {
@@ -179,7 +208,9 @@ impl From<settings::SshConnection> for SshConnectionOptions {
             password: None,
             args: Some(val.args),
             nickname: val.nickname,
-            upload_binary_over_ssh: val.upload_binary_over_ssh.unwrap_or_default(),
+            upload_binary_over_ssh: val.remote_server_source.is_some()
+                || val.upload_binary_over_ssh.unwrap_or_default(),
+            remote_server_source: val.remote_server_source.unwrap_or_default(),
             port_forwards: val.port_forwards,
             connection_timeout: val.connection_timeout,
         }
@@ -524,6 +555,15 @@ impl RemoteConnection for SshRemoteConnection {
             return Task::ready(Err(anyhow!("Remote binary path not set")));
         };
 
+        // Separate source sessions as well as binaries: a normal proxy launch replaces
+        // the server holding the same identifier.
+        let unique_identifier = if self.socket.connection_options.remote_server_source
+            == settings::RemoteServerSource::ZedCn
+        {
+            format!("cn-{unique_identifier}")
+        } else {
+            unique_identifier
+        };
         let mut ssh_command = if self.ssh_platform.os.is_windows() {
             // TODO: Set the `VARS` environment variables, we do not have `env` on windows
             // so this needs a different approach
@@ -876,6 +916,8 @@ impl SshRemoteConnection {
             this.ensure_server_binary(&delegate, release_channel, version, cx)
                 .await?,
         );
+        // Other clients can start an older server after any process snapshot, so
+        // connection setup must not prune installed server versions.
 
         Ok(this)
     }
@@ -887,42 +929,70 @@ impl SshRemoteConnection {
         version: Version,
         cx: &mut AsyncApp,
     ) -> Result<Arc<RelPath>> {
+        let custom_tag = if self.socket.connection_options.remote_server_source
+            == settings::RemoteServerSource::ZedCn
+        {
+            Some(
+                cx.update(|cx| release_channel::CustomReleaseTag::current(cx))
+                    .context("当前客户端没有有效的 Zed CN 正式发布标识，无法选择对应远程服务")?,
+            )
+        } else {
+            None
+        };
         let version_str = super::remote_server_version(release_channel, &version);
-        let binary_name = format!(
-            "zed-remote-server-{}-{}{}",
-            release_channel.dev_name(),
-            version_str,
-            if self.ssh_platform.os.is_windows() {
-                ".exe"
-            } else {
-                ""
-            }
-        );
+        let binary_name = if let Some(tag) = &custom_tag {
+            format!(
+                "zed-cn-remote-server-{tag}{}",
+                if self.ssh_platform.os.is_windows() {
+                    ".exe"
+                } else {
+                    ""
+                }
+            )
+        } else {
+            format!(
+                "zed-remote-server-{}-{}{}",
+                release_channel.dev_name(),
+                version_str,
+                if self.ssh_platform.os.is_windows() {
+                    ".exe"
+                } else {
+                    ""
+                }
+            )
+        };
         let dst_path =
             paths::remote_server_dir_relative().join(RelPath::from_unix_str(&binary_name).unwrap());
 
-        delegate.set_status(Some(&format!("正在检查远程开发服务 {version_str}")), cx);
-        let binary_exists_on_server = self
-            .socket
-            .run_command_with_timeout(
-                self.ssh_shell_kind,
-                &dst_path.display(self.path_style()),
-                &["version"],
-                true,
-                REMOTE_COMMAND_TIMEOUT,
-                cx,
-            )
-            .await
-            .is_ok();
+        let display_version = custom_tag.as_deref().unwrap_or(&version_str);
+        delegate.set_status(Some(&format!("正在检查远程开发服务 {display_version}")), cx);
+        let binary_exists_on_server = if let Some(tag) = &custom_tag {
+            self.verify_custom_server_binary(&dst_path, tag, delegate, cx)
+                .await?
+        } else {
+            self.socket
+                .run_command_with_timeout(
+                    self.ssh_shell_kind,
+                    &dst_path.display(self.path_style()),
+                    &["version"],
+                    true,
+                    REMOTE_COMMAND_TIMEOUT,
+                    cx,
+                )
+                .await
+                .is_ok()
+        };
 
         #[cfg(any(debug_assertions, feature = "build-remote-server-binary"))]
-        if let Some(remote_server_path) = super::build_remote_server_from_source(
-            &self.ssh_platform,
-            delegate.as_ref(),
-            binary_exists_on_server,
-            cx,
-        )
-        .await?
+        if custom_tag.is_none()
+            && release_channel == ReleaseChannel::Dev
+            && let Some(remote_server_path) = super::build_remote_server_from_source(
+                &self.ssh_platform,
+                delegate.as_ref(),
+                binary_exists_on_server,
+                cx,
+            )
+            .await?
         {
             let tmp_path = paths::remote_server_dir_relative().join(
                 RelPath::from_unix_str(&format!(
@@ -956,11 +1026,23 @@ impl SshRemoteConnection {
             _ => Ok(Some(AppVersion::global(cx))),
         })?;
 
+        // Keep the random local directory alive so concurrent installations cannot
+        // share upload/extraction paths, even when they originate in one process.
+        let install_attempt = tempfile::Builder::new().prefix("zed-install-").tempdir()?;
+        let install_id = install_attempt
+            .path()
+            .file_name()
+            .and_then(|name| name.to_str())
+            .context("invalid install identifier")?;
         let tmp_path_compressed = remote_server_dir_relative().join(
             RelPath::from_unix_str(&format!(
                 "{}-download-{}.{}",
                 binary_name,
-                std::process::id(),
+                if custom_tag.is_some() {
+                    install_id.to_owned()
+                } else {
+                    std::process::id().to_string()
+                },
                 if self.ssh_platform.os.is_windows() {
                     "zip"
                 } else {
@@ -970,7 +1052,7 @@ impl SshRemoteConnection {
             .unwrap(),
         );
         let mut remote_download_error = None;
-        if !self.socket.connection_options.upload_binary_over_ssh {
+        if custom_tag.is_none() && !self.socket.connection_options.upload_binary_over_ssh {
             delegate.set_status(Some("正在获取远程开发服务下载地址"), cx);
             match delegate
                 .get_download_url(
@@ -1025,14 +1107,20 @@ impl SshRemoteConnection {
             );
         }
 
-        let local_download = delegate
-            .download_server_binary_locally(
-                self.ssh_platform,
-                release_channel,
-                wanted_version.clone(),
-                cx,
-            )
-            .await;
+        let local_download = if let Some(tag) = &custom_tag {
+            delegate
+                .download_custom_server_binary(self.ssh_platform, tag.clone(), cx)
+                .await
+        } else {
+            delegate
+                .download_server_binary_locally(
+                    self.ssh_platform,
+                    release_channel,
+                    wanted_version.clone(),
+                    cx,
+                )
+                .await
+        };
         let src_path = match (local_download, remote_download_error) {
             (Ok(path), _) => path,
             (Err(local_error), Some(remote_error)) => {
@@ -1047,9 +1135,28 @@ impl SshRemoteConnection {
         self.upload_local_server_binary(&src_path, &tmp_path_compressed, delegate, cx)
             .await
             .context("上传远程开发服务失败")?;
-        self.extract_server_binary(&dst_path, &tmp_path_compressed, delegate, cx)
-            .await
-            .context("解压远程开发服务失败")?;
+        if let Some(tag) = &custom_tag {
+            let staged_path = remote_server_dir_relative().join(RelPath::from_unix_str(&format!(
+                "{binary_name}-{install_id}-staged"
+            ))?);
+            self.extract_server_binary(&staged_path, &tmp_path_compressed, delegate, cx)
+                .await
+                .context("解压远程开发服务失败")?;
+            let promotion = self
+                .promote_custom_server_binary(&staged_path, &dst_path, cx)
+                .await;
+            self.remove_remote_download(&staged_path, cx).await;
+            promotion?;
+            anyhow::ensure!(
+                self.verify_custom_server_binary(&dst_path, tag, delegate, cx)
+                    .await?,
+                "安装后未找到 Zed CN 远程服务，已停止连接"
+            );
+        } else {
+            self.extract_server_binary(&dst_path, &tmp_path_compressed, delegate, cx)
+                .await
+                .context("解压远程开发服务失败")?;
+        }
         Ok(dst_path.into())
     }
 
@@ -1180,6 +1287,137 @@ impl SshRemoteConnection {
         }
 
         Ok(())
+    }
+
+    async fn promote_custom_server_binary(
+        &self,
+        staged: &RelPath,
+        destination: &RelPath,
+        cx: &mut AsyncApp,
+    ) -> Result<()> {
+        let staged = staged.display(self.path_style());
+        let destination = destination.display(self.path_style());
+        if self.ssh_platform.os.is_windows() {
+            let staged = ShellKind::Pwsh
+                .try_quote(&staged)
+                .context("shell quoting")?;
+            let destination = ShellKind::Pwsh
+                .try_quote(&destination)
+                .context("shell quoting")?;
+            let script = format!(
+                "$ErrorActionPreference='Stop'; try {{ [IO.File]::Move({staged}, {destination}) }} catch {{ if (-not (Test-Path -LiteralPath {destination} -PathType Leaf)) {{ throw }} }}"
+            );
+            self.socket
+                .run_command_with_timeout(
+                    self.ssh_shell_kind,
+                    "powershell",
+                    &["-NoProfile", "-NonInteractive", "-Command", &script],
+                    true,
+                    REMOTE_COMMAND_TIMEOUT,
+                    cx,
+                )
+                .await?;
+        } else {
+            self.socket
+                .run_command_with_timeout(
+                    self.ssh_shell_kind,
+                    "python3",
+                    &[
+                        "-c",
+                        include_str!("promote_custom_server.py"),
+                        &staged,
+                        &destination,
+                    ],
+                    true,
+                    REMOTE_COMMAND_TIMEOUT,
+                    cx,
+                )
+                .await
+                .context("安全安装 Zed CN 远程服务需要远端 python3，且目标文件系统须支持硬链接")?;
+        }
+        Ok(())
+    }
+
+    async fn verify_custom_server_binary(
+        &self,
+        path: &RelPath,
+        tag: &str,
+        delegate: &Arc<dyn RemoteClientDelegate>,
+        cx: &mut AsyncApp,
+    ) -> Result<bool> {
+        // Obtain trusted archive bytes through the exact-tag/source/checksum path
+        // before inspecting an installed executable; never execute it to identify it.
+        let archive = delegate
+            .download_custom_server_binary(self.ssh_platform, tag.to_owned(), cx)
+            .await?;
+        let windows = self.ssh_platform.os.is_windows();
+        let expected = cx
+            .background_spawn(async move {
+                use sha2::{Digest, Sha256};
+                let directory = tempfile::tempdir()?;
+                let file = fs::File::open(&archive).await?;
+                let mut reader: Box<dyn futures::AsyncRead + Unpin + Send> = if windows {
+                    util::archive::extract_zip(directory.path(), file).await?;
+                    Box::new(fs::File::open(directory.path().join("remote_server.exe")).await?)
+                } else {
+                    Box::new(async_compression::futures::bufread::GzipDecoder::new(
+                        futures::io::BufReader::new(file),
+                    ))
+                };
+                let mut hasher = Sha256::new();
+                let mut buffer = [0; 65536];
+                loop {
+                    let count = reader.read(&mut buffer).await?;
+                    if count == 0 {
+                        break;
+                    }
+                    hasher.update(&buffer[..count]);
+                }
+                anyhow::Ok(format!("{:x}", hasher.finalize()))
+            })
+            .await?;
+        let displayed = path.display(self.path_style());
+        let (command, script) = if windows {
+            let quoted = ShellKind::Pwsh
+                .try_quote(&displayed)
+                .context("shell quoting")?;
+            (
+                "powershell",
+                format!(
+                    "$ErrorActionPreference='Stop'; if (Test-Path -LiteralPath {quoted}) {{ (Get-FileHash -LiteralPath {quoted} -Algorithm SHA256).Hash }} else {{ 'MISSING' }}"
+                ),
+            )
+        } else {
+            let quoted = ShellKind::Posix
+                .try_quote(&displayed)
+                .context("shell quoting")?;
+            (
+                "sh",
+                format!(
+                    "if [ -e {quoted} ] || [ -L {quoted} ]; then if command -v sha256sum >/dev/null 2>&1; then sha256sum {quoted}; else shasum -a 256 {quoted}; fi; else printf 'MISSING\\n'; fi"
+                ),
+            )
+        };
+        let kind = if windows {
+            ShellKind::Pwsh
+        } else {
+            ShellKind::Posix
+        };
+        let args = kind.args_for_shell(false, script);
+        let arguments: Vec<&str> = args.iter().map(String::as_str).collect();
+        let output = self
+            .socket
+            .run_command_with_timeout(
+                self.ssh_shell_kind,
+                command,
+                &arguments,
+                true,
+                REMOTE_COMMAND_TIMEOUT,
+                cx,
+            )
+            .await
+            .context("无法校验已有 Zed CN 远程服务，已停止连接")?;
+        verify_custom_server_digest(&output, &expected)
     }
 
     async fn remove_remote_download(&self, path: &RelPath, cx: &mut AsyncApp) {
@@ -2065,6 +2303,7 @@ impl SshConnectionOptions {
             password: None,
             nickname: None,
             upload_binary_over_ssh: false,
+            remote_server_source: settings::RemoteServerSource::Official,
             connection_timeout: None,
         })
     }

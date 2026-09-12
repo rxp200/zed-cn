@@ -249,6 +249,13 @@ async fn test_remote_telemetry_event_forwarding(
         })
         .detach();
 
+    // Forwarding is opt-in; do not rely on the application's privacy defaults.
+    cx.update_global(|settings_store: &mut SettingsStore, cx| {
+        settings_store.set_user_settings(r#"{"telemetry":{"metrics":true}}"#, cx)
+    })
+    .expect("enable metrics for forwarding test");
+    cx.run_until_parked();
+
     // The remote server forwards a bare `FlexibleEvent` as JSON; mirror that
     // here by sending the proto message the forwarding task would send.
     let event_json = json!({

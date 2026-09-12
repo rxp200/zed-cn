@@ -52,7 +52,6 @@ use std::{
     io::Write,
     mem,
     path::{Path, PathBuf},
-    str::FromStr,
     sync::{Arc, LazyLock},
     time::Instant,
 };
@@ -722,11 +721,8 @@ pub fn execute_run(
 
         handle_crash_files_requests(&project, &session);
 
-        cx.background_spawn(async move {
-            cleanup_old_binaries_wsl();
-            cleanup_old_binaries()
-        })
-        .detach();
+        // Older clients do not share a launch lock with this process. Retain their
+        // binaries and legacy WSL directory rather than racing their startup.
 
         mem::forget(project);
     };
@@ -1314,60 +1310,6 @@ fn read_proxy_settings(cx: &mut Context<HeadlessProject>) -> Option<Url> {
                 .ok()
         })
         .or_else(read_proxy_from_env)
-}
-
-fn cleanup_old_binaries() -> Result<()> {
-    let server_dir = paths::remote_server_dir_relative();
-    let release_channel = release_channel::RELEASE_CHANNEL.dev_name();
-    let prefix = format!("zed-remote-server-{}-", release_channel);
-
-    for entry in std::fs::read_dir(server_dir.as_std_path())? {
-        let path = entry?.path();
-
-        if let Some(file_name) = path.file_name()
-            && let Some(version) = file_name.to_string_lossy().strip_prefix(&prefix)
-            && !is_new_version(version)
-            && !is_file_in_use(file_name)
-        {
-            log::info!("removing old remote server binary: {:?}", path);
-            std::fs::remove_file(&path)?;
-        }
-    }
-
-    Ok(())
-}
-
-// Remove this once 223 goes stable, we only have this to clean up old binaries on WSL
-// we no longer download them into this folder, we use the same folder as other remote servers
-fn cleanup_old_binaries_wsl() {
-    let server_dir = paths::remote_wsl_server_dir_relative();
-    if let Ok(()) = std::fs::remove_dir_all(server_dir.as_std_path()) {
-        log::info!("removing old wsl remote server folder: {:?}", server_dir);
-    }
-}
-
-fn is_new_version(version: &str) -> bool {
-    semver::Version::from_str(version)
-        .ok()
-        .zip(semver::Version::from_str(env!("ZED_PKG_VERSION")).ok())
-        .is_some_and(|(version, current_version)| version >= current_version)
-}
-
-fn is_file_in_use(file_name: &OsStr) -> bool {
-    let info = sysinfo::System::new_with_specifics(sysinfo::RefreshKind::nothing().with_processes(
-        sysinfo::ProcessRefreshKind::nothing().with_exe(sysinfo::UpdateKind::Always),
-    ));
-
-    for process in info.processes().values() {
-        if process
-            .exe()
-            .is_some_and(|exe| exe.file_name().is_some_and(|name| name == file_name))
-        {
-            return true;
-        }
-    }
-
-    false
 }
 
 #[cfg(test)]

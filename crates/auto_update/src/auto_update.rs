@@ -7,7 +7,6 @@ use gpui::{
     Task, TaskExt, Window, actions,
 };
 use http_client::{HttpClient, HttpClientWithUrl};
-use paths::remote_servers_dir;
 use release_channel::{AppCommitSha, ReleaseChannel};
 use semver::Version;
 use serde::{Deserialize, Serialize};
@@ -707,6 +706,81 @@ impl AutoUpdater {
         Ok(version_path)
     }
 
+    pub async fn download_custom_remote_server_release(
+        tag: String,
+        os: &str,
+        arch: &str,
+        set_status: impl Fn(&str, &mut AsyncApp) + Send + 'static,
+        set_progress: impl Fn(Option<f32>, &mut AsyncApp) + Send + 'static,
+        cx: &mut AsyncApp,
+    ) -> Result<PathBuf> {
+        let (this, source_sha) = cx.update(|cx| {
+            anyhow::ensure!(
+                release_channel::CustomReleaseTag::current(cx).as_deref() == Some(tag.as_str()),
+                "Zed CN 远程服务必须与当前客户端的完整发布版本一致"
+            );
+            Ok((
+                cx.default_global::<GlobalAutoUpdate>()
+                    .0
+                    .clone()
+                    .context("auto-update not initialized")?,
+                AppCommitSha::try_global(cx)
+                    .context("客户端缺少源码版本标识")?
+                    .full(),
+            ))
+        })?;
+        anyhow::ensure!(
+            matches!(os, "linux" | "macos" | "windows") && matches!(arch, "x86_64" | "aarch64"),
+            "不支持的远程服务平台"
+        );
+        let client = this.read_with(cx, |this, _| this.client.http_client());
+        let executor = cx.background_executor().clone();
+        let base_url = format!("https://github.com/rxp200/zed-cn/releases/download/{tag}");
+        set_status("正在通过本地代理或网络校验 Zed CN 远程服务版本", cx);
+        let metadata = read_remote_release_metadata(
+            &client,
+            &format!("{base_url}/update-metadata.json"),
+            &executor,
+        )
+        .await?;
+        validate_custom_remote_server_metadata(&metadata, &tag, &source_sha)?;
+        let extension = if os == "windows" { "zip" } else { "gz" };
+        let name = format!("zed-remote-server-{os}-{arch}.{extension}");
+        let checksums =
+            read_remote_release_metadata(&client, &format!("{base_url}/SHA256SUMS.txt"), &executor)
+                .await?;
+        let checksum = remote_server_checksum(std::str::from_utf8(&checksums)?, &name)?;
+        let directory = paths::remote_servers_dir()
+            .join("zed-cn")
+            .join(format!("{os}-{arch}"));
+        smol::fs::create_dir_all(&directory).await?;
+        let path = directory.join(format!("{tag}.{extension}"));
+        if smol::fs::metadata(&path).await.is_ok() {
+            verify_update_checksum(&path, &checksum).await?;
+            return Ok(path);
+        }
+        // Validate a staging file before publishing it to the shared download cache.
+        let staging = tempfile::Builder::new()
+            .tempfile_in(&directory)?
+            .into_temp_path();
+        let staging_path = staging.to_path_buf();
+        set_status("正在通过本地代理或网络下载 Zed CN 远程服务", cx);
+        download_remote_server_binary(
+            &staging_path,
+            ReleaseAsset {
+                version: tag,
+                url: format!("{base_url}/{name}"),
+            },
+            client,
+            &set_progress,
+            cx,
+        )
+        .await?;
+        verify_update_checksum(&staging_path, &checksum).await?;
+        smol::fs::rename(&staging_path, &path).await?;
+        Ok(path)
+    }
+
     pub async fn get_remote_server_release_url(
         channel: ReleaseChannel,
         version: Option<Version>,
@@ -1181,7 +1255,9 @@ async fn download_remote_server_binary(
     cx: &mut AsyncApp,
 ) -> Result<()> {
     let executor = cx.background_executor().clone();
-    let temp = tempfile::Builder::new().tempfile_in(remote_servers_dir())?;
+    let temp = tempfile::Builder::new()
+        .tempfile_in(target_path.parent().context("远程服务缓存路径缺少父目录")?)?
+        .into_temp_path();
     let mut temp_file = File::create(&temp).await?;
 
     let mut response = client
@@ -1226,9 +1302,107 @@ async fn download_remote_server_binary(
     if total_bytes.is_some() && last_reported_percent != Some(100) {
         set_progress(Some(1.0), cx);
     }
+    drop(temp_file);
     smol::fs::rename(&temp, &target_path).await?;
 
     Ok(())
+}
+
+fn validate_custom_remote_server_metadata(body: &[u8], tag: &str, source_sha: &str) -> Result<()> {
+    let metadata: GitHubRelease = serde_json::from_slice(body)?;
+    anyhow::ensure!(
+        metadata.tag_name == tag
+            && metadata.target_commitish == source_sha
+            && source_sha.len() == 40
+            && source_sha.bytes().all(|byte| byte.is_ascii_hexdigit())
+            && !metadata.draft
+            && !metadata.prerelease,
+        "Zed CN 发布记录与当前客户端源码不匹配，请安装对应的正式发布版"
+    );
+    Ok(())
+}
+
+#[test]
+fn custom_remote_server_metadata_rejects_other_sources_and_revisions() {
+    let tag = "zed-cn-v1.19.2-r1";
+    let sha = "a".repeat(40);
+    let mut metadata = serde_json::json!({"tag_name": tag, "target_commitish": sha, "draft": false, "prerelease": false, "assets": []});
+    let validate = |metadata: &serde_json::Value| {
+        validate_custom_remote_server_metadata(
+            &serde_json::to_vec(metadata).expect("metadata"),
+            tag,
+            &sha,
+        )
+    };
+    assert!(validate(&metadata).is_ok());
+    metadata["tag_name"] = "zed-cn-v1.19.2-r2".into();
+    assert!(validate(&metadata).is_err());
+    metadata["tag_name"] = tag.into();
+    metadata["target_commitish"] = "b".repeat(40).into();
+    assert!(validate(&metadata).is_err());
+    metadata["target_commitish"] = sha.clone().into();
+    metadata["draft"] = true.into();
+    assert!(validate(&metadata).is_err());
+}
+
+async fn read_remote_release_metadata(
+    client: &Arc<HttpClientWithUrl>,
+    url: &str,
+    executor: &BackgroundExecutor,
+) -> Result<Vec<u8>> {
+    let read = async {
+        let mut response = client.get(url, Default::default(), true).await?;
+        anyhow::ensure!(
+            response.status().is_success(),
+            "无法获取对应版本的 Zed CN 发布校验信息：{}",
+            response.status()
+        );
+        let mut body = Vec::new();
+        response
+            .body_mut()
+            .take(1024 * 1024 + 1)
+            .read_to_end(&mut body)
+            .await?;
+        anyhow::ensure!(body.len() <= 1024 * 1024, "Zed CN 发布校验信息过大");
+        anyhow::Ok(body)
+    };
+    read.with_timeout(REMOTE_SERVER_DOWNLOAD_IDLE_TIMEOUT, executor)
+        .await
+        .context("获取 Zed CN 发布校验信息超时")?
+}
+
+#[test]
+fn custom_remote_server_checksum_requires_exact_unique_asset() {
+    let name = "zed-remote-server-linux-x86_64.gz";
+    let digest = "a".repeat(64);
+    assert_eq!(
+        remote_server_checksum(&format!("{digest}  {name}\n"), name).expect("checksum"),
+        digest
+    );
+    assert!(remote_server_checksum(&format!("{digest}  other.gz\n"), name).is_err());
+    assert!(
+        remote_server_checksum(&format!("{digest}  {name}\n{digest}  {name}\n"), name).is_err()
+    );
+    assert!(remote_server_checksum(&format!("invalid  {name}\n"), name).is_err());
+}
+
+fn remote_server_checksum(checksums: &str, name: &str) -> Result<String> {
+    let mut matching = checksums.lines().filter_map(|line| {
+        let mut fields = line.split_whitespace();
+        let checksum = fields.next()?;
+        let filename = fields.next()?.trim_start_matches('*');
+        (filename == name && fields.next().is_none()).then_some(checksum)
+    });
+    let checksum = matching
+        .next()
+        .context("当前 Zed CN 发布缺少此平台的远程服务；不会回退到官方或其他版本")?;
+    anyhow::ensure!(
+        matching.next().is_none()
+            && checksum.len() == 64
+            && checksum.bytes().all(|byte| byte.is_ascii_hexdigit()),
+        "远程服务校验和无效或重复"
+    );
+    Ok(checksum.to_ascii_lowercase())
 }
 
 async fn copy_remote_server_binary(
@@ -1933,6 +2107,82 @@ mod tests {
         ) -> Poll<std::io::Result<usize>> {
             Poll::Pending
         }
+    }
+
+    #[gpui::test]
+    async fn test_custom_remote_server_staged_download_and_checksum(cx: &mut TestAppContext) {
+        cx.background_executor.allow_parking();
+        let bytes = b"custom server archive";
+        let client = FakeHttpClient::create(move |request| async move {
+            assert_eq!(request.uri().host(), Some("github.com"));
+            Ok(Response::builder()
+                .status(200)
+                .header("Content-Length", bytes.len())
+                .body(bytes.to_vec().into())
+                .expect("response"))
+        });
+        let client = Arc::new(HttpClientWithUrl::new(
+            client,
+            "https://github.com",
+            Some("http://127.0.0.1:7890".to_owned()),
+        ));
+        let directory = tempdir().expect("directory");
+        let path = directory.path().join("server.gz");
+        download_remote_server_binary(&path, ReleaseAsset { version: "zed-cn-v1.19.2-r1".into(), url: "https://github.com/rxp200/zed-cn/releases/download/zed-cn-v1.19.2-r1/zed-remote-server-linux-x86_64.gz".into() }, client, &|_, _| {}, &mut cx.to_async()).await.expect("download");
+        let checksum = format!("{:x}", Sha256::digest(bytes));
+        verify_update_checksum(&path, &checksum)
+            .await
+            .expect("checksum");
+        assert!(
+            verify_update_checksum(&path, &"0".repeat(64))
+                .await
+                .is_err()
+        );
+    }
+
+    #[gpui::test]
+    async fn test_custom_remote_server_metadata_http_bounds(cx: &mut TestAppContext) {
+        let client = FakeHttpClient::create(|request| async move {
+            let response = match request.uri().path() {
+                "/ok" => Response::builder()
+                    .status(200)
+                    .body(b"metadata".to_vec().into()),
+                "/large" => Response::builder()
+                    .status(200)
+                    .body(vec![0; 1024 * 1024 + 1].into()),
+                _ => Response::builder().status(404).body(Vec::new().into()),
+            };
+            Ok(response.expect("response"))
+        });
+        let client = Arc::new(HttpClientWithUrl::new(
+            client,
+            "https://github.com",
+            Some("http://127.0.0.1:7890".to_owned()),
+        ));
+        assert_eq!(
+            read_remote_release_metadata(&client, "https://github.com/ok", &cx.background_executor)
+                .await
+                .expect("metadata"),
+            b"metadata"
+        );
+        assert!(
+            read_remote_release_metadata(
+                &client,
+                "https://github.com/large",
+                &cx.background_executor
+            )
+            .await
+            .is_err()
+        );
+        assert!(
+            read_remote_release_metadata(
+                &client,
+                "https://github.com/missing",
+                &cx.background_executor
+            )
+            .await
+            .is_err()
+        );
     }
 
     #[gpui::test]
