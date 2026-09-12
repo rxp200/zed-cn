@@ -165,9 +165,9 @@ def main() -> int:
     parser.add_argument("--previous-release", help="override the previous published Release")
     parser.add_argument("--release-repository", default="rxp200/zed-cn")
     parser.add_argument(
-        "--remote-review-approved",
+        "--remote-security-reviewed",
         metavar="SOURCE_SHA:STABLE_SHA",
-        help="resume only after reporting remote changes and receiving explicit user approval for these exact commits",
+        help="record completed remote security review for these exact commits; not a compatibility check or automatic safety certification",
     )
     arguments = parser.parse_args()
 
@@ -205,25 +205,22 @@ def main() -> int:
         )
 
     protocol_paths = changed_protocol_paths(stable_commit, source_commit)
-    if protocol_paths:
-        print("Remote/API differences requiring review after GitHub main synchronization:")
-        for path in protocol_paths:
-            print(f"  {path}")
-        approval = f"{source_commit}:{stable_commit}"
-        if arguments.remote_review_approved != approval:
-            print(
-                "Pause before generating the Stable tree. Inspect the complete diffs, report "
-                "affected files/symbols, wire/API and runtime changes, official Stable server "
-                "compatibility (compatible/incompatible/uncertain) and evidence to the user. "
-                "Do not infer incompatibility from a path difference alone. "
-                f"Only after explicit approval resume with --remote-review-approved {approval}",
-                file=sys.stderr,
-            )
-            return 2
-        print("Resuming for the exact source/baseline pair after recorded user approval; "
-              "this option is not proof of compatibility.")
-    elif arguments.remote_review_approved:
-        raise RuntimeError("remote approval supplied but no matching remote differences exist")
+    print("Remote/API paths to include in the mandatory security review:")
+    for path in protocol_paths:
+        print(f"  {path}")
+    review_identity = f"{source_commit}:{stable_commit}"
+    if arguments.remote_security_reviewed != review_identity:
+        print(
+            "Complete and record a security review of the exact remote runtime, client APIs, "
+            "download/install/cleanup paths and dependencies, including impacts outside this "
+            "path list. Unresolved security risks block release. Official Remote Server "
+            "compatibility review and additional compatibility approval are not required. "
+            f"After security review passes, resume with --remote-security-reviewed {review_identity}",
+            file=sys.stderr,
+        )
+        return 2
+    print("Recorded remote security review for the exact source/baseline pair; "
+          "the argument itself is not proof of security or compatibility.")
 
     previous_release, previous_commit = resolve_previous(
         arguments.release_tag, arguments.release_repository, arguments.previous_release

@@ -813,6 +813,7 @@ enum RemoteMatch {
     AddServer,
     AddDevContainer,
     AddWsl,
+    EditSshConfig,
     Separator,
     ServerHeader {
         server: usize,
@@ -827,6 +828,9 @@ enum RemoteMatch {
         server: usize,
     },
     ViewServerOptions {
+        server: usize,
+    },
+    RemoteServerSource {
         server: usize,
     },
 }
@@ -904,6 +908,7 @@ impl RemoteServerPickerDelegate {
             if cfg!(target_os = "windows") {
                 matches.push(RemoteMatch::AddWsl);
             }
+            matches.push(RemoteMatch::EditSshConfig);
         }
 
         let push_server = |matches: &mut Vec<RemoteMatch>,
@@ -933,6 +938,17 @@ impl RemoteServerPickerDelegate {
                     matches.push(RemoteMatch::ViewServerOptions {
                         server: server_index,
                     });
+                    if matches!(
+                        server,
+                        RemoteEntry::Project {
+                            connection: Connection::Ssh(_),
+                            ..
+                        }
+                    ) {
+                        matches.push(RemoteMatch::RemoteServerSource {
+                            server: server_index,
+                        });
+                    }
                 }
                 RemoteEntry::SshConfig { .. } => {
                     matches.push(RemoteMatch::OpenFolder {
@@ -1168,6 +1184,11 @@ impl PickerDelegate for RemoteServerPickerDelegate {
                     })
                     .ok();
             }
+            RemoteMatch::EditSshConfig => {
+                remote_server_projects
+                    .update(cx, |this, cx| this.edit_local_ssh_config(window, cx))
+                    .log_err();
+            }
             RemoteMatch::Project {
                 server, project, ..
             } => {
@@ -1228,6 +1249,23 @@ impl PickerDelegate for RemoteServerPickerDelegate {
                     }
                 }
             }
+            RemoteMatch::RemoteServerSource { server } => {
+                let Some(RemoteEntry::Project {
+                    connection: Connection::Ssh(connection),
+                    index,
+                    ..
+                }) = self.state.servers.get(*server)
+                else {
+                    return;
+                };
+                let connection = connection.clone();
+                let index = *index;
+                remote_server_projects
+                    .update(cx, |this, cx| {
+                        this.choose_remote_server_source(index, connection, window, cx);
+                    })
+                    .log_err();
+            }
             RemoteMatch::ViewServerOptions { server } => {
                 let Some(RemoteEntry::Project {
                     connection, index, ..
@@ -1271,8 +1309,29 @@ impl PickerDelegate for RemoteServerPickerDelegate {
             RemoteMatch::AddWsl => {
                 Some(self.render_action_item(ix, IconName::Plus, "Add WSL Distro", selected))
             }
+            RemoteMatch::EditSshConfig => {
+                Some(self.render_action_item(ix, IconName::Settings, "编辑本机 SSH 配置", selected))
+            }
             RemoteMatch::OpenFolder { .. } => {
                 Some(self.render_action_item(ix, IconName::Plus, "Open Folder", selected))
+            }
+            RemoteMatch::RemoteServerSource { server } => {
+                let Some(RemoteEntry::Project {
+                    connection: Connection::Ssh(connection),
+                    ..
+                }) = self.state.servers.get(*server)
+                else {
+                    return None;
+                };
+                Some(self.render_action_item(
+                    ix,
+                    IconName::Server,
+                    match connection.remote_server_source.unwrap_or_default() {
+                        settings::RemoteServerSource::Official => "远程服务来源：官方 Zed",
+                        settings::RemoteServerSource::ZedCn => "远程服务来源：Zed CN",
+                    },
+                    selected,
+                ))
             }
             RemoteMatch::ViewServerOptions { .. } => Some(self.render_action_item(
                 ix,
@@ -1732,6 +1791,52 @@ impl RemoteServerProjects {
         });
     }
 
+    fn choose_remote_server_source(
+        &mut self,
+        index: ServerIndex,
+        connection: SshConnection,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let current = match connection.remote_server_source.unwrap_or_default() {
+            settings::RemoteServerSource::Official => "官方 Zed",
+            settings::RemoteServerSource::ZedCn => "Zed CN",
+        };
+        let selection = window.prompt(
+            PromptLevel::Info,
+            &format!("选择 {} 的远程服务来源（当前：{current}）", connection.nickname.as_deref().unwrap_or(connection.host.as_ref())),
+            Some("官方 Zed 使用对应的官方版本；Zed CN 使用与客户端完全相同的发布修订版。两者均通过本机配置的代理下载后上传，缺少对应版本时不会切换来源。更改在下次连接时生效，不中断当前会话。"),
+            &["官方 Zed", "Zed CN", "取消"],
+            cx,
+        );
+        cx.spawn(async move |this, cx| {
+            let source = match selection.await? {
+                0 => settings::RemoteServerSource::Official,
+                1 => settings::RemoteServerSource::ZedCn,
+                _ => return anyhow::Ok(()),
+            };
+            this.update(cx, |this, cx| {
+                if let ServerIndex::Ssh(index) = index {
+                    this.update_settings_file(cx, move |settings, _| {
+                        if let Some(server) = settings
+                            .ssh_connections
+                            .as_mut()
+                            .and_then(|servers| servers.get_mut(index.0))
+                            && server.host == connection.host
+                            && server.username == connection.username
+                            && server.port == connection.port
+                        {
+                            server.remote_server_source = Some(source);
+                            server.upload_binary_over_ssh = Some(true);
+                        }
+                    });
+                }
+            })?;
+            Ok(())
+        })
+        .detach_and_log_err(cx);
+    }
+
     fn view_server_options(
         &mut self,
         (server_index, connection): (ServerIndex, RemoteConnectionOptions),
@@ -2133,6 +2238,7 @@ impl RemoteServerProjects {
                     nickname: None,
                     args: connection_options.args.unwrap_or_default(),
                     upload_binary_over_ssh: None,
+                    remote_server_source: Some(connection_options.remote_server_source),
                     port_forwards: connection_options.port_forwards,
                     connection_timeout: connection_options.connection_timeout,
                 })
@@ -2956,6 +3062,45 @@ impl RemoteServerProjects {
             .into_any_element()
     }
 
+    fn edit_local_ssh_config(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let workspace = self.workspace.clone();
+        cx.emit(DismissEvent);
+        cx.spawn_in(window, async move |_, cx| {
+            let path = user_ssh_config_file();
+            let fs = workspace.read_with(cx, |workspace, _| workspace.app_state().fs.clone())?;
+            let parent = path
+                .parent()
+                .ok_or_else(|| anyhow::anyhow!("无法确定本机 SSH 配置目录"))?;
+            fs.create_dir(parent).await?;
+            fs.create_file(
+                &path,
+                fs::CreateOptions {
+                    ignore_if_exists: true,
+                    ..Default::default()
+                },
+            )
+            .await?;
+            workspace
+                .update_in(cx, |workspace, window, cx| {
+                    workspace.with_local_workspace(window, cx, move |workspace, window, cx| {
+                        workspace.open_abs_path(
+                            path,
+                            OpenOptions {
+                                visible: Some(workspace::OpenVisible::None),
+                                ..Default::default()
+                            },
+                            window,
+                            cx,
+                        )
+                    })
+                })?
+                .await?
+                .await?;
+            anyhow::Ok(())
+        })
+        .detach_and_prompt_err("无法打开本机 SSH 配置", window, cx, |_, _, _| None);
+    }
+
     fn create_host_from_ssh_config(
         &mut self,
         ssh_config_host: &SharedString,
@@ -3125,6 +3270,39 @@ mod filter_tests {
     }
 
     #[test]
+    fn remote_server_source_entry_follows_options_for_each_ssh_host() {
+        let entries = vec![RemoteEntry::Project {
+            projects: Vec::new(),
+            connection: Connection::Ssh(SshConnection {
+                host: "example.com".into(),
+                ..Default::default()
+            }),
+            index: ServerIndex::Ssh(SshServerIndex(0)),
+        }];
+        let mut delegate = RemoteServerPickerDelegate {
+            remote_server_projects: WeakEntity::new_invalid(),
+            state: DefaultState {
+                filter_data: Arc::new(FilterData::build(&entries)),
+                servers: entries,
+                filtered_servers: None,
+            },
+            matches: Vec::new(),
+            selected_index: 0,
+            query: String::new(),
+            has_open_project: false,
+            is_local: true,
+        };
+        delegate.rebuild_matches();
+        assert!(delegate.matches.windows(2).any(|entries| matches!(
+            entries,
+            [
+                RemoteMatch::ViewServerOptions { server: 0 },
+                RemoteMatch::RemoteServerSource { server: 0 }
+            ]
+        )));
+    }
+
+    #[test]
     fn test_filter_sync_repopulates_after_rebuild() {
         let entries = vec![ssh_config_entry("alpha"), ssh_config_entry("beta")];
         let mut state = DefaultState {
@@ -3162,6 +3340,94 @@ mod create_host_tests {
             editor::init(cx);
             state
         })
+    }
+
+    #[gpui::test]
+    async fn test_remote_server_source_prompt_persists_and_cancels(cx: &mut TestAppContext) {
+        let app_state = init_test(cx);
+        let fs = app_state.fs.clone();
+        let connection = SshConnection {
+            host: "example.com".into(),
+            ..Default::default()
+        };
+        cx.update(|cx| {
+            update_settings_file(fs.clone(), cx, {
+                let connection = connection.clone();
+                move |settings, _| settings.remote.ssh_connections = Some(vec![connection])
+            })
+        });
+        cx.run_until_parked();
+        let project = Project::test(fs.clone(), [], cx).await;
+        let (workspace, cx) =
+            cx.add_window_view(|window, cx| Workspace::test_new(project, window, cx));
+        let modal = workspace.update_in(cx, |_, window, cx| {
+            let workspace = cx.weak_entity();
+            cx.new(|cx| RemoteServerProjects::new(false, fs.clone(), window, workspace, cx))
+        });
+        for (answer, expected) in [
+            ("Zed CN", settings::RemoteServerSource::ZedCn),
+            ("取消", settings::RemoteServerSource::ZedCn),
+            ("官方 Zed", settings::RemoteServerSource::Official),
+        ] {
+            modal.update_in(cx, |modal, window, cx| {
+                modal.choose_remote_server_source(
+                    ServerIndex::Ssh(SshServerIndex(0)),
+                    connection.clone(),
+                    window,
+                    cx,
+                )
+            });
+            cx.simulate_prompt_answer(answer);
+            cx.run_until_parked();
+            cx.update(|_, cx| {
+                let connection = RemoteSettings::get_global(cx)
+                    .ssh_connections()
+                    .next()
+                    .expect("connection");
+                assert_eq!(connection.remote_server_source, Some(expected));
+                assert_eq!(connection.upload_binary_over_ssh, Some(true));
+            });
+        }
+    }
+
+    #[gpui::test]
+    async fn test_edit_local_ssh_config_creates_and_preserves_file(cx: &mut TestAppContext) {
+        let app_state = init_test(cx);
+        let fs = app_state.fs.clone();
+        let project = Project::test(fs.clone(), [], cx).await;
+        let (workspace, cx) =
+            cx.add_window_view(|window, cx| Workspace::test_new(project, window, cx));
+        let modal = workspace.update_in(cx, |_workspace, window, cx| {
+            let workspace = cx.weak_entity();
+            cx.new(|cx| RemoteServerProjects::new(false, fs.clone(), window, workspace, cx))
+        });
+        modal.update(cx, |modal, cx| {
+            let picker = modal.default_picker.read(cx);
+            assert!(
+                picker
+                    .delegate
+                    .matches
+                    .iter()
+                    .any(|entry| matches!(entry, RemoteMatch::EditSshConfig))
+            );
+        });
+        modal.update_in(cx, |modal, window, cx| {
+            modal.edit_local_ssh_config(window, cx)
+        });
+        cx.run_until_parked();
+        let path = user_ssh_config_file();
+        assert_eq!(fs.load(&path).await.unwrap(), "");
+        assert!(workspace.read_with(cx, |workspace, cx| workspace.active_item(cx).is_some()));
+
+        let content = "Host example\n    HostName example.com\n";
+        fs.atomic_write(path.clone(), content.to_owned())
+            .await
+            .unwrap();
+        modal.update_in(cx, |modal, window, cx| {
+            modal.edit_local_ssh_config(window, cx)
+        });
+        cx.run_until_parked();
+        assert_eq!(fs.load(&path).await.unwrap(), content);
     }
 
     #[gpui::test]

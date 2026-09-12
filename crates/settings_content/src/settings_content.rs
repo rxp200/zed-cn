@@ -1402,11 +1402,23 @@ pub struct SshConnection {
     // limited outbound internet access. The global `china_server_adaptation`
     // setting forces this behavior for every SSH connection.
     pub upload_binary_over_ssh: Option<bool>,
+    /// Selects the Remote Server distribution for this SSH host.
+    pub remote_server_source: Option<RemoteServerSource>,
 
     pub port_forwards: Option<Vec<SshPortForwardOption>>,
     /// Timeout in seconds for SSH connection and downloading the remote server binary.
     /// Defaults to 10 seconds if not specified.
     pub connection_timeout: Option<u16>,
+}
+
+#[derive(
+    Clone, Copy, Default, Debug, Serialize, Deserialize, PartialEq, Eq, Hash, JsonSchema, MergeFrom,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum RemoteServerSource {
+    #[default]
+    Official,
+    ZedCn,
 }
 
 #[derive(Clone, Default, Serialize, Deserialize, PartialEq, JsonSchema, MergeFrom, Debug)]

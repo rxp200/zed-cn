@@ -155,6 +155,14 @@ pub trait RemoteClientDelegate: Send + Sync {
         version: Option<Version>,
         cx: &mut AsyncApp,
     ) -> Task<Result<PathBuf>>;
+    fn download_custom_server_binary(
+        &self,
+        _platform: RemotePlatform,
+        _tag: String,
+        _cx: &mut AsyncApp,
+    ) -> Task<Result<PathBuf>> {
+        Task::ready(Err(anyhow::anyhow!("当前连接不支持下载 Zed CN 远程服务")))
+    }
     fn set_status(&self, status: Option<&str>, cx: &mut AsyncApp);
     fn set_transfer_progress(&self, _progress: Option<f32>, _cx: &mut AsyncApp) {}
 }
@@ -404,15 +412,17 @@ impl ConnectionIdentifier {
     }
 }
 
-#[derive(Clone, Copy, Debug, RegisterSetting)]
+#[derive(Clone, Debug, RegisterSetting)]
 struct RemoteServerDownloadSettings {
     china_server_adaptation: bool,
+    ssh_connections: Vec<settings::SshConnection>,
 }
 
 impl Settings for RemoteServerDownloadSettings {
     fn from_settings(content: &settings::SettingsContent) -> Self {
         Self {
             china_server_adaptation: content.remote.china_server_adaptation.unwrap(),
+            ssh_connections: content.remote.ssh_connections.clone().unwrap_or_default(),
         }
     }
 }
@@ -435,6 +445,21 @@ fn connection_options_with_settings(
 ) -> RemoteConnectionOptions {
     let china_server_adaptation = RemoteServerDownloadSettings::try_get(cx)
         .is_some_and(|settings| settings.china_server_adaptation);
+    let mut connection_options = connection_options;
+    if let RemoteConnectionOptions::Ssh(options) = &mut connection_options
+        && let Some(settings) = RemoteServerDownloadSettings::try_get(cx)
+    {
+        if let Some(connection) = settings.ssh_connections.iter().find(|connection| {
+            connection.host == options.host.to_string()
+                && connection.username == options.username
+                && connection.port == options.port
+        }) {
+            options.remote_server_source = connection.remote_server_source.unwrap_or_default();
+            if connection.remote_server_source.is_some() {
+                options.upload_binary_over_ssh = true;
+            }
+        }
+    }
     apply_remote_server_download_settings(connection_options, china_server_adaptation)
 }
 
@@ -1825,6 +1850,49 @@ mod tests {
         assert_eq!(
             reconnect_delay(MAX_RECONNECT_ATTEMPTS),
             Duration::from_secs(30)
+        );
+    }
+
+    #[gpui::test]
+    fn remote_server_source_settings_apply_to_restored_connections(cx: &mut App) {
+        settings::init(cx);
+        cx.update_global::<settings::SettingsStore, _>(|store, cx| {
+            store.set_user_settings(r#"{"china_server_adaptation":false,"ssh_connections":[{"host":"example.com","remote_server_source":"zed_cn","upload_binary_over_ssh":false}]}"#, cx).expect("settings");
+        });
+        let restored = RemoteConnectionOptions::Ssh(SshConnectionOptions {
+            host: "example.com".into(),
+            ..Default::default()
+        });
+        let RemoteConnectionOptions::Ssh(effective) =
+            connection_options_with_settings(restored, cx)
+        else {
+            panic!("SSH");
+        };
+        assert_eq!(
+            effective.remote_server_source,
+            settings::RemoteServerSource::ZedCn
+        );
+        assert!(effective.upload_binary_over_ssh);
+    }
+
+    #[test]
+    fn remote_server_sources_have_separate_pool_keys_and_legacy_default() {
+        let official = SshConnectionOptions {
+            host: "example.com".into(),
+            ..Default::default()
+        };
+        let mut custom = official.clone();
+        custom.remote_server_source = settings::RemoteServerSource::ZedCn;
+        assert_ne!(official, custom);
+        let mut legacy = serde_json::to_value(&custom).expect("serialize");
+        legacy
+            .as_object_mut()
+            .expect("object")
+            .remove("remote_server_source");
+        let decoded: SshConnectionOptions = serde_json::from_value(legacy).expect("legacy options");
+        assert_eq!(
+            decoded.remote_server_source,
+            settings::RemoteServerSource::Official
         );
     }
 

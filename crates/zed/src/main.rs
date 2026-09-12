@@ -486,6 +486,9 @@ fn main() {
         zed_actions::init();
 
         release_channel::init(app_version, cx);
+        if let Some(tag) = option_env!("ZED_CUSTOM_RELEASE_TAG") {
+            cx.set_global(release_channel::CustomReleaseTag(tag.to_owned()));
+        }
         gpui_tokio::init(cx);
         if let Some(app_commit_sha) = app_commit_sha {
             AppCommitSha::set_global(app_commit_sha, cx);

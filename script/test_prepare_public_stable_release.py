@@ -15,7 +15,7 @@ LOADER.exec_module(MODULE)
 
 
 class RemoteCheckpointTests(unittest.TestCase):
-    def test_remote_difference_blocks_before_mutation_and_network(self):
+    def check_security_gate(self, remote_difference):
         previous = Path.cwd()
         with tempfile.TemporaryDirectory() as directory:
             try:
@@ -32,26 +32,37 @@ class RemoteCheckpointTests(unittest.TestCase):
                 git('commit', '-qm', 'Stable')
                 stable = git('rev-parse', 'HEAD')
                 git('tag', 'v1.2.3')
-                Path('crates/remote_server').mkdir()
-                Path('crates/remote_server/server.rs').write_text('changed\n')
-                git('add', '.')
-                git('commit', '-qm', 'Remote change')
+                if remote_difference:
+                    Path('crates/remote_server').mkdir()
+                    Path('crates/remote_server/server.rs').write_text('changed\n')
+                    git('add', '.')
+                    git('commit', '-qm', 'Remote change')
                 source = git('rev-parse', 'HEAD')
                 git('checkout', '--detach', stable)
                 before = git('write-tree')
                 args = ['prepare', '--source-ref', source, '--stable-tag', 'v1.2.3', '--release-tag', 'zed-cn-v1.2.3-r1']
-                for extra in ([], ['--remote-review-approved', source + ':' + '0' * 40]):
+                for extra in ([], ['--remote-security-reviewed', source + ':' + '0' * 40], ['--remote-security-reviewed', '0' * 40 + ':' + stable]):
                     with patch('sys.argv', args + extra), patch.object(MODULE, 'resolve_previous') as network, contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
                         self.assertEqual(MODULE.main(), 2)
                         network.assert_not_called()
                     self.assertEqual(git('write-tree'), before)
                     self.assertFalse(Path('crates/remote_server/server.rs').exists())
-                with patch('sys.argv', args + ['--remote-review-approved', source + ':' + stable]), patch.object(MODULE, 'resolve_previous', side_effect=RuntimeError('approved gate reached')) as network:
+                with patch('sys.argv', args + ['--remote-security-reviewed', source + ':' + stable]), patch.object(MODULE, 'resolve_previous', side_effect=RuntimeError('approved gate reached')) as network:
                     with self.assertRaisesRegex(RuntimeError, 'approved gate reached'):
                         MODULE.main()
                     network.assert_called_once()
+                with patch('sys.argv', args + ['--remote-review-approved', source + ':' + stable]), contextlib.redirect_stderr(io.StringIO()):
+                    with self.assertRaises(SystemExit) as error:
+                        MODULE.main()
+                    self.assertEqual(error.exception.code, 2)
             finally:
                 os.chdir(previous)
+
+    def test_remote_security_gate_before_mutation_and_network(self):
+        self.check_security_gate(remote_difference=True)
+
+    def test_security_review_required_without_remote_directory_diff(self):
+        self.check_security_gate(remote_difference=False)
 
 
 if __name__ == '__main__':
