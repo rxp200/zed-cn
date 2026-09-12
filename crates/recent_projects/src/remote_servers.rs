@@ -173,6 +173,177 @@ struct ProjectPicker {
     _path_task: Shared<Task<Option<()>>>,
 }
 
+struct RemoteServerSourcePickerDelegate {
+    index: SshServerIndex,
+    connection: SshConnection,
+    parent_modal: WeakEntity<RemoteServerProjects>,
+    selected_index: usize,
+    matches: Vec<settings::RemoteServerSource>,
+}
+
+impl RemoteServerSourcePickerDelegate {
+    fn label(source: settings::RemoteServerSource) -> &'static str {
+        match source {
+            settings::RemoteServerSource::Official => "官方 Zed",
+            settings::RemoteServerSource::ZedCn => "Zed CN",
+        }
+    }
+}
+
+impl PickerDelegate for RemoteServerSourcePickerDelegate {
+    type ListItem = AnyElement;
+
+    fn name() -> &'static str {
+        "remote server source picker"
+    }
+
+    fn match_count(&self) -> usize {
+        self.matches.len()
+    }
+
+    fn selected_index(&self) -> usize {
+        self.selected_index
+    }
+
+    fn set_selected_index(&mut self, index: usize, _: &mut Window, _: &mut Context<Picker<Self>>) {
+        self.selected_index = index;
+    }
+
+    fn placeholder_text(&self, _: &mut Window, _: &mut App) -> Arc<str> {
+        format!(
+            "选择 {} 的远程服务来源…",
+            self.connection
+                .nickname
+                .as_deref()
+                .unwrap_or(&self.connection.host)
+        )
+        .into()
+    }
+
+    fn update_matches(
+        &mut self,
+        query: String,
+        _: &mut Window,
+        _: &mut Context<Picker<Self>>,
+    ) -> Task<()> {
+        let selected = self.matches.get(self.selected_index).copied();
+        self.matches = [
+            settings::RemoteServerSource::Official,
+            settings::RemoteServerSource::ZedCn,
+        ]
+        .into_iter()
+        .filter(|source| {
+            Self::label(*source)
+                .to_lowercase()
+                .contains(&query.to_lowercase())
+        })
+        .collect();
+        self.selected_index = self
+            .matches
+            .iter()
+            .position(|source| Some(*source) == selected)
+            .unwrap_or(0);
+        Task::ready(())
+    }
+
+    fn confirm(&mut self, _: bool, window: &mut Window, cx: &mut Context<Picker<Self>>) {
+        let Some(source) = self.matches.get(self.selected_index).copied() else {
+            return;
+        };
+        let index = self.index;
+        let connection = self.connection.clone();
+        self.parent_modal
+            .update(cx, |modal, cx| {
+                modal.update_settings_file(cx, move |settings, _| {
+                    if let Some(server) = settings
+                        .ssh_connections
+                        .as_mut()
+                        .and_then(|servers| servers.get_mut(index.0))
+                        && server.host == connection.host
+                        && server.username == connection.username
+                        && server.port == connection.port
+                    {
+                        server.remote_server_source = Some(source);
+                        server.upload_binary_over_ssh = Some(true);
+                    }
+                });
+                modal.cancel(&menu::Cancel, window, cx);
+            })
+            .log_err();
+    }
+
+    fn dismissed(&mut self, window: &mut Window, cx: &mut Context<Picker<Self>>) {
+        self.parent_modal
+            .update(cx, |modal, cx| modal.cancel(&menu::Cancel, window, cx))
+            .log_err();
+    }
+
+    fn render_match(
+        &self,
+        index: usize,
+        selected: bool,
+        _: &mut Window,
+        _: &mut Context<Picker<Self>>,
+    ) -> Option<AnyElement> {
+        let source = *self.matches.get(index)?;
+        let current = source == self.connection.remote_server_source.unwrap_or_default();
+        Some(
+            ListItem::new(index)
+                .inset(true)
+                .toggle_state(selected)
+                .child(
+                    v_flex()
+                        .child(Label::new(format!(
+                            "{}{}",
+                            Self::label(source),
+                            if current { "（当前）" } else { "" }
+                        )))
+                        .child(
+                            Label::new(match source {
+                                settings::RemoteServerSource::Official => "使用对应的官方版本",
+                                settings::RemoteServerSource::ZedCn => {
+                                    "使用与客户端相同的 Zed CN 发布修订版"
+                                }
+                            })
+                            .size(LabelSize::Small)
+                            .color(Color::Muted),
+                        ),
+                )
+                .into_any_element(),
+        )
+    }
+
+    fn render_footer(&self, _: &mut Window, cx: &mut Context<Picker<Self>>) -> Option<AnyElement> {
+        Some(
+            v_flex()
+                .p_2()
+                .gap_1()
+                .border_t_1()
+                .border_color(cx.theme().colors().border_variant)
+                .child(
+                    Label::new("通过本机代理下载后上传；缺少对应版本时不会切换来源。")
+                        .size(LabelSize::Small)
+                        .color(Color::Muted),
+                )
+                .child(
+                    Label::new("下次连接生效，不中断当前会话。")
+                        .size(LabelSize::Small)
+                        .color(Color::Muted),
+                )
+                .child(
+                    h_flex().justify_end().child(
+                        Button::new("confirm-source", "选择")
+                            .key_binding(KeyBinding::for_action(&menu::Confirm, cx))
+                            .on_click(|_, window, cx| {
+                                window.dispatch_action(menu::Confirm.boxed_clone(), cx)
+                            }),
+                    ),
+                )
+                .into_any_element(),
+        )
+    }
+}
+
 struct EditNicknameState {
     index: SshServerIndex,
     editor: Entity<Editor>,
@@ -792,6 +963,7 @@ impl ViewServerOptionsState {
 enum Mode {
     Default,
     ViewServerOptions(ViewServerOptionsState),
+    RemoteServerSource(Entity<Picker<RemoteServerSourcePickerDelegate>>),
     EditNickname(EditNicknameState),
     ProjectPicker(Entity<ProjectPicker>),
     CreateRemoteServer(CreateRemoteServer),
@@ -1798,43 +1970,27 @@ impl RemoteServerProjects {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let current = match connection.remote_server_source.unwrap_or_default() {
-            settings::RemoteServerSource::Official => "官方 Zed",
-            settings::RemoteServerSource::ZedCn => "Zed CN",
+        let ServerIndex::Ssh(index) = index else {
+            return;
         };
-        let selection = window.prompt(
-            PromptLevel::Info,
-            &format!("选择 {} 的远程服务来源（当前：{current}）", connection.nickname.as_deref().unwrap_or(connection.host.as_ref())),
-            Some("官方 Zed 使用对应的官方版本；Zed CN 使用与客户端完全相同的发布修订版。两者均通过本机配置的代理下载后上传，缺少对应版本时不会切换来源。更改在下次连接时生效，不中断当前会话。"),
-            &["官方 Zed", "Zed CN", "取消"],
-            cx,
-        );
-        cx.spawn(async move |this, cx| {
-            let source = match selection.await? {
-                0 => settings::RemoteServerSource::Official,
-                1 => settings::RemoteServerSource::ZedCn,
-                _ => return anyhow::Ok(()),
-            };
-            this.update(cx, |this, cx| {
-                if let ServerIndex::Ssh(index) = index {
-                    this.update_settings_file(cx, move |settings, _| {
-                        if let Some(server) = settings
-                            .ssh_connections
-                            .as_mut()
-                            .and_then(|servers| servers.get_mut(index.0))
-                            && server.host == connection.host
-                            && server.username == connection.username
-                            && server.port == connection.port
-                        {
-                            server.remote_server_source = Some(source);
-                            server.upload_binary_over_ssh = Some(true);
-                        }
-                    });
-                }
-            })?;
-            Ok(())
-        })
-        .detach_and_log_err(cx);
+        let selected_index = match connection.remote_server_source.unwrap_or_default() {
+            settings::RemoteServerSource::Official => 0,
+            settings::RemoteServerSource::ZedCn => 1,
+        };
+        let delegate = RemoteServerSourcePickerDelegate {
+            index,
+            connection,
+            parent_modal: cx.weak_entity(),
+            selected_index,
+            matches: vec![
+                settings::RemoteServerSource::Official,
+                settings::RemoteServerSource::ZedCn,
+            ],
+        };
+        let picker = cx.new(|cx| Picker::uniform_list(delegate, window, cx).embedded());
+        picker.focus_handle(cx).focus(window, cx);
+        self.mode = Mode::RemoteServerSource(picker);
+        cx.notify();
     }
 
     fn view_server_options(
@@ -1984,7 +2140,7 @@ impl RemoteServerProjects {
 
     fn confirm(&mut self, _: &menu::Confirm, window: &mut Window, cx: &mut Context<Self>) {
         match &self.mode {
-            Mode::Default | Mode::ViewServerOptions(_) => {}
+            Mode::Default | Mode::ViewServerOptions(_) | Mode::RemoteServerSource(_) => {}
             Mode::ProjectPicker(_) => {}
             Mode::CreateRemoteServer(state) => {
                 if let Some(prompt) = state.ssh_prompt.as_ref() {
@@ -3212,6 +3368,7 @@ impl Focusable for RemoteServerProjects {
     fn focus_handle(&self, cx: &App) -> FocusHandle {
         match &self.mode {
             Mode::Default => self.default_picker.focus_handle(cx),
+            Mode::RemoteServerSource(picker) => picker.focus_handle(cx),
             Mode::ProjectPicker(picker) => picker.focus_handle(cx),
             _ => self.focus_handle.clone(),
         }
@@ -3238,6 +3395,7 @@ impl Render for RemoteServerProjects {
             }))
             .child(match &self.mode {
                 Mode::Default => self.render_default(window, cx).into_any_element(),
+                Mode::RemoteServerSource(picker) => picker.clone().into_any_element(),
                 Mode::ViewServerOptions(state) => self
                     .render_view_options(state.clone(), window, cx)
                     .into_any_element(),
@@ -3343,7 +3501,7 @@ mod create_host_tests {
     }
 
     #[gpui::test]
-    async fn test_remote_server_source_prompt_persists_and_cancels(cx: &mut TestAppContext) {
+    async fn test_remote_server_source_picker_persists_and_cancels(cx: &mut TestAppContext) {
         let app_state = init_test(cx);
         let fs = app_state.fs.clone();
         let connection = SshConnection {
@@ -3377,7 +3535,28 @@ mod create_host_tests {
                     cx,
                 )
             });
-            cx.simulate_prompt_answer(answer);
+            let picker = modal.read_with(cx, |modal, _| {
+                let Mode::RemoteServerSource(picker) = &modal.mode else {
+                    panic!("expected embedded source picker");
+                };
+                picker.clone()
+            });
+            picker.update_in(cx, |picker, window, cx| {
+                if answer == "取消" {
+                    picker.delegate.dismissed(window, cx);
+                } else {
+                    picker.delegate.selected_index = picker
+                        .delegate
+                        .matches
+                        .iter()
+                        .position(|source| {
+                            RemoteServerSourcePickerDelegate::label(*source) == answer
+                        })
+                        .expect("source option");
+                    picker.delegate.confirm(false, window, cx);
+                }
+            });
+            modal.read_with(cx, |modal, _| assert!(matches!(modal.mode, Mode::Default)));
             cx.run_until_parked();
             cx.update(|_, cx| {
                 let connection = RemoteSettings::get_global(cx)
