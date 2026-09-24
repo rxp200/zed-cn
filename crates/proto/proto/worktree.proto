@@ -101,6 +101,39 @@ message CreateProjectEntry {
   optional bytes content = 5;
 }
 
+message CreateTemporaryFile {
+  string suggested_name = 1;
+  bytes content = 2;
+}
+
+message CreateTemporaryFileResponse {
+  string path = 1;
+}
+
+message GetSystemStats {}
+
+message GetSystemStatsResponse {
+  string hostname = 1;
+  string os_name = 2;
+  string kernel_version = 3;
+  uint64 uptime_seconds = 4;
+  float cpu_usage_percent = 5;
+  repeated float cpu_core_usage_percent = 6;
+  uint64 memory_used_bytes = 7;
+  uint64 memory_total_bytes = 8;
+  uint64 swap_used_bytes = 9;
+  uint64 swap_total_bytes = 10;
+  uint64 disk_used_bytes = 11;
+  uint64 disk_total_bytes = 12;
+  uint64 network_received_bytes_per_second = 13;
+  uint64 network_transmitted_bytes_per_second = 14;
+  uint32 process_count = 15;
+  double load_average_one = 16;
+  double load_average_five = 17;
+  double load_average_fifteen = 18;
+  int64 sampled_at_unix_seconds = 19;
+}
+
 message RenameProjectEntry {
   uint64 project_id = 1;
   uint64 entry_id = 2;

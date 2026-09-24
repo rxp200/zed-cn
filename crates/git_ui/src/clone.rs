@@ -71,9 +71,9 @@ pub fn clone_and_open(
                 cx.update(|window, cx| {
                     window.prompt(
                         gpui::PromptLevel::Info,
-                        &format!("Git Clone: {}", repo_name),
+                        &format!("Git 克隆：{}", repo_name),
                         None,
-                        &["Add repo to project", "Open repo in new project"],
+                        &["添加到项目", "在新项目中打开仓库"],
                         cx,
                     )
                 })

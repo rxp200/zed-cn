@@ -1037,6 +1037,109 @@ pub struct JupyterContent {
     pub kernel_selections: Option<HashMap<String, String>>,
 }
 
+/// The language model provider (channel) used for translation, matching one
+/// of the providers configured under `language_models`.
+#[with_fallible_options]
+#[derive(Clone, Default, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, MergeFrom)]
+#[serde(transparent)]
+pub struct TranslationProviderSetting(pub String);
+
+impl TranslationProviderSetting {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<String> for TranslationProviderSetting {
+    fn from(value: String) -> Self {
+        Self(value)
+    }
+}
+
+/// The model to use for translation, provided by the selected provider.
+#[with_fallible_options]
+#[derive(Clone, Default, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, MergeFrom)]
+#[serde(transparent)]
+pub struct TranslationModelSetting(pub String);
+
+impl TranslationModelSetting {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<String> for TranslationModelSetting {
+    fn from(value: String) -> Self {
+        Self(value)
+    }
+}
+
+/// Settings for AI-powered translation in the editor's hover popovers.
+#[with_fallible_options]
+#[derive(Clone, Default, Debug, Serialize, Deserialize, JsonSchema, MergeFrom, PartialEq, Eq)]
+pub struct HoverTranslationSettingsContent {
+    /// Whether to automatically translate non-Chinese parts of hover
+    /// documentation (e.g. LSP hover information) into the target language.
+    /// The translation is shown underlined below the original text.
+    ///
+    /// Default: false
+    pub enabled: Option<bool>,
+    /// The language model provider (channel) used for translation, matching
+    /// one of the providers configured under `language_models`, e.g.
+    /// "openai_compatible", "anthropic", "google", "ollama".
+    /// When unset, the default fast model is used.
+    ///
+    /// Default: null
+    pub provider: Option<TranslationProviderSetting>,
+    /// The model to use for translation, as provided by the configured
+    /// `provider`.
+    ///
+    /// Default: null
+    pub model: Option<TranslationModelSetting>,
+    /// The target language to translate into.
+    ///
+    /// Default: 中文
+    pub target_language: Option<String>,
+    /// Maximum number of characters of documentation sent for translation.
+    /// Longer documents are truncated to limit token usage.
+    ///
+    /// Default: 4000
+    pub max_chars: Option<u64>,
+    /// Whether translations are persisted to an on-disk cache that is reused
+    /// across sessions, so repeatedly translating the same documentation does
+    /// not call the model again.
+    ///
+    /// Default: true
+    pub cache_persist: Option<bool>,
+    /// Maximum size of the on-disk translation cache, in bytes. When the cache
+    /// grows beyond this limit, the least useful entries (least
+    /// recently/frequently viewed and largest) are evicted.
+    ///
+    /// Default: 5242880 (5 MiB)
+    pub cache_max_bytes: Option<u64>,
+}
+
+#[with_fallible_options]
+#[derive(Clone, Default, Debug, Serialize, Deserialize, JsonSchema, MergeFrom, PartialEq, Eq)]
+pub struct CodeExplanationSettingsContent {
+    /// Automatically send visible code and its context to the selected AI service.
+    pub enabled: Option<bool>,
+    pub provider: Option<TranslationProviderSetting>,
+    pub model: Option<TranslationModelSetting>,
+    pub target_language: Option<String>,
+    /// Explain a file as one request within this line count; larger files are split by syntax.
+    /// Individual functions over the same threshold still require confirmation.
+    pub max_function_lines: Option<u64>,
+    /// Number of code explanation model requests allowed to run at once per project.
+    pub max_concurrent_requests: Option<u64>,
+    /// Number of buffer lines to preload above and below the visible viewport.
+    pub preload_lines: Option<u64>,
+    pub detailed: Option<bool>,
+    pub prefer_existing_comments: Option<bool>,
+    pub cache_persist: Option<bool>,
+    pub cache_max_bytes: Option<u64>,
+}
+
 /// Whether to allow drag and drop text selection in buffer.
 #[with_fallible_options]
 #[derive(Clone, Default, Debug, Serialize, Deserialize, JsonSchema, MergeFrom, PartialEq, Eq)]

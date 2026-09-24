@@ -242,7 +242,7 @@ impl Render for ConfigurationView {
                     )
                     .when(is_sign_in_cancellable, |this| {
                         this.child(
-                            Button::new("cancel-sign-in", "Cancel")
+                            Button::new("cancel-sign-in", "取消")
                                 .style(ButtonStyle::Subtle)
                                 .size(ButtonSize::Medium)
                                 .on_click(move |_, _window, cx| {

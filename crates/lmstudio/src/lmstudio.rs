@@ -206,6 +206,10 @@ pub struct ChatCompletionRequest {
 pub struct Capabilities(Vec<String>);
 
 impl Capabilities {
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
     pub fn supports_tool_calls(&self) -> bool {
         self.0.iter().any(|cap| cap == "tool_use")
     }
@@ -223,12 +227,17 @@ pub struct ListModelsResponse {
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct ModelEntry {
     pub id: String,
+    #[serde(default)]
     pub object: String,
+    #[serde(default)]
     pub r#type: ModelType,
+    #[serde(default)]
     pub publisher: String,
     pub arch: Option<String>,
+    #[serde(default)]
     pub compatibility_type: CompatibilityType,
     pub quantization: Option<String>,
+    #[serde(default)]
     pub state: ModelState,
     pub max_context_length: Option<u64>,
     pub loaded_context_length: Option<u64>,
@@ -236,25 +245,48 @@ pub struct ModelEntry {
     pub capabilities: Capabilities,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+impl Default for ModelEntry {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            object: "model".to_string(),
+            r#type: ModelType::default(),
+            publisher: String::new(),
+            arch: None,
+            compatibility_type: CompatibilityType::default(),
+            quantization: None,
+            state: ModelState::default(),
+            max_context_length: None,
+            loaded_context_length: None,
+            capabilities: Capabilities::default(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum ModelType {
+    #[default]
     Llm,
     Embeddings,
     Vlm,
+    #[serde(other)]
+    Unknown,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "kebab-case")]
 pub enum ModelState {
+    #[default]
     Loaded,
     Loading,
     NotLoaded,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum CompatibilityType {
+    #[default]
     Gguf,
     Mlx,
 }
@@ -371,6 +403,68 @@ mod tests {
         // Verify the structure matches what LM Studio expects
         let expected_structure = r#"{"type":"image_url","image_url":{"url":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="}}"#;
         assert_eq!(json, expected_structure);
+    }
+
+    #[test]
+    fn parse_openai_compatible_models_response() {
+        let body = r#"{
+            "object": "list",
+            "data": [
+                {
+                    "id": "qwen2.5-coder-7b-instruct",
+                    "object": "model"
+                }
+            ]
+        }"#;
+        let response: ListModelsResponse = serde_json::from_str(body).unwrap();
+        assert_eq!(response.data.len(), 1);
+        let entry = &response.data[0];
+        assert_eq!(entry.id, "qwen2.5-coder-7b-instruct");
+        assert_eq!(entry.object, "model");
+        assert_eq!(entry.r#type, ModelType::Llm);
+        assert_eq!(entry.state, ModelState::Loaded);
+        assert_eq!(entry.compatibility_type, CompatibilityType::Gguf);
+        assert!(entry.capabilities.is_empty());
+    }
+
+    #[test]
+    fn parse_models_with_provider_specific_types() -> Result<()> {
+        let body = r#"{
+            "object": "list",
+            "data": [
+                {"id": "compatible-model", "object": "model", "type": "model"},
+                {"id": "future-model", "type": "future-type"},
+                {"id": "text-model", "type": "llm", "max_context_length": 32768},
+                {"id": "embedding-model", "type": "embeddings"},
+                {
+                    "id": "vision-model",
+                    "type": "vlm",
+                    "loaded_context_length": 8192,
+                    "capabilities": ["vision", "tool_use"]
+                }
+            ]
+        }"#;
+        let response: ListModelsResponse = serde_json::from_str(body)?;
+        let entries = response.data;
+        assert_eq!(entries.len(), 5);
+        let mut entries = entries.into_iter();
+        let compatible = entries.next().context("missing compatible model")?;
+        assert_eq!(compatible.id, "compatible-model");
+        assert_eq!(compatible.object, "model");
+        assert_eq!(compatible.r#type, ModelType::Unknown);
+        let future = entries.next().context("missing future model")?;
+        assert_eq!(future.r#type, ModelType::Unknown);
+        let text = entries.next().context("missing text model")?;
+        assert_eq!(text.r#type, ModelType::Llm);
+        assert_eq!(text.max_context_length, Some(32768));
+        let embedding = entries.next().context("missing embedding model")?;
+        assert_eq!(embedding.r#type, ModelType::Embeddings);
+        let vision = entries.next().context("missing vision model")?;
+        assert_eq!(vision.r#type, ModelType::Vlm);
+        assert_eq!(vision.loaded_context_length, Some(8192));
+        assert!(vision.capabilities.supports_images());
+        assert!(vision.capabilities.supports_tool_calls());
+        Ok(())
     }
 
     #[test]

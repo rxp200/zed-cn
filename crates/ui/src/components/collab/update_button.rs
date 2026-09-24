@@ -118,6 +118,10 @@ impl UpdateButton {
             .disabled(true)
     }
 
+    pub fn up_to_date() -> Self {
+        Self::new(IconName::Check, "Up to Date").disabled(true)
+    }
+
     pub fn updated(version: impl Into<SharedString>) -> Self {
         Self::new(IconName::Download, "Restart to Update")
             .tooltip(version)
@@ -210,7 +214,7 @@ impl RenderOnce for UpdateButton {
                         IconButton::new(dismiss_button_id, IconName::Close)
                             .icon_size(IconSize::Indicator)
                             .when_some(self.on_dismiss, |this, handler| this.on_click(handler))
-                            .tooltip(Tooltip::text("Dismiss")),
+                            .tooltip(Tooltip::text("关闭")),
                     ),
                 )
             })
@@ -254,6 +258,7 @@ impl Component for UpdateButton {
                             "Installing",
                             UpdateButton::installing(version).into_any_element(),
                         ),
+                        single_example("Up to Date", UpdateButton::up_to_date().into_any_element()),
                     ],
                 ),
                 example_group_with_title(

@@ -8,7 +8,7 @@ use util::ResultExt;
 
 use crate::{SettingField, SettingsFieldMetadata, SettingsUiFile, update_settings_file};
 
-pub(crate) const SYSTEM_DEFAULT: &str = "System Default";
+pub(crate) const SYSTEM_DEFAULT: &str = "系统默认";
 
 pub(crate) fn get_current_device(
     current_id: Option<&DeviceId>,

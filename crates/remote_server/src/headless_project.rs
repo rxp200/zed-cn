@@ -35,21 +35,92 @@ use rpc::{
     AnyProtoClient, TypedEnvelope,
     proto::{self, REMOTE_SERVER_PEER_ID, REMOTE_SERVER_PROJECT_ID},
 };
-use smol::process::Child;
+use smol::{fs as async_fs, process::Child};
 
 use settings::initial_server_settings_content;
 use std::{
     num::NonZeroU64,
     path::{Path, PathBuf},
     sync::{
-        Arc,
+        Arc, Mutex, OnceLock,
         atomic::{AtomicU64, AtomicUsize, Ordering},
     },
-    time::Instant,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-use sysinfo::{ProcessRefreshKind, RefreshKind, System, UpdateKind};
+use sysinfo::{Disks, Networks, ProcessRefreshKind, RefreshKind, System, UpdateKind};
 use util::{ResultExt, paths::PathStyle, rel_path::RelPath};
 use worktree::Worktree;
+
+struct SystemStatsSampler {
+    system: System,
+    disks: Disks,
+    networks: Networks,
+    last_sample: Instant,
+}
+
+impl SystemStatsSampler {
+    fn new() -> Self {
+        let mut system = System::new();
+        system.refresh_cpu_all();
+        system.refresh_memory();
+        system.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
+        Self {
+            system,
+            disks: Disks::new_with_refreshed_list(),
+            networks: Networks::new_with_refreshed_list(),
+            last_sample: Instant::now(),
+        }
+    }
+
+    fn sample(&mut self) -> proto::GetSystemStatsResponse {
+        let elapsed = self.last_sample.elapsed().as_secs_f64().max(0.001);
+        self.system.refresh_cpu_usage();
+        self.system.refresh_memory();
+        self.system
+            .refresh_processes(sysinfo::ProcessesToUpdate::All, true);
+        self.disks.refresh(true);
+        self.networks.refresh(true);
+        self.last_sample = Instant::now();
+
+        let disk_total_bytes: u64 = self.disks.iter().map(|disk| disk.total_space()).sum();
+        let disk_available_bytes: u64 = self.disks.iter().map(|disk| disk.available_space()).sum();
+        let received: u64 = self.networks.values().map(|data| data.received()).sum();
+        let transmitted: u64 = self.networks.values().map(|data| data.transmitted()).sum();
+        let load = System::load_average();
+
+        proto::GetSystemStatsResponse {
+            hostname: System::host_name().unwrap_or_else(|| "未知主机".into()),
+            os_name: System::long_os_version()
+                .or_else(System::name)
+                .unwrap_or_else(|| "未知系统".into()),
+            kernel_version: System::kernel_version().unwrap_or_default(),
+            uptime_seconds: System::uptime(),
+            cpu_usage_percent: self.system.global_cpu_usage(),
+            cpu_core_usage_percent: self
+                .system
+                .cpus()
+                .iter()
+                .map(|cpu| cpu.cpu_usage())
+                .collect(),
+            memory_used_bytes: self.system.used_memory(),
+            memory_total_bytes: self.system.total_memory(),
+            swap_used_bytes: self.system.used_swap(),
+            swap_total_bytes: self.system.total_swap(),
+            disk_used_bytes: disk_total_bytes.saturating_sub(disk_available_bytes),
+            disk_total_bytes,
+            network_received_bytes_per_second: (received as f64 / elapsed) as u64,
+            network_transmitted_bytes_per_second: (transmitted as f64 / elapsed) as u64,
+            process_count: self.system.processes().len().try_into().unwrap_or(u32::MAX),
+            load_average_one: load.one,
+            load_average_five: load.five,
+            load_average_fifteen: load.fifteen,
+            sampled_at_unix_seconds: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|duration| duration.as_secs().try_into().unwrap_or(i64::MAX))
+                .unwrap_or_default(),
+        }
+    }
+}
 
 pub struct HeadlessProject {
     pub fs: Arc<dyn Fs>,
@@ -83,6 +154,34 @@ pub struct HeadlessAppState {
     pub languages: Arc<LanguageRegistry>,
     pub extension_host_proxy: Arc<ExtensionHostProxy>,
     pub startup_time: Instant,
+}
+
+async fn cleanup_temporary_files(directory: &Path) {
+    const RETENTION: Duration = Duration::from_secs(24 * 60 * 60);
+
+    let Ok(mut entries) = async_fs::read_dir(directory).await else {
+        return;
+    };
+    while let Some(entry) = futures::StreamExt::next(&mut entries).await {
+        let Ok(entry) = entry else {
+            continue;
+        };
+        let Ok(metadata) = entry.metadata().await else {
+            continue;
+        };
+        let is_expired = metadata
+            .modified()
+            .ok()
+            .and_then(|modified| SystemTime::now().duration_since(modified).ok())
+            .is_some_and(|age| age >= RETENTION);
+        if !is_expired {
+            continue;
+        }
+
+        if let Err(error) = async_fs::remove_file(entry.path()).await {
+            log::warn!("failed to remove expired temporary clipboard file: {error:#}");
+        }
+    }
 }
 
 impl HeadlessProject {
@@ -297,6 +396,8 @@ impl HeadlessProject {
         session.add_request_handler(cx.weak_entity(), Self::handle_ping);
         session.add_request_handler(cx.weak_entity(), Self::handle_get_processes);
         session.add_request_handler(cx.weak_entity(), Self::handle_get_remote_profiling_data);
+        session.add_request_handler(cx.weak_entity(), Self::handle_create_temporary_file);
+        session.add_request_handler(cx.weak_entity(), Self::handle_get_system_stats);
 
         session.add_entity_request_handler(Self::handle_add_worktree);
         session.add_request_handler(cx.weak_entity(), Self::handle_remove_worktree);
@@ -867,6 +968,73 @@ impl HeadlessProject {
             file_id
         );
         Ok(proto::DownloadFileResponse { file_id })
+    }
+
+    async fn handle_get_system_stats(
+        _this: Entity<Self>,
+        _message: TypedEnvelope<proto::GetSystemStats>,
+        cx: AsyncApp,
+    ) -> Result<proto::GetSystemStatsResponse> {
+        cx.background_spawn(async move {
+            static SAMPLER: OnceLock<Mutex<SystemStatsSampler>> = OnceLock::new();
+            let sampler = SAMPLER.get_or_init(|| Mutex::new(SystemStatsSampler::new()));
+            let mut sampler = sampler
+                .lock()
+                .map_err(|_| anyhow!("system statistics sampler is unavailable"))?;
+            Ok(sampler.sample())
+        })
+        .await
+    }
+
+    async fn handle_create_temporary_file(
+        _this: Entity<Self>,
+        message: TypedEnvelope<proto::CreateTemporaryFile>,
+        _cx: AsyncApp,
+    ) -> Result<proto::CreateTemporaryFileResponse> {
+        const MAX_TEMPORARY_FILE_BYTES: usize = 100 * 1024 * 1024;
+        anyhow::ensure!(
+            message.payload.content.len() <= MAX_TEMPORARY_FILE_BYTES,
+            "temporary clipboard file exceeds the 100 MiB limit"
+        );
+
+        let suggested_name = Path::new(&message.payload.suggested_name)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .filter(|name| !name.is_empty() && name.len() <= 255)
+            .context("invalid temporary clipboard file name")?;
+        anyhow::ensure!(
+            suggested_name == message.payload.suggested_name,
+            "temporary clipboard file name must not contain a directory"
+        );
+
+        let directory = paths::temp_dir().join("clipboard-files");
+        async_fs::create_dir_all(&directory).await?;
+        cleanup_temporary_files(&directory).await;
+
+        let extension = Path::new(suggested_name)
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .map(|extension| format!(".{extension}"))
+            .unwrap_or_default();
+        let stem = Path::new(suggested_name)
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .filter(|stem| !stem.is_empty())
+            .unwrap_or("clipboard-file");
+        let path = directory.join(format!("{stem}-{}{extension}", uuid::Uuid::new_v4()));
+        let temporary_path = directory.join(format!(".{}.part", uuid::Uuid::new_v4()));
+
+        async_fs::write(&temporary_path, &message.payload.content).await?;
+        if let Err(error) = async_fs::rename(&temporary_path, &path).await {
+            if let Err(cleanup_error) = async_fs::remove_file(&temporary_path).await {
+                log::warn!("failed to remove temporary clipboard staging file: {cleanup_error:#}");
+            }
+            return Err(error.into());
+        }
+
+        Ok(proto::CreateTemporaryFileResponse {
+            path: path.to_string_lossy().into_owned(),
+        })
     }
 
     pub async fn handle_open_new_buffer(

@@ -52,6 +52,7 @@ impl RemoteSettings {
             {
                 options.nickname = conn.nickname;
                 options.upload_binary_over_ssh = conn.upload_binary_over_ssh.unwrap_or_default();
+                options.remote_server_source = conn.remote_server_source.unwrap_or_default();
                 options.args = Some(conn.args);
                 options.port_forwards = conn.port_forwards;
                 break;

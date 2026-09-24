@@ -684,6 +684,14 @@ pub mod assistant {
         ]
     );
 
+    /// 将代码讲解放入新的 Agent 草稿，不自动发送。
+    #[derive(Clone, Deserialize, PartialEq, JsonSchema, Action)]
+    #[action(namespace = assistant)]
+    #[serde(deny_unknown_fields)]
+    pub struct FollowUpCodeExplanation {
+        pub text: String,
+    }
+
     /// Deploys the assistant interface with the specified configuration.
     #[derive(Clone, Default, Deserialize, PartialEq, JsonSchema, Action)]
     #[action(namespace = assistant)]
@@ -917,6 +925,20 @@ pub mod preview {
                 OpenPreview,
                 /// Opens an SVG preview in a split pane.
                 OpenPreviewToTheSide,
+            ]
+        );
+    }
+
+    pub mod web {
+        use gpui::actions;
+
+        actions!(
+            web,
+            [
+                /// Opens the current HTML file in a live browser preview.
+                OpenPreview,
+                /// Stops the live browser preview for the current workspace.
+                StopPreview,
             ]
         );
     }

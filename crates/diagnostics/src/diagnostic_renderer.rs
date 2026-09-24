@@ -64,11 +64,9 @@ impl DiagnosticRenderer {
             } else {
                 append_source_and_code(&mut markdown, entry.diagnostic);
 
-                if entry.range.start.row.abs_diff(primary.range.start.row) >= 5 {
-                    markdown.push_str(&format!(
-                        " ([back](file://#diagnostic-{buffer_id}-{group_id}-{primary_ix}))"
-                    ));
-                }
+                markdown.push_str(&format!(
+                    " ([back](file://#diagnostic-{buffer_id}-{group_id}-{primary_ix}))"
+                ));
                 results.push(DiagnosticBlock {
                     initial_range: entry.range.clone(),
                     severity: entry.diagnostic.severity,
@@ -269,7 +267,7 @@ impl DiagnosticBlock {
             )
             .child(
                 CopyButton::new(copy_button_id, self.copy_message.clone())
-                    .tooltip_label("Copy Diagnostic"),
+                    .tooltip_label("复制诊断信息"),
             )
             .into_any_element()
     }

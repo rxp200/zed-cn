@@ -658,7 +658,7 @@ impl StackFrameList {
                                     }
                                 }))
                                 .tooltip(move |window, cx| {
-                                    Tooltip::text("Restart Stack Frame")(window, cx)
+                                    Tooltip::text("重新启动堆栈帧")(window, cx)
                                 }),
                             ),
                     )
@@ -906,8 +906,8 @@ impl StackFrameList {
 
     pub(crate) fn render_control_strip(&self) -> AnyElement {
         let tooltip_title = match self.list_filter {
-            StackFrameFilter::All => "Show stack frames from your project",
-            StackFrameFilter::OnlyUserFrames => "Show all stack frames",
+            StackFrameFilter::All => "显示项目中的堆栈帧",
+            StackFrameFilter::OnlyUserFrames => "显示所有堆栈帧",
         };
 
         h_flex()

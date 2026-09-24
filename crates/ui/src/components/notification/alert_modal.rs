@@ -142,7 +142,7 @@ impl RenderOnce for AlertModal {
             modal = modal.child(footer);
         } else if has_default_footer {
             let primary_action = self.primary_action.unwrap_or_else(|| "OK".into());
-            let dismiss_label = self.dismiss_label.unwrap_or_else(|| "Cancel".into());
+            let dismiss_label = self.dismiss_label.unwrap_or_else(|| "取消".into());
 
             modal = modal.child(
                 h_flex()
@@ -175,7 +175,7 @@ impl Component for AlertModal {
     }
 
     fn description() -> &'static str {
-        "A modal dialog that presents an alert message with primary and dismiss actions."
+        "一个模态对话框，显示带有主要和取消操作的提示消息。"
     }
 
     fn preview(_window: &mut Window, cx: &mut App) -> AnyElement {
@@ -184,18 +184,18 @@ impl Component for AlertModal {
                 .p_4()
                 .children(vec![
                     example_group(vec![single_example(
-                        "Basic Alert",
+                        "基本提示",
                         AlertModal::new("simple-modal")
-                            .title("Do you want to leave the current call?")
+                            .title("您要离开当前通话吗？")
                             .child(
-                                "The current window will be closed, and connections to any shared projects will be terminated."
+                                "当前窗口将被关闭，与任何共享项目的连接将被终止。"
                             )
-                            .primary_action("Leave Call")
-                            .dismiss_label("Cancel")
+                            .primary_action("离开通话")
+                            .dismiss_label("取消")
                             .into_any_element(),
                     )]),
                     example_group(vec![single_example(
-                        "Custom Header",
+                        "自定义标题",
                         AlertModal::new("custom-header-modal")
                             .header(
                                 v_flex()
@@ -206,7 +206,7 @@ impl Component for AlertModal {
                                         h_flex()
                                             .gap_1()
                                             .child(Icon::new(IconName::Warning).color(Color::Warning))
-                                            .child(Headline::new("Unrecognized Workspace").size(HeadlineSize::Small))
+                                            .child(Headline::new("无法识别的工作区").size(HeadlineSize::Small))
                                     )
                                     .child(
                                         h_flex()
@@ -221,10 +221,10 @@ Review .zed/settings.json for any extensions or commands configured by this proj
                             .child(
                                 v_flex()
                                     .mt_1()
-                                    .child(Label::new("Restricted mode prevents:").color(Color::Muted))
-                                    .child(ListBulletItem::new("Project settings from being applied"))
-                                    .child(ListBulletItem::new("Language servers from running"))
-                                    .child(ListBulletItem::new("MCP integrations from installing"))
+                                    .child(Label::new("受限模式会阻止以下操作：").color(Color::Muted))
+                                    .child(ListBulletItem::new("应用项目设置"))
+                                    .child(ListBulletItem::new("运行语言服务器"))
+                                    .child(ListBulletItem::new("安装 MCP 集成"))
                             )
                             .footer(
                                 h_flex()
@@ -232,13 +232,13 @@ Review .zed/settings.json for any extensions or commands configured by this proj
                                     .justify_between()
                                     .child(
                                         Checkbox::new("trust-parent", ToggleState::Unselected)
-                                            .label("Trust all projects in parent directory")
+                                            .label("信任父目录中的所有项目")
                                     )
                                     .child(
                                         h_flex()
                                             .gap_1()
-                                            .child(Button::new("restricted", "Stay in Restricted Mode").color(Color::Muted))
-                                            .child(Button::new("trust", "Trust and Continue").style(ButtonStyle::Filled))
+                                            .child(Button::new("restricted", "保持在受限模式").color(Color::Muted))
+                                            .child(Button::new("trust", "信任并继续").style(ButtonStyle::Filled))
                                     )
                             )
                             .width(rems(40.))
