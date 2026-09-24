@@ -1,5 +1,5 @@
 use editor::{Editor, MultiBuffer};
-use gpui::{AnyElement, Entity, Modifiers};
+use gpui::{Action, AnyElement, Entity, Modifiers};
 use markdown_preview::markdown_preview_view::MarkdownPreviewView;
 use svg_preview::svg_preview_view::SvgPreviewView;
 use tabular_data_preview::TabularDataPreviewPane;
