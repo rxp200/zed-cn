@@ -64,14 +64,14 @@ use crate::alacritty::current_child_signal_mask;
 use crate::alacritty::{
     AlacrittyCell, AlacrittyGridIterator, AlacrittyHyperlink, AlacrittySearch, AlacrittyTerm,
     AlacrittyTermConfig, AlacrittyTermLock, HyperlinkMatch, PtySender, RegexSearches,
-    append_text_to_term, apply_config, clear_saved_screen, content_text, display_offset,
-    display_only_term_config, find_from_terminal_point, full_content_range, last_non_empty_lines,
-    make_content, new_term, open_pty, pty_options, pty_term_config, resize, screen_lines,
-    scroll_display, scroll_to_point, search_matches, selection_text, set_default_cursor_style,
-    set_selection as set_term_selection, shrink_to_used, spawn_event_loop,
-    toggle_vi_mode as toggle_term_vi_mode, total_lines, update_selection as update_term_selection,
-    update_selection_to_vi_cursor, update_vi_cursor_for_scroll, used_lines, vi_goto_point,
-    vi_motion,
+    append_text_to_term, apply_config, clear_saved_screen, clone_active_grid, content_text,
+    display_offset, display_only_term_config, find_from_terminal_point, full_content_range,
+    last_non_empty_lines, make_content, new_term, open_pty, pty_options, pty_term_config, resize,
+    screen_lines, scroll_display, scroll_to_point, search_matches, selection_text,
+    set_default_cursor_style, set_selection as set_term_selection, shrink_to_used,
+    spawn_event_loop, toggle_vi_mode as toggle_term_vi_mode, total_lines,
+    update_selection as update_term_selection, update_selection_to_vi_cursor,
+    update_vi_cursor_for_scroll, used_lines, vi_goto_point, vi_motion,
 };
 use crate::mappings::colors::to_vte_rgb;
 use crate::mappings::keys::to_esc_str;
@@ -3213,6 +3213,27 @@ impl Terminal {
         self.vi_mode_enabled
     }
 
+    pub fn frozen_snapshot_builder(&self, cx: &App) -> TerminalBuilder {
+        let bounds = self.last_content.terminal_bounds;
+        let history_lines = self.total_lines().saturating_sub(self.viewport_lines());
+        let mut builder = TerminalBuilder::new_display_only_with_bounds(
+            self.template.cursor_shape,
+            self.template.alternate_scroll,
+            Some(history_lines),
+            self.template.window_id,
+            cx.background_executor(),
+            self.path_style,
+            bounds,
+        );
+        clone_active_grid(&self.term, &builder.terminal.term);
+        builder.terminal.last_content = make_content(
+            &builder.terminal.term.lock_unfair(),
+            &builder.terminal.last_content,
+        );
+        builder.terminal.title_override = Some(format!("[冻结] {}", self.title(false)));
+        builder
+    }
+
     pub fn clone_builder(&self, cx: &App, cwd: Option<PathBuf>) -> Task<Result<TerminalBuilder>> {
         let working_directory = self.working_directory().or_else(|| cwd);
         TerminalBuilder::new(
@@ -3607,6 +3628,42 @@ mod tests {
     use parking_lot::Mutex;
     use rand::{Rng, distr, rngs::StdRng};
     use task::{Shell, ShellBuilder};
+
+    #[gpui::test]
+    fn frozen_snapshot_copies_scrollback_and_stops_following_source(cx: &mut TestAppContext) {
+        let source = cx.new(|cx| {
+            let mut terminal = TerminalBuilder::new_display_only_with_bounds(
+                SettingsCursorShape::Block,
+                AlternateScroll::On,
+                Some(100),
+                0,
+                cx.background_executor(),
+                PathStyle::local(),
+                TerminalBounds::new(
+                    px(16.),
+                    px(8.),
+                    bounds(point(px(0.), px(0.)), size(px(640.), px(48.))),
+                ),
+            )
+            .subscribe(cx);
+            terminal.write_output(b"one\ntwo\nthree\nfour\nfive\n", cx);
+            terminal
+        });
+
+        let frozen = cx.new(|cx| source.read(cx).frozen_snapshot_builder(cx).subscribe(cx));
+        cx.read(|cx| {
+            assert_eq!(frozen.read(cx).get_content(), source.read(cx).get_content());
+            assert!(frozen.read(cx).total_lines() > frozen.read(cx).viewport_lines());
+        });
+
+        source.update(cx, |terminal, cx| {
+            terminal.write_output(b"six\n", cx);
+        });
+        cx.read(|cx| {
+            assert!(!frozen.read(cx).get_content().contains("six"));
+            assert!(frozen.read(cx).title(false).starts_with("[冻结]"));
+        });
+    }
 
     #[test]
     fn test_init_command_startup_marker_commands_do_not_contain_marker() {

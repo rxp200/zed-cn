@@ -1039,7 +1039,7 @@ fn render_add_pattern_input(
     let settings_window = cx.entity().downgrade();
 
     SettingsInputField::new(input_id)
-        .with_placeholder("Add regex pattern…")
+        .with_placeholder("添加正则表达式…")
         .tab_index(0)
         .with_buffer_font()
         .display_clear_button()

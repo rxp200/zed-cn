@@ -132,6 +132,30 @@ class ManifestTests(unittest.TestCase):
                 self.assertEqual(result["releases"], [new])
                 self.assertIn("Skipping " + old["tag_name"], warnings.getvalue())
 
+    def test_legacy_marker_uses_release_title_and_notes_for_history(self):
+        data = metadata()
+        entry = release(data)
+        entry["name"] = "Zed CN 1.18.1 r1"
+        entry["body"] = "## 历史版本说明"
+
+        result = manifest.build_manifest([entry], lambda tag: copy.deepcopy(data), embedded_assets)
+
+        self.assertEqual(result["releases"][0]["title"], entry["name"])
+        self.assertEqual(result["releases"][0]["release_notes"], entry["body"])
+
+    def test_marker_notes_remain_authoritative_when_present(self):
+        data = metadata()
+        data["title"] = "已审核标题"
+        data["release_notes"] = "已审核说明"
+        entry = release(data)
+        entry["name"] = "Release 标题"
+        entry["body"] = "Release 说明"
+
+        result = manifest.build_manifest([entry], lambda tag: copy.deepcopy(data), embedded_assets)
+
+        self.assertEqual(result["releases"][0]["title"], data["title"])
+        self.assertEqual(result["releases"][0]["release_notes"], data["release_notes"])
+
     def test_invalid_new_release_preserves_valid_history(self):
         old, new = metadata(1), metadata(6)
         for failure in ("source", "digest", "size", "url", "tag", "schema"):

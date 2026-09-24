@@ -604,6 +604,8 @@ pub fn translate_action_name(name: &str) -> Option<&'static str> {
         "zed::Minimize" => Some("Zed: 最小化"),
         "zed::OpenAccountSettings" => Some("Zed: 打开账户设置"),
         "zed::OpenBrowser" => Some("Zed: 打开浏览器"),
+        "web::OpenPreview" => Some("网页: 在浏览器中实时预览"),
+        "web::StopPreview" => Some("网页: 停止实时预览"),
         "zed::OpenDebugTasks" => Some("Zed: 打开调试任务"),
         "zed::OpenDefaultKeymap" => Some("Zed: 打开默认快捷键文件"),
         "zed::OpenDefaultSettings" => Some("Zed: 打开默认设置"),

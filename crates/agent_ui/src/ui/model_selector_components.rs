@@ -167,11 +167,11 @@ impl RenderOnce for ModelSelectorListItem {
                     .when(self.is_latest, |parent| parent.child(Chip::new("Latest")))
                     .when_some(self.cost_info, |this, cost_info| {
                         let tooltip_text = if cost_info.ends_with('×') {
-                            format!("Cost Multiplier: {}", cost_info)
+                            format!("成本倍数：{}", cost_info)
                         } else if cost_info.contains('$') {
-                            format!("Cost per Million Tokens: {}", cost_info)
+                            format!("每百万 Token 成本：{}", cost_info)
                         } else {
-                            format!("Cost: {}", cost_info)
+                            format!("成本：{}", cost_info)
                         };
 
                         this.child(Chip::new(cost_info).tooltip(Tooltip::text(tooltip_text)))

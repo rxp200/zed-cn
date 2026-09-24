@@ -870,6 +870,14 @@ impl Item for Editor {
         true
     }
 
+    fn clone_to_new_window(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let Some(workspace) = self.workspace() else {
+            return false;
+        };
+        let clone = cx.new(|cx| self.clone(window, cx));
+        Workspace::open_item_clone_window(workspace, Box::new(clone), window, cx)
+    }
+
     fn clone_on_split(
         &self,
         _workspace_id: Option<WorkspaceId>,
@@ -1222,7 +1230,10 @@ impl Item for Editor {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Vec<(SharedString, Box<dyn gpui::Action>)> {
-        let mut actions = Vec::new();
+        let mut actions = vec![(
+            "复制到新窗口".into(),
+            Box::new(workspace::CloneItemToNewWindow) as Box<dyn gpui::Action>,
+        )];
 
         let is_markdown = self
             .buffer()

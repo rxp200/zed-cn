@@ -1727,7 +1727,7 @@ impl InlineAssist {
                                         .ok();
                                 }
 
-                                let error = format!("Inline assistant error: {}", error);
+                                let error = format!("内联助手错误：{}", error);
                                 workspace.update(cx, |workspace, cx| {
                                     struct InlineAssistantError;
 

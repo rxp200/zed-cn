@@ -14,7 +14,7 @@ use gpui::{
     Action, AnyElement, App, ClipboardEntry, DismissEvent, Entity, EventEmitter, ExternalPaths,
     FocusHandle, Focusable, Font, KeyContext, KeyDownEvent, Keystroke, MouseButton, MouseDownEvent,
     Pixels, Point as GpuiPoint, Render, ScrollWheelEvent, Styled, Subscription, Task, TaskExt,
-    WeakEntity, actions, anchored, deferred, div,
+    WeakEntity, WindowBounds, actions, anchored, deferred, div, point,
 };
 use menu;
 use persistence::TerminalDb;
@@ -53,8 +53,8 @@ use ui::{
 };
 use util::ResultExt;
 use workspace::{
-    CloseActiveItem, DraggedSelection, DraggedTab, NewCenterTerminal, NewTerminal, Pane, Toast,
-    ToolbarItemLocation, Workspace, WorkspaceId, delete_unloaded_items,
+    CloseActiveItem, DraggedSelection, DraggedTab, MultiWorkspace, NewCenterTerminal, NewTerminal,
+    Pane, Toast, ToolbarItemLocation, Workspace, WorkspaceId, delete_unloaded_items,
     item::{
         HighlightedText, Item, ItemEvent, SerializableItem, TabContentParams, TabTooltipContent,
     },
@@ -173,6 +173,16 @@ actions!(
 #[derive(Clone, Debug, Default, Deserialize, JsonSchema, PartialEq, Action)]
 #[action(namespace = terminal)]
 pub struct RenameTerminal;
+
+/// Moves the terminal tab to a new window.
+#[derive(Clone, Debug, Default, Deserialize, JsonSchema, PartialEq, Action)]
+#[action(namespace = terminal)]
+pub struct MoveTerminalToNewWindow;
+
+/// Creates a read-only snapshot with the terminal's retained scrollback.
+#[derive(Clone, Debug, Default, Deserialize, JsonSchema, PartialEq, Action)]
+#[action(namespace = terminal)]
+pub struct FreezeTerminalToNewWindow;
 
 pub fn init(cx: &mut App) {
     terminal_panel::init(cx);
@@ -299,6 +309,153 @@ impl TerminalView {
             }
         })
         .detach_and_log_err(cx);
+    }
+
+    fn move_to_new_window(
+        &mut self,
+        _: &MoveTerminalToNewWindow,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(workspace) = self.workspace.upgrade() else {
+            return;
+        };
+        let source_item = cx.entity();
+        let source_pane = workspace.read(cx).pane_for(&source_item).or_else(|| {
+            workspace
+                .read(cx)
+                .panel::<TerminalPanel>(cx)?
+                .read(cx)
+                .center
+                .panes()
+                .into_iter()
+                .find(|pane| pane.read(cx).index_for_item(&source_item).is_some())
+                .cloned()
+        });
+        let Some(source_pane) = source_pane else {
+            return;
+        };
+        Self::schedule_detach_to_new_window(source_item, source_pane, window, cx);
+    }
+
+    fn freeze_to_new_window(
+        &mut self,
+        _: &FreezeTerminalToNewWindow,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(workspace) = self.workspace.upgrade() else {
+            return;
+        };
+        let terminal = cx.new(|cx| {
+            self.terminal
+                .read(cx)
+                .frozen_snapshot_builder(cx)
+                .subscribe(cx)
+        });
+        let title = format!("[冻结] {}", self.tab_content_text(0, cx));
+        let frozen_view = cx.new(|cx| {
+            let mut view = TerminalView::new(
+                terminal,
+                workspace.downgrade(),
+                None,
+                self.project.clone(),
+                window,
+                cx,
+            )
+            .with_read_only(true);
+            view.custom_title = Some(title);
+            view
+        });
+        Workspace::open_item_clone_window(workspace, Box::new(frozen_view), window, cx);
+    }
+
+    fn schedule_detach_to_new_window(
+        source_item: Entity<Self>,
+        source_pane: Entity<Pane>,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let source_window = window.window_handle();
+        cx.defer(move |cx| {
+            source_window
+                .update(cx, |_, window, cx| {
+                    Self::detach_to_new_window(source_item, source_pane, window, cx);
+                })
+                .ok();
+        });
+    }
+
+    fn detach_to_new_window(
+        source_item: Entity<Self>,
+        source_pane: Entity<Pane>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> bool {
+        let Some(source_workspace) = source_item.read(cx).workspace.upgrade() else {
+            return false;
+        };
+        let item_id = source_item.entity_id();
+        let project = source_workspace.read(cx).project().clone();
+        let app_state = source_workspace.read(cx).app_state().clone();
+        let size = window.viewport_size();
+        let position = window.window_bounds().get_bounds().origin + point(px(32.), px(32.));
+        let mut options = (app_state.build_window_options)(None, cx);
+        options.window_bounds = Some(WindowBounds::Windowed(gpui::Bounds::new(position, size)));
+
+        let result = cx.open_window(options, move |window, cx| {
+            let workspace = cx.new(|cx| Workspace::new(None, project, app_state, window, cx));
+            cx.new(|cx| MultiWorkspace::new(workspace, window, cx))
+        });
+        let Ok(destination_window) = result else {
+            return false;
+        };
+
+        source_pane.update(cx, |pane, cx| {
+            pane.remove_item(item_id, false, false, window, cx);
+        });
+        let move_result = destination_window.update(cx, |multi_workspace, destination, cx| {
+            let destination_workspace = multi_workspace.workspace().clone();
+            let destination_pane = destination_workspace.read(cx).active_pane().clone();
+            destination_pane.update(cx, |pane, cx| {
+                pane.add_item(
+                    Box::new(source_item.clone()),
+                    true,
+                    true,
+                    None,
+                    destination,
+                    cx,
+                );
+            });
+            source_item.update(cx, |terminal_view, cx| {
+                terminal_view.rebind_workspace(destination_workspace.downgrade(), destination, cx);
+            });
+            destination.activate_window();
+        });
+
+        if move_result.is_err() {
+            destination_window
+                .update(cx, |_, destination, _| destination.remove_window())
+                .ok();
+            source_pane.update(cx, |pane, cx| {
+                pane.add_item(Box::new(source_item), true, true, None, window, cx);
+            });
+            return false;
+        }
+
+        true
+    }
+
+    fn rebind_workspace(
+        &mut self,
+        workspace: WeakEntity<Workspace>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.workspace = workspace.clone();
+        self._terminal_subscriptions =
+            subscribe_for_terminal_events(&self.terminal, workspace, window, cx);
+        cx.notify();
     }
 
     pub fn new(
@@ -1650,6 +1807,8 @@ impl Render for TerminalView {
             .relative()
             .track_focus(&self.focus_handle(cx))
             .key_context(self.dispatch_context(cx))
+            .on_action(cx.listener(TerminalView::move_to_new_window))
+            .on_action(cx.listener(TerminalView::freeze_to_new_window))
             .on_action(cx.listener(TerminalView::send_text))
             .on_action(cx.listener(TerminalView::send_keystroke))
             .on_action(cx.listener(TerminalView::copy))
@@ -1743,7 +1902,16 @@ impl Render for TerminalView {
 impl Item for TerminalView {
     type Event = ItemEvent;
 
+    fn tab_icon(&self, _window: &Window, _cx: &App) -> Option<Icon> {
+        self.read_only.then(|| Icon::new(IconName::Lock))
+    }
+
     fn tab_tooltip_content(&self, cx: &App) -> Option<TabTooltipContent> {
+        if self.read_only {
+            return Some(TabTooltipContent::Text(
+                "冻结终端快照 · 包含创建时保留的滚动历史 · 仅供查看".into(),
+            ));
+        }
         Some(TabTooltipContent::Custom(Box::new(Tooltip::element({
             let terminal = self.terminal().read(cx);
             let title = terminal.title(false);
@@ -2036,12 +2204,27 @@ impl Item for TerminalView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Vec<(SharedString, Box<dyn gpui::Action>)> {
-        let terminal = self.terminal.read(cx);
-        if terminal.task().is_none() {
-            vec![("Rename".into(), Box::new(RenameTerminal))]
-        } else {
-            Vec::new()
+        let mut actions: Vec<(SharedString, Box<dyn gpui::Action>)> = vec![
+            ("移动到新窗口".into(), Box::new(MoveTerminalToNewWindow)),
+            (
+                "创建冻结终端页面".into(),
+                Box::new(FreezeTerminalToNewWindow),
+            ),
+        ];
+        if self.terminal.read(cx).task().is_none() {
+            actions.push(("Rename".into(), Box::new(RenameTerminal)));
         }
+        actions
+    }
+
+    fn detach_to_new_window(
+        &mut self,
+        source_pane: Entity<Pane>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        Self::schedule_detach_to_new_window(cx.entity(), source_pane, window, cx);
+        true
     }
 
     fn buffer_kind(&self, _: &App) -> workspace::item::ItemBufferKind {
@@ -3130,6 +3313,59 @@ mod tests {
                 (active_pane, terminal, terminal_view)
             })
             .unwrap()
+    }
+
+    #[gpui::test]
+    async fn moving_terminal_to_new_window_preserves_view_and_terminal(cx: &mut TestAppContext) {
+        let (project, source_workspace, source_window) = init_test_with_window(cx).await;
+        let (source_pane, terminal, terminal_view) =
+            add_display_only_terminal(&project, source_window, false, false, cx);
+        let original_item_id = terminal_view.entity_id();
+        let original_terminal_id = terminal.entity_id();
+
+        let moved = source_window
+            .update(cx, |_, window, cx| {
+                TerminalView::detach_to_new_window(
+                    terminal_view.clone(),
+                    source_pane.clone(),
+                    window,
+                    cx,
+                )
+            })
+            .unwrap();
+        assert!(moved);
+        assert!(source_workspace.read_with(cx, |workspace, cx| {
+            workspace.pane_for_entity_id(original_item_id).is_none()
+                && workspace.project() == &project
+                && workspace.active_item(cx).is_none()
+        }));
+
+        let destination_workspace = cx
+            .windows()
+            .into_iter()
+            .filter(|window| window.window_id() != source_window.window_id())
+            .find_map(|window| {
+                window
+                    .downcast::<MultiWorkspace>()?
+                    .read_with(cx, |multi_workspace, _| multi_workspace.workspace().clone())
+                    .ok()
+            })
+            .expect("a destination workspace should be opened");
+        assert!(destination_workspace.read_with(cx, |workspace, cx| {
+            workspace.project() == &project
+                && workspace.active_item(cx).is_some_and(|item| {
+                    item.item_id() == original_item_id
+                        && item.downcast::<TerminalView>().is_some_and(|view| {
+                            view.read(cx).terminal.entity_id() == original_terminal_id
+                        })
+                })
+        }));
+        assert_eq!(
+            terminal_view.read_with(cx, |terminal_view, _| {
+                terminal_view.workspace.entity_id()
+            }),
+            destination_workspace.entity_id()
+        );
     }
 
     /// Creates a worktree with 1 file /root.txt and returns the project, workspace, and window handle.

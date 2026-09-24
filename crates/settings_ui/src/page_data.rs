@@ -8963,7 +8963,7 @@ fn code_explanations_section() -> [SettingsPageItem; 12] {
         }),
         SettingsPageItem::SettingItem(SettingItem {
             title: "最大并发请求数",
-            description: "每个项目独立同时执行的代码讲解请求数量；切换项目不会共享额度，默认及最大值为 5。",
+            description: "每个项目独立同时执行的代码讲解请求数量；切换项目不会共享额度，默认值为 5，不设最大限制。较高的数值会增加内存、网络、模型服务压力和费用。",
             field: Box::new(SettingField {
                 organization_override: None,
                 json_path: Some("code_explanations.max_concurrent_requests"),

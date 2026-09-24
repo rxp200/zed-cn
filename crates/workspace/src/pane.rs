@@ -317,6 +317,8 @@ actions!(
         TogglePinTab,
         /// Unpins all tabs in the pane.
         UnpinAllTabs,
+        /// Clones the active item into a new window.
+        CloneItemToNewWindow,
     ]
 );
 
@@ -527,6 +529,17 @@ pub struct DraggedTab {
     pub ix: usize,
     pub detail: usize,
     pub is_active: bool,
+}
+
+impl DraggedTab {
+    fn release_outside_source(&self, window: &mut Window, cx: &mut App) {
+        if self
+            .item
+            .detach_to_new_window(self.pane.clone(), window, cx)
+        {
+            cx.stop_active_drag(window);
+        }
+    }
 }
 
 impl EventEmitter<Event> for Pane {}
@@ -1440,6 +1453,20 @@ impl Pane {
         self.items.get(ix).map(|i| i.as_ref())
     }
 
+    fn clone_item_to_new_window(
+        &mut self,
+        _: &CloneItemToNewWindow,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(item) = self.active_item() else {
+            return;
+        };
+        if !item.clone_to_new_window(window, cx) {
+            cx.propagate();
+        }
+    }
+
     pub fn toggle_zoom(&mut self, _: &ToggleZoom, window: &mut Window, cx: &mut Context<Self>) {
         if !self.can_toggle_zoom {
             cx.propagate();
@@ -1998,7 +2025,7 @@ impl Pane {
                     let detail = Self::file_names_for_prompt(&mut dirty_items.iter(), cx);
                     window.prompt(
                         PromptLevel::Warning,
-                        "Do you want to save changes to the following files?",
+                        "要保存以下文件的更改吗？",
                         Some(&detail),
                         &["全部保存", "全部丢弃", "取消"],
                         cx,
@@ -2049,7 +2076,7 @@ impl Pane {
                                 );
                                 window.prompt(
                                     PromptLevel::Warning,
-                                    &format!("Unable to save file: {err}"),
+                                    &format!("无法保存文件：{err}"),
                                     Some(&detail),
                                     &["不保存关闭", "取消"],
                                     cx,
@@ -2955,6 +2982,9 @@ impl Pane {
                 },
                 |tab, _, _, cx| cx.new(|_| tab.clone()),
             )
+            .on_drag_release_outside(|tab: &DraggedTab, window, cx| {
+                tab.release_outside_source(window, cx);
+            })
             .drag_over::<DraggedTab>(move |tab, dragged_tab: &DraggedTab, _, cx| {
                 let mut styled_tab = tab
                     .bg(cx.theme().colors().drop_target_background)
@@ -4485,6 +4515,7 @@ impl Render for Pane {
             .on_action(cx.listener(Self::swap_item_right))
             .on_action(cx.listener(Self::toggle_pin_tab))
             .on_action(cx.listener(Self::unpin_all_tabs))
+            .on_action(cx.listener(Self::clone_item_to_new_window))
             .when(PreviewTabsSettings::get_global(cx).enabled, |this| {
                 this.on_action(
                     cx.listener(|pane: &mut Pane, _: &TogglePreviewTab, window, cx| {

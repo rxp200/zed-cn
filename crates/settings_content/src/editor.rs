@@ -1130,7 +1130,7 @@ pub struct CodeExplanationSettingsContent {
     /// Explain a file as one request within this line count; larger files are split by syntax.
     /// Individual functions over the same threshold still require confirmation.
     pub max_function_lines: Option<u64>,
-    /// Maximum number of code explanation model requests running at once.
+    /// Number of code explanation model requests allowed to run at once per project.
     pub max_concurrent_requests: Option<u64>,
     /// Number of buffer lines to preload above and below the visible viewport.
     pub preload_lines: Option<u64>,

@@ -233,20 +233,20 @@ fn announcement_for_version(version: &Version, cx: &App) -> Option<AnnouncementC
 
         let mut bullet_items: Vec<SharedString> = Vec::with_capacity(3);
         bullet_items
-            .push(format!("Skills live in {GLOBAL_SKILLS_DIR_DISPLAY}/<name>/SKILL.md").into());
-        bullet_items.push("Type / to manually invoke a skill".into());
+            .push(format!("技能位于 {GLOBAL_SKILLS_DIR_DISPLAY}/<name>/SKILL.md").into());
+        bullet_items.push("输入 / 可手动调用技能".into());
         if migrated_anything {
             bullet_items.push(
-                "The Rules Library is making way for skills: your default rules are now in a global AGENTS.md, and your other rules have been converted to skills".into(),
+                "规则库正被技能取代：你的默认规则现在位于全局 AGENTS.md 中，其他规则已转换为技能".into(),
             );
         }
 
         Some(AnnouncementContent {
-            heading: "Introducing Skills Support".into(),
-            description: "Extend the agent with focused instructions and domain knowledge.".into(),
+            heading: "推出技能支持".into(),
+            description: "为代理添加针对性的指令和领域知识。".into(),
             bullet_items,
-            primary_action_label: "Try Now".into(),
-            secondary_action_label: "Read Documentation".into(),
+            primary_action_label: "立即尝试".into(),
+            secondary_action_label: "阅读文档".into(),
             primary_action_url: None,
             primary_action_callback: Some(Arc::new(move |window, cx| {
                 window.dispatch_action(Box::new(zed_actions::assistant::FocusAgent), cx);

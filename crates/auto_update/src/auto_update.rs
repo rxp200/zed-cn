@@ -226,6 +226,52 @@ pub struct CustomReleaseNotes {
     pub body: String,
 }
 
+fn custom_release_notes_from_manifest(
+    manifest: UpdateManifest,
+    installed_tag: &str,
+) -> Option<CustomReleaseNotes> {
+    let installed_release = parse_zed_cn_release_tag(installed_tag)?;
+    let mut releases = manifest
+        .releases
+        .into_iter()
+        .filter_map(|release| {
+            let identity = parse_zed_cn_release_tag(&release.tag_name)?;
+            (identity <= installed_release
+                && !release.title.trim().is_empty()
+                && !release.release_notes.trim().is_empty())
+            .then_some((identity, release))
+        })
+        .collect::<Vec<_>>();
+    releases.sort_by_key(|(identity, _)| std::cmp::Reverse(identity.clone()));
+    if !releases
+        .iter()
+        .any(|(_, release)| release.tag_name == installed_tag)
+    {
+        return None;
+    }
+
+    let mut body = String::new();
+    for (index, (_, release)) in releases.into_iter().enumerate() {
+        if index > 0 {
+            body.push_str("\n\n---\n\n");
+        }
+        body.push_str("# [");
+        body.push_str(release.title.trim());
+        body.push_str("](https://github.com/rxp200/zed-cn/releases/tag/");
+        body.push_str(&release.tag_name);
+        body.push_str(")\n\n");
+        if release.tag_name == installed_tag {
+            body.push_str("*当前安装版本*\n\n");
+        }
+        body.push_str(release.release_notes.trim());
+    }
+
+    Some(CustomReleaseNotes {
+        title: "Zed CN 发布说明".to_string(),
+        body,
+    })
+}
+
 #[derive(Clone, Deserialize, Debug)]
 struct GitHubReleaseAsset {
     name: String,
@@ -362,7 +408,7 @@ pub fn check(_: &Check, window: &mut Window, cx: &mut App) {
     {
         drop(window.prompt(
             gpui::PromptLevel::Info,
-            "Zed was installed via a package manager.",
+            "Zed 是通过包管理器安装的。",
             Some(&message),
             &["确定"],
             cx,
@@ -382,8 +428,8 @@ pub fn check(_: &Check, window: &mut Window, cx: &mut App) {
     } else {
         drop(window.prompt(
             gpui::PromptLevel::Info,
-            "Could not check for updates",
-            Some("Auto-updates disabled for non-bundled app."),
+            "无法检查更新",
+            Some("已为非打包应用禁用自动更新。"),
             &["确定"],
             cx,
         ));
@@ -448,17 +494,7 @@ pub async fn custom_release_notes(
         .log_err()?
         .log_err()?;
     let manifest = parse_update_manifest(&body).log_err()?;
-    let release = manifest
-        .releases
-        .into_iter()
-        .find(|release| release.tag_name == tag)?;
-    if release.title.trim().is_empty() || release.release_notes.trim().is_empty() {
-        return None;
-    }
-    Some(CustomReleaseNotes {
-        title: release.title,
-        body: release.release_notes,
-    })
+    custom_release_notes_from_manifest(manifest, tag)
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -1023,7 +1059,7 @@ impl AutoUpdater {
 
         let installer_dir = InstallerDir::new()
             .await
-            .context("Failed to create installer dir")?;
+            .context("创建安装程序目录失败")?;
         let target_path = Self::target_path(&installer_dir).await?;
         let progress_entity = this.clone();
         let mut progress_cx = cx.clone();
@@ -1045,7 +1081,7 @@ impl AutoUpdater {
             },
         )
         .await
-        .with_context(|| format!("Failed to download update to {}", target_path.display()))?;
+        .with_context(|| format!("下载更新到 {} 失败", target_path.display()))?;
 
         if let Some(expected_sha256) = expected_sha256 {
             let target_path = target_path.clone();
@@ -1086,7 +1122,7 @@ impl AutoUpdater {
             .await
         };
         let new_binary_path = install_result
-            .with_context(|| format!("Failed to install update at: {}", target_path.display()))?;
+            .with_context(|| format!("在 {} 安装更新失败", target_path.display()))?;
         if let Some(new_binary_path) = new_binary_path {
             cx.update(|cx| cx.set_restart_path(new_binary_path));
         }
@@ -1230,7 +1266,7 @@ impl AutoUpdater {
         #[cfg(target_os = "macos")]
         anyhow::ensure!(
             which::which("rsync").is_ok(),
-            "Could not auto-update because the required rsync utility was not found."
+            "无法自动更新，因为未找到所需的 rsync 工具。"
         );
 
         Ok(())
@@ -2484,6 +2520,55 @@ mod tests {
         assert!(
             parse_update_manifest(&vec![b' '; UPDATE_MANIFEST_MAX_BYTES as usize + 1]).is_err()
         );
+    }
+
+    #[test]
+    fn test_custom_release_notes_include_available_history_through_installed_release() {
+        let release = |tag: &str, title: &str, notes: &str| GitHubRelease {
+            tag_name: tag.to_string(),
+            target_commitish: "a".repeat(40),
+            draft: false,
+            prerelease: false,
+            title: title.to_string(),
+            release_notes: notes.to_string(),
+            assets: Vec::new(),
+        };
+        let manifest = UpdateManifest {
+            schema_version: 1,
+            releases: vec![
+                release("zed-cn-v1.20.2-r6", "Zed CN 1.20.2 r6", "## 新版本"),
+                release("zed-cn-v1.20.2-r4", "", ""),
+                release("zed-cn-v1.19.2-r12", "Zed CN 1.19.2 r12", "## 旧版本"),
+                release("zed-cn-v1.21.0-r1", "Zed CN 1.21.0 r1", "## 未来版本"),
+            ],
+        };
+
+        let notes = custom_release_notes_from_manifest(manifest, "zed-cn-v1.20.2-r6").unwrap();
+        assert_eq!(notes.title, "Zed CN 发布说明");
+        assert!(notes.body.contains("# [Zed CN 1.20.2 r6]"));
+        assert!(notes.body.contains("*当前安装版本*"));
+        assert!(notes.body.contains("# [Zed CN 1.19.2 r12]"));
+        assert!(notes.body.contains("## 旧版本"));
+        assert!(!notes.body.contains("zed-cn-v1.20.2-r4"));
+        assert!(!notes.body.contains("未来版本"));
+    }
+
+    #[test]
+    fn test_custom_release_notes_require_installed_release_notes() {
+        let manifest = UpdateManifest {
+            schema_version: 1,
+            releases: vec![GitHubRelease {
+                tag_name: "zed-cn-v1.20.2-r4".to_string(),
+                target_commitish: "a".repeat(40),
+                draft: false,
+                prerelease: false,
+                title: String::new(),
+                release_notes: String::new(),
+                assets: Vec::new(),
+            }],
+        };
+
+        assert!(custom_release_notes_from_manifest(manifest, "zed-cn-v1.20.2-r4").is_none());
     }
 
     #[gpui::test]

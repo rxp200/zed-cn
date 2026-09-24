@@ -164,6 +164,39 @@ impl TerminalPanel {
         terminal_panel
     }
 
+    pub fn port_forward_manager(&self) -> Entity<PortForwardManager> {
+        self.port_forward_manager.clone()
+    }
+
+    pub fn stop_task(&self, task_id: &TaskId, cx: &mut Context<Self>) {
+        let terminals = self
+            .center
+            .panes()
+            .into_iter()
+            .flat_map(|pane| {
+                pane.read(cx)
+                    .items_of_type::<TerminalView>()
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        for terminal in terminals {
+            let terminal = terminal.read(cx).terminal().clone();
+            let is_target = terminal
+                .read(cx)
+                .task()
+                .is_some_and(|task| task.spawned_task.id == *task_id);
+            if is_target {
+                terminal.update(cx, |terminal, _| {
+                    if terminal.is_remote_terminal() {
+                        terminal.input(vec![3]);
+                    } else {
+                        terminal.kill_active_task();
+                    }
+                });
+            }
+        }
+    }
+
     pub fn detect_ports(&mut self, output: &str, project: Entity<Project>, cx: &mut Context<Self>) {
         self.port_forward_manager.update(cx, |manager, cx| {
             manager.detect_from_terminal_output(output, project, cx);

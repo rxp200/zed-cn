@@ -928,6 +928,20 @@ pub mod preview {
             ]
         );
     }
+
+    pub mod web {
+        use gpui::actions;
+
+        actions!(
+            web,
+            [
+                /// Opens the current HTML file in a live browser preview.
+                OpenPreview,
+                /// Stops the live browser preview for the current workspace.
+                StopPreview,
+            ]
+        );
+    }
 }
 
 pub mod agents_sidebar {

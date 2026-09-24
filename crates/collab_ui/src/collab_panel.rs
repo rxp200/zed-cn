@@ -165,7 +165,7 @@ pub fn init(cx: &mut App) {
                         workspace.show_toast(
                             workspace::Toast::new(
                                 NotificationId::unique::<RoomIdCopiedToast>(),
-                                "Room ID copied to clipboard",
+                                "已复制房间 ID 到剪贴板",
                             )
                             .autohide(),
                             cx,
@@ -174,7 +174,7 @@ pub fn init(cx: &mut App) {
                 })
                 .detach_and_notify_err(workspace_handle, window, cx);
             } else {
-                workspace.show_error("There’s no active call; join one first.", cx);
+                workspace.show_error("当前没有进行中的通话；请先加入一个。", cx);
             }
         });
         workspace.register_action(|workspace, _: &ShareProject, window, cx| {

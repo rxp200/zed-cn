@@ -232,16 +232,20 @@ pub fn deploy_context_menu(
             .and_then(|buffer| buffer.read(cx).language())
             .is_some_and(|language| language.name().as_ref() == "Markdown");
 
-        let is_svg = editor
-            .buffer()
-            .read(cx)
-            .as_singleton()
-            .and_then(|buffer| buffer.read(cx).file())
-            .is_some_and(|file| {
-                std::path::Path::new(file.file_name(cx))
-                    .extension()
-                    .is_some_and(|ext| ext.eq_ignore_ascii_case("svg"))
-            });
+        let file_extension_is = |expected: &str| {
+            editor
+                .buffer()
+                .read(cx)
+                .as_singleton()
+                .and_then(|buffer| buffer.read(cx).file())
+                .is_some_and(|file| {
+                    std::path::Path::new(file.file_name(cx))
+                        .extension()
+                        .is_some_and(|extension| extension.eq_ignore_ascii_case(expected))
+                })
+        };
+        let is_svg = file_extension_is("svg");
+        let is_html = file_extension_is("html") || file_extension_is("htm");
 
         ui::ContextMenu::build(window, cx, |menu, _window, _cx| {
             let builder = menu
@@ -307,6 +311,12 @@ pub fn deploy_context_menu(
                 })
                 .when(is_svg, |builder| {
                     builder.action("打开SVG预览", Box::new(OpenSvgPreview))
+                })
+                .when(is_html, |builder| {
+                    builder.action(
+                        "在浏览器中实时预览",
+                        Box::new(zed_actions::preview::web::OpenPreview),
+                    )
                 })
                 .action_disabled_when(!has_reveal_target, "在终端中打开", Box::new(OpenInTerminal))
                 .action_disabled_when(

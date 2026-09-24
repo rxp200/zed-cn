@@ -5498,6 +5498,7 @@ impl Window {
                             cursor_offset: position,
                             cursor_style: None,
                             external_payload_source: None,
+                            release_outside_source: None,
                         });
                     }
                     PlatformInput::MouseMove(MouseMoveEvent {
@@ -5803,10 +5804,15 @@ impl Window {
                 // If this was a mouse move event, redraw the window so that the
                 // active drag can follow the mouse cursor.
                 self.refresh();
-            } else if event.is::<MouseUpEvent>() {
-                // If this was a mouse up event, cancel the active drag and redraw
-                // the window.
-                cx.active_drag = None;
+            } else if let Some(mouse_up) = event.downcast_ref::<MouseUpEvent>() {
+                let drag = cx.active_drag.take();
+                if let Some(mut drag) = drag
+                    && !Bounds::new(Point::default(), self.viewport_size)
+                        .contains(&mouse_up.position)
+                    && let Some(release_outside_source) = drag.release_outside_source.take()
+                {
+                    release_outside_source(drag.value.as_ref(), self, cx);
+                }
                 self.refresh();
             }
         }

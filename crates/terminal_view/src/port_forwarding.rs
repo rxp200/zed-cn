@@ -49,6 +49,7 @@ pub enum ForwardDirection {
 pub enum ForwardSource {
     Automatic,
     Manual,
+    Preview,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -627,6 +628,43 @@ impl PortForwardManager {
         self.start(direction, port, ForwardSource::Manual, project, cx);
     }
 
+    pub fn add_preview(&mut self, port: u16, project: Entity<Project>, cx: &mut Context<Self>) {
+        if !self
+            .entries
+            .contains_key(&(ForwardDirection::RemoteToLocal, port))
+        {
+            self.start(
+                ForwardDirection::RemoteToLocal,
+                port,
+                ForwardSource::Preview,
+                project,
+                cx,
+            );
+        }
+    }
+
+    pub fn stop_preview(&mut self, port: u16, cx: &mut Context<Self>) {
+        if self
+            .entries
+            .get(&(ForwardDirection::RemoteToLocal, port))
+            .is_some_and(|entry| entry.source == ForwardSource::Preview)
+        {
+            self.stop(ForwardDirection::RemoteToLocal, port, cx);
+        }
+    }
+
+    pub fn available_remote_port(&self) -> Result<u16> {
+        for port in 49152..=65535 {
+            if !self
+                .entries
+                .contains_key(&(ForwardDirection::RemoteToLocal, port))
+            {
+                return Ok(port);
+            }
+        }
+        Err(anyhow!("没有可用于网页预览的远端端口"))
+    }
+
     pub fn stop(&mut self, direction: ForwardDirection, port: u16, cx: &mut Context<Self>) {
         if let Some(mut entry) = self.entries.remove(&(direction, port))
             && let Some(cancellation) = entry.cancellation.take()
@@ -1079,6 +1117,7 @@ impl Render for PortForwardModal {
                 let source = match entry.source {
                     ForwardSource::Automatic => "自动",
                     ForwardSource::Manual => "手动",
+                    ForwardSource::Preview => "网页预览",
                 };
                 let local_port = entry.local_port.map(|port| port.to_string()).unwrap_or_else(|| "待分配".to_string());
                 let (address, status_color) = match &entry.status {

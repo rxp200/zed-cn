@@ -76,7 +76,7 @@ impl WorkspaceError for DevExtensionNotInstalledError {
     fn primary_message(&self) -> SharedString {
         match &self.extension_id {
             Some(extension_id) => {
-                format!("Dev extension '{extension_id}' is not installed.").into()
+                format!("开发扩展 '{extension_id}' 未安装。").into()
             }
             None => "尚未安装开发扩展。".into(),
         }
@@ -219,7 +219,7 @@ pub fn init(cx: &mut App) {
                                         // NOTE: using `anyhow::context` here ends up not printing
                                         // the error
                                         workspace.show_error(
-                                            format!("Failed to install dev extension: {}", err),
+                                            format!("安装开发扩展失败：{}", err),
                                             cx,
                                         );
                                     })

@@ -274,7 +274,7 @@ pub struct CodeExplanationSettings {
     pub model: Option<String>,
     pub target_language: String,
     pub max_function_lines: u64,
-    pub max_concurrent_requests: u64,
+    pub max_concurrent_requests: usize,
     pub preload_lines: u64,
     pub detailed: bool,
     pub prefer_existing_comments: bool,
@@ -291,7 +291,9 @@ impl Settings for CodeExplanationSettings {
             model: content.model.map(|value| value.0),
             target_language: content.target_language.unwrap_or_else(|| "中文".into()),
             max_function_lines: content.max_function_lines.unwrap_or(500),
-            max_concurrent_requests: content.max_concurrent_requests.unwrap_or(5).clamp(1, 5),
+            max_concurrent_requests: code_explanation_concurrency(
+                content.max_concurrent_requests.unwrap_or(5),
+            ),
             preload_lines: content.preload_lines.unwrap_or(100).min(5000),
             detailed: content.detailed.unwrap_or(false),
             prefer_existing_comments: content.prefer_existing_comments.unwrap_or(true),
@@ -299,6 +301,10 @@ impl Settings for CodeExplanationSettings {
             cache_max_bytes: content.cache_max_bytes.unwrap_or(50 * 1024 * 1024),
         }
     }
+}
+
+fn code_explanation_concurrency(value: u64) -> usize {
+    usize::try_from(value.max(1)).unwrap_or(usize::MAX)
 }
 
 #[derive(Default)]
@@ -879,8 +885,7 @@ pub(crate) fn schedule(editor: &mut Editor, window: &gpui::Window, cx: &mut Cont
                     }
                 };
                 loop {
-                    if let Some(permit) = waiting.acquire(settings.max_concurrent_requests as usize)
-                    {
+                    if let Some(permit) = waiting.acquire(settings.max_concurrent_requests) {
                         this.update(cx, |_, cx| cx.notify()).ok();
                         break Some(permit);
                     }
@@ -1323,6 +1328,12 @@ fn trim_global_cache(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explanation_concurrency_has_no_configured_maximum() {
+        assert_eq!(code_explanation_concurrency(0), 1);
+        assert_eq!(code_explanation_concurrency(100), 100);
+    }
 
     #[gpui::test]
     async fn model_request_is_read_only_and_structured(cx: &mut gpui::TestAppContext) {
@@ -1987,7 +1998,7 @@ pub fn deep_explain_selection(
             {
                 return anyhow::Ok(());
             }
-            if let Some(permit) = waiting.acquire(settings.max_concurrent_requests as usize) {
+            if let Some(permit) = waiting.acquire(settings.max_concurrent_requests) {
                 editor_handle.update(cx, |_, cx| cx.notify()).ok();
                 break permit;
             }
@@ -2927,11 +2938,8 @@ async fn run_project_scan(
     cx: &mut gpui::AsyncApp,
 ) -> Result<()> {
     let mut pending = FuturesUnordered::new();
-    let concurrency = cx.update(|cx| {
-        CodeExplanationSettings::get_global(cx)
-            .max_concurrent_requests
-            .clamp(1, 5) as usize
-    });
+    let concurrency =
+        cx.update(|cx| CodeExplanationSettings::get_global(cx).max_concurrent_requests);
     for candidate in candidates {
         if cancelled.load(Ordering::SeqCst) {
             break;
@@ -3228,7 +3236,7 @@ async fn scan_project_file(
                 result.skipped = true;
                 return Ok(result);
             }
-            if let Some(permit) = waiting.acquire(settings.max_concurrent_requests as usize) {
+            if let Some(permit) = waiting.acquire(settings.max_concurrent_requests) {
                 break permit;
             }
             cx.background_executor()

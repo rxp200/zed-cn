@@ -1,11 +1,12 @@
 use gpui::{
     Action, App, Context, Div, Entity, EventEmitter, FocusHandle, Focusable, FontWeight, Hsla,
-    InteractiveElement as _, Render, StatefulInteractiveElement as _, Subscription, Task,
-    WeakEntity, Window, actions, px,
+    InteractiveElement as _, PathBuilder, Render, StatefulInteractiveElement as _, Subscription,
+    Task, WeakEntity, Window, actions, canvas, point, px,
 };
 use proto::GetSystemStatsResponse;
 use std::{collections::VecDeque, time::Duration};
 use sysinfo::{Disks, Networks, ProcessesToUpdate, System};
+use terminal_view::port_forwarding::{ForwardDirection, ForwardSnapshot, ForwardSource, ForwardStatus, PortForwardManager};
 use ui::{ProgressBar, prelude::*};
 use workspace::{
     Panel, StatusItemView, Workspace,
@@ -350,15 +351,39 @@ impl StatusItemView for SystemMonitor {
 
 pub struct SystemMonitorPanel {
     monitor: Entity<SystemMonitor>,
+    port_forward_manager: Option<Entity<PortForwardManager>>,
     focus_handle: FocusHandle,
+    _port_forward_subscription: Option<Subscription>,
 }
 
 impl SystemMonitorPanel {
-    pub fn new(monitor: Entity<SystemMonitor>, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        monitor: Entity<SystemMonitor>,
+        port_forward_manager: Option<Entity<PortForwardManager>>,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let port_forward_subscription = port_forward_manager
+            .as_ref()
+            .map(|manager| cx.observe(manager, |_, _, cx| cx.notify()));
         Self {
             monitor,
+            port_forward_manager,
             focus_handle: cx.focus_handle(),
+            _port_forward_subscription: port_forward_subscription,
         }
+    }
+
+    pub fn set_port_forward_manager(
+        &mut self,
+        port_forward_manager: Entity<PortForwardManager>,
+        cx: &mut Context<Self>,
+    ) {
+        self._port_forward_subscription = Some(cx.observe(
+            &port_forward_manager,
+            |_, _, cx| cx.notify(),
+        ));
+        self.port_forward_manager = Some(port_forward_manager);
+        cx.notify();
     }
 }
 
@@ -414,6 +439,11 @@ impl Render for SystemMonitorPanel {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let monitor = self.monitor.read(cx);
         let stats = monitor.stats.as_ref();
+        let forwarded_ports = self
+            .port_forward_manager
+            .as_ref()
+            .map(|manager| manager.read(cx).snapshots())
+            .unwrap_or_default();
         v_flex()
             .id("system-monitor-panel")
             .size_full()
@@ -456,7 +486,7 @@ impl Render for SystemMonitorPanel {
                         stats.cpu_usage_percent,
                         format!("{:.1}%", stats.cpu_usage_percent),
                         Some(
-                            sparkline_bars(
+                            sparkline(
                                 &monitor.cpu_history,
                                 100.,
                                 24.,
@@ -492,6 +522,9 @@ impl Render for SystemMonitorPanel {
                         None,
                         cx,
                     ))
+            })
+            .when(!forwarded_ports.is_empty(), |element| {
+                element.child(port_forwarding_card(&forwarded_ports, cx))
             })
             .when(stats.is_none(), |element| {
                 element.child(
@@ -614,6 +647,74 @@ fn resource_card(
         .child(ProgressBar::new(title, percent, 100., cx).fg_color(usage_color(percent, cx)))
 }
 
+fn port_forwarding_card(entries: &[ForwardSnapshot], cx: &App) -> impl IntoElement {
+    card(cx)
+        .child(
+            h_flex()
+                .w_full()
+                .min_w_0()
+                .gap_1p5()
+                .child(
+                    Icon::new(IconName::Link)
+                        .size(IconSize::Small)
+                        .color(Color::Accent),
+                )
+                .child(Label::new("端口转发")),
+        )
+        .children(entries.iter().map(|entry| {
+            let direction = match entry.direction {
+                ForwardDirection::RemoteToLocal => "远程 → 本地",
+                ForwardDirection::LocalToRemote => "本地 → 远程",
+            };
+            let source = match entry.source {
+                ForwardSource::Automatic => "自动",
+                ForwardSource::Manual => "手动",
+                ForwardSource::Preview => "网页预览",
+            };
+            let local_port = entry
+                .local_port
+                .map(|port| port.to_string())
+                .unwrap_or_else(|| "待分配".into());
+            let ports = match entry.direction {
+                ForwardDirection::RemoteToLocal => {
+                    format!("{} → {local_port}", entry.remote_port)
+                }
+                ForwardDirection::LocalToRemote => {
+                    format!("{local_port} → {}", entry.remote_port)
+                }
+            };
+            let (status, status_color) = match entry.status {
+                ForwardStatus::Starting => ("启动中", Color::Muted),
+                ForwardStatus::RunningUnconfirmed => ("运行中", Color::Success),
+                ForwardStatus::Failed(_) => ("失败", Color::Error),
+            };
+            v_flex()
+                .w_full()
+                .min_w_0()
+                .gap_0p5()
+                .child(
+                    h_flex()
+                        .w_full()
+                        .min_w_0()
+                        .justify_between()
+                        .gap_2()
+                        .child(
+                            Label::new(format!("{direction} · {source}"))
+                                .size(LabelSize::XSmall)
+                                .color(Color::Muted)
+                                .truncate(),
+                        )
+                        .child(
+                            Label::new(status)
+                                .size(LabelSize::XSmall)
+                                .color(status_color)
+                                .flex_none(),
+                        ),
+                )
+                .child(Label::new(ports).size(LabelSize::Small).truncate())
+        }))
+}
+
 fn network_card(stats: &SystemStats, monitor: &SystemMonitor, cx: &App) -> impl IntoElement {
     let maximum = monitor
         .download_history
@@ -672,7 +773,7 @@ fn network_row(
                 .flex_none(),
         )
         .child(
-            sparkline_bars(&values, maximum, 16., color)
+            sparkline(&values, maximum, 16., color)
                 .flex_1()
                 .min_w(px(24.)),
         )
@@ -683,22 +784,35 @@ fn network_row(
         )
 }
 
-// The bars share their container's width, so callers must place the result in a
-// row with `flex_1`, or in a column with `w_full`; a column child that grows would
-// collapse to a zero flex basis instead of keeping its height.
-fn sparkline_bars(values: &VecDeque<f32>, maximum: f32, height: f32, color: Hsla) -> Div {
-    h_flex()
-        .items_end()
-        .h(px(height))
-        .gap_px()
-        .children(values.iter().map(|value| {
-            div()
-                .flex_1()
-                .min_w(px(1.))
-                .h(relative((*value / maximum).clamp(0.06, 1.)))
-                .rounded_t_xs()
-                .bg(color)
-        }))
+fn sparkline(values: &VecDeque<f32>, maximum: f32, height: f32, color: Hsla) -> Div {
+    let values = values.iter().copied().collect::<Vec<_>>();
+    div().h(px(height)).relative().child(
+        canvas(
+            |_, _, _| {},
+            move |bounds, _, window, _| {
+                if values.len() < 2 || maximum <= 0. {
+                    return;
+                }
+                let last_index = (values.len() - 1) as f32;
+                let mut builder = PathBuilder::stroke(px(1.5));
+                for (index, value) in values.iter().enumerate() {
+                    let x = bounds.origin.x + bounds.size.width * (index as f32 / last_index);
+                    let normalized = (*value / maximum).clamp(0., 1.);
+                    let y = bounds.origin.y + bounds.size.height * (1. - normalized);
+                    if index == 0 {
+                        builder.move_to(point(x, y));
+                    } else {
+                        builder.line_to(point(x, y));
+                    }
+                }
+                if let Ok(path) = builder.build() {
+                    window.paint_path(path, color);
+                }
+            },
+        )
+        .absolute()
+        .size_full(),
+    )
 }
 
 fn metric_line(label: &'static str, value: String) -> impl IntoElement {

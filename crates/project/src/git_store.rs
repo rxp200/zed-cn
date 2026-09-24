@@ -2378,8 +2378,11 @@ impl GitStore {
                             cx.update(GitHostingProviderRegistry::default_global);
 
                         let (provider, remote) =
-                            parse_git_remote_url(provider_registry, &origin_url)
-                                .context("parsing Git remote URL")?;
+                            parse_git_remote_url(provider_registry, &origin_url).with_context(|| {
+                                format!(
+                                    "无法识别 Git 远程仓库“{remote}”对应的代码托管平台，因此无法生成文件永久链接。请检查该远程仓库地址；如果使用自建 Git 服务，请在设置的 git_hosting_providers 中配置它"
+                                )
+                            })?;
 
                         Ok(provider.build_permalink(
                             remote,

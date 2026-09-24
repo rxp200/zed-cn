@@ -11,6 +11,7 @@ enum PreviewTarget {
     Markdown(Entity<Editor>),
     Svg(Entity<MultiBuffer>),
     TabularData(Entity<Editor>),
+    Web,
 }
 
 impl QuickActionBar {
@@ -29,6 +30,10 @@ impl QuickActionBar {
             && SvgPreviewView::is_svg_file(&buffer, cx)
         {
             PreviewTarget::Svg(buffer)
+        } else if let Some(editor) = &editor
+            && web_preview::is_html_editor(editor, cx)
+        {
+            PreviewTarget::Web
         } else if let Some(editor) = editor
             && TabularDataPreviewPane::is_tabular_data_file(&editor, cx)
         {
@@ -50,11 +55,17 @@ impl QuickActionBar {
             ),
             PreviewTarget::TabularData(_) => (
                 "toggle-tabular-preview",
-                "Preview Tabular Data",
+                "预览表格数据",
                 &tabular_data_preview::OpenPreview as &dyn gpui::Action,
+            ),
+            PreviewTarget::Web => (
+                "open-web-preview",
+                "在浏览器中实时预览网页",
+                &zed_actions::preview::web::OpenPreview as &dyn gpui::Action,
             ),
         };
 
+        let is_web = matches!(preview_target, PreviewTarget::Web);
         let alt_click = gpui::Keystroke {
             key: "click".into(),
             modifiers: Modifiers::alt(),
@@ -65,15 +76,19 @@ impl QuickActionBar {
             .icon_size(IconSize::Small)
             .style(ButtonStyle::Subtle)
             .tooltip(move |_window, cx| {
-                Tooltip::with_meta(
-                    tooltip_text,
-                    Some(open_action_for_tooltip),
-                    format!(
-                        "{} to open in a split",
-                        text_for_keystroke(&alt_click.modifiers, &alt_click.key, cx)
-                    ),
-                    cx,
-                )
+                if is_web {
+                    Tooltip::for_action(tooltip_text, open_action_for_tooltip, cx)
+                } else {
+                    Tooltip::with_meta(
+                        tooltip_text,
+                        Some(open_action_for_tooltip),
+                        format!(
+                            "{} to open in a split",
+                            text_for_keystroke(&alt_click.modifiers, &alt_click.key, cx)
+                        ),
+                        cx,
+                    )
+                }
             })
             .on_click({
                 let workspace_handle = self.workspace.clone();
@@ -124,6 +139,10 @@ impl QuickActionBar {
                                     );
                                 }
                             }
+                            PreviewTarget::Web => window.dispatch_action(
+                                zed_actions::preview::web::OpenPreview.boxed_clone(),
+                                cx,
+                            ),
                         }
                     });
                 }

@@ -459,9 +459,9 @@ impl CommandPaletteDelegate {
             })
             .child(
                 ButtonLike::new(("remove-command-history", ix))
-                    .aria_label("Remove from Command History")
+                    .aria_label("从命令历史中移除")
                     .tooltip(Tooltip::for_action_title(
-                        "Remove from Command History",
+                        "从命令历史中移除",
                         &RemoveSelected,
                     ))
                     .child(

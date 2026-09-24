@@ -66,8 +66,8 @@ use gpui::{
     EventEmitter, FocusHandle, Focusable, Global, HitboxBehavior, Hsla, KeyContext, Keystroke,
     ManagedView, MouseButton, PathPromptOptions, Point, PromptLevel, Render, ResizeEdge, Size,
     Stateful, Subscription, SystemWindowTabController, Task, TaskExt, Tiling, WeakEntity,
-    WindowBounds, WindowHandle, WindowId, WindowOptions, actions, canvas, point, relative, size,
-    transparent_black,
+    WindowBounds, WindowHandle, WindowId, WindowOptions, actions, canvas, point, px, relative,
+    size, transparent_black,
 };
 pub use history_manager::*;
 pub use item::{
@@ -806,12 +806,7 @@ fn handle_file_permalink(
                 .ok();
             }
             Err(err) => {
-                let action = if copy {
-                    "copy file permalink"
-                } else {
-                    "open file permalink"
-                };
-                let message = format!("Failed to {action}: {err}");
+                let message = format_file_permalink_error(&err, copy);
                 anyhow::Result::<()>::Err(err).log_err();
 
                 workspace
@@ -826,6 +821,24 @@ fn handle_file_permalink(
             }
         })
         .detach();
+}
+
+fn format_file_permalink_error(error: &anyhow::Error, copy: bool) -> String {
+    let action = if copy {
+        "复制文件永久链接"
+    } else {
+        "打开文件永久链接"
+    };
+    let details = error
+        .chain()
+        .find_map(|cause| {
+            cause
+                .downcast_ref::<proto::RpcError>()
+                .map(proto::RpcError::raw_message)
+        })
+        .map(str::to_string)
+        .unwrap_or_else(|| error.to_string());
+    format!("无法{action}：{}", details.trim())
 }
 
 impl PartialEq for Toast {
@@ -2931,6 +2944,33 @@ impl Workspace {
         &self.project
     }
 
+    pub fn open_item_clone_window(
+        source_workspace: Entity<Self>,
+        item: Box<dyn ItemHandle>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> bool {
+        let project = source_workspace.read(cx).project.clone();
+        let app_state = source_workspace.read(cx).app_state.clone();
+        let size = window.viewport_size();
+        let position = window.window_bounds().get_bounds().origin + point(px(32.), px(32.));
+        let mut options = (app_state.build_window_options)(None, cx);
+        options.window_bounds = Some(WindowBounds::Windowed(Bounds::new(position, size)));
+        let result = cx.open_window(options, move |window, cx| {
+            let workspace = cx.new(|cx| Workspace::new(None, project, app_state, window, cx));
+            workspace.update(cx, |workspace, cx| {
+                workspace.add_item_to_active_pane(item, None, true, window, cx);
+            });
+            cx.new(|cx| MultiWorkspace::new(workspace, window, cx))
+        });
+        let Ok(destination_window) = result else {
+            return false;
+        };
+        destination_window
+            .update(cx, |_, window, _| window.activate_window())
+            .is_ok()
+    }
+
     pub fn path_style(&self, cx: &App) -> PathStyle {
         self.project.read(cx).path_style(cx)
     }
@@ -3926,7 +3966,7 @@ impl Workspace {
                         );
                         window.prompt(
                             PromptLevel::Warning,
-                            "Do you want to save all changes in the following files?",
+                            "要保存以下文件的所有更改吗？",
                             Some(&detail),
                             &["全部保存", "全部丢弃", "取消"],
                             cx,
@@ -4230,7 +4270,7 @@ impl Workspace {
     ) {
         let project = self.project.read(cx);
         if project.is_via_collab() {
-            self.show_error("You cannot add folders to someone else's project", cx);
+            self.show_error("不能向他人的项目中添加文件夹", cx);
             return;
         }
         let paths = self.prompt_for_open_path(
@@ -10496,9 +10536,9 @@ async fn join_channel_internal(
                 .update(cx, |_, window, cx| {
                     window.prompt(
                         PromptLevel::Warning,
-                        "Do you want to switch channels?",
-                        Some("Leaving this call will unshare your current project."),
-                        &["Yes, Join Channel", "Cancel"],
+                        "要切换通话频道吗？",
+                        Some("离开当前通话将取消共享你当前的项目。"),
+                        &["是，加入频道", "取消"],
                         cx,
                     )
                 })?
@@ -10703,30 +10743,30 @@ pub fn join_channel(
                 active_window
                     .update(cx, |_, window, cx| {
                         let detail: SharedString = match err.error_code() {
-                            ErrorCode::SignedOut => "Please sign in to continue.".into(),
+                            ErrorCode::SignedOut => "请先登录以继续。".into(),
                             ErrorCode::UpgradeRequired => concat!(
-                                "Your are running an unsupported version of Zed. ",
-                                "Please update to continue."
+                                "你正在运行的 Zed 版本不受支持。",
+                                "请更新后继续。"
                             )
                             .into(),
                             ErrorCode::NoSuchChannel => concat!(
-                                "No matching channel was found. ",
-                                "Please check the link and try again."
+                                "未找到匹配的频道。",
+                                "请检查链接后重试。"
                             )
                             .into(),
                             ErrorCode::Forbidden => concat!(
-                                "This channel is private, and you do not have access. ",
-                                "Please ask someone to add you and try again."
+                                "此频道为私有频道，你没有访问权限。",
+                                "请让别人添加你后重试。"
                             )
                             .into(),
                             ErrorCode::Disconnected => {
-                                "Please check your internet connection and try again.".into()
+                                "请检查你的网络连接后重试。".into()
                             }
-                            _ => format!("{}\n\nPlease try again.", err).into(),
+                            _ => format!("{}\n\n请重试。", err).into(),
                         };
                         window.prompt(
                             PromptLevel::Critical,
-                            "Failed to join channel",
+                            "加入频道失败",
                             Some(&detail),
                             &["确定"],
                             cx,
@@ -11755,9 +11795,9 @@ pub fn reload(cx: &mut App) {
             .update(cx, |_, window, cx| {
                 window.prompt(
                     PromptLevel::Info,
-                    "Are you sure you want to restart?",
+                    "确定要重启吗？",
                     None,
-                    &["Restart", "Cancel"],
+                    &["重启", "取消"],
                     cx,
                 )
             })
@@ -12475,6 +12515,27 @@ mod tests {
     use settings::SettingsStore;
     use util::path;
     use util::rel_path::rel_path;
+
+    #[test]
+    fn test_file_permalink_error_is_localized_and_omits_rpc_framing() {
+        let error = proto::RpcError::from_proto(
+            &proto::Error {
+                message: "无法识别 Git 远程仓库“origin”对应的代码托管平台".to_string(),
+                code: proto::ErrorCode::Internal as i32,
+                tags: Vec::new(),
+            },
+            "GetFilePermalink",
+        );
+
+        assert_eq!(
+            format_file_permalink_error(&error, false),
+            "无法打开文件永久链接：无法识别 Git 远程仓库“origin”对应的代码托管平台"
+        );
+        assert_eq!(
+            format_file_permalink_error(&error, true),
+            "无法复制文件永久链接：无法识别 Git 远程仓库“origin”对应的代码托管平台"
+        );
+    }
 
     #[test]
     fn test_render_window_title_format_omits_empty_segments() {

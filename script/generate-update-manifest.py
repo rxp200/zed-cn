@@ -145,7 +145,12 @@ def build_manifest(releases, load_metadata, load_uploaded_assets):
                   f"{MARKER_ASSET} completion marker.", file=sys.stderr)
             continue
         try:
-            metadata = validate_release(load_metadata(release["tag_name"]))
+            metadata = load_metadata(release["tag_name"])
+            if not metadata.get("title") and isinstance(release.get("name"), str):
+                metadata["title"] = release["name"]
+            if not metadata.get("release_notes") and isinstance(release.get("body"), str):
+                metadata["release_notes"] = release["body"]
+            metadata = validate_release(metadata)
             if metadata["tag_name"] != release["tag_name"]:
                 raise ValueError("Metadata tag mismatch")
             if metadata["draft"] or metadata["prerelease"]:

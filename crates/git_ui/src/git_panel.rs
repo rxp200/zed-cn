@@ -4340,8 +4340,8 @@ impl GitPanel {
         } else if worktrees.is_empty() {
             let result = window.prompt(
                 PromptLevel::Warning,
-                "Unable to initialize a git repository",
-                Some("Open a directory first"),
+                "无法初始化 Git 仓库",
+                Some("请先打开一个目录"),
                 &["确定"],
                 cx,
             );
@@ -5895,7 +5895,7 @@ impl GitPanel {
     {
         if let Ok(Some(workspace)) = weak_this.update(cx, |this, _cx| this.workspace.upgrade()) {
             let _ = workspace.update(cx, |workspace, cx| {
-                workspace.show_error(format!("Failed to generate commit message: {err}"), cx);
+                workspace.show_error(format!("生成提交信息失败：{err}"), cx);
             });
         }
     }

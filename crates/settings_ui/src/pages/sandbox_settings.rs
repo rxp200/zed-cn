@@ -301,7 +301,7 @@ fn render_add_host_input(cx: &mut Context<SettingsWindow>) -> AnyElement {
     let settings_window = cx.entity().downgrade();
 
     SettingsInputField::new("sandbox-host-new")
-        .with_placeholder("Add domain (e.g. github.com or *.npmjs.org)…")
+        .with_placeholder("添加域名（例如 github.com 或 *.npmjs.org）…")
         .tab_index(0)
         .with_buffer_font()
         .display_clear_button()
@@ -375,7 +375,7 @@ fn render_add_path_input(cx: &mut Context<SettingsWindow>) -> AnyElement {
     let settings_window = cx.entity().downgrade();
 
     SettingsInputField::new("sandbox-path-new")
-        .with_placeholder("Add an absolute path (e.g. /path/to/directory)…")
+        .with_placeholder("添加绝对路径（例如 /path/to/directory）…")
         .tab_index(0)
         .with_buffer_font()
         .display_clear_button()

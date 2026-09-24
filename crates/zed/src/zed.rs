@@ -568,6 +568,19 @@ pub fn initialize_workspace(app_state: Arc<AppState>, cx: &mut App) {
                     title,
                     language,
                 } => open_bundled_file(workspace, text.clone(), title, language, window, cx),
+                workspace::Event::PanelAdded(panel) => {
+                    if let Ok(terminal_panel) = panel.clone().downcast::<TerminalPanel>()
+                        && let Some(system_monitor_panel) = workspace.panel::<
+                            activity_indicator::system_monitor::SystemMonitorPanel,
+                        >(cx)
+                    {
+                        let port_forward_manager =
+                            terminal_panel.read(cx).port_forward_manager();
+                        system_monitor_panel.update(cx, |panel, cx| {
+                            panel.set_port_forward_manager(port_forward_manager, cx);
+                        });
+                    }
+                }
                 _ => {}
             }
         })
@@ -615,8 +628,15 @@ pub fn initialize_workspace(app_state: Arc<AppState>, cx: &mut App) {
                 >(window, cx);
             },
         );
+        let port_forward_manager = workspace
+            .panel::<TerminalPanel>(cx)
+            .map(|panel| panel.read(cx).port_forward_manager());
         let system_monitor_panel = cx.new(|cx| {
-            activity_indicator::system_monitor::SystemMonitorPanel::new(system_monitor.clone(), cx)
+            activity_indicator::system_monitor::SystemMonitorPanel::new(
+                system_monitor.clone(),
+                port_forward_manager,
+                cx,
+            )
         });
         workspace.add_panel(system_monitor_panel, window, cx);
         let active_buffer_encoding =
@@ -691,17 +711,17 @@ fn initialize_file_watcher(fs: &dyn Fs, window: &mut Window, cx: &mut Context<Wo
     if let Err(e) = fs.start_native_watcher() {
         let message = format!(
             db::indoc! {r#"
-            inotify_init returned {}
+            inotify_init 返回 {}
 
-            This may be due to system-wide limits on inotify instances. For troubleshooting see: https://zed.dev/docs/linux
+            这可能是由于系统对 inotify 实例数量的限制。排查方法请参见：https://zed.dev/docs/linux
             "#},
             e
         );
         let prompt = window.prompt(
             PromptLevel::Critical,
-            "Could not start inotify",
+            "无法启动 inotify",
             Some(&message),
-            &["Troubleshoot and Quit"],
+            &["排查并退出"],
             cx,
         );
         cx.spawn(async move |_, cx| {
@@ -722,17 +742,17 @@ fn initialize_file_watcher(fs: &dyn Fs, window: &mut Window, cx: &mut Context<Wo
     if let Err(e) = fs.start_native_watcher() {
         let message = format!(
             db::indoc! {r#"
-            ReadDirectoryChangesW initialization failed: {}
+            ReadDirectoryChangesW 初始化失败：{}
 
-            This may occur on network filesystems and WSL paths. For troubleshooting see: https://zed.dev/docs/windows
+            这种情况可能发生在网络文件系统和 WSL 路径上。排查方法请参见：https://zed.dev/docs/windows
             "#},
             e
         );
         let prompt = window.prompt(
             PromptLevel::Critical,
-            "Could not start ReadDirectoryChangesW",
+            "无法启动 ReadDirectoryChangesW",
             Some(&message),
-            &["Troubleshoot and Quit"],
+            &["排查并退出"],
             cx,
         );
         cx.spawn(async move |_, cx| {
@@ -768,21 +788,21 @@ fn show_software_emulation_warning_if_needed(
         };
         let message = format!(
             db::indoc! {r#"
-            Zed uses {} for rendering and requires a compatible GPU.
+            Zed 使用 {} 进行渲染，需要兼容的 GPU。
 
-            Currently you are using a software emulated GPU ({}) which
-            will result in awful performance.
+            你当前使用的是软件模拟的 GPU（{}），
+            这将导致性能严重下降。
 
-            For troubleshooting see: {}
-            Set ZED_ALLOW_EMULATED_GPU=1 env var to permanently override.
+            排查方法请参见：{}
+            设置环境变量 ZED_ALLOW_EMULATED_GPU=1 可永久跳过此检查。
             "#},
             graphics_api, specs.device_name, docs_url
         );
         let prompt = window.prompt(
             PromptLevel::Critical,
-            "Unsupported GPU",
+            "不支持的 GPU",
             Some(&message),
-            &["Skip", "Troubleshoot and Quit"],
+            &["跳过", "排查并退出"],
             cx,
         );
         cx.spawn(async move |_, cx| {
@@ -1804,9 +1824,9 @@ fn quit(_: &Quit, cx: &mut App) {
                 .update(cx, |_, window, cx| {
                     window.prompt(
                         PromptLevel::Info,
-                        "Are you sure you want to quit?",
+                        "确定要退出吗？",
                         None,
-                        &["Quit", "Cancel"],
+                        &["退出", "取消"],
                         cx,
                     )
                 })

@@ -197,6 +197,7 @@ dependencies = [
  "remote",
  "smallvec",
  "sysinfo 0.39.6",
+ "terminal_view",
  "ui",
  "util",
  "workspace",
@@ -615,7 +616,6 @@ dependencies = [
 [[package]]
 name = "alacritty_terminal"
 version = "0.26.1-dev"
-source = "git+https://github.com/zed-industries/alacritty?rev=4c129667ce56611becdc82de6e28218c80e2e88f#4c129667ce56611becdc82de6e28218c80e2e88f"
 dependencies = [
  "base64 0.22.1",
  "bitflags 2.13.1",
@@ -630,6 +630,7 @@ dependencies = [
  "rustix",
  "rustix-openpty",
  "serde",
+ "serde_json",
  "signal-hook",
  "unicode-width 0.2.2",
  "vte",
@@ -20838,6 +20839,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "web_preview"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "editor",
+ "gpui",
+ "log",
+ "percent-encoding",
+ "project",
+ "remote",
+ "task",
+ "tasks_ui",
+ "terminal_view",
+ "util",
+ "workspace",
+ "zed_actions",
+]
+
+[[package]]
 name = "web_search"
 version = "0.1.0"
 dependencies = [
@@ -23039,6 +23059,7 @@ dependencies = [
  "vim",
  "vim_mode_setting",
  "watch",
+ "web_preview",
  "web_search",
  "web_search_providers",
  "which_key",

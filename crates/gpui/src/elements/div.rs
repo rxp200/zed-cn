@@ -631,7 +631,38 @@ impl Interactivity {
                 constructor(value.downcast_ref().unwrap(), offset, window, cx).into()
             }),
             external_payload: None,
+            release_outside: None,
         });
+    }
+
+    /// Registers a callback for a drag released outside its source window.
+    pub fn on_drag_release_outside<T>(
+        &mut self,
+        listener: impl Fn(&T, &mut Window, &mut App) + 'static,
+    ) where
+        Self: Sized,
+        T: 'static,
+    {
+        let Some(drag_listener) = self.drag_listener.as_mut() else {
+            debug_assert!(
+                false,
+                "on_drag_release_outside must be called after on_drag"
+            );
+            return;
+        };
+        debug_assert!(
+            drag_listener.value.as_ref().type_id() == TypeId::of::<T>(),
+            "on_drag_release_outside must use the same dragged value type as on_drag"
+        );
+        debug_assert!(
+            drag_listener.release_outside.is_none(),
+            "calling on_drag_release_outside more than once is not supported"
+        );
+        drag_listener.release_outside = Some(Box::new(move |value, window, cx| {
+            if let Some(value) = value.downcast_ref::<T>() {
+                listener(value, window, cx);
+            }
+        }));
     }
 
     /// Registers a callback resolving a payload to offer the platform if a drag started by this
@@ -1642,6 +1673,19 @@ pub trait StatefulInteractiveElement: InteractiveElement {
         self
     }
 
+    /// Registers a callback for a drag released outside its source window.
+    fn on_drag_release_outside<T>(
+        mut self,
+        listener: impl Fn(&T, &mut Window, &mut App) + 'static,
+    ) -> Self
+    where
+        Self: Sized,
+        T: 'static,
+    {
+        self.interactivity().on_drag_release_outside(listener);
+        self
+    }
+
     /// Bind the given callback on the hover start and end events of this element. Note that the boolean
     /// passed to the callback is true when the hover starts and false when it ends.
     /// Transitions caused by layout changes under a stationary mouse also invoke the callback.
@@ -1757,10 +1801,12 @@ pub(crate) struct DragListener {
     value: Arc<dyn Any>,
     render: Box<dyn Fn(&dyn Any, Point<Pixels>, &mut Window, &mut App) -> AnyView + 'static>,
     external_payload: Option<ExternalDragPayloadResolver>,
+    release_outside: Option<DragReleaseOutsideResolver>,
 }
 
 type ExternalDragPayloadResolver =
     Box<dyn Fn(&dyn Any, &mut Window, &mut App) -> Option<ExternalDragPayload> + 'static>;
+type DragReleaseOutsideResolver = Box<dyn Fn(&dyn Any, &mut Window, &mut App) + 'static>;
 
 type DropListener = Box<dyn Fn(&dyn Any, &mut Window, &mut App) + 'static>;
 
@@ -2999,6 +3045,7 @@ impl Interactivity {
                                 cursor_offset,
                                 cursor_style: drag_cursor_style,
                                 external_payload_source,
+                                release_outside_source: listener.release_outside,
                             });
                             pending_mouse_down.take();
                             window.refresh();

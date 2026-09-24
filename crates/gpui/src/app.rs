@@ -3173,12 +3173,18 @@ pub struct AnyDrag {
     /// Resolves the payload to offer the platform if the drag leaves the window.
     /// Invoked at most once per drag gesture, at promotion time.
     pub external_payload_source: Option<ExternalDragPayloadSource>,
+
+    /// Handles a release outside the source window when the drag remains app-owned.
+    pub release_outside_source: Option<DragReleaseOutsideSource>,
 }
 
 /// Lazily resolves the payload handed to the platform when an internal drag is
 /// promoted to a native drag session.
 pub type ExternalDragPayloadSource =
     Box<dyn FnOnce(&mut Window, &mut App) -> Option<ExternalDragPayload> + 'static>;
+
+/// Handles an app-owned drag released outside its source window.
+pub type DragReleaseOutsideSource = Box<dyn Fn(&dyn Any, &mut Window, &mut App) + 'static>;
 
 /// Contains state associated with a tooltip. You'll only need this struct if you're implementing
 /// tooltip behavior on a custom element. Otherwise, use [Div::tooltip](crate::Interactivity::tooltip).
