@@ -7,6 +7,7 @@ enum IndicatorKind {
     Dot,
     Bar,
     Icon(AnyIcon),
+    Custom(AnyElement),
 }
 
 #[derive(IntoElement, RegisterComponent)]
@@ -43,6 +44,14 @@ impl Indicator {
         }
     }
 
+    pub fn custom(element: impl IntoElement) -> Self {
+        Self {
+            kind: IndicatorKind::Custom(element.into_any_element()),
+            border_color: None,
+            color: Color::Default,
+        }
+    }
+
     pub fn color(mut self, color: Color) -> Self {
         self.color = color;
         self
@@ -70,6 +79,7 @@ impl RenderOnce for Indicator {
         match self.kind {
             IndicatorKind::Icon(icon) => container
                 .child(icon.map(|icon| icon.custom_size(rems_from_px(8_f32)).color(self.color))),
+            IndicatorKind::Custom(element) => container.child(element),
             IndicatorKind::Dot => container
                 .w_1p5()
                 .h_1p5()

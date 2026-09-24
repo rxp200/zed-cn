@@ -1,9 +1,9 @@
 # yaml-language-server: $schema=https://www.schemastore.org/github-issue-config.json
 blank_issues_enabled: false
 contact_links:
-  - name: Feature request
-    url: https://github.com/zed-industries/zed/discussions/new?category=feature-requests
-    about: To request a feature, open a new discussion under one of the appropriate categories.
-  - name: Our Discord community
-    url: https://discord.com/invite/zedindustries
-    about: Join our Discord server for real-time discussion and user support.
+  - name: Zed CN feature requests and support
+    url: https://github.com/rxp200/zed-cn/issues
+    about: Use this repository for Chinese localization, packaging, remote-development adaptations, and other Zed CN-specific requests. Zed CN is unofficial and is not supported by Zed Industries.
+  - name: Official Zed upstream
+    url: https://github.com/zed-industries/zed
+    about: Use the official project only for issues reproduced in an unmodified official Zed build or for upstream-wide contributions.

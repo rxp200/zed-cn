@@ -1758,7 +1758,9 @@ fn test_bracket_ranges_keep_chunk_spanning_pairs_amid_errors(cx: &mut App) {
 }
 
 #[gpui::test]
-fn test_bracket_ranges_keep_pairs_straddling_a_chunk_boundary_amid_errors(cx: &mut App) {
+async fn test_bracket_ranges_keep_pairs_straddling_a_chunk_boundary_amid_errors(
+    cx: &mut TestAppContext,
+) {
     let mut text = String::from("void outer(void) {\n");
     for index in 0..56 {
         text.push_str(&format!("  int before_{index:02} = 0;\n"));
@@ -1782,7 +1784,10 @@ fn test_bracket_ranges_keep_pairs_straddling_a_chunk_boundary_amid_errors(cx: &m
     text.push_str("  }\n}\n");
 
     let buffer = cx.new(|cx| Buffer::local(text.clone(), cx).with_language(c_lang(), cx));
-    let snapshot = buffer.read(cx).snapshot();
+    buffer
+        .read_with(cx, |buffer, _| buffer.parsing_idle())
+        .await;
+    let snapshot = buffer.read_with(cx, |buffer, _| buffer.snapshot());
     assert_has_syntax_errors(&snapshot);
 
     let open_row = snapshot.offset_to_point(if_open_offset).row;
@@ -5559,6 +5564,28 @@ fn test_chunk_highlights_across_row_chunk_seeks(cx: &mut TestAppContext) {
         runs_after_seek, expected_last_row_runs,
         "seeking into another row chunk must refetch that chunk's highlights"
     );
+}
+
+#[gpui::test]
+fn test_cached_highlights_skip_very_long_lines(cx: &mut TestAppContext) {
+    if std::env::var_os("ZED_DISABLE_HIGHLIGHT_CACHE").is_some() {
+        return;
+    }
+    cx.update(|cx| init_settings(cx, |_| {}));
+
+    let language = keyword_and_function_lang();
+    let theme = keyword_and_function_theme();
+    language.set_theme(&theme);
+    let long_line = format!("fn skipped() {{}}{}", " ".repeat(MAX_HIGHLIGHTED_LINE_LEN));
+    let text = format!("fn before() {{}}\n{long_line}\nfn after() {{}}");
+    let buffer = cx.new(|cx| Buffer::local(text, cx).with_language(language, cx));
+    cx.run_until_parked();
+    let snapshot = buffer.read_with(cx, |buffer, _| buffer.snapshot());
+    let runs = merged_highlight_runs(&snapshot, 0..snapshot.len());
+
+    assert!(runs.iter().any(|(text, _)| text == "before"));
+    assert!(!runs.iter().any(|(text, _)| text == "skipped"));
+    assert!(runs.iter().any(|(text, _)| text == "after"));
 }
 
 #[gpui::test]

@@ -769,6 +769,8 @@ pub struct SearchCommitArgs {
     pub case_sensitive: bool,
 }
 
+pub const AUTHOR_SEARCH_QUERY_PREFIX: &str = "zed-author:";
+
 pub fn commit_hash_search_query(query: &str) -> Option<&str> {
     let query = query.trim();
     (SHORT_SHA_LENGTH..=SHA256_HEX_LENGTH)
@@ -3455,10 +3457,25 @@ impl GitRepository for RealGitRepository {
         async move {
             let log_source_args = log_source.get_args();
             let mut args = vec!["log", SEARCH_COMMIT_FORMAT];
-            let hash_query = commit_hash_search_query(search_args.query.as_str())
-                .map(|query| query.to_ascii_lowercase());
+            let author_query = search_args.query.strip_prefix(AUTHOR_SEARCH_QUERY_PREFIX);
+            let hash_query = author_query
+                .is_none()
+                .then(|| {
+                    commit_hash_search_query(search_args.query.as_str())
+                        .map(|query| query.to_ascii_lowercase())
+                })
+                .flatten();
 
-            if hash_query.is_none() {
+            if let Some(author) = author_query {
+                args.push("--fixed-strings");
+
+                if !search_args.case_sensitive {
+                    args.push("--regexp-ignore-case");
+                }
+
+                args.push("--author");
+                args.push(author);
+            } else if hash_query.is_none() {
                 args.push("--fixed-strings");
 
                 if !search_args.case_sensitive {

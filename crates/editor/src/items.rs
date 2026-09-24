@@ -1,7 +1,7 @@
 use crate::{
     ActiveDebugLine, Anchor, Autoscroll, BufferSerialization, Capability, Editor, EditorEvent,
     EditorSettings, ExcerptRange, FormatTarget, MultiBuffer, MultiBufferSnapshot, NavigationData,
-    ReportEditorEvent, SelectionEffects, ToPoint as _,
+    ReportEditorEvent, SelectionEffects, ToPoint as _, code_explanations,
     display_map::HighlightKey,
     editor_settings::SeedQuerySetting,
     persistence::{EditorDb, SerializedEditor},
@@ -870,6 +870,14 @@ impl Item for Editor {
         true
     }
 
+    fn clone_to_new_window(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let Some(workspace) = self.workspace() else {
+            return false;
+        };
+        let clone = cx.new(|cx| self.clone(window, cx));
+        Workspace::open_item_clone_window(workspace, Box::new(clone), window, cx)
+    }
+
     fn clone_on_split(
         &self,
         _workspace_id: Option<WorkspaceId>,
@@ -1022,6 +1030,12 @@ impl Item for Editor {
                     .await?;
             }
 
+            if !options.autosave {
+                this.update(cx, |editor, cx| {
+                    code_explanations::request_refresh(editor);
+                    cx.notify();
+                })?;
+            }
             Ok(())
         })
     }
@@ -1216,7 +1230,10 @@ impl Item for Editor {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Vec<(SharedString, Box<dyn gpui::Action>)> {
-        let mut actions = Vec::new();
+        let mut actions = vec![(
+            "复制到新窗口".into(),
+            Box::new(workspace::CloneItemToNewWindow) as Box<dyn gpui::Action>,
+        )];
 
         let is_markdown = self
             .buffer()
@@ -2520,8 +2537,18 @@ pub(crate) fn handle_lsp_show_document(
 ) -> Task<()> {
     let request = request.clone();
     if request.external {
-        cx.open_url(request.uri.as_str());
-        request.respond(true);
+        match request.uri.scheme() {
+            "http" | "https" => {
+                cx.open_url(request.uri.as_str());
+                request.respond(true);
+            }
+            scheme => {
+                log::error!(
+                    "language server requested to open an unsupported external URI scheme {scheme}"
+                );
+                request.respond(false);
+            }
+        }
         return Task::ready(());
     }
     let Ok(abs_path) = request.uri.to_file_path_ext(workspace.path_style(cx)) else {
@@ -2532,6 +2559,19 @@ pub(crate) fn handle_lsp_show_document(
         request.respond(false);
         return Task::ready(());
     };
+    if workspace
+        .project()
+        .read(cx)
+        .find_worktree(&abs_path, cx)
+        .is_none()
+    {
+        log::error!(
+            "language server requested to show a document outside the current project: {}",
+            abs_path.display()
+        );
+        request.respond(false);
+        return Task::ready(());
+    }
     let open_task = workspace.open_abs_path(
         abs_path,
         OpenOptions {

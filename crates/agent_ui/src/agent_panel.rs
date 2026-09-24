@@ -373,6 +373,29 @@ pub fn init(cx: &mut App) {
     cx.observe_new(
         |workspace: &mut Workspace, _window, _cx: &mut Context<Workspace>| {
             workspace
+                .register_action(
+                    |workspace,
+                     action: &zed_actions::assistant::FollowUpCodeExplanation,
+                     window,
+                     cx| {
+                        if project::DisableAiSettings::get_global(cx).disable_ai {
+                            return;
+                        }
+                        let Some(prompt) = ExternalSourcePrompt::new(&action.text) else {
+                            return;
+                        };
+                        if let Some(panel) = workspace.panel::<AgentPanel>(cx) {
+                            panel.update(cx, |panel, cx| {
+                                panel.new_agent_thread_with_external_source_prompt(
+                                    Some(prompt),
+                                    window,
+                                    cx,
+                                )
+                            });
+                            workspace.focus_panel::<AgentPanel>(window, cx);
+                        }
+                    },
+                )
                 .register_action(|workspace, _: &NewThread, window, cx| {
                     if let Some(panel) = workspace.panel::<AgentPanel>(cx) {
                         panel.update(cx, |panel, cx| {
@@ -841,7 +864,7 @@ fn build_conflict_resolution_prompt(conflicts: &[ConflictContent]) -> Vec<acp::C
         let conflict = &conflicts[0];
 
         blocks.push(acp::ContentBlock::Text(acp::TextContent::new(
-            "Please resolve the following merge conflict in ",
+            "请解决以下合并冲突：",
         )));
         let mention = MentionUri::File {
             abs_path: PathBuf::from(conflict.file_path.clone()),
@@ -1169,6 +1192,8 @@ pub struct AgentPanel {
     retained_threads: HashMap<ThreadId, Entity<ConversationView>>,
     terminals: HashMap<TerminalId, AgentTerminal>,
     pending_terminal_spawn: Option<TerminalId>,
+    #[cfg(test)]
+    test_terminal_spawn_gate: Option<futures::channel::oneshot::Receiver<()>>,
     new_thread_menu_handle: PopoverMenuHandle<ContextMenu>,
     agent_panel_menu_handle: PopoverMenuHandle<ContextMenu>,
     _extension_subscription: Option<Subscription>,
@@ -1582,6 +1607,8 @@ impl AgentPanel {
             retained_threads: HashMap::default(),
             terminals: HashMap::default(),
             pending_terminal_spawn: None,
+            #[cfg(test)]
+            test_terminal_spawn_gate: None,
             new_thread_menu_handle: PopoverMenuHandle::default(),
             agent_panel_menu_handle: PopoverMenuHandle::default(),
 
@@ -2073,11 +2100,14 @@ impl AgentPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // The spawn is async, so the panel keeps its current base view until
+        // the terminal lands. Marking the spawn as pending stops
+        // `ensure_thread_initialized` from treating a still-uninitialized panel
+        // as empty and spawning a second, "initial" terminal on activation.
+        self.pending_terminal_spawn = Some(terminal_id);
         let terminal_working_directory = working_directory.clone();
         let init_command = Self::terminal_init_command(run_init_command, cx);
-        let terminal_task = self.project.update(cx, |project, cx| {
-            project.create_terminal_shell(working_directory, cx)
-        });
+        let terminal_task = self.create_terminal_shell(working_directory, cx);
         let workspace = self.workspace.clone();
         let workspace_id = self.workspace_id;
         let project = self.project.downgrade();
@@ -2126,6 +2156,27 @@ impl AgentPanel {
             anyhow::Ok(())
         })
         .detach_and_log_err(cx);
+    }
+
+    fn create_terminal_shell(
+        &mut self,
+        working_directory: Option<PathBuf>,
+        cx: &mut Context<Self>,
+    ) -> Task<Result<Entity<terminal::Terminal>>> {
+        // A real shell ties the spawn's timing to the host, so a test that needs
+        // to observe the panel mid-spawn installs a gate and gets a display-only
+        // terminal when it releases it.
+        #[cfg(test)]
+        if let Some(gate) = self.test_terminal_spawn_gate.take() {
+            return cx.spawn(async move |this, cx| {
+                gate.await.ok();
+                this.update(cx, |this, cx| this.build_display_only_terminal(cx))
+            });
+        }
+
+        self.project.update(cx, |project, cx| {
+            project.create_terminal_shell(working_directory, cx)
+        })
     }
 
     fn terminal_init_command(run_init_command: bool, cx: &App) -> Option<String> {
@@ -2452,7 +2503,6 @@ impl AgentPanel {
             return;
         }
 
-        self.pending_terminal_spawn = Some(metadata.terminal_id);
         let working_directory = self.terminal_restore_working_directory(&metadata, workspace, cx);
         let initial_title = Self::terminal_restore_initial_title(&metadata);
         self.spawn_terminal(
@@ -3919,7 +3969,7 @@ impl AgentPanel {
         };
 
         let Some(store) = ThreadMetadataStore::try_global(cx) else {
-            Self::show_deferred_toast(&self.workspace, "Thread metadata store not available", cx);
+            Self::show_deferred_toast(&self.workspace, "线程元数据存储不可用", cx);
             return;
         };
 
@@ -3942,7 +3992,7 @@ impl AgentPanel {
         cx: &mut Context<Self>,
     ) {
         let Some(store) = ThreadMetadataStore::try_global(cx) else {
-            Self::show_deferred_toast(&self.workspace, "Thread metadata store not available", cx);
+            Self::show_deferred_toast(&self.workspace, "线程元数据存储不可用", cx);
             return;
         };
 
@@ -5514,7 +5564,7 @@ impl AgentPanel {
                             .into_any_element()
                     }
                 } else {
-                    Label::new("Terminal").into_any_element()
+                    Label::new("终端").into_any_element()
                 }
             }
 
@@ -5552,7 +5602,7 @@ impl AgentPanel {
                             .child(
                                 IconButton::new("edit_tile", IconName::Pencil)
                                     .icon_size(IconSize::Small)
-                                    .tooltip(Tooltip::text("Edit Thread Title")),
+                                    .tooltip(Tooltip::text("编辑线程标题")),
                             ),
                     )
             })
@@ -5653,12 +5703,7 @@ impl AgentPanel {
                 IconButton::new("agent-options-menu", IconName::Ellipsis)
                     .icon_size(IconSize::Small),
                 move |_window, cx| {
-                    Tooltip::for_action_in(
-                        "Toggle Agent Menu",
-                        &ToggleOptionsMenu,
-                        &focus_handle,
-                        cx,
-                    )
+                    Tooltip::for_action_in("切换 Agent 菜单", &ToggleOptionsMenu, &focus_handle, cx)
                 },
             )
             .anchor(Anchor::TopRight)
@@ -5669,11 +5714,11 @@ impl AgentPanel {
                         menu = menu.context(menu_action_context.clone());
 
                         if has_thread_messages {
-                            menu = menu.header("Current Thread");
+                            menu = menu.header("当前线程");
 
                             if let Some(conversation_view) = conversation_view.as_ref() {
                                 if can_regenerate_thread_title {
-                                    menu = menu.entry("Regenerate Thread Title", None, {
+                                    menu = menu.entry("重新生成线程标题", None, {
                                         let conversation_view = conversation_view.clone();
                                         let workspace = workspace.clone();
                                         move |_, cx| {
@@ -5690,7 +5735,7 @@ impl AgentPanel {
                                     conversation_view.read(cx).root_thread_view();
                                 if let Some(thread_view) = root_thread_view {
                                     let workspace = workspace.clone();
-                                    menu = menu.entry("Open Thread as Markdown", None, {
+                                    menu = menu.entry("以 Markdown 打开线程", None, {
                                         move |window, cx| {
                                             if let Some(workspace) = workspace.upgrade() {
                                                 thread_view.update(cx, |thread_view, cx| {
@@ -5711,16 +5756,16 @@ impl AgentPanel {
 
                         if !showing_terminal {
                             menu = menu
-                                .header("MCP Servers")
+                                .header("MCP 服务器")
                                 .action(
-                                    "Add Server…",
+                                    "添加服务器…",
                                     Box::new(zed_actions::OpenSettingsAt {
                                         path: "context_servers".to_string(),
                                         target: None,
                                     }),
                                 )
                                 .action(
-                                    "Install New Servers…",
+                                    "安装新服务器…",
                                     Box::new(zed_actions::Extensions {
                                         category_filter: Some(
                                             zed_actions::ExtensionCategoryFilter::ContextServers,
@@ -5729,8 +5774,8 @@ impl AgentPanel {
                                     }),
                                 )
                                 .separator()
-                                .header("Context")
-                                .action("Skills", Box::new(ManageSkills));
+                                .header("上下文")
+                                .action("技能", Box::new(ManageSkills));
 
                             if project_agents_md_path.is_some() || global_agents_md_loaded {
                                 if global_agents_md_loaded {
@@ -5741,7 +5786,7 @@ impl AgentPanel {
                                             h_flex()
                                                 .w_full()
                                                 .gap_1()
-                                                .child(Label::new("Open Global Rules"))
+                                                .child(Label::new("打开全局规则"))
                                                 .child(
                                                     Label::new("(AGENTS.md)")
                                                         .color(Color::Muted)
@@ -5766,7 +5811,7 @@ impl AgentPanel {
                                             h_flex()
                                                 .w_full()
                                                 .gap_1()
-                                                .child(Label::new("Open Project Rules"))
+                                                .child(Label::new("打开项目规则"))
                                                 .child(
                                                     Label::new("(AGENTS.md)")
                                                         .color(Color::Muted)
@@ -5787,26 +5832,26 @@ impl AgentPanel {
 
                             menu = menu
                                 .separator()
-                                .action("Profiles", Box::new(ManageProfiles::default()));
+                                .action("配置文件", Box::new(ManageProfiles::default()));
                         }
 
                         menu = menu
-                            .action("Settings", Box::new(OpenSettings))
+                            .action("设置", Box::new(OpenSettings))
                             .separator()
-                            .action("Toggle Threads Sidebar", Box::new(ToggleWorkspaceSidebar));
+                            .action("切换线程侧边栏", Box::new(ToggleWorkspaceSidebar));
 
                         if has_auth_methods || supports_logout {
                             menu = menu.separator()
                         }
                         if has_auth_methods {
-                            menu = menu.action("Reauthenticate", Box::new(ReauthenticateAgent))
+                            menu = menu.action("重新认证", Box::new(ReauthenticateAgent))
                         }
                         if supports_logout {
-                            menu = menu.action("Log Out", Box::new(LogoutAgent))
+                            menu = menu.action("登出", Box::new(LogoutAgent))
                         }
 
                         if let Some(conversation_view) = conversation_view.as_ref() {
-                            menu = menu.entry("Reload Agent", None, {
+                            menu = menu.entry("重新加载 Agent", None, {
                                 let conversation_view = conversation_view.clone();
                                 move |window, cx| {
                                     conversation_view.update(cx, |conversation_view, cx| {
@@ -5826,7 +5871,7 @@ impl AgentPanel {
         let focus_handle = self.focus_handle(cx);
 
         ProjectEmptyState::new(
-            "Agent Panel",
+            "Agent 面板",
             focus_handle.clone(),
             KeyBinding::for_action_in(&workspace::Open::default(), &focus_handle, cx),
         )
@@ -5976,7 +6021,7 @@ impl AgentPanel {
                                 .collect::<Vec<_>>();
 
                             if !agent_items.is_empty() {
-                                menu = menu.separator().header("External Agents");
+                                menu = menu.separator().header("外部Agent");
                             }
                             for item in &agent_items {
                                 let mut entry = ContextMenuEntry::new(item.display_name.clone());
@@ -6082,7 +6127,7 @@ impl AgentPanel {
                 Tooltip::with_meta(
                     selected_agent_label_for_tooltip.clone(),
                     None,
-                    "Selected Agent",
+                    "已选择的 Agent",
                     cx,
                 )
             });
@@ -6117,9 +6162,9 @@ impl AgentPanel {
 
         let is_full_screen = self.is_zoomed(window, cx);
         let (icon_name, tooltip_text) = if is_full_screen {
-            (IconName::Minimize, "Disable Full Screen")
+            (IconName::Minimize, "退出全屏")
         } else {
-            (IconName::Maximize, "Enable Full Screen")
+            (IconName::Maximize, "进入全屏")
         };
         let full_screen_button = IconButton::new("toggle-full-screen", icon_name)
             .icon_size(IconSize::Small)
@@ -6798,6 +6843,21 @@ impl AgentPanel {
     }
 
     #[cfg(any(test, feature = "test-support"))]
+    fn build_display_only_terminal(&self, cx: &mut Context<Self>) -> Entity<terminal::Terminal> {
+        let settings = TerminalSettings::get_global(cx).clone();
+        let path_style = self.project.read(cx).path_style(cx);
+        let builder = terminal::TerminalBuilder::new_display_only(
+            settings.cursor_shape,
+            settings.alternate_scroll,
+            settings.max_scroll_history_lines,
+            cx.entity_id().as_u64(),
+            cx.background_executor(),
+            path_style,
+        );
+        cx.new(|cx| builder.subscribe(cx))
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
     fn insert_display_only_terminal(
         &mut self,
         terminal_id: TerminalId,
@@ -6813,17 +6873,7 @@ impl AgentPanel {
         cx: &mut Context<Self>,
     ) -> Result<()> {
         let init_command = Self::terminal_init_command(run_init_command, cx);
-        let settings = TerminalSettings::get_global(cx).clone();
-        let path_style = self.project.read(cx).path_style(cx);
-        let builder = terminal::TerminalBuilder::new_display_only(
-            settings.cursor_shape,
-            settings.alternate_scroll,
-            settings.max_scroll_history_lines,
-            cx.entity_id().as_u64(),
-            cx.background_executor(),
-            path_style,
-        );
-        let terminal = cx.new(|cx| builder.subscribe(cx));
+        let terminal = self.build_display_only_terminal(cx);
         let terminal_for_init_command = terminal.clone();
         let terminal_view = cx.new(|cx| {
             let mut view = TerminalView::new(
@@ -7670,6 +7720,62 @@ mod tests {
             assert!(
                 panel.active_terminal_id().is_some(),
                 "the single initial terminal should become active"
+            );
+        });
+    }
+
+    #[gpui::test]
+    async fn test_new_terminal_prevents_initial_terminal_creation(cx: &mut TestAppContext) {
+        let (panel, mut cx) = setup_panel(cx).await;
+
+        let (terminal_landed, spawn_gate) = futures::channel::oneshot::channel::<()>();
+
+        // `create_new_terminal` in the sidebar calls `new_terminal` and then
+        // focuses the panel, which activates it while the spawn is still in
+        // flight. The gate keeps the spawn in flight for as long as the test
+        // wants, instead of racing a real shell.
+        panel.update_in(&mut cx, |panel, window, cx| {
+            panel.test_terminal_spawn_gate = Some(spawn_gate);
+            panel.new_terminal(None, AgentThreadSource::AgentPanel, window, cx);
+            assert!(
+                panel.pending_terminal_spawn.is_some(),
+                "a new terminal spawn should be marked pending until it lands"
+            );
+            panel.set_active(true, window, cx);
+        });
+        cx.run_until_parked();
+
+        panel.read_with(&cx, |panel, cx| {
+            assert!(
+                panel.terminals(cx).is_empty(),
+                "no terminal should land while the spawn is held"
+            );
+            assert!(
+                panel.pending_terminal_spawn.is_some(),
+                "the in-flight spawn should still be pending after activation"
+            );
+        });
+
+        terminal_landed
+            .send(())
+            .expect("the panel should still be waiting on the terminal spawn");
+        cx.run_until_parked();
+
+        panel.read_with(&cx, |panel, cx| {
+            let terminals = panel.terminals(cx);
+            assert_eq!(
+                terminals.len(),
+                1,
+                "activation while a new terminal is spawning should not create a second terminal"
+            );
+            assert_eq!(
+                panel.active_terminal_id(),
+                terminals.first().map(|terminal| terminal.id),
+                "the terminal that was spawned should be the active one"
+            );
+            assert!(
+                panel.pending_terminal_spawn.is_none(),
+                "the pending marker should be cleared once the terminal lands"
             );
         });
     }
@@ -9702,7 +9808,7 @@ mod tests {
         cx.run_until_parked();
 
         assert!(
-            cx.debug_bounds("MENU_ITEM-Skills").is_some(),
+            cx.debug_bounds("MENU_ITEM-技能").is_some(),
             "Skills menu item should be visible"
         );
         assert!(

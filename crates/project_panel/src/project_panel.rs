@@ -92,6 +92,23 @@ use crate::{
 const PROJECT_PANEL_KEY: &str = "ProjectPanel";
 const NEW_ENTRY_ID: ProjectEntryId = ProjectEntryId::MAX;
 
+fn unused_pasted_image_path(
+    target_directory: &RelPath,
+    extension: &str,
+    exists: impl Fn(&RelPath) -> bool,
+) -> Option<Arc<RelPath>> {
+    let mut filename = format!("image.{extension}");
+    let mut counter = 1usize;
+    loop {
+        let candidate = target_directory.join(RelPath::from_unix_str(&filename).ok()?);
+        if !exists(&candidate) {
+            return Some(candidate.into());
+        }
+        filename = format!("image_{counter}.{extension}");
+        counter = counter.checked_add(1)?;
+    }
+}
+
 struct VisibleEntriesForWorktree {
     worktree_id: WorktreeId,
     entries: Vec<GitEntry>,
@@ -446,6 +463,8 @@ actions!(
         Redo,
         /// Opens a markdown preview for the selected file.
         OpenMarkdownPreview,
+        /// Generates complete AI explanations for the selected files and directories.
+        ScanSelectedEntriesForCodeExplanations,
         /// Opens the context menu for the selected entry.
         OpenContextMenu,
     ]
@@ -845,6 +864,9 @@ impl ProjectPanel {
                 cx.notify();
             })
             .detach();
+            let explanation_index = editor::code_explanations::code_explanation_file_index(cx);
+            cx.observe(&explanation_index, |_, _, cx| cx.notify())
+                .detach();
 
             let mut project_panel_settings = *ProjectPanelSettings::get_global(cx);
             cx.observe_global_in::<SettingsStore>(window, move |this, window, cx| {
@@ -877,6 +899,16 @@ impl ProjectPanel {
 
             let scroll_handle = UniformListScrollHandle::new();
             let weak_project_panel = cx.weak_entity();
+            cx.spawn({
+                let project = project.clone();
+                async move |_, cx| {
+                    editor::code_explanations::load_code_explanation_file_index(project, cx)
+                        .await
+                        .log_err();
+                }
+            })
+            .detach();
+
             let mut this = Self {
                 project: project.clone(),
                 hover_scroll_task: None,
@@ -1176,18 +1208,29 @@ impl ProjectPanel {
             };
 
             let has_pasteable_content = self.has_pasteable_content(cx);
+            let can_scan_selection =
+                self.selected_code_explanation_paths(cx)
+                    .is_some_and(|paths| {
+                        !paths.is_empty() && !project::DisableAiSettings::get_global(cx).disable_ai
+                    });
             let context_menu = ContextMenu::build(window, cx, |menu, _, _| {
                 menu.context(self.focus_handle.clone()).map(|menu| {
                     if is_read_only {
                         menu.when(is_markdown, |menu| {
-                            menu.action("Open Markdown Preview", Box::new(OpenMarkdownPreview))
+                            menu.action("打开Markdown预览", Box::new(OpenMarkdownPreview))
+                        })
+                        .when(can_scan_selection, |menu| {
+                            menu.separator().action(
+                                "完整扫描讲解所选文件",
+                                Box::new(ScanSelectedEntriesForCodeExplanations),
+                            )
                         })
                         .when(is_dir, |menu| {
-                            menu.action("Search Inside", Box::new(NewSearchInDirectory))
+                            menu.action("搜索内部", Box::new(NewSearchInDirectory))
                         })
                     } else {
-                        menu.action("New File", Box::new(NewFile))
-                            .action("New Folder", Box::new(NewDirectory))
+                        menu.action("新建文件", Box::new(NewFile))
+                            .action("新建文件夹", Box::new(NewDirectory))
                             .separator()
                             .when(is_local, |menu| {
                                 menu.action(
@@ -1196,104 +1239,107 @@ impl ProjectPanel {
                                 )
                             })
                             .when(is_local, |menu| {
-                                menu.action("Open in Default App", Box::new(OpenWithSystem))
+                                menu.action("在默认应用中打开", Box::new(OpenWithSystem))
                             })
-                            .action("Open in Terminal", Box::new(OpenInTerminal))
+                            .action("在终端中打开", Box::new(OpenInTerminal))
                             .when(is_markdown, |menu| {
-                                menu.action("Open Markdown Preview", Box::new(OpenMarkdownPreview))
+                                menu.action("打开Markdown预览", Box::new(OpenMarkdownPreview))
+                            })
+                            .when(can_scan_selection, |menu| {
+                                menu.separator().action(
+                                    "完整扫描讲解所选文件",
+                                    Box::new(ScanSelectedEntriesForCodeExplanations),
+                                )
                             })
                             .when(is_dir, |menu| {
                                 menu.separator()
-                                    .action("Find in Folder…", Box::new(NewSearchInDirectory))
+                                    .action("在文件夹中查找…", Box::new(NewSearchInDirectory))
                             })
                             .when(is_unfoldable, |menu| {
-                                menu.action("Unfold Directory", Box::new(UnfoldDirectory))
+                                menu.action("展开目录", Box::new(UnfoldDirectory))
                             })
                             .when(is_foldable, |menu| {
-                                menu.action("Fold Directory", Box::new(FoldDirectory))
+                                menu.action("折叠目录", Box::new(FoldDirectory))
                             })
                             .when(should_show_compare, |menu| {
                                 menu.separator()
-                                    .action("Compare Marked Files", Box::new(CompareMarkedFiles))
+                                    .action("比较标记的文件", Box::new(CompareMarkedFiles))
                             })
                             .separator()
-                            .action("Cut", Box::new(Cut))
-                            .action("Copy", Box::new(Copy))
-                            .action("Duplicate", Box::new(Duplicate))
-                            .action_disabled_when(!has_pasteable_content, "Paste", Box::new(Paste))
+                            .action("剪切", Box::new(Cut))
+                            .action("复制", Box::new(Copy))
+                            .action("生成副本", Box::new(Duplicate))
+                            .action_disabled_when(!has_pasteable_content, "粘贴", Box::new(Paste))
                             .when(!is_collab, |menu| {
                                 let can_undo = self.undo_manager.can_undo();
                                 let can_redo = self.undo_manager.can_redo();
 
-                                menu.action_disabled_when(!can_undo, "Undo", Box::new(Undo))
-                                    .action_disabled_when(!can_redo, "Redo", Box::new(Redo))
+                                menu.action_disabled_when(!can_undo, "撤销", Box::new(Undo))
+                                    .action_disabled_when(!can_redo, "重做", Box::new(Redo))
                             })
                             .when(is_remote, |menu| {
                                 menu.separator()
-                                    .action("Download...", Box::new(DownloadFromRemote))
+                                    .action("下载...", Box::new(DownloadFromRemote))
                             })
                             .separator()
-                            .action("Copy Path", Box::new(zed_actions::workspace::CopyPath))
+                            .action("复制路径", Box::new(zed_actions::workspace::CopyPath))
                             .action(
-                                "Copy Relative Path",
+                                "复制相对路径",
                                 Box::new(zed_actions::workspace::CopyRelativePath),
                             )
                             .when(has_git_repo, |menu| {
                                 menu.separator()
                                     .when(!is_dir && self.has_git_changes(entry_id), |menu| {
                                         menu.action(
-                                            "Restore File",
+                                            "恢复文件",
                                             Box::new(git::RestoreFile { skip_prompt: false }),
                                         )
                                     })
-                                    .action("Add to .gitignore", Box::new(git::AddToGitignore))
+                                    .action("添加到.gitignore", Box::new(git::AddToGitignore))
                                     .action(
-                                        "Add to .git/info/exclude",
+                                        "添加到.git/info/exclude",
                                         Box::new(git::AddToGitInfoExclude),
                                     )
                                     .when(has_history, |menu| {
-                                        menu.action("View History", Box::new(git::FileHistory))
+                                        menu.action("查看历史", Box::new(git::FileHistory))
                                     })
                                     .when(!is_dir, |menu| {
                                         menu.action(
-                                            "Open File Permalink",
+                                            "打开文件永久链接",
                                             git::OpenFilePermalink.boxed_clone(),
                                         )
                                         .action(
-                                            "Copy File Permalink",
+                                            "复制文件永久链接",
                                             git::CopyFilePermalink.boxed_clone(),
                                         )
                                     })
                             })
                             .when(!should_hide_rename, |menu| {
-                                menu.separator().action("Rename", Box::new(Rename))
+                                menu.separator().action("重命名", Box::new(Rename))
                             })
                             .when(!is_root && !is_collab, |menu| {
-                                menu.action("Trash", Box::new(Trash { skip_prompt: false }))
+                                menu.action("移至废纸篓", Box::new(Trash { skip_prompt: false }))
                             })
                             .when(!is_root, |menu| {
-                                menu.action("Delete", Box::new(Delete { skip_prompt: false }))
+                                menu.action("删除", Box::new(Delete { skip_prompt: false }))
                             })
                             .when(!is_collab && is_root, |menu| {
                                 menu.separator()
                                     .action(
-                                        "Add Folders to Project…",
+                                        "添加文件夹到项目…",
                                         Box::new(workspace::AddFolderToProject),
                                     )
-                                    .action("Remove from Project", Box::new(RemoveFromProject))
+                                    .action("从项目中移除", Box::new(RemoveFromProject))
                             })
                             .when(is_dir && !is_root, |menu| {
                                 menu.separator()
-                                    .action("Expand All", Box::new(ExpandSelectedEntryAndChildren))
-                                    .action(
-                                        "Collapse All",
-                                        Box::new(CollapseSelectedEntryAndChildren),
-                                    )
+                                    .action("全部展开", Box::new(ExpandSelectedEntryAndChildren))
+                                    .action("全部折叠", Box::new(CollapseSelectedEntryAndChildren))
                             })
                             .when(is_dir && is_root, |menu| {
                                 menu.separator()
-                                    .action("Expand All", Box::new(ExpandAllEntries))
-                                    .action("Collapse All", Box::new(CollapseAllEntries))
+                                    .action("全部展开", Box::new(ExpandAllEntries))
+                                    .action("全部折叠", Box::new(CollapseAllEntries))
                             })
                     }
                 })
@@ -2041,8 +2087,10 @@ impl ProjectPanel {
                 return;
             };
 
-            let project = self.project.read(cx);
-            if let Some(worktree) = project.worktree_for_id(edit_state.worktree_id, cx)
+            if let Some(worktree) = self
+                .project
+                .read(cx)
+                .worktree_for_id(edit_state.worktree_id, cx)
                 && let Some(entry) = worktree.read(cx).entry_for_id(edit_state.entry_id)
             {
                 let mut already_exists = false;
@@ -2052,18 +2100,12 @@ impl ProjectPanel {
                         already_exists = true;
                     }
                 } else {
-                    let new_path = match entry.path.clone().parent() {
-                        Some(parent) => parent.join(&filename),
-                        None => filename.to_owned(),
+                    let new_path = if let Some(parent) = entry.path.clone().parent() {
+                        parent.join(&filename)
+                    } else {
+                        filename.to_owned()
                     };
-
-                    // We skip the collision check for worktree roots as the
-                    // lookup resolves paths relative to the root itself,
-                    // whereas renaming the root should resolve it against its
-                    // parent directory. Otherwise, renaming `bar/` to `foo/`
-                    // would report a false collision with `bar/foo/`.
-                    if !project.entry_is_worktree_root(entry.id, cx)
-                        && let Some(existing) = worktree.read(cx).entry_for_path(&new_path)
+                    if let Some(existing) = worktree.read(cx).entry_for_path(&new_path)
                         && existing.id != entry.id
                     {
                         already_exists = true;
@@ -2146,19 +2188,12 @@ impl ProjectPanel {
             });
             changes = vec![Change::Created(new_project_path)];
         } else {
-            let new_path = match entry.path.parent() {
-                Some(parent) => parent.join(&filename).into(),
-                None => filename.clone(),
+            let new_path = if let Some(parent) = entry.path.parent() {
+                parent.join(&filename).into()
+            } else {
+                filename.clone()
             };
-
-            // We skip the collision check for worktree roots as the lookup
-            // resolves paths relative to the root itself, whereas renaming the
-            // root should resolve it against its parent directory. Otherwise,
-            // renaming `bar/` to `foo/` would report a false collision with
-            // `bar/foo/`.
-            if !self.project.read(cx).entry_is_worktree_root(entry.id, cx)
-                && let Some(existing) = worktree.read(cx).entry_for_path(&new_path)
-            {
+            if let Some(existing) = worktree.read(cx).entry_for_path(&new_path) {
                 if existing.id == entry.id && refocus {
                     window.focus(&self.focus_handle, cx);
                 }
@@ -2610,8 +2645,8 @@ impl ProjectPanel {
             let file_name = entry.path.file_name()?.to_string();
 
             let answer = if !action.skip_prompt {
-                let prompt = format!("Discard changes to {}?", MarkdownInlineCode(&file_name));
-                Some(window.prompt(PromptLevel::Info, &prompt, None, &["Restore", "Cancel"], cx))
+                let prompt = format!("确定放弃对 {} 的更改吗？", MarkdownInlineCode(&file_name));
+                Some(window.prompt(PromptLevel::Info, &prompt, None, &["恢复", "取消"], cx))
             } else {
                 None
             };
@@ -2632,7 +2667,7 @@ impl ProjectPanel {
                 if let Err(e) = task.await {
                     panel
                         .update(cx, |panel, cx| {
-                            let message = format!("Failed to restore {}: {}", file_name, e);
+                            let message = format!("无法还原 {}：{}", file_name, e);
                             let toast = StatusToast::new(message, cx, |this, _| {
                                 this.icon(
                                     Icon::new(IconName::XCircle)
@@ -2704,7 +2739,7 @@ impl ProjectPanel {
                 if let Err(e) = receiver.await? {
                     if let Some(workspace) = workspace.upgrade() {
                         cx.update(|cx| {
-                            let message = format!("Failed to add to .gitignore: {}", e);
+                            let message = format!("无法添加到 .gitignore：{}", e);
                             let toast = StatusToast::new(message, cx, |this, _| {
                                 this.icon(Icon::new(IconName::XCircle).color(Color::Error))
                                     .dismiss_button(true)
@@ -2751,7 +2786,7 @@ impl ProjectPanel {
                 if let Err(e) = receiver.await? {
                     if let Some(workspace) = workspace.upgrade() {
                         cx.update(|cx| {
-                            let message = format!("Failed to add to .git/info/exclude: {}", e);
+                            let message = format!("无法添加到 .git/info/exclude：{}", e);
                             let toast = StatusToast::new(message, cx, |this, _| {
                                 this.icon(Icon::new(IconName::XCircle).color(Color::Error))
                                     .dismiss_button(true)
@@ -2785,16 +2820,12 @@ impl ProjectPanel {
         S: AsRef<str>,
     {
         let (message_start, confirmation_label, detail) = match kind {
-            RemovalKind::Trash => ("Do you want to trash", "Trash", None),
-            RemovalKind::Delete => (
-                "Are you sure you want to permanently delete",
-                "Delete",
-                Some("This cannot be undone."),
-            ),
+            RemovalKind::Trash => ("您确定要移到废纸篓", "移到废纸篓", None),
+            RemovalKind::Delete => ("您确定要永久删除", "删除", Some("此操作无法撤销。")),
         };
 
         let mut message = match names {
-            [name] => format!("{message_start} {}?", MarkdownInlineCode(name.as_ref())),
+            [name] => format!("{message_start} {}？", MarkdownInlineCode(name.as_ref())),
             _ => {
                 const CUTOFF_POINT: usize = 10;
                 let mut listed_names = names
@@ -2804,13 +2835,13 @@ impl ProjectPanel {
                     .collect::<Vec<_>>();
                 let omitted_count = names.len().saturating_sub(CUTOFF_POINT);
                 if omitted_count == 1 {
-                    listed_names.push(".. 1 file not shown".into());
+                    listed_names.push(".. 未显示 1 个文件".into());
                 } else if omitted_count > 1 {
-                    listed_names.push(format!(".. {omitted_count} files not shown"));
+                    listed_names.push(format!(".. 未显示 {omitted_count} 个文件"));
                 }
 
                 format!(
-                    "{message_start} the following {} files?\n{}",
+                    "{message_start} 以下 {} 个文件？\n{}",
                     names.len(),
                     listed_names.join("\n")
                 )
@@ -2819,14 +2850,14 @@ impl ProjectPanel {
         match dirty_buffers {
             0 => {}
             1 if names.len() == 1 => {
-                message.push_str("\n\nIt has unsaved changes, which will be lost.");
+                message.push_str("\n\n它含有未保存的更改，这些更改将丢失。");
             }
             1 => {
-                message.push_str("\n\n1 of these has unsaved changes, which will be lost.");
+                message.push_str("\n\n其中有 1 个含有未保存的更改，这些更改将丢失。");
             }
             dirty_buffers => {
                 message.push_str(&format!(
-                    "\n\n{dirty_buffers} of these have unsaved changes, which will be lost."
+                    "\n\n其中有 {dirty_buffers} 个含有未保存的更改，这些更改将丢失。"
                 ));
             }
         }
@@ -2893,7 +2924,7 @@ impl ProjectPanel {
                     PromptLevel::Info,
                     &prompt.message,
                     prompt.detail,
-                    &[prompt.confirmation_label, "Cancel"],
+                    &[prompt.confirmation_label, "取消"],
                     cx,
                 ))
             } else {
@@ -2979,10 +3010,10 @@ impl ProjectPanel {
         cx: &mut Context<Self>,
     ) {
         let message = match (trash, total_count) {
-            (true, 1) => format!("Failed to trash {failed_count} of {total_count} file."),
-            (true, _) => format!("Failed to trash {failed_count} of {total_count} files."),
-            (false, 1) => format!("Failed to delete {failed_count} of {total_count} file."),
-            (false, _) => format!("Failed to delete {failed_count} of {total_count} files."),
+            (true, 1) => format!("无法将 {failed_count}/{total_count} 个文件移入回收站。"),
+            (true, _) => format!("无法将 {failed_count}/{total_count} 个文件移入回收站。"),
+            (false, 1) => format!("无法删除 {failed_count}/{total_count} 个文件。"),
+            (false, _) => format!("无法删除 {failed_count}/{total_count} 个文件。"),
         };
 
         let toast = StatusToast::new(message, cx, |this, _| {
@@ -3621,6 +3652,11 @@ impl ProjectPanel {
             return;
         }
 
+        if let Some(image) = self.image_from_system_clipboard(cx) {
+            self.paste_image(image, window, cx);
+            return;
+        }
+
         maybe!({
             let (worktree, entry) = self.selected_entry_handle(cx)?;
             let entry = entry.clone();
@@ -3839,63 +3875,18 @@ impl ProjectPanel {
             return;
         }
 
-        let total_files = files_to_download.len();
-        let workspace = self.workspace.clone();
-
         let destination_dir = cx.prompt_for_paths(PathPromptOptions {
             files: false,
             directories: true,
             multiple: false,
-            prompt: Some("Download".into()),
+            prompt: Some("选择下载目录".into()),
         });
 
-        let fs = self.fs.clone();
-        let notification_id =
-            workspace::notifications::NotificationId::Named("download-progress".into());
         cx.spawn_in(window, async move |this, cx| {
             if let Ok(Ok(Some(mut paths))) = destination_dir.await {
                 if let Some(dest_dir) = paths.pop() {
-                    // Show initial toast
-                    workspace
-                        .update(cx, |workspace, cx| {
-                            workspace.show_toast(
-                                workspace::Toast::new(
-                                    notification_id.clone(),
-                                    format!("Downloading 0/{} files...", total_files),
-                                ),
-                                cx,
-                            );
-                        })
-                        .ok();
-
-                    for (index, (worktree_id, entry_path, relative_path)) in
-                        files_to_download.into_iter().enumerate()
-                    {
-                        // Update progress toast
-                        workspace
-                            .update(cx, |workspace, cx| {
-                                workspace.show_toast(
-                                    workspace::Toast::new(
-                                        notification_id.clone(),
-                                        format!(
-                                            "Downloading {}/{} files...",
-                                            index + 1,
-                                            total_files
-                                        ),
-                                    ),
-                                    cx,
-                                );
-                            })
-                            .ok();
-
+                    for (worktree_id, entry_path, relative_path) in files_to_download {
                         let destination_path = dest_dir.join(&relative_path);
-
-                        // Create parent directories if needed
-                        if let Some(parent) = destination_path.parent() {
-                            if !parent.exists() {
-                                fs.create_dir(parent).await.log_err();
-                            }
-                        }
 
                         let download_task = this.update(cx, |this, cx| {
                             let project = this.project.clone();
@@ -3907,19 +3898,6 @@ impl ProjectPanel {
                             task.await.log_err();
                         }
                     }
-
-                    // Show completion toast
-                    workspace
-                        .update(cx, |workspace, cx| {
-                            workspace.show_toast(
-                                workspace::Toast::new(
-                                    notification_id.clone(),
-                                    format!("Downloaded {} files", total_files),
-                                ),
-                                cx,
-                            );
-                        })
-                        .ok();
                 }
             }
         })
@@ -4262,6 +4240,43 @@ impl ProjectPanel {
         self.index_for_entry(selection.entry_id, selection.worktree_id)
     }
 
+    fn selected_code_explanation_paths(&self, cx: &App) -> Option<Vec<ProjectPath>> {
+        let project = self.project.read(cx);
+        let entries = self.disjoint_entries(self.effective_entries(), cx);
+        let mut paths = Vec::with_capacity(entries.len());
+        for selected in entries {
+            let worktree = project.worktree_for_id(selected.worktree_id, cx)?;
+            let worktree = worktree.read(cx);
+            let entry = worktree.entry_for_id(selected.entry_id)?;
+            if entry.is_private || entry.is_ignored || entry.is_external || entry.is_fifo {
+                continue;
+            }
+            paths.push(ProjectPath {
+                worktree_id: selected.worktree_id,
+                path: entry.path.clone(),
+            });
+        }
+        Some(paths)
+    }
+
+    fn scan_selected_entries_for_code_explanations(
+        &mut self,
+        _: &ScanSelectedEntriesForCodeExplanations,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(paths) = self.selected_code_explanation_paths(cx) else {
+            return;
+        };
+        editor::code_explanations::show_selected_project_scan_confirmation(
+            self.project.clone(),
+            self.workspace.clone(),
+            paths,
+            window,
+            cx,
+        );
+    }
+
     fn disjoint_effective_entries_excluding_roots(&self, cx: &App) -> BTreeSet<SelectedEntry> {
         let project = self.project.read(cx);
         let entries = self
@@ -4439,6 +4454,98 @@ impl ProjectPanel {
         None
     }
 
+    fn image_from_system_clipboard(&self, cx: &App) -> Option<gpui::Image> {
+        cx.read_from_clipboard()?
+            .into_entries()
+            .find_map(|entry| match entry {
+                GpuiClipboardEntry::Image(image) if !image.bytes().is_empty() => Some(image),
+                _ => None,
+            })
+    }
+
+    fn paste_image(&mut self, image: gpui::Image, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((worktree, target_entry)) = self.selected_sub_entry(cx) else {
+            return;
+        };
+        let target_directory = if target_entry.is_dir() {
+            target_entry.path.clone()
+        } else if let Some(parent) = target_entry.path.parent() {
+            parent.into()
+        } else {
+            return;
+        };
+        let worktree_id = worktree.read(cx).id();
+        let snapshot = worktree.read(cx).snapshot();
+        let Some(image_path) =
+            unused_pasted_image_path(&target_directory, image.format.extension(), |path| {
+                snapshot.entry_for_path(path).is_some()
+            })
+        else {
+            return;
+        };
+        let project_path = ProjectPath {
+            worktree_id,
+            path: image_path.clone(),
+        };
+        let transfers = project::file_transfer::store(&self.project, cx);
+        let direction = if worktree.read(cx).is_local() {
+            project::file_transfer::TransferDirection::Copy
+        } else {
+            project::file_transfer::TransferDirection::Upload
+        };
+        let progress = transfers.update(cx, |transfers, cx| {
+            transfers.start(
+                direction,
+                image_path.to_string(),
+                worktree
+                    .read(cx)
+                    .absolutize(&target_directory)
+                    .display()
+                    .to_string(),
+                cx,
+            )
+        });
+        let observer = progress.clone();
+        let create_task = worktree.update(cx, |worktree, cx| {
+            worktree.create_entry_with_progress(
+                image_path,
+                false,
+                Some(image.bytes().to_vec()),
+                Some(Arc::new(move |event| observer.progress(event))),
+                cx,
+            )
+        });
+        let create_task = progress.track(create_task, cx);
+        let workspace = self.workspace.clone();
+
+        cx.spawn_in(window, async move |project_panel, mut cx| {
+            let Some(created_entry) = create_task
+                .await
+                .notify_workspace_async_err(workspace, &mut cx)
+            else {
+                return;
+            };
+
+            project_panel
+                .update_in(cx, |project_panel, window, cx| {
+                    if let CreatedEntry::Included(entry) = created_entry {
+                        project_panel
+                            .undo_manager
+                            .record([Change::Created(project_path)])
+                            .log_err();
+                        project_panel.selection = Some(SelectedEntry {
+                            worktree_id,
+                            entry_id: entry.id,
+                        });
+                        project_panel.marked_entries.clear();
+                        project_panel.update_visible_entries(None, false, false, window, cx);
+                    }
+                })
+                .log_err();
+        })
+        .detach();
+    }
+
     fn has_pasteable_content(&self, cx: &App) -> bool {
         if self
             .clipboard
@@ -4448,6 +4555,7 @@ impl ProjectPanel {
             return true;
         }
         self.external_paths_from_system_clipboard(cx).is_some()
+            || self.image_from_system_clipboard(cx).is_some()
     }
 
     fn selected_entry_handle<'a>(
@@ -4926,7 +5034,7 @@ impl ProjectPanel {
                                 PromptLevel::Info,
                                 &prompt_message,
                                 None,
-                                &["Replace", "Cancel"],
+                                &["替换", "取消"],
                                 cx,
                             )
                         })?
@@ -4943,11 +5051,41 @@ impl ProjectPanel {
                     return Ok(());
                 }
 
-                let (worktree_id, task) = worktree.update(cx, |worktree, cx| {
-                    (
-                        worktree.id(),
-                        worktree.copy_external_entries(target_directory, paths, fs, cx),
+                let transfers = this.update(cx, |this, cx| {
+                    project::file_transfer::store(&this.project, cx)
+                })?;
+                let direction = worktree.read_with(cx, |worktree, _| {
+                    if worktree.is_local() {
+                        project::file_transfer::TransferDirection::Copy
+                    } else {
+                        project::file_transfer::TransferDirection::Upload
+                    }
+                });
+                let progress = transfers.update(cx, |transfers, cx| {
+                    transfers.start(
+                        direction,
+                        paths
+                            .first()
+                            .map(|path| path.display().to_string())
+                            .unwrap_or_else(|| "文件".into()),
+                        worktree
+                            .read(cx)
+                            .absolutize(&target_directory)
+                            .display()
+                            .to_string(),
+                        cx,
                     )
+                });
+                let observer = progress.clone();
+                let (worktree_id, task) = worktree.update(cx, |worktree, cx| {
+                    let task = worktree.copy_external_entries_with_progress(
+                        target_directory,
+                        paths,
+                        fs,
+                        Some(Arc::new(move |event| observer.progress(event))),
+                        cx,
+                    );
+                    (worktree.id(), progress.track(task, cx))
                 });
 
                 let opened_entries: Vec<_> = task
@@ -5921,7 +6059,7 @@ impl ProjectPanel {
         let kind = details.kind;
         let is_sticky = details.sticky.is_some();
         let sticky_index = details.sticky.as_ref().map(|this| this.sticky_index);
-        let settings = ProjectPanelSettings::get_global(cx);
+        let settings = *ProjectPanelSettings::get_global(cx);
         let show_editor = details.is_editing && !details.is_processing;
 
         let selection = SelectedEntry {
@@ -6037,6 +6175,15 @@ impl ProjectPanel {
             .git_status_indicator
             .then(|| git_status_indicator(details.git_status))
             .flatten();
+        let explanation_index = editor::code_explanations::code_explanation_file_index(cx);
+        let has_ai_explanation = kind.is_file()
+            && explanation_index.read(cx).contains(
+                &self.project,
+                &ProjectPath {
+                    worktree_id,
+                    path: path.clone(),
+                },
+            );
 
         let id: ElementId = if is_sticky {
             SharedString::from(format!("project_panel_sticky_item_{}", entry_id.to_usize())).into()
@@ -6436,7 +6583,8 @@ impl ProjectPanel {
                     .when(
                         canonical_path.is_some()
                             || diagnostic_count.is_some()
-                            || git_indicator.is_some(),
+                            || git_indicator.is_some()
+                            || has_ai_explanation,
                         |this| {
                             let symlink_element = canonical_path.map(|path| {
                                 div()
@@ -6477,6 +6625,13 @@ impl ProjectPanel {
                                                         .color(Color::Warning),
                                                 )
                                             },
+                                        )
+                                    })
+                                    .when(has_ai_explanation, |this| {
+                                        this.child(
+                                            Label::new("AI")
+                                                .size(LabelSize::Custom(rems_from_px(8_f32)))
+                                                .color(Color::Muted),
                                         )
                                     })
                                     .when_some(git_indicator, |this, (label, color)| {
@@ -7460,6 +7615,7 @@ impl Render for ProjectPanel {
                 .on_action(cx.listener(Self::fold_directory))
                 .on_action(cx.listener(Self::remove_from_project))
                 .on_action(cx.listener(Self::compare_marked_files))
+                .on_action(cx.listener(Self::scan_selected_entries_for_code_explanations))
                 .on_action(cx.listener(Self::open_context_menu))
                 .when(!project.is_read_only(cx), |el| {
                     el.on_action(cx.listener(Self::new_file))

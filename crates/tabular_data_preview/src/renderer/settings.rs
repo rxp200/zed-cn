@@ -48,7 +48,7 @@ pub(crate) fn settings_popover_menu(
             IconButton::new("table-settings-trigger", IconName::Filter)
                 .icon_size(IconSize::Small)
                 .size(ButtonSize::Compact),
-            Tooltip::text("Table Settings"),
+            Tooltip::text("表格设置"),
         )
         .anchor(Anchor::TopRight)
         .menu(move |window, cx| {
@@ -60,34 +60,34 @@ pub(crate) fn settings_popover_menu(
                     let settings = view_entity.read(cx).settings.clone();
 
                     let menu = toggle_entry(
-                        menu.header("Text Alignment"),
-                        "Top",
-                        Some("Choose vertical text alignment within cells"),
+                        menu.header("文本对齐"),
+                        "顶部",
+                        Some("选择单元格内的垂直文本对齐方式"),
                         matches!(settings.vertical_alignment, VerticalAlignment::Top),
                         &view_entity,
                         |settings| settings.vertical_alignment = VerticalAlignment::Top,
                     );
                     let menu = toggle_entry(
                         menu,
-                        "Center",
+                        "居中",
                         None,
                         matches!(settings.vertical_alignment, VerticalAlignment::Center),
                         &view_entity,
                         |settings| settings.vertical_alignment = VerticalAlignment::Center,
                     );
 
-                    let menu = menu.separator().header("Filter Sort");
+                    let menu = menu.separator().header("筛选排序");
                     let menu = toggle_entry(
                         menu,
-                        "A-Z, then Count",
-                        Some("Choose how filter values are sorted in the filter menu"),
+                        "A-Z，再按数量",
+                        Some("选择筛选菜单中筛选值的排序方式"),
                         settings.filter_sort_order == FilterSortOrder::AlphaThenCount,
                         &view_entity,
                         |settings| settings.filter_sort_order = FilterSortOrder::AlphaThenCount,
                     );
                     let menu = toggle_entry(
                         menu,
-                        "Count, then A-Z",
+                        "按数量，再按 A-Z",
                         None,
                         settings.filter_sort_order == FilterSortOrder::CountThenAlpha,
                         &view_entity,
@@ -96,14 +96,16 @@ pub(crate) fn settings_popover_menu(
 
                     let menu = toggle_entry(
                         menu.separator(),
-                        "Display multiline rows",
+                        "显示多行单元格",
                         Some(
-                            "When enabled, row height grows to show all content. \
-                             When disabled, only the first line is visible — hover a cell to see the rest.",
+                            "启用时，行高将增长以显示所有内容。\
+                             禁用时，仅显示第一行——悬停在单元格上可查看其余内容。",
                         ),
                         settings.multiline_cells_enabled,
                         &view_entity,
-                        |settings| settings.multiline_cells_enabled = !settings.multiline_cells_enabled,
+                        |settings| {
+                            settings.multiline_cells_enabled = !settings.multiline_cells_enabled
+                        },
                     );
 
                     #[cfg(feature = "dev-tools")]
@@ -123,13 +125,13 @@ fn append_dev_only_entries(
 ) -> ContextMenu {
     use crate::settings::RowRenderMechanism;
 
-    let menu = menu.separator().header("Dev-only: Rendering Mode");
+    let menu = menu.separator().header("仅开发用：渲染模式");
     let menu = toggle_entry(
         menu,
-        "Variable Height",
+        "可变高度",
         Some(
-            "Dev-only section used for debugging purposes.\n\
-             Will be removed on public release of the tabular data preview feature",
+            "仅开发用的调试部分。\n\
+             表格数据预览功能公开发布后将移除。",
         ),
         settings.rendering_with == RowRenderMechanism::VariableList,
         view_entity,
@@ -137,7 +139,7 @@ fn append_dev_only_entries(
     );
     let menu = toggle_entry(
         menu,
-        "Uniform Height",
+        "统一高度",
         None,
         settings.rendering_with == RowRenderMechanism::UniformList,
         view_entity,
@@ -146,7 +148,7 @@ fn append_dev_only_entries(
 
     let menu = toggle_entry(
         menu.separator(),
-        "Show perf metrics",
+        "显示性能指标",
         None,
         settings.show_perf_metrics_overlay,
         view_entity,
@@ -154,7 +156,7 @@ fn append_dev_only_entries(
     );
     toggle_entry(
         menu,
-        "Show cell positions",
+        "显示单元格位置",
         None,
         settings.show_debug_info,
         view_entity,
