@@ -64,14 +64,14 @@ use crate::alacritty::current_child_signal_mask;
 use crate::alacritty::{
     AlacrittyCell, AlacrittyGridIterator, AlacrittyHyperlink, AlacrittySearch, AlacrittyTerm,
     AlacrittyTermConfig, AlacrittyTermLock, HyperlinkMatch, PtySender, RegexSearches,
-    append_text_to_term, apply_config, clear_saved_screen, content_text, display_offset,
-    display_only_term_config, find_from_terminal_point, full_content_range, last_non_empty_lines,
-    make_content, new_term, open_pty, pty_options, pty_term_config, resize, screen_lines,
-    scroll_display, scroll_to_point, search_matches, selection_text, set_default_cursor_style,
-    set_selection as set_term_selection, shrink_to_used, spawn_event_loop,
-    toggle_vi_mode as toggle_term_vi_mode, total_lines, update_selection as update_term_selection,
-    update_selection_to_vi_cursor, update_vi_cursor_for_scroll, used_lines, vi_goto_point,
-    vi_motion,
+    append_text_to_term, apply_config, clear_saved_screen, clone_active_grid, content_text,
+    display_offset, display_only_term_config, find_from_terminal_point, full_content_range,
+    last_non_empty_lines, make_content, new_term, open_pty, pty_options, pty_term_config, resize,
+    screen_lines, scroll_display, scroll_to_point, search_matches, selection_text,
+    set_default_cursor_style, set_selection as set_term_selection, shrink_to_used,
+    spawn_event_loop, toggle_vi_mode as toggle_term_vi_mode, total_lines,
+    update_selection as update_term_selection, update_selection_to_vi_cursor,
+    update_vi_cursor_for_scroll, used_lines, vi_goto_point, vi_motion,
 };
 use crate::mappings::colors::to_vte_rgb;
 use crate::mappings::keys::to_esc_str;
@@ -934,6 +934,12 @@ fn init_command_startup_marker_command(shell_kind: ShellKind, marker_id: u64) ->
 /// sender and receiver remain paired.
 pub struct TerminalMode(TerminalModeKind);
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MouseInputMode {
+    ReportToTerminal,
+    LocalSelection,
+}
+
 enum TerminalModeKind {
     Interactive,
     InteractiveWithCompletion(Sender<Option<ExitStatus>>),
@@ -1019,7 +1025,7 @@ impl TerminalBuilder {
             completion_tx: None,
             term,
             term_config: config,
-            output_processor: Processor::<StdSyncHandler>::new(),
+            output_processor: None,
             title_override: None,
             events: VecDeque::with_capacity(10),
             last_content: Content {
@@ -1063,6 +1069,7 @@ impl TerminalBuilder {
             path_style,
             cwd_history: Vec::new(),
             pending_cwd_boundary: None,
+            last_output_at: None,
             #[cfg(any(test, feature = "test-support"))]
             input_log: Vec::new(),
             #[cfg(test)]
@@ -1306,7 +1313,7 @@ impl TerminalBuilder {
                 completion_tx,
                 term,
                 term_config: config,
-                output_processor: Processor::<StdSyncHandler>::new(),
+                output_processor: None,
                 title_override: terminal_title_override,
                 events: VecDeque::with_capacity(10), //Should never get this high.
                 last_content: Default::default(),
@@ -1362,6 +1369,7 @@ impl TerminalBuilder {
                         .unwrap_or_default()
                 },
                 pending_cwd_boundary: None,
+                last_output_at: None,
                 #[cfg(any(test, feature = "test-support"))]
                 input_log: Vec::new(),
                 #[cfg(test)]
@@ -1506,7 +1514,7 @@ pub struct Terminal {
     completion_tx: Option<Sender<Option<ExitStatus>>>,
     term: Arc<AlacrittyTermLock>,
     term_config: AlacrittyTermConfig,
-    output_processor: Processor<StdSyncHandler>,
+    output_processor: Option<Processor<StdSyncHandler>>,
     events: VecDeque<InternalEvent>,
     /// This is only used for mouse mode cell change detection
     last_mouse: Option<(Point, SelectionSide)>,
@@ -1542,6 +1550,7 @@ pub struct Terminal {
     path_style: PathStyle,
     cwd_history: Vec<CwdHistoryEntry>,
     pending_cwd_boundary: Option<i32>,
+    last_output_at: Option<Instant>,
     #[cfg(any(test, feature = "test-support"))]
     input_log: Vec<Vec<u8>>,
     #[cfg(test)]
@@ -1672,6 +1681,7 @@ impl Terminal {
                 //NOOP, Handled in render
             }
             TerminalBackendEvent::Wakeup => {
+                self.note_program_output();
                 self.detect_init_command_startup_marker();
                 cx.emit(Event::Wakeup);
 
@@ -1965,14 +1975,27 @@ impl Terminal {
         let converted = convert_lf_to_crlf(bytes, &mut previous_byte_was_cr);
 
         let mut term = self.term.lock();
-        self.output_processor.advance(&mut *term, &converted);
+        self.output_processor
+            .get_or_insert_with(Processor::<StdSyncHandler>::new)
+            .advance(&mut *term, &converted);
         drop(term);
+        self.note_program_output();
         self.detect_init_command_startup_marker();
         cx.emit(Event::Wakeup);
     }
 
     pub fn total_lines(&self) -> usize {
         total_lines(&self.term.lock_unfair())
+    }
+
+    /// Timestamp of the most recent output produced by the program running in the
+    /// terminal, on the testable executor clock. `None` before any output arrived.
+    pub fn last_output_activity(&self) -> Option<Instant> {
+        self.last_output_at
+    }
+
+    fn note_program_output(&mut self) {
+        self.last_output_at = Some(self.background_executor.now());
     }
 
     pub fn viewport_lines(&self) -> usize {
@@ -2440,6 +2463,10 @@ impl Terminal {
         content_text(&term)
     }
 
+    pub fn is_remote_terminal(&self) -> bool {
+        self.is_remote_terminal
+    }
+
     pub fn last_n_non_empty_lines(&self, n: usize) -> Vec<String> {
         let terminal = self.term.lock_unfair();
         last_non_empty_lines(&terminal, n)
@@ -2474,13 +2501,15 @@ impl Terminal {
         }
     }
 
-    pub fn mouse_mode(&self, shift: bool) -> bool {
-        self.last_content.mode.intersects(Modes::MOUSE_MODE) && !shift
+    pub fn mouse_mode(&self, shift: bool, mode: MouseInputMode) -> bool {
+        mode == MouseInputMode::ReportToTerminal
+            && self.last_content.mode.intersects(Modes::MOUSE_MODE)
+            && !shift
     }
 
-    pub fn mouse_move(&mut self, e: &MouseMoveEvent, cx: &mut Context<Self>) {
+    pub fn mouse_move(&mut self, e: &MouseMoveEvent, mode: MouseInputMode, cx: &mut Context<Self>) {
         let position = e.position - self.last_content.terminal_bounds.bounds.origin;
-        if self.mouse_mode(e.modifiers.shift) {
+        if self.mouse_mode(e.modifiers.shift, mode) {
             // A ctrl/cmd press on a link suppressed its button-press report in
             // `mouse_down`. Since the app never saw the press, we must swallow
             // the whole gesture rather than forward later motion/release
@@ -2578,10 +2607,11 @@ impl Terminal {
         &mut self,
         e: &MouseMoveEvent,
         region: Bounds<Pixels>,
+        mode: MouseInputMode,
         cx: &mut Context<Self>,
     ) {
         let position = e.position - self.last_content.terminal_bounds.bounds.origin;
-        if !self.mouse_mode(e.modifiers.shift) {
+        if !self.mouse_mode(e.modifiers.shift, mode) {
             if let Some(hyperlink) = &self.mouse_down_hyperlink {
                 let point = grid_point(
                     position,
@@ -2644,7 +2674,7 @@ impl Terminal {
         Some(scroll_lines.clamp(-3, 3))
     }
 
-    pub fn mouse_down(&mut self, e: &MouseDownEvent, cx: &mut Context<Self>) {
+    pub fn mouse_down(&mut self, e: &MouseDownEvent, mode: MouseInputMode, cx: &mut Context<Self>) {
         let position = e.position - self.last_content.terminal_bounds.bounds.origin;
         let point = grid_point(
             position,
@@ -2655,7 +2685,7 @@ impl Terminal {
         if e.button == MouseButton::Left
             && e.modifiers.secondary()
             && (TerminalSettings::get_global(cx).open_links_in_mouse_mode
-                || !self.mouse_mode(e.modifiers.shift))
+                || !self.mouse_mode(e.modifiers.shift, mode))
         {
             self.mouse_down_hyperlink = self.find_hyperlink_at_point(point);
 
@@ -2664,7 +2694,7 @@ impl Terminal {
             }
         }
 
-        if self.mouse_mode(e.modifiers.shift) {
+        if self.mouse_mode(e.modifiers.shift, mode) {
             let bytes =
                 mouse_button_report(point, e.button, e.modifiers, true, self.last_content.mode);
 
@@ -2715,7 +2745,9 @@ impl Terminal {
                 }
                 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
                 MouseButton::Middle => {
-                    if let Some(item) = cx.read_from_primary() {
+                    if mode == MouseInputMode::ReportToTerminal
+                        && let Some(item) = cx.read_from_primary()
+                    {
                         let text = item.text().unwrap_or_default();
                         self.paste(&text);
                     }
@@ -2725,7 +2757,7 @@ impl Terminal {
         }
     }
 
-    pub fn mouse_up(&mut self, e: &MouseUpEvent, cx: &Context<Self>) {
+    pub fn mouse_up(&mut self, e: &MouseUpEvent, mode: MouseInputMode, cx: &Context<Self>) {
         let setting = TerminalSettings::get_global(cx);
 
         let position = e.position - self.last_content.terminal_bounds.bounds.origin;
@@ -2748,7 +2780,7 @@ impl Terminal {
                 return;
             }
 
-            if self.mouse_mode(e.modifiers.shift) {
+            if self.mouse_mode(e.modifiers.shift, mode) {
                 self.selection_phase = SelectionPhase::Ended;
                 self.last_mouse = None;
                 self.mouse_down_position = None;
@@ -2756,7 +2788,7 @@ impl Terminal {
             }
         }
 
-        if self.mouse_mode(e.modifiers.shift) {
+        if self.mouse_mode(e.modifiers.shift, mode) {
             let point = grid_point(
                 position,
                 self.last_content.terminal_bounds,
@@ -2798,8 +2830,13 @@ impl Terminal {
     }
 
     ///Scroll the terminal
-    pub fn scroll_wheel(&mut self, e: &ScrollWheelEvent, scroll_multiplier: f32) {
-        let mouse_mode = self.mouse_mode(e.shift);
+    pub fn scroll_wheel(
+        &mut self,
+        e: &ScrollWheelEvent,
+        scroll_multiplier: f32,
+        mode: MouseInputMode,
+    ) {
+        let mouse_mode = self.mouse_mode(e.shift, mode);
         let scroll_multiplier = if mouse_mode { 1. } else { scroll_multiplier };
 
         if let Some(scroll_lines) = self.determine_scroll_lines(e, scroll_multiplier)
@@ -2818,10 +2855,11 @@ impl Terminal {
                         self.write_to_pty(scroll);
                     }
                 };
-            } else if self
-                .last_content
-                .mode
-                .contains(Modes::ALT_SCREEN | Modes::ALTERNATE_SCROLL)
+            } else if mode == MouseInputMode::ReportToTerminal
+                && self
+                    .last_content
+                    .mode
+                    .contains(Modes::ALT_SCREEN | Modes::ALTERNATE_SCROLL)
                 && !e.shift
             {
                 self.write_to_pty(alt_scroll(scroll_lines));
@@ -3051,7 +3089,9 @@ impl Terminal {
         )
     }
 
-    /// Releases live PTY resources while retaining process metadata and buffered output.
+    /// Releases live PTY resources, including the parse buffer used by
+    /// [`Terminal::write_output`], while retaining process metadata and buffered
+    /// output.
     ///
     /// Calling this method after the resources have already been released is a no-op.
     pub fn release_pty_resources(&mut self) {
@@ -3063,6 +3103,10 @@ impl Terminal {
             return;
         };
         let info = info.clone();
+
+        // The terminal is retained past the command, so drop the parse buffer's
+        // reservation; `write_output` builds a new one if it is called again.
+        self.output_processor = None;
 
         pty_tx.shutdown();
         info.terminate_child_process();
@@ -3182,6 +3226,27 @@ impl Terminal {
 
     pub fn vi_mode_enabled(&self) -> bool {
         self.vi_mode_enabled
+    }
+
+    pub fn frozen_snapshot_builder(&self, cx: &App) -> TerminalBuilder {
+        let bounds = self.last_content.terminal_bounds;
+        let history_lines = self.total_lines().saturating_sub(self.viewport_lines());
+        let mut builder = TerminalBuilder::new_display_only_with_bounds(
+            self.template.cursor_shape,
+            self.template.alternate_scroll,
+            Some(history_lines),
+            self.template.window_id,
+            cx.background_executor(),
+            self.path_style,
+            bounds,
+        );
+        clone_active_grid(&self.term, &builder.terminal.term);
+        builder.terminal.last_content = make_content(
+            &builder.terminal.term.lock_unfair(),
+            &builder.terminal.last_content,
+        );
+        builder.terminal.title_override = Some(format!("[冻结] {}", self.title(false)));
+        builder
     }
 
     pub fn clone_builder(&self, cx: &App, cwd: Option<PathBuf>) -> Task<Result<TerminalBuilder>> {
@@ -3572,11 +3637,48 @@ mod tests {
     };
     use collections::HashMap;
     use gpui::{
-        ClipboardItem, Entity, Pixels, TestAppContext, VisualTestContext, bounds, point, size,
+        ClipboardItem, Entity, Pixels, ScrollDelta, TestAppContext, VisualContext,
+        VisualTestContext, bounds, point, size,
     };
     use parking_lot::Mutex;
     use rand::{Rng, distr, rngs::StdRng};
     use task::{Shell, ShellBuilder};
+
+    #[gpui::test]
+    fn frozen_snapshot_copies_scrollback_and_stops_following_source(cx: &mut TestAppContext) {
+        let source = cx.new(|cx| {
+            let mut terminal = TerminalBuilder::new_display_only_with_bounds(
+                SettingsCursorShape::Block,
+                AlternateScroll::On,
+                Some(100),
+                0,
+                cx.background_executor(),
+                PathStyle::local(),
+                TerminalBounds::new(
+                    px(16.),
+                    px(8.),
+                    bounds(point(px(0.), px(0.)), size(px(640.), px(48.))),
+                ),
+            )
+            .subscribe(cx);
+            terminal.write_output(b"one\ntwo\nthree\nfour\nfive\n", cx);
+            terminal
+        });
+
+        let frozen = cx.new(|cx| source.read(cx).frozen_snapshot_builder(cx).subscribe(cx));
+        cx.read(|cx| {
+            assert_eq!(frozen.read(cx).get_content(), source.read(cx).get_content());
+            assert!(frozen.read(cx).total_lines() > frozen.read(cx).viewport_lines());
+        });
+
+        source.update(cx, |terminal, cx| {
+            terminal.write_output(b"six\n", cx);
+        });
+        cx.read(|cx| {
+            assert!(!frozen.read(cx).get_content().contains("six"));
+            assert!(frozen.read(cx).title(false).starts_with("[冻结]"));
+        });
+    }
 
     #[test]
     fn test_init_command_startup_marker_commands_do_not_contain_marker() {
@@ -3919,7 +4021,7 @@ mod tests {
             click_count: 1,
             first_mouse: true,
         };
-        terminal.mouse_down(&mouse_down, cx);
+        terminal.mouse_down(&mouse_down, MouseInputMode::ReportToTerminal, cx);
     }
 
     fn left_mouse_up_at(
@@ -3933,7 +4035,7 @@ mod tests {
             modifiers: Modifiers::none(),
             click_count: 1,
         };
-        terminal.mouse_up(&mouse_up, cx);
+        terminal.mouse_up(&mouse_up, MouseInputMode::ReportToTerminal, cx);
     }
 
     fn left_mouse_drag_to(
@@ -3947,7 +4049,7 @@ mod tests {
             pressed_button: Some(MouseButton::Left),
             modifiers: Modifiers::none(),
         };
-        terminal.mouse_drag(&drag_event, region, cx);
+        terminal.mouse_drag(&drag_event, region, MouseInputMode::ReportToTerminal, cx);
     }
 
     /// A left click that jitters by a pixel or two (e.g. the window-focusing
@@ -3998,6 +4100,92 @@ mod tests {
         });
     }
 
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    #[gpui::test]
+    async fn test_local_selection_does_not_paste_primary_selection(cx: &mut TestAppContext) {
+        let terminal = init_terminal_test(cx, b"hello world\r\n");
+        terminal.update(cx, |terminal, cx| {
+            cx.write_to_primary(ClipboardItem::new_string("primary selection".into()));
+            let event = MouseDownEvent {
+                button: MouseButton::Middle,
+                position: point(px(50.), px(10.)),
+                modifiers: Modifiers::none(),
+                click_count: 1,
+                first_mouse: true,
+            };
+            terminal.mouse_down(&event, MouseInputMode::LocalSelection, cx);
+            assert!(terminal.take_input_log().is_empty());
+            assert!(terminal.take_pty_write_log().is_empty());
+
+            terminal.mouse_down(&event, MouseInputMode::ReportToTerminal, cx);
+            assert_eq!(
+                terminal.take_input_log(),
+                vec![b"primary selection".to_vec()]
+            );
+            assert_eq!(
+                terminal.take_pty_write_log(),
+                vec![b"primary selection".to_vec()]
+            );
+        });
+    }
+
+    #[gpui::test]
+    async fn test_local_selection_scrolls_without_terminal_reports(cx: &mut TestAppContext) {
+        let mut output = Vec::new();
+        output.extend_from_slice(b"\x1b[?1002h\x1b[?1006h");
+        for line in 0..80 {
+            output.extend_from_slice(format!("scrollback line {line}\r\n").as_bytes());
+        }
+        let (terminal, cx) = init_terminal_test_with_window(cx, &output);
+        cx.run_until_parked();
+
+        cx.update_window_entity(&terminal, |terminal, window, cx| {
+            terminal.sync(window, cx);
+            assert!(terminal.last_content.mode.intersects(Modes::MOUSE_MODE));
+            assert_eq!(display_offset(&terminal.term.lock()), 0);
+
+            let scroll_event = ScrollWheelEvent {
+                position: point(px(50.0), px(10.0)),
+                delta: ScrollDelta::Lines(point(0.0, 1.0)),
+                ..Default::default()
+            };
+
+            terminal.scroll_wheel(&scroll_event, 1.0, MouseInputMode::LocalSelection);
+            terminal.sync(window, cx);
+            assert!(display_offset(&terminal.term.lock()) > 0);
+            assert!(terminal.take_input_log().is_empty());
+            assert!(terminal.take_pty_write_log().is_empty());
+
+            terminal.scroll_wheel(&scroll_event, 1.0, MouseInputMode::ReportToTerminal);
+            assert!(!terminal.take_pty_write_log().is_empty());
+
+            terminal.write_output(b"\x1b[?1049h\x1b[?1007h", cx);
+        });
+        cx.run_until_parked();
+
+        cx.update_window_entity(&terminal, |terminal, window, cx| {
+            terminal.sync(window, cx);
+            assert!(
+                terminal
+                    .last_content
+                    .mode
+                    .contains(Modes::ALT_SCREEN | Modes::ALTERNATE_SCROLL)
+            );
+            assert_eq!(display_offset(&terminal.term.lock()), 0);
+
+            let scroll_event = ScrollWheelEvent {
+                position: point(px(50.0), px(10.0)),
+                delta: ScrollDelta::Lines(point(0.0, 1.0)),
+                ..Default::default()
+            };
+            terminal.scroll_wheel(&scroll_event, 1.0, MouseInputMode::LocalSelection);
+            terminal.sync(window, cx);
+            assert_eq!(display_offset(&terminal.term.lock()), 0);
+            assert!(terminal.take_input_log().is_empty());
+            assert!(terminal.take_pty_write_log().is_empty());
+        });
+    }
+
     /// With mouse tracking active (e.g. htop), Shift is the escape hatch to
     /// select terminal text. Shift+drag must start a selection rather than being
     /// swallowed as a "extend existing selection" no-op. Regression test for #60254.
@@ -4024,6 +4212,7 @@ mod tests {
                     click_count: 1,
                     first_mouse: true,
                 },
+                MouseInputMode::ReportToTerminal,
                 cx,
             );
 
@@ -4046,6 +4235,7 @@ mod tests {
                     modifiers: shift,
                 },
                 region,
+                MouseInputMode::ReportToTerminal,
                 cx,
             );
 
@@ -4086,6 +4276,7 @@ mod tests {
                     click_count: 1,
                     first_mouse: true,
                 },
+                MouseInputMode::ReportToTerminal,
                 cx,
             );
 
@@ -4814,7 +5005,7 @@ mod tests {
                 click_count: 1,
                 first_mouse: true,
             };
-            terminal.mouse_down(&mouse_down, cx);
+            terminal.mouse_down(&mouse_down, MouseInputMode::ReportToTerminal, cx);
         }
 
         fn ctrl_mouse_drag_to(
@@ -4828,7 +5019,12 @@ mod tests {
                 pressed_button: Some(MouseButton::Left),
                 modifiers: Modifiers::secondary_key(),
             };
-            terminal.mouse_drag(&drag_event, terminal_bounds, cx);
+            terminal.mouse_drag(
+                &drag_event,
+                terminal_bounds,
+                MouseInputMode::ReportToTerminal,
+                cx,
+            );
         }
 
         fn ctrl_mouse_up_at(
@@ -4842,7 +5038,7 @@ mod tests {
                 modifiers: Modifiers::secondary_key(),
                 click_count: 1,
             };
-            terminal.mouse_up(&mouse_up, cx);
+            terminal.mouse_up(&mouse_up, MouseInputMode::ReportToTerminal, cx);
         }
 
         macro_rules! any_event_matches {
@@ -4890,6 +5086,38 @@ mod tests {
         }
 
         #[gpui::test]
+        async fn test_local_selection_activates_hyperlink_in_mouse_mode(cx: &mut TestAppContext) {
+            let terminal = init_terminal_test(cx, b"Visit https://zed.dev/ for more\r\n");
+
+            terminal.update(cx, |terminal, cx| {
+                terminal.last_content.mode = Modes::MOUSE_MODE;
+                let position = point(px(80.0), px(10.0));
+                let mouse_down = MouseDownEvent {
+                    button: MouseButton::Left,
+                    position,
+                    modifiers: Modifiers::secondary_key(),
+                    click_count: 1,
+                    first_mouse: true,
+                };
+                let mouse_up = MouseUpEvent {
+                    button: MouseButton::Left,
+                    position,
+                    modifiers: Modifiers::secondary_key(),
+                    click_count: 1,
+                };
+
+                terminal.mouse_down(&mouse_down, MouseInputMode::LocalSelection, cx);
+                terminal.mouse_up(&mouse_up, MouseInputMode::LocalSelection, cx);
+
+                assert!(any_event_matches!(
+                    terminal,
+                    InternalEvent::ProcessHyperlink(_, true)
+                ));
+                assert!(terminal.take_pty_write_log().is_empty());
+            });
+        }
+
+        #[gpui::test]
         async fn test_hyperlink_ctrl_click_mismatch_in_mouse_mode_consumes_gesture(
             cx: &mut TestAppContext,
         ) {
@@ -4912,6 +5140,7 @@ mod tests {
                     pressed_button: Some(MouseButton::Left),
                     modifiers: Modifiers::secondary_key(),
                 },
+                MouseInputMode::ReportToTerminal,
                 cx,
             );
             ctrl_mouse_up_at(terminal, up_position, cx);
@@ -5197,7 +5426,8 @@ mod tests {
                 };
                 self.window.simulate_mouse_move(position, self.cx);
                 self.unthrottle();
-                self.terminal.mouse_move(&move_event, self.cx);
+                self.terminal
+                    .mouse_move(&move_event, MouseInputMode::ReportToTerminal, self.cx);
             }
 
             fn try_modifiers_change(&mut self, modifiers: Modifiers) {
@@ -5678,6 +5908,49 @@ mod tests {
         );
     }
 
+    /// The parse buffer `write_output` needs is only built for injected bytes and
+    /// must not outlive the command, even though the terminal does.
+    #[gpui::test]
+    async fn test_release_pty_resources_drops_an_allocated_parse_buffer(cx: &mut TestAppContext) {
+        cx.executor().allow_parking();
+
+        let terminal = build_test_terminal(cx, "echo", &["captured_output"]).await;
+
+        assert!(
+            terminal.read_with(cx, |terminal, _| terminal.output_processor.is_none()),
+            "a terminal that received no injected output should not hold a parse buffer"
+        );
+
+        let exit_status =
+            terminal.read_with(cx, |terminal, cx| terminal.wait_for_completed_task(cx));
+        assert_eq!(exit_status.await, Some(ExitStatus::default()));
+        assert_content_eventually(&terminal, "captured_output", cx).await;
+
+        terminal.update(cx, |terminal, cx| {
+            terminal.write_output(b"injected_before_release\n", cx);
+        });
+        assert!(
+            terminal.read_with(cx, |terminal, _| terminal.output_processor.is_some()),
+            "injecting output should build the parse buffer"
+        );
+
+        terminal.update(cx, |terminal, _| terminal.release_pty_resources());
+        assert!(
+            terminal.read_with(cx, |terminal, _| terminal.output_processor.is_none()),
+            "releasing the PTY should drop the parse buffer"
+        );
+
+        assert_content_eventually(&terminal, "captured_output", cx).await;
+        terminal.update(cx, |terminal, cx| {
+            terminal.write_output(b"injected_after_release\n", cx);
+        });
+        assert!(
+            terminal.read_with(cx, |terminal, _| terminal.output_processor.is_some()),
+            "injecting output after a release should build a new parse buffer"
+        );
+        assert_content_eventually(&terminal, "injected_after_release", cx).await;
+    }
+
     mod perf {
         use super::{super::*, init_terminal_test_with_window};
         use gpui::{ScrollDelta, ScrollWheelEvent, TestAppContext, VisualContext, point};
@@ -5701,6 +5974,7 @@ mod tests {
                             position,
                             ..default()
                         },
+                        MouseInputMode::ReportToTerminal,
                         cx,
                     );
 
@@ -5711,6 +5985,7 @@ mod tests {
                             ..default()
                         },
                         1.0,
+                        MouseInputMode::ReportToTerminal,
                     );
 
                     assert!(

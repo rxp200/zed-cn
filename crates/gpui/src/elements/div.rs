@@ -454,6 +454,7 @@ impl Interactivity {
     ///
     /// See [`Context::listener`](crate::Context::listener) to get access to a view's state from this callback.
     #[track_caller]
+    #[inline(always)]
     pub fn on_action<A: Action>(&mut self, listener: impl Fn(&A, &mut Window, &mut App) + 'static) {
         self.action_listeners.push((
             TypeId::of::<A>(),
@@ -557,10 +558,7 @@ impl Interactivity {
         &mut self,
         listener: impl Fn(&ModifiersChangedEvent, &mut Window, &mut App) + 'static,
     ) {
-        self.modifiers_changed_listeners
-            .push(Box::new(move |event, window, cx| {
-                listener(event, window, cx)
-            }));
+        self.modifiers_changed_listeners.push(Box::new(listener));
     }
 
     /// Bind the given callback to drop events of the given type, whether or not the drag started on this element.
@@ -589,13 +587,12 @@ impl Interactivity {
     /// The imperative API equivalent to [`StatefulInteractiveElement::on_click`].
     ///
     /// See [`Context::listener`](crate::Context::listener) to get access to a view's state from this callback.
+    #[inline(always)]
     pub fn on_click(&mut self, listener: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static)
     where
         Self: Sized,
     {
-        self.click_listeners.push(Rc::new(move |event, window, cx| {
-            listener(event, window, cx)
-        }));
+        self.click_listeners.push(Rc::new(listener));
     }
 
     /// Bind the given callback to non-primary click events of this element.
@@ -606,10 +603,7 @@ impl Interactivity {
     where
         Self: Sized,
     {
-        self.aux_click_listeners
-            .push(Rc::new(move |event, window, cx| {
-                listener(event, window, cx)
-            }));
+        self.aux_click_listeners.push(Rc::new(listener));
     }
 
     /// On drag initiation, this callback will be used to create a new view to render the dragged value for a
@@ -637,7 +631,38 @@ impl Interactivity {
                 constructor(value.downcast_ref().unwrap(), offset, window, cx).into()
             }),
             external_payload: None,
+            release_outside: None,
         });
+    }
+
+    /// Registers a callback for a drag released outside its source window.
+    pub fn on_drag_release_outside<T>(
+        &mut self,
+        listener: impl Fn(&T, &mut Window, &mut App) + 'static,
+    ) where
+        Self: Sized,
+        T: 'static,
+    {
+        let Some(drag_listener) = self.drag_listener.as_mut() else {
+            debug_assert!(
+                false,
+                "on_drag_release_outside must be called after on_drag"
+            );
+            return;
+        };
+        debug_assert!(
+            drag_listener.value.as_ref().type_id() == TypeId::of::<T>(),
+            "on_drag_release_outside must use the same dragged value type as on_drag"
+        );
+        debug_assert!(
+            drag_listener.release_outside.is_none(),
+            "calling on_drag_release_outside more than once is not supported"
+        );
+        drag_listener.release_outside = Some(Box::new(move |value, window, cx| {
+            if let Some(value) = value.downcast_ref::<T>() {
+                listener(value, window, cx);
+            }
+        }));
     }
 
     /// Registers a callback resolving a payload to offer the platform if a drag started by this
@@ -871,6 +896,7 @@ pub trait InteractiveElement: Sized {
     /// The fluent API equivalent to [`Interactivity::on_mouse_down`].
     ///
     /// See [`Context::listener`](crate::Context::listener) to get access to the view state from this callback.
+    #[inline(always)]
     fn on_mouse_down(
         mut self,
         button: MouseButton,
@@ -1101,6 +1127,7 @@ pub trait InteractiveElement: Sized {
     ///
     /// See [`Context::listener`](crate::Context::listener) to get access to a view's state from this callback.
     #[track_caller]
+    #[inline(always)]
     fn on_action<A: Action>(
         mut self,
         listener: impl Fn(&A, &mut Window, &mut App) + 'static,
@@ -1176,6 +1203,7 @@ pub trait InteractiveElement: Sized {
     /// The fluent API equivalent to [`Interactivity::on_modifiers_changed`].
     ///
     /// See [`Context::listener`](crate::Context::listener) to get access to a view's state from this callback.
+    #[inline(always)]
     fn on_modifiers_changed(
         mut self,
         listener: impl Fn(&ModifiersChangedEvent, &mut Window, &mut App) + 'static,
@@ -1496,6 +1524,7 @@ pub trait StatefulInteractiveElement: InteractiveElement {
     /// The handler is called when a screen reader requests the given action.
     ///
     /// See the [accessibility guide](crate::_accessibility) for an overview.
+    #[inline(always)]
     fn on_a11y_action(
         mut self,
         action: accesskit::Action,
@@ -1582,6 +1611,7 @@ pub trait StatefulInteractiveElement: InteractiveElement {
     /// The fluent API equivalent to [`Interactivity::on_click`].
     ///
     /// See [`Context::listener`](crate::Context::listener) to get access to a view's state from this callback.
+    #[inline(always)]
     fn on_click(mut self, listener: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static) -> Self
     where
         Self: Sized,
@@ -1640,6 +1670,19 @@ pub trait StatefulInteractiveElement: InteractiveElement {
         T: 'static,
     {
         self.interactivity().external_drag_payload(resolver);
+        self
+    }
+
+    /// Registers a callback for a drag released outside its source window.
+    fn on_drag_release_outside<T>(
+        mut self,
+        listener: impl Fn(&T, &mut Window, &mut App) + 'static,
+    ) -> Self
+    where
+        Self: Sized,
+        T: 'static,
+    {
+        self.interactivity().on_drag_release_outside(listener);
         self
     }
 
@@ -1758,10 +1801,12 @@ pub(crate) struct DragListener {
     value: Arc<dyn Any>,
     render: Box<dyn Fn(&dyn Any, Point<Pixels>, &mut Window, &mut App) -> AnyView + 'static>,
     external_payload: Option<ExternalDragPayloadResolver>,
+    release_outside: Option<DragReleaseOutsideResolver>,
 }
 
 type ExternalDragPayloadResolver =
     Box<dyn Fn(&dyn Any, &mut Window, &mut App) -> Option<ExternalDragPayload> + 'static>;
+type DragReleaseOutsideResolver = Box<dyn Fn(&dyn Any, &mut Window, &mut App) + 'static>;
 
 type DropListener = Box<dyn Fn(&dyn Any, &mut Window, &mut App) + 'static>;
 
@@ -2522,8 +2567,7 @@ impl Interactivity {
                 if let Some(debug_selector) = &self.debug_selector {
                     window
                         .next_frame
-                        .debug_bounds
-                        .insert(debug_selector.clone(), bounds);
+                        .record_debug_bounds(debug_selector.clone(), bounds);
                 }
 
                 self.paint_hover_group_handler(window, cx);
@@ -3001,6 +3045,7 @@ impl Interactivity {
                                 cursor_offset,
                                 cursor_style: drag_cursor_style,
                                 external_payload_source,
+                                release_outside_source: listener.release_outside,
                             });
                             pending_mouse_down.take();
                             window.refresh();

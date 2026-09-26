@@ -425,6 +425,14 @@ actions!(
 actions!(
     editor,
     [
+        /// 运行选中的代码；没有选区时保存并运行当前文件。
+        RunCode,
+        /// 运行选中的独立代码片段。
+        RunSelection,
+        /// 停止当前工作区中的代码运行器任务。
+        StopCode,
+        /// 保存并运行当前文件，自动选择语言运行工具。
+        RunFile,
         /// Accepts the full edit prediction.
         AcceptEditPrediction,
         /// Accepts a partial edit prediction.
@@ -933,6 +941,13 @@ actions!(
         ToggleSoftWrap,
         /// Toggles the tab bar display.
         ToggleTabBar,
+        /// Generates a syntax-level explanation for the selected code and adds
+        /// a line-end control that opens the explanation in a modal.
+        DeepExplainSelection,
+        /// Translates the selected text, or the word under the cursor when
+        /// nothing is selected, using the model configured under
+        /// `hover_translation` in settings.
+        TranslateSelection,
         /// Transposes characters around cursor.
         Transpose,
         /// Undoes the last edit.

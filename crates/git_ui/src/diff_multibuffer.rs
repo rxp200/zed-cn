@@ -1,5 +1,6 @@
 use crate::{
     conflict_view,
+    diff_explanations::{DiffExplanationController, DiffFileInput, DiffHunkInput},
     git_panel::{GitPanel, GitStatusEntry},
     git_panel_settings::GitPanelSettings,
 };
@@ -10,6 +11,7 @@ use editor::{
     EditorEvent, EditorSettings, SelectionEffects, SplittableEditor, actions::GoToHunk,
     multibuffer_context_lines, scroll::Autoscroll,
 };
+use futures::{FutureExt as _, StreamExt as _, stream};
 use futures_lite::future::yield_now;
 use git::{repository::RepoPath, status::FileStatus};
 use gpui::{
@@ -36,6 +38,10 @@ use workspace::{
 };
 use ztracing::instrument;
 
+/// Loading every changed file at once makes the first one land no sooner than the
+/// last, leaving a large diff on a spinner. Throughput flattens past this point.
+const MAX_CONCURRENT_BUFFER_LOADS: usize = 16;
+
 struct BufferSubscriptions {
     _diff: Entity<BufferDiff>,
     display_buffer: Entity<Buffer>,
@@ -53,6 +59,7 @@ pub struct DiffMultibuffer {
     focus_handle: FocusHandle,
     pending_scroll: Option<PathKey>,
     review_comment_count: usize,
+    explanation_controller: Entity<DiffExplanationController>,
     empty_label: SharedString,
     _task: Task<Result<()>>,
     _subscription: Subscription,
@@ -151,6 +158,7 @@ impl DiffMultibuffer {
         })
         .detach();
 
+        let explanation_controller = cx.new(|_| DiffExplanationController::default());
         let task = window.spawn(cx, {
             let this = cx.weak_entity();
             async |cx| Self::refresh(this, cx).await
@@ -165,6 +173,7 @@ impl DiffMultibuffer {
             buffer_subscriptions: Default::default(),
             pending_scroll: None,
             review_comment_count: 0,
+            explanation_controller,
             empty_label: empty_label.into(),
             _task: task,
             _subscription: Subscription::join(
@@ -679,17 +688,28 @@ impl DiffMultibuffer {
 
         let mut buffers_to_fold = Vec::new();
 
-        for (path_key, entry) in entries {
-            if let Some(loaded_buffer) = entry.load.await.log_err() {
-                // We might be lagging behind enough that all future entry.load futures are no longer pending.
-                // If that is the case, this task will never yield, starving the foreground thread of execution time.
-                yield_now().await;
+        // Ordered, so excerpts don't shift under the reader as later files arrive.
+        let mut loads = stream::iter(entries.into_iter().map(|(path_key, entry)| {
+            let diff_buffer_list::DiffBuffer {
+                repo_path,
+                file_status,
+                load,
+            } = entry;
+            load.map(move |loaded| (path_key, repo_path, file_status, loaded))
+        }))
+        .buffered(MAX_CONCURRENT_BUFFER_LOADS);
+
+        while let Some((path_key, repo_path, file_status, loaded)) = loads.next().await {
+            // Buffered loads can already be complete when we poll them, in which
+            // case this loop never awaits and starves the foreground thread.
+            yield_now().await;
+            if let Some(loaded_buffer) = loaded.log_err() {
                 cx.update(|window, cx| {
                     this.update(cx, |this, cx| {
                         if let Some(buffer_id) = this.register_buffer(
-                            entry.repo_path,
+                            repo_path,
                             path_key,
-                            entry.file_status,
+                            file_status,
                             loaded_buffer.display_buffer,
                             loaded_buffer.main_buffer,
                             loaded_buffer.diff,
@@ -713,10 +733,88 @@ impl DiffMultibuffer {
                 });
             }
             this.pending_scroll.take();
+            this.schedule_explanations(cx);
             cx.notify();
         })?;
 
         Ok(())
+    }
+
+    fn schedule_explanations(&mut self, cx: &mut Context<Self>) {
+        let snapshot = self.multibuffer.read(cx).snapshot(cx);
+        let mut files = Vec::new();
+        for (repo_path, subscription) in &self.buffer_subscriptions {
+            let buffer_snapshot = subscription.display_buffer.read(cx).snapshot();
+            let diff_snapshot = subscription._diff.read(cx).snapshot(cx);
+            let Some(file) = buffer_snapshot.file() else {
+                continue;
+            };
+            let mut hunks = Vec::new();
+            for (index, hunk) in diff_snapshot
+                .hunks_intersecting_range(
+                    Anchor::min_max_range_for_buffer(buffer_snapshot.remote_id()),
+                    &buffer_snapshot,
+                )
+                .enumerate()
+            {
+                let old_range = hunk.diff_base_byte_range.clone();
+                let new_range = hunk.buffer_range.to_offset(&buffer_snapshot);
+                let old_text = diff_snapshot
+                    .base_text()
+                    .text_for_range(old_range.clone())
+                    .collect();
+                let new_text = buffer_snapshot.text_for_range(new_range.clone()).collect();
+                let anchor = snapshot
+                    .anchor_in_excerpt(hunk.buffer_range.start)
+                    .unwrap_or(multi_buffer::Anchor::Min);
+                hunks.push(DiffHunkInput {
+                    identifier: index + 1,
+                    old_start_line: diff_snapshot
+                        .base_text()
+                        .offset_to_point(old_range.start)
+                        .row,
+                    new_start_line: buffer_snapshot.offset_to_point(new_range.start).row,
+                    old_text,
+                    new_text,
+                    anchor,
+                });
+            }
+            if hunks.is_empty() {
+                continue;
+            }
+            let anchor = snapshot
+                .excerpts_for_buffer(buffer_snapshot.remote_id())
+                .next()
+                .and_then(|excerpt| snapshot.anchor_in_excerpt(excerpt.context.start))
+                .unwrap_or_else(|| hunks[0].anchor);
+            files.push(DiffFileInput {
+                path: repo_path
+                    .display(util::paths::PathStyle::local())
+                    .to_string(),
+                language: buffer_snapshot
+                    .language()
+                    .map(|language| language.name().to_string())
+                    .unwrap_or_default(),
+                old_text: diff_snapshot.base_text().text(),
+                new_text: buffer_snapshot.text(),
+                hunks,
+                anchor,
+                private: file.is_private(),
+                worktree_id: file.worktree_id(cx),
+            });
+        }
+        files.sort_by(|left, right| left.path.cmp(&right.path));
+        let editor = self.editor.read(cx).rhs_editor().clone();
+        let project = editor.read(cx).project().cloned();
+        if let Some(project) = project {
+            DiffExplanationController::schedule(
+                &self.explanation_controller,
+                editor,
+                project,
+                files,
+                cx,
+            );
+        }
     }
 
     pub(crate) fn active_project_path(&self, cx: &App) -> Option<ProjectPath> {
@@ -925,15 +1023,12 @@ impl Render for DiffMultibuffer {
                         .child(h_flex().justify_around().child(Label::new(empty_label)))
                         .map(|el| match remote_button {
                             Some(button) => el.child(h_flex().justify_around().child(button)),
-                            None => el.child(
-                                h_flex()
-                                    .justify_around()
-                                    .child(Label::new("Remote up to date")),
-                            ),
+                            None => el
+                                .child(h_flex().justify_around().child(Label::new("远程已是最新"))),
                         })
                         .child(
                             h_flex().justify_around().mt_1().child(
-                                Button::new("project-diff-close-button", "Close")
+                                Button::new("project-diff-close-button", "关闭")
                                     .key_binding(KeyBinding::for_action_in(
                                         &CloseActiveItem::default(),
                                         &keybinding_focus_handle,

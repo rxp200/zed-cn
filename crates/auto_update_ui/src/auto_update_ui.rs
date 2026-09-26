@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use agent_skills::GLOBAL_SKILLS_DIR_DISPLAY;
-use auto_update::{AutoUpdater, release_notes_url};
+use auto_update::{AutoUpdater, custom_release_notes, release_notes_url};
 use client::zed_urls;
 use db::kvp::Dismissable;
 use editor::{Editor, MultiBuffer};
@@ -106,6 +106,7 @@ fn view_release_notes_locally(
         return;
     }
 
+    let custom_release_tag = release_channel::CustomReleaseTag::current(cx);
     let version = AppVersion::global(cx).to_string();
 
     let client = client::Client::global(cx).http_client();
@@ -122,21 +123,29 @@ fn view_release_notes_locally(
 
     cx.spawn_in(window, async move |workspace, cx| {
         let markdown = markdown.await.log_err();
-        let response = client.get(&url, Default::default(), true).await;
-        let Some(mut response) = response.log_err() else {
-            workspace
-                .update_in(cx, notify_release_notes_failed_to_show)
-                .log_err();
-            return;
+        let body = if let Some(tag) = custom_release_tag {
+            custom_release_notes(client.clone(), &tag, cx.background_executor())
+                .await
+                .map(|notes| ReleaseNotesBody {
+                    title: notes.title,
+                    release_notes: notes.body,
+                })
+        } else {
+            let response = client.get(&url, Default::default(), true).await;
+            let Some(mut response) = response.log_err() else {
+                workspace
+                    .update_in(cx, notify_release_notes_failed_to_show)
+                    .log_err();
+                return;
+            };
+
+            let mut body = Vec::new();
+            response.body_mut().read_to_end(&mut body).await.ok();
+            serde_json::from_slice(body.as_slice()).log_err()
         };
 
-        let mut body = Vec::new();
-        response.body_mut().read_to_end(&mut body).await.ok();
-
-        let body: serde_json::Result<ReleaseNotesBody> = serde_json::from_slice(body.as_slice());
-
         let res: Option<()> = maybe!(async {
-            let body = body.ok()?;
+            let body = body?;
             let project = workspace
                 .read_with(cx, |workspace, _| workspace.project().clone())
                 .ok()?;
@@ -224,20 +233,20 @@ fn announcement_for_version(version: &Version, cx: &App) -> Option<AnnouncementC
 
         let mut bullet_items: Vec<SharedString> = Vec::with_capacity(3);
         bullet_items
-            .push(format!("Skills live in {GLOBAL_SKILLS_DIR_DISPLAY}/<name>/SKILL.md").into());
-        bullet_items.push("Type / to manually invoke a skill".into());
+            .push(format!("技能位于 {GLOBAL_SKILLS_DIR_DISPLAY}/<name>/SKILL.md").into());
+        bullet_items.push("输入 / 可手动调用技能".into());
         if migrated_anything {
             bullet_items.push(
-                "The Rules Library is making way for skills: your default rules are now in a global AGENTS.md, and your other rules have been converted to skills".into(),
+                "规则库正被技能取代：你的默认规则现在位于全局 AGENTS.md 中，其他规则已转换为技能".into(),
             );
         }
 
         Some(AnnouncementContent {
-            heading: "Introducing Skills Support".into(),
-            description: "Extend the agent with focused instructions and domain knowledge.".into(),
+            heading: "推出技能支持".into(),
+            description: "为代理添加针对性的指令和领域知识。".into(),
             bullet_items,
-            primary_action_label: "Try Now".into(),
-            secondary_action_label: "Read Documentation".into(),
+            primary_action_label: "立即尝试".into(),
+            secondary_action_label: "阅读文档".into(),
             primary_action_url: None,
             primary_action_callback: Some(Arc::new(move |window, cx| {
                 window.dispatch_action(Box::new(zed_actions::assistant::FocusAgent), cx);

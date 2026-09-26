@@ -125,7 +125,7 @@ struct SerializedSidebar {
     ///
     /// Legacy state recorded every width without this flag. A width other than
     /// the old default of 300 pixels still identifies a manual resize. Only
-    /// that ambiguous default falls back to `agent.threads_sidebar_default_width`.
+    /// that ambiguous default falls back to `agent.threads_sidebar.default_width`.
     #[serde(default)]
     width_set_by_user: bool,
     #[serde(default)]
@@ -767,7 +767,7 @@ pub struct Sidebar {
     multi_workspace: WeakEntity<MultiWorkspace>,
     width: Pixels,
     /// Whether `width` came from the user rather than from
-    /// `agent.threads_sidebar_default_width`. Only a user-chosen width is persisted, so
+    /// `agent.threads_sidebar.default_width`. Only a user-chosen width is persisted, so
     /// that changing the setting is not overridden by a width the user never
     /// picked. Serialization runs on many triggers besides resizing.
     width_set_by_user: bool,
@@ -840,18 +840,21 @@ impl Sidebar {
 
         AgentThreadWorktreeLabelFlag::watch(cx);
 
-        cx.observe_global::<SettingsStore>(|this, cx| {
-            let width = AgentSettings::get_global(cx).threads_sidebar_default_width;
-            if !this.width_set_by_user && this.width != width {
-                this.width = width;
-                cx.notify();
+        let mut previous_default_width =
+            AgentSettings::get_global(cx).threads_sidebar.default_width;
+        cx.observe_global::<SettingsStore>(move |this, cx| {
+            let width = AgentSettings::get_global(cx).threads_sidebar.default_width;
+            if previous_default_width != width {
+                previous_default_width = width;
+                this.set_width(None, cx);
+                this.serialize(cx);
             }
         })
         .detach();
 
         let filter_editor = cx.new(|cx| {
             let mut editor = Editor::single_line(window, cx);
-            editor.set_placeholder_text("Search threads…", window, cx);
+            editor.set_placeholder_text("搜索线程…", window, cx);
             editor
         });
         let rename_editor = cx.new(|cx| Editor::single_line(window, cx));
@@ -934,7 +937,7 @@ impl Sidebar {
 
         Self {
             multi_workspace: multi_workspace.downgrade(),
-            width: AgentSettings::get_global(cx).threads_sidebar_default_width,
+            width: AgentSettings::get_global(cx).threads_sidebar.default_width,
             width_set_by_user: false,
             focus_handle,
             filter_editor,
@@ -2298,7 +2301,7 @@ impl Sidebar {
                         .size(IconSize::XSmall)
                         .color(Color::Muted),
                 )
-                .tooltip(Tooltip::text("Remote Project"))
+                .tooltip(Tooltip::text("远程项目"))
                 .into_any_element(),
         )
     }
@@ -2513,7 +2516,7 @@ impl Sidebar {
                             Color::Custom(cx.theme().colors().icon_placeholder.opacity(0.1)),
                         ))
                         .child(
-                            Label::new("No threads yet")
+                            Label::new("暂无线程")
                                 .size(LabelSize::Small)
                                 .color(Color::Placeholder),
                         ),
@@ -2617,7 +2620,7 @@ impl Sidebar {
                 window,
                 cx,
                 move |mut menu, _window, cx| {
-                    menu = menu.header("New Thread In…");
+                    menu = menu.header("在此新建线程…");
 
                     for (workspace, labels) in open_workspaces
                         .iter()
@@ -2994,7 +2997,7 @@ impl Sidebar {
                         let menu = if open_workspaces.is_empty() {
                             menu
                         } else {
-                            let mut menu = menu.separator().header("Open Worktrees");
+                            let mut menu = menu.separator().header("打开工作树");
 
                             for (
                                 workspace_index,
@@ -3062,7 +3065,7 @@ impl Sidebar {
                                                     )
                                                     .icon_size(IconSize::Small)
                                                     .visible_on_hover(&row_group_name)
-                                                    .tooltip(Tooltip::text("Close Worktree"))
+                                                    .tooltip(Tooltip::text("关闭工作树"))
                                                     .on_click(move |_, window, cx| {
                                                         cx.stop_propagation();
                                                         window.prevent_default();
@@ -6345,7 +6348,7 @@ impl Sidebar {
                             .icon_size(IconSize::Small)
                             .icon_color(Color::Error)
                             .style(ButtonStyle::Tinted(TintColor::Error))
-                            .tooltip(Tooltip::text("Stop Generation"))
+                            .tooltip(Tooltip::text("停止生成"))
                             .on_click(cx.listener(move |this, _, _window, cx| {
                                 this.stop_thread(&thread_id_for_actions, cx);
                             }))
@@ -6357,7 +6360,7 @@ impl Sidebar {
                         Some(DraftKind::WithContent) => Some(
                             IconButton::new("discard_thread", IconName::Close)
                                 .icon_size(IconSize::Small)
-                                .tooltip(Tooltip::text("Discard Draft"))
+                                .tooltip(Tooltip::text("放弃草稿"))
                                 .on_click({
                                     let thread_workspace = thread_workspace.clone();
                                     cx.listener(move |this, _, window, cx| {
@@ -6641,6 +6644,7 @@ impl Sidebar {
                 let metadata = terminal.metadata.clone();
                 let workspace = terminal.workspace.clone();
                 move |this, _, window, cx| {
+                    this.selection = None;
                     this.activate_terminal_entry(
                         metadata.clone(),
                         workspace.clone(),
@@ -6662,7 +6666,7 @@ impl Sidebar {
                 let sidebar = sidebar.clone();
                 let rename_title = rename_title.clone();
                 ContextMenu::build(window, cx, move |menu, _window, _cx| {
-                    menu.entry("Rename Title", None, move |window, cx| {
+                    menu.entry("重命名标题", None, move |window, cx| {
                         sidebar
                             .update(cx, |sidebar, cx| {
                                 sidebar.start_renaming_entry(
@@ -7386,7 +7390,7 @@ impl Sidebar {
                                 this.child(
                                     IconButton::new("clear_filter", IconName::Close)
                                         .icon_size(IconSize::Small)
-                                        .tooltip(Tooltip::text("Clear Search"))
+                                        .tooltip(Tooltip::text("清除搜索"))
                                         .on_click(cx.listener(|this, _, window, cx| {
                                             this.reset_filter_editor_text(window, cx);
                                             this.update_entries(cx);
@@ -7445,7 +7449,7 @@ impl Sidebar {
                                 h_flex()
                                     .gap_2()
                                     .justify_between()
-                                    .child(Label::new("Toggle Sidebar"))
+                                    .child(Label::new("切换侧边栏"))
                                     .child(KeyBinding::for_action(&ToggleWorkspaceSidebar, cx)),
                             )
                             .child(
@@ -7455,7 +7459,7 @@ impl Sidebar {
                                     .border_t_1()
                                     .border_color(cx.theme().colors().border_variant)
                                     .justify_between()
-                                    .child(Label::new("Focus Sidebar"))
+                                    .child(Label::new("聚焦侧边栏"))
                                     .child(KeyBinding::for_action(&FocusWorkspaceSidebar, cx)),
                             )
                             .into_any_element()
@@ -7813,7 +7817,7 @@ impl WorkspaceSidebar for Sidebar {
         // `None` is the reset gesture, which hands the width back to the setting.
         self.width_set_by_user = width.is_some();
         self.width = width
-            .unwrap_or_else(|| AgentSettings::get_global(cx).threads_sidebar_default_width)
+            .unwrap_or_else(|| AgentSettings::get_global(cx).threads_sidebar.default_width)
             .clamp(THREADS_LIST_MIN_WIDTH, THREADS_LIST_MAX_WIDTH);
         cx.notify();
     }

@@ -15,6 +15,7 @@ use crate::{
 };
 use anyhow::{Context as _, Result, anyhow, bail};
 use askpass::{AskPassDelegate, EncryptedPassword, IKnowWhatIAmDoingAndIHaveReadTheDocs};
+use async_lock::Semaphore;
 use buffer_diff::{
     BufferDiff, DiffHunk, DiffHunkSecondaryStatus, DiffOperations, PendingHunk, PendingSense,
 };
@@ -36,12 +37,12 @@ use git::{
     blame::Blame,
     parse_git_remote_url,
     repository::{
-        Branch, BranchesScanResult, CommitData, CommitDetails, CommitFileStatus, CommitOptions,
-        CreateWorktreeTarget, DiffStatType, DiffType, FetchOptions, FileHistoryChangedFileSets,
-        GitCommitTemplate, GitRepository, GitRepositoryCheckpoint, InitialGraphCommitData,
-        LogOrder, LogSource, PushOptions, Remote, RemoteCommandOutput, RepoPath, ResetMode,
-        SearchCommitArgs, UpstreamTrackingStatus, Worktree as GitWorktree, delete_branch_flag,
-        is_binary_content,
+        AUTHOR_SEARCH_QUERY_PREFIX, Branch, BranchesScanResult, CommitData, CommitDetails,
+        CommitFileStatus, CommitOptions, CreateWorktreeTarget, DiffStatType, DiffType,
+        FetchOptions, FileHistoryChangedFileSets, GitCommitTemplate, GitRepository,
+        GitRepositoryCheckpoint, InitialGraphCommitData, LogOrder, LogSource, PushOptions, Remote,
+        RemoteCommandOutput, RepoPath, ResetMode, SearchCommitArgs, UpstreamTrackingStatus,
+        Worktree as GitWorktree, delete_branch_flag, is_binary_content,
     },
     stash::{GitStash, StashEntry},
     status::{
@@ -98,6 +99,20 @@ use worktree::{
 };
 use zeroize::Zeroize;
 
+fn author_matches_query(
+    author_name: &str,
+    author_email: &str,
+    query: &str,
+    case_sensitive: bool,
+) -> bool {
+    if case_sensitive {
+        author_name.contains(query) || author_email.contains(query)
+    } else {
+        let query = query.to_lowercase();
+        author_name.to_lowercase().contains(&query) || author_email.to_lowercase().contains(&query)
+    }
+}
+
 pub struct GitStore {
     state: GitStoreState,
     project: Option<WeakEntity<Project>>,
@@ -115,10 +130,13 @@ pub struct GitStore {
     diffs: HashMap<BufferId, Entity<BufferGitState>>,
     buffer_ids_by_index_text_buffer_id: HashMap<BufferId, BufferId>,
     shared_diffs: HashMap<proto::PeerId, HashMap<BufferId, SharedDiffs>>,
+    blob_read_limiter: Arc<Semaphore>,
     _subscriptions: Vec<Subscription>,
 }
 
 const MIN_PARKED_REPOSITORY_DEPTH: usize = 2;
+
+pub const MAX_CONCURRENT_BLOB_READS: usize = 16;
 
 #[derive(Clone, Debug)]
 pub struct ParkedRepository {
@@ -683,6 +701,7 @@ pub struct Repository {
     unshallow_state: UnshallowState,
     commit_message_buffer: Option<Entity<Buffer>>,
     git_store: WeakEntity<GitStore>,
+    blob_read_limiter: Arc<Semaphore>,
     // For a local repository, holds paths that have had worktree events since the last status scan completed,
     // and that should be examined during the next status scan.
     paths_needing_status_update: Vec<Vec<RepoPath>>,
@@ -1019,6 +1038,7 @@ impl GitStore {
             _subscriptions,
             loading_diffs: HashMap::default(),
             shared_diffs: HashMap::default(),
+            blob_read_limiter: Arc::new(Semaphore::new(MAX_CONCURRENT_BLOB_READS)),
             diffs: HashMap::default(),
             buffer_ids_by_index_text_buffer_id: HashMap::default(),
         }
@@ -2358,8 +2378,11 @@ impl GitStore {
                             cx.update(GitHostingProviderRegistry::default_global);
 
                         let (provider, remote) =
-                            parse_git_remote_url(provider_registry, &origin_url)
-                                .context("parsing Git remote URL")?;
+                            parse_git_remote_url(provider_registry, &origin_url).with_context(|| {
+                                format!(
+                                    "无法识别 Git 远程仓库“{remote}”对应的代码托管平台，因此无法生成文件永久链接。请检查该远程仓库地址；如果使用自建 Git 服务，请在设置的 git_hosting_providers 中配置它"
+                                )
+                            })?;
 
                         Ok(provider.build_permalink(
                             remote,
@@ -2912,6 +2935,7 @@ impl GitStore {
 
         let id = RepositoryId(next_repository_id.fetch_add(1, atomic::Ordering::Release));
         let git_store = cx.weak_entity();
+        let blob_read_limiter = self.blob_read_limiter.clone();
         let repo = cx.new(|cx| {
             let mut repo = Repository::local(
                 id,
@@ -2923,6 +2947,7 @@ impl GitStore {
                 fs,
                 is_trusted,
                 git_store,
+                blob_read_limiter,
                 cx,
             );
             if let Some(updates_tx) = updates_tx.as_ref() {
@@ -3391,6 +3416,7 @@ impl GitStore {
                 .map(|p| Path::new(p).into());
 
             let mut repo_subscription = None;
+            let blob_read_limiter = this.blob_read_limiter.clone();
             let repo = this.repositories.entry(id).or_insert_with(|| {
                 let git_store = cx.weak_entity();
                 let repo = cx.new(|cx| {
@@ -3403,6 +3429,7 @@ impl GitStore {
                         ProjectId(update.project_id),
                         client,
                         git_store,
+                        blob_read_limiter,
                         cx,
                     )
                 });
@@ -6530,6 +6557,7 @@ impl Repository {
         fs: Arc<dyn Fs>,
         is_trusted: bool,
         git_store: WeakEntity<GitStore>,
+        blob_read_limiter: Arc<Semaphore>,
         cx: &mut Context<Self>,
     ) -> Self {
         let snapshot = RepositorySnapshot::empty(
@@ -6544,6 +6572,7 @@ impl Repository {
         let mut repo = Repository {
             this: cx.weak_entity(),
             git_store,
+            blob_read_limiter,
             snapshot,
             unshallow_state: UnshallowState::default(),
             pending_ops: Default::default(),
@@ -6575,6 +6604,7 @@ impl Repository {
         project_id: ProjectId,
         client: AnyProtoClient,
         git_store: WeakEntity<GitStore>,
+        blob_read_limiter: Arc<Semaphore>,
         cx: &mut Context<Self>,
     ) -> Self {
         let snapshot = RepositorySnapshot::empty(
@@ -6597,6 +6627,7 @@ impl Repository {
             unshallow_state: UnshallowState::default(),
             commit_message_buffer: None,
             git_store,
+            blob_read_limiter,
             pending_ops: Default::default(),
             paths_needing_status_update: Default::default(),
             job_sender,
@@ -7273,6 +7304,25 @@ impl Repository {
                 }
 
                 Ok(RepositoryState::Remote(RemoteRepositoryState { client, project_id })) => {
+                    if let Some(author_query) =
+                        search_args.query.strip_prefix(AUTHOR_SEARCH_QUERY_PREFIX)
+                    {
+                        let result = Self::search_remote_commits_by_author(
+                            client,
+                            project_id,
+                            repository_id,
+                            log_source,
+                            author_query,
+                            search_args.case_sensitive,
+                            request_tx,
+                        )
+                        .await;
+                        if let Err(error) = result {
+                            log::error!("failed to search remote commits by author: {error:?}");
+                        }
+                        return;
+                    }
+
                     let result = client
                         .request_stream(proto::SearchCommits {
                             project_id: project_id.to_proto(),
@@ -7318,6 +7368,104 @@ impl Repository {
             };
         })
         .detach();
+    }
+
+    async fn search_remote_commits_by_author(
+        client: AnyProtoClient,
+        project_id: ProjectId,
+        repository_id: RepositoryId,
+        log_source: LogSource,
+        author_query: &str,
+        case_sensitive: bool,
+        request_tx: async_channel::Sender<Oid>,
+    ) -> Result<()> {
+        let cancellation = request_tx.clone();
+        let search = async move {
+            let mut graph_stream = client
+                .request_stream(proto::GetInitialGraphData {
+                    project_id: project_id.to_proto(),
+                    repository_id: repository_id.to_proto(),
+                    log_source: Some(log_source_to_proto(&log_source)),
+                    log_order: log_order_to_proto(LogOrder::DateOrder),
+                })
+                .await?;
+            const COMMIT_BATCH_SIZE: usize = 64;
+            const MAX_CONCURRENT_COMMIT_REQUESTS: usize = 4;
+
+            // ChannelClient waits for each graph response to be consumed before dispatching
+            // any other response. Backpressure here would block the metadata responses
+            // that the workers need to free queue capacity. Queue only SHAs, not metadata;
+            // the worker count still bounds the expensive requests.
+            let (commit_batch_tx, commit_batch_rx) = async_channel::unbounded::<Vec<String>>();
+
+            let collect_commit_shas = {
+                let request_tx = request_tx.clone();
+                async move {
+                    while let Some(response) = graph_stream.next().await {
+                        if request_tx.is_closed() {
+                            return Ok(());
+                        }
+
+                        let response = response?;
+                        for commit_chunk in response.commits.chunks(COMMIT_BATCH_SIZE) {
+                            let shas = commit_chunk
+                                .iter()
+                                .map(|commit| commit.sha.clone())
+                                .collect();
+                            if commit_batch_tx.send(shas).await.is_err() {
+                                return Ok(());
+                            }
+                        }
+                    }
+
+                    Ok::<_, anyhow::Error>(())
+                }
+            };
+
+            let fetch_and_match_authors =
+                future::try_join_all((0..MAX_CONCURRENT_COMMIT_REQUESTS).map(|_| {
+                    let client = client.clone();
+                    let commit_batch_rx = commit_batch_rx.clone();
+                    let request_tx = request_tx.clone();
+                    async move {
+                        while let Ok(shas) = commit_batch_rx.recv().await {
+                            if request_tx.is_closed() {
+                                return Ok(());
+                            }
+
+                            let response = client
+                                .request(proto::GetCommitData {
+                                    project_id: project_id.to_proto(),
+                                    repository_id: repository_id.to_proto(),
+                                    shas,
+                                })
+                                .await?;
+
+                            for commit in response.commits {
+                                if author_matches_query(
+                                    &commit.author_name,
+                                    &commit.author_email,
+                                    author_query,
+                                    case_sensitive,
+                                ) && let Ok(oid) = Oid::from_str(&commit.sha)
+                                    && request_tx.send(oid).await.is_err()
+                                {
+                                    return Ok(());
+                                }
+                            }
+                        }
+
+                        Ok::<_, anyhow::Error>(())
+                    }
+                }));
+
+            future::try_join(collect_commit_shas, fetch_and_match_authors).await?;
+            Ok(())
+        };
+        match future::select(Box::pin(search), Box::pin(cancellation.closed())).await {
+            future::Either::Left((result, _)) => result,
+            future::Either::Right(((), _)) => Ok(()),
+        }
     }
 
     pub fn graph_data(
@@ -8413,7 +8561,7 @@ impl Repository {
         is_dir: bool,
     ) -> oneshot::Receiver<Result<()>> {
         let id = self.id;
-        let repository_dir = self.snapshot.repository_dir_abs_path.clone();
+        let repository_dir = self.snapshot.common_dir_abs_path.clone();
         let path_display = repo_path.as_ref().display(PathStyle::Unix);
         let path = repo_path.as_unix_str().to_owned();
         let file_path_str = if is_dir {
@@ -10381,10 +10529,15 @@ impl Repository {
         })
     }
 
-    fn load_blob_content(&mut self, oid: Oid, cx: &App) -> Task<Result<String>> {
+    /// Bypasses the serial git job queue: blobs are content-addressed, so this read
+    /// doesn't depend on the status snapshot, and a diff issues one per changed file.
+    fn load_blob_content(&self, oid: Oid, cx: &App) -> Task<Result<String>> {
         let repository_id = self.snapshot.id;
-        let rx = self.send_job("load_blob_content", None, move |state, _| async move {
-            match state {
+        let repository_state = self.repository_state.clone();
+        let blob_read_limiter = self.blob_read_limiter.clone();
+        cx.background_spawn(async move {
+            let _permit = blob_read_limiter.acquire_arc().await;
+            match repository_state.await.map_err(|err| anyhow::anyhow!(err))? {
                 RepositoryState::Local(LocalRepositoryState { backend, .. }) => {
                     decode_git_text(backend.load_blob_content(oid).await?)
                 }
@@ -10399,8 +10552,7 @@ impl Repository {
                     Ok(response.content)
                 }
             }
-        });
-        cx.spawn(|_: &mut AsyncApp| async move { rx.await? })
+        })
     }
 
     fn paths_changed(
@@ -11361,7 +11513,7 @@ impl Repository {
 mod tests {
     use super::*;
     use crate::Project;
-    use fs::{FakeFs, Fs};
+    use fs::{FakeBlobReadGate, FakeFs, Fs};
     use git::repository::{RepoPath, repo_path};
     use gpui::proptest::prelude::*;
     use gpui::{TestAppContext, UpdateGlobal};
@@ -11369,6 +11521,211 @@ mod tests {
     use serde_json::json;
     use settings::SettingsStore;
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn test_author_matches_query() {
+        let email = "79969964+rxp200@users.noreply.github.com";
+
+        assert!(author_matches_query("Author", email, email, true));
+        assert!(author_matches_query(
+            "Author",
+            email,
+            "79969964+RXP200@USERS.NOREPLY.GITHUB.COM",
+            false
+        ));
+        assert!(author_matches_query("Author", email, "author", false));
+        assert!(!author_matches_query(
+            "Author",
+            email,
+            "another@example.com",
+            false
+        ));
+    }
+
+    #[gpui::test]
+    async fn test_remote_author_search_drains_graph_before_metadata(cx: &mut TestAppContext) {
+        use proto::EnvelopedMessage as _;
+
+        let (incoming_tx, incoming_rx) = mpsc::unbounded();
+        let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded();
+        let client = cx.update(|cx| {
+            remote::RemoteClient::proto_client_from_channels(
+                incoming_rx,
+                outgoing_tx,
+                cx,
+                "author-search-test",
+                false,
+            )
+        });
+        let (result_tx, result_rx) = async_channel::unbounded();
+        let search_client = client.clone();
+        let search = cx.background_executor.spawn(async move {
+            Repository::search_remote_commits_by_author(
+                search_client,
+                ProjectId(1),
+                RepositoryId(1),
+                LogSource::default(),
+                "target",
+                false,
+                result_tx,
+            )
+            .await
+        });
+        let graph_request = loop {
+            let request = outgoing_rx.next().await.expect("graph request");
+            if matches!(
+                request.payload,
+                Some(proto::envelope::Payload::RemoteStarted(_))
+            ) {
+                continue;
+            }
+            break request;
+        };
+        assert!(matches!(
+            graph_request.payload,
+            Some(proto::envelope::Payload::GetInitialGraphData(_))
+        ));
+        for chunk in 0..3 {
+            incoming_tx
+                .unbounded_send(
+                    proto::GetInitialGraphDataResponse {
+                        commits: (0..1000)
+                            .map(|index| proto::InitialGraphCommit {
+                                sha: format!("{:040x}", chunk * 1000 + index + 1),
+                                ..Default::default()
+                            })
+                            .collect(),
+                    }
+                    .into_envelope(chunk, Some(graph_request.id), None),
+                )
+                .expect("graph response");
+        }
+        incoming_tx
+            .unbounded_send(proto::EndStream {}.into_envelope(3, Some(graph_request.id), None))
+            .expect("end graph");
+        cx.run_until_parked();
+
+        // An unrelated response must pass even while all author workers await metadata.
+        let unrelated = cx.background_executor.spawn(async move {
+            client
+                .request(proto::GetCommitData {
+                    project_id: 1,
+                    repository_id: 1,
+                    shas: Vec::new(),
+                })
+                .await
+        });
+        cx.run_until_parked();
+        let mut metadata_requests = Vec::new();
+        loop {
+            let request = outgoing_rx.next().await.expect("metadata request");
+            if matches!(
+                request.payload,
+                Some(proto::envelope::Payload::RemoteStarted(_))
+            ) {
+                continue;
+            }
+            let Some(proto::envelope::Payload::GetCommitData(payload)) = &request.payload else {
+                panic!("unexpected request");
+            };
+            if payload.shas.is_empty() {
+                incoming_tx
+                    .unbounded_send(proto::GetCommitDataResponse::default().into_envelope(
+                        4,
+                        Some(request.id),
+                        None,
+                    ))
+                    .expect("unrelated response");
+                break;
+            }
+            metadata_requests.push(request);
+        }
+        assert_eq!(metadata_requests.len(), 4);
+        cx.run_until_parked();
+        assert!(
+            unrelated.is_ready(),
+            "graph backpressure blocked unrelated response"
+        );
+        unrelated.await.expect("unrelated request succeeds");
+
+        let mut processed = 0;
+        while processed < 3000 {
+            let request = if let Some(request) = metadata_requests.pop() {
+                request
+            } else {
+                outgoing_rx.next().await.expect("next metadata batch")
+            };
+            let Some(proto::envelope::Payload::GetCommitData(payload)) = request.payload else {
+                panic!("unexpected request");
+            };
+            assert!(payload.shas.len() <= 64);
+            processed += payload.shas.len();
+            incoming_tx
+                .unbounded_send(
+                    proto::GetCommitDataResponse {
+                        commits: payload
+                            .shas
+                            .into_iter()
+                            .map(|sha| proto::CommitData {
+                                sha,
+                                author_name: "Target".into(),
+                                ..Default::default()
+                            })
+                            .collect(),
+                    }
+                    .into_envelope(
+                        5 + processed as u32,
+                        Some(request.id),
+                        None,
+                    ),
+                )
+                .expect("metadata response");
+        }
+        search.await.expect("author search succeeds");
+        let mut matches = HashSet::<Oid>::default();
+        while let Ok(oid) = result_rx.recv().await {
+            matches.insert(oid);
+        }
+        assert_eq!(matches.len(), 3000);
+    }
+
+    #[gpui::test]
+    async fn test_remote_author_search_cancels_pending_stream(cx: &mut TestAppContext) {
+        let (_incoming_tx, incoming_rx) = mpsc::unbounded();
+        let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded();
+        let client = cx.update(|cx| {
+            remote::RemoteClient::proto_client_from_channels(
+                incoming_rx,
+                outgoing_tx,
+                cx,
+                "author-cancel-test",
+                false,
+            )
+        });
+        let (result_tx, result_rx) = async_channel::unbounded();
+        let search = cx.background_executor.spawn(async move {
+            Repository::search_remote_commits_by_author(
+                client,
+                ProjectId(1),
+                RepositoryId(1),
+                LogSource::default(),
+                "target",
+                false,
+                result_tx,
+            )
+            .await
+        });
+        outgoing_rx.next().await.expect("graph request");
+        cx.run_until_parked();
+        assert!(!search.is_ready());
+        drop(result_rx);
+        cx.run_until_parked();
+        assert!(
+            search.is_ready(),
+            "cancel must not wait for another graph response"
+        );
+        search.await.expect("cancel succeeds");
+    }
 
     fn init_test(cx: &mut TestAppContext) {
         cx.update(|cx| {
@@ -11746,29 +12103,25 @@ mod tests {
 
     #[gpui::test]
     async fn test_merge_base_status_uses_worktree_contents(cx: &mut TestAppContext) {
-        use util::rel_path::rel_path;
+        use util::{path, rel_path::rel_path};
 
         init_test(cx);
 
+        let project_root = Path::new(path!("/project"));
+        let dot_git = project_root.join(".git");
         let fs = FakeFs::new(cx.executor());
         fs.insert_tree(
-            Path::new("/project"),
+            project_root,
             json!({
                 ".git": {},
                 "committed.txt": "base\n",
             }),
         )
         .await;
-        fs.set_head_and_index_for_repo(
-            Path::new("/project/.git"),
-            &[("committed.txt", "head\n".into())],
-        );
-        fs.set_merge_base_content_for_repo(
-            Path::new("/project/.git"),
-            &[("committed.txt", "base\n".into())],
-        );
+        fs.set_head_and_index_for_repo(&dot_git, &[("committed.txt", "head\n".into())]);
+        fs.set_merge_base_content_for_repo(&dot_git, &[("committed.txt", "base\n".into())]);
 
-        let project = Project::test(fs.clone(), [Path::new("/project")], cx).await;
+        let project = Project::test(fs.clone(), [project_root], cx).await;
         project
             .update(cx, |project, cx| project.git_scans_complete(cx))
             .await;
@@ -11836,10 +12189,7 @@ mod tests {
             assert_eq!(display_snapshot.statuses_by_path.iter().count(), 0);
         });
 
-        fs.set_merge_base_content_for_repo(
-            Path::new("/project/.git"),
-            &[("committed.txt", "head\n".into())],
-        );
+        fs.set_merge_base_content_for_repo(&dot_git, &[("committed.txt", "head\n".into())]);
         let repository =
             project.read_with(cx, |project, cx| project.active_repository(cx).unwrap());
         let branches = repository.read_with(cx, |repository, _| {
@@ -11881,6 +12231,95 @@ mod tests {
             assert!(git_store.display_diff_for_repo(repository_id).is_none());
         });
         assert!(weak_display_diff_list.upgrade().is_none());
+    }
+
+    async fn setup_gated_blob_reads(
+        cx: &mut TestAppContext,
+        count: usize,
+    ) -> (FakeBlobReadGate, Entity<Repository>, Vec<git::Oid>) {
+        use util::path;
+
+        let project_root = Path::new(path!("/project"));
+        let dot_git = project_root.join(".git");
+        let fs = FakeFs::new(cx.executor());
+        fs.insert_tree(project_root, json!({ ".git": {} })).await;
+
+        let entries = (0..count)
+            .map(|index| (format!("f{index:02}.txt"), format!("blob-{index:02}\n")))
+            .collect::<Vec<_>>();
+        let entry_refs = entries
+            .iter()
+            .map(|(name, content)| (name.as_str(), content.clone()))
+            .collect::<Vec<_>>();
+        let oids = fs.set_merge_base_content_for_repo(&dot_git, &entry_refs);
+        let gate = fs.install_blob_read_gate_for_repo(&dot_git);
+
+        let project = Project::test(fs, [project_root], cx).await;
+        project
+            .update(cx, |project, cx| project.git_scans_complete(cx))
+            .await;
+        let repository =
+            project.read_with(cx, |project, cx| project.active_repository(cx).unwrap());
+        (gate, repository, oids)
+    }
+
+    #[gpui::test]
+    async fn test_blob_reads_are_bounded(cx: &mut TestAppContext) {
+        init_test(cx);
+        let (gate, repository, oids) =
+            setup_gated_blob_reads(cx, MAX_CONCURRENT_BLOB_READS + 4).await;
+
+        let reads = oids
+            .iter()
+            .map(|oid| {
+                repository.update(cx, |repository, cx| repository.load_blob_content(*oid, cx))
+            })
+            .collect::<Vec<_>>();
+        cx.run_until_parked();
+
+        assert_eq!(gate.peak_concurrent(), MAX_CONCURRENT_BLOB_READS);
+        assert_eq!(gate.waiting(), MAX_CONCURRENT_BLOB_READS);
+
+        gate.open();
+        cx.run_until_parked();
+        for read in reads {
+            read.await.unwrap();
+        }
+    }
+
+    #[gpui::test]
+    async fn test_cancelled_blob_read_releases_permit(cx: &mut TestAppContext) {
+        init_test(cx);
+        let (gate, repository, oids) =
+            setup_gated_blob_reads(cx, MAX_CONCURRENT_BLOB_READS + 1).await;
+
+        let mut holding = oids[..MAX_CONCURRENT_BLOB_READS]
+            .iter()
+            .map(|oid| {
+                repository.update(cx, |repository, cx| repository.load_blob_content(*oid, cx))
+            })
+            .collect::<Vec<_>>();
+        cx.run_until_parked();
+        assert_eq!(gate.waiting(), MAX_CONCURRENT_BLOB_READS);
+
+        // One more read can't get a permit, so it never reaches the backend.
+        let blocked_oid = oids[MAX_CONCURRENT_BLOB_READS];
+        let _blocked = repository.update(cx, |repository, cx| {
+            repository.load_blob_content(blocked_oid, cx)
+        });
+        cx.run_until_parked();
+        assert!(!gate.is_waiting(blocked_oid));
+
+        let cancelled_oid = oids[0];
+        drop(holding.remove(0));
+        cx.run_until_parked();
+        assert!(gate.is_waiting(blocked_oid));
+        assert!(!gate.is_waiting(cancelled_oid));
+        assert_eq!(gate.waiting(), MAX_CONCURRENT_BLOB_READS);
+        assert_eq!(gate.peak_concurrent(), MAX_CONCURRENT_BLOB_READS);
+
+        gate.open();
+        cx.run_until_parked();
     }
 
     #[gpui::test]

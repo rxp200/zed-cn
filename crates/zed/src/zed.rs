@@ -1,3 +1,4 @@
+mod about_version;
 mod app_menus;
 pub mod edit_prediction_registry;
 #[cfg(target_os = "macos")]
@@ -38,6 +39,7 @@ use git_ui::project_diff::ProjectDiffToolbar;
 use git_ui::solo_diff_view::{SoloDiffGitToolbar, SoloDiffStyleToolbar};
 use git_ui::staged_diff::StagedDiffToolbar;
 use git_ui::unstaged_diff::UnstagedDiffToolbar;
+use git_ui_core::file_diff_view::FileDiffStyleToolbar;
 use gpui::{
     Action, App, AppContext as _, AsyncWindowContext, ClipboardItem, Context, DismissEvent,
     Element, Entity, FocusHandle, Focusable, Image, ImageFormat, KeyBinding, ParentElement,
@@ -488,6 +490,7 @@ pub fn initialize_workspace(app_state: Arc<AppState>, cx: &mut App) {
         })
         .detach();
 
+        let auxiliary = _multi_workspace.workspace().read(cx).is_auxiliary();
         let multi_workspace_handle = cx.entity().downgrade();
         window.on_window_should_close(cx, move |window, cx| {
             multi_workspace_handle
@@ -533,17 +536,19 @@ pub fn initialize_workspace(app_state: Arc<AppState>, cx: &mut App) {
         )
         .detach();
 
-        cx.defer(move |cx| {
-            window_handle
-                .update(cx, |_, window, cx| {
-                    let sidebar =
-                        cx.new(|cx| Sidebar::new(multi_workspace_handle.clone(), window, cx));
-                    multi_workspace_handle.update(cx, |multi_workspace, cx| {
-                        multi_workspace.register_sidebar(sidebar, cx);
-                    });
-                })
-                .ok();
-        });
+        if !auxiliary {
+            cx.defer(move |cx| {
+                window_handle
+                    .update(cx, |_, window, cx| {
+                        let sidebar =
+                            cx.new(|cx| Sidebar::new(multi_workspace_handle.clone(), window, cx));
+                        multi_workspace_handle.update(cx, |multi_workspace, cx| {
+                            multi_workspace.register_sidebar(sidebar, cx);
+                        });
+                    })
+                    .ok();
+            });
+        }
     })
     .detach();
 
@@ -555,6 +560,7 @@ pub fn initialize_workspace(app_state: Arc<AppState>, cx: &mut App) {
         let workspace_handle = cx.entity();
         let center_pane = workspace.active_pane().clone();
         initialize_pane(workspace, &center_pane, window, cx);
+        let is_auxiliary = workspace.is_auxiliary();
 
         cx.subscribe_in(&workspace_handle, window, {
             move |workspace, _, event, window, cx| match event {
@@ -566,6 +572,18 @@ pub fn initialize_workspace(app_state: Arc<AppState>, cx: &mut App) {
                     title,
                     language,
                 } => open_bundled_file(workspace, text.clone(), title, language, window, cx),
+                workspace::Event::PanelAdded(panel) => {
+                    if let Ok(terminal_panel) = panel.clone().downcast::<TerminalPanel>()
+                        && let Some(system_monitor_panel) =
+                            workspace
+                                .panel::<activity_indicator::system_monitor::SystemMonitorPanel>(cx)
+                    {
+                        let port_forward_manager = terminal_panel.read(cx).port_forward_manager();
+                        system_monitor_panel.update(cx, |panel, cx| {
+                            panel.set_port_forward_manager(port_forward_manager, cx);
+                        });
+                    }
+                }
                 _ => {}
             }
         })
@@ -580,6 +598,14 @@ pub fn initialize_workspace(app_state: Arc<AppState>, cx: &mut App) {
             if let Some(crash_client) = cx.try_global::<CrashHandler>() {
                 crashes::set_gpu_info(&crash_client.0, specs);
             }
+        }
+
+        if is_auxiliary {
+            register_actions(app_state.clone(), workspace, window, cx);
+            if !workspace.has_active_modal(window, cx) {
+                workspace.focus_handle(cx).focus(window, cx);
+            }
+            return;
         }
 
         let edit_prediction_menu_handle = PopoverMenuHandle::default();
@@ -603,6 +629,27 @@ pub fn initialize_workspace(app_state: Arc<AppState>, cx: &mut App) {
             cx.new(|cx| diagnostics::items::DiagnosticIndicator::new(workspace, cx));
         let active_file_name = cx.new(|_| workspace::active_file_name::ActiveFileName::new());
         let activity_indicator = activity_indicator::ActivityIndicator::new(workspace, window, cx);
+        let file_transfer_indicator =
+            activity_indicator::file_transfer::FileTransferIndicator::new(workspace, cx);
+        let system_monitor = activity_indicator::system_monitor::SystemMonitor::new(workspace, cx);
+        workspace.register_action(
+            |workspace, _: &activity_indicator::system_monitor::ToggleFocus, window, cx| {
+                workspace.toggle_panel_visibility::<
+                    activity_indicator::system_monitor::SystemMonitorPanel,
+                >(window, cx);
+            },
+        );
+        let port_forward_manager = workspace
+            .panel::<TerminalPanel>(cx)
+            .map(|panel| panel.read(cx).port_forward_manager());
+        let system_monitor_panel = cx.new(|cx| {
+            activity_indicator::system_monitor::SystemMonitorPanel::new(
+                system_monitor.clone(),
+                port_forward_manager,
+                cx,
+            )
+        });
+        workspace.add_panel(system_monitor_panel, window, cx);
         let active_buffer_encoding =
             cx.new(|_| encoding_selector::ActiveBufferEncoding::new(workspace));
         let active_buffer_language =
@@ -638,6 +685,14 @@ pub fn initialize_workspace(app_state: Arc<AppState>, cx: &mut App) {
             status_bar.add_left_item(git_blame_status, window, cx);
             status_bar.add_left_item(merge_conflict_indicator, window, cx);
             status_bar.add_left_item(activity_indicator, window, cx);
+            status_bar.add_left_item(file_transfer_indicator, window, cx);
+            let explanations = cx.new(|cx| {
+                cx.observe_global::<settings::SettingsStore>(|_, cx| cx.notify())
+                    .detach();
+                editor::code_explanations::CodeExplanationIndicator::default()
+            });
+            status_bar.add_right_item(explanations, window, cx);
+            status_bar.add_right_item(system_monitor, window, cx);
             status_bar.add_right_item(edit_prediction_ui, window, cx);
             status_bar.add_right_item(active_buffer_encoding, window, cx);
             status_bar.add_right_item(active_buffer_language, window, cx);
@@ -667,17 +722,17 @@ fn initialize_file_watcher(fs: &dyn Fs, window: &mut Window, cx: &mut Context<Wo
     if let Err(e) = fs.start_native_watcher() {
         let message = format!(
             db::indoc! {r#"
-            inotify_init returned {}
+            inotify_init 返回 {}
 
-            This may be due to system-wide limits on inotify instances. For troubleshooting see: https://zed.dev/docs/linux
+            这可能是由于系统对 inotify 实例数量的限制。排查方法请参见：https://zed.dev/docs/linux
             "#},
             e
         );
         let prompt = window.prompt(
             PromptLevel::Critical,
-            "Could not start inotify",
+            "无法启动 inotify",
             Some(&message),
-            &["Troubleshoot and Quit"],
+            &["排查并退出"],
             cx,
         );
         cx.spawn(async move |_, cx| {
@@ -698,17 +753,17 @@ fn initialize_file_watcher(fs: &dyn Fs, window: &mut Window, cx: &mut Context<Wo
     if let Err(e) = fs.start_native_watcher() {
         let message = format!(
             db::indoc! {r#"
-            ReadDirectoryChangesW initialization failed: {}
+            ReadDirectoryChangesW 初始化失败：{}
 
-            This may occur on network filesystems and WSL paths. For troubleshooting see: https://zed.dev/docs/windows
+            这种情况可能发生在网络文件系统和 WSL 路径上。排查方法请参见：https://zed.dev/docs/windows
             "#},
             e
         );
         let prompt = window.prompt(
             PromptLevel::Critical,
-            "Could not start ReadDirectoryChangesW",
+            "无法启动 ReadDirectoryChangesW",
             Some(&message),
-            &["Troubleshoot and Quit"],
+            &["排查并退出"],
             cx,
         );
         cx.spawn(async move |_, cx| {
@@ -744,21 +799,21 @@ fn show_software_emulation_warning_if_needed(
         };
         let message = format!(
             db::indoc! {r#"
-            Zed uses {} for rendering and requires a compatible GPU.
+            Zed 使用 {} 进行渲染，需要兼容的 GPU。
 
-            Currently you are using a software emulated GPU ({}) which
-            will result in awful performance.
+            你当前使用的是软件模拟的 GPU（{}），
+            这将导致性能严重下降。
 
-            For troubleshooting see: {}
-            Set ZED_ALLOW_EMULATED_GPU=1 env var to permanently override.
+            排查方法请参见：{}
+            设置环境变量 ZED_ALLOW_EMULATED_GPU=1 可永久跳过此检查。
             "#},
             graphics_api, specs.device_name, docs_url
         );
         let prompt = window.prompt(
             PromptLevel::Critical,
-            "Unsupported GPU",
+            "不支持的 GPU",
             Some(&message),
-            &["Skip", "Troubleshoot and Quit"],
+            &["跳过", "排查并退出"],
             cx,
         );
         cx.spawn(async move |_, cx| {
@@ -1466,6 +1521,8 @@ fn initialize_pane(
             toolbar.add_item(multibuffer_hint, window, cx);
             let solo_diff_style_toolbar = cx.new(SoloDiffStyleToolbar::new);
             toolbar.add_item(solo_diff_style_toolbar, window, cx);
+            let file_diff_style_toolbar = cx.new(FileDiffStyleToolbar::new);
+            toolbar.add_item(file_diff_style_toolbar, window, cx);
             let breadcrumbs = cx.new(|_| Breadcrumbs::new());
             toolbar.add_item(breadcrumbs, window, cx);
             let buffer_search_bar = cx.new(|cx| {
@@ -1554,6 +1611,12 @@ fn open_about_window(cx: &mut App) {
             let release_channel_name = release_channel.display_name();
             let full_version: SharedString = AppVersion::global(cx).to_string().into();
             let version = env!("CARGO_PKG_VERSION");
+            let version = if release_channel == ReleaseChannel::Stable {
+                about_version::custom_version(version, option_env!("ZED_CUSTOM_RELEASE_TAG"))
+                    .unwrap_or(version)
+            } else {
+                version
+            };
 
             let debug = if cfg!(debug_assertions) {
                 "(debug)"
@@ -1622,14 +1685,14 @@ fn open_about_window(cx: &mut App) {
                             .child(Headline::new(self.message.clone()))
                             .when_some(self.commit.clone(), |this, commit| {
                                 this.child(
-                                    Label::new("Commit")
+                                    Label::new("提交")
                                         .color(Color::Muted)
                                         .size(LabelSize::XSmall),
                                 )
                                 .child(Label::new(commit).size(LabelSize::Small))
                             })
                             .child(
-                                Label::new("Version")
+                                Label::new("版本")
                                     .color(Color::Muted)
                                     .size(LabelSize::XSmall),
                             )
@@ -1647,7 +1710,7 @@ fn open_about_window(cx: &mut App) {
                                         window.remove_window();
                                     }))
                                     .child(
-                                        Button::new("ok", "OK")
+                                        Button::new("ok", "确定")
                                             .full_width()
                                             .style(ButtonStyle::OutlinedGhost)
                                             .toggle_state(ok_is_focused)
@@ -1667,7 +1730,7 @@ fn open_about_window(cx: &mut App) {
                                         },
                                     ))
                                     .child(
-                                        Button::new("copy", "Copy")
+                                        Button::new("copy", "复制")
                                             .full_width()
                                             .style(ButtonStyle::Tinted(TintColor::Accent))
                                             .toggle_state(copy_is_focused)
@@ -1772,9 +1835,9 @@ fn quit(_: &Quit, cx: &mut App) {
                 .update(cx, |_, window, cx| {
                     window.prompt(
                         PromptLevel::Info,
-                        "Are you sure you want to quit?",
+                        "确定要退出吗？",
                         None,
-                        &["Quit", "Cancel"],
+                        &["退出", "取消"],
                         cx,
                     )
                 })
@@ -1988,12 +2051,12 @@ fn init_global_config_error_notifications(cx: &mut App) {
         cx.subscribe_self::<SettingsObserverEvent>(|_, event, cx| {
             let (result, file_kind, on_click): (_, _, fn(&mut Window, &mut App)) = match event {
                 SettingsObserverEvent::GlobalTasksUpdated(result) => {
-                    (result, "tasks", |window, cx| {
+                    (result, "任务", |window, cx| {
                         window.dispatch_action(OpenTasks.boxed_clone(), cx)
                     })
                 }
                 SettingsObserverEvent::GlobalDebugScenariosUpdated(result) => {
-                    (result, "debug scenarios", |window, cx| {
+                    (result, "调试场景", |window, cx| {
                         window.dispatch_action(OpenDebugTasks.boxed_clone(), cx)
                     })
                 }
@@ -2003,11 +2066,11 @@ fn init_global_config_error_notifications(cx: &mut App) {
             match result {
                 Ok(_) => dismiss_app_notification(&id, cx),
                 Err(error) => {
-                    let message = format!("Invalid global {file_kind} file\n{error}");
+                    let message = format!("全局 {file_kind} 文件无效\n{error}");
                     show_app_notification(id, cx, move |cx| {
                         cx.new(|cx| {
                             MessageNotification::new(message.clone(), cx)
-                                .primary_message("Open File")
+                                .primary_message("打开文件")
                                 .primary_icon(IconName::Settings)
                                 .primary_on_click(move |window, cx| {
                                     on_click(window, cx);
@@ -2962,7 +3025,7 @@ mod tests {
         indicator.update(cx, |indicator, cx| {
             assert_eq!(
                 indicator.message_to_render(cx),
-                Some("Partial file index".to_string())
+                Some("部分文件按需索引".to_string())
             );
         });
 
@@ -2979,7 +3042,7 @@ mod tests {
         indicator.update(cx, |indicator, cx| {
             assert_eq!(
                 indicator.message_to_render(cx),
-                Some("Partial file index".to_string())
+                Some("部分文件按需索引".to_string())
             );
         });
 
@@ -3540,7 +3603,7 @@ mod tests {
             .unwrap();
         executor.run_until_parked();
 
-        cx.simulate_prompt_answer("Don't Save");
+        cx.simulate_prompt_answer("不保存");
         close.await.unwrap();
 
         // Advance the clock to ensure that the item has been serialized and dropped from the queue
@@ -3606,7 +3669,7 @@ mod tests {
         assert_eq!(cx.update(|cx| cx.windows().len()), 1);
 
         // The window is successfully closed after the user dismisses the prompt.
-        cx.simulate_prompt_answer("Don't Save");
+        cx.simulate_prompt_answer("不保存");
         executor.run_until_parked();
         assert_eq!(cx.update(|cx| cx.windows().len()), 0);
     }
@@ -4468,7 +4531,7 @@ mod tests {
             })
             .unwrap();
         cx.background_executor.run_until_parked();
-        cx.simulate_prompt_answer("Overwrite");
+        cx.simulate_prompt_answer("覆盖");
         save_task.await.unwrap();
         window
             .update(cx, |_, _, cx| {
@@ -4794,7 +4857,7 @@ mod tests {
             close_pinned: false,
         });
         cx.background_executor.run_until_parked();
-        cx.simulate_prompt_answer("Don't Save");
+        cx.simulate_prompt_answer("不保存");
         cx.background_executor.run_until_parked();
 
         workspace.read_with(cx, |workspace, cx| {
@@ -7001,7 +7064,7 @@ mod tests {
             "Case 1: Should prompt to save dirty item in active workspace"
         );
 
-        cx.simulate_prompt_answer("Cancel");
+        cx.simulate_prompt_answer("取消");
         cx.run_until_parked();
 
         assert_eq!(
@@ -7021,7 +7084,7 @@ mod tests {
             })
             .unwrap();
         cx.run_until_parked();
-        cx.simulate_prompt_answer("Don't Save");
+        cx.simulate_prompt_answer("不保存");
         close_task.await.ok();
         cx.run_until_parked();
 
@@ -7083,7 +7146,7 @@ mod tests {
             "Case 2: Should prompt to save dirty item in non-active workspace"
         );
 
-        cx.simulate_prompt_answer("Cancel");
+        cx.simulate_prompt_answer("取消");
         cx.run_until_parked();
 
         assert_eq!(
@@ -7103,7 +7166,7 @@ mod tests {
             })
             .unwrap();
         cx.run_until_parked();
-        cx.simulate_prompt_answer("Don't Save");
+        cx.simulate_prompt_answer("不保存");
         close_task.await.ok();
         cx.run_until_parked();
 
@@ -7167,7 +7230,7 @@ mod tests {
             "Case 3: Should prompt to save dirty item in non-active window"
         );
 
-        cx.simulate_prompt_answer("Cancel");
+        cx.simulate_prompt_answer("取消");
         cx.run_until_parked();
 
         assert_eq!(
@@ -8162,7 +8225,7 @@ mod tests {
         cx.update(|cx| reload_keymaps(cx, Vec::new()));
         cx.update(|cx| {
             assert!(
-                has_view_item(cx, "Agent Panel"),
+                has_view_item(cx, "Agent 面板"),
                 "expected Agent Panel in the View menu when AI is enabled"
             );
             assert!(
@@ -8183,7 +8246,7 @@ mod tests {
         });
         cx.update(|cx| {
             assert!(
-                !has_view_item(cx, "Agent Panel"),
+                !has_view_item(cx, "Agent 面板"),
                 "expected Agent Panel to be removed from the View menu after disabling AI"
             );
             assert!(
@@ -8202,7 +8265,7 @@ mod tests {
         cx.update(|cx| reload_keymaps(cx, Vec::new()));
         cx.update(|cx| {
             assert!(
-                has_view_item(cx, "Agent Panel"),
+                has_view_item(cx, "Agent 面板"),
                 "expected Agent Panel back in the View menu after re-enabling AI"
             );
             assert!(
@@ -8219,7 +8282,7 @@ mod tests {
         cx.update(|cx| reload_keymaps(cx, Vec::new()));
         cx.update(|cx| {
             assert!(
-                has_view_item(cx, "Agent Panel"),
+                has_view_item(cx, "Agent 面板"),
                 "expected Agent Panel before disabling AI"
             );
             assert!(
@@ -8264,7 +8327,7 @@ mod tests {
 
         cx.update(|cx| {
             assert!(
-                !has_view_item(cx, "Agent Panel"),
+                !has_view_item(cx, "Agent 面板"),
                 "expected Agent Panel removed even though the keymap file is malformed"
             );
             assert!(
@@ -8286,7 +8349,7 @@ mod tests {
 
         cx.update(|cx| {
             assert!(
-                has_view_item(cx, "Agent Panel"),
+                has_view_item(cx, "Agent 面板"),
                 "expected Agent Panel added back even though the keymap file is malformed"
             );
             assert!(
@@ -8300,7 +8363,7 @@ mod tests {
         cx.get_menus()
             .expect("reload_keymaps should populate the menu bar")
             .iter()
-            .find(|menu| menu.name == "View")
+            .find(|menu| menu.name == "视图")
             .expect("expected a View menu")
             .items
             .iter()

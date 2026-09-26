@@ -283,9 +283,9 @@ impl PickerDelegate for SidebarRecentProjectsDelegate {
 
     fn no_matches_text(&self, _window: &mut Window, _cx: &mut App) -> Option<SharedString> {
         let text = if self.workspaces.is_empty() {
-            "Recently opened projects will show up here"
+            "最近打开的项目将显示在此处"
         } else {
-            "No matches"
+            "无匹配项"
         };
         Some(text.into())
     }
@@ -399,7 +399,7 @@ impl PickerDelegate for SidebarRecentProjectsDelegate {
                                 .w_full()
                                 .gap_1()
                                 .justify_between()
-                                .child(Label::new("Open Local Folders"))
+                                .child(Label::new("打开本地文件夹"))
                                 .child(KeyBinding::for_action_in(&open_action, &focus_handle, cx)),
                         )
                         .on_click(cx.listener(move |_, _, window, cx| {
@@ -414,7 +414,7 @@ impl PickerDelegate for SidebarRecentProjectsDelegate {
                                 .w_full()
                                 .gap_1()
                                 .justify_between()
-                                .child(Label::new("Open Remote Folder"))
+                                .child(Label::new("打开远程文件夹"))
                                 .child(KeyBinding::for_action(
                                     &OpenRemote {
                                         from_existing_connection: false,

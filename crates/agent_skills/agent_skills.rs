@@ -64,7 +64,7 @@ impl SkillLoadWarning {
                 actual_len,
                 max_len,
             } => format!(
-                "Skill description is {actual_len} characters, exceeding the {max_len}-character limit. The skill was loaded, but long descriptions may consume more model-context tokens."
+                "技能描述有 {actual_len} 个字符，超过 {max_len} 个字符的限制。技能已加载，但过长的描述可能消耗更多模型上下文令牌。"
             ),
         }
     }
@@ -531,7 +531,7 @@ pub fn validate_description(description: &str) -> Result<(), &'static str> {
     }
     if description.chars().count() > MAX_SKILL_DESCRIPTION_LEN {
         return Err(formatcp!(
-            "Skill description must be at most {MAX_SKILL_DESCRIPTION_LEN} characters"
+            "技能描述最多包含 {MAX_SKILL_DESCRIPTION_LEN} 个字符"
         ));
     }
     Ok(())
@@ -1440,7 +1440,7 @@ Content.
 
         let result = parse_skill_file_content(&content);
         assert!(result.is_err());
-        let expected = format!("at most {MAX_SKILL_DESCRIPTION_LEN} characters");
+        let expected = format!("最多包含 {MAX_SKILL_DESCRIPTION_LEN} 个字符");
         assert!(result.unwrap_err().to_string().contains(&expected));
     }
 

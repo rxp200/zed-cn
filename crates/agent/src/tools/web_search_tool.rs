@@ -109,7 +109,7 @@ impl AgentTool for WebSearchTool {
                         Ok(response) => response,
                         Err(err) => {
                             event_stream
-                                .update_fields(acp::ToolCallUpdateFields::new().title("Web Search Failed"));
+                                .update_fields(acp::ToolCallUpdateFields::new().title("网页搜索失败"));
                             return Err(WebSearchToolOutput::Error { error: err.to_string() });
                         }
                     }

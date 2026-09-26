@@ -1,6 +1,6 @@
 use anyhow::{Context as _, anyhow};
 use gpui::{App, DivInspectorState, Inspector, InspectorElementId, IntoElement, TaskExt, Window};
-use std::{cell::OnceCell, path::Path, sync::Arc};
+use std::{path::Path, sync::Arc};
 use ui::{Label, Tooltip, prelude::*, utils::platform_title_bar_height};
 use util::{ResultExt as _, command::new_command};
 use workspace::AppState;
@@ -24,29 +24,28 @@ pub fn init(app_state: Arc<AppState>, cx: &mut App) {
         });
     });
 
-    // Project used for editor buffers with LSP support
-    let project = project::Project::local(
-        app_state.client.clone(),
-        app_state.node_runtime.clone(),
-        app_state.user_store.clone(),
-        app_state.languages.clone(),
-        app_state.fs.clone(),
-        None,
-        project::LocalProjectFlags {
-            init_worktree_trust: false,
-            ..Default::default()
-        },
-        cx,
-    );
-
-    let div_inspector = OnceCell::new();
-    cx.register_inspector_element(move |id, state: &DivInspectorState, window, cx| {
-        let div_inspector = div_inspector
-            .get_or_init(|| cx.new(|cx| DivInspector::new(project.clone(), window, cx)));
-        div_inspector.update(cx, |div_inspector, cx| {
-            div_inspector.update_inspected_element(&id, state.clone(), window, cx);
-            div_inspector.render(window, cx).into_any_element()
-        })
+    cx.register_inspector_element(move |window, cx| {
+        // Project used for editor buffers with LSP support
+        let project = project::Project::local(
+            app_state.client.clone(),
+            app_state.node_runtime.clone(),
+            app_state.user_store.clone(),
+            app_state.languages.clone(),
+            app_state.fs.clone(),
+            None,
+            project::LocalProjectFlags {
+                init_worktree_trust: false,
+                watch_global_configs: false,
+            },
+            cx,
+        );
+        let div_inspector = cx.new(|cx| DivInspector::new(project, window, cx));
+        move |id, state: &DivInspectorState, window: &mut Window, cx: &mut App| {
+            div_inspector.update(cx, |div_inspector, cx| {
+                div_inspector.update_inspected_element(&id, state.clone(), window, cx);
+                div_inspector.render(window, cx).into_any_element()
+            })
+        }
     });
 
     cx.set_inspector_renderer(Box::new(render_inspector));
@@ -80,7 +79,7 @@ fn render_inspector(
                 .border_color(colors.border_variant)
                 .child(
                     IconButton::new("pick-mode", IconName::MagnifyingGlass)
-                        .tooltip(Tooltip::text("Start inspector pick mode"))
+                        .tooltip(Tooltip::text("启动检查器拾取模式"))
                         .selected_icon_color(Color::Selected)
                         .toggle_state(inspector.is_picking())
                         .on_click(cx.listener(|inspector, _, window, _cx| {
@@ -88,7 +87,7 @@ fn render_inspector(
                             window.refresh();
                         })),
                 )
-                .child(h_flex().justify_end().child(Label::new("GPUI Inspector"))),
+                .child(h_flex().justify_end().child(Label::new("GPUI 检查器"))),
         )
         .child(
             v_flex()
@@ -120,7 +119,7 @@ fn render_inspector_id(inspector_id: &InspectorElementId, cx: &App) -> Div {
         .child(
             h_flex()
                 .justify_between()
-                .child(Label::new("Element ID").size(LabelSize::Large))
+                .child(Label::new("元素 ID").size(LabelSize::Large))
                 .child(
                     div()
                         .id("instance-id")
@@ -140,7 +139,7 @@ fn render_inspector_id(inspector_id: &InspectorElementId, cx: &App) -> Div {
                 .font_buffer(cx)
                 .text_xs()
                 .child(source_location_string)
-                .tooltip(Tooltip::text("Click to open by running Zed CLI"))
+                .tooltip(Tooltip::text("点击以运行Zed CLI打开"))
                 .on_click(move |_, _window, cx| {
                     cx.background_spawn(open_zed_source_location(source_location))
                         .detach_and_log_err(cx);
