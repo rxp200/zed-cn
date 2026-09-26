@@ -1069,6 +1069,7 @@ impl TerminalBuilder {
             path_style,
             cwd_history: Vec::new(),
             pending_cwd_boundary: None,
+            last_output_at: None,
             #[cfg(any(test, feature = "test-support"))]
             input_log: Vec::new(),
             #[cfg(test)]
@@ -1368,6 +1369,7 @@ impl TerminalBuilder {
                         .unwrap_or_default()
                 },
                 pending_cwd_boundary: None,
+                last_output_at: None,
                 #[cfg(any(test, feature = "test-support"))]
                 input_log: Vec::new(),
                 #[cfg(test)]
@@ -1548,6 +1550,7 @@ pub struct Terminal {
     path_style: PathStyle,
     cwd_history: Vec<CwdHistoryEntry>,
     pending_cwd_boundary: Option<i32>,
+    last_output_at: Option<Instant>,
     #[cfg(any(test, feature = "test-support"))]
     input_log: Vec<Vec<u8>>,
     #[cfg(test)]
@@ -1678,6 +1681,7 @@ impl Terminal {
                 //NOOP, Handled in render
             }
             TerminalBackendEvent::Wakeup => {
+                self.note_program_output();
                 self.detect_init_command_startup_marker();
                 cx.emit(Event::Wakeup);
 
@@ -1975,12 +1979,23 @@ impl Terminal {
             .get_or_insert_with(Processor::<StdSyncHandler>::new)
             .advance(&mut *term, &converted);
         drop(term);
+        self.note_program_output();
         self.detect_init_command_startup_marker();
         cx.emit(Event::Wakeup);
     }
 
     pub fn total_lines(&self) -> usize {
         total_lines(&self.term.lock_unfair())
+    }
+
+    /// Timestamp of the most recent output produced by the program running in the
+    /// terminal, on the testable executor clock. `None` before any output arrived.
+    pub fn last_output_activity(&self) -> Option<Instant> {
+        self.last_output_at
+    }
+
+    fn note_program_output(&mut self) {
+        self.last_output_at = Some(self.background_executor.now());
     }
 
     pub fn viewport_lines(&self) -> usize {

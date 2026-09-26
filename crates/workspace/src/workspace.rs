@@ -1667,6 +1667,7 @@ pub struct Workspace {
     persisted_recent_navigation_history: Vec<PathBuf>,
     last_active_project_path: Option<ProjectPath>,
     restoring_workspace: bool,
+    auxiliary: bool,
 }
 
 impl EventEmitter<Event> for Workspace {}
@@ -1718,6 +1719,26 @@ impl Workspace {
         workspace_id: Option<WorkspaceId>,
         project: Entity<Project>,
         app_state: Arc<AppState>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        Self::new_with_kind(workspace_id, project, app_state, false, window, cx)
+    }
+
+    pub fn new_auxiliary(
+        project: Entity<Project>,
+        app_state: Arc<AppState>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        Self::new_with_kind(None, project, app_state, true, window, cx)
+    }
+
+    fn new_with_kind(
+        workspace_id: Option<WorkspaceId>,
+        project: Entity<Project>,
+        app_state: Arc<AppState>,
+        auxiliary: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -2169,6 +2190,7 @@ impl Workspace {
             persisted_recent_navigation_history: Vec::new(),
             last_active_project_path: None,
             restoring_workspace: false,
+            auxiliary,
         }
     }
 
@@ -2923,6 +2945,10 @@ impl Workspace {
         self.restoring_workspace
     }
 
+    pub fn is_auxiliary(&self) -> bool {
+        self.auxiliary
+    }
+
     #[cfg(any(test, feature = "test-support"))]
     pub fn set_restoring_workspace(&mut self, restoring: bool) {
         self.restoring_workspace = restoring;
@@ -2944,6 +2970,61 @@ impl Workspace {
         &self.project
     }
 
+    pub fn detach_item_to_auxiliary_window<T: Item>(
+        source_item: Entity<T>,
+        source_pane: Entity<Pane>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> bool {
+        let Some(source_workspace) = source_pane.read(cx).workspace.upgrade() else {
+            return false;
+        };
+        let item_id = source_item.entity_id();
+        let project = source_workspace.read(cx).project.clone();
+        let app_state = source_workspace.read(cx).app_state.clone();
+        let size = window.viewport_size();
+        let position = window.window_bounds().get_bounds().origin + point(px(32.), px(32.));
+        let mut options = (app_state.build_window_options)(None, cx);
+        options.window_bounds = Some(WindowBounds::Windowed(Bounds::new(position, size)));
+
+        let result = cx.open_window(options, move |window, cx| {
+            let workspace = cx.new(|cx| Workspace::new_auxiliary(project, app_state, window, cx));
+            cx.new(|cx| MultiWorkspace::new(workspace, window, cx))
+        });
+        let Ok(destination_window) = result else {
+            return false;
+        };
+
+        source_pane.update(cx, |pane, cx| {
+            pane.remove_item(item_id, false, false, window, cx);
+        });
+        let move_result = destination_window.update(cx, |multi_workspace, destination, cx| {
+            let destination_workspace = multi_workspace.workspace().clone();
+            destination_workspace.update(cx, |workspace, cx| {
+                workspace.add_item_to_active_pane(
+                    Box::new(source_item.clone()),
+                    None,
+                    true,
+                    destination,
+                    cx,
+                );
+            });
+            destination.activate_window();
+        });
+
+        if move_result.is_err() {
+            destination_window
+                .update(cx, |_, destination, _| destination.remove_window())
+                .ok();
+            source_pane.update(cx, |pane, cx| {
+                pane.add_item(Box::new(source_item), true, true, None, window, cx);
+            });
+            return false;
+        }
+
+        true
+    }
+
     pub fn open_item_clone_window(
         source_workspace: Entity<Self>,
         item: Box<dyn ItemHandle>,
@@ -2957,7 +3038,7 @@ impl Workspace {
         let mut options = (app_state.build_window_options)(None, cx);
         options.window_bounds = Some(WindowBounds::Windowed(Bounds::new(position, size)));
         let result = cx.open_window(options, move |window, cx| {
-            let workspace = cx.new(|cx| Workspace::new(None, project, app_state, window, cx));
+            let workspace = cx.new(|cx| Workspace::new_auxiliary(project, app_state, window, cx));
             workspace.update(cx, |workspace, cx| {
                 workspace.add_item_to_active_pane(item, None, true, window, cx);
             });
@@ -9659,6 +9740,31 @@ impl Render for Workspace {
             project: &self.project,
             workspace: &self.weak_self,
         };
+
+        if self.auxiliary {
+            return div()
+                .relative()
+                .size_full()
+                .flex()
+                .flex_col()
+                .font(ui_font)
+                .text_color(colors.text)
+                .overflow_hidden()
+                .when_some(self.titlebar_item.clone(), |this, item| this.child(item))
+                .child(
+                    div()
+                        .id("auxiliary-workspace")
+                        .relative()
+                        .flex_1()
+                        .w_full()
+                        .overflow_hidden()
+                        .border_t_1()
+                        .border_color(colors.border)
+                        .child(self.render_center(&pane_render_context, window, cx))
+                        .children(self.render_notifications(window, cx)),
+                )
+                .child(self.toast_layer.clone());
+        }
 
         div()
             .relative()

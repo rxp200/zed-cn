@@ -6,7 +6,9 @@ use gpui::{
 use proto::GetSystemStatsResponse;
 use std::{collections::VecDeque, time::Duration};
 use sysinfo::{Disks, Networks, ProcessesToUpdate, System};
-use terminal_view::port_forwarding::{ForwardDirection, ForwardSnapshot, ForwardSource, ForwardStatus, PortForwardManager};
+use terminal_view::port_forwarding::{
+    ForwardDirection, ForwardSnapshot, ForwardSource, ForwardStatus, PortForwardManager,
+};
 use ui::{ProgressBar, prelude::*};
 use workspace::{
     Panel, StatusItemView, Workspace,
@@ -353,6 +355,7 @@ pub struct SystemMonitorPanel {
     monitor: Entity<SystemMonitor>,
     port_forward_manager: Option<Entity<PortForwardManager>>,
     focus_handle: FocusHandle,
+    _monitor_subscription: Subscription,
     _port_forward_subscription: Option<Subscription>,
 }
 
@@ -365,10 +368,15 @@ impl SystemMonitorPanel {
         let port_forward_subscription = port_forward_manager
             .as_ref()
             .map(|manager| cx.observe(manager, |_, _, cx| cx.notify()));
+        // 采样任务每 2 秒只对 `SystemMonitor` 实体调用 `cx.notify()`，
+        // 面板若不显式订阅该实体就不会被标记为 dirty，
+        // GPUI 会直接复用上一帧的绘制缓存，导致 CPU/网络等数据看起来不刷新。
+        let monitor_subscription = cx.observe(&monitor, |_, _, cx| cx.notify());
         Self {
             monitor,
             port_forward_manager,
             focus_handle: cx.focus_handle(),
+            _monitor_subscription: monitor_subscription,
             _port_forward_subscription: port_forward_subscription,
         }
     }
@@ -378,10 +386,8 @@ impl SystemMonitorPanel {
         port_forward_manager: Entity<PortForwardManager>,
         cx: &mut Context<Self>,
     ) {
-        self._port_forward_subscription = Some(cx.observe(
-            &port_forward_manager,
-            |_, _, cx| cx.notify(),
-        ));
+        self._port_forward_subscription =
+            Some(cx.observe(&port_forward_manager, |_, _, cx| cx.notify()));
         self.port_forward_manager = Some(port_forward_manager);
         cx.notify();
     }

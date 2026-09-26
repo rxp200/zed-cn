@@ -490,6 +490,7 @@ pub fn initialize_workspace(app_state: Arc<AppState>, cx: &mut App) {
         })
         .detach();
 
+        let auxiliary = _multi_workspace.workspace().read(cx).is_auxiliary();
         let multi_workspace_handle = cx.entity().downgrade();
         window.on_window_should_close(cx, move |window, cx| {
             multi_workspace_handle
@@ -535,17 +536,19 @@ pub fn initialize_workspace(app_state: Arc<AppState>, cx: &mut App) {
         )
         .detach();
 
-        cx.defer(move |cx| {
-            window_handle
-                .update(cx, |_, window, cx| {
-                    let sidebar =
-                        cx.new(|cx| Sidebar::new(multi_workspace_handle.clone(), window, cx));
-                    multi_workspace_handle.update(cx, |multi_workspace, cx| {
-                        multi_workspace.register_sidebar(sidebar, cx);
-                    });
-                })
-                .ok();
-        });
+        if !auxiliary {
+            cx.defer(move |cx| {
+                window_handle
+                    .update(cx, |_, window, cx| {
+                        let sidebar =
+                            cx.new(|cx| Sidebar::new(multi_workspace_handle.clone(), window, cx));
+                        multi_workspace_handle.update(cx, |multi_workspace, cx| {
+                            multi_workspace.register_sidebar(sidebar, cx);
+                        });
+                    })
+                    .ok();
+            });
+        }
     })
     .detach();
 
@@ -557,6 +560,7 @@ pub fn initialize_workspace(app_state: Arc<AppState>, cx: &mut App) {
         let workspace_handle = cx.entity();
         let center_pane = workspace.active_pane().clone();
         initialize_pane(workspace, &center_pane, window, cx);
+        let is_auxiliary = workspace.is_auxiliary();
 
         cx.subscribe_in(&workspace_handle, window, {
             move |workspace, _, event, window, cx| match event {
@@ -570,12 +574,11 @@ pub fn initialize_workspace(app_state: Arc<AppState>, cx: &mut App) {
                 } => open_bundled_file(workspace, text.clone(), title, language, window, cx),
                 workspace::Event::PanelAdded(panel) => {
                     if let Ok(terminal_panel) = panel.clone().downcast::<TerminalPanel>()
-                        && let Some(system_monitor_panel) = workspace.panel::<
-                            activity_indicator::system_monitor::SystemMonitorPanel,
-                        >(cx)
+                        && let Some(system_monitor_panel) =
+                            workspace
+                                .panel::<activity_indicator::system_monitor::SystemMonitorPanel>(cx)
                     {
-                        let port_forward_manager =
-                            terminal_panel.read(cx).port_forward_manager();
+                        let port_forward_manager = terminal_panel.read(cx).port_forward_manager();
                         system_monitor_panel.update(cx, |panel, cx| {
                             panel.set_port_forward_manager(port_forward_manager, cx);
                         });
@@ -595,6 +598,14 @@ pub fn initialize_workspace(app_state: Arc<AppState>, cx: &mut App) {
             if let Some(crash_client) = cx.try_global::<CrashHandler>() {
                 crashes::set_gpu_info(&crash_client.0, specs);
             }
+        }
+
+        if is_auxiliary {
+            register_actions(app_state.clone(), workspace, window, cx);
+            if !workspace.has_active_modal(window, cx) {
+                workspace.focus_handle(cx).focus(window, cx);
+            }
+            return;
         }
 
         let edit_prediction_menu_handle = PopoverMenuHandle::default();

@@ -238,7 +238,22 @@ pub struct TerminalView {
     rename_editor_subscription: Option<Subscription>,
     _subscriptions: Vec<Subscription>,
     _terminal_subscriptions: Vec<Subscription>,
+    terminal_activity: TerminalActivity,
+    _activity_monitor: Task<()>,
 }
+
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+enum TerminalActivity {
+    /// The program running in the terminal produced output recently.
+    Active,
+    /// No program output for [`TERMINAL_ACTIVITY_IDLE_DELAY`].
+    #[default]
+    Idle,
+}
+
+/// How long a terminal may stay without program output before the tab indicator
+/// reports the idle (yellow) state.
+const TERMINAL_ACTIVITY_IDLE_DELAY: Duration = Duration::from_secs(3);
 
 #[derive(Default, Clone)]
 pub enum TerminalMode {
@@ -404,7 +419,7 @@ impl TerminalView {
         options.window_bounds = Some(WindowBounds::Windowed(gpui::Bounds::new(position, size)));
 
         let result = cx.open_window(options, move |window, cx| {
-            let workspace = cx.new(|cx| Workspace::new(None, project, app_state, window, cx));
+            let workspace = cx.new(|cx| Workspace::new_auxiliary(project, app_state, window, cx));
             cx.new(|cx| MultiWorkspace::new(workspace, window, cx))
         });
         let Ok(destination_window) = result else {
@@ -505,6 +520,22 @@ impl TerminalView {
             cx.observe_global::<SettingsStore>(Self::settings_changed),
         ];
 
+        let activity_monitor = cx.spawn(async move |terminal_view: WeakEntity<Self>, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(TERMINAL_ACTIVITY_IDLE_DELAY)
+                    .await;
+                let still_alive = terminal_view
+                    .update_in(cx, |terminal_view, _window, cx| {
+                        terminal_view.refresh_terminal_activity(cx);
+                    })
+                    .is_ok();
+                if !still_alive {
+                    break;
+                }
+            }
+        });
+
         Self {
             terminal,
             workspace: workspace_handle,
@@ -533,6 +564,8 @@ impl TerminalView {
             rename_editor_subscription: None,
             _subscriptions: subscriptions,
             _terminal_subscriptions: terminal_subscriptions,
+            terminal_activity: TerminalActivity::Idle,
+            _activity_monitor: activity_monitor,
         }
     }
 
@@ -550,6 +583,32 @@ impl TerminalView {
 
     pub fn is_read_only(&self) -> bool {
         self.read_only
+    }
+
+    /// Short human-readable label for the tab indicator and its tooltip.
+    fn terminal_activity_description(&self) -> &'static str {
+        match self.terminal_activity {
+            TerminalActivity::Active => "正在输出",
+            TerminalActivity::Idle => "暂无输出",
+        }
+    }
+
+    /// Recomputes the tab activity indicator from the terminal's last program
+    /// output timestamp and repaints the tab when it changes.
+    fn refresh_terminal_activity(&mut self, cx: &mut Context<Self>) {
+        let activity = match self.terminal.read(cx).last_output_activity() {
+            Some(at)
+                if cx.background_executor().now().duration_since(at)
+                    < TERMINAL_ACTIVITY_IDLE_DELAY =>
+            {
+                TerminalActivity::Active
+            }
+            _ => TerminalActivity::Idle,
+        };
+        if activity != self.terminal_activity {
+            self.terminal_activity = activity;
+            cx.notify();
+        }
     }
 
     /// Fixes the view's input policy at construction, without restricting producer output
@@ -1577,6 +1636,7 @@ fn subscribe_for_terminal_events(
                         }
                     }
                     cx.notify();
+                    terminal_view.refresh_terminal_activity(cx);
                     window.invalidate_character_coordinates();
                     cx.emit(Event::Wakeup);
                     cx.emit(ItemEvent::UpdateTab);
@@ -1916,6 +1976,7 @@ impl Item for TerminalView {
             let terminal = self.terminal().read(cx);
             let title = terminal.title(false);
             let pid = terminal.pid_getter()?.fallback_pid();
+            let activity = self.terminal_activity_description();
 
             move |_, _| {
                 v_flex()
@@ -1924,6 +1985,11 @@ impl Item for TerminalView {
                     .child(h_flex().flex_grow_1().child(Divider::horizontal()))
                     .child(
                         Label::new(format!("Process ID (PID): {}", pid))
+                            .color(Color::Muted)
+                            .size(LabelSize::Small),
+                    )
+                    .child(
+                        Label::new(activity)
                             .color(Color::Muted)
                             .size(LabelSize::Small),
                     )
@@ -1967,6 +2033,10 @@ impl Item for TerminalView {
         };
 
         let self_handle = self.self_handle.clone();
+        let activity_indicator_color = match self.terminal_activity {
+            TerminalActivity::Active => Color::Success.color(cx).opacity(0.55),
+            TerminalActivity::Idle => Color::Warning.color(cx).opacity(0.55),
+        };
         h_flex()
             .gap_1()
             .group("term-tab-icon")
@@ -1977,6 +2047,17 @@ impl Item for TerminalView {
                 self_handle
                     .update(cx, |this, cx| this.rename_terminal(action, window, cx))
                     .ok();
+            })
+            .when(!self.read_only, |this| {
+                this.child(
+                    div()
+                        .id("terminal-activity-indicator")
+                        .flex_shrink_0()
+                        .size(rems_from_px(6_f32))
+                        .rounded_full()
+                        .bg(activity_indicator_color)
+                        .tooltip(Tooltip::text(self.terminal_activity_description())),
+                )
             })
             .child(
                 h_flex()
@@ -2732,6 +2813,74 @@ mod tests {
     const SHIFT_UP_ESCAPE: &[u8] = b"\x1b[1;2A";
 
     #[gpui::test]
+    async fn terminal_tab_activity_indicator_follows_program_output(cx: &mut TestAppContext) {
+        let (project, _workspace, window_handle) = init_test_with_window(cx).await;
+        let (_pane, terminal, terminal_view) =
+            add_display_only_terminal(&project, window_handle, true, false, cx);
+        let mut cx = VisualTestContext::from_window(window_handle.into(), cx);
+
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+            terminal_view.update(cx, |terminal_view, _| {
+                assert_eq!(
+                    terminal_view.terminal_activity,
+                    TerminalActivity::Idle,
+                    "a terminal without any output must report idle"
+                );
+            });
+        });
+        cx.run_until_parked();
+
+        cx.update(|_window, cx| {
+            terminal.update(cx, |terminal, cx| {
+                terminal.write_output(b"agent output\n", cx);
+            });
+        });
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+            terminal_view.update(cx, |terminal_view, _| {
+                assert_eq!(
+                    terminal_view.terminal_activity,
+                    TerminalActivity::Active,
+                    "fresh program output must mark the terminal active"
+                );
+            });
+        });
+
+        cx.executor()
+            .advance_clock(TERMINAL_ACTIVITY_IDLE_DELAY + Duration::from_secs(1));
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+            terminal_view.update(cx, |terminal_view, _| {
+                assert_eq!(
+                    terminal_view.terminal_activity,
+                    TerminalActivity::Idle,
+                    "the terminal must fall back to idle after the idle delay"
+                );
+            });
+        });
+
+        cx.update(|_window, cx| {
+            terminal.update(cx, |terminal, cx| {
+                terminal.write_output(b"more output\n", cx);
+            });
+        });
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+            terminal_view.update(cx, |terminal_view, _| {
+                assert_eq!(
+                    terminal_view.terminal_activity,
+                    TerminalActivity::Active,
+                    "output after an idle period must turn the indicator active again"
+                );
+            });
+        });
+
+        cx.run_until_parked();
+    }
+
+    #[gpui::test]
     async fn edit_menu_copy_and_paste_are_available_when_terminal_is_focused(
         cx: &mut TestAppContext,
     ) {
@@ -3352,7 +3501,8 @@ mod tests {
             })
             .expect("a destination workspace should be opened");
         assert!(destination_workspace.read_with(cx, |workspace, cx| {
-            workspace.project() == &project
+            workspace.is_auxiliary()
+                && workspace.project() == &project
                 && workspace.active_item(cx).is_some_and(|item| {
                     item.item_id() == original_item_id
                         && item.downcast::<TerminalView>().is_some_and(|view| {

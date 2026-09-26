@@ -4,7 +4,7 @@ use std::{
     path::{Component, Path, PathBuf},
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     thread,
     time::Duration,
@@ -12,7 +12,7 @@ use std::{
 
 use anyhow::{Context as _, Result, bail};
 use editor::Editor;
-use gpui::{App, AppContext as _, Context, Entity, Window};
+use gpui::{App, AppContext as _, Context, Entity, Global, Window};
 use percent_encoding::percent_decode_str;
 use project::{Project, ProjectItem as _, TaskSourceKind, trusted_worktrees::TrustedWorktrees};
 use task::{RevealStrategy, SaveStrategy, Shell, TaskContext, TaskTemplate};
@@ -21,37 +21,62 @@ use terminal_view::{
     terminal_panel::TerminalPanel,
 };
 use util::ResultExt as _;
-use workspace::Workspace;
+use workspace::{Toast, Workspace, notifications::NotificationId};
 use zed_actions::preview::web::{OpenPreview, StopPreview};
 
 const MAX_REQUEST_BYTES: usize = 16 * 1024;
 const RELOAD_PATH: &str = "/.zed-live-preview/reload";
-const RELOAD_SCRIPT: &str = r#"<script>(()=>{let v="";const poll=()=>{const q=new URLSearchParams();q.append('p',location.pathname);performance.getEntriesByType('resource').slice(0,63).forEach(e=>{const u=new URL(e.name,location.href);if(u.origin===location.origin)q.append('p',u.pathname)});fetch('/.zed-live-preview/reload?'+q,{cache:'no-store'}).then(r=>r.text()).then(n=>{if(v&&v!==n)location.reload();v=n}).catch(()=>{}).finally(()=>setTimeout(poll,700))};poll()})()</script>"#;
+const EVENTS_PATH: &str = "/.zed-live-preview/events";
+const MAX_CONCURRENT_CONNECTIONS: usize = 64;
+const RELOAD_POLL_INTERVAL: Duration = Duration::from_millis(250);
+// The same script is embedded in remote_preview_server.py for SSH previews;
+// keep both copies byte-identical.
+const RELOAD_SCRIPT: &str = r#"<script>(()=>{const base='/.zed-live-preview';const declare=()=>{const q=new URLSearchParams();q.append('p',location.pathname);performance.getEntriesByType('resource').slice(0,63).forEach(e=>{const u=new URL(e.name,location.href);if(u.origin===location.origin)q.append('p',u.pathname)});return q.toString()};const reload=()=>location.reload();if(typeof EventSource!=='function'){let seen='';const poll=()=>{fetch(base+'/reload?'+declare(),{cache:'no-store'}).then(r=>r.text()).then(next=>{if(seen&&seen!==next)reload();seen=next}).catch(()=>{}).finally(()=>setTimeout(poll,1000))};poll();return}let stream=null;let declared='';const connect=()=>{declared=declare();const next=new EventSource(base+'/events?'+declared);next.onmessage=e=>{if(e.data==='reload')reload()};next.onerror=()=>{if(next.readyState===EventSource.CLOSED){next.close();setTimeout(connect,1000)}};if(stream)stream.close();stream=next};const refresh=setInterval(()=>{if(stream&&stream.readyState===EventSource.OPEN&&declare()!==declared)connect()},2000);addEventListener('pagehide',()=>{clearInterval(refresh);if(stream)stream.close()});connect()})()</script>"#;
+
+pub struct GlobalPreviewState(pub Entity<PreviewState>);
+
+impl Global for GlobalPreviewState {}
+
+pub fn preview_state(cx: &App) -> Option<Entity<PreviewState>> {
+    cx.try_global::<GlobalPreviewState>()
+        .map(|state| state.0.clone())
+}
 
 pub fn init(cx: &mut App) {
-    cx.observe_new(|workspace: &mut Workspace, window, cx| {
-        let Some(_window) = window else {
-            return;
-        };
-        let state = cx.new(|_| PreviewState::default());
-        workspace.register_action({
+    let state = cx.new(|_| PreviewState::default());
+    cx.observe_new({
+        let state = state.clone();
+        move |workspace: &mut Workspace, window, _cx| {
+            let Some(_window) = window else {
+                return;
+            };
             let state = state.clone();
-            move |workspace, _: &OpenPreview, window, cx| {
-                open_preview(workspace, state.clone(), window, cx)
-            }
-        });
-        workspace.register_action(move |workspace, _: &StopPreview, _, cx| {
-            stop_preview(workspace, state.clone(), cx)
-        });
+            workspace.register_action({
+                let state = state.clone();
+                move |workspace, _: &OpenPreview, window, cx| {
+                    open_preview(workspace, state.clone(), window, cx)
+                }
+            });
+            workspace.register_action(move |workspace, _: &StopPreview, _, cx| {
+                stop_preview(workspace, state.clone(), cx)
+            });
+        }
     })
     .detach();
+    cx.set_global(GlobalPreviewState(state));
 }
 
 #[derive(Default)]
-struct PreviewState {
+pub struct PreviewState {
     local_server: Option<LocalServer>,
     remote_port: Option<u16>,
     remote_task_id: Option<task::TaskId>,
+}
+
+impl PreviewState {
+    pub fn is_active(&self) -> bool {
+        self.local_server.is_some() || self.remote_port.is_some()
+    }
 }
 
 struct LocalServer {
@@ -296,10 +321,17 @@ fn stop_preview(
     cx: &mut Context<Workspace>,
 ) {
     let project = workspace.project().clone();
-    let (remote_port, remote_task_id) = state.update(cx, |state, _| {
-        state.local_server = None;
-        (state.remote_port.take(), state.remote_task_id.take())
+    let (stopped_local, remote_port, remote_task_id) = state.update(cx, |state, _| {
+        (
+            state.local_server.take().is_some(),
+            state.remote_port.take(),
+            state.remote_task_id.take(),
+        )
     });
+    let stopped_remote = remote_port.is_some() || remote_task_id.is_some();
+    if !stopped_local && !stopped_remote {
+        return;
+    }
     if let Some(panel) = workspace.panel::<TerminalPanel>(cx) {
         if let Some(remote_port) = remote_port {
             panel
@@ -311,9 +343,15 @@ fn stop_preview(
             panel.update(cx, |panel, cx| panel.stop_task(&remote_task_id, cx));
         }
     }
-    if project.read(cx).is_via_remote_server() {
-        workspace.show_error("已停止远端网页预览和 SSH 端口转发。", cx);
-    }
+    let message = if stopped_remote || project.read(cx).is_via_remote_server() {
+        "已停止远端网页预览和 SSH 端口转发。"
+    } else {
+        "已停止网页实时预览。"
+    };
+    workspace.show_toast(
+        Toast::new(NotificationId::unique::<PreviewState>(), message),
+        cx,
+    );
 }
 
 impl LocalServer {
@@ -343,11 +381,41 @@ impl LocalServer {
 }
 
 fn run_server(listener: TcpListener, root: PathBuf, stop: Arc<AtomicBool>) -> Result<()> {
+    // Each connection gets its own thread: a browser keeps speculative and
+    // long-lived event-stream connections open, and serializing them would
+    // stall every other request behind an idle socket.
+    let live_connections = Arc::new(AtomicUsize::new(0));
     while !stop.load(Ordering::Acquire) {
         match listener.accept() {
-            Ok((stream, _)) => {
-                if let Err(error) = serve_connection(stream, &root) {
-                    log::debug!("网页预览请求失败：{error:#}");
+            Ok((mut stream, _)) => {
+                if live_connections.load(Ordering::Acquire) >= MAX_CONCURRENT_CONNECTIONS {
+                    if let Err(error) = write_response(
+                        &mut stream,
+                        503,
+                        "text/plain; charset=utf-8",
+                        b"Too Many Connections",
+                        false,
+                    ) {
+                        log::debug!("网页预览拒绝连接失败：{error:#}");
+                    }
+                    continue;
+                }
+                live_connections.fetch_add(1, Ordering::AcqRel);
+                let connection_count = live_connections.clone();
+                let root = root.clone();
+                let stop = stop.clone();
+                let spawned = thread::Builder::new()
+                    .name("web-preview-conn".into())
+                    .stack_size(256 * 1024)
+                    .spawn(move || {
+                        if let Err(error) = serve_connection(stream, &root, &stop) {
+                            log::debug!("网页预览请求失败：{error:#}");
+                        }
+                        connection_count.fetch_sub(1, Ordering::AcqRel);
+                    });
+                if let Err(error) = spawned {
+                    live_connections.fetch_sub(1, Ordering::AcqRel);
+                    return Err(error.into());
                 }
             }
             Err(error) if error.kind() == ErrorKind::WouldBlock => {
@@ -359,7 +427,7 @@ fn run_server(listener: TcpListener, root: PathBuf, stop: Arc<AtomicBool>) -> Re
     Ok(())
 }
 
-fn serve_connection(mut stream: TcpStream, root: &Path) -> Result<()> {
+fn serve_connection(mut stream: TcpStream, root: &Path, stop: &AtomicBool) -> Result<()> {
     stream.set_read_timeout(Some(Duration::from_secs(2)))?;
     stream.set_write_timeout(Some(Duration::from_secs(5)))?;
     let mut request = [0_u8; MAX_REQUEST_BYTES];
@@ -379,8 +447,14 @@ fn serve_connection(mut stream: TcpStream, root: &Path) -> Result<()> {
         );
     }
     let path = target.split('?').next().unwrap_or(target);
+    if path == EVENTS_PATH {
+        if method == "HEAD" {
+            return write_response(&mut stream, 200, "text/event-stream", b"", true);
+        }
+        return serve_event_stream(&mut stream, root, target, stop);
+    }
     if path == RELOAD_PATH {
-        let revision = resource_revision(root, target)?;
+        let revision = watched_revision(&watched_paths(root, target)?);
         return write_response(
             &mut stream,
             200,
@@ -422,37 +496,70 @@ fn serve_connection(mut stream: TcpStream, root: &Path) -> Result<()> {
     write_response(&mut stream, 200, content_type, &body, method == "HEAD")
 }
 
-fn resource_revision(root: &Path, target: &str) -> Result<String> {
-    let canonical_root = std::fs::canonicalize(root)?;
-    let mut latest = 0_u128;
-    if let Some(query) = target.split_once('?').map(|(_, query)| query) {
-        for encoded_path in query
-            .split('&')
-            .filter_map(|part| part.strip_prefix("p="))
-            .take(64)
-        {
-            let encoded_path = encoded_path.replace('+', " ");
-            let decoded = percent_decode_str(&encoded_path)
-                .decode_utf8()
-                .context("资源路径不是 UTF-8")?;
-            let relative = safe_relative_path(decoded.as_ref())?;
-            let canonical = match std::fs::canonicalize(root.join(relative)) {
-                Ok(path) => path,
-                Err(_) => continue,
-            };
-            if !canonical.starts_with(&canonical_root) {
-                continue;
-            }
-            if let Ok(modified) = canonical
-                .metadata()
-                .and_then(|metadata| metadata.modified())
-                && let Ok(duration) = modified.duration_since(std::time::UNIX_EPOCH)
-            {
-                latest = latest.max(duration.as_nanos());
-            }
+// Browsers throttle timers in background tabs, so the page cannot rely on its
+// own polling to notice saves; the server watches the declared resources and
+// pushes a reload over this stream instead.
+fn serve_event_stream(
+    stream: &mut TcpStream,
+    root: &Path,
+    target: &str,
+    stop: &AtomicBool,
+) -> Result<()> {
+    let watched = watched_paths(root, target)?;
+    write!(
+        stream,
+        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-store\r\nConnection: close\r\nX-Accel-Buffering: no\r\n\r\nretry: 1000\n\n"
+    )?;
+    stream.flush()?;
+    let mut revision = watched_revision(&watched);
+    while !stop.load(Ordering::Acquire) {
+        thread::sleep(RELOAD_POLL_INTERVAL);
+        let current = watched_revision(&watched);
+        if current != revision {
+            revision = current;
+            stream.write_all(b"data: reload\n\n")?;
+            stream.flush()?;
         }
     }
-    Ok(latest.to_string())
+    Ok(())
+}
+
+fn watched_paths(root: &Path, target: &str) -> Result<Vec<PathBuf>> {
+    let canonical_root = std::fs::canonicalize(root)?;
+    let mut watched = Vec::new();
+    let Some(query) = target.split_once('?').map(|(_, query)| query) else {
+        return Ok(watched);
+    };
+    for encoded_path in query
+        .split('&')
+        .filter_map(|part| part.strip_prefix("p="))
+        .take(64)
+    {
+        let encoded_path = encoded_path.replace('+', " ");
+        let decoded = percent_decode_str(&encoded_path)
+            .decode_utf8()
+            .context("资源路径不是 UTF-8")?;
+        let relative = safe_relative_path(decoded.as_ref())?;
+        let Ok(canonical) = std::fs::canonicalize(root.join(relative)) else {
+            continue;
+        };
+        if canonical.starts_with(&canonical_root) {
+            watched.push(canonical);
+        }
+    }
+    Ok(watched)
+}
+
+fn watched_revision(paths: &[PathBuf]) -> String {
+    let mut latest = 0_u128;
+    for path in paths {
+        if let Ok(modified) = path.metadata().and_then(|metadata| metadata.modified())
+            && let Ok(duration) = modified.duration_since(std::time::UNIX_EPOCH)
+        {
+            latest = latest.max(duration.as_nanos());
+        }
+    }
+    latest.to_string()
 }
 
 fn safe_relative_path(path: &str) -> Result<PathBuf> {
@@ -487,6 +594,7 @@ fn write_response(
         403 => "Forbidden",
         404 => "Not Found",
         405 => "Method Not Allowed",
+        503 => "Service Unavailable",
         _ => "Error",
     };
     write!(
@@ -564,6 +672,38 @@ fn is_html_path(path: &Path) -> bool {
 mod tests {
     use super::*;
 
+    fn test_project(name: &str) -> tempfile::TempDir {
+        tempfile::Builder::new()
+            .prefix(&format!("zed-web-preview-{name}-"))
+            .tempdir()
+            .expect("test project dir")
+    }
+
+    fn spawn_test_server(root: &Path) -> (std::net::SocketAddr, Arc<AtomicBool>) {
+        let listener =
+            TcpListener::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)).expect("test listener");
+        listener.set_nonblocking(true).expect("test listener mode");
+        let addr = listener.local_addr().expect("test listener addr");
+        let stop = Arc::new(AtomicBool::new(false));
+        let server_stop = stop.clone();
+        let root = root.to_path_buf();
+        thread::spawn(move || {
+            if let Err(error) = run_server(listener, root, server_stop) {
+                panic!("test server failed: {error:#}");
+            }
+        });
+        (addr, stop)
+    }
+
+    fn read_until(stream: &mut TcpStream, buffer: &mut Vec<u8>, needle: &[u8]) {
+        let mut chunk = [0_u8; 1024];
+        while !buffer.windows(needle.len()).any(|window| window == needle) {
+            let count = stream.read(&mut chunk).expect("read from stream");
+            assert!(count > 0, "stream closed before {needle:?}");
+            buffer.extend_from_slice(&chunk[..count]);
+        }
+    }
+
     #[test]
     fn rejects_paths_outside_root() {
         assert!(safe_relative_path("/../secret").is_err());
@@ -619,5 +759,71 @@ mod tests {
             result.find(RELOAD_SCRIPT).expect("reload script")
                 < result.find("</body>").expect("body end")
         );
+    }
+
+    #[test]
+    fn serves_requests_while_another_connection_is_idle() {
+        let root = test_project("idle-connection");
+        std::fs::write(
+            root.path().join("index.html"),
+            b"<html><body>hi</body></html>",
+        )
+        .expect("write index.html");
+        let (addr, stop) = spawn_test_server(root.path());
+
+        // Browsers open speculative connections that stay idle until a request
+        // is written into them; they must not stall unrelated requests.
+        let _idle = TcpStream::connect(addr).expect("idle connection");
+        let mut client = TcpStream::connect(addr).expect("client connection");
+        client
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .expect("client read timeout");
+        client
+            .write_all(b"GET /index.html HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+            .expect("write request");
+        let mut response = Vec::new();
+        client.read_to_end(&mut response).expect("read response");
+        let response = String::from_utf8_lossy(&response);
+        assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
+        assert!(response.contains(RELOAD_SCRIPT), "{response}");
+
+        stop.store(true, Ordering::Release);
+    }
+
+    #[test]
+    fn pushes_reload_when_watched_file_changes() {
+        let root = test_project("event-stream");
+        std::fs::write(
+            root.path().join("index.html"),
+            b"<html><body>one</body></html>",
+        )
+        .expect("write index.html");
+        let (addr, stop) = spawn_test_server(root.path());
+
+        let mut stream = TcpStream::connect(addr).expect("event stream connection");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .expect("event stream read timeout");
+        stream
+            .write_all(
+                format!("GET {EVENTS_PATH}?p=%2Findex.html HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+                    .as_bytes(),
+            )
+            .expect("write event stream request");
+        let mut response = Vec::new();
+        read_until(&mut stream, &mut response, b"retry: 1000\n\n");
+        assert!(
+            String::from_utf8_lossy(&response).contains("text/event-stream"),
+            "{response:?}"
+        );
+
+        std::fs::write(
+            root.path().join("index.html"),
+            b"<html><body>two</body></html>",
+        )
+        .expect("rewrite index.html");
+        read_until(&mut stream, &mut response, b"data: reload\n\n");
+
+        stop.store(true, Ordering::Release);
     }
 }
