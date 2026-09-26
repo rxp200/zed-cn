@@ -1,3 +1,6 @@
+pub mod file_transfer;
+pub mod system_monitor;
+
 use auto_update::DismissMessage;
 use editor::Editor;
 use extension_host::{ExtensionOperation, ExtensionStore};
@@ -94,7 +97,47 @@ impl ActivityIndicator {
         cx: &mut Context<Workspace>,
     ) -> Entity<ActivityIndicator> {
         let project = workspace.project().clone();
+        if let Some(remote_client) = project.read(cx).remote_client() {
+            cx.subscribe(&remote_client, |workspace, remote_client, event, cx| {
+                if matches!(event, remote::RemoteClientEvent::Reconnected) {
+                    let project_name = workspace
+                        .project()
+                        .read(cx)
+                        .worktree_root_names(cx)
+                        .collect::<Vec<_>>()
+                        .join("、");
+                    let recovery = if remote_client.read(cx).was_manual_reconnect() {
+                        "重连成功"
+                    } else {
+                        "断联后自动重连成功"
+                    };
+                    let toast = notifications::status_toast::StatusToast::new(
+                        format!(
+                            "{}项目{recovery}",
+                            if project_name.is_empty() {
+                                "远程"
+                            } else {
+                                &project_name
+                            }
+                        ),
+                        cx,
+                        |this, _| {
+                            this.icon(
+                                Icon::new(IconName::Check)
+                                    .size(IconSize::Small)
+                                    .color(Color::Success),
+                            )
+                        },
+                    );
+                    workspace.toggle_status_toast(toast, cx);
+                }
+            })
+            .detach();
+        }
         let this = cx.new(|cx| {
+            if let Some(remote_client) = project.read(cx).remote_client() {
+                cx.observe(&remote_client, |_, _, cx| cx.notify()).detach();
+            }
             let fs = project.read(cx).fs().clone();
             let mut job_events = fs.subscribe_to_jobs();
             cx.spawn(async move |this, cx| {
@@ -383,6 +426,38 @@ impl ActivityIndicator {
     }
 
     fn content_to_render(&mut self, cx: &mut Context<Self>) -> Option<Content> {
+        if let Some(remote_client) = self.project.read(cx).remote_client() {
+            let remote_client = remote_client.read(cx);
+            let message = match remote_client.connection_state() {
+                remote::ConnectionState::HeartbeatMissed => {
+                    Some("连接无响应，正在检测网络；确认断联后将自动重连…".to_string())
+                }
+                remote::ConnectionState::Reconnecting => Some(
+                    remote_client
+                        .reconnect_status()
+                        .unwrap_or("正在自动重连…")
+                        .to_string(),
+                ),
+                remote::ConnectionState::Disconnected => {
+                    Some("远程连接已断开，自动恢复未成功；请重新打开远程项目".to_string())
+                }
+                _ => None,
+            };
+            if let Some(message) = message {
+                return Some(Content {
+                    icon: if remote_client.connection_state()
+                        == remote::ConnectionState::Disconnected
+                    {
+                        ActivityIcon::Icon(IconName::Warning)
+                    } else {
+                        ActivityIcon::LoadingSpinner
+                    },
+                    message,
+                    on_click: None,
+                    tooltip_message: None,
+                });
+            }
+        }
         if let Some(content) = self.primary_content(cx) {
             return Some(content);
         }
@@ -718,8 +793,10 @@ impl ActivityIndicator {
         }
         Some(Content {
             icon: ActivityIcon::Icon(IconName::Info),
-            message: "Partial file index".to_string(),
-            tooltip_message: Some("Directories outside of git repositories and deeper than the `file_scan_depth` setting will be indexed on demand.".to_string()),
+            message: "部分文件按需索引".to_string(),
+            tooltip_message: Some(
+                "Git 仓库之外、且深度超过 `file_scan_depth` 设置值的目录将按需索引。".to_string(),
+            ),
             on_click: Some(Arc::new(|this, _, cx| {
                 this.deferred_scan_message = DeferredScanMessage::Dismissed;
                 cx.notify();

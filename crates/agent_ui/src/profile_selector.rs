@@ -181,11 +181,11 @@ impl Render for ProfileSelector {
         }
 
         if !self.provider.profiles_supported(cx) {
-            return Button::new("tools-not-supported-button", "Tools Unsupported")
+            return Button::new("tools-not-supported-button", "不支持的工具")
                 .disabled(true)
                 .label_size(LabelSize::Small)
                 .color(Color::Muted)
-                .tooltip(Tooltip::text("This model does not support tools."))
+                .tooltip(Tooltip::text("此模型不支持工具。"))
                 .into_any_element();
         }
 
@@ -231,7 +231,7 @@ impl Render for ProfileSelector {
                     .gap_1()
                     .child(
                         container()
-                            .child(Label::new("Change Profile"))
+                            .child(Label::new("更改配置文件"))
                             .child(KeyBinding::for_action(&ToggleProfileSelector, cx)),
                     )
                     .child(
@@ -239,7 +239,7 @@ impl Render for ProfileSelector {
                             .pt_1()
                             .border_t_1()
                             .border_color(cx.theme().colors().border_variant)
-                            .child(Label::new("Cycle Through Profiles"))
+                            .child(Label::new("循环切换配置文件"))
                             .child(KeyBinding::for_action(&CycleModeSelector, cx)),
                     )
                     .into_any()
@@ -486,9 +486,9 @@ impl PickerDelegate for ProfilePickerDelegate {
 
     fn no_matches_text(&self, _window: &mut Window, _cx: &mut App) -> Option<SharedString> {
         let text = if self.candidates.is_empty() {
-            "No profiles.".into()
+            "没有配置文件。".into()
         } else {
-            "No profiles match your search.".into()
+            "没有与你搜索匹配的配置文件。".into()
         };
         Some(text)
     }
@@ -752,8 +752,7 @@ impl PickerDelegate for ProfilePickerDelegate {
                                                 .color(Color::Warning),
                                         )
                                         .child(
-                                            Label::new("Disabled in Restricted Mode")
-                                                .size(LabelSize::Small),
+                                            Label::new("在受限模式下已禁用").size(LabelSize::Small),
                                         ),
                                 )
                                 .children(forbidden_tools.iter().map(|tool| {
@@ -790,7 +789,7 @@ impl PickerDelegate for ProfilePickerDelegate {
                         .border_color(cx.theme().colors().border_variant)
                         .p_1p5()
                         .child(
-                            Button::new("configure", "Configure")
+                            Button::new("configure", "配置")
                                 .full_width()
                                 .style(ButtonStyle::Outlined)
                                 .key_binding(
@@ -817,7 +816,7 @@ impl PickerDelegate for ProfilePickerDelegate {
                             .border_color(cx.theme().colors().border_variant)
                             .p_1p5()
                             .child(
-                                Button::new("restricted-mode", "Restricted Mode")
+                                Button::new("restricted-mode", "受限模式")
                                     .full_width()
                                     .style(ButtonStyle::Tinted(TintColor::Warning))
                                     .color(Color::Warning)
@@ -854,7 +853,7 @@ mod tests {
         let candidates = vec![
             ProfileCandidate {
                 id: AgentProfileId("write".into()),
-                name: SharedString::from("Write"),
+                name: SharedString::from("编写"),
                 is_builtin: true,
             },
             ProfileCandidate {
@@ -881,7 +880,7 @@ mod tests {
     fn fuzzy_filter_returns_no_results_and_keeps_configure(cx: &mut TestAppContext) {
         let candidates = vec![ProfileCandidate {
             id: AgentProfileId("write".into()),
-            name: SharedString::from("Write"),
+            name: SharedString::from("编写"),
             is_builtin: true,
         }];
 
@@ -913,12 +912,12 @@ mod tests {
         let candidates = vec![
             ProfileCandidate {
                 id: AgentProfileId("write".into()),
-                name: SharedString::from("Write"),
+                name: SharedString::from("编写"),
                 is_builtin: true,
             },
             ProfileCandidate {
                 id: AgentProfileId("ask".into()),
-                name: SharedString::from("Ask"),
+                name: SharedString::from("询问"),
                 is_builtin: true,
             },
         ];

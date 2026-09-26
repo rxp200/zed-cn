@@ -929,6 +929,12 @@ pub(super) fn make_content(term: &Term<ZedListener>, last_content: &Content) -> 
     }
 }
 
+pub(super) fn clone_active_grid(source: &AlacrittyTermLock, target: &AlacrittyTermLock) {
+    let source = source.lock_unfair();
+    let mut target = target.lock_unfair();
+    *target.grid_mut() = source.grid().clone();
+}
+
 pub(super) fn content_text(term: &Term<ZedListener>) -> String {
     let start = AlacPoint::new(term.topmost_line(), Column(0));
     let end = AlacPoint::new(term.bottommost_line(), term.last_column());

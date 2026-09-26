@@ -11,7 +11,7 @@ use futures::{
     channel::mpsc::{Sender, UnboundedReceiver, UnboundedSender},
     select_biased,
 };
-use gpui::{App, AppContext as _, AsyncApp, Task};
+use gpui::{App, AppContext as _, AsyncApp, FutureExt as _, Task};
 use parking_lot::Mutex;
 use paths::remote_server_dir_relative;
 use release_channel::{AppVersion, ReleaseChannel};
@@ -38,6 +38,105 @@ use util::{
 
 /// How long to wait for SSH to connect when no askpass prompt has opened.
 const SSH_CONNECTION_PROMPT_TIMEOUT: Duration = Duration::from_secs(17);
+const REMOTE_SERVER_DOWNLOAD_IDLE_TIMEOUT_SECS: u64 = 30;
+const REMOTE_SERVER_DOWNLOAD_TOTAL_TIMEOUT_SECS: u64 = 300;
+const REMOTE_SERVER_DOWNLOAD_TOTAL_TIMEOUT: Duration =
+    Duration::from_secs(REMOTE_SERVER_DOWNLOAD_TOTAL_TIMEOUT_SECS);
+const REMOTE_SERVER_UPLOAD_TOTAL_TIMEOUT: Duration = Duration::from_secs(300);
+const REMOTE_SERVER_INSTALL_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// How long to wait for a remote shell/platform detection command to finish
+/// before giving up.
+///
+/// The SSH connection itself may be healthy ("ssh" works from a terminal)
+/// while an individual session spawned for detection stalls indefinitely
+/// (e.g. a wedged ControlMaster session or a remote login shell that blocks
+/// on startup). Without this guard the connection modal would hang forever
+/// at the "detecting remote shell" step instead of failing with an error.
+const REMOTE_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
+const CUSTOM_SERVER_DIGEST_TIMEOUT: Duration = Duration::from_secs(120);
+
+fn display_remote_command(program: &str, args: &[impl AsRef<str>]) -> String {
+    let mut display = program.to_owned();
+    for argument in args.iter().take(3) {
+        let argument = argument.as_ref();
+        let safe_argument = if argument.starts_with("http://")
+            || argument.starts_with("https://")
+            || argument.len() > 80
+            || argument.contains('\n')
+            || argument.contains("token")
+            || argument.contains("password")
+            || argument.contains("secret")
+        {
+            "…"
+        } else {
+            argument
+        };
+        display.push(' ');
+        display.push_str(safe_argument);
+    }
+    if args.len() > 3 {
+        display.push_str(" …");
+    }
+    display
+}
+
+fn connection_log_text(output: &str) -> String {
+    let text = output
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or("")
+        .trim();
+    let first_token = text.split_whitespace().next().unwrap_or_default();
+    if first_token.len() == 64 && first_token.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return "SHA-256 已返回".to_owned();
+    }
+    let mut text = text
+        .chars()
+        .filter(|character| !character.is_control())
+        .take(120)
+        .collect::<String>();
+    if output.trim().chars().count() > 120 {
+        text.push('…');
+    }
+    text
+}
+
+fn verify_custom_server_digest(output: &str, expected: &str) -> Result<bool> {
+    let output = output.trim();
+    if output == "MISSING" {
+        return Ok(false);
+    }
+    let actual = output.split_whitespace().next().unwrap_or_default();
+    anyhow::ensure!(
+        actual.len() == 64 && actual.eq_ignore_ascii_case(expected),
+        "已有 Zed CN 远程服务与对应发布产物不一致，已停止连接；请先关闭使用该服务的工作区再处理该文件"
+    );
+    Ok(true)
+}
+
+#[test]
+fn connection_log_summarizes_digest_without_exposing_it() {
+    let digest = "a".repeat(64);
+    assert_eq!(
+        connection_log_text(&format!("{digest}  .zed_server/server")),
+        "SHA-256 已返回"
+    );
+}
+
+#[test]
+fn custom_server_reuse_requires_matching_digest() {
+    let digest = "a".repeat(64);
+    assert_eq!(
+        verify_custom_server_digest("MISSING", &digest).unwrap(),
+        false
+    );
+    assert!(verify_custom_server_digest(&format!("{digest}  server\n"), &digest).unwrap());
+    assert!(verify_custom_server_digest(&digest.to_uppercase(), &digest).unwrap());
+    for invalid in ["", "1.19.2", "MISSING extra", &"b".repeat(64)] {
+        assert!(verify_custom_server_digest(invalid, &digest).is_err());
+    }
+}
 
 pub(crate) struct SshRemoteConnection {
     socket: SshSocket,
@@ -133,6 +232,15 @@ fn sftp_put_command(source_path: &str, destination_path: &str) -> String {
     format!("put {source} {destination}\n")
 }
 
+fn reverse_forward_spec(remote_port: u16, host: &str, local_port: u16) -> String {
+    format!(
+        "localhost:{}:{}:{}",
+        remote_port,
+        bracket_ipv6(host),
+        local_port
+    )
+}
+
 #[derive(Debug, Default, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct SshConnectionOptions {
     pub host: SshConnectionHost,
@@ -145,6 +253,8 @@ pub struct SshConnectionOptions {
 
     pub nickname: Option<String>,
     pub upload_binary_over_ssh: bool,
+    #[serde(default)]
+    pub remote_server_source: settings::RemoteServerSource,
 }
 
 impl From<settings::SshConnection> for SshConnectionOptions {
@@ -156,7 +266,9 @@ impl From<settings::SshConnection> for SshConnectionOptions {
             password: None,
             args: Some(val.args),
             nickname: val.nickname,
-            upload_binary_over_ssh: val.upload_binary_over_ssh.unwrap_or_default(),
+            upload_binary_over_ssh: val.remote_server_source.is_some()
+                || val.upload_binary_over_ssh.unwrap_or_default(),
+            remote_server_source: val.remote_server_source.unwrap_or_default(),
             port_forwards: val.port_forwards,
             connection_timeout: val.connection_timeout,
         }
@@ -165,6 +277,7 @@ impl From<settings::SshConnection> for SshConnectionOptions {
 
 struct SshSocket {
     connection_options: SshConnectionOptions,
+    delegate: Arc<dyn RemoteClientDelegate>,
     #[cfg(not(windows))]
     socket_path: std::path::PathBuf,
     /// Extra environment variables needed for the ssh process
@@ -383,12 +496,13 @@ impl RemoteConnection for SshRemoteConnection {
         forwards: Vec<(u16, String, u16)>,
     ) -> Result<CommandTemplate> {
         let Self { socket, .. } = self;
-        let mut args = socket.ssh_command_options();
+        let mut args = socket.ssh_command_options_without_port_forwards();
+        args.extend(["-o".into(), "ExitOnForwardFailure=yes".into()]);
         args.push("-N".into());
         for (local_port, host, remote_port) in forwards {
             args.push("-L".into());
             args.push(format!(
-                "{}:{}:{}",
+                "127.0.0.1:{}:{}:{}",
                 local_port,
                 bracket_ipv6(&host),
                 remote_port
@@ -398,7 +512,27 @@ impl RemoteConnection for SshRemoteConnection {
         Ok(CommandTemplate {
             program: "ssh".into(),
             args,
-            env: Default::default(),
+            env: socket.envs.clone(),
+        })
+    }
+
+    fn build_reverse_forward_ports_command(
+        &self,
+        forwards: Vec<(u16, String, u16)>,
+    ) -> Result<CommandTemplate> {
+        let Self { socket, .. } = self;
+        let mut args = socket.ssh_command_options_without_port_forwards();
+        args.extend(["-o".into(), "ExitOnForwardFailure=yes".into()]);
+        args.push("-N".into());
+        for (remote_port, host, local_port) in forwards {
+            args.push("-R".into());
+            args.push(reverse_forward_spec(remote_port, &host, local_port));
+        }
+        args.push(socket.connection_options.ssh_destination());
+        Ok(CommandTemplate {
+            program: "ssh".into(),
+            args,
+            env: socket.envs.clone(),
         })
     }
 
@@ -468,17 +602,27 @@ impl RemoteConnection for SshRemoteConnection {
         reconnect: bool,
         incoming_tx: UnboundedSender<Envelope>,
         outgoing_rx: UnboundedReceiver<Envelope>,
+        outgoing_progress: crate::protocol::OutgoingProgress,
         connection_activity_tx: Sender<()>,
         delegate: Arc<dyn RemoteClientDelegate>,
         cx: &mut AsyncApp,
     ) -> Task<Result<i32>> {
         const VARS: [&str; 3] = ["RUST_LOG", "RUST_BACKTRACE", "ZED_GENERATE_MINIDUMPS"];
-        delegate.set_status(Some("Starting proxy"), cx);
+        delegate.set_status(Some("正在启动远程开发服务"), cx);
 
         let Some(remote_binary_path) = self.remote_binary_path.clone() else {
             return Task::ready(Err(anyhow!("Remote binary path not set")));
         };
 
+        // Separate source sessions as well as binaries: a normal proxy launch replaces
+        // the server holding the same identifier.
+        let unique_identifier = if self.socket.connection_options.remote_server_source
+            == settings::RemoteServerSource::ZedCn
+        {
+            format!("cn-{unique_identifier}")
+        } else {
+            unique_identifier
+        };
         let mut ssh_command = if self.ssh_platform.os.is_windows() {
             // TODO: Set the `VARS` environment variables, we do not have `env` on windows
             // so this needs a different approach
@@ -532,9 +676,14 @@ impl RemoteConnection for SshRemoteConnection {
             ssh_proxy_process,
             incoming_tx,
             outgoing_rx,
+            outgoing_progress,
             connection_activity_tx,
             cx,
         )
+    }
+
+    fn restart_unresponsive_server_on_initial_connect(&self) -> bool {
+        self.socket.connection_options.remote_server_source == settings::RemoteServerSource::ZedCn
     }
 
     fn path_style(&self) -> PathStyle {
@@ -639,6 +788,9 @@ impl SshRemoteConnection {
         use askpass::AskPassResult;
 
         let destination = connection_options.ssh_destination();
+        let mut connection_options = connection_options;
+        let managed_key =
+            crate::managed_ssh_keys::apply_managed_identity(&mut connection_options, cx).await?;
 
         let temp_dir = tempfile::Builder::new()
             .prefix("zed-ssh-session")
@@ -652,9 +804,9 @@ impl SshRemoteConnection {
 
         #[cfg(not(windows))]
         let (socket, master_process_option) = if let Some(reused_path) = reused_socket {
-            delegate.set_status(Some("Connecting (reusing session)"), cx);
+            delegate.set_status(Some("正在复用已有 SSH 连接"), cx);
             log::info!("reusing existing ControlMaster, skipping authentication");
-            let socket = SshSocket::new(connection_options, reused_path).await?;
+            let socket = SshSocket::new(connection_options, delegate.clone(), reused_path).await?;
             (socket, None)
         } else {
             let askpass_delegate = askpass::AskPassDelegate::new_with_cancellation(cx, {
@@ -668,7 +820,7 @@ impl SshRemoteConnection {
                 askpass::AskPassSession::new(cx.background_executor().clone(), askpass_delegate)
                     .await?;
 
-            delegate.set_status(Some("Connecting"), cx);
+            delegate.set_status(Some("正在建立 SSH 连接"), cx);
 
             // Start the master SSH process, which does not do anything except
             // for establish the connection and keep it open, allowing other ssh
@@ -714,7 +866,7 @@ impl SshRemoteConnection {
                 anyhow::bail!(error_message);
             }
 
-            let socket = SshSocket::new(connection_options, socket_path).await?;
+            let socket = SshSocket::new(connection_options, delegate.clone(), socket_path).await?;
             drop(askpass);
             (socket, Some(master_process))
         };
@@ -732,7 +884,7 @@ impl SshRemoteConnection {
                 askpass::AskPassSession::new(cx.background_executor().clone(), askpass_delegate)
                     .await?;
 
-            delegate.set_status(Some("Connecting"), cx);
+            delegate.set_status(Some("正在建立 SSH 连接"), cx);
 
             let mut master_process = MasterProcess::new(
                 askpass.script_path().as_ref(),
@@ -776,6 +928,7 @@ impl SshRemoteConnection {
 
             let socket = SshSocket::new(
                 connection_options,
+                delegate.clone(),
                 askpass
                     .get_password()
                     .or_else(|| askpass::EncryptedPassword::try_from("").ok())
@@ -788,18 +941,31 @@ impl SshRemoteConnection {
             (socket, Some(master_process))
         };
 
-        let is_windows = socket.probe_is_windows().await;
+        delegate.set_status(Some("SSH 连接成功，正在检测远程操作系统"), cx);
+        let is_windows = socket.probe_is_windows(cx).await;
         log::info!("Remote is windows: {}", is_windows);
 
-        let ssh_shell = socket.shell(is_windows).await;
+        delegate.set_status(Some("正在检测远程 Shell"), cx);
+        let ssh_shell = socket.shell(is_windows, cx).await;
         log::info!("Remote shell discovered: {}", ssh_shell);
 
+        delegate.set_status(Some("正在检测远程 CPU 架构"), cx);
         let ssh_shell_kind = ShellKind::new(&ssh_shell, is_windows);
-        let ssh_platform = socket.platform(ssh_shell_kind, is_windows).await?;
+        let ssh_platform = socket.platform(ssh_shell_kind, is_windows, cx).await?;
         log::info!("Remote platform discovered: {:?}", ssh_platform);
 
-        let ssh_os_version = socket.os_version(ssh_platform.os, ssh_shell_kind).await;
+        delegate.set_status(Some("正在检测远程系统版本"), cx);
+        let ssh_os_version = socket.os_version(ssh_platform.os, ssh_shell_kind, cx).await;
         log::info!("Remote OS version discovered: {:?}", ssh_os_version);
+
+        if let Some(managed_key) = managed_key {
+            crate::managed_ssh_keys::mark_managed_ssh_key_used(&managed_key.key_id, cx).await?;
+        } else if delegate.should_create_managed_ssh_key() {
+            delegate.set_status(Some("正在创建并部署 Zed 专属 SSH 密钥"), cx);
+            socket
+                .create_and_deploy_managed_key(ssh_shell_kind, ssh_platform.os, cx)
+                .await?;
+        }
 
         let (ssh_path_style, ssh_default_system_shell) = match ssh_platform.os {
             RemoteOs::Windows => (PathStyle::Windows, ssh_shell.clone()),
@@ -826,6 +992,8 @@ impl SshRemoteConnection {
             this.ensure_server_binary(&delegate, release_channel, version, cx)
                 .await?,
         );
+        // Other clients can start an older server after any process snapshot, so
+        // connection setup must not prune installed server versions.
 
         Ok(this)
     }
@@ -837,42 +1005,71 @@ impl SshRemoteConnection {
         version: Version,
         cx: &mut AsyncApp,
     ) -> Result<Arc<RelPath>> {
-        let version_str = match release_channel {
-            ReleaseChannel::Dev => "build".to_string(),
-            _ => version.to_string(),
+        let custom_tag = if self.socket.connection_options.remote_server_source
+            == settings::RemoteServerSource::ZedCn
+        {
+            Some(
+                cx.update(|cx| release_channel::CustomReleaseTag::current(cx))
+                    .context("当前客户端没有有效的 Zed CN 正式发布标识，无法选择对应远程服务")?,
+            )
+        } else {
+            None
         };
-        let binary_name = format!(
-            "zed-remote-server-{}-{}{}",
-            release_channel.dev_name(),
-            version_str,
-            if self.ssh_platform.os.is_windows() {
-                ".exe"
-            } else {
-                ""
-            }
-        );
+        let version_str = super::remote_server_version(release_channel, &version);
+        let binary_name = if let Some(tag) = &custom_tag {
+            format!(
+                "zed-cn-remote-server-{tag}{}",
+                if self.ssh_platform.os.is_windows() {
+                    ".exe"
+                } else {
+                    ""
+                }
+            )
+        } else {
+            format!(
+                "zed-remote-server-{}-{}{}",
+                release_channel.dev_name(),
+                version_str,
+                if self.ssh_platform.os.is_windows() {
+                    ".exe"
+                } else {
+                    ""
+                }
+            )
+        };
         let dst_path =
             paths::remote_server_dir_relative().join(RelPath::from_unix_str(&binary_name).unwrap());
 
-        let binary_exists_on_server = self
-            .socket
-            .run_command(
-                self.ssh_shell_kind,
-                &dst_path.display(self.path_style()),
-                &["version"],
-                true,
-            )
-            .await
-            .is_ok();
+        let display_version = custom_tag.as_deref().unwrap_or(&version_str);
+        delegate.set_status(Some(&format!("正在检查远程开发服务 {display_version}")), cx);
+        delegate.append_connection_log("正在校验远程开发服务文件", cx);
+        let binary_exists_on_server = if let Some(tag) = &custom_tag {
+            self.verify_custom_server_binary(&dst_path, tag, delegate, cx)
+                .await?
+        } else {
+            self.socket
+                .run_command_with_timeout(
+                    self.ssh_shell_kind,
+                    &dst_path.display(self.path_style()),
+                    &["version"],
+                    true,
+                    REMOTE_COMMAND_TIMEOUT,
+                    cx,
+                )
+                .await
+                .is_ok()
+        };
 
         #[cfg(any(debug_assertions, feature = "build-remote-server-binary"))]
-        if let Some(remote_server_path) = super::build_remote_server_from_source(
-            &self.ssh_platform,
-            delegate.as_ref(),
-            binary_exists_on_server,
-            cx,
-        )
-        .await?
+        if custom_tag.is_none()
+            && release_channel == ReleaseChannel::Dev
+            && let Some(remote_server_path) = super::build_remote_server_from_source(
+                &self.ssh_platform,
+                delegate.as_ref(),
+                binary_exists_on_server,
+                cx,
+            )
+            .await?
         {
             let tmp_path = paths::remote_server_dir_relative().join(
                 RelPath::from_unix_str(&format!(
@@ -890,9 +1087,11 @@ impl SshRemoteConnection {
         }
 
         if binary_exists_on_server {
+            delegate.set_status(Some("已找到远程开发服务"), cx);
             return Ok(dst_path.into());
         }
 
+        delegate.set_status(Some("远程开发服务不存在，正在准备安装"), cx);
         let wanted_version = cx.update(|cx| match release_channel {
             ReleaseChannel::Nightly => Ok(None),
             ReleaseChannel::Dev => {
@@ -904,11 +1103,23 @@ impl SshRemoteConnection {
             _ => Ok(Some(AppVersion::global(cx))),
         })?;
 
+        // Keep the random local directory alive so concurrent installations cannot
+        // share upload/extraction paths, even when they originate in one process.
+        let install_attempt = tempfile::Builder::new().prefix("zed-install-").tempdir()?;
+        let install_id = install_attempt
+            .path()
+            .file_name()
+            .and_then(|name| name.to_str())
+            .context("invalid install identifier")?;
         let tmp_path_compressed = remote_server_dir_relative().join(
             RelPath::from_unix_str(&format!(
                 "{}-download-{}.{}",
                 binary_name,
-                std::process::id(),
+                if custom_tag.is_some() {
+                    install_id.to_owned()
+                } else {
+                    std::process::id().to_string()
+                },
                 if self.ssh_platform.os.is_windows() {
                     "zip"
                 } else {
@@ -917,49 +1128,112 @@ impl SshRemoteConnection {
             ))
             .unwrap(),
         );
-        if !self.socket.connection_options.upload_binary_over_ssh
-            && let Some(url) = delegate
+        let mut remote_download_error = None;
+        if custom_tag.is_none() && !self.socket.connection_options.upload_binary_over_ssh {
+            delegate.set_status(Some("正在获取远程开发服务下载地址"), cx);
+            match delegate
                 .get_download_url(
                     self.ssh_platform,
                     release_channel,
                     wanted_version.clone(),
                     cx,
                 )
-                .await?
-        {
-            match self
-                .download_binary_on_server(&url, &tmp_path_compressed, delegate, cx)
                 .await
             {
-                Ok(_) => {
-                    self.extract_server_binary(&dst_path, &tmp_path_compressed, delegate, cx)
+                Ok(Some(url)) => {
+                    match self
+                        .download_binary_on_server(&url, &tmp_path_compressed, delegate, cx)
                         .await
-                        .context("extracting server binary")?;
-                    return Ok(dst_path.into());
+                    {
+                        Ok(()) => {
+                            self.extract_server_binary(
+                                &dst_path,
+                                &tmp_path_compressed,
+                                delegate,
+                                cx,
+                            )
+                            .await
+                            .context("解压远程开发服务失败")?;
+                            return Ok(dst_path.into());
+                        }
+                        Err(error) => {
+                            log::warn!(
+                                "Failed to download remote server binary on host; falling back to a local download: {error:#}"
+                            );
+                            self.remove_remote_download(&tmp_path_compressed, cx).await;
+                            delegate.set_status(Some("远程主机下载失败，正在改用本地网络下载"), cx);
+                            remote_download_error = Some(error);
+                        }
+                    }
                 }
-                Err(e) => {
-                    log::error!(
-                        "Failed to download binary on server, attempting to download locally and then upload it the server: {e:#}",
-                    )
+                Ok(None) => {
+                    let error = anyhow!("没有可供远程主机使用的下载地址");
+                    delegate.set_status(Some("无法远程下载，正在改用本地下载"), cx);
+                    remote_download_error = Some(error);
+                }
+                Err(error) => {
+                    log::warn!("Failed to obtain a remote server download URL: {error:#}");
+                    delegate.set_status(Some("获取远程下载地址失败，正在改用本地下载"), cx);
+                    remote_download_error = Some(error);
                 }
             }
+        } else {
+            delegate.set_status(
+                Some("正在通过本机网络下载远程开发服务，完成后将经 SSH 上传"),
+                cx,
+            );
         }
 
-        let src_path = delegate
-            .download_server_binary_locally(
-                self.ssh_platform,
-                release_channel,
-                wanted_version.clone(),
-                cx,
-            )
-            .await
-            .context("downloading server binary locally")?;
+        let local_download = if let Some(tag) = &custom_tag {
+            delegate
+                .download_custom_server_binary(self.ssh_platform, tag.clone(), cx)
+                .await
+        } else {
+            delegate
+                .download_server_binary_locally(
+                    self.ssh_platform,
+                    release_channel,
+                    wanted_version.clone(),
+                    cx,
+                )
+                .await
+        };
+        let src_path = match (local_download, remote_download_error) {
+            (Ok(path), _) => path,
+            (Err(local_error), Some(remote_error)) => {
+                return Err(local_error).context(format!(
+                    "无法安装远程开发服务；远程主机下载失败：{remote_error:#}；本地下载也失败"
+                ));
+            }
+            (Err(local_error), None) => {
+                return Err(local_error).context("本地下载远程开发服务失败");
+            }
+        };
         self.upload_local_server_binary(&src_path, &tmp_path_compressed, delegate, cx)
             .await
-            .context("uploading server binary")?;
-        self.extract_server_binary(&dst_path, &tmp_path_compressed, delegate, cx)
-            .await
-            .context("extracting server binary")?;
+            .context("上传远程开发服务失败")?;
+        if let Some(tag) = &custom_tag {
+            let staged_path = remote_server_dir_relative().join(RelPath::from_unix_str(&format!(
+                "{binary_name}-{install_id}-staged"
+            ))?);
+            self.extract_server_binary(&staged_path, &tmp_path_compressed, delegate, cx)
+                .await
+                .context("解压远程开发服务失败")?;
+            let promotion = self
+                .promote_custom_server_binary(&staged_path, &dst_path, cx)
+                .await;
+            self.remove_remote_download(&staged_path, cx).await;
+            promotion?;
+            anyhow::ensure!(
+                self.verify_custom_server_binary(&dst_path, tag, delegate, cx)
+                    .await?,
+                "安装后未找到 Zed CN 远程服务，已停止连接"
+            );
+        } else {
+            self.extract_server_binary(&dst_path, &tmp_path_compressed, delegate, cx)
+                .await
+                .context("解压远程开发服务失败")?;
+        }
         Ok(dst_path.into())
     }
 
@@ -973,11 +1247,13 @@ impl SshRemoteConnection {
         if let Some(parent) = tmp_path.parent() {
             let res = self
                 .socket
-                .run_command(
+                .run_command_with_timeout(
                     self.ssh_shell_kind,
                     "mkdir",
                     &["-p", parent.display(self.path_style()).as_ref()],
                     true,
+                    REMOTE_COMMAND_TIMEOUT,
+                    cx,
                 )
                 .await;
             if !self.ssh_platform.os.is_windows() {
@@ -986,7 +1262,7 @@ impl SshRemoteConnection {
             }
         }
 
-        delegate.set_status(Some("Downloading remote development server on host"), cx);
+        delegate.set_status(Some("正在从远程主机下载远程开发服务"), cx);
 
         let connection_timeout = self
             .socket
@@ -994,10 +1270,13 @@ impl SshRemoteConnection {
             .connection_timeout
             .unwrap_or(10)
             .to_string();
+        let idle_timeout = REMOTE_SERVER_DOWNLOAD_IDLE_TIMEOUT_SECS.to_string();
+        let total_timeout = REMOTE_SERVER_DOWNLOAD_TOTAL_TIMEOUT_SECS.to_string();
+        let tmp_path = tmp_path.display(self.path_style());
 
         match self
             .socket
-            .run_command(
+            .run_command_with_timeout(
                 self.ssh_shell_kind,
                 "curl",
                 &[
@@ -1005,11 +1284,19 @@ impl SshRemoteConnection {
                     "-L",
                     "--connect-timeout",
                     &connection_timeout,
+                    "--speed-limit",
+                    "1024",
+                    "--speed-time",
+                    &idle_timeout,
+                    "--max-time",
+                    &total_timeout,
                     url,
                     "-o",
-                    &tmp_path.display(self.path_style()),
+                    &tmp_path,
                 ],
                 true,
+                REMOTE_SERVER_DOWNLOAD_TOTAL_TIMEOUT,
+                cx,
             )
             .await
         {
@@ -1017,7 +1304,14 @@ impl SshRemoteConnection {
             Err(e) => {
                 if self
                     .socket
-                    .run_command(self.ssh_shell_kind, "which", &["curl"], true)
+                    .run_command_with_timeout(
+                        self.ssh_shell_kind,
+                        "which",
+                        &["curl"],
+                        true,
+                        Duration::from_secs(10),
+                        cx,
+                    )
                     .await
                     .is_ok()
                 {
@@ -1027,19 +1321,23 @@ impl SshRemoteConnection {
                 log::info!("curl is not available, trying wget");
                 match self
                     .socket
-                    .run_command(
+                    .run_command_with_timeout(
                         self.ssh_shell_kind,
                         "wget",
                         &[
                             "--connect-timeout",
                             &connection_timeout,
+                            "--timeout",
+                            &idle_timeout,
                             "--tries",
                             "1",
                             url,
                             "-O",
-                            &tmp_path.display(self.path_style()),
+                            &tmp_path,
                         ],
                         true,
+                        REMOTE_SERVER_DOWNLOAD_TOTAL_TIMEOUT,
+                        cx,
                     )
                     .await
                 {
@@ -1047,7 +1345,14 @@ impl SshRemoteConnection {
                     Err(e) => {
                         if self
                             .socket
-                            .run_command(self.ssh_shell_kind, "which", &["wget"], true)
+                            .run_command_with_timeout(
+                                self.ssh_shell_kind,
+                                "which",
+                                &["wget"],
+                                true,
+                                Duration::from_secs(10),
+                                cx,
+                            )
                             .await
                             .is_ok()
                         {
@@ -1063,6 +1368,177 @@ impl SshRemoteConnection {
         Ok(())
     }
 
+    async fn promote_custom_server_binary(
+        &self,
+        staged: &RelPath,
+        destination: &RelPath,
+        cx: &mut AsyncApp,
+    ) -> Result<()> {
+        let staged = staged.display(self.path_style());
+        let destination = destination.display(self.path_style());
+        if self.ssh_platform.os.is_windows() {
+            let staged = ShellKind::Pwsh
+                .try_quote(&staged)
+                .context("shell quoting")?;
+            let destination = ShellKind::Pwsh
+                .try_quote(&destination)
+                .context("shell quoting")?;
+            let script = format!(
+                "$ErrorActionPreference='Stop'; try {{ [IO.File]::Move({staged}, {destination}) }} catch {{ if (-not (Test-Path -LiteralPath {destination} -PathType Leaf)) {{ throw }} }}"
+            );
+            self.socket
+                .run_command_with_timeout(
+                    self.ssh_shell_kind,
+                    "powershell",
+                    &["-NoProfile", "-NonInteractive", "-Command", &script],
+                    true,
+                    REMOTE_COMMAND_TIMEOUT,
+                    cx,
+                )
+                .await?;
+        } else {
+            self.socket
+                .run_command_with_timeout(
+                    self.ssh_shell_kind,
+                    "python3",
+                    &[
+                        "-c",
+                        include_str!("promote_custom_server.py"),
+                        &staged,
+                        &destination,
+                    ],
+                    true,
+                    REMOTE_COMMAND_TIMEOUT,
+                    cx,
+                )
+                .await
+                .context("安全安装 Zed CN 远程服务需要远端 python3，且目标文件系统须支持硬链接")?;
+        }
+        Ok(())
+    }
+
+    async fn verify_custom_server_binary(
+        &self,
+        path: &RelPath,
+        tag: &str,
+        delegate: &Arc<dyn RemoteClientDelegate>,
+        cx: &mut AsyncApp,
+    ) -> Result<bool> {
+        // Obtain trusted archive bytes through the exact-tag/source/checksum path
+        // before inspecting an installed executable; never execute it to identify it.
+        let archive = delegate
+            .download_custom_server_binary(self.ssh_platform, tag.to_owned(), cx)
+            .await?;
+        let windows = self.ssh_platform.os.is_windows();
+        let expected = cx
+            .background_spawn(async move {
+                use sha2::{Digest, Sha256};
+                let directory = tempfile::tempdir()?;
+                let file = fs::File::open(&archive).await?;
+                let mut reader: Box<dyn futures::AsyncRead + Unpin + Send> = if windows {
+                    util::archive::extract_zip(directory.path(), file).await?;
+                    Box::new(fs::File::open(directory.path().join("remote_server.exe")).await?)
+                } else {
+                    Box::new(async_compression::futures::bufread::GzipDecoder::new(
+                        futures::io::BufReader::new(file),
+                    ))
+                };
+                let mut hasher = Sha256::new();
+                let mut buffer = [0; 65536];
+                loop {
+                    let count = reader.read(&mut buffer).await?;
+                    if count == 0 {
+                        break;
+                    }
+                    hasher.update(&buffer[..count]);
+                }
+                anyhow::Ok(format!("{:x}", hasher.finalize()))
+            })
+            .await?;
+        let displayed = path.display(self.path_style());
+        let (command, script) = if windows {
+            let quoted = ShellKind::Pwsh
+                .try_quote(&displayed)
+                .context("shell quoting")?;
+            (
+                "powershell",
+                format!(
+                    "$ErrorActionPreference='Stop'; if (Test-Path -LiteralPath {quoted}) {{ (Get-FileHash -LiteralPath {quoted} -Algorithm SHA256).Hash }} else {{ 'MISSING' }}"
+                ),
+            )
+        } else {
+            let quoted = ShellKind::Posix
+                .try_quote(&displayed)
+                .context("shell quoting")?;
+            (
+                "sh",
+                format!(
+                    "if [ -e {quoted} ] || [ -L {quoted} ]; then if command -v sha256sum >/dev/null 2>&1; then sha256sum {quoted}; else shasum -a 256 {quoted}; fi; else printf 'MISSING\\n'; fi"
+                ),
+            )
+        };
+        let kind = if windows {
+            ShellKind::Pwsh
+        } else {
+            ShellKind::Posix
+        };
+        let args = kind.args_for_shell(false, script);
+        let arguments: Vec<&str> = args.iter().map(String::as_str).collect();
+        delegate.set_status(Some("正在校验 Zed CN 远程开发服务完整性"), cx);
+        delegate.append_connection_log("正在计算远程服务 SHA-256", cx);
+        let output = self
+            .socket
+            .run_command_with_timeout(
+                self.ssh_shell_kind,
+                command,
+                &arguments,
+                true,
+                CUSTOM_SERVER_DIGEST_TIMEOUT,
+                cx,
+            )
+            .await
+            .context("无法校验已有 Zed CN 远程服务，已停止连接")?;
+        verify_custom_server_digest(&output, &expected)
+    }
+
+    async fn remove_remote_download(&self, path: &RelPath, cx: &mut AsyncApp) {
+        let result = if self.ssh_platform.os.is_windows() {
+            let path = path.display(self.path_style());
+            let Some(path) = ShellKind::Pwsh.try_quote(&path) else {
+                log::warn!("Failed to quote partial remote download path");
+                return;
+            };
+            self.socket
+                .run_command_with_timeout(
+                    self.ssh_shell_kind,
+                    "powershell",
+                    &[
+                        "-NoProfile",
+                        "-Command",
+                        &format!("Remove-Item -Force -ErrorAction SilentlyContinue {path}"),
+                    ],
+                    true,
+                    Duration::from_secs(10),
+                    cx,
+                )
+                .await
+        } else {
+            self.socket
+                .run_command_with_timeout(
+                    self.ssh_shell_kind,
+                    "rm",
+                    &["-f", path.display(self.path_style()).as_ref()],
+                    true,
+                    Duration::from_secs(10),
+                    cx,
+                )
+                .await
+        };
+        if let Err(error) = result {
+            log::warn!("Failed to remove partial remote server download: {error:#}");
+        }
+    }
+
     async fn upload_local_server_binary(
         &self,
         src_path: &Path,
@@ -1073,11 +1549,13 @@ impl SshRemoteConnection {
         if let Some(parent) = tmp_path.parent() {
             let res = self
                 .socket
-                .run_command(
+                .run_command_with_timeout(
                     self.ssh_shell_kind,
                     "mkdir",
                     &["-p", parent.display(self.path_style()).as_ref()],
                     true,
+                    REMOTE_COMMAND_TIMEOUT,
+                    cx,
                 )
                 .await;
             if !self.ssh_platform.os.is_windows() {
@@ -1092,15 +1570,17 @@ impl SshRemoteConnection {
         let size = src_stat.len();
 
         let t0 = Instant::now();
-        delegate.set_status(Some("Uploading remote development server"), cx);
+        delegate.set_status(Some("正在上传远程开发服务到远程主机"), cx);
         log::info!(
             "uploading remote development server to {:?} ({}kb)",
             tmp_path,
             size / 1024
         );
-        self.upload_file(src_path, tmp_path)
+        delegate.set_transfer_progress(Some(0.0), cx);
+        self.upload_file(src_path, tmp_path, size, delegate, cx)
             .await
             .context("failed to upload server binary")?;
+        delegate.set_transfer_progress(Some(1.0), cx);
         log::info!("uploaded remote development server in {:?}", t0.elapsed());
         Ok(())
     }
@@ -1112,19 +1592,35 @@ impl SshRemoteConnection {
         delegate: &Arc<dyn RemoteClientDelegate>,
         cx: &mut AsyncApp,
     ) -> Result<()> {
-        delegate.set_status(Some("Extracting remote development server"), cx);
+        delegate.set_status(Some("正在远程主机上解压远程开发服务"), cx);
+        let started_at = Instant::now();
+        log::info!("extracting remote development server to {dst_path:?}");
 
-        if self.ssh_platform.os.is_windows() {
-            self.extract_server_binary_windows(dst_path, tmp_path).await
+        let result = if self.ssh_platform.os.is_windows() {
+            self.extract_server_binary_windows(dst_path, tmp_path, cx)
+                .await
         } else {
-            self.extract_server_binary_posix(dst_path, tmp_path).await
+            self.extract_server_binary_posix(dst_path, tmp_path, cx)
+                .await
+        };
+        match &result {
+            Ok(()) => log::info!(
+                "extracted remote development server in {:?}",
+                started_at.elapsed()
+            ),
+            Err(error) => log::warn!(
+                "failed to extract remote development server after {:?}: {error:#}",
+                started_at.elapsed()
+            ),
         }
+        result
     }
 
     async fn extract_server_binary_posix(
         &self,
         dst_path: &RelPath,
         tmp_path: &RelPath,
+        cx: &AsyncApp,
     ) -> Result<()> {
         let shell_kind = ShellKind::Posix;
         let server_mode = 0o755;
@@ -1151,7 +1647,14 @@ impl SshRemoteConnection {
         };
         let args = shell_kind.args_for_shell(false, script.to_string());
         self.socket
-            .run_command(self.ssh_shell_kind, "sh", &args, true)
+            .run_command_with_timeout(
+                self.ssh_shell_kind,
+                "sh",
+                &args,
+                true,
+                REMOTE_SERVER_INSTALL_TIMEOUT,
+                cx,
+            )
             .await?;
         Ok(())
     }
@@ -1160,6 +1663,7 @@ impl SshRemoteConnection {
         &self,
         dst_path: &RelPath,
         tmp_path: &RelPath,
+        cx: &AsyncApp,
     ) -> Result<()> {
         let shell_kind = ShellKind::Pwsh;
         let orig_tmp_path = tmp_path.display(self.path_style());
@@ -1187,7 +1691,14 @@ impl SshRemoteConnection {
 
         let args = shell_kind.args_for_shell(false, script);
         self.socket
-            .run_command(self.ssh_shell_kind, "powershell", &args, true)
+            .run_command_with_timeout(
+                self.ssh_shell_kind,
+                "powershell",
+                &args,
+                true,
+                REMOTE_SERVER_INSTALL_TIMEOUT,
+                cx,
+            )
             .await?;
         Ok(())
     }
@@ -1242,7 +1753,14 @@ impl SshRemoteConnection {
         command
     }
 
-    async fn upload_file(&self, src_path: &Path, dest_path: &RelPath) -> Result<()> {
+    async fn upload_file(
+        &self,
+        src_path: &Path,
+        dest_path: &RelPath,
+        total_bytes: u64,
+        delegate: &Arc<dyn RemoteClientDelegate>,
+        cx: &mut AsyncApp,
+    ) -> Result<()> {
         log::debug!("uploading file {:?} to {:?}", src_path, dest_path);
 
         let src_path_display = src_path.display().to_string();
@@ -1257,6 +1775,7 @@ impl SshRemoteConnection {
         if Self::is_sftp_available().await {
             log::debug!("using SFTP for file upload");
             let mut command = self.build_sftp_command();
+            command.kill_on_drop(true);
             let sftp_batch = sftp_put_command(&src_path_display, &dest_path_str);
 
             let mut child = command.spawn()?;
@@ -1266,7 +1785,9 @@ impl SshRemoteConnection {
                 stdin.flush().await?;
             }
 
-            let output = child.output().await?;
+            let output = self
+                .wait_for_upload(child, dest_path, total_bytes, delegate, cx)
+                .await?;
             if output.status.success() {
                 return Ok(());
             }
@@ -1278,8 +1799,13 @@ impl SshRemoteConnection {
         }
 
         log::debug!("using SCP for file upload");
+        delegate.set_transfer_progress(Some(0.0), cx);
         let mut command = self.build_scp_command(src_path, &dest_path_str, None);
-        let output = command.output().await?;
+        command.kill_on_drop(true);
+        let child = command.spawn()?;
+        let output = self
+            .wait_for_upload(child, dest_path, total_bytes, delegate, cx)
+            .await?;
 
         if output.status.success() {
             return Ok(());
@@ -1297,6 +1823,72 @@ impl SshRemoteConnection {
         );
     }
 
+    async fn wait_for_upload(
+        &self,
+        child: Child,
+        dest_path: &RelPath,
+        total_bytes: u64,
+        delegate: &Arc<dyn RemoteClientDelegate>,
+        cx: &mut AsyncApp,
+    ) -> Result<std::process::Output> {
+        let output = child.output().fuse();
+        futures::pin_mut!(output);
+        let started_at = Instant::now();
+        loop {
+            select_biased! {
+                output = output => return Ok(output?),
+                _ = cx.background_executor().timer(Duration::from_millis(250)).fuse() => {
+                    anyhow::ensure!(
+                        started_at.elapsed() < REMOTE_SERVER_UPLOAD_TOTAL_TIMEOUT,
+                        "uploading remote development server timed out after {:?}",
+                        REMOTE_SERVER_UPLOAD_TOTAL_TIMEOUT
+                    );
+                    if total_bytes == 0 {
+                        continue;
+                    }
+                    let uploaded_bytes = self.remote_file_size(dest_path, cx).await;
+                    if let Some(uploaded_bytes) = uploaded_bytes {
+                        let progress = (uploaded_bytes as f32 / total_bytes as f32).clamp(0.0, 1.0);
+                        delegate.set_transfer_progress(Some(progress), cx);
+                    }
+                }
+            }
+        }
+    }
+
+    async fn remote_file_size(&self, path: &RelPath, cx: &mut AsyncApp) -> Option<u64> {
+        let path = path.display(self.path_style());
+        let result = if self.ssh_platform.os.is_windows() {
+            let path = ShellKind::Pwsh.try_quote(&path)?;
+            self.socket
+                .run_command_with_timeout(
+                    self.ssh_shell_kind,
+                    "powershell",
+                    &[
+                        "-NoProfile",
+                        "-Command",
+                        &format!("(Get-Item -LiteralPath {path} -ErrorAction Stop).Length"),
+                    ],
+                    true,
+                    Duration::from_secs(5),
+                    cx,
+                )
+                .await
+        } else {
+            self.socket
+                .run_command_with_timeout(
+                    self.ssh_shell_kind,
+                    "wc",
+                    &["-c", path.as_ref()],
+                    true,
+                    Duration::from_secs(5),
+                    cx,
+                )
+                .await
+        };
+        result.ok()?.split_whitespace().next()?.parse().ok()
+    }
+
     async fn is_sftp_available() -> bool {
         which::which("sftp").is_ok()
     }
@@ -1304,9 +1896,14 @@ impl SshRemoteConnection {
 
 impl SshSocket {
     #[cfg(not(windows))]
-    async fn new(options: SshConnectionOptions, socket_path: PathBuf) -> Result<Self> {
+    async fn new(
+        options: SshConnectionOptions,
+        delegate: Arc<dyn RemoteClientDelegate>,
+        socket_path: PathBuf,
+    ) -> Result<Self> {
         Ok(Self {
             connection_options: options,
+            delegate,
             envs: HashMap::default(),
             socket_path,
         })
@@ -1315,6 +1912,7 @@ impl SshSocket {
     #[cfg(windows)]
     async fn new(
         options: SshConnectionOptions,
+        delegate: Arc<dyn RemoteClientDelegate>,
         password: askpass::EncryptedPassword,
         executor: gpui::BackgroundExecutor,
     ) -> Result<Self> {
@@ -1335,9 +1933,95 @@ impl SshSocket {
 
         Ok(Self {
             connection_options: options,
+            delegate,
             envs,
             _proxy,
         })
+    }
+
+    async fn create_and_deploy_managed_key(
+        &self,
+        shell_kind: ShellKind,
+        remote_os: RemoteOs,
+        cx: &AsyncApp,
+    ) -> Result<()> {
+        if remote_os == RemoteOs::Windows {
+            anyhow::bail!("Zed 专属 SSH 密钥暂不支持自动部署到 Windows 远程主机");
+        }
+
+        let remote_username = self
+            .run_command_with_timeout(
+                shell_kind,
+                "id",
+                &["-un"],
+                false,
+                REMOTE_COMMAND_TIMEOUT,
+                cx,
+            )
+            .await?
+            .trim()
+            .to_string();
+        if remote_username.is_empty() {
+            anyhow::bail!("远程主机没有返回当前 SSH 用户名");
+        }
+
+        let generated = crate::managed_ssh_keys::generate_managed_ssh_key(
+            &self.connection_options,
+            remote_username,
+            cx,
+        )
+        .await?;
+        let install_script = "umask 077; mkdir -p \"$HOME/.ssh\"; file=\"$HOME/.ssh/authorized_keys\"; lock=\"$HOME/.ssh/.zed-authorized-keys.lock\"; count=0; while ! mkdir \"$lock\" 2>/dev/null; do count=$((count+1)); [ \"$count\" -ge 100 ] && exit 73; sleep 0.1; done; trap 'rmdir \"$lock\"' EXIT HUP INT TERM; touch \"$file\"; chmod 700 \"$HOME/.ssh\"; chmod 600 \"$file\"; key=$1; set -- $key; type=$1; blob=$2; if ! awk -v type=\"$type\" -v blob=\"$blob\" '$1 == type && $2 == blob { found=1 } END { exit !found }' \"$file\"; then printf '%s\\n' \"$key\" >> \"$file\"; fi";
+        self.run_command_with_timeout(
+            shell_kind,
+            "sh",
+            &[
+                "-c",
+                install_script,
+                "zed-install-key",
+                &generated.record.public_key,
+            ],
+            false,
+            REMOTE_COMMAND_TIMEOUT,
+            cx,
+        )
+        .await
+        .context("将 Zed SSH 公钥部署到远程 authorized_keys 失败")?;
+
+        self.verify_managed_key(&generated.private_key_path, cx)
+            .await
+            .context("公钥已写入远程主机，但使用新密钥进行独立验证失败")?;
+        crate::managed_ssh_keys::mark_managed_ssh_key_verified(&generated.record.key_id, cx)
+            .await?;
+        self.delegate
+            .append_connection_log("✓ Zed 专属 SSH 密钥已部署并验证", &mut cx.clone());
+        Ok(())
+    }
+
+    async fn verify_managed_key(&self, private_key_path: &Path, cx: &AsyncApp) -> Result<()> {
+        let mut command = util::command::new_command("ssh");
+        command
+            .kill_on_drop(true)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .args(
+                self.connection_options
+                    .additional_args_without_port_forwards(),
+            )
+            .args(["-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes", "-i"])
+            .arg(private_key_path)
+            .arg(self.connection_options.ssh_destination())
+            .arg("true");
+        let output = command
+            .output()
+            .with_timeout(REMOTE_COMMAND_TIMEOUT, cx.background_executor())
+            .await
+            .context("验证 Zed SSH 密钥超时")??;
+        if !output.status.success() {
+            anyhow::bail!("{}", String::from_utf8_lossy(&output.stderr).trim());
+        }
+        Ok(())
     }
 
     // :WARNING: ssh unquotes arguments when executing on the remote :WARNING:
@@ -1384,22 +2068,79 @@ impl SshSocket {
         command
     }
 
-    async fn run_command(
+    /// Runs a remote command and fails if it does not finish within `timeout`.
+    /// The spawned `ssh` process is killed on drop so a wedged session cannot leak.
+    async fn run_command_with_timeout(
         &self,
         shell_kind: ShellKind,
         program: &str,
         args: &[impl AsRef<str>],
         allow_pseudo_tty: bool,
+        timeout: Duration,
+        cx: &AsyncApp,
     ) -> Result<String> {
+        let display = display_remote_command(program, args);
+        self.delegate
+            .append_connection_log(&format!("$ {display}"), &mut cx.clone());
+
         let mut command = self.ssh_command(shell_kind, program, args, allow_pseudo_tty);
-        let output = command.output().await?;
+        command.kill_on_drop(true);
+        let output = match command
+            .output()
+            .with_timeout(timeout, cx.background_executor())
+            .await
+        {
+            Ok(Ok(output)) => output,
+            Ok(Err(error)) => {
+                self.delegate.append_connection_log(
+                    &format!("✗ {display} — 无法启动：{error}"),
+                    &mut cx.clone(),
+                );
+                return Err(error.into());
+            }
+            Err(error) => {
+                self.delegate.append_connection_log(
+                    &format!("✗ {display} — 等待超过 {} 秒", timeout.as_secs()),
+                    &mut cx.clone(),
+                );
+                return Err(error)
+                    .with_context(|| format!("remote command timed out after {timeout:?}"));
+            }
+        };
         log::debug!("{:?}: {:?}", command, output);
-        anyhow::ensure!(
-            output.status.success(),
-            "failed to run command {command:?}: {}",
-            String::from_utf8_lossy(&output.stderr)
+        if !output.status.success() {
+            let detail = connection_log_text(&String::from_utf8_lossy(&output.stderr));
+            self.delegate.append_connection_log(
+                &format!(
+                    "✗ {display} — {}",
+                    if detail.is_empty() {
+                        "命令失败"
+                    } else {
+                        &detail
+                    }
+                ),
+                &mut cx.clone(),
+            );
+            anyhow::bail!(
+                "failed to run command {command:?}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let detail = connection_log_text(&stdout);
+        self.delegate.append_connection_log(
+            &format!(
+                "✓ {display}{}",
+                if detail.is_empty() {
+                    String::new()
+                } else {
+                    format!(" — {detail}")
+                }
+            ),
+            &mut cx.clone(),
         );
-        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+        Ok(stdout)
     }
 
     fn ssh_options<'a>(
@@ -1442,6 +2183,17 @@ impl SshSocket {
     // SSH command structure: ssh [options] destination [command]
     fn ssh_command_options(&self) -> Vec<String> {
         let arguments = self.connection_options.additional_args();
+        self.with_control_path(arguments)
+    }
+
+    fn ssh_command_options_without_port_forwards(&self) -> Vec<String> {
+        let arguments = self
+            .connection_options
+            .additional_args_without_port_forwards();
+        self.with_control_path(arguments)
+    }
+
+    fn with_control_path(&self, arguments: Vec<String>) -> Vec<String> {
         #[cfg(not(windows))]
         let arguments = {
             let mut args = arguments;
@@ -1456,17 +2208,22 @@ impl SshSocket {
         arguments
     }
 
-    async fn platform(&self, shell: ShellKind, is_windows: bool) -> Result<RemotePlatform> {
+    async fn platform(
+        &self,
+        shell: ShellKind,
+        is_windows: bool,
+        cx: &AsyncApp,
+    ) -> Result<RemotePlatform> {
         if is_windows {
-            self.platform_windows(shell).await
+            self.platform_windows(shell, cx).await
         } else {
-            self.platform_posix(shell).await
+            self.platform_posix(shell, cx).await
         }
     }
 
-    async fn platform_posix(&self, shell: ShellKind) -> Result<RemotePlatform> {
+    async fn platform_posix(&self, shell: ShellKind, cx: &AsyncApp) -> Result<RemotePlatform> {
         let output = self
-            .run_command(shell, "uname", &["-sm"], false)
+            .run_command_with_timeout(shell, "uname", &["-sm"], false, REMOTE_COMMAND_TIMEOUT, cx)
             .await
             .context("Failed to run 'uname -sm' to determine platform")?;
         parse_platform(&output)
@@ -1475,9 +2232,12 @@ impl SshSocket {
     /// Best-effort detection of the remote OS version. Failures are logged and
     /// result in `None` rather than failing the connection, since this is only
     /// used for telemetry.
-    async fn os_version(&self, os: RemoteOs, shell: ShellKind) -> Option<String> {
+    async fn os_version(&self, os: RemoteOs, shell: ShellKind, cx: &AsyncApp) -> Option<String> {
         let (program, args) = super::os_version_command(os);
-        match self.run_command(shell, program, args, false).await {
+        match self
+            .run_command_with_timeout(shell, program, args, false, REMOTE_COMMAND_TIMEOUT, cx)
+            .await
+        {
             Ok(output) => super::parse_os_version(os, &output),
             Err(error) => {
                 log::warn!("Failed to determine remote OS version: {error:#}");
@@ -1486,13 +2246,15 @@ impl SshSocket {
         }
     }
 
-    async fn platform_windows(&self, shell: ShellKind) -> Result<RemotePlatform> {
+    async fn platform_windows(&self, shell: ShellKind, cx: &AsyncApp) -> Result<RemotePlatform> {
         let output = self
-            .run_command(
+            .run_command_with_timeout(
                 shell,
                 "cmd.exe",
                 &["/c", "echo", "%PROCESSOR_ARCHITECTURE%"],
                 false,
+                REMOTE_COMMAND_TIMEOUT,
+                cx,
             )
             .await
             .context(
@@ -1515,9 +2277,16 @@ impl SshSocket {
     ///
     /// This is done by attempting to run a simple Windows-specific command.
     /// If it succeeds and returns Windows-like output, we assume it's Windows.
-    async fn probe_is_windows(&self) -> bool {
+    async fn probe_is_windows(&self, cx: &AsyncApp) -> bool {
         match self
-            .run_command(ShellKind::Cmd, "cmd.exe", &["/c", "ver"], false)
+            .run_command_with_timeout(
+                ShellKind::Cmd,
+                "cmd.exe",
+                &["/c", "ver"],
+                false,
+                REMOTE_COMMAND_TIMEOUT,
+                cx,
+            )
             .await
         {
             // Windows 'ver' command outputs something like "Microsoft Windows [Version 10.0.19045.5011]"
@@ -1526,18 +2295,25 @@ impl SshSocket {
         }
     }
 
-    async fn shell(&self, is_windows: bool) -> String {
+    async fn shell(&self, is_windows: bool, cx: &AsyncApp) -> String {
         if is_windows {
-            self.shell_windows().await
+            self.shell_windows(cx).await
         } else {
-            self.shell_posix().await
+            self.shell_posix(cx).await
         }
     }
 
-    async fn shell_posix(&self) -> String {
+    async fn shell_posix(&self, cx: &AsyncApp) -> String {
         const DEFAULT_SHELL: &str = "sh";
         match self
-            .run_command(ShellKind::Posix, "sh", &["-c", "echo $SHELL"], false)
+            .run_command_with_timeout(
+                ShellKind::Posix,
+                "sh",
+                &["-c", "echo $SHELL"],
+                false,
+                REMOTE_COMMAND_TIMEOUT,
+                cx,
+            )
             .await
         {
             Ok(output) => parse_shell(&output, DEFAULT_SHELL),
@@ -1548,7 +2324,7 @@ impl SshSocket {
         }
     }
 
-    async fn shell_windows(&self) -> String {
+    async fn shell_windows(&self, cx: &AsyncApp) -> String {
         const DEFAULT_SHELL: &str = "cmd.exe";
 
         // We detect the shell used by the SSH session by running the following command in PowerShell:
@@ -1557,7 +2333,7 @@ impl SshSocket {
         // We pass it as a Base64 encoded string since we don't yet know how to correctly quote that command.
         // (We'd need to know what the shell is to do that...)
         match self
-            .run_command(
+            .run_command_with_timeout(
                 ShellKind::Cmd,
                 "powershell",
                 &[
@@ -1565,6 +2341,8 @@ impl SshSocket {
                     "KABHAGUAdAAtAEMAaQBtAEkAbgBzAHQAYQBuAGMAZQAgAFcAaQBuADMAMgBfAFAAcgBvAGMAZQBzAHMAIAAtAEYAaQBsAHQAZQByACAAIgBQAHIAbwBjAGUAcwBzAEkAZAAgAD0AIAAkACgAKABHAGUAdAAtAEMAaQBtAEkAbgBzAHQAYQBuAGMAZQAgAFcAaQBuADMAMgBfAFAAcgBvAGMAZQBzAHMAIAAtAEYAaQBsAHQAZQByACAAUAByAG8AYwBlAHMAcwBJAGQAPQAkAFAASQBEACkALgBQAGEAcgBlAG4AdABQAHIAbwBjAGUAcwBzAEkAZAApACIAKQAuAE4AYQBtAGUA",
                 ],
                 false,
+                REMOTE_COMMAND_TIMEOUT,
+                cx,
             )
             .await
         {
@@ -1767,6 +2545,7 @@ impl SshConnectionOptions {
             password: None,
             nickname: None,
             upload_binary_over_ssh: false,
+            remote_server_source: settings::RemoteServerSource::Official,
             connection_timeout: None,
         })
     }
@@ -1788,7 +2567,7 @@ impl SshConnectionOptions {
         self.args.iter().flatten().cloned().collect::<Vec<String>>()
     }
 
-    pub fn additional_args(&self) -> Vec<String> {
+    pub fn additional_args_without_port_forwards(&self) -> Vec<String> {
         let mut args = self.additional_args_for_scp();
 
         if let Some(timeout) = self.connection_timeout {
@@ -1799,6 +2578,12 @@ impl SshConnectionOptions {
             args.push("-p".to_string());
             args.push(port.to_string());
         }
+
+        args
+    }
+
+    pub fn additional_args(&self) -> Vec<String> {
+        let mut args = self.additional_args_without_port_forwards();
 
         if let Some(forwards) = &self.port_forwards {
             args.extend(forwards.iter().map(|pf| {
@@ -2255,6 +3040,18 @@ mod tests {
     }
 
     #[test]
+    fn reverse_forward_spec_uses_loopback_endpoints() {
+        assert_eq!(
+            reverse_forward_spec(4000, "127.0.0.1", 3000),
+            "localhost:4000:127.0.0.1:3000"
+        );
+        assert_eq!(
+            reverse_forward_spec(4000, "::1", 3000),
+            "localhost:4000:[::1]:3000"
+        );
+    }
+
+    #[test]
     fn scp_args_exclude_port_forward_flags() {
         let options = SshConnectionOptions {
             host: "example.com".into(),
@@ -2289,6 +3086,9 @@ mod tests {
                 "StrictHostKeyChecking=no".to_string(),
             ]
         );
+
+        let dynamic_forward_args = options.additional_args_without_port_forwards();
+        assert!(!dynamic_forward_args.iter().any(|arg| arg.starts_with("-L")));
     }
 
     #[test]

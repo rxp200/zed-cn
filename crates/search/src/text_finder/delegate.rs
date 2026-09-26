@@ -727,7 +727,7 @@ impl PickerDelegate for Delegate {
     }
 
     fn placeholder_text(&self, _window: &mut Window, _cx: &mut App) -> Arc<str> {
-        "Search all files…".into()
+        "搜索所有文件…".into()
     }
 
     fn searchbar_trailer(
@@ -805,13 +805,13 @@ impl PickerDelegate for Delegate {
             picker::PickerAction::separator(),
             picker::PickerAction::button(
                 if self.selected_matches.len() > 1 {
-                    "Open Multiple"
+                    "打开多个文件"
                 } else {
-                    "Open File"
+                    "打开文件"
                 },
                 menu::Confirm.boxed_clone(),
             ),
-            picker::PickerAction::button("Open as Tab", super::ToProjectSearch.boxed_clone()),
+            picker::PickerAction::button("在标签页中打开", super::ToProjectSearch.boxed_clone()),
         ]
     }
 

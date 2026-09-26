@@ -2299,6 +2299,22 @@ async fn update_diagnostic_summary(
 }
 
 /// Updates other participants with changes to the worktree settings
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lsp_query_response_target_must_belong_to_project() {
+        let host = ConnectionId { owner_id: 1, id: 1 };
+        let collaborator = ConnectionId { owner_id: 1, id: 2 };
+        let outsider = ConnectionId { owner_id: 1, id: 3 };
+        let project_connection_ids = HashSet::from_iter([host, collaborator]);
+
+        assert!(validate_lsp_query_response_target(&project_connection_ids, collaborator).is_ok());
+        assert!(validate_lsp_query_response_target(&project_connection_ids, outsider).is_err());
+    }
+}
+
 async fn update_worktree_settings(
     message: proto::UpdateWorktreeSettings,
     session: MessageContext,
@@ -2477,6 +2493,19 @@ async fn lsp_query(
     }
 }
 
+fn validate_lsp_query_response_target(
+    project_connection_ids: &HashSet<ConnectionId>,
+    peer_id: ConnectionId,
+) -> anyhow::Result<()> {
+    if project_connection_ids.contains(&peer_id) {
+        Ok(())
+    } else {
+        Err(anyhow!(
+            "LSP query response target is not a collaborator on this project"
+        ))
+    }
+}
+
 async fn forward_lsp_query_response(
     request: proto::LspQueryResponse,
     session: MessageContext,
@@ -2488,9 +2517,16 @@ async fn forward_lsp_query_response(
         .check_user_is_project_host(project_id, session.connection_id)
         .await?;
     if let Some(peer_id) = request.peer_id {
+        let peer_id = peer_id.into();
+        let project_connection_ids = session
+            .db()
+            .await
+            .project_connection_ids(project_id, session.connection_id, false)
+            .await?;
+        validate_lsp_query_response_target(&project_connection_ids, peer_id)?;
         session
             .peer
-            .forward_send(session.connection_id, peer_id.into(), request)?;
+            .forward_send(session.connection_id, peer_id, request)?;
         Ok(())
     } else {
         broadcast_project_message_from_host(request, session).await

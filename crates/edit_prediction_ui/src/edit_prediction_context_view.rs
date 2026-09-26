@@ -406,7 +406,7 @@ impl gpui::Render for EditPredictionContextView {
                             .size_full()
                             .justify_center()
                             .items_center()
-                            .child("No retrieval runs yet"),
+                            .child("尚无检索运行记录"),
                     )
                 } else {
                     this.child(self.runs[self.current_ix].editor.clone())

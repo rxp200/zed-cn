@@ -88,7 +88,7 @@ pub fn install_cli_binary(window: &mut Window, cx: &mut Context<Workspace>) {
                 PromptLevel::Warning,
                 "CLI should already be installed",
                 Some(LINUX_PROMPT_DETAIL),
-                &["OK"],
+                &["确定"],
             );
             cx.background_spawn(prompt).detach();
             return Ok(());

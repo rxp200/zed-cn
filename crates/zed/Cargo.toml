@@ -128,6 +128,7 @@ gpui_platform = { workspace = true, features = [
     "x11",
 ] }
 gpui_tokio.workspace = true
+hdrhistogram.workspace = true
 image = { workspace = true, optional = true }
 spin = "0.10.0"
 itertools.workspace = true
@@ -224,6 +225,7 @@ uuid.workspace = true
 vim.workspace = true
 vim_mode_setting.workspace = true
 watch.workspace = true
+web_preview.workspace = true
 web_search.workspace = true
 web_search_providers.workspace = true
 which_key.workspace = true

@@ -51,10 +51,9 @@ impl InlineInputPreview {
             return (text.to_string(), line_count as u32);
         }
         let hidden_lines = line_count - max_lines;
-        let noun = if hidden_lines == 1 { "line" } else { "lines" };
         let shown = text.lines().take(max_lines).collect::<Vec<_>>().join("\n");
         (
-            format!("{shown}\n… +{hidden_lines} more {noun}"),
+            format!("{shown}\n… 还有 {hidden_lines} 行"),
             max_lines as u32 + 1,
         )
     }
@@ -358,7 +357,7 @@ mod tests {
         assert_eq!(
             shown,
             format!(
-                "{}\n… +4 more lines",
+                "{}\n… 还有 4 行",
                 text.lines().take(8).collect::<Vec<_>>().join("\n")
             )
         );

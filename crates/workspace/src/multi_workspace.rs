@@ -8,7 +8,7 @@ use gpui::{
 };
 pub use project::ProjectGroupKey;
 use project::{DisableAiSettings, Project};
-use remote::RemoteConnectionOptions;
+use remote::{RemoteConnectionOptions, same_remote_connection_identity};
 use settings::Settings;
 pub use settings::SidebarSide;
 use std::cell::Cell;
@@ -70,7 +70,7 @@ pub fn sidebar_side_context_menu(
     id: impl Into<ElementId>,
     cx: &App,
 ) -> ui::RightClickMenu<ContextMenu> {
-    let current_position = AgentSettings::get_global(cx).sidebar_side;
+    let current_position = AgentSettings::get_global(cx).threads_sidebar.position;
     right_click_menu(id).menu(move |window, cx| {
         let fs = <dyn fs::Fs>::global(cx);
         ContextMenu::build(window, cx, move |mut menu, _, _cx| {
@@ -95,7 +95,7 @@ pub fn sidebar_side_context_menu(
                             settings
                                 .agent
                                 .get_or_insert_default()
-                                .set_sidebar_side(position);
+                                .set_threads_sidebar_position(Some(position));
                         });
                     },
                 );
@@ -864,7 +864,7 @@ impl MultiWorkspace {
     ) -> Option<Entity<Workspace>> {
         self.held
             .iter()
-            .filter(|held| held.workspace.read(cx).project_group_key(cx) == *key)
+            .filter(|held| Self::workspace_belongs_to_group(held.workspace.read(cx), key, cx))
             .filter_map(|held| Some((held.activated_at?, &held.workspace)))
             .max_by_key(|(activated_at, _)| *activated_at)
             .map(|(_, workspace)| workspace.clone())
@@ -1056,7 +1056,12 @@ impl MultiWorkspace {
         })
     }
 
-    /// Finds an existing workspace whose root paths and host exactly match.
+    /// Finds an existing workspace that describes the given project.
+    ///
+    /// Workspaces are matched by their stable remote host identity and by
+    /// either their folder roots or their main worktree paths, so a linked
+    /// worktree workspace or a connection whose runtime-only options changed is
+    /// reused instead of being opened as a second workspace.
     pub fn workspace_for_paths(
         &self,
         path_list: &PathList,
@@ -1064,16 +1069,42 @@ impl MultiWorkspace {
         cx: &App,
     ) -> Option<Entity<Workspace>> {
         for workspace in self.workspaces() {
-            let root_paths = PathList::new(&workspace.read(cx).root_paths(cx));
-            let key = workspace.read(cx).project_group_key(cx);
-            let host_matches = key.host().as_ref() == host;
-            let paths_match = root_paths == *path_list;
-            if host_matches && paths_match {
+            if Self::workspace_matches_project(workspace.read(cx), path_list, host, cx) {
                 return Some(workspace.clone());
             }
         }
 
         None
+    }
+
+    /// Whether `workspace` describes the project identified by `path_list` on
+    /// the given remote host, or the local project when `host` is `None`.
+    ///
+    /// Project-group paths are main worktree paths while a workspace reports its
+    /// folder roots, which differ for linked worktrees; a live connection also
+    /// carries runtime-only options that can drift from the persisted ones, so
+    /// hosts are compared by their stable identity and either path list may
+    /// match.
+    fn workspace_matches_project(
+        workspace: &Workspace,
+        path_list: &PathList,
+        host: Option<&RemoteConnectionOptions>,
+        cx: &App,
+    ) -> bool {
+        let key = workspace.project_group_key(cx);
+        if !same_remote_connection_identity(key.host().as_ref(), host) {
+            return false;
+        }
+
+        let paths = path_list.distinct_paths();
+        key.path_list().distinct_paths() == paths
+            || PathList::new(&workspace.root_paths(cx)).distinct_paths() == paths
+    }
+
+    /// Whether `workspace` belongs to the project group identified by `key`.
+    fn workspace_belongs_to_group(workspace: &Workspace, key: &ProjectGroupKey, cx: &App) -> bool {
+        let host = key.host();
+        Self::workspace_matches_project(workspace, key.path_list(), host.as_ref(), cx)
     }
 
     /// Finds an existing workspace whose paths match, or creates a new one.
@@ -1300,7 +1331,7 @@ impl MultiWorkspace {
         let index = self.hold(workspace, window, cx);
         self.pin(index, key, cx);
         telemetry::event!(
-            "Workspace Added",
+            "工作区已添加",
             workspace_count = self.held.iter().filter(|held| held.pinned).count()
         );
         cx.notify();

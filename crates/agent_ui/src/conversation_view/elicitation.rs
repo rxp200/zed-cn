@@ -4,7 +4,7 @@ use collections::{HashMap, HashSet};
 use component::{Component, ComponentScope, example_group_with_title, single_example};
 use editor::Editor;
 use futures::channel::oneshot;
-use gpui::{AnyElement, App, Div, Empty, Entity, Hsla, SharedString, Window, div};
+use gpui::{AnyElement, App, Div, Empty, Entity, Focusable, Hsla, SharedString, Window, div};
 use std::collections::BTreeMap;
 use std::rc::Rc;
 use ui::{
@@ -363,7 +363,352 @@ impl ElicitationFormSubmission {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gpui::TestAppContext;
+    use gpui::{KeyUpEvent, Keystroke, PlatformInput, TestAppContext, VisualTestContext};
+    use std::cell::RefCell;
+
+    struct TestElicitationView {
+        elicitation: Elicitation,
+        form_state: ElicitationFormState,
+        events: Rc<RefCell<Vec<String>>>,
+    }
+
+    impl TestElicitationView {
+        fn new(schema: acp::ElicitationSchema, window: &mut Window, cx: &mut App) -> Self {
+            Self {
+                form_state: ElicitationFormState::new(&schema, window, cx),
+                elicitation: Elicitation {
+                    id: ElicitationEntryId("keyboard-test".into()),
+                    request: acp::CreateElicitationRequest::new(
+                        acp::ElicitationFormMode::new(preview_request_scope(0), schema),
+                        "Choose an answer.",
+                    ),
+                    status: pending_status(),
+                },
+                events: Rc::default(),
+            }
+        }
+
+        fn editor(&self, field_name: &str) -> Entity<Editor> {
+            match self.form_state.fields.get(field_name) {
+                Some(ElicitationFieldState::Text(editor)) => editor.clone(),
+                _ => panic!("expected a text field named {field_name}"),
+            }
+        }
+    }
+
+    impl Render for TestElicitationView {
+        fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let response_handler = |response: &'static str| -> RespondHandler {
+                let events = self.events.clone();
+                let expected_id = self.elicitation.id.clone();
+                Rc::new(move |id, _, _| {
+                    assert_eq!(id, expected_id);
+                    events.borrow_mut().push(response.into());
+                })
+            };
+            let handlers = ElicitationCardHandlers {
+                on_submit: response_handler("submit"),
+                on_decline: response_handler("decline"),
+                on_cancel: response_handler("cancel"),
+                on_dismiss_url: response_handler("dismiss"),
+                on_open_url: {
+                    let events = self.events.clone();
+                    let expected_id = self.elicitation.id.clone();
+                    Rc::new(move |id, url, _, _| {
+                        assert_eq!(id, expected_id);
+                        events.borrow_mut().push(format!("open: {url}"));
+                    })
+                },
+                on_boolean_change: {
+                    let events = self.events.clone();
+                    Rc::new(move |_, name, value, _| {
+                        events.borrow_mut().push(format!("{name}: {value}"));
+                    })
+                },
+                on_single_select_change: {
+                    let events = self.events.clone();
+                    Rc::new(move |_, name, value, _| {
+                        events.borrow_mut().push(format!("{name}: {value}"));
+                    })
+                },
+                on_multi_select_change: {
+                    let events = self.events.clone();
+                    Rc::new(move |_, name, value, selected, _| {
+                        events
+                            .borrow_mut()
+                            .push(format!("{name}: {value} = {selected}"));
+                    })
+                },
+            };
+
+            div()
+                .key_context("AcpThread")
+                .on_action(|_: &crate::CycleModeSelector, _, _| {
+                    panic!("form navigation must not cycle the agent mode");
+                })
+                .on_action(|_: &zed_actions::agent::Chat, _, _| {
+                    panic!("form submission must not send a chat message");
+                })
+                .child(
+                    ElicitationCard::new(
+                        0,
+                        &self.elicitation,
+                        "Claude Code".into(),
+                        Some(&self.form_state),
+                        handlers,
+                    )
+                    .render(cx),
+                )
+        }
+    }
+
+    fn init_keyboard_test(cx: &mut TestAppContext) {
+        crate::conversation_view::tests::init_test(cx);
+        cx.update(|cx| {
+            let bindings = settings::KeymapFile::load_asset_allow_partial_failure(
+                "keymaps/default-linux.json",
+                cx,
+            )
+            .expect("default keymap should load");
+            cx.bind_keys(bindings);
+        });
+    }
+
+    fn press_keys(cx: &mut VisualTestContext, keys: &str) {
+        for key in keys.split_whitespace() {
+            cx.simulate_keystrokes(key);
+            cx.update(|window, cx| {
+                // Click handlers activate buttons on key release, not key press.
+                window.dispatch_event(
+                    PlatformInput::KeyUp(KeyUpEvent {
+                        keystroke: Keystroke::parse(key).expect("valid test keystroke"),
+                    }),
+                    cx,
+                );
+            });
+            cx.run_until_parked();
+        }
+    }
+
+    #[gpui::test]
+    fn form_text_fields_submit_on_enter(cx: &mut TestAppContext) {
+        init_keyboard_test(cx);
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            TestElicitationView::new(
+                acp::ElicitationSchema::new()
+                    .string("other", true)
+                    .property("count", acp::IntegerPropertySchema::new(), true)
+                    .property("amount", acp::NumberPropertySchema::new(), true),
+                window,
+                cx,
+            )
+        });
+        let events = view.read_with(cx, |view, _| view.events.clone());
+
+        for (field_name, value) in [
+            ("other", "  My answer  "),
+            ("count", "2"),
+            ("amount", "1.5"),
+        ] {
+            let editor = view.read_with(cx, |view, _| view.editor(field_name));
+            cx.update(|window, cx| window.focus(&editor.focus_handle(cx), cx));
+            cx.simulate_input(value);
+            press_keys(cx, "enter");
+            assert_eq!(editor.read_with(cx, |editor, cx| editor.text(cx)), value);
+        }
+        assert_eq!(*events.borrow(), ["submit", "submit", "submit"]);
+
+        view.update(cx, |view, cx| {
+            assert!(view.form_state.begin_submission(cx).is_some());
+            cx.notify();
+        });
+        press_keys(cx, "enter");
+        assert_eq!(events.borrow().len(), 3);
+    }
+
+    #[gpui::test]
+    fn form_tab_navigation_reaches_fields_and_actions(cx: &mut TestAppContext) {
+        init_keyboard_test(cx);
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            TestElicitationView::new(
+                acp::ElicitationSchema::new()
+                    .string("first", false)
+                    .string("other", false),
+                window,
+                cx,
+            )
+        });
+        let (first, other, events) = view.read_with(cx, |view, _| {
+            (
+                view.editor("first"),
+                view.editor("other"),
+                view.events.clone(),
+            )
+        });
+        cx.update(|window, cx| window.focus(&first.focus_handle(cx), cx));
+
+        press_keys(cx, "tab");
+        cx.update(|window, cx| assert!(other.focus_handle(cx).is_focused(window)));
+        press_keys(cx, "shift-tab");
+        cx.update(|window, cx| assert!(first.focus_handle(cx).is_focused(window)));
+
+        press_keys(cx, "tab tab");
+        let submit_focus =
+            cx.update(|window, cx| window.focused(cx).expect("Submit should be focused"));
+        press_keys(cx, "shift-tab");
+        cx.update(|window, cx| assert!(other.focus_handle(cx).is_focused(window)));
+        press_keys(cx, "tab");
+        cx.update(|window, _| assert!(submit_focus.is_focused(window)));
+        press_keys(cx, "enter tab enter tab space");
+        assert_eq!(*events.borrow(), ["submit", "decline", "cancel"]);
+
+        press_keys(cx, "shift-tab space");
+        assert_eq!(*events.borrow(), ["submit", "decline", "cancel", "decline"]);
+        let decline_focus =
+            cx.update(|window, cx| window.focused(cx).expect("Decline should be focused"));
+
+        cx.update(|window, cx| window.focus(&submit_focus, cx));
+        view.update(cx, |view, cx| {
+            assert!(view.form_state.begin_submission(cx).is_some());
+            cx.notify();
+        });
+        press_keys(cx, "tab");
+        cx.update(|window, _| assert!(decline_focus.is_focused(window)));
+        press_keys(cx, "shift-tab");
+        cx.update(|window, cx| assert!(other.focus_handle(cx).is_focused(window)));
+        press_keys(cx, "tab");
+        cx.update(|window, _| assert!(decline_focus.is_focused(window)));
+        press_keys(cx, "shift-tab");
+        cx.update(|window, cx| assert!(other.focus_handle(cx).is_focused(window)));
+
+        view.update(cx, |view, cx| {
+            view.form_state.set_errors(HashMap::default());
+            cx.notify();
+        });
+        press_keys(cx, "tab");
+        cx.update(|window, _| assert!(submit_focus.is_focused(window)));
+    }
+
+    #[gpui::test]
+    fn form_choices_are_keyboard_accessible(cx: &mut TestAppContext) {
+        init_keyboard_test(cx);
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            TestElicitationView::new(
+                acp::ElicitationSchema::new()
+                    .string("answer", false)
+                    .property("boolean", acp::BooleanPropertySchema::new(), false)
+                    .property(
+                        "choice",
+                        acp::StringPropertySchema::new()
+                            .enum_values(vec!["first".into(), "second".into()]),
+                        false,
+                    )
+                    .property(
+                        "multiple",
+                        acp::MultiSelectPropertySchema::new(vec!["first".into(), "second".into()]),
+                        false,
+                    ),
+                window,
+                cx,
+            )
+        });
+        let (editor, events) =
+            view.read_with(cx, |view, _| (view.editor("answer"), view.events.clone()));
+        cx.update(|window, cx| window.focus(&editor.focus_handle(cx), cx));
+        press_keys(
+            cx,
+            "tab space tab enter tab space tab space tab enter tab enter",
+        );
+        assert_eq!(
+            *events.borrow(),
+            [
+                "boolean: true",
+                "choice: first",
+                "choice: second",
+                "multiple: first = true",
+                "multiple: second = true",
+                "submit",
+            ]
+        );
+    }
+
+    #[gpui::test]
+    fn tab_navigation_between_form_and_url_cards(cx: &mut TestAppContext) {
+        struct Cards {
+            form: Entity<TestElicitationView>,
+            url: Entity<TestElicitationView>,
+        }
+
+        impl Render for Cards {
+            fn render(
+                &mut self,
+                _window: &mut Window,
+                _cx: &mut Context<Self>,
+            ) -> impl IntoElement {
+                v_flex().child(self.form.clone()).child(self.url.clone())
+            }
+        }
+
+        init_keyboard_test(cx);
+        let (cards, cx) = cx.add_window_view(|window, cx| Cards {
+            form: cx.new(|cx| {
+                TestElicitationView::new(
+                    acp::ElicitationSchema::new().string("other", false),
+                    window,
+                    cx,
+                )
+            }),
+            url: cx.new(|cx| {
+                let mut view = TestElicitationView::new(acp::ElicitationSchema::new(), window, cx);
+                view.elicitation.id = ElicitationEntryId("url-test".into());
+                view.elicitation.request = acp::CreateElicitationRequest::new(
+                    acp::ElicitationUrlMode::new(
+                        preview_request_scope(1),
+                        acp::ElicitationId::new("url-test"),
+                        "https://example.com/authorize",
+                    ),
+                    "Authorize access.",
+                );
+                view
+            }),
+        });
+        let (form, url) = cards.read_with(cx, |cards, _| (cards.form.clone(), cards.url.clone()));
+        let (editor, form_events) =
+            form.read_with(cx, |form, _| (form.editor("other"), form.events.clone()));
+        let url_events = url.read_with(cx, |url, _| url.events.clone());
+        cx.update(|window, cx| window.focus(&editor.focus_handle(cx), cx));
+
+        press_keys(cx, "tab tab tab enter");
+        assert_eq!(*form_events.borrow(), ["cancel"]);
+        press_keys(cx, "tab enter");
+        assert_eq!(
+            *url_events.borrow(),
+            ["open: https://example.com/authorize", "submit"]
+        );
+
+        press_keys(cx, "shift-tab enter");
+        assert_eq!(*form_events.borrow(), ["cancel", "cancel"]);
+        press_keys(cx, "shift-tab shift-tab enter");
+        assert_eq!(*form_events.borrow(), ["cancel", "cancel", "submit"]);
+        press_keys(cx, "shift-tab");
+        cx.update(|window, cx| assert!(editor.focus_handle(cx).is_focused(window)));
+
+        url.update(cx, |url, cx| {
+            url.elicitation.status = ElicitationStatus::Accepted;
+            cx.notify();
+        });
+        press_keys(cx, "tab tab tab tab enter tab enter");
+        assert_eq!(
+            *url_events.borrow(),
+            [
+                "open: https://example.com/authorize",
+                "submit",
+                "open: https://example.com/authorize",
+                "dismiss",
+            ]
+        );
+        assert_eq!(*form_events.borrow(), ["cancel", "cancel", "submit"]);
+    }
 
     #[test]
     fn string_validation_rejects_email_format_mismatch() {
@@ -840,15 +1185,15 @@ impl Component for ElicitationCardPreview {
             .gap_6()
             .children([
                 example_group_with_title(
-                    "Form Requests",
+                    "表单请求",
                     vec![
                         single_example(
-                            "Pending Form",
+                            "待处理表单",
                             render_form_preview(0, pending_status(), &[], window, cx),
                         )
                         .width(px(640.)),
                         single_example(
-                            "Validation Errors",
+                            "验证错误",
                             render_form_preview(
                                 1,
                                 pending_status(),
@@ -867,10 +1212,10 @@ impl Component for ElicitationCardPreview {
                 .vertical()
                 .into_any_element(),
                 example_group_with_title(
-                    "URL Requests",
+                    "URL 请求",
                     vec![
                         single_example(
-                            "URL Consent",
+                            "URL 授权",
                             render_url_preview(3, pending_status(), window, cx),
                         )
                         .width(px(640.)),
@@ -879,15 +1224,15 @@ impl Component for ElicitationCardPreview {
                 .vertical()
                 .into_any_element(),
                 example_group_with_title(
-                    "Terminal States",
+                    "终端状态",
                     vec![
                         single_example(
-                            "Declined",
+                            "已拒绝",
                             render_form_preview(6, ElicitationStatus::Declined, &[], window, cx),
                         )
                         .width(px(640.)),
                         single_example(
-                            "Canceled",
+                            "已取消",
                             render_form_preview(7, ElicitationStatus::Canceled, &[], window, cx),
                         )
                         .width(px(640.)),
@@ -1464,7 +1809,7 @@ impl<'a> ElicitationCard<'a> {
             (ElicitationStatus::Accepted, acp::ElicitationMode::Url(_))
         );
         let (status_label, status_icon, status_color) = match &self.elicitation.status {
-            ElicitationStatus::Pending { .. } => ("Waiting for input", IconName::Info, Color::Info),
+            ElicitationStatus::Pending { .. } => ("等待输入", IconName::Info, Color::Info),
             ElicitationStatus::Accepted if is_accepted_url => {
                 ("Waiting for completion", IconName::Info, Color::Info)
             }
@@ -1489,6 +1834,10 @@ impl<'a> ElicitationCard<'a> {
         };
 
         v_flex()
+            .key_context("Elicitation")
+            .tab_group()
+            .on_action(|_: &menu::SelectNext, window, cx| window.focus_next(cx))
+            .on_action(|_: &menu::SelectPrevious, window, cx| window.focus_prev(cx))
             .mx_5()
             .my_1p5()
             .rounded_md()
@@ -1513,7 +1862,7 @@ impl<'a> ElicitationCard<'a> {
                                     .color(status_color),
                             )
                             .child(
-                                Label::new(format!("Input Requested by {}", self.requester_name))
+                                Label::new(format!("{} 请求输入", self.requester_name))
                                     .size(LabelSize::Custom(tool_name_font_size))
                                     .truncate(),
                             ),
@@ -1576,6 +1925,7 @@ impl<'a> ElicitationCard<'a> {
         let label = property_title(field_name, property);
         let description = property_description(property);
         let border_color = cx.theme().colors().border.opacity(0.8);
+        let focused_border_color = cx.theme().colors().border_focused;
         let field_border_color = if error.is_some() {
             Color::Error.color(cx)
         } else {
@@ -1606,10 +1956,12 @@ impl<'a> ElicitationCard<'a> {
                 .child(
                     h_flex()
                         .id(row_id)
+                        .tab_index(0)
                         .w_full()
                         .items_start()
                         .gap_1()
                         .cursor_pointer()
+                        .focus_visible(|this| this.bg(cx.theme().colors().element_hover))
                         .on_click(move |_, _window, cx| {
                             on_boolean_change(
                                 elicitation_id.clone(),
@@ -1655,16 +2007,29 @@ impl<'a> ElicitationCard<'a> {
                 )
             })
             .child(match field {
-                ElicitationFieldState::Text(editor) => div()
-                    .rounded_sm()
-                    .border_1()
-                    .border_color(field_border_color)
-                    .bg(editor_background)
-                    .px_1()
-                    .py_0p5()
-                    .text_xs()
-                    .child(editor.clone().into_any_element())
-                    .into_any_element(),
+                ElicitationFieldState::Text(editor) => {
+                    let on_submit = self.handlers.on_submit.clone();
+                    let elicitation_id = self.elicitation.id.clone();
+                    let is_submitting = self.form_state.is_some_and(|state| state.is_submitting);
+
+                    div()
+                        .track_focus(&editor.focus_handle(cx).tab_stop(true))
+                        .on_action(move |_: &menu::Confirm, window, cx| {
+                            if !is_submitting {
+                                on_submit(elicitation_id.clone(), window, cx);
+                            }
+                        })
+                        .rounded_sm()
+                        .border_1()
+                        .border_color(field_border_color)
+                        .focus_visible(|this| this.border_color(focused_border_color))
+                        .bg(editor_background)
+                        .px_1()
+                        .py_0p5()
+                        .text_xs()
+                        .child(editor.clone().into_any_element())
+                        .into_any_element()
+                }
                 ElicitationFieldState::Boolean(_) => Empty.into_any_element(),
                 ElicitationFieldState::SingleSelect { value } => {
                     let options = match property {
@@ -1714,6 +2079,7 @@ impl<'a> ElicitationCard<'a> {
                                     "elicitation-multi-option-{}-{field_name}-{}",
                                     self.entry_ix, option.value
                                 )))
+                                .tab_index(0)
                                 .w_full()
                                 .min_h(rems_from_px(28_f32))
                                 .items_start()
@@ -1725,6 +2091,7 @@ impl<'a> ElicitationCard<'a> {
                                 .px_2()
                                 .py_1()
                                 .hover(move |this| this.bg(hover_background).cursor_pointer())
+                                .focus_visible(|this| this.border_color(focused_border_color))
                                 .on_click(move |_, _window, cx| {
                                     on_multi_select_change(
                                         elicitation_id.clone(),
@@ -1781,6 +2148,7 @@ impl<'a> ElicitationCard<'a> {
 
                 h_flex()
                     .id(option_id)
+                    .tab_index(0)
                     .w_full()
                     .min_h(rems_from_px(28_f32))
                     .items_start()
@@ -1792,6 +2160,7 @@ impl<'a> ElicitationCard<'a> {
                     .px_2()
                     .py_1()
                     .hover(move |this| this.bg(hover_background).cursor_pointer())
+                    .focus_visible(|this| this.border_color(cx.theme().colors().border_focused))
                     .on_click(move |_, _window, cx| {
                         on_single_select_change(
                             elicitation_id.clone(),
@@ -1884,7 +2253,7 @@ impl<'a> ElicitationCard<'a> {
                             h_flex()
                                 .gap_1()
                                 .child(
-                                    Label::new("Destination")
+                                    Label::new("目标")
                                         .size(LabelSize::Small)
                                         .color(Color::Muted),
                                 )
@@ -1950,11 +2319,11 @@ impl<'a> ElicitationCard<'a> {
             open_url.is_some() && matches!(self.elicitation.status, ElicitationStatus::Accepted);
         let is_submitting = self.form_state.is_some_and(|state| state.is_submitting);
         let (accept_label, accept_icon, accept_icon_color) = if is_accepted_url {
-            ("Open Again", IconName::ArrowUpRight, Color::Muted)
+            ("再次打开", IconName::ArrowUpRight, Color::Muted)
         } else if open_url.is_some() {
-            ("Open", IconName::ArrowUpRight, Color::Muted)
+            ("打开", IconName::ArrowUpRight, Color::Muted)
         } else {
-            ("Submit", IconName::Check, Color::Success)
+            ("提交", IconName::Check, Color::Success)
         };
         let border_color = cx.theme().colors().border.opacity(0.8);
         let on_submit = self.handlers.on_submit.clone();
@@ -1976,6 +2345,7 @@ impl<'a> ElicitationCard<'a> {
             .border_color(border_color)
             .child(
                 Button::new(("elicitation-accept", self.entry_ix), accept_label)
+                    .tab_index(0_isize)
                     .start_icon(
                         Icon::new(accept_icon)
                             .size(IconSize::XSmall)
@@ -1996,7 +2366,8 @@ impl<'a> ElicitationCard<'a> {
             )
             .when(!is_accepted_url, |this| {
                 this.child(
-                    Button::new(("elicitation-decline", self.entry_ix), "Decline")
+                    Button::new(("elicitation-decline", self.entry_ix), "拒绝")
+                        .tab_index(0_isize)
                         .start_icon(
                             Icon::new(IconName::Close)
                                 .size(IconSize::XSmall)
@@ -2008,7 +2379,8 @@ impl<'a> ElicitationCard<'a> {
                         }),
                 )
                 .child(
-                    Button::new(("elicitation-cancel", self.entry_ix), "Cancel")
+                    Button::new(("elicitation-cancel", self.entry_ix), "取消")
+                        .tab_index(0_isize)
                         .label_size(LabelSize::Small)
                         .on_click(move |_, window, cx| {
                             on_cancel(cancel_id.clone(), window, cx);
@@ -2017,7 +2389,8 @@ impl<'a> ElicitationCard<'a> {
             })
             .when(is_accepted_url, |this| {
                 this.child(
-                    Button::new(("elicitation-dismiss-url", self.entry_ix), "Cancel")
+                    Button::new(("elicitation-dismiss-url", self.entry_ix), "取消")
+                        .tab_index(0_isize)
                         .label_size(LabelSize::Small)
                         .on_click(move |_, window, cx| {
                             on_dismiss_url(dismiss_id.clone(), window, cx);

@@ -36,14 +36,15 @@ use rpc::{
     proto::{self, Envelope, EnvelopedMessage, PeerId, RequestMessage, build_typed_envelope},
 };
 use semver::Version;
+use settings::{RegisterSetting, Settings};
 use std::{
     collections::VecDeque,
     fmt,
     ops::ControlFlow,
     path::PathBuf,
     sync::{
-        Arc, Weak,
-        atomic::{AtomicU32, AtomicU64, Ordering::SeqCst},
+        Arc, LazyLock, Weak,
+        atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering::SeqCst},
     },
     time::{Duration, Instant},
 };
@@ -154,16 +155,49 @@ pub trait RemoteClientDelegate: Send + Sync {
         version: Option<Version>,
         cx: &mut AsyncApp,
     ) -> Task<Result<PathBuf>>;
+    fn download_custom_server_binary(
+        &self,
+        _platform: RemotePlatform,
+        _tag: String,
+        _cx: &mut AsyncApp,
+    ) -> Task<Result<PathBuf>> {
+        Task::ready(Err(anyhow::anyhow!("当前连接不支持下载 Zed CN 远程服务")))
+    }
     fn set_status(&self, status: Option<&str>, cx: &mut AsyncApp);
+    fn append_connection_log(&self, _line: &str, _cx: &mut AsyncApp) {}
+    fn set_transfer_progress(&self, _progress: Option<f32>, _cx: &mut AsyncApp) {}
+    fn should_create_managed_ssh_key(&self) -> bool {
+        false
+    }
 }
+
+pub const TEMPORARY_FILES_CAPABILITY: &str = "temporary_files_v1";
+pub const SYSTEM_STATS_CAPABILITY: &str = "system_stats_v1";
 
 const MAX_MISSED_HEARTBEATS: usize = 5;
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 const HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(5);
+// Replaying queued responses can take much longer than an idle heartbeat.
+const RECONNECT_SYNC_TIMEOUT: Duration = Duration::from_secs(60);
 const INITIAL_CONNECTION_TIMEOUT: Duration =
     Duration::from_secs(if cfg!(debug_assertions) { 5 } else { 60 });
 
-pub const MAX_RECONNECT_ATTEMPTS: usize = 3;
+/// Keep retrying long enough for temporary network outages to recover instead of
+/// exhausting all attempts while the network is still unavailable.
+pub const MAX_RECONNECT_ATTEMPTS: usize = 30;
+const INITIAL_RECONNECT_DELAY: Duration = Duration::from_secs(1);
+const MAX_RECONNECT_DELAY: Duration = Duration::from_secs(30);
+
+fn reconnect_delay(attempt: usize) -> Duration {
+    if attempt <= 1 {
+        return Duration::ZERO;
+    }
+
+    let exponent = attempt.saturating_sub(2).min(5) as u32;
+    INITIAL_RECONNECT_DELAY
+        .saturating_mul(1_u32 << exponent)
+        .min(MAX_RECONNECT_DELAY)
+}
 
 enum State {
     Connecting,
@@ -313,6 +347,12 @@ pub enum ConnectionState {
     Disconnected,
 }
 
+impl ConnectionState {
+    pub fn can_reconnect_manually(self) -> bool {
+        matches!(self, Self::HeartbeatMissed | Self::Reconnecting)
+    }
+}
+
 impl From<&State> for ConnectionState {
     fn from(value: &State) -> Self {
         match value {
@@ -334,6 +374,10 @@ pub struct RemoteClient {
     platform: RemotePlatform,
     os_version: Option<String>,
     state: Option<State>,
+    reconnect_cancellation: Option<oneshot::Sender<()>>,
+    reconnect_status: Option<String>,
+    manual_reconnect: bool,
+    connection_generation: u64,
 }
 
 #[derive(Debug)]
@@ -358,24 +402,142 @@ impl ConnectionIdentifier {
         Self::Setup(NEXT_ID.fetch_add(1, SeqCst))
     }
 
-    // This string gets used in a socket name, and so must be relatively short.
+    // This string gets used as a socket name on the remote server, and so must
+    // be relatively short.
     // The total length of:
     //   /home/{username}/.local/share/zed/server_state/{name}/stdout.sock
     // Must be less than about 100 characters
     //   https://unix.stackexchange.com/questions/367008/why-is-socket-path-length-limited-to-a-hundred-chars
     // So our strings should be at most 20 characters or so.
+    //
+    // The name is namespaced to the installation that created it: launching a
+    // proxy replaces the server that already holds the same identifier, and the
+    // ids below are numbered per machine, so without a machine scope two
+    // machines connecting to the same remote account would silently kill each
+    // other's sessions.
     fn to_string(&self, cx: &App) -> String {
         let identifier_prefix = match ReleaseChannel::global(cx) {
             ReleaseChannel::Stable => "".to_string(),
             release_channel => format!("{}-", release_channel.dev_name()),
         };
+        let machine_scope = machine_scope(cx);
         match self {
-            Self::Setup(setup_id) => format!("{identifier_prefix}setup-{setup_id}"),
+            Self::Setup(setup_id) => {
+                format!("{identifier_prefix}{machine_scope}-setup-{setup_id}")
+            }
             Self::Workspace(workspace_id) => {
-                format!("{identifier_prefix}workspace-{workspace_id}",)
+                format!("{identifier_prefix}{machine_scope}-ws-{workspace_id}")
             }
         }
     }
+}
+
+/// How many characters of the installation id namespace remote server session
+/// names.
+///
+/// Eight base 36 digits carry 41 bits, which separates installations by a wide
+/// margin while leaving room for the release-channel and Zed CN prefixes within
+/// the socket path limit documented on [`ConnectionIdentifier::to_string`].
+const MACHINE_SCOPE_LENGTH: usize = 8;
+
+/// Derived from the installation id, and used until that id has been loaded, so
+/// that session names are never shared across machines.
+static EPHEMERAL_MACHINE_SCOPE: LazyLock<String> =
+    LazyLock::new(|| encode_machine_scope(uuid::Uuid::new_v4().as_u128()));
+
+/// Encodes the high bits of an installation id in base 36.
+///
+/// Base 36 packs more entropy per character than hex, which matters because the
+/// result becomes part of a socket path with a hard length limit.
+fn encode_machine_scope(installation_id: u128) -> String {
+    const DIGITS: &[u8; 36] = b"0123456789abcdefghijklmnopqrstuvwxyz";
+    let mut encoded = String::with_capacity(MACHINE_SCOPE_LENGTH);
+    let mut remaining = installation_id;
+    for _ in 0..MACHINE_SCOPE_LENGTH {
+        encoded.push(DIGITS[(remaining % 36) as usize] as char);
+        remaining /= 36;
+    }
+    encoded.chars().rev().collect()
+}
+
+/// Namespaces remote server session names to a single installation.
+///
+/// See [`ConnectionIdentifier::to_string`] for why session names must not be
+/// shared between machines.
+#[derive(Clone, Default)]
+pub struct MachineIdentity(Option<Arc<str>>);
+
+impl Global for MachineIdentity {}
+
+impl MachineIdentity {
+    /// Namespaces session names to the installation identified by
+    /// `installation_id`, which is ignored when it is not a UUID.
+    pub fn new(installation_id: impl AsRef<str>) -> Self {
+        let scope = uuid::Uuid::parse_str(installation_id.as_ref())
+            .ok()
+            .map(|id| encode_machine_scope(id.as_u128()));
+        Self(scope.map(|scope| Arc::from(scope.as_str())))
+    }
+}
+
+/// The namespace remote server session names are scoped to on this
+/// installation.
+fn machine_scope(cx: &App) -> String {
+    cx.try_global::<MachineIdentity>()
+        .and_then(|identity| identity.0.clone())
+        .map(|scope| scope.to_string())
+        .unwrap_or_else(|| EPHEMERAL_MACHINE_SCOPE.clone())
+}
+
+#[derive(Clone, Debug, RegisterSetting)]
+struct RemoteServerDownloadSettings {
+    china_server_adaptation: bool,
+    ssh_connections: Vec<settings::SshConnection>,
+}
+
+impl Settings for RemoteServerDownloadSettings {
+    fn from_settings(content: &settings::SettingsContent) -> Self {
+        Self {
+            china_server_adaptation: content.remote.china_server_adaptation.unwrap(),
+            ssh_connections: content.remote.ssh_connections.clone().unwrap_or_default(),
+        }
+    }
+}
+
+fn apply_remote_server_download_settings(
+    mut connection_options: RemoteConnectionOptions,
+    china_server_adaptation: bool,
+) -> RemoteConnectionOptions {
+    if china_server_adaptation
+        && let RemoteConnectionOptions::Ssh(options) = &mut connection_options
+    {
+        options.upload_binary_over_ssh = true;
+    }
+    connection_options
+}
+
+fn connection_options_with_settings(
+    connection_options: RemoteConnectionOptions,
+    cx: &App,
+) -> RemoteConnectionOptions {
+    let china_server_adaptation = RemoteServerDownloadSettings::try_get(cx)
+        .is_some_and(|settings| settings.china_server_adaptation);
+    let mut connection_options = connection_options;
+    if let RemoteConnectionOptions::Ssh(options) = &mut connection_options
+        && let Some(settings) = RemoteServerDownloadSettings::try_get(cx)
+    {
+        if let Some(connection) = settings.ssh_connections.iter().find(|connection| {
+            connection.host == options.host.to_string()
+                && connection.username == options.username
+                && connection.port == options.port
+        }) {
+            options.remote_server_source = connection.remote_server_source.unwrap_or_default();
+            if connection.remote_server_source.is_some() {
+                options.upload_binary_over_ssh = true;
+            }
+        }
+    }
+    apply_remote_server_download_settings(connection_options, china_server_adaptation)
 }
 
 pub async fn connect(
@@ -383,6 +545,8 @@ pub async fn connect(
     delegate: Arc<dyn RemoteClientDelegate>,
     cx: &mut AsyncApp,
 ) -> Result<Arc<dyn RemoteConnection>> {
+    let connection_options =
+        cx.update(|cx| connection_options_with_settings(connection_options, cx));
     cx.update(|cx| {
         cx.update_default_global(|pool: &mut ConnectionPool, cx| {
             pool.connect(connection_options.clone(), delegate.clone(), cx)
@@ -397,9 +561,10 @@ pub async fn connect(
 /// whether to show interactive UI (e.g., a password modal) before
 /// connecting.
 pub fn has_active_connection(opts: &RemoteConnectionOptions, cx: &App) -> bool {
+    let opts = connection_options_with_settings(opts.clone(), cx);
     cx.try_global::<ConnectionPool>().is_some_and(|pool| {
         matches!(
-            pool.connections.get(opts),
+            pool.connections.get(&opts),
             Some(ConnectionPoolEntry::Connected(remote))
                 if remote.upgrade().is_some_and(|r| !r.has_been_killed())
         )
@@ -419,7 +584,8 @@ impl RemoteClient {
             let success = Box::pin(async move {
                 let (outgoing_tx, outgoing_rx) = mpsc::unbounded::<Envelope>();
                 let (incoming_tx, incoming_rx) = mpsc::unbounded::<Envelope>();
-                let (connection_activity_tx, connection_activity_rx) = mpsc::channel::<()>(1);
+                let (connection_activity_tx, mut connection_activity_rx) =
+                    mpsc::channel::<()>(1);
 
                 let client = cx.update(|cx| {
                     ChannelClient::new(
@@ -444,22 +610,79 @@ impl RemoteClient {
                     platform,
                     os_version: os_version.clone(),
                     state: Some(State::Connecting),
+                    reconnect_cancellation: None,
+                    reconnect_status: None,
+                    manual_reconnect: false,
+                    connection_generation: 0,
                 });
 
-                let io_task = remote_connection.start_proxy(
-                    unique_identifier,
+                let session_invalidated = client.session_invalidated.wait();
+                let weak_client = this.downgrade();
+                cx.spawn(async move |cx| {
+                    if let Some(reason) = session_invalidated.await {
+                        weak_client
+                            .update(cx, |this, cx| {
+                                log::error!(
+                                    "remote project session {} invalidated: {reason}",
+                                    this.unique_identifier
+                                );
+                                this.set_state(State::ReconnectExhausted, cx);
+                            })
+                            .log_err();
+                    }
+                })
+                .detach();
+
+                let mut io_task = remote_connection.start_proxy(
+                    unique_identifier.clone(),
                     false,
                     incoming_tx,
                     outgoing_rx,
+                    client.outgoing_progress.clone(),
                     connection_activity_tx,
                     delegate.clone(),
                     cx,
                 );
 
-                let ready = client
+                delegate.set_status(Some("正在等待远程开发服务响应"), cx);
+                let mut ready = client
                     .wait_for_remote_started()
                     .with_timeout(INITIAL_CONNECTION_TIMEOUT, cx.background_executor())
                     .await;
+                if ready.is_err()
+                    && remote_connection.restart_unresponsive_server_on_initial_connect()
+                {
+                    log::warn!(
+                        "Zed CN remote server did not respond during initial connection; restarting it once"
+                    );
+                    delegate.set_status(
+                        Some("远程开发服务未响应，正在强制停止并重新启动"),
+                        cx,
+                    );
+                    drop(io_task);
+
+                    let (retry_outgoing_tx, retry_outgoing_rx) = mpsc::unbounded::<Envelope>();
+                    let (retry_incoming_tx, retry_incoming_rx) = mpsc::unbounded::<Envelope>();
+                    let (retry_connection_activity_tx, retry_connection_activity_rx) =
+                        mpsc::channel::<()>(1);
+                    client.reconnect(retry_incoming_rx, retry_outgoing_tx, cx);
+                    connection_activity_rx = retry_connection_activity_rx;
+                    io_task = remote_connection.start_proxy(
+                        unique_identifier,
+                        false,
+                        retry_incoming_tx,
+                        retry_outgoing_rx,
+                        client.outgoing_progress.clone(),
+                        retry_connection_activity_tx,
+                        delegate.clone(),
+                        cx,
+                    );
+                    delegate.set_status(Some("正在等待重新启动的远程开发服务响应"), cx);
+                    ready = client
+                        .wait_for_remote_started()
+                        .with_timeout(INITIAL_CONNECTION_TIMEOUT, cx.background_executor())
+                        .await;
+                }
                 match ready {
                     Ok(Some(_)) => {}
                     Ok(None) => {
@@ -502,6 +725,7 @@ impl RemoteClient {
 
                 let heartbeat_task = Self::heartbeat(this.downgrade(), connection_activity_rx, cx);
 
+                delegate.set_status(Some("远程开发连接已建立"), cx);
                 this.update(cx, |this, _| {
                     this.state = Some(State::Connected {
                         remote_connection,
@@ -604,6 +828,9 @@ impl RemoteClient {
             );
         }
 
+        if self.connection_state() == ConnectionState::Connected {
+            self.manual_reconnect = false;
+        }
         let state = self.state.take().unwrap();
         let (attempts, remote_connection, delegate) = match state {
             State::Connected {
@@ -635,10 +862,10 @@ impl RemoteClient {
             | State::ServerNotRunning => unreachable!(),
         };
 
-        let attempts = attempts + 1;
+        let attempts = attempts.saturating_add(1);
         if attempts > MAX_RECONNECT_ATTEMPTS {
             log::error!(
-                "Failed to reconnect to after {} attempts, giving up",
+                "Failed to reconnect after {} attempts, giving up",
                 MAX_RECONNECT_ATTEMPTS
             );
             self.set_state(State::ReconnectExhausted, cx);
@@ -647,85 +874,158 @@ impl RemoteClient {
 
         self.set_state(State::Reconnecting, cx);
 
-        log::info!(
-            "Trying to reconnect to remote server... Attempt {}",
-            attempts
+        let retry_delay = reconnect_delay(attempts);
+        self.set_reconnect_status(
+            if retry_delay.is_zero() {
+                format!("正在重连（第 {attempts}/{MAX_RECONNECT_ATTEMPTS} 次）")
+            } else {
+                format!(
+                    "连接中断，{} 秒后进行第 {attempts}/{MAX_RECONNECT_ATTEMPTS} 次重连",
+                    retry_delay.as_secs()
+                )
+            },
+            cx,
         );
+        if retry_delay.is_zero() {
+            log::info!(
+                "Trying to reconnect to remote server... Attempt {}",
+                attempts
+            );
+        } else {
+            log::info!(
+                "Retrying remote server connection in {:?}... Attempt {} of {}",
+                retry_delay,
+                attempts,
+                MAX_RECONNECT_ATTEMPTS
+            );
+        }
 
+        self.connection_generation = self.connection_generation.wrapping_add(1);
         let unique_identifier = self.unique_identifier.clone();
         let client = self.client.clone();
+        let (reconnect_cancellation_tx, reconnect_cancellation_rx) = oneshot::channel();
+        self.reconnect_cancellation = Some(reconnect_cancellation_tx);
+        let cancelled_remote_connection = remote_connection.clone();
+        let cancelled_delegate = delegate.clone();
         let reconnect_task = cx.spawn(async move |this, cx| {
-            macro_rules! failed {
-                ($error:expr, $attempts:expr, $remote_connection:expr, $delegate:expr) => {
-                    delegate.set_status(Some(&format!("{error:#}", error = $error)), cx);
-                    return State::ReconnectFailed {
-                        error: anyhow!($error),
-                        attempts: $attempts,
-                        remote_connection: $remote_connection,
-                        delegate: $delegate,
-                    };
-                };
-            }
+            let reconnect_attempt = async {
+                if !retry_delay.is_zero() {
+                    delegate.set_status(
+                        Some(&format!(
+                            "网络连接中断，{} 秒后进行第 {} 次重连",
+                            retry_delay.as_secs(),
+                            attempts
+                        )),
+                        cx,
+                    );
+                    cx.background_executor().timer(retry_delay).await;
+                }
 
-            if let Err(error) = remote_connection
-                .kill()
-                .await
-                .context("Failed to kill remote_connection process")
-            {
-                failed!(error, attempts, remote_connection, delegate);
-            };
-
-            let connection_options = remote_connection.connection_options();
-
-            let (outgoing_tx, outgoing_rx) = mpsc::unbounded::<Envelope>();
-            let (incoming_tx, incoming_rx) = mpsc::unbounded::<Envelope>();
-            let (connection_activity_tx, connection_activity_rx) = mpsc::channel::<()>(1);
-
-            let (remote_connection, io_task) = match async {
-                let remote_connection = cx
-                    .update_global(|pool: &mut ConnectionPool, cx| {
-                        pool.connect(connection_options, delegate.clone(), cx)
-                    })
-                    .await
-                    .map_err(|error| error.cloned())?;
-
-                let io_task = remote_connection.start_proxy(
-                    unique_identifier,
-                    true,
-                    incoming_tx,
-                    outgoing_rx,
-                    connection_activity_tx,
-                    delegate.clone(),
+                this.update(cx, |this, cx| {
+                    this.set_reconnect_status(format!("正在建立远程连接（第 {attempts}/{MAX_RECONNECT_ATTEMPTS} 次）"), cx);
+                }).log_err();
+                delegate.set_status(
+                    Some(&format!(
+                        "正在重新连接远程开发服务（第 {}/{} 次）",
+                        attempts, MAX_RECONNECT_ATTEMPTS
+                    )),
                     cx,
                 );
-                anyhow::Ok((remote_connection, io_task))
-            }
-            .await
-            {
-                Ok((remote_connection, io_task)) => (remote_connection, io_task),
-                Err(error) => {
+
+                macro_rules! failed {
+                    ($error:expr, $attempts:expr, $remote_connection:expr, $delegate:expr) => {
+                        delegate.set_status(Some(&format!("{error:#}", error = $error)), cx);
+                        return State::ReconnectFailed {
+                            error: anyhow!($error),
+                            attempts: $attempts,
+                            remote_connection: $remote_connection,
+                            delegate: $delegate,
+                        };
+                    };
+                }
+
+                if let Err(error) = remote_connection
+                    .kill()
+                    .await
+                    .context("Failed to kill remote_connection process")
+                {
                     failed!(error, attempts, remote_connection, delegate);
+                };
+
+                let connection_options = remote_connection.connection_options();
+
+                let (outgoing_tx, outgoing_rx) = mpsc::unbounded::<Envelope>();
+                let (incoming_tx, incoming_rx) = mpsc::unbounded::<Envelope>();
+                let (connection_activity_tx, connection_activity_rx) = mpsc::channel::<()>(1);
+
+                let (remote_connection, io_task) = match async {
+                    let remote_connection = cx
+                        .update_global(|pool: &mut ConnectionPool, cx| {
+                            pool.connect(connection_options, delegate.clone(), cx)
+                        })
+                        .await
+                        .map_err(|error| error.cloned())?;
+
+                    let io_task = remote_connection.start_proxy(
+                        unique_identifier,
+                        // Buffered requests reference the existing server's worktree and buffer IDs.
+                        // A new server requires a new project, not a transport-only resync.
+                        true,
+                        incoming_tx,
+                        outgoing_rx,
+                        client.outgoing_progress.clone(),
+                        connection_activity_tx,
+                        delegate.clone(),
+                        cx,
+                    );
+                    anyhow::Ok((remote_connection, io_task))
+                }
+                .await
+                {
+                    Ok((remote_connection, io_task)) => (remote_connection, io_task),
+                    Err(error) => {
+                        failed!(error, attempts, remote_connection, delegate);
+                    }
+                };
+
+                this.update(cx, |this, cx| {
+                    this.set_reconnect_status(format!("正在等待远程服务响应并同步会话（第 {attempts}/{MAX_RECONNECT_ATTEMPTS} 次）"), cx);
+                }).log_err();
+                let multiplex_task = Self::monitor(this.clone(), io_task, cx);
+                client.reconnect(incoming_rx, outgoing_tx, cx);
+
+                if let Err(error) = client.resync(RECONNECT_SYNC_TIMEOUT).await {
+                    failed!(error, attempts, remote_connection, delegate);
+                };
+                if client.session_is_invalid.load(SeqCst) {
+                    return State::ReconnectExhausted;
+                }
+
+                delegate.set_status(Some("远程开发连接已恢复"), cx);
+                State::Connected {
+                    remote_connection,
+                    delegate,
+                    multiplex_task,
+                    heartbeat_task: Self::heartbeat(this.clone(), connection_activity_rx, cx),
                 }
             };
-
-            let multiplex_task = Self::monitor(this.clone(), io_task, cx);
-            client.reconnect(incoming_rx, outgoing_tx, cx);
-
-            if let Err(error) = client.resync(HEARTBEAT_TIMEOUT).await {
-                failed!(error, attempts, remote_connection, delegate);
-            };
-
-            State::Connected {
-                remote_connection,
-                delegate,
-                multiplex_task,
-                heartbeat_task: Self::heartbeat(this.clone(), connection_activity_rx, cx),
+            futures::pin_mut!(reconnect_attempt);
+            futures::pin_mut!(reconnect_cancellation_rx);
+            select! {
+                new_state = reconnect_attempt.fuse() => new_state,
+                _ = reconnect_cancellation_rx.fuse() => State::ReconnectFailed {
+                    remote_connection: cancelled_remote_connection,
+                    delegate: cancelled_delegate,
+                    error: anyhow!("manual reconnect requested"),
+                    attempts: 0,
+                },
             }
         });
 
         cx.spawn(async move |this, cx| {
             let new_state = reconnect_task.await;
             this.update(cx, |this, cx| {
+                this.reconnect_cancellation.take();
                 let reconnected = this.state_is(State::is_reconnecting)
                     && matches!(&new_state, State::Connected { .. });
                 this.try_set_state(cx, |old_state| {
@@ -810,7 +1110,10 @@ impl RemoteClient {
                         log::debug!("Sending heartbeat to server...");
 
                         let result = select_biased! {
-                            _ = connection_activity_rx.next().fuse() => {
+                            activity = connection_activity_rx.next().fuse() => {
+                                if activity.is_none() {
+                                    anyhow::bail!("remote connection activity channel closed during heartbeat");
+                                }
                                 Ok(())
                             }
                             ping_result = client.ping(HEARTBEAT_TIMEOUT).fuse() => {
@@ -829,6 +1132,7 @@ impl RemoteClient {
                         } else if missed_heartbeats != 0 {
                             missed_heartbeats = 0;
                         } else {
+                            keepalive_timer.set(cx.background_executor().timer(HEARTBEAT_INTERVAL).fuse());
                             continue;
                         }
 
@@ -851,6 +1155,9 @@ impl RemoteClient {
         missed_heartbeats: usize,
         cx: &mut Context<Self>,
     ) -> ControlFlow<()> {
+        if missed_heartbeats > 0 && self.connection_state() == ConnectionState::Connected {
+            self.manual_reconnect = false;
+        }
         let state = self.state.take().unwrap();
         let next_state = if missed_heartbeats > 0 {
             state.heartbeat_missed()
@@ -880,8 +1187,16 @@ impl RemoteClient {
         io_task: Task<Result<i32>>,
         cx: &AsyncApp,
     ) -> Task<Result<()>> {
+        let generation = match this.read_with(cx, |this, _| this.connection_generation) {
+            Ok(generation) => generation,
+            Err(error) => return Task::ready(Err(error)),
+        };
         cx.spawn(async move |cx| {
             let result = io_task.await;
+            if !this.read_with(cx, |this, _| this.connection_generation == generation)? {
+                log::debug!("ignoring obsolete remote transport completion");
+                return Ok(());
+            }
 
             match result {
                 Ok(exit_code) => {
@@ -936,6 +1251,12 @@ impl RemoteClient {
         self.state.replace(state);
 
         if is_reconnect_exhausted || is_server_not_running {
+            self.client.response_channels.lock().clear();
+            self.client.stream_response_channels.lock().clear();
+            self.client.outgoing_progress.lock().clear();
+            if self.client.session_is_invalid.load(SeqCst) {
+                self.client.buffer.lock().clear();
+            }
             cx.emit(RemoteClientEvent::Disconnected {
                 server_not_running: is_server_not_running,
             });
@@ -986,6 +1307,16 @@ impl RemoteClient {
         connection.build_forward_ports_command(forwards)
     }
 
+    pub fn build_reverse_forward_ports_command(
+        &self,
+        forwards: Vec<(u16, String, u16)>,
+    ) -> Result<CommandTemplate> {
+        let Some(connection) = self.remote_connection() else {
+            return Err(anyhow!("no remote connection"));
+        };
+        connection.build_reverse_forward_ports_command(forwards)
+    }
+
     pub fn upload_directory(
         &self,
         src_path: PathBuf,
@@ -1000,6 +1331,20 @@ impl RemoteClient {
 
     pub fn proto_client(&self) -> AnyProtoClient {
         self.client.clone().into()
+    }
+
+    pub fn supports_temporary_files(&self) -> bool {
+        self.client.supports_temporary_files.load(SeqCst)
+    }
+
+    pub fn supports_system_stats(&self) -> bool {
+        self.client.supports_system_stats.load(SeqCst)
+    }
+
+    pub fn system_stats(
+        &self,
+    ) -> impl Future<Output = Result<proto::GetSystemStatsResponse>> + use<> {
+        self.proto_client().request(proto::GetSystemStats {})
     }
 
     pub fn connection_options(&self) -> RemoteConnectionOptions {
@@ -1022,6 +1367,41 @@ impl RemoteClient {
             .as_ref()
             .map(ConnectionState::from)
             .unwrap_or(ConnectionState::Disconnected)
+    }
+
+    pub fn reconnect_status(&self) -> Option<&str> {
+        self.reconnect_status.as_deref()
+    }
+
+    pub fn was_manual_reconnect(&self) -> bool {
+        self.manual_reconnect
+    }
+
+    fn set_reconnect_status(&mut self, status: String, cx: &mut Context<Self>) {
+        self.reconnect_status = Some(status);
+        cx.notify();
+    }
+
+    pub fn reconnect_now(&mut self, cx: &mut Context<Self>) -> Result<()> {
+        match self.connection_state() {
+            ConnectionState::HeartbeatMissed => {
+                self.manual_reconnect = true;
+                self.reconnect(cx)
+            }
+            ConnectionState::Reconnecting => {
+                let cancellation = self
+                    .reconnect_cancellation
+                    .take()
+                    .context("no active reconnect attempt to restart")?;
+                cancellation
+                    .send(())
+                    .map_err(|_| anyhow!("active reconnect attempt already completed"))?;
+                self.manual_reconnect = true;
+                self.set_reconnect_status("已收到重连请求，正在重新建立连接…".into(), cx);
+                Ok(())
+            }
+            state => anyhow::bail!("cannot reconnect manually while connection is {state:?}"),
+        }
     }
 
     pub fn is_disconnected(&self) -> bool {
@@ -1208,6 +1588,62 @@ impl RemoteClient {
             .unwrap()
     }
 
+    /// Builds a connected entity without a proxy, monitor or heartbeat for client UI tests.
+    #[cfg(feature = "test-support")]
+    pub async fn test_connected_ssh(client_cx: &mut gpui::TestAppContext) -> Entity<Self> {
+        let mut server_cx = client_cx.new_app();
+        let (options, _, guard) = Self::fake_server(client_cx, &mut server_cx);
+        drop(guard);
+        let connection = connect(
+            options,
+            Arc::new(crate::transport::mock::MockDelegate),
+            &mut client_cx.to_async(),
+        )
+        .await
+        .unwrap();
+        client_cx.new(|cx| {
+            let (outgoing_tx, _) = mpsc::unbounded();
+            let (_, incoming_rx) = mpsc::unbounded();
+            Self {
+                client: ChannelClient::new(incoming_rx, outgoing_tx, cx, "forwarding-test", false),
+                unique_identifier: "forwarding-test".into(),
+                connection_options: RemoteConnectionOptions::Ssh(Default::default()),
+                path_style: connection.path_style(),
+                platform: connection.remote_platform(),
+                os_version: None,
+                state: Some(State::Connected {
+                    remote_connection: connection,
+                    delegate: Arc::new(crate::transport::mock::MockDelegate),
+                    multiplex_task: Task::ready(Ok(())),
+                    heartbeat_task: Task::ready(Ok(())),
+                }),
+                reconnect_cancellation: None,
+                reconnect_status: None,
+                manual_reconnect: false,
+                connection_generation: 0,
+            }
+        })
+    }
+
+    /// Controlled connection changes for UI observers, not a production reconnect simulation.
+    #[cfg(feature = "test-support")]
+    pub fn set_connection_for_test(
+        &mut self,
+        connection: Option<Arc<dyn RemoteConnection>>,
+        cx: &mut Context<Self>,
+    ) {
+        self.state = Some(match connection {
+            Some(remote_connection) => State::Connected {
+                remote_connection,
+                delegate: Arc::new(crate::transport::mock::MockDelegate),
+                multiplex_task: Task::ready(Ok(())),
+                heartbeat_task: Task::ready(Ok(())),
+            },
+            None => State::Reconnecting,
+        });
+        cx.notify();
+    }
+
     pub fn remote_connection(&self) -> Option<Arc<dyn RemoteConnection>> {
         self.state
             .as_ref()
@@ -1240,7 +1676,7 @@ impl ConnectionPool {
                 if let Some(task) = task.upgrade() {
                     log::debug!("Connecting task is still alive");
                     cx.spawn(async move |cx| {
-                        delegate.set_status(Some("Waiting for existing connection attempt"), cx)
+                        delegate.set_status(Some("正在等待已有的连接任务"), cx)
                     })
                     .detach();
                     return task;
@@ -1388,7 +1824,396 @@ impl RemoteConnectionOptions {
 mod tests {
     use super::*;
     use gpui::TestAppContext;
-    use rpc::{ErrorCodeExt, proto::ErrorCode};
+    use rpc::{ErrorCodeExt, TypedEnvelope, proto::ErrorCode};
+
+    #[gpui::test]
+    async fn successful_heartbeats_keep_their_interval(
+        cx: &mut TestAppContext,
+        server_cx: &mut TestAppContext,
+    ) {
+        cx.update(|cx| release_channel::init(Version::new(0, 0, 0), cx));
+        let (options, server, guard) = RemoteClient::fake_server(cx, server_cx);
+        let handler = server_cx.new(|_| ());
+        let pings = Arc::new(AtomicU32::new(0));
+        server.add_request_handler(handler.downgrade(), {
+            let pings = pings.clone();
+            move |_, _: TypedEnvelope<proto::Ping>, _| {
+                pings.fetch_add(1, SeqCst);
+                async { Ok(proto::Ack {}) }
+            }
+        });
+        drop(guard);
+        let client = RemoteClient::connect_mock(options, cx).await;
+        // Exclude transport activity so only successful ping responses rearm the timer.
+        let (_activity_tx, activity_rx) = mpsc::channel(1);
+        let heartbeat =
+            RemoteClient::heartbeat(client.downgrade(), activity_rx, &mut cx.to_async());
+        client.update(cx, |client, _| match client.state.as_mut() {
+            Some(State::Connected { heartbeat_task, .. }) => *heartbeat_task = heartbeat,
+            _ => panic!("expected connected state"),
+        });
+        cx.run_until_parked();
+        let initial = pings.load(SeqCst);
+        for expected in 1..=3 {
+            cx.executor().advance_clock(HEARTBEAT_INTERVAL);
+            cx.run_until_parked();
+            assert_eq!(pings.load(SeqCst), initial + expected);
+        }
+    }
+
+    #[gpui::test]
+    async fn obsolete_proxy_exit_cannot_disconnect_new_attempt(
+        cx: &mut TestAppContext,
+        server_cx: &mut TestAppContext,
+    ) {
+        cx.update(|cx| release_channel::init(Version::new(0, 0, 0), cx));
+        let (options, server, guard) = RemoteClient::fake_server(cx, server_cx);
+        let handler = server_cx.new(|_| ());
+        server.add_request_handler(
+            handler.downgrade(),
+            |_, _: TypedEnvelope<proto::Ping>, _| async { Ok(proto::Ack {}) },
+        );
+        drop(guard);
+        let client = RemoteClient::connect_mock(options, cx).await;
+        let (exit_tx, exit_rx) = oneshot::channel();
+        let io_task = cx
+            .executor()
+            .spawn(async move { exit_rx.await.context("exit signal") });
+        let monitor = RemoteClient::monitor(client.downgrade(), io_task, &cx.to_async());
+        client.update(cx, |client, _| client.connection_generation += 1);
+        exit_tx
+            .send(ProxyLaunchError::ServerNotRunning.to_exit_code())
+            .expect("exit signal");
+        monitor.await.expect("obsolete monitor finishes");
+        assert_eq!(
+            client.read_with(cx, |client, _| client.connection_state()),
+            ConnectionState::Connected
+        );
+    }
+
+    #[gpui::test]
+    async fn missing_server_during_reconnect_disconnects_old_session(
+        cx: &mut TestAppContext,
+        server_cx: &mut TestAppContext,
+    ) {
+        cx.update(|cx| release_channel::init(Version::new(0, 0, 0), cx));
+        let (options, server, guard) = RemoteClient::fake_server(cx, server_cx);
+        let handler = server_cx.new(|_| ());
+        server.add_request_handler(
+            handler.downgrade(),
+            |_, _: TypedEnvelope<proto::Ping>, _| async { Ok(proto::Ack {}) },
+        );
+        drop(guard);
+        let client = RemoteClient::connect_mock(options, cx).await;
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let _subscription = cx.update(|cx| {
+            let events = events.clone();
+            cx.subscribe(&client, move |_, event, _| {
+                events.lock().push(matches!(
+                    event,
+                    RemoteClientEvent::Disconnected {
+                        server_not_running: true
+                    }
+                ));
+            })
+        });
+        client.update(cx, |client, cx| client.set_state(State::Reconnecting, cx));
+        let channel = client.read_with(cx, |client, _| client.client.clone());
+        let pending_request = channel.request(proto::Ping {});
+        let monitor = RemoteClient::monitor(
+            client.downgrade(),
+            Task::ready(Ok(ProxyLaunchError::ServerNotRunning.to_exit_code())),
+            &cx.to_async(),
+        );
+        monitor.await.expect("proxy exit should be handled");
+        assert!(pending_request.await.is_err());
+        cx.run_until_parked();
+        client.update(cx, |client, cx| {
+            assert!(client.is_disconnected());
+            assert!(client.reconnect_now(cx).is_err());
+            assert!(client.client.response_channels.lock().is_empty());
+        });
+        assert_eq!(*events.lock(), vec![true]);
+    }
+
+    #[gpui::test]
+    async fn missing_worktree_disconnects_live_client(
+        cx: &mut TestAppContext,
+        server_cx: &mut TestAppContext,
+    ) {
+        cx.update(|cx| release_channel::init(Version::new(0, 0, 0), cx));
+        let (options, server, guard) = RemoteClient::fake_server(cx, server_cx);
+        let handler = server_cx.new(|_| ());
+        server.add_request_handler(
+            handler.downgrade(),
+            |_, _: TypedEnvelope<proto::Ping>, _| async { Ok(proto::Ack {}) },
+        );
+        server.add_request_handler(
+            handler.downgrade(),
+            |_, _: TypedEnvelope<proto::CreateProjectEntry>, _| async {
+                anyhow::bail!("worktree not found")
+            },
+        );
+        drop(guard);
+        let client = RemoteClient::connect_mock(options, cx).await;
+        let disconnected = Arc::new(AtomicBool::new(false));
+        let _subscription = cx.update(|cx| {
+            let disconnected = disconnected.clone();
+            cx.subscribe(&client, move |_, event, _| {
+                if matches!(event, RemoteClientEvent::Disconnected { .. }) {
+                    disconnected.store(true, SeqCst);
+                }
+            })
+        });
+        let channel = client.read_with(cx, |client, _| client.client.clone());
+        assert!(
+            channel
+                .request(proto::CreateProjectEntry::default())
+                .await
+                .is_err()
+        );
+        cx.run_until_parked();
+        assert!(disconnected.load(SeqCst));
+        client.update(cx, |client, cx| {
+            assert!(client.is_disconnected());
+            assert!(client.reconnect_now(cx).is_err());
+        });
+        assert!(channel.buffer.lock().is_empty());
+        assert!(channel.response_channels.lock().is_empty());
+    }
+
+    #[gpui::test]
+    async fn manual_reconnect_retains_existing_session(
+        cx: &mut TestAppContext,
+        server_cx: &mut TestAppContext,
+    ) {
+        cx.update(|cx| release_channel::init(Version::new(0, 0, 0), cx));
+        let (options, server, guard) = RemoteClient::fake_server(cx, server_cx);
+        let handler = server_cx.new(|_| ());
+        server.add_request_handler(
+            handler.downgrade(),
+            |_, _: TypedEnvelope<proto::Ping>, _| async { Ok(proto::Ack {}) },
+        );
+        drop(guard);
+        let client = RemoteClient::connect_mock(options, cx).await;
+        let reconnected = Arc::new(Mutex::new(false));
+        let _subscription = cx.update(|cx| {
+            let reconnected = reconnected.clone();
+            cx.subscribe(&client, move |_, event, _| {
+                assert!(matches!(event, RemoteClientEvent::Reconnected));
+                *reconnected.lock() = true;
+            })
+        });
+        client.update(cx, |client, cx| {
+            let Some(State::Connected {
+                remote_connection,
+                delegate,
+                multiplex_task,
+                heartbeat_task,
+            }) = client.state.take()
+            else {
+                panic!("expected a connected client");
+            };
+            client.set_state(
+                State::HeartbeatMissed {
+                    missed_heartbeats: 1,
+                    remote_connection,
+                    delegate,
+                    multiplex_task,
+                    heartbeat_task,
+                },
+                cx,
+            );
+            client
+                .reconnect_now(cx)
+                .expect("manual reconnect should start");
+        });
+        cx.run_until_parked();
+        assert!(*reconnected.lock());
+        client.read_with(cx, |client, _| {
+            assert_eq!(client.connection_state(), ConnectionState::Connected);
+            assert!(client.was_manual_reconnect());
+        });
+    }
+
+    #[test]
+    fn manual_reconnect_is_available_only_for_warning_states() {
+        assert!(ConnectionState::HeartbeatMissed.can_reconnect_manually());
+        assert!(ConnectionState::Reconnecting.can_reconnect_manually());
+        assert!(!ConnectionState::Connecting.can_reconnect_manually());
+        assert!(!ConnectionState::Connected.can_reconnect_manually());
+        assert!(!ConnectionState::Disconnected.can_reconnect_manually());
+    }
+
+    #[test]
+    fn reconnect_uses_capped_exponential_backoff() {
+        assert_eq!(reconnect_delay(1), Duration::ZERO);
+        assert_eq!(reconnect_delay(2), Duration::from_secs(1));
+        assert_eq!(reconnect_delay(3), Duration::from_secs(2));
+        assert_eq!(reconnect_delay(4), Duration::from_secs(4));
+        assert_eq!(reconnect_delay(6), Duration::from_secs(16));
+        assert_eq!(reconnect_delay(7), Duration::from_secs(30));
+        assert_eq!(
+            reconnect_delay(MAX_RECONNECT_ATTEMPTS),
+            Duration::from_secs(30)
+        );
+    }
+
+    #[gpui::test]
+    fn remote_server_source_settings_apply_to_restored_connections(cx: &mut App) {
+        settings::init(cx);
+        cx.update_global::<settings::SettingsStore, _>(|store, cx| {
+            store.set_user_settings(r#"{"china_server_adaptation":false,"ssh_connections":[{"host":"example.com","remote_server_source":"zed_cn","upload_binary_over_ssh":false}]}"#, cx).expect("settings");
+        });
+        let restored = RemoteConnectionOptions::Ssh(SshConnectionOptions {
+            host: "example.com".into(),
+            ..Default::default()
+        });
+        let RemoteConnectionOptions::Ssh(effective) =
+            connection_options_with_settings(restored, cx)
+        else {
+            panic!("SSH");
+        };
+        assert_eq!(
+            effective.remote_server_source,
+            settings::RemoteServerSource::ZedCn
+        );
+        assert!(effective.upload_binary_over_ssh);
+    }
+
+    #[gpui::test]
+    fn machine_identity_scopes_remote_server_session_names(cx: &mut App) {
+        release_channel::init(Version::new(0, 0, 0), cx);
+        // Without a seeded installation the scope is still stable within the
+        // process, so a session name is never shared between machines.
+        let fallback = ConnectionIdentifier::Workspace(7).to_string(cx);
+        assert_eq!(fallback, ConnectionIdentifier::Workspace(7).to_string(cx));
+        assert!(fallback.ends_with("-ws-7"), "{fallback}");
+
+        let scope = MachineIdentity::new("01234567-89ab-cdef-0123-456789abcdef").0;
+        let scope = scope.expect("a UUID installation id scopes session names");
+        assert_eq!(scope.len(), MACHINE_SCOPE_LENGTH);
+        cx.set_global(MachineIdentity(Some(scope.clone())));
+
+        let this_machine = ConnectionIdentifier::Workspace(7).to_string(cx);
+        assert_eq!(
+            this_machine,
+            ConnectionIdentifier::Workspace(7).to_string(cx)
+        );
+        assert!(
+            this_machine.contains(&format!("{scope}-")),
+            "{this_machine}"
+        );
+        assert!(this_machine.ends_with("-ws-7"), "{this_machine}");
+        assert_ne!(this_machine, fallback);
+
+        // The same workspace id on another machine must name another session.
+        cx.set_global(MachineIdentity::new("fedcba98-7654-3210-fedc-ba9876543210"));
+        let other_machine = ConnectionIdentifier::Workspace(7).to_string(cx);
+        assert_ne!(this_machine, other_machine);
+        assert!(
+            !other_machine.contains(&format!("{scope}-")),
+            "{other_machine}"
+        );
+
+        // Setup sessions are scoped the same way.
+        let setup = ConnectionIdentifier::Setup(1).to_string(cx);
+        assert!(setup.ends_with("-setup-1"), "{setup}");
+        assert_ne!(setup, other_machine);
+
+        // An installation id that is not a UUID must not produce an unscoped
+        // name.
+        cx.set_global(MachineIdentity::new("not-a-uuid"));
+        assert_eq!(ConnectionIdentifier::Workspace(7).to_string(cx), fallback);
+    }
+
+    #[gpui::test]
+    fn remote_server_session_names_fit_the_socket_path_limit(cx: &mut App) {
+        release_channel::init(Version::new(0, 0, 0), cx);
+        cx.set_global(MachineIdentity::new("01234567-89ab-cdef-0123-456789abcdef"));
+        let name = ConnectionIdentifier::Workspace(999_999).to_string(cx);
+        // Rebuild the worst case: the longest release channel prefix, the Zed CN
+        // source prefix, and a very long username.
+        let (_, unscoped_name) = name.split_at(name.find('-').unwrap() + 1);
+        let longest_name = format!("nightly-cn-{unscoped_name}");
+        let path = format!(
+            "/home/{}/.local/share/zed/server_state/{longest_name}/stdout.sock",
+            "a-twenty-char-user"
+        );
+        assert!(
+            path.len() < 100,
+            "socket path {path} is {} characters",
+            path.len()
+        );
+    }
+
+    #[test]
+    fn remote_server_sources_have_separate_pool_keys_and_legacy_default() {
+        let official = SshConnectionOptions {
+            host: "example.com".into(),
+            ..Default::default()
+        };
+        let mut custom = official.clone();
+        custom.remote_server_source = settings::RemoteServerSource::ZedCn;
+        assert_ne!(official, custom);
+        let mut legacy = serde_json::to_value(&custom).expect("serialize");
+        legacy
+            .as_object_mut()
+            .expect("object")
+            .remove("remote_server_source");
+        let decoded: SshConnectionOptions = serde_json::from_value(legacy).expect("legacy options");
+        assert_eq!(
+            decoded.remote_server_source,
+            settings::RemoteServerSource::Official
+        );
+    }
+
+    #[test]
+    fn china_server_adaptation_forces_local_remote_server_download_for_ssh() {
+        let options = RemoteConnectionOptions::Ssh(SshConnectionOptions {
+            upload_binary_over_ssh: false,
+            ..Default::default()
+        });
+
+        let RemoteConnectionOptions::Ssh(options) =
+            apply_remote_server_download_settings(options, true)
+        else {
+            panic!("SSH options should remain SSH options");
+        };
+
+        assert!(options.upload_binary_over_ssh);
+    }
+
+    #[test]
+    fn disabled_china_server_adaptation_preserves_per_connection_setting() {
+        for upload_binary_over_ssh in [false, true] {
+            let options = RemoteConnectionOptions::Ssh(SshConnectionOptions {
+                upload_binary_over_ssh,
+                ..Default::default()
+            });
+
+            let RemoteConnectionOptions::Ssh(options) =
+                apply_remote_server_download_settings(options, false)
+            else {
+                panic!("SSH options should remain SSH options");
+            };
+
+            assert_eq!(options.upload_binary_over_ssh, upload_binary_over_ssh);
+        }
+    }
+
+    #[test]
+    fn china_server_adaptation_does_not_change_non_ssh_connections() {
+        let options = RemoteConnectionOptions::Wsl(WslConnectionOptions {
+            distro_name: "Ubuntu".to_string(),
+            user: None,
+        });
+
+        assert_eq!(
+            apply_remote_server_download_settings(options.clone(), true),
+            options
+        );
+    }
 
     #[test]
     fn test_ssh_display_name_prefers_nickname() {
@@ -1441,6 +2266,128 @@ mod tests {
             .connection_type(),
             "podman"
         );
+    }
+
+    #[gpui::test]
+    async fn test_transfer_progress_registration_is_cleaned_up(cx: &mut TestAppContext) {
+        let (_incoming_tx, incoming_rx) = mpsc::unbounded::<Envelope>();
+        let (outgoing_tx, _outgoing_rx) = mpsc::unbounded::<Envelope>();
+        let client =
+            cx.update(|cx| ChannelClient::new(incoming_rx, outgoing_tx, cx, "test-client", false));
+        let request = client.request_dynamic(
+            proto::Ping {}.into_envelope(0, None, None),
+            "Ping",
+            true,
+            Some(Arc::new(|_, _| {})),
+        );
+        assert_eq!(client.outgoing_progress.lock().len(), 1);
+        drop(request);
+        assert!(client.outgoing_progress.lock().is_empty());
+    }
+
+    #[gpui::test]
+    async fn cancelled_requests_release_response_channels(cx: &mut TestAppContext) {
+        let (_incoming_tx, incoming_rx) = mpsc::unbounded();
+        let (outgoing_tx, _outgoing_rx) = mpsc::unbounded();
+        let client =
+            cx.update(|cx| ChannelClient::new(incoming_rx, outgoing_tx, cx, "test", false));
+        let request = client.request(proto::Ping {});
+        assert_eq!(client.response_channels.lock().len(), 1);
+        drop(request);
+        assert!(client.response_channels.lock().is_empty());
+        assert!(client.ping(HEARTBEAT_TIMEOUT).await.is_err());
+        assert!(client.response_channels.lock().is_empty());
+        // Cancellation must not discard operations whose execution is uncertain.
+        assert!(!client.buffer.lock().is_empty());
+    }
+
+    #[gpui::test]
+    async fn reconnect_sync_accepts_slow_legacy_ack(cx: &mut TestAppContext) {
+        let (incoming_tx, incoming_rx) = mpsc::unbounded();
+        let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded::<Envelope>();
+        let client =
+            cx.update(|cx| ChannelClient::new(incoming_rx, outgoing_tx, cx, "test", false));
+        let executor = cx.background_executor.clone();
+        let responder = cx.executor().spawn(async move {
+            while let Some(message) = outgoing_rx.next().await {
+                if matches!(
+                    message.payload,
+                    Some(proto::envelope::Payload::FlushBufferedMessages(_))
+                ) {
+                    executor.timer(HEARTBEAT_TIMEOUT * 2).await;
+                    incoming_tx
+                        .unbounded_send(proto::Ack {}.into_envelope(100, Some(message.id), None))
+                        .expect("deliver legacy ack");
+                    break;
+                }
+            }
+        });
+        client
+            .resync(RECONNECT_SYNC_TIMEOUT)
+            .await
+            .expect("slow session sync should succeed");
+        responder.await;
+        assert!(client.response_channels.lock().is_empty());
+    }
+
+    #[gpui::test]
+    async fn reconnect_sync_timeout_releases_request(cx: &mut TestAppContext) {
+        let (_incoming_tx, incoming_rx) = mpsc::unbounded();
+        let (outgoing_tx, _outgoing_rx) = mpsc::unbounded();
+        let client =
+            cx.update(|cx| ChannelClient::new(incoming_rx, outgoing_tx, cx, "test", false));
+        assert!(client.resync(RECONNECT_SYNC_TIMEOUT).await.is_err());
+        assert!(client.response_channels.lock().is_empty());
+        assert!(client.buffer.lock().is_empty());
+    }
+
+    #[test]
+    fn missing_worktree_errors_are_scoped_to_project_requests() {
+        assert!(is_missing_remote_worktree(
+            "OpenBufferByPath",
+            "no such worktree"
+        ));
+        assert!(is_missing_remote_worktree(
+            "CreateProjectEntry",
+            "worktree not found"
+        ));
+        assert!(!is_missing_remote_worktree(
+            "CreateProjectEntry",
+            "permission denied"
+        ));
+        assert!(!is_missing_remote_worktree("LspQuery", "no such worktree"));
+        assert!(!is_missing_remote_worktree(
+            "OpenBufferByPath",
+            "unknown buffer id 1"
+        ));
+    }
+
+    #[gpui::test]
+    async fn test_missing_worktree_invalidates_session(cx: &mut TestAppContext) {
+        let (incoming_tx, incoming_rx) = mpsc::unbounded::<Envelope>();
+        let (outgoing_tx, _outgoing_rx) = mpsc::unbounded::<Envelope>();
+        let client =
+            cx.update(|cx| ChannelClient::new(incoming_rx, outgoing_tx, cx, "test-client", false));
+        let request = client.request_dynamic(
+            proto::Ping {}.into_envelope(0, None, None),
+            "OpenBufferByPath",
+            true,
+            None,
+        );
+        incoming_tx
+            .unbounded_send(
+                ErrorCode::Internal
+                    .message("no such worktree".to_string())
+                    .to_proto()
+                    .into_envelope(100, Some(0), None),
+            )
+            .unwrap();
+        assert!(request.await.is_err());
+        assert!(client.session_is_invalid.load(SeqCst));
+        assert!(client.session_invalidated.wait().await.is_some());
+        assert!(client.resync(HEARTBEAT_TIMEOUT).await.is_err());
+        assert!(client.request(proto::Ping {}).await.is_err());
+        assert!(client.response_channels.lock().is_empty());
     }
 
     #[gpui::test]
@@ -1622,10 +2569,14 @@ pub trait RemoteConnection: Send + Sync {
         reconnect: bool,
         incoming_tx: UnboundedSender<Envelope>,
         outgoing_rx: UnboundedReceiver<Envelope>,
+        outgoing_progress: crate::protocol::OutgoingProgress,
         connection_activity_tx: Sender<()>,
         delegate: Arc<dyn RemoteClientDelegate>,
         cx: &mut AsyncApp,
     ) -> Task<Result<i32>>;
+    fn restart_unresponsive_server_on_initial_connect(&self) -> bool {
+        false
+    }
     fn upload_directory(
         &self,
         src_path: PathBuf,
@@ -1650,6 +2601,10 @@ pub trait RemoteConnection: Send + Sync {
         &self,
         forwards: Vec<(u16, String, u16)>,
     ) -> Result<CommandTemplate>;
+    fn build_reverse_forward_ports_command(
+        &self,
+        forwards: Vec<(u16, String, u16)>,
+    ) -> Result<CommandTemplate>;
     fn connection_options(&self) -> RemoteConnectionOptions;
     fn path_style(&self) -> PathStyle;
     /// The remote platform (OS and architecture), detected during connection setup.
@@ -1665,7 +2620,8 @@ pub trait RemoteConnection: Send + Sync {
     fn simulate_disconnect(&self, _: &AsyncApp) {}
 }
 
-type ResponseChannels = Mutex<HashMap<MessageId, oneshot::Sender<(Envelope, oneshot::Sender<()>)>>>;
+type ResponseChannels =
+    Arc<Mutex<HashMap<MessageId, oneshot::Sender<(Envelope, oneshot::Sender<()>)>>>>;
 type StreamResponseChannels =
     Arc<Mutex<HashMap<MessageId, UnboundedSender<(Result<Envelope>, oneshot::Sender<()>)>>>>;
 
@@ -1700,7 +2656,15 @@ impl<T: Send + Clone + 'static> Signal<T> {
     }
 }
 
+// Older official servers expose missing worktrees only as unstructured errors.
+// Buffer and entry errors can be transient, so do not invalidate on those.
+fn is_missing_remote_worktree(request_type: &str, message: &str) -> bool {
+    matches!(request_type, "OpenBufferByPath" | "CreateProjectEntry")
+        && matches!(message, "no such worktree" | "worktree not found")
+}
+
 pub(crate) struct ChannelClient {
+    outgoing_progress: crate::protocol::OutgoingProgress,
     next_message_id: AtomicU32,
     outgoing_tx: Mutex<mpsc::UnboundedSender<Envelope>>,
     buffer: Mutex<VecDeque<Envelope>>,
@@ -1711,6 +2675,10 @@ pub(crate) struct ChannelClient {
     name: &'static str,
     task: Mutex<Task<Result<()>>>,
     remote_started: Signal<()>,
+    supports_temporary_files: AtomicBool,
+    supports_system_stats: AtomicBool,
+    session_invalidated: Arc<Signal<String>>,
+    session_is_invalid: Arc<AtomicBool>,
     has_wsl_interop: bool,
     executor: BackgroundExecutor,
 }
@@ -1733,12 +2701,17 @@ impl ChannelClient {
             buffer: Mutex::new(VecDeque::new()),
             name,
             executor: cx.background_executor().clone(),
+            outgoing_progress: Default::default(),
             task: Mutex::new(Self::start_handling_messages(
                 this.clone(),
                 incoming_rx,
                 &cx.to_async(),
             )),
             remote_started: Signal::new(cx),
+            supports_temporary_files: AtomicBool::new(false),
+            supports_system_stats: AtomicBool::new(false),
+            session_invalidated: Arc::new(Signal::new(cx)),
+            session_is_invalid: Arc::new(AtomicBool::new(false)),
             has_wsl_interop,
         })
     }
@@ -1754,7 +2727,13 @@ impl ChannelClient {
     ) -> Task<Result<()>> {
         cx.spawn(async move |cx| {
             if let Some(this) = this.upgrade() {
-                let envelope = proto::RemoteStarted {}.into_envelope(0, None, None);
+                let envelope = proto::RemoteStarted {
+                    capabilities: vec![
+                        TEMPORARY_FILES_CAPABILITY.to_string(),
+                        SYSTEM_STATS_CAPABILITY.to_string(),
+                    ],
+                }
+                .into_envelope(0, None, None);
                 this.outgoing_tx.lock().unbounded_send(envelope).ok();
             };
 
@@ -1790,7 +2769,21 @@ impl ChannelClient {
                     continue;
                 }
 
-                if let Some(proto::envelope::Payload::RemoteStarted(_)) = &incoming.payload {
+                if let Some(proto::envelope::Payload::RemoteStarted(started)) = &incoming.payload {
+                    this.supports_temporary_files.store(
+                        started
+                            .capabilities
+                            .iter()
+                            .any(|capability| capability == TEMPORARY_FILES_CAPABILITY),
+                        SeqCst,
+                    );
+                    this.supports_system_stats.store(
+                        started
+                            .capabilities
+                            .iter()
+                            .any(|capability| capability == SYSTEM_STATS_CAPABILITY),
+                        SeqCst,
+                    );
                     this.remote_started.set(());
                     let mut envelope = proto::Ack {}.into_envelope(0, Some(incoming.id), None);
                     envelope.id = this.next_message_id.fetch_add(1, SeqCst);
@@ -1919,8 +2912,12 @@ impl ChannelClient {
         use_buffer: bool,
     ) -> impl 'static + Future<Output = Result<T::Response>> {
         log::debug!("remote request start. name:{}", T::NAME);
-        let response =
-            self.request_dynamic(payload.into_envelope(0, None, None), T::NAME, use_buffer);
+        let response = self.request_dynamic(
+            payload.into_envelope(0, None, None),
+            T::NAME,
+            use_buffer,
+            None,
+        );
         async move {
             let response = response.await?;
             log::debug!("remote request finish. name:{}", T::NAME);
@@ -1929,6 +2926,10 @@ impl ChannelClient {
     }
 
     async fn resync(&self, timeout: Duration) -> Result<()> {
+        anyhow::ensure!(
+            !self.session_is_invalid.load(SeqCst),
+            "远程项目会话已失效，请重新打开项目"
+        );
         smol::future::or(
             async {
                 self.request_internal(proto::FlushBufferedMessages {}, false)
@@ -1974,6 +2975,7 @@ impl ChannelClient {
         mut envelope: proto::Envelope,
         type_name: &'static str,
         use_buffer: bool,
+        progress: Option<rpc::RequestProgress>,
     ) -> impl 'static + Future<Output = Result<proto::Envelope>> {
         envelope.id = self.next_message_id.fetch_add(1, SeqCst);
         let (tx, rx) = oneshot::channel();
@@ -1981,12 +2983,28 @@ impl ChannelClient {
         response_channels_lock.insert(MessageId(envelope.id), tx);
         drop(response_channels_lock);
 
+        let session_is_invalid = self.session_is_invalid.clone();
+        let invalidation_signal = self.session_invalidated.clone();
+        let outgoing_progress = self.outgoing_progress.clone();
+        let message_id = envelope.id;
+        if let Some(progress) = progress {
+            outgoing_progress.lock().insert(message_id, progress);
+        }
+        let response_channels = self.response_channels.clone();
+        let cleanup_progress = util::defer(move || {
+            outgoing_progress.lock().remove(&message_id);
+            response_channels.lock().remove(&MessageId(message_id));
+        });
         let result = if use_buffer {
             self.send_buffered(envelope)
         } else {
             self.send_unbuffered(envelope)
         };
+        if result.is_err() {
+            self.response_channels.lock().remove(&MessageId(message_id));
+        }
         async move {
+            let _cleanup_progress = cleanup_progress;
             if let Err(error) = &result {
                 log::error!("failed to send message: {error}");
                 anyhow::bail!("failed to send message: {error}");
@@ -1994,6 +3012,10 @@ impl ChannelClient {
 
             let response = rx.await.context("connection lost")?.0;
             if let Some(proto::envelope::Payload::Error(error)) = &response.payload {
+                if is_missing_remote_worktree(type_name, &error.message) {
+                    session_is_invalid.store(true, SeqCst);
+                    invalidation_signal.set(format!("{type_name}: {}", error.message));
+                }
                 return Err(RpcError::from_proto(error, type_name));
             }
             Ok(response)
@@ -2012,6 +3034,9 @@ impl ChannelClient {
         stream_response_channels.lock().insert(message_id, tx);
 
         let result = self.send_buffered(envelope);
+        if result.is_err() {
+            stream_response_channels.lock().remove(&message_id);
+        }
         async move {
             if let Err(error) = &result {
                 log::error!("failed to send message: {error}");
@@ -2055,6 +3080,10 @@ impl ChannelClient {
     }
 
     fn send_buffered(&self, mut envelope: proto::Envelope) -> Result<()> {
+        anyhow::ensure!(
+            !self.session_is_invalid.load(SeqCst),
+            "远程项目会话已失效，请重新打开项目"
+        );
         envelope.ack_id = Some(self.max_received.load(SeqCst));
         self.buffer.lock().push_back(envelope.clone());
         // ignore errors on send (happen while we're reconnecting)
@@ -2064,6 +3093,10 @@ impl ChannelClient {
     }
 
     fn send_unbuffered(&self, mut envelope: proto::Envelope) -> Result<()> {
+        anyhow::ensure!(
+            !self.session_is_invalid.load(SeqCst),
+            "远程项目会话已失效，请重新打开项目"
+        );
         envelope.ack_id = Some(self.max_received.load(SeqCst));
         self.outgoing_tx.lock().unbounded_send(envelope).ok();
         Ok(())
@@ -2071,12 +3104,23 @@ impl ChannelClient {
 }
 
 impl ProtoClient for ChannelClient {
+    fn request_with_progress(
+        &self,
+        envelope: Envelope,
+        request_type: &'static str,
+        progress: rpc::RequestProgress,
+    ) -> BoxFuture<'static, Result<Envelope>> {
+        self.request_dynamic(envelope, request_type, true, Some(progress))
+            .boxed()
+    }
+
     fn request(
         &self,
         envelope: proto::Envelope,
         request_type: &'static str,
     ) -> BoxFuture<'static, Result<proto::Envelope>> {
-        self.request_dynamic(envelope, request_type, true).boxed()
+        self.request_dynamic(envelope, request_type, true, None)
+            .boxed()
     }
 
     fn request_stream(

@@ -62,9 +62,9 @@ pub fn init(cx: &mut App) {
 
                     cx.prompt(
                         PromptLevel::Info,
-                        "Copied into clipboard",
+                        "已复制到剪贴板",
                         Some(&specs),
-                        &["OK"],
+                        &["确定"],
                     )
                     .await
                 })
@@ -75,9 +75,9 @@ pub fn init(cx: &mut App) {
                 cx.write_to_clipboard(ClipboardItem::new_string(clipboard_text.clone()));
                 drop(window.prompt(
                     PromptLevel::Info,
-                    "Copied into clipboard",
+                    "已复制到剪贴板",
                     Some(&clipboard_text),
-                    &["OK"],
+                    &["确定"],
                     cx,
                 ));
             })

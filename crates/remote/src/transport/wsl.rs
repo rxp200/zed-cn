@@ -194,10 +194,7 @@ impl WslRemoteConnection {
         version: Version,
         cx: &mut AsyncApp,
     ) -> Result<Arc<RelPath>> {
-        let version_str = match release_channel {
-            ReleaseChannel::Dev => "build".to_string(),
-            _ => version.to_string(),
-        };
+        let version_str = super::remote_server_version(release_channel, &version);
 
         let binary_name = format!(
             "zed-remote-server-{}-{}",
@@ -430,6 +427,7 @@ impl RemoteConnection for WslRemoteConnection {
         reconnect: bool,
         incoming_tx: UnboundedSender<Envelope>,
         outgoing_rx: UnboundedReceiver<Envelope>,
+        outgoing_progress: crate::protocol::OutgoingProgress,
         connection_activity_tx: Sender<()>,
         delegate: Arc<dyn RemoteClientDelegate>,
         cx: &mut AsyncApp,
@@ -476,6 +474,7 @@ impl RemoteConnection for WslRemoteConnection {
             proxy_process,
             incoming_tx,
             outgoing_rx,
+            outgoing_progress,
             connection_activity_tx,
             cx,
         )
@@ -599,6 +598,13 @@ impl RemoteConnection for WslRemoteConnection {
     }
 
     fn build_forward_ports_command(
+        &self,
+        _: Vec<(u16, String, u16)>,
+    ) -> anyhow::Result<CommandTemplate> {
+        Err(anyhow!("WSL shares a network interface with the host"))
+    }
+
+    fn build_reverse_forward_ports_command(
         &self,
         _: Vec<(u16, String, u16)>,
     ) -> anyhow::Result<CommandTemplate> {
