@@ -2298,6 +2298,7 @@ impl Workspace {
                 _ => requesting_window,
             };
 
+            let created_new_window = window_to_replace.is_none();
             let (window, workspace): (WindowHandle<MultiWorkspace>, Entity<Workspace>) =
                 if let Some(window) = window_to_replace {
                     let centered_layout = serialized_workspace
@@ -2396,6 +2397,12 @@ impl Workspace {
                         })?;
                     (window, workspace)
                 };
+
+            if created_new_window {
+                window
+                    .update(cx, |_, window, _cx| window.activate_window())
+                    .log_err();
+            }
 
             notify_if_database_failed(window, cx);
             // Check if this is an empty workspace (no paths to open)
