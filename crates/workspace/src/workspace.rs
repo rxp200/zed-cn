@@ -11196,6 +11196,7 @@ pub fn open_workspace_by_id(
 
         let centered_layout = serialized_workspace.centered_layout;
 
+        let created_new_window = requesting_window.is_none();
         let (window, workspace) = if let Some(window) = requesting_window {
             let workspace = window.update(cx, |multi_workspace, window, cx| {
                 let workspace = cx.new(|cx| {
@@ -11259,6 +11260,12 @@ pub fn open_workspace_by_id(
 
             (window, workspace)
         };
+
+        if created_new_window {
+            window
+                .update(cx, |_, window, _cx| window.activate_window())
+                .log_err();
+        }
 
         notify_if_database_failed(window, cx);
 

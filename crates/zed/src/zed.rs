@@ -631,7 +631,15 @@ pub fn initialize_workspace(app_state: Arc<AppState>, cx: &mut App) {
         let activity_indicator = activity_indicator::ActivityIndicator::new(workspace, window, cx);
         let file_transfer_indicator =
             activity_indicator::file_transfer::FileTransferIndicator::new(workspace, cx);
-        let system_monitor = activity_indicator::system_monitor::SystemMonitor::new(workspace, cx);
+        let system_monitor_data =
+            activity_indicator::system_monitor::SystemMonitorData::new(workspace, cx);
+        let system_monitor = cx.new(|cx| {
+            activity_indicator::system_monitor::SystemMonitor::new(
+                system_monitor_data.clone(),
+                workspace.right_dock().clone(),
+                cx,
+            )
+        });
         workspace.register_action(
             |workspace, _: &activity_indicator::system_monitor::ToggleFocus, window, cx| {
                 workspace.toggle_panel_visibility::<
@@ -644,7 +652,7 @@ pub fn initialize_workspace(app_state: Arc<AppState>, cx: &mut App) {
             .map(|panel| panel.read(cx).port_forward_manager());
         let system_monitor_panel = cx.new(|cx| {
             activity_indicator::system_monitor::SystemMonitorPanel::new(
-                system_monitor.clone(),
+                system_monitor_data,
                 port_forward_manager,
                 cx,
             )

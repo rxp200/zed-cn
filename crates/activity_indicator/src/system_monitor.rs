@@ -134,7 +134,7 @@ impl LocalSampler {
     }
 }
 
-pub struct SystemMonitor {
+pub struct SystemMonitorData {
     stats: Option<SystemStats>,
     cpu_history: VecDeque<f32>,
     download_history: VecDeque<u64>,
@@ -142,22 +142,18 @@ pub struct SystemMonitor {
     remote_name: Option<String>,
     error: Option<String>,
     _refresh_task: Task<()>,
-    right_dock: Entity<workspace::dock::Dock>,
-    _dock_subscription: Subscription,
 }
 
-impl SystemMonitor {
+impl SystemMonitorData {
     pub fn new(workspace: &Workspace, cx: &mut App) -> Entity<Self> {
         let remote_client = workspace.project().read(cx).remote_client();
         let remote_name = remote_client
             .as_ref()
             .map(|client| client.read(cx).connection_options().host());
-        let right_dock = workspace.right_dock().clone();
         cx.new(|cx| {
-            let dock_subscription = cx.observe(&right_dock, |_, _, cx| cx.notify());
             let refresh_task = cx.spawn({
                 let remote_client = remote_client.clone();
-                async move |this: WeakEntity<SystemMonitor>, cx| {
+                async move |this: WeakEntity<SystemMonitorData>, cx| {
                     let mut local_sampler = remote_client.is_none().then(LocalSampler::new);
                     loop {
                         let result = if let Some(remote_client) = remote_client.as_ref() {
@@ -203,8 +199,6 @@ impl SystemMonitor {
                 remote_name,
                 error: None,
                 _refresh_task: refresh_task,
-                right_dock,
-                _dock_subscription: dock_subscription,
             }
         })
     }
@@ -314,9 +308,33 @@ impl SystemMonitor {
     }
 }
 
+pub struct SystemMonitor {
+    data: Entity<SystemMonitorData>,
+    right_dock: Entity<workspace::dock::Dock>,
+    _data_subscription: Subscription,
+    _dock_subscription: Subscription,
+}
+
+impl SystemMonitor {
+    pub fn new(
+        data: Entity<SystemMonitorData>,
+        right_dock: Entity<workspace::dock::Dock>,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let data_subscription = cx.observe(&data, |_, _, cx| cx.notify());
+        let dock_subscription = cx.observe(&right_dock, |_, _, cx| cx.notify());
+        Self {
+            data,
+            right_dock,
+            _data_subscription: data_subscription,
+            _dock_subscription: dock_subscription,
+        }
+    }
+}
+
 impl Render for SystemMonitor {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let monitor = cx.entity();
+        let data = self.data.clone();
         let dock = self.right_dock.read(cx);
         let open = dock
             .visible_panel()
@@ -329,7 +347,7 @@ impl Render for SystemMonitor {
             .aria_label("系统监控")
             .aria_expanded(open)
             .tooltip(ui::Tooltip::element(move |_, cx| {
-                monitor.read(cx).tooltip_element()
+                data.read(cx).tooltip_element()
             }))
             .on_click(|_, window, cx| {
                 window.dispatch_action(ToggleFocus.boxed_clone(), cx);
@@ -352,7 +370,7 @@ impl StatusItemView for SystemMonitor {
 }
 
 pub struct SystemMonitorPanel {
-    monitor: Entity<SystemMonitor>,
+    data: Entity<SystemMonitorData>,
     port_forward_manager: Option<Entity<PortForwardManager>>,
     focus_handle: FocusHandle,
     _monitor_subscription: Subscription,
@@ -361,19 +379,16 @@ pub struct SystemMonitorPanel {
 
 impl SystemMonitorPanel {
     pub fn new(
-        monitor: Entity<SystemMonitor>,
+        data: Entity<SystemMonitorData>,
         port_forward_manager: Option<Entity<PortForwardManager>>,
         cx: &mut Context<Self>,
     ) -> Self {
         let port_forward_subscription = port_forward_manager
             .as_ref()
             .map(|manager| cx.observe(manager, |_, _, cx| cx.notify()));
-        // 采样任务每 2 秒只对 `SystemMonitor` 实体调用 `cx.notify()`，
-        // 面板若不显式订阅该实体就不会被标记为 dirty，
-        // GPUI 会直接复用上一帧的绘制缓存，导致 CPU/网络等数据看起来不刷新。
-        let monitor_subscription = cx.observe(&monitor, |_, _, cx| cx.notify());
+        let monitor_subscription = cx.observe(&data, |_, _, cx| cx.notify());
         Self {
-            monitor,
+            data,
             port_forward_manager,
             focus_handle: cx.focus_handle(),
             _monitor_subscription: monitor_subscription,
@@ -443,7 +458,7 @@ impl Panel for SystemMonitorPanel {
 
 impl Render for SystemMonitorPanel {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let monitor = self.monitor.read(cx);
+        let monitor = self.data.read(cx);
         let stats = monitor.stats.as_ref();
         let forwarded_ports = self
             .port_forward_manager
@@ -721,7 +736,7 @@ fn port_forwarding_card(entries: &[ForwardSnapshot], cx: &App) -> impl IntoEleme
         }))
 }
 
-fn network_card(stats: &SystemStats, monitor: &SystemMonitor, cx: &App) -> impl IntoElement {
+fn network_card(stats: &SystemStats, monitor: &SystemMonitorData, cx: &App) -> impl IntoElement {
     let maximum = monitor
         .download_history
         .iter()
