@@ -55,6 +55,8 @@ mod fake_git_repo;
 #[cfg(feature = "test-support")]
 use collections::{BTreeMap, btree_map};
 #[cfg(feature = "test-support")]
+pub use fake_git_repo::FakeBlobReadGate;
+#[cfg(feature = "test-support")]
 use fake_git_repo::{FakeCommitDataEntry, FakeGitRepositoryState};
 #[cfg(feature = "test-support")]
 use git::{
@@ -1269,7 +1271,7 @@ impl Fs for RealFs {
         let job_info = JobInfo {
             id: job_id,
             start: Instant::now(),
-            message: SharedString::from(format!("Cloning {}", repo_url)),
+            message: SharedString::from(format!("正在克隆 {}", repo_url)),
         };
 
         let job_tracker = JobTracker::new(job_info, self.job_event_subscribers.clone());
@@ -1280,19 +1282,16 @@ impl Fs for RealFs {
             .stderr(Stdio::piped())
             .kill_on_drop(true)
             .spawn()?;
-        let stderr = child
-            .stderr
-            .take()
-            .context("failed to read git clone progress")?;
+        let stderr = child.stderr.take().context("无法读取 Git 克隆进度")?;
         let stderr_output = git_clone_progress::read(stderr, |message| {
-            job_tracker.update(message.into());
+            job_tracker.update(git_clone_progress::localized_progress(&message).into());
         })
         .await?;
         let status = child.status().await?;
 
         if !status.success() {
             anyhow::bail!(
-                "git clone failed: {}",
+                "Git 克隆失败：{}",
                 git_clone_progress::failure_message(&stderr_output)
             );
         }
@@ -2444,20 +2443,32 @@ impl FakeFs {
         &self,
         dot_git: &Path,
         contents_by_path: &[(&str, String)],
-    ) {
+    ) -> Vec<git::Oid> {
         self.with_git_state(dot_git, true, |state| {
             use git::Oid;
 
             state.merge_base_contents.clear();
-            let oids = (1..)
-                .map(|n| n.to_string())
-                .map(|n| Oid::from_bytes(n.repeat(20).as_bytes()).unwrap());
-            for ((path, content), oid) in contents_by_path.iter().zip(oids) {
+            let mut assigned = Vec::with_capacity(contents_by_path.len());
+            for (index, (path, content)) in contents_by_path.iter().enumerate() {
+                let mut bytes = [0u8; 20];
+                bytes[..4].copy_from_slice(&((index as u32) + 1).to_be_bytes());
+                let oid = Oid::from_bytes(&bytes).unwrap();
                 state.merge_base_contents.insert(repo_path(path), oid);
                 state.oids.insert(oid, content.as_bytes().to_vec());
+                assigned.push(oid);
             }
+            assigned
+        })
+        .unwrap()
+    }
+
+    pub fn install_blob_read_gate_for_repo(&self, dot_git: &Path) -> FakeBlobReadGate {
+        let gate = FakeBlobReadGate::default();
+        self.with_git_state(dot_git, false, |state| {
+            state.blob_read_gate = Some(gate.clone());
         })
         .unwrap();
+        gate
     }
 
     pub fn set_blame_for_repo(&self, dot_git: &Path, blames: Vec<(RepoPath, git::blame::Blame)>) {

@@ -1,5 +1,5 @@
 use editor::{Editor, MultiBuffer};
-use gpui::{AnyElement, Entity, Modifiers};
+use gpui::{Action, AnyElement, Entity, Modifiers};
 use markdown_preview::markdown_preview_view::MarkdownPreviewView;
 use svg_preview::svg_preview_view::SvgPreviewView;
 use tabular_data_preview::TabularDataPreviewPane;
@@ -11,6 +11,7 @@ enum PreviewTarget {
     Markdown(Entity<Editor>),
     Svg(Entity<MultiBuffer>),
     TabularData(Entity<Editor>),
+    Web,
 }
 
 impl QuickActionBar {
@@ -20,6 +21,8 @@ impl QuickActionBar {
         // targets the content of the pane it belongs to.
         let active_item = self.active_item.as_ref()?;
         let editor = active_item.act_as::<Editor>(cx);
+        let web_preview_active =
+            web_preview::preview_state(cx).is_some_and(|state| state.read(cx).is_active());
 
         let preview_target = if let Some(editor) = &editor
             && MarkdownPreviewView::is_markdown_file(editor, cx)
@@ -29,6 +32,10 @@ impl QuickActionBar {
             && SvgPreviewView::is_svg_file(&buffer, cx)
         {
             PreviewTarget::Svg(buffer)
+        } else if let Some(editor) = &editor
+            && web_preview::is_html_editor(editor, cx)
+        {
+            PreviewTarget::Web
         } else if let Some(editor) = editor
             && TabularDataPreviewPane::is_tabular_data_file(&editor, cx)
         {
@@ -50,21 +57,52 @@ impl QuickActionBar {
             ),
             PreviewTarget::TabularData(_) => (
                 "toggle-tabular-preview",
-                "Preview Tabular Data",
+                "预览表格数据",
                 &tabular_data_preview::OpenPreview as &dyn gpui::Action,
             ),
+            PreviewTarget::Web => {
+                if web_preview_active {
+                    (
+                        "open-web-preview",
+                        "停止网页实时预览",
+                        &zed_actions::preview::web::StopPreview as &dyn gpui::Action,
+                    )
+                } else {
+                    (
+                        "open-web-preview",
+                        "在浏览器中实时预览网页",
+                        &zed_actions::preview::web::OpenPreview as &dyn gpui::Action,
+                    )
+                }
+            }
         };
 
+        let is_web = matches!(preview_target, PreviewTarget::Web);
+        let web_preview_icon = if web_preview_active {
+            IconName::Eye
+        } else {
+            IconName::EyeOff
+        };
         let alt_click = gpui::Keystroke {
             key: "click".into(),
             modifiers: Modifiers::alt(),
             ..Default::default()
         };
 
-        let button = IconButton::new(button_id, IconName::Eye)
-            .icon_size(IconSize::Small)
-            .style(ButtonStyle::Subtle)
-            .tooltip(move |_window, cx| {
+        let button = IconButton::new(
+            button_id,
+            if is_web {
+                web_preview_icon
+            } else {
+                IconName::Eye
+            },
+        )
+        .icon_size(IconSize::Small)
+        .style(ButtonStyle::Subtle)
+        .tooltip(move |_window, cx| {
+            if is_web {
+                Tooltip::for_action(tooltip_text, open_action_for_tooltip, cx)
+            } else {
                 Tooltip::with_meta(
                     tooltip_text,
                     Some(open_action_for_tooltip),
@@ -74,60 +112,74 @@ impl QuickActionBar {
                     ),
                     cx,
                 )
-            })
-            .on_click({
-                let workspace_handle = self.workspace.clone();
-                let active_item = active_item.boxed_clone();
-                move |_, window, cx| {
-                    let Some(workspace) = workspace_handle.upgrade() else {
+            }
+        })
+        .on_click({
+            let workspace_handle = self.workspace.clone();
+            let active_item = active_item.boxed_clone();
+            move |_, window, cx| {
+                let Some(workspace) = workspace_handle.upgrade() else {
+                    return;
+                };
+                workspace.update(cx, |workspace, cx| {
+                    let Some(pane) = workspace.pane_for(active_item.as_ref()) else {
                         return;
                     };
-                    workspace.update(cx, |workspace, cx| {
-                        let Some(pane) = workspace.pane_for(active_item.as_ref()) else {
-                            return;
-                        };
-                        let open_to_the_side = window.modifiers().alt;
-                        match &preview_target {
-                            PreviewTarget::Markdown(editor) => {
-                                let editor = editor.clone();
-                                if open_to_the_side {
-                                    MarkdownPreviewView::open_preview_to_the_side_of_pane(
-                                        workspace, editor, pane, window, cx,
-                                    );
-                                } else {
-                                    MarkdownPreviewView::open_preview_in_pane(
-                                        workspace, editor, pane, window, cx,
-                                    );
-                                }
-                            }
-                            PreviewTarget::Svg(buffer) => {
-                                let buffer = buffer.clone();
-                                if open_to_the_side {
-                                    SvgPreviewView::open_preview_to_the_side_of_pane(
-                                        workspace, buffer, pane, window, cx,
-                                    );
-                                } else {
-                                    SvgPreviewView::open_preview_in_pane(
-                                        workspace, buffer, pane, window, cx,
-                                    );
-                                }
-                            }
-                            PreviewTarget::TabularData(editor) => {
-                                let editor = editor.clone();
-                                if open_to_the_side {
-                                    TabularDataPreviewPane::open_preview_to_the_side_of_pane(
-                                        workspace, editor, pane, window, cx,
-                                    );
-                                } else {
-                                    TabularDataPreviewPane::open_preview_in_pane(
-                                        editor, pane, window, cx,
-                                    );
-                                }
+                    let open_to_the_side = window.modifiers().alt;
+                    match &preview_target {
+                        PreviewTarget::Markdown(editor) => {
+                            let editor = editor.clone();
+                            if open_to_the_side {
+                                MarkdownPreviewView::open_preview_to_the_side_of_pane(
+                                    workspace, editor, pane, window, cx,
+                                );
+                            } else {
+                                MarkdownPreviewView::open_preview_in_pane(
+                                    workspace, editor, pane, window, cx,
+                                );
                             }
                         }
-                    });
-                }
-            });
+                        PreviewTarget::Svg(buffer) => {
+                            let buffer = buffer.clone();
+                            if open_to_the_side {
+                                SvgPreviewView::open_preview_to_the_side_of_pane(
+                                    workspace, buffer, pane, window, cx,
+                                );
+                            } else {
+                                SvgPreviewView::open_preview_in_pane(
+                                    workspace, buffer, pane, window, cx,
+                                );
+                            }
+                        }
+                        PreviewTarget::TabularData(editor) => {
+                            let editor = editor.clone();
+                            if open_to_the_side {
+                                TabularDataPreviewPane::open_preview_to_the_side_of_pane(
+                                    workspace, editor, pane, window, cx,
+                                );
+                            } else {
+                                TabularDataPreviewPane::open_preview_in_pane(
+                                    editor, pane, window, cx,
+                                );
+                            }
+                        }
+                        PreviewTarget::Web => {
+                            if web_preview_active {
+                                window.dispatch_action(
+                                    zed_actions::preview::web::StopPreview.boxed_clone(),
+                                    cx,
+                                );
+                            } else {
+                                window.dispatch_action(
+                                    zed_actions::preview::web::OpenPreview.boxed_clone(),
+                                    cx,
+                                );
+                            }
+                        }
+                    }
+                });
+            }
+        });
 
         Some(button.into_any_element())
     }

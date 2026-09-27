@@ -87,6 +87,58 @@ impl AppCommitSha {
     }
 }
 
+/// The exact custom release tag embedded in the desktop build.
+#[derive(Clone)]
+pub struct CustomReleaseTag(pub String);
+
+impl Global for CustomReleaseTag {}
+
+impl CustomReleaseTag {
+    /// Returns a validated Stable tag matching the running application's version.
+    pub fn current(cx: &App) -> Option<String> {
+        if ReleaseChannel::global(cx) != ReleaseChannel::Stable {
+            return None;
+        }
+        let tag = &cx.try_global::<Self>()?.0;
+        let version = AppVersion::global(cx);
+        let prefix = format!(
+            "zed-cn-v{}.{}.{}-r",
+            version.major, version.minor, version.patch
+        );
+        let revision = tag.strip_prefix(&prefix)?;
+        if revision.starts_with('0') || !revision.bytes().all(|byte| byte.is_ascii_digit()) {
+            return None;
+        }
+        revision
+            .parse::<u64>()
+            .ok()
+            .filter(|revision| *revision > 0)?;
+        Some(tag.clone())
+    }
+}
+
+#[gpui::test]
+fn custom_remote_server_tag_requires_matching_stable_release(cx: &mut App) {
+    cx.set_global(GlobalAppVersion(Version::new(1, 19, 2)));
+    cx.set_global(GlobalReleaseChannel(ReleaseChannel::Stable));
+    for tag in ["zed-cn-v1.19.2-r1", "zed-cn-v1.19.2-r12"] {
+        cx.set_global(CustomReleaseTag(tag.to_owned()));
+        assert_eq!(CustomReleaseTag::current(cx).as_deref(), Some(tag));
+    }
+    for tag in [
+        "zed-cn-v1.19.1-r1",
+        "zed-cn-v1.19.2-r0",
+        "zed-cn-v1.19.2-r01",
+        "zed-cn-v1.19.2-r1/other",
+    ] {
+        cx.set_global(CustomReleaseTag(tag.to_owned()));
+        assert!(CustomReleaseTag::current(cx).is_none());
+    }
+    cx.set_global(CustomReleaseTag("zed-cn-v1.19.2-r1".to_owned()));
+    cx.set_global(GlobalReleaseChannel(ReleaseChannel::Dev));
+    assert!(CustomReleaseTag::current(cx).is_none());
+}
+
 struct GlobalAppVersion(Version);
 
 impl Global for GlobalAppVersion {}

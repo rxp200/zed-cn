@@ -23,13 +23,11 @@ use language::{
     },
 };
 use project::{DisableAiSettings, Project};
-use regex::Regex;
-use settings::{Settings, SettingsStore, update_settings_file};
-use std::{
-    rc::Rc,
-    sync::{Arc, LazyLock},
-    time::Duration,
+use settings::{
+    Settings, SettingsContent, SettingsStore, SplicingVec, find_value_range_in_json_text,
+    update_settings_file,
 };
+use std::{ops::Range, rc::Rc, sync::Arc, time::Duration};
 use ui::{
     Clickable, ContextMenu, ContextMenuEntry, DocumentationSide, IconButton, IconButtonShape,
     Indicator, PopoverMenu, PopoverMenuHandle, ProgressBar, Tooltip, prelude::*,
@@ -236,7 +234,7 @@ impl Render for EditPredictionButton {
                             IconButton::new("codestral-icon", IconName::AiMistral)
                                 .shape(IconButtonShape::Square)
                                 .tab_index(0isize)
-                                .aria_label("Edit Prediction")
+                                .aria_label("编辑预测")
                                 .when(!has_api_key, |this| {
                                     this.indicator(Indicator::dot().color(Color::Error))
                                         .indicator_border_color(Some(
@@ -250,12 +248,7 @@ impl Render for EditPredictionButton {
                                         ))
                                 }),
                             move |_window, cx| {
-                                Tooltip::with_meta(
-                                    "Edit Prediction",
-                                    Some(&ToggleMenu),
-                                    tooltip_meta,
-                                    cx,
-                                )
+                                Tooltip::with_meta("编辑预测", Some(&ToggleMenu), tooltip_meta, cx)
                             },
                         )
                         .with_handle(self.popover_menu_handle.clone()),
@@ -282,7 +275,7 @@ impl Render for EditPredictionButton {
                             IconButton::new("openai-compatible-api-icon", IconName::AiOpenAiCompat)
                                 .shape(IconButtonShape::Square)
                                 .tab_index(0isize)
-                                .aria_label("Edit Prediction")
+                                .aria_label("编辑预测")
                                 .when(!enabled, |this| {
                                     this.indicator(Indicator::dot().color(Color::Ignored))
                                         .indicator_border_color(Some(
@@ -314,7 +307,7 @@ impl Render for EditPredictionButton {
                             IconButton::new("ollama-icon", IconName::AiOllama)
                                 .shape(IconButtonShape::Square)
                                 .tab_index(0isize)
-                                .aria_label("Edit Prediction")
+                                .aria_label("编辑预测")
                                 .when(!enabled, |this| {
                                     this.indicator(Indicator::dot().color(Color::Ignored))
                                         .indicator_border_color(Some(
@@ -333,12 +326,7 @@ impl Render for EditPredictionButton {
                                     }
                                 };
 
-                                Tooltip::with_meta(
-                                    "Edit Prediction",
-                                    Some(&ToggleMenu),
-                                    tooltip_meta,
-                                    cx,
-                                )
+                                Tooltip::with_meta("编辑预测", Some(&ToggleMenu), tooltip_meta, cx)
                             },
                         )
                         .with_handle(self.popover_menu_handle.clone()),
@@ -456,7 +444,7 @@ impl Render for EditPredictionButton {
                 let icon_button = IconButton::new("zed-predict-pending-button", ep_icon)
                     .shape(IconButtonShape::Square)
                     .tab_index(0isize)
-                    .aria_label("Edit Prediction")
+                    .aria_label("编辑预测")
                     .when_some(indicator_color, |this, color| {
                         this.indicator(Indicator::dot().color(color))
                             .indicator_border_color(Some(cx.theme().colors().status_bar_background))
@@ -473,12 +461,7 @@ impl Render for EditPredictionButton {
                                 "Enable to Use"
                             };
 
-                            Tooltip::with_meta(
-                                "Edit Prediction",
-                                Some(&ToggleMenu),
-                                description,
-                                cx,
-                            )
+                            Tooltip::with_meta("编辑预测", Some(&ToggleMenu), description, cx)
                         })
                     });
 
@@ -611,7 +594,21 @@ impl EditPredictionButton {
             .collect();
 
         if !providers.is_empty() {
-            menu = menu.separator().header("Providers");
+            let fs = self.fs.clone();
+            menu = menu.separator().header("Providers").item(
+                ContextMenuEntry::new("关闭")
+                    .toggleable(
+                        IconPosition::Start,
+                        current_provider == EditPredictionProvider::None,
+                    )
+                    .documentation_aside(DocumentationSide::Left, move |_| {
+                        Label::new("关闭 AI 编辑预测并隐藏状态栏图标，可在设置中重新启用。")
+                            .into_any_element()
+                    })
+                    .handler(move |_, cx| {
+                        set_completion_provider(fs.clone(), cx, EditPredictionProvider::None);
+                    }),
+            );
 
             for provider in providers {
                 let Some(name) = provider.display_name() else {
@@ -628,8 +625,7 @@ impl EditPredictionButton {
                         .disabled(is_disabled_zed_provider)
                         .when(is_disabled_zed_provider, |item| {
                             item.documentation_aside(DocumentationSide::Left, move |_cx| {
-                                Label::new("Edit predictions are disabled for this organization.")
-                                    .into_any_element()
+                                Label::new("此组织的编辑预测已被禁用。").into_any_element()
                             })
                         })
                         .handler(move |_, cx| {
@@ -722,7 +718,7 @@ impl EditPredictionButton {
         let fs = self.fs.clone();
         let line_height = window.line_height();
 
-        menu = menu.header("Show Edit Predictions For");
+        menu = menu.header("显示编辑预测范围");
 
         let language_state = self.language.as_ref().map(|language| {
             (
@@ -732,7 +728,7 @@ impl EditPredictionButton {
         });
 
         if let Some(editor_focus_handle) = self.editor_focus_handle.clone() {
-            let entry = ContextMenuEntry::new("This Buffer")
+            let entry = ContextMenuEntry::new("当前缓冲区")
                 .toggleable(IconPosition::Start, self.editor_show_predictions)
                 .action(Box::new(editor::actions::ToggleEditPrediction))
                 .handler(move |window, cx| {
@@ -748,11 +744,8 @@ impl EditPredictionButton {
                     menu = menu.item(entry.disabled(true).documentation_aside(
                         DocumentationSide::Left,
                         move |_cx| {
-                            Label::new(format!(
-                                "Edit predictions are disabled for {}",
-                                language.name()
-                            ))
-                            .into_any_element()
+                            Label::new(format!("已对 {} 禁用编辑预测", language.name()))
+                                .into_any_element()
                         },
                     ));
                 }
@@ -784,7 +777,7 @@ impl EditPredictionButton {
         let settings = AllLanguageSettings::get_global(cx);
 
         let globally_enabled = settings.show_edit_predictions(None, cx);
-        let entry = ContextMenuEntry::new("All Files")
+        let entry = ContextMenuEntry::new("所有文件")
             .toggleable(IconPosition::Start, globally_enabled)
             .action(workspace::ToggleEditPrediction.boxed_clone())
             .handler(|window, cx| {
@@ -798,51 +791,51 @@ impl EditPredictionButton {
         let eager_mode = matches!(current_mode, EditPredictionsMode::Eager);
 
         menu = menu
-                .separator()
-                .header("Display Modes")
-                .item(
-                    ContextMenuEntry::new("Eager")
-                        .toggleable(IconPosition::Start, eager_mode)
-                        .documentation_aside(DocumentationSide::Left, move |_| {
-                            Label::new("Display predictions inline when there are no language server completions available.").into_any_element()
-                        })
-                        .handler({
-                            let fs = fs.clone();
-                            move |_, cx| {
-                                telemetry::event!(
-                                    "Edit Prediction Setting Changed",
-                                    setting = "mode",
-                                    value = "eager",
-                                );
-                                toggle_edit_prediction_mode(fs.clone(), EditPredictionsMode::Eager, cx)
-                            }
-                        }),
-                )
-                .item(
-                    ContextMenuEntry::new("Subtle")
-                        .toggleable(IconPosition::Start, subtle_mode)
-                        .documentation_aside(DocumentationSide::Left, move |_| {
-                            Label::new(concat!(
-                                "Display predictions inline only when holding a modifier key (",
-                                ui::alt_key_name!(),
-                                " by default)."
-                            ))
-                            .into_any_element()
-                        })
-                        .handler({
-                            let fs = fs.clone();
-                            move |_, cx| {
-                                telemetry::event!(
-                                    "Edit Prediction Setting Changed",
-                                    setting = "mode",
-                                    value = "subtle",
-                                );
-                                toggle_edit_prediction_mode(fs.clone(), EditPredictionsMode::Subtle, cx)
-                            }
-                        }),
-                );
+            .separator()
+            .header("显示模式")
+            .item(
+                ContextMenuEntry::new("即时")
+                    .toggleable(IconPosition::Start, eager_mode)
+                    .documentation_aside(DocumentationSide::Left, move |_| {
+                        Label::new("当没有语言服务器补全可用时内联显示预测。").into_any_element()
+                    })
+                    .handler({
+                        let fs = fs.clone();
+                        move |_, cx| {
+                            telemetry::event!(
+                                "Edit Prediction Setting Changed",
+                                setting = "mode",
+                                value = "eager",
+                            );
+                            toggle_edit_prediction_mode(fs.clone(), EditPredictionsMode::Eager, cx)
+                        }
+                    }),
+            )
+            .item(
+                ContextMenuEntry::new("按键触发")
+                    .toggleable(IconPosition::Start, subtle_mode)
+                    .documentation_aside(DocumentationSide::Left, move |_| {
+                        Label::new(concat!(
+                            "仅在按住修饰键时内联显示预测（默认为 ",
+                            ui::alt_key_name!(),
+                            "）。"
+                        ))
+                        .into_any_element()
+                    })
+                    .handler({
+                        let fs = fs.clone();
+                        move |_, cx| {
+                            telemetry::event!(
+                                "Edit Prediction Setting Changed",
+                                setting = "mode",
+                                value = "subtle",
+                            );
+                            toggle_edit_prediction_mode(fs.clone(), EditPredictionsMode::Subtle, cx)
+                        }
+                    }),
+            );
 
-        menu = menu.separator().header("Privacy");
+        menu = menu.separator().header("隐私");
 
         if matches!(provider, EditPredictionProvider::Zed) {
             if let Some(provider) = &self.edit_prediction_provider {
@@ -1020,7 +1013,7 @@ impl EditPredictionButton {
                 .context(editor_focus_handle)
                 .when(
                     cx.has_flag::<PredictEditsRatePredictionsFeatureFlag>(),
-                    |this| this.action("Rate Predictions", RatePredictions.boxed_clone()),
+                    |this| this.action("评价预测", RatePredictions.boxed_clone()),
                 );
         }
 
@@ -1080,7 +1073,7 @@ impl EditPredictionButton {
                     "Go to Copilot Settings",
                     OpenBrowser { url: settings_url }.boxed_clone(),
                 )
-                .entry("Sign Out", None, |window, cx| {
+                .entry("登出", None, |window, cx| {
                     if let Some(auth) = copilot::GlobalCopilotAuth::try_global(cx) {
                         copilot_ui::initiate_sign_out(auth.0.clone(), window, cx);
                     }
@@ -1131,7 +1124,7 @@ impl EditPredictionButton {
                             .max_w_64()
                             .h(rems_from_px(148_f32))
                             .child(render_zeta_tab_animation(cx))
-                            .child(Label::new("Edit Prediction"))
+                            .child(Label::new("编辑预测"))
                             .child(
                                 Label::new(description)
                                     .color(Color::Muted)
@@ -1243,7 +1236,7 @@ impl EditPredictionButton {
                     menu = menu
                         .custom_entry(
                             |_window, _cx| {
-                                Label::new("Your GitHub account is less than 30 days old.")
+                                Label::new("你的 GitHub 账户注册不足 30 天。")
                                     .size(LabelSize::Small)
                                     .color(Color::Warning)
                                     .into_any_element()
@@ -1263,7 +1256,7 @@ impl EditPredictionButton {
                     menu = menu
                         .custom_entry(
                             |_window, _cx| {
-                                Label::new("You have an outstanding invoice")
+                                Label::new("你有一笔未结发票")
                                     .size(LabelSize::Small)
                                     .color(Color::Warning)
                                     .into_any_element()
@@ -1402,6 +1395,25 @@ impl StatusItemView for EditPredictionButton {
     }
 }
 
+fn initialize_disabled_globs_setting(file: &mut SettingsContent) {
+    file.project
+        .all_languages
+        .edit_predictions
+        .get_or_insert_with(Default::default)
+        .disabled_globs
+        .get_or_insert_with(|| SplicingVec::from(vec![SplicingVec::REST.to_string()]));
+}
+
+fn disabled_globs_content_range(text: &str) -> Option<Range<usize>> {
+    let array_range = find_value_range_in_json_text(text, &["edit_predictions", "disabled_globs"])?;
+    let content = text
+        .get(array_range.clone())?
+        .strip_prefix('[')?
+        .strip_suffix(']')?;
+    let start = array_range.start + 1 + (content.len() - content.trim_start().len());
+    Some(start..start + content.trim().len())
+}
+
 async fn open_disabled_globs_setting_in_editor(
     workspace: WeakEntity<Workspace>,
     cx: &mut AsyncWindowContext,
@@ -1423,16 +1435,8 @@ async fn open_disabled_globs_setting_in_editor(
 
             let settings = cx.global::<SettingsStore>();
 
-            // Ensure that we always have "edit_predictions { "disabled_globs": [] }"
             let Some(edits) = settings
-                .edits_for_update(&text, |file| {
-                    file.project
-                        .all_languages
-                        .edit_predictions
-                        .get_or_insert_with(Default::default)
-                        .disabled_globs
-                        .get_or_insert_with(Vec::new);
-                })
+                .edits_for_update(&text, initialize_disabled_globs_setting)
                 .log_err()
             else {
                 return;
@@ -1449,16 +1453,7 @@ async fn open_disabled_globs_setting_in_editor(
 
             let text = item.buffer().read(cx).snapshot(cx).text();
 
-            static DISABLED_GLOBS_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-                Regex::new(r#""disabled_globs":\s*\[\s*(?P<content>(?:.|\n)*?)\s*\]"#).unwrap()
-            });
-            // Only capture [...]
-            let range = DISABLED_GLOBS_REGEX.captures(&text).and_then(|captures| {
-                captures
-                    .name("content")
-                    .map(|inner_match| inner_match.start()..inner_match.end())
-            });
-            if let Some(range) = range {
+            if let Some(range) = disabled_globs_content_range(&text) {
                 let range = MultiBufferOffset(range.start)..MultiBufferOffset(range.end);
                 item.change_selections(
                     SelectionEffects::scroll(Autoscroll::newest()),
@@ -1686,7 +1681,118 @@ fn copilot_settings_url(enterprise_uri: Option<&str>) -> Arc<str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anyhow::Context as _;
     use gpui::TestAppContext;
+    use settings::RootUserSettings;
+
+    #[test]
+    fn test_disabled_globs_selection_and_replacement() -> Result<()> {
+        for contents in [
+            r#""[.][.][.]""#,
+            r#""**/[ab]/**", "...""#,
+            r#""escaped\"]", "backslash\\", "...""#,
+            r#""escaped\\]", "line\nbreak]", "unicode\u005d""#,
+            "\n    \"é[ab]\",\n    \"...\"\n  ",
+            "// Ignore filenames containing a \" character\n    \"**/private/**\"\n",
+            "/* Ignore \" and ] */\n    \"**/private/**\"\n",
+            "\"**/private/**\", // Keep \" and ]\n    \"...\"\n",
+            r#""**/build/**", "...""#,
+            "",
+            "\n  ",
+        ] {
+            let mut text = format!(
+                r#"// "disabled_globs": ["commented/**"]
+{{"languages":{{"Rust":{{"disabled_globs":["nested/**"]}}}},
+/* "disabled_globs": ["commented/**"] */
+"edit_predictions":{{"disabled_globs":[{contents}],"mode":"subtle"}}}}"#
+            );
+            let mut expected = SettingsContent::parse_json_with_comments(&text)?;
+            let range = disabled_globs_content_range(&text).context("disabled globs selection")?;
+            assert_eq!(text.get(range.clone()), Some(contents.trim()));
+
+            text.replace_range(range, r#""**/replacement/**", "...""#);
+            expected
+                .project
+                .all_languages
+                .edit_predictions
+                .as_mut()
+                .context("edit prediction settings")?
+                .disabled_globs = Some(SplicingVec::from(vec![
+                "**/replacement/**".to_string(),
+                SplicingVec::REST.to_string(),
+            ]));
+            assert_eq!(SettingsContent::parse_json_with_comments(&text)?, expected);
+        }
+        Ok(())
+    }
+
+    #[gpui::test]
+    fn test_initialize_disabled_globs_setting(cx: &mut App) {
+        let store = SettingsStore::new(cx, &settings::default_settings());
+
+        let cases: &[(&str, &[&str])] = &[
+            ("", &[SplicingVec::REST]),
+            (r#"{}"#, &[SplicingVec::REST]),
+            (r#"{"edit_predictions":{}}"#, &[SplicingVec::REST]),
+            (
+                r#"{"edit_predictions":{"mode":"subtle"}}"#,
+                &[SplicingVec::REST],
+            ),
+            (r#"{"edit_predictions":{"disabled_globs":[]}}"#, &[]),
+            (
+                r#"{"edit_predictions":{"disabled_globs":["**/build/**"]}}"#,
+                &["**/build/**"],
+            ),
+            (
+                r#"{"edit_predictions":{"disabled_globs":["...","**/build/**"]}}"#,
+                &[SplicingVec::REST, "**/build/**"],
+            ),
+            (
+                r#"{"edit_predictions":{"disabled_globs":["[.][.][.]"]}}"#,
+                &["[.][.][.]"],
+            ),
+        ];
+        for &(content, expected_globs) in cases {
+            let original = if content.is_empty() { "{}" } else { content };
+            let mut expected_content = SettingsContent::parse_json_with_comments(original)
+                .expect("settings content parses");
+            let original_globs = &mut expected_content
+                .project
+                .all_languages
+                .edit_predictions
+                .get_or_insert_with(Default::default)
+                .disabled_globs;
+            let already_configured = original_globs.is_some();
+            *original_globs = Some(SplicingVec::from(
+                expected_globs
+                    .iter()
+                    .map(|glob| glob.to_string())
+                    .collect::<Vec<_>>(),
+            ));
+
+            let edits = store
+                .edits_for_update(content, initialize_disabled_globs_setting)
+                .expect("settings edits are generated");
+            assert_eq!(edits.is_empty(), already_configured, "{content}");
+            let mut updated = content.to_string();
+            for (range, replacement) in edits {
+                updated.replace_range(range, &replacement);
+            }
+            assert_eq!(
+                SettingsContent::parse_json_with_comments(&updated)
+                    .expect("updated settings parse"),
+                expected_content,
+                "{content}",
+            );
+            assert!(
+                store
+                    .edits_for_update(&updated, initialize_disabled_globs_setting)
+                    .expect("repeated settings edits are generated")
+                    .is_empty(),
+                "{content}",
+            );
+        }
+    }
 
     #[gpui::test]
     async fn test_copilot_settings_url_with_enterprise_uri(cx: &mut TestAppContext) {

@@ -32,6 +32,7 @@ menu.workspace = true
 pretty_assertions.workspace = true
 project.workspace = true
 regex.workspace = true
+remote.workspace = true
 schemars.workspace = true
 task.workspace = true
 
@@ -45,6 +46,7 @@ theme.workspace = true
 theme_settings.workspace = true
 ui.workspace = true
 util.workspace = true
+uuid = { workspace = true, features = ["v4"] }
 workspace.workspace = true
 zed_actions.workspace = true
 

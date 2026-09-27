@@ -73,14 +73,14 @@ impl MoveToApplicationsRequest {
         let response = cx
             .prompt(
                 PromptLevel::Info,
-                "Move Zed to Applications?",
+                "将 Zed 移动到「应用程序」文件夹？",
                 Some(
-                    "Zed is running from a temporary location. Move it to Applications to finish installing it.",
+                    "Zed 正从临时位置运行。请将其移动到「应用程序」文件夹以完成安装。",
                 ),
                 &[
-                    PromptButton::ok("Yes"),
-                    PromptButton::cancel("No"),
-                    PromptButton::new("Don't ask me again"),
+                    PromptButton::ok("是"),
+                    PromptButton::cancel("否"),
+                    PromptButton::new("不再询问"),
                 ],
             )
             .await?;
@@ -103,9 +103,9 @@ impl MoveToApplicationsRequest {
                         .ok();
                     cx.prompt(
                         PromptLevel::Critical,
-                        "Failed to move Zed to Applications",
+                        "移动 Zed 到「应用程序」文件夹失败",
                         Some(&error.to_string()),
-                        &["OK"],
+                        &["确定"],
                     )
                     .await
                     .log_err();
@@ -178,7 +178,7 @@ impl Render for InstallingZedModal {
                     .py_3()
                     .border_b_1()
                     .border_color(theme.colors().border_variant)
-                    .child(Label::new("Installing Zed…")),
+                    .child(Label::new("正在安装 Zed…")),
             )
             .child(
                 h_flex()
@@ -196,9 +196,9 @@ impl Render for InstallingZedModal {
                     .child(
                         v_flex()
                             .gap_1()
-                            .child(Label::new("Moving Zed to Applications"))
+                            .child(Label::new("正在将 Zed 移动到应用程序文件夹"))
                             .child(
-                                Label::new("Zed will reopen when installation is complete.")
+                                Label::new("安装完成后 Zed 将重新打开。")
                                     .size(LabelSize::Small)
                                     .color(Color::Muted),
                             ),

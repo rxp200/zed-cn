@@ -265,6 +265,7 @@ impl TerminalInlineAssistant {
 
             LanguageModelRequest {
                 thread_id: Some(session_id),
+                prompt_cache_key: None,
                 prompt_id: None,
                 intent: Some(CompletionIntent::TerminalInlineAssist),
                 messages: vec![request_message],
@@ -445,7 +446,7 @@ impl TerminalInlineAssist {
                                 && assist.prompt_editor.is_none()
                                 && let Some(workspace) = assist.workspace.upgrade()
                             {
-                                let error = format!("Terminal inline assistant error: {}", error);
+                                let error = format!("终端内联助手错误：{}", error);
                                 workspace.update(cx, |workspace, cx| {
                                     struct InlineAssistantError;
 

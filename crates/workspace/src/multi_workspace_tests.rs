@@ -272,6 +272,46 @@ async fn test_move_active_project_group_actions(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+async fn test_workspace_for_local_location_ignores_active_nonlocal_workspace(
+    cx: &mut TestAppContext,
+) {
+    init_test(cx);
+    let app_state = cx.update(AppState::test);
+    let fs = app_state.fs.as_fake();
+    fs.insert_tree("/local", json!({ "file.txt": "" })).await;
+
+    let local_project = Project::test(app_state.fs.clone(), ["/local".as_ref()], cx).await;
+    let (multi_workspace, cx) =
+        cx.add_window_view(|window, cx| MultiWorkspace::test_new(local_project, window, cx));
+    let local_workspace =
+        multi_workspace.read_with(cx, |multi_workspace, _| multi_workspace.workspace().clone());
+
+    let remote_project = Project::test(app_state.fs.clone(), [], cx).await;
+    remote_project.update(cx, |project, _| project.mark_as_collab_for_testing());
+    let remote_workspace = multi_workspace.update_in(cx, |multi_workspace, window, cx| {
+        multi_workspace.test_add_workspace(remote_project, window, cx)
+    });
+
+    multi_workspace.read_with(cx, |multi_workspace, cx| {
+        assert_eq!(
+            multi_workspace.workspace().entity_id(),
+            remote_workspace.entity_id(),
+            "the nonlocal workspace must be active to reproduce the external-file routing bug",
+        );
+        assert_eq!(
+            workspace_for_location(
+                multi_workspace,
+                &SerializedWorkspaceLocation::Local,
+                cx,
+            )
+            .map(|workspace| workspace.entity_id()),
+            Some(local_workspace.entity_id()),
+            "a local file request must target the retained local workspace, not the active remote workspace",
+        );
+    });
+}
+
+#[gpui::test]
 async fn test_open_new_window_does_not_open_sidebar_on_existing_window(cx: &mut TestAppContext) {
     init_test(cx);
 
@@ -311,6 +351,93 @@ async fn test_open_new_window_does_not_open_sidebar_on_existing_window(cx: &mut 
             assert!(
                 !mw.sidebar_open(),
                 "opening a project in a new window must not open the sidebar on the original window",
+            );
+        })
+        .unwrap();
+}
+
+#[gpui::test]
+async fn test_open_directory_in_existing_window_opens_sidebar(cx: &mut TestAppContext) {
+    init_test(cx);
+
+    let app_state = cx.update(AppState::test);
+    let fs = app_state.fs.as_fake();
+    fs.insert_tree(path!("/project_a"), json!({ "file.txt": "" }))
+        .await;
+    fs.insert_tree(path!("/project_b"), json!({ "file.txt": "" }))
+        .await;
+
+    let project = Project::test(app_state.fs.clone(), [path!("/project_a").as_ref()], cx).await;
+    let window = cx.add_window(|window, cx| MultiWorkspace::test_new(project, window, cx));
+    cx.run_until_parked();
+
+    cx.update(|cx| {
+        open_paths(
+            &[PathBuf::from(path!("/project_b"))],
+            app_state,
+            OpenOptions::default(),
+            cx,
+        )
+    })
+    .await
+    .unwrap();
+
+    window
+        .read_with(cx, |mw, _cx| {
+            assert!(
+                mw.sidebar_open(),
+                "adding a directory to an existing window opens the sidebar by default",
+            );
+            assert_eq!(mw.workspaces().count(), 2);
+        })
+        .unwrap();
+}
+
+#[gpui::test]
+async fn test_open_directory_in_existing_window_respects_auto_open_setting(
+    cx: &mut TestAppContext,
+) {
+    init_test(cx);
+
+    let app_state = cx.update(AppState::test);
+    let fs = app_state.fs.as_fake();
+    fs.insert_tree(path!("/project_a"), json!({ "file.txt": "" }))
+        .await;
+    fs.insert_tree(path!("/project_b"), json!({ "file.txt": "" }))
+        .await;
+
+    cx.update(|cx| {
+        let mut settings = AgentSettings::get_global(cx).clone();
+        settings.threads_sidebar.auto_open = false;
+        AgentSettings::override_global(settings, cx);
+    });
+
+    let project = Project::test(app_state.fs.clone(), [path!("/project_a").as_ref()], cx).await;
+    let window = cx.add_window(|window, cx| MultiWorkspace::test_new(project, window, cx));
+    cx.run_until_parked();
+
+    cx.update(|cx| {
+        open_paths(
+            &[PathBuf::from(path!("/project_b"))],
+            app_state,
+            OpenOptions::default(),
+            cx,
+        )
+    })
+    .await
+    .unwrap();
+
+    window
+        .read_with(cx, |mw, _cx| {
+            assert!(
+                !mw.sidebar_open(),
+                "the sidebar must stay closed when `threads_sidebar.auto_open` is disabled",
+            );
+            assert_eq!(
+                mw.workspaces().count(),
+                2,
+                "the directory is still added to the existing window, and the workspace it \
+                 replaces is retained",
             );
         })
         .unwrap();
@@ -402,6 +529,50 @@ async fn test_project_group_keys_duplicate_not_added(cx: &mut TestAppContext) {
             keys.len(),
             1,
             "duplicate key should not be added when a workspace with the same root is inserted"
+        );
+    });
+}
+
+#[gpui::test]
+async fn test_project_group_keys_ignore_runtime_connection_fields(cx: &mut TestAppContext) {
+    init_test(cx);
+    let fs = FakeFs::new(cx.executor());
+    let project = Project::test(fs, [], cx).await;
+    let (multi_workspace, cx) =
+        cx.add_window_view(|window, cx| MultiWorkspace::test_new(project, window, cx));
+
+    let paths = PathList::new(&[PathBuf::from("/remote/project")]);
+    let options = remote::SshConnectionOptions {
+        host: "example.com".into(),
+        username: Some("dev".to_string()),
+        ..Default::default()
+    };
+    let mut drifted = options.clone();
+    drifted.nickname = Some("example-host".to_string());
+    drifted.upload_binary_over_ssh = true;
+    drifted.args = Some(vec!["-i".to_string(), "/zed/keys/id_ed25519".to_string()]);
+
+    multi_workspace.update(cx, |multi_workspace, cx| {
+        multi_workspace.restore_project_groups(
+            [options, drifted]
+                .into_iter()
+                .map(|options| SerializedProjectGroupState {
+                    key: ProjectGroupKey::new(
+                        Some(RemoteConnectionOptions::Ssh(options)),
+                        paths.clone(),
+                    ),
+                    expanded: true,
+                })
+                .collect(),
+            cx,
+        );
+    });
+
+    multi_workspace.read_with(cx, |multi_workspace, _cx| {
+        assert_eq!(
+            multi_workspace.project_group_keys().len(),
+            1,
+            "runtime-only connection fields must not create a second project group"
         );
     });
 }
@@ -1259,7 +1430,7 @@ async fn test_open_project_closes_empty_workspace_but_not_non_empty_ones(cx: &mu
 
     // Cancelling keeps the empty workspace.
     assert!(cx.has_pending_prompt(),);
-    cx.simulate_prompt_answer("Cancel");
+    cx.simulate_prompt_answer("取消");
     cx.run_until_parked();
     assert_eq!(open_task.await.unwrap(), empty_workspace);
     window
@@ -1285,7 +1456,7 @@ async fn test_open_project_closes_empty_workspace_but_not_non_empty_ones(cx: &mu
     cx.run_until_parked();
 
     assert!(cx.has_pending_prompt(),);
-    cx.simulate_prompt_answer("Don't Save");
+    cx.simulate_prompt_answer("不保存");
     cx.run_until_parked();
 
     let workspace_a = open_task.await.unwrap();

@@ -939,11 +939,24 @@ fn extract_email_claim(jwt: &str) -> Option<String> {
 
 fn redact_token_body(body: &str) -> String {
     const MAX_LEN: usize = 240;
-    if body.len() <= MAX_LEN {
-        body.to_string()
-    } else {
-        format!("{}…", &body[..MAX_LEN])
-    }
+    let summary = serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|value| {
+            let error = value.get("error")?;
+            let code = error
+                .as_str()
+                .or_else(|| error.get("code").and_then(serde_json::Value::as_str))?;
+            let description = value
+                .get("error_description")
+                .or_else(|| error.get("message"))
+                .and_then(serde_json::Value::as_str);
+            Some(match description {
+                Some(description) => format!("{code}: {description}"),
+                None => code.to_string(),
+            })
+        })
+        .unwrap_or_else(|| "OAuth provider returned an unrecognized error response".to_string());
+    summary.chars().take(MAX_LEN).collect()
 }
 
 fn now_ms() -> u64 {
@@ -1050,6 +1063,19 @@ mod tests {
         assert_eq!(
             SuperGrokModel::GrokBuild01.max_output_tokens(),
             Some(64_000)
+        );
+    }
+
+    #[test]
+    fn token_error_body_excludes_sensitive_fields() {
+        let body = r#"{"error":"invalid_grant","error_description":"expired","access_token":"secret-access","refresh_token":"secret-refresh"}"#;
+        let summary = redact_token_body(body);
+        assert_eq!(summary, "invalid_grant: expired");
+        assert!(!summary.contains("secret-access"));
+        assert!(!summary.contains("secret-refresh"));
+        assert_eq!(
+            redact_token_body("not json secret-token"),
+            "OAuth provider returned an unrecognized error response"
         );
     }
 

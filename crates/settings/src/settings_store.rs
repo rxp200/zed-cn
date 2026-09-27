@@ -1373,8 +1373,11 @@ impl SettingsStore {
 
         if changed_local_path.is_none() {
             let mut merged = self.default_settings.as_ref().clone();
+            let default_explanations = merged.code_explanations.clone();
             merged.merge_from_option(self.extension_settings.as_deref());
             merged.merge_from_option(self.global_settings.as_deref());
+            // Automatic code disclosure may only be authorized by local user settings.
+            merged.code_explanations = default_explanations;
             if let Some(user_settings) = self.user_settings.as_ref() {
                 let active_profile = user_settings.for_profile(cx);
                 let should_merge_user_settings =
@@ -1390,7 +1393,12 @@ impl SettingsStore {
                     merged.merge_from(&profile.settings);
                 }
             }
+            let user_explanations = merged.code_explanations.clone();
+            let user_language_models = merged.language_models.clone();
             merged.merge_from_option(self.server_settings.as_deref());
+            merged.code_explanations = user_explanations;
+            // A remote host must not redirect client-side model requests to another endpoint.
+            merged.language_models = user_language_models;
 
             // Merge `disable_ai` from all project/local settings into the global value.
             // Since `SaturatingBool` uses OR logic, if any project has `disable_ai: true`,
@@ -1467,6 +1475,8 @@ impl SettingsStore {
                 self.merged_settings.as_ref().clone()
             };
             merged_local_settings.merge_from(local_settings);
+            merged_local_settings.code_explanations =
+                self.merged_settings.code_explanations.clone();
 
             project_settings_stack.push(merged_local_settings);
 
@@ -2763,6 +2773,45 @@ mod tests {
             }
             "#
             .unindent()
+        );
+    }
+
+    #[gpui::test]
+    fn code_explanations_only_accept_user_authorization(cx: &mut App) {
+        let mut store = SettingsStore::new(cx, &test_settings());
+        let hostile =
+            r#"{"code_explanations":{"enabled":true,"provider":"unexpected","model":"remote"}}"#;
+        store.set_global_settings(hostile, cx).unwrap();
+        store.set_server_settings(hostile, cx).unwrap();
+        assert!(
+            !store
+                .merged_settings()
+                .code_explanations
+                .as_ref()
+                .and_then(|settings| settings.enabled)
+                .unwrap_or(false)
+        );
+        store
+            .set_user_settings(
+                r#"{"code_explanations":{"enabled":true,"provider":"chosen","model":"local"}}"#,
+                cx,
+            )
+            .unwrap();
+        store.set_server_settings(hostile, cx).unwrap();
+        let settings = store.merged_settings().code_explanations.as_ref().unwrap();
+        assert_eq!(settings.provider.as_ref().unwrap().0, "chosen");
+        assert_eq!(settings.model.as_ref().unwrap().0, "local");
+        store
+            .set_user_settings(r#"{"code_explanations":{"enabled":false}}"#, cx)
+            .unwrap();
+        assert_eq!(
+            store
+                .merged_settings()
+                .code_explanations
+                .as_ref()
+                .unwrap()
+                .enabled,
+            Some(false)
         );
     }
 

@@ -631,7 +631,7 @@ impl Inner {
         cx: &mut AsyncApp,
     ) -> Result<CreatedEntry> {
         let Some(workspace) = self.workspace.upgrade() else {
-            return Err(anyhow!("Failed to obtain workspace."));
+            return Err(anyhow!("无法获取工作区。"));
         };
 
         let (from_name, to_name) = workspace.update(cx, |workspace, cx| {
@@ -754,7 +754,7 @@ impl Inner {
         cx: &mut AsyncApp,
     ) -> Result<Option<TrashId>> {
         let Some(workspace) = self.workspace.upgrade() else {
-            return Err(anyhow!("Failed to obtain workspace."));
+            return Err(anyhow!("无法获取工作区。"));
         };
 
         let name = workspace.update(cx, |workspace, cx| {
@@ -781,7 +781,7 @@ impl Inner {
         cx: &mut AsyncApp,
     ) -> Result<TrashId> {
         let Some(workspace) = self.workspace.upgrade() else {
-            return Err(anyhow!("Failed to obtain workspace."));
+            return Err(anyhow!("无法获取工作区。"));
         };
 
         let name = workspace.update(cx, |workspace, cx| {
@@ -817,7 +817,7 @@ impl Inner {
         cx: &mut AsyncApp,
     ) -> Result<ProjectPath> {
         let Some(workspace) = self.workspace.upgrade() else {
-            return Err(anyhow!("Failed to obtain workspace."));
+            return Err(anyhow!("无法获取工作区。"));
         };
 
         let name = workspace

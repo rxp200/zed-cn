@@ -1,4 +1,11 @@
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    collections::VecDeque,
+    path::PathBuf,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
 use anyhow::Result;
 use askpass::EncryptedPassword;
@@ -15,8 +22,8 @@ use semver::Version;
 use settings::Settings;
 use theme_settings::ThemeSettings;
 use ui::{
-    ActiveTheme, CommonAnimationExt, Context, InteractiveElement, KeyBinding, ListItem, Tooltip,
-    prelude::*,
+    ActiveTheme, Checkbox, CommonAnimationExt, Context, InteractiveElement, KeyBinding, ListItem,
+    ProgressBar, ToggleState, Tooltip, prelude::*,
 };
 use ui_input::{ERASED_EDITOR_FACTORY, ErasedEditor};
 use workspace::{DismissDecision, ModalView, Workspace};
@@ -27,12 +34,24 @@ pub struct RemoteConnectionPrompt {
     is_wsl: bool,
     is_devcontainer: bool,
     status_message: Option<SharedString>,
+    transfer_progress: Option<f32>,
+    connection_log: VecDeque<SharedString>,
     prompt: Option<(Entity<Markdown>, oneshot::Sender<EncryptedPassword>)>,
     prompt_cancellation_task: Option<Task<()>>,
     cancellation: Option<oneshot::Sender<()>>,
     editor: Arc<dyn ErasedEditor>,
     is_password_prompt: bool,
+    offer_managed_key_creation: bool,
+    create_managed_key: Arc<AtomicBool>,
     is_masked: bool,
+}
+
+fn is_account_password_prompt(prompt: &str) -> bool {
+    let prompt = prompt.trim().to_ascii_lowercase();
+    prompt.contains("password")
+        && !prompt.contains("passphrase")
+        && !prompt.contains("private key")
+        && !prompt.contains("密钥口令")
 }
 
 impl Drop for RemoteConnectionPrompt {
@@ -71,10 +90,14 @@ impl RemoteConnectionPrompt {
             is_devcontainer,
             editor,
             status_message: None,
+            transfer_progress: None,
+            connection_log: VecDeque::new(),
             cancellation: None,
             prompt: None,
             prompt_cancellation_task: None,
             is_password_prompt: false,
+            offer_managed_key_creation: false,
+            create_managed_key: Arc::new(AtomicBool::new(false)),
             is_masked: true,
         }
     }
@@ -93,6 +116,7 @@ impl RemoteConnectionPrompt {
     ) {
         let is_yes_no = prompt.contains("yes/no");
         self.is_password_prompt = !is_yes_no;
+        self.offer_managed_key_creation = is_account_password_prompt(&prompt);
         self.is_masked = !is_yes_no;
         self.editor.set_masked(self.is_masked, window, cx);
 
@@ -112,14 +136,41 @@ impl RemoteConnectionPrompt {
     }
 
     pub fn set_status(&mut self, status: Option<String>, cx: &mut Context<Self>) {
-        self.status_message = status.map(|s| s.into());
+        if let Some(status) = status.as_deref()
+            && self.connection_log.back().map(AsRef::as_ref) != Some(status)
+        {
+            self.push_connection_log_line(status);
+        }
+        self.status_message = status.map(Into::into);
+        self.transfer_progress = None;
+        cx.notify();
+    }
+
+    pub fn set_transfer_progress(&mut self, progress: Option<f32>, cx: &mut Context<Self>) {
+        self.transfer_progress = progress.map(|progress| progress.clamp(0.0, 1.0));
+        cx.notify();
+    }
+
+    fn push_connection_log_line(&mut self, line: &str) {
+        const MAX_CONNECTION_LOG_LINES: usize = 10;
+
+        if self.connection_log.len() == MAX_CONNECTION_LOG_LINES {
+            self.connection_log.pop_front();
+        }
+        self.connection_log.push_back(line.to_owned().into());
+    }
+
+    pub fn append_connection_log(&mut self, line: String, cx: &mut Context<Self>) {
+        for line in line.lines().filter(|line| !line.trim().is_empty()) {
+            self.push_connection_log_line(line.trim());
+        }
         cx.notify();
     }
 
     pub fn confirm(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some((_, tx)) = self.prompt.take() {
             self.prompt_cancellation_task.take();
-            self.status_message = Some("Connecting".into());
+            self.status_message = Some("正在建立 SSH 连接".into());
 
             let pw = self.editor.text(cx);
             if let Ok(secure) = EncryptedPassword::try_from(pw.as_ref()) {
@@ -152,6 +203,7 @@ impl Render for RemoteConnectionPrompt {
         };
 
         let is_password_prompt = self.is_password_prompt;
+        let offer_managed_key_creation = self.offer_managed_key_creation;
         let is_masked = self.is_masked;
         let (masked_password_icon, masked_password_tooltip) = if is_masked {
             (IconName::Eye, "Toggle to Unmask Password")
@@ -188,7 +240,38 @@ impl Render for RemoteConnectionPrompt {
                                     )
                                 }),
                         )
-                        .child(div().flex_1().child(self.editor.render(window, cx))),
+                        .child(div().flex_1().child(self.editor.render(window, cx)))
+                        .when(offer_managed_key_creation, |this| {
+                            let create_managed_key =
+                                self.create_managed_key.load(Ordering::Relaxed);
+                            this.child(
+                                v_flex()
+                                    .mt_2()
+                                    .gap_1()
+                                    .child(
+                                        Checkbox::new(
+                                            "create-zed-managed-ssh-key",
+                                            ToggleState::from(create_managed_key),
+                                        )
+                                        .label("创建此主机的 Zed 专属 SSH 密钥")
+                                        .on_click(cx.listener(
+                                            |this, state: &ToggleState, _, cx| {
+                                                this.create_managed_key
+                                                    .store(state.selected(), Ordering::Relaxed);
+                                                cx.notify();
+                                                cx.stop_propagation();
+                                            },
+                                        )),
+                                    )
+                                    .child(
+                                        Label::new(
+                                            "连接成功后会自动部署并验证独立密钥，以后无需再次输入密码。",
+                                        )
+                                        .size(LabelSize::Small)
+                                        .color(Color::Muted),
+                                    ),
+                            )
+                        }),
                 )
                 .when(window.capslock().on, |this| {
                     this.child(
@@ -203,7 +286,7 @@ impl Render for RemoteConnectionPrompt {
                                     .color(Color::Muted),
                             )
                             .child(
-                                Label::new("Caps lock is on.")
+                                Label::new("大写锁定已开启。")
                                     .size(LabelSize::Small)
                                     .color(Color::Muted),
                             ),
@@ -212,24 +295,101 @@ impl Render for RemoteConnectionPrompt {
             })
             .when_some(self.status_message.clone(), |this, status_message| {
                 this.child(
-                    h_flex()
+                    v_flex()
                         .min_w_0()
                         .w_full()
                         .mt_1()
                         .gap_1()
                         .child(
-                            Icon::new(IconName::LoadCircle)
-                                .size(IconSize::Small)
-                                .color(Color::Muted)
-                                .with_rotate_animation(2),
+                            h_flex()
+                                .min_w_0()
+                                .w_full()
+                                .gap_1()
+                                .child(
+                                    Icon::new(IconName::LoadCircle)
+                                        .size(IconSize::Small)
+                                        .color(Color::Muted)
+                                        .with_rotate_animation(2),
+                                )
+                                .child(
+                                    Label::new(format!("{}…", status_message))
+                                        .size(LabelSize::Small)
+                                        .color(Color::Muted)
+                                        .truncate()
+                                        .flex_1(),
+                                )
+                                .when_some(self.transfer_progress, |this, progress| {
+                                    this.child(
+                                        Label::new(format!("{:.0}%", progress * 100.0))
+                                            .size(LabelSize::Small)
+                                            .color(Color::Muted),
+                                    )
+                                }),
                         )
-                        .child(
-                            Label::new(format!("{}…", status_message))
-                                .size(LabelSize::Small)
-                                .color(Color::Muted)
-                                .truncate()
-                                .flex_1(),
-                        ),
+                        .when_some(self.transfer_progress, |this, progress| {
+                            this.child(ProgressBar::new(
+                                "remote-server-transfer-progress",
+                                progress,
+                                1.0,
+                                cx,
+                            ))
+                        })
+                        .when(!self.connection_log.is_empty(), |this| {
+                            this.child(
+                                v_flex()
+                                    .mt_1()
+                                    .w_full()
+                                    .h(rems(14.))
+                                    .overflow_hidden()
+                                    .rounded_sm()
+                                    .border_1()
+                                    .border_color(cx.theme().colors().border_variant)
+                                    .bg(cx.theme().colors().terminal_background)
+                                    .child(
+                                        h_flex()
+                                            .h(rems(2.))
+                                            .px_2()
+                                            .gap_1()
+                                            .border_b_1()
+                                            .border_color(cx.theme().colors().border_variant)
+                                            .child(
+                                                Icon::new(IconName::Terminal)
+                                                    .size(IconSize::XSmall)
+                                                    .color(Color::Muted),
+                                            )
+                                            .child(
+                                                Label::new("连接详情")
+                                                    .size(LabelSize::XSmall)
+                                                    .color(Color::Muted),
+                                            ),
+                                    )
+                                    .child(
+                                        v_flex()
+                                            .flex_1()
+                                            .min_h_0()
+                                            .justify_end()
+                                            .px_2()
+                                            .py_1()
+                                            .overflow_hidden()
+                                            .font(theme.buffer_font.clone())
+                                            .text_xs()
+                                            .text_color(cx.theme().colors().terminal_foreground)
+                                            .children(self.connection_log.iter().cloned().map(
+                                                |line| {
+                                                    div()
+                                                        .flex_none()
+                                                        .w_full()
+                                                        .h(rems(1.))
+                                                        .line_height(rems(1.))
+                                                        .overflow_hidden()
+                                                        .text_ellipsis()
+                                                        .whitespace_nowrap()
+                                                        .child(line)
+                                                },
+                                            )),
+                                    ),
+                            )
+                        }),
                 )
             })
     }
@@ -372,7 +532,7 @@ impl Render for RemoteConnectionModal {
 
         v_flex()
             .elevation_3(cx)
-            .w(rems(34.))
+            .w(rems(42.))
             .border_1()
             .border_color(theme.colors().border)
             .key_context("SshConnectionModal")
@@ -443,6 +603,7 @@ pub struct RemoteClientDelegate {
     window: AnyWindowHandle,
     ui: WeakEntity<RemoteConnectionPrompt>,
     known_password: Option<EncryptedPassword>,
+    create_managed_key: Arc<AtomicBool>,
 }
 
 impl RemoteClientDelegate {
@@ -455,11 +616,34 @@ impl RemoteClientDelegate {
             window,
             ui,
             known_password,
+            create_managed_key: Arc::new(AtomicBool::new(false)),
         }
     }
 }
 
 impl remote::RemoteClientDelegate for RemoteClientDelegate {
+    fn download_custom_server_binary(
+        &self,
+        platform: RemotePlatform,
+        tag: String,
+        cx: &mut AsyncApp,
+    ) -> Task<Result<PathBuf>> {
+        let this = self.clone();
+        cx.spawn(async move |cx| {
+            AutoUpdater::download_custom_remote_server_release(
+                tag,
+                platform.os.as_str(),
+                platform.arch.as_str(),
+                {
+                    let this = this.clone();
+                    move |status, cx| this.set_status(Some(status), cx)
+                },
+                move |progress, cx| this.set_transfer_progress(progress, cx),
+                cx,
+            )
+            .await
+        })
+    }
     fn ask_password(
         &self,
         prompt: String,
@@ -485,6 +669,26 @@ impl remote::RemoteClientDelegate for RemoteClientDelegate {
         self.update_status(status, cx)
     }
 
+    fn append_connection_log(&self, line: &str, cx: &mut AsyncApp) {
+        self.ui
+            .update(cx, |prompt, cx| {
+                prompt.append_connection_log(line.to_owned(), cx);
+            })
+            .ok();
+    }
+
+    fn set_transfer_progress(&self, progress: Option<f32>, cx: &mut AsyncApp) {
+        self.ui
+            .update(cx, |prompt, cx| {
+                prompt.set_transfer_progress(progress, cx);
+            })
+            .ok();
+    }
+
+    fn should_create_managed_ssh_key(&self) -> bool {
+        self.create_managed_key.load(Ordering::Relaxed)
+    }
+
     fn download_server_binary_locally(
         &self,
         platform: RemotePlatform,
@@ -499,17 +703,21 @@ impl remote::RemoteClientDelegate for RemoteClientDelegate {
                 version.clone(),
                 platform.os.as_str(),
                 platform.arch.as_str(),
-                move |status, cx| this.set_status(Some(status), cx),
+                {
+                    let this = this.clone();
+                    move |status, cx| this.set_status(Some(status), cx)
+                },
+                move |progress, cx| this.set_transfer_progress(progress, cx),
                 cx,
             )
             .await
             .with_context(|| {
                 format!(
-                    "Downloading remote server binary (version: {}, os: {}, arch: {})",
+                    "下载远程开发服务失败（版本：{}，操作系统：{}，架构：{}）",
                     version
                         .as_ref()
                         .map(|v| format!("{}", v))
-                        .unwrap_or("unknown".to_string()),
+                        .unwrap_or("未知".to_string()),
                     platform.os,
                     platform.arch,
                 )
@@ -637,6 +845,24 @@ pub fn connect_reusing_pool(
 struct BackgroundRemoteClientDelegate;
 
 impl remote::RemoteClientDelegate for BackgroundRemoteClientDelegate {
+    fn download_custom_server_binary(
+        &self,
+        platform: RemotePlatform,
+        tag: String,
+        cx: &mut AsyncApp,
+    ) -> Task<Result<PathBuf>> {
+        cx.spawn(async move |cx| {
+            AutoUpdater::download_custom_remote_server_release(
+                tag,
+                platform.os.as_str(),
+                platform.arch.as_str(),
+                |_, _| {},
+                |_, _| {},
+                cx,
+            )
+            .await
+        })
+    }
     fn ask_password(
         &self,
         prompt: String,
@@ -666,16 +892,17 @@ impl remote::RemoteClientDelegate for BackgroundRemoteClientDelegate {
                 platform.os.as_str(),
                 platform.arch.as_str(),
                 |_status, _cx| {},
+                |_progress, _cx| {},
                 cx,
             )
             .await
             .with_context(|| {
                 format!(
-                    "Downloading remote server binary (version: {}, os: {}, arch: {})",
+                    "下载远程开发服务失败（版本：{}，操作系统：{}，架构：{}）",
                     version
                         .as_ref()
                         .map(|v| format!("{v}"))
-                        .unwrap_or("unknown".to_string()),
+                        .unwrap_or("未知".to_string()),
                     platform.os,
                     platform.arch,
                 )
@@ -721,10 +948,12 @@ pub fn connect(
     let (tx, mut rx) = oneshot::channel();
     ui.update(cx, |ui, _cx| ui.set_cancellation_tx(tx));
 
+    let create_managed_key = ui.read(cx).create_managed_key.clone();
     let delegate = Arc::new(RemoteClientDelegate {
         window,
         ui: ui.downgrade(),
         known_password,
+        create_managed_key,
     });
 
     cx.spawn(async move |cx| {
@@ -748,6 +977,70 @@ mod tests {
     use settings::SettingsStore;
 
     use super::*;
+
+    #[test]
+    fn recognizes_only_account_password_prompts() {
+        assert!(is_account_password_prompt("user@example.com's password:"));
+        assert!(!is_account_password_prompt(
+            "Enter passphrase for key '/home/user/.ssh/id_ed25519':"
+        ));
+        assert!(!is_account_password_prompt("Are you sure (yes/no)?"));
+    }
+
+    #[gpui::test]
+    fn clamps_and_clears_transfer_progress(cx: &mut TestAppContext) {
+        initialize_test(cx);
+
+        let window = cx.add_window(|window, cx| Editor::single_line(window, cx));
+        let prompt = window
+            .update(cx, |_, window, cx| {
+                cx.new(|cx| {
+                    RemoteConnectionPrompt::new(
+                        "example.com".to_string(),
+                        None,
+                        false,
+                        false,
+                        window,
+                        cx,
+                    )
+                })
+            })
+            .expect("test window should remain open");
+
+        prompt.update(cx, |prompt, cx| {
+            for index in 0..12 {
+                prompt.append_connection_log(format!("line {index}"), cx);
+            }
+        });
+        assert_eq!(
+            prompt.read_with(cx, |prompt, _| prompt.connection_log.len()),
+            10
+        );
+        assert_eq!(
+            prompt.read_with(cx, |prompt, _| prompt.connection_log.front().cloned()),
+            Some(SharedString::from("line 2"))
+        );
+        assert_eq!(
+            prompt.read_with(cx, |prompt, _| prompt.connection_log.back().cloned()),
+            Some(SharedString::from("line 11"))
+        );
+
+        prompt.update(cx, |prompt, cx| {
+            prompt.set_transfer_progress(Some(1.5), cx);
+        });
+        assert_eq!(
+            prompt.read_with(cx, |prompt, _| prompt.transfer_progress),
+            Some(1.0)
+        );
+
+        prompt.update(cx, |prompt, cx| {
+            prompt.set_status(Some("正在解压".to_string()), cx);
+        });
+        assert_eq!(
+            prompt.read_with(cx, |prompt, _| prompt.transfer_progress),
+            None
+        );
+    }
 
     #[gpui::test]
     fn clears_prompt_when_password_request_is_cancelled(cx: &mut TestAppContext) {

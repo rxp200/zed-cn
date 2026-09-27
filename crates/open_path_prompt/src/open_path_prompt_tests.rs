@@ -238,6 +238,34 @@ async fn test_open_path_prompt_completion(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+async fn test_enter_completes_open_path_before_confirming(cx: &mut TestAppContext) {
+    let app_state = init_test(cx);
+    app_state
+        .fs
+        .as_fake()
+        .insert_tree(
+            path!("/"),
+            json!({
+                "code": {},
+                "config": {}
+            }),
+        )
+        .await;
+
+    let project = Project::test(app_state.fs.clone(), [path!("/").as_ref()], cx).await;
+    let (picker, cx) = build_open_path_prompt(project, false, false, cx);
+
+    insert_query(path!("/cod"), &picker, cx).await;
+    assert_eq!(
+        confirm_update_query(&picker, cx).as_deref(),
+        Some(path!("/code/"))
+    );
+
+    insert_query(path!("/code/"), &picker, cx).await;
+    assert_eq!(confirm_update_query(&picker, cx), None);
+}
+
+#[gpui::test]
 #[cfg_attr(not(target_os = "windows"), ignore)]
 async fn test_open_path_prompt_on_windows(cx: &mut TestAppContext) {
     let app_state = init_test(cx);
@@ -541,6 +569,15 @@ fn confirm_completion(
             f.delegate.set_selected_index(select, window, cx);
         }
         f.delegate.confirm_completion(query.to_string(), window, cx)
+    })
+}
+
+fn confirm_update_query(
+    picker: &Entity<Picker<OpenPathDelegate>>,
+    cx: &mut VisualTestContext,
+) -> Option<String> {
+    picker.update_in(cx, |picker, window, cx| {
+        picker.delegate.confirm_update_query(window, cx)
     })
 }
 

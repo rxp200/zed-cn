@@ -38,10 +38,11 @@ const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 
 const CREDENTIALS_KEY: &str = "https://chatgpt.com/backend-api/codex";
 const TOKEN_REFRESH_BUFFER_MS: u64 = Duration::from_mins(5).as_millis() as u64;
-/// Client compatibility version sent to the ChatGPT model catalog.
+/// Requests the complete account catalog without Codex CLI version filtering.
 ///
-/// The backend compares this value with each model's `minimal_client_version`.
-const MODEL_CATALOG_CLIENT_VERSION: &str = "0.999.0";
+/// The backend treats this exact version as an ungated sentinel. Other versions
+/// are compared with each model's `minimal_client_version`.
+const UNGATED_MODEL_CATALOG_CLIENT_VERSION: &str = "0.0.0";
 // Codex applies the same bound because model discovery is a startup-critical request.
 const MODEL_CATALOG_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -164,7 +165,7 @@ impl State {
             load_task: Some(load_task),
             credentials_provider,
             http_client,
-            client_version: MODEL_CATALOG_CLIENT_VERSION.into(),
+            client_version: UNGATED_MODEL_CATALOG_CLIENT_VERSION.into(),
             available_models: ChatGptModel::all(),
             auth_generation: 0,
             model_catalog_generation: 0,
@@ -842,7 +843,7 @@ impl LanguageModel for OpenAiSubscribedLanguageModel {
                     ) => {
                         if compacted_context.replace(context).is_some() {
                             return Err(LanguageModelCompletionError::Other(anyhow!(
-                                "ChatGPT subscription compaction returned multiple replacement contexts"
+                                "ChatGPT 订阅的上下文压缩返回了多个替换上下文"
                             )));
                         }
                     }
@@ -855,7 +856,7 @@ impl LanguageModel for OpenAiSubscribedLanguageModel {
 
             let context = compacted_context.ok_or_else(|| {
                 LanguageModelCompletionError::Other(anyhow!(
-                    "ChatGPT subscription compaction returned no replacement context"
+                    "ChatGPT 订阅的上下文压缩未返回替换上下文"
                 ))
             })?;
             Ok(CompactionResult { context, usage })
@@ -1725,9 +1726,7 @@ mod tests {
         let http: Arc<dyn HttpClient> = FakeHttpClient::create(|request| async move {
             assert_eq!(
                 request.uri().to_string(),
-                format!(
-                    "https://chatgpt.com/backend-api/codex/models?client_version={MODEL_CATALOG_CLIENT_VERSION}"
-                )
+                "https://chatgpt.com/backend-api/codex/models?client_version=0.0.0"
             );
             Ok(http_client::Response::builder()
                 .status(200)
