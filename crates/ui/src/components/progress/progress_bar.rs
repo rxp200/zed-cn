@@ -121,7 +121,7 @@ impl Component for ProgressBar {
                             h_flex()
                                 .justify_between()
                                 .child(Label::new("38%"))
-                                .child(Label::new("部分")),
+                                .child(Label::new(i18n::t!("1bb5512d7923a6f1"))),
                         )
                         .child(ProgressBar::new("partial", max_value * 0.35, max_value, cx)),
                 )
@@ -131,7 +131,7 @@ impl Component for ProgressBar {
                             h_flex()
                                 .justify_between()
                                 .child(Label::new("100%"))
-                                .child(Label::new("完成")),
+                                .child(Label::new(i18n::t!("c0b3fbff51ccc40b"))),
                         )
                         .child(ProgressBar::new("filled", max_value, max_value, cx)),
                 )

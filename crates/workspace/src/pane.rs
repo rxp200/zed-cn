@@ -2025,9 +2025,13 @@ impl Pane {
                     let detail = Self::file_names_for_prompt(&mut dirty_items.iter(), cx);
                     window.prompt(
                         PromptLevel::Warning,
-                        "要保存以下文件的更改吗？",
+                        i18n::t!("8c6b07f825b62039"),
                         Some(&detail),
-                        &["全部保存", "全部丢弃", "取消"],
+                        &[
+                            i18n::t!("592b52ba3cd3cd5a"),
+                            i18n::t!("2725e3b0b5b06397"),
+                            i18n::t!("2cd0f3be8738a86c"),
+                        ],
                         cx,
                     )
                 })?;
@@ -2076,9 +2080,9 @@ impl Pane {
                                 );
                                 window.prompt(
                                     PromptLevel::Warning,
-                                    &format!("无法保存文件：{err}"),
+                                    &i18n::t!("277fac85db1b0a63", err = err),
                                     Some(&detail),
-                                    &["不保存关闭", "取消"],
+                                    &[i18n::t!("b841391919f681b3"), i18n::t!("2cd0f3be8738a86c")],
                                     cx,
                                 )
                             })?;
@@ -2352,7 +2356,11 @@ impl Pane {
                         PromptLevel::Warning,
                         DELETED_MESSAGE,
                         None,
-                        &["保存", "关闭", "取消"],
+                        &[
+                            i18n::t!("a3030bf8f16dc63c"),
+                            i18n::t!("3fd47edce45b3603"),
+                            i18n::t!("2cd0f3be8738a86c"),
+                        ],
                         cx,
                     )
                 })?;
@@ -2387,7 +2395,11 @@ impl Pane {
                         PromptLevel::Warning,
                         CONFLICT_MESSAGE,
                         None,
-                        &["覆盖", "丢弃更改", "取消"],
+                        &[
+                            i18n::t!("4ce4c98eb27e4b65"),
+                            i18n::t!("cc3fc6bfbd0cc1af"),
+                            i18n::t!("2cd0f3be8738a86c"),
+                        ],
                         cx,
                     )
                 })?;
@@ -2430,7 +2442,11 @@ impl Pane {
                                 PromptLevel::Warning,
                                 &prompt,
                                 None,
-                                &["保存", "不保存", "取消"],
+                                &[
+                                    i18n::t!("a3030bf8f16dc63c"),
+                                    i18n::t!("8bcc3e177f5f3b10"),
+                                    i18n::t!("2cd0f3be8738a86c"),
+                                ],
                                 cx,
                             ))
                         } else {
@@ -2912,9 +2928,19 @@ impl Pane {
                 .disabled(!toggleable)
                 .tooltip(move |_, cx| {
                     if toggleable {
-                        Tooltip::with_meta("解锁标签页", None, "这将使此标签页可编辑", cx)
+                        Tooltip::with_meta(
+                            i18n::t!("0bb3b6540b6ca5f7"),
+                            None,
+                            i18n::t!("922f25b36cf6fe8b"),
+                            cx,
+                        )
                     } else {
-                        Tooltip::with_meta("锁定标签页", None, "此标签页为只读", cx)
+                        Tooltip::with_meta(
+                            i18n::t!("e9c35c96cbed8286"),
+                            None,
+                            i18n::t!("a108103aa00af9cf"),
+                            cx,
+                        )
                     }
                 })
                 .on_click(cx.listener(move |pane, _, window, cx| {
@@ -3027,7 +3053,7 @@ impl Pane {
                 let end_slot_tooltip_text: &'static str;
                 let end_slot = if is_pinned {
                     end_slot_action = &TogglePinTab;
-                    end_slot_tooltip_text = "取消固定标签页";
+                    end_slot_tooltip_text = i18n::t!("04a5269f4f524167");
                     IconButton::new("unpin tab", IconName::Pin)
                         .shape(IconButtonShape::Square)
                         .icon_color(Color::Muted)
@@ -3094,7 +3120,7 @@ impl Pane {
                             } else {
                                 this.tooltip(move |_, cx| {
                                     let text = text.clone();
-                                    Tooltip::with_meta(text, None, "Read-Only Tab", cx)
+                                    Tooltip::with_meta(text, None, i18n::t!("65b3590e70453684"), cx)
                                 })
                             }
                         }
@@ -3161,7 +3187,7 @@ impl Pane {
                     if let Some(pane) = pane.upgrade() {
                         menu = menu
                             .entry(
-                                "关闭",
+                                i18n::t!("3fd47edce45b3603"),
                                 Some(Box::new(close_active_item_action)),
                                 window.handler_for(&pane, move |pane, window, cx| {
                                     pane.close_item_by_id(item_id, SaveIntent::Close, window, cx)
@@ -3169,7 +3195,7 @@ impl Pane {
                                 }),
                             )
                             .item(ContextMenuItem::Entry(
-                                ContextMenuEntry::new("关闭其他")
+                                ContextMenuEntry::new(i18n::t!("b92d86f4f5570817"))
                                     .action(Box::new(close_inactive_items_action.clone()))
                                     .disabled(total_items == 1)
                                     .handler(window.handler_for(&pane, move |pane, window, cx| {
@@ -3185,7 +3211,7 @@ impl Pane {
                             // We make this optional, instead of using disabled as to not overwhelm the context menu unnecessarily
                             .extend(has_multibuffer_items.then(|| {
                                 ContextMenuItem::Entry(
-                                    ContextMenuEntry::new("关闭多缓冲区")
+                                    ContextMenuEntry::new(i18n::t!("b8fe3e766330e95d"))
                                         .action(Box::new(close_multibuffers_action.clone()))
                                         .handler(window.handler_for(
                                             &pane,
@@ -3202,7 +3228,7 @@ impl Pane {
                             }))
                             .separator()
                             .item(ContextMenuItem::Entry(
-                                ContextMenuEntry::new("关闭左侧")
+                                ContextMenuEntry::new(i18n::t!("bc066eb3c8b6d497"))
                                     .action(Box::new(close_items_to_the_left_action.clone()))
                                     .disabled(!has_items_to_left)
                                     .handler(window.handler_for(&pane, move |pane, window, cx| {
@@ -3216,7 +3242,7 @@ impl Pane {
                                     })),
                             ))
                             .item(ContextMenuItem::Entry(
-                                ContextMenuEntry::new("关闭右侧")
+                                ContextMenuEntry::new(i18n::t!("9594d7707c4bfc74"))
                                     .action(Box::new(close_items_to_the_right_action.clone()))
                                     .disabled(!has_items_to_right)
                                     .handler(window.handler_for(&pane, move |pane, window, cx| {
@@ -3231,7 +3257,7 @@ impl Pane {
                             ))
                             .separator()
                             .item(ContextMenuItem::Entry(
-                                ContextMenuEntry::new("关闭未修改的")
+                                ContextMenuEntry::new(i18n::t!("74cb3cfcc05333d5"))
                                     .action(Box::new(close_clean_items_action.clone()))
                                     .disabled(!has_clean_items)
                                     .handler(window.handler_for(&pane, move |pane, window, cx| {
@@ -3244,7 +3270,7 @@ impl Pane {
                                     })),
                             ))
                             .entry(
-                                "关闭全部",
+                                i18n::t!("2e8456bb7d65651a"),
                                 Some(Box::new(close_all_items_action.clone())),
                                 window.handler_for(&pane, move |pane, window, cx| {
                                     pane.close_all_items(&close_all_items_action, window, cx)
@@ -3256,7 +3282,7 @@ impl Pane {
                             menu.separator().map(|this| {
                                 if is_pinned {
                                     this.entry(
-                                        "取消固定标签页",
+                                        i18n::t!("04a5269f4f524167"),
                                         Some(TogglePinTab.boxed_clone()),
                                         window.handler_for(&pane, move |pane, window, cx| {
                                             pane.unpin_tab_at(ix, window, cx);
@@ -3264,7 +3290,7 @@ impl Pane {
                                     )
                                 } else {
                                     this.entry(
-                                        "固定标签页",
+                                        i18n::t!("f51c832fa5619a8a"),
                                         Some(TogglePinTab.boxed_clone()),
                                         window.handler_for(&pane, move |pane, window, cx| {
                                             pane.pin_tab_at(ix, window, cx);
@@ -3276,9 +3302,9 @@ impl Pane {
 
                         if capability != Capability::ReadOnly {
                             let read_only_label = if capability.editable() {
-                                "设为只读"
+                                i18n::t!("70be9cfb51358967")
                             } else {
-                                "设为可编辑"
+                                i18n::t!("a4c7252efa72b971")
                             };
                             menu = menu.separator().entry(
                                 read_only_label,
@@ -3348,7 +3374,7 @@ impl Pane {
                                 .separator()
                                 .when_some(entry_abs_path, |menu, abs_path| {
                                     menu.entry(
-                                        "复制路径",
+                                        i18n::t!("b97c49acb93028ec"),
                                         Some(Box::new(zed_actions::workspace::CopyPath)),
                                         window.handler_for(&pane, move |_, _, cx| {
                                             cx.write_to_clipboard(ClipboardItem::new_string(
@@ -3359,7 +3385,7 @@ impl Pane {
                                 })
                                 .when_some(relative_path, |menu, relative_path| {
                                     menu.entry(
-                                        "复制相对路径",
+                                        i18n::t!("02bcdbc5a1453cb0"),
                                         Some(Box::new(zed_actions::workspace::CopyRelativePath)),
                                         window.handler_for(&pane, move |this, _, cx| {
                                             let Some(project) = this.project.upgrade() else {
@@ -3378,7 +3404,7 @@ impl Pane {
                                         project_path.clone(),
                                         |menu, project_path| {
                                             menu.entry(
-                                                "打开文件永久链接",
+                                                i18n::t!("aa32d423e7138efa"),
                                                 Some(OpenFilePermalink.boxed_clone()),
                                                 window.handler_for(&pane, {
                                                     let project_path = project_path.clone();
@@ -3398,7 +3424,7 @@ impl Pane {
                                                 }),
                                             )
                                             .entry(
-                                                "复制文件永久链接",
+                                                i18n::t!("d72898311fb0c0e3"),
                                                 Some(CopyFilePermalink.boxed_clone()),
                                                 window.handler_for(
                                                     &pane,
@@ -3442,7 +3468,7 @@ impl Pane {
                                 .map(pin_tab_entries)
                                 .when(visible_in_project_panel, |menu| {
                                     menu.entry(
-                                        "在项目面板中显示",
+                                        i18n::t!("8ab39adcd02f4d5b"),
                                         Some(Box::new(RevealInProjectPanel::default())),
                                         window.handler_for(&pane, move |pane, _, cx| {
                                             pane.project
@@ -3457,7 +3483,7 @@ impl Pane {
                                 })
                                 .when_some(parent_abs_path, |menu, parent_abs_path| {
                                     menu.entry(
-                                        "在终端中打开",
+                                        i18n::t!("a04c3bc562c5f568"),
                                         Some(Box::new(OpenInTerminal)),
                                         window.handler_for(&pane, move |_, window, cx| {
                                             window.dispatch_action(
@@ -3511,7 +3537,7 @@ impl Pane {
                 let focus_handle = focus_handle.clone();
                 move |window, cx| {
                     Tooltip::for_action_in(
-                        "后退",
+                        i18n::t!("2d1d8c1e38956bea"),
                         &GoBack,
                         &window.focused(cx).unwrap_or_else(|| focus_handle.clone()),
                         cx,
@@ -3534,7 +3560,7 @@ impl Pane {
                 let focus_handle = focus_handle.clone();
                 move |window, cx| {
                     Tooltip::for_action_in(
-                        "前进",
+                        i18n::t!("d681c6e2947ae79b"),
                         &GoForward,
                         &window.focused(cx).unwrap_or_else(|| focus_handle.clone()),
                         cx,
@@ -4156,7 +4182,7 @@ impl Pane {
                 let project = workspace.project().read(cx);
 
                 if project.is_via_collab() {
-                    workspace.show_error("无法在远程项目中拖放文件", cx);
+                    workspace.show_error(i18n::t!("3fd0f398c1ec1d8a"), cx);
                     return (true, false);
                 }
                 if project.is_via_remote_server() {
@@ -4355,7 +4381,7 @@ fn default_render_tab_bar_buttons(
             PopoverMenu::new("pane-tab-bar-popover-menu")
                 .trigger_with_tooltip(
                     IconButton::new("plus", IconName::Plus).icon_size(IconSize::Small),
-                    Tooltip::text("新建…"),
+                    Tooltip::text(i18n::t!("0b0f7ee4a6703701")),
                 )
                 .anchor(Anchor::TopRight)
                 .with_handle(pane.new_item_context_menu_handle.clone())
@@ -4378,7 +4404,7 @@ fn default_render_tab_bar_buttons(
                     IconButton::new("split", IconName::Split)
                         .icon_size(IconSize::Small)
                         .disabled(!can_clone && !can_split_move),
-                    Tooltip::text("分割窗格"),
+                    Tooltip::text(i18n::t!("5115c5b366985ba0")),
                 )
                 .anchor(Anchor::TopRight)
                 .with_handle(pane.split_item_context_menu_handle.clone())
@@ -4410,7 +4436,15 @@ fn default_render_tab_bar_buttons(
                     pane.toggle_zoom(&crate::ToggleZoom, window, cx);
                 }))
                 .tooltip(move |_window, cx| {
-                    Tooltip::for_action(if zoomed { "缩小" } else { "放大" }, &ToggleZoom, cx)
+                    Tooltip::for_action(
+                        if zoomed {
+                            i18n::t!("290f68030501cd9c")
+                        } else {
+                            i18n::t!("80f8fbcfa0117633")
+                        },
+                        &ToggleZoom,
+                        cx,
+                    )
                 })
         })
         .into_any_element()

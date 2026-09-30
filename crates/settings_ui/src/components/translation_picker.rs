@@ -83,7 +83,7 @@ impl PickerDelegate for TranslationPickerDelegate {
     }
 
     fn placeholder_text(&self, _window: &mut Window, _cx: &mut App) -> Arc<str> {
-        "搜索…".into()
+        i18n::t!("a249f60ce7e86b52").into()
     }
 
     fn update_matches(

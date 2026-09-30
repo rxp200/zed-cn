@@ -535,7 +535,7 @@ fn init_renderers(cx: &mut App) {
                     settings_window,
                     item,
                     settings_file,
-                    Button::new("open-in-settings-file", "在settings.json中编辑")
+                    Button::new("open-in-settings-file", i18n::t!("d467612e914e9ddf"))
                         .style(ButtonStyle::Outlined)
                         .size(ButtonSize::Medium)
                         .tab_index(0_isize)
@@ -556,6 +556,7 @@ fn init_renderers(cx: &mut App) {
         .add_basic_renderer::<bool>(render_toggle_button)
         .add_basic_renderer::<String>(render_text_field)
         .add_basic_renderer::<SharedString>(render_text_field)
+        .add_basic_renderer::<settings::UiLanguage>(render_language_dropdown)
         .add_basic_renderer::<settings::SaturatingBool>(render_toggle_button)
         .add_basic_renderer::<settings::CursorShape>(render_dropdown)
         .add_basic_renderer::<settings::RestoreOnStartupBehavior>(render_dropdown)
@@ -1547,8 +1548,8 @@ fn render_settings_item_layout(
                                 IconButton::new("reset-to-default-btn", IconName::Undo)
                                     .icon_color(Color::Muted)
                                     .icon_size(IconSize::Small)
-                                    .aria_label("重置为默认值")
-                                    .tooltip(Tooltip::text("重置为默认值"))
+                                    .aria_label(i18n::t!("7e2f65b12a520a5c"))
+                                    .tooltip(Tooltip::text(i18n::t!("7e2f65b12a520a5c")))
                                     .on_click(move |_, window, cx| {
                                         reset_to_default(window, cx);
                                     }),
@@ -1680,8 +1681,8 @@ fn render_settings_item_link(
                 .icon_color(link_icon_color)
                 .icon_size(IconSize::Small)
                 .shape(IconButtonShape::Square)
-                .aria_label("复制链接")
-                .tooltip(Tooltip::text("复制链接"))
+                .aria_label(i18n::t!("8e86f9b1d54f2c51"))
+                .tooltip(Tooltip::text(i18n::t!("8e86f9b1d54f2c51")))
                 .when_some(json_path, |this, path| {
                     this.on_click(cx.listener(move |this, _, _, cx| {
                         let link = format!("zed://settings/{}", path);
@@ -1904,7 +1905,7 @@ impl SettingsWindow {
         let current_file = SettingsUiFile::User;
         let search_bar = cx.new(|cx| {
             let mut editor = Editor::single_line(window, cx);
-            editor.set_placeholder_text("搜索设置…", window, cx);
+            editor.set_placeholder_text(i18n::t!("f4b3b1bead678176"), window, cx);
             editor
         });
         cx.subscribe(&search_bar, |this, _, event: &EditorEvent, cx| {
@@ -2986,7 +2987,7 @@ impl SettingsWindow {
         h_flex()
             .id("settings-ui-files-header")
             .role(Role::Group)
-            .aria_label("设置文件")
+            .aria_label(i18n::t!("7c3708f655821a4c"))
             .w_full()
             .gap_1()
             .justify_between()
@@ -3051,7 +3052,7 @@ impl SettingsWindow {
                                         }),
                                     )
                                     .style(DropdownStyle::Subtle)
-                                    .trigger_tooltip(Tooltip::text("查看其他项目"))
+                                    .trigger_tooltip(Tooltip::text(i18n::t!("9fbbd0a506507669")))
                                     .trigger_icon(IconName::ChevronDown)
                                     .attach(gpui::Anchor::BottomLeft)
                                     .offset(gpui::Point {
@@ -3064,7 +3065,7 @@ impl SettingsWindow {
                     }),
             )
             .child(
-                Button::new(edit_in_json_id, "在settings.json中编辑")
+                Button::new(edit_in_json_id, i18n::t!("d467612e914e9ddf"))
                     .tab_index(0_isize)
                     .style(ButtonStyle::OutlinedGhost)
                     .tooltip(Tooltip::for_action_title_in(
@@ -3136,7 +3137,7 @@ impl SettingsWindow {
         h_flex()
             .id("settings-ui-search")
             .role(Role::SearchInput)
-            .aria_label("搜索设置")
+            .aria_label(i18n::t!("2874151bd36be9a3"))
             .aria_value(a11y_value)
             .track_focus(&self.search_bar.focus_handle(cx))
             .a11y_synthetic_children(a11y_text_runs)
@@ -3157,7 +3158,7 @@ impl SettingsWindow {
                     IconButton::new("clear-btn", IconName::Close)
                         .icon_color(Color::Muted)
                         .icon_size(IconSize::Small)
-                        .tooltip(Tooltip::text("清除"))
+                        .tooltip(Tooltip::text(i18n::t!("bce2377283c2455a")))
                         .on_click(cx.listener(|settings_window, _, window, cx| {
                             settings_window.clear_search(window, cx);
                         })),
@@ -3324,7 +3325,7 @@ impl SettingsWindow {
                 v_flex()
                     .id("settings-ui-nav")
                     .role(Role::Tree)
-                    .aria_label("设置导航")
+                    .aria_label(i18n::t!("00127e834a9b9a85"))
                     .flex_1()
                     .overflow_hidden()
                     .track_focus(&self.navbar_focus_handle.focus_handle(cx))
@@ -3611,7 +3612,7 @@ impl SettingsWindow {
                 "sub-page-scope-picker",
                 scope_name,
                 ContextMenu::build(window, cx, move |mut menu, _, _| {
-                    menu = menu.header("作用域");
+                    menu = menu.header(i18n::t!("91d422af707c61f4"));
 
                     for ix in allowed_file_indices {
                         let (file, focus_handle) = &self.files[ix];
@@ -3641,7 +3642,7 @@ impl SettingsWindow {
                 }),
             )
             .style(DropdownStyle::Subtle)
-            .trigger_tooltip(Tooltip::text("更改范围"))
+            .trigger_tooltip(Tooltip::text(i18n::t!("61d0478587a9284a")))
             .attach(gpui::Anchor::BottomLeft)
             .offset(gpui::Point {
                 x: px(0.0),
@@ -3688,9 +3689,9 @@ impl SettingsWindow {
             .items_center()
             .justify_center()
             .gap_1()
-            .child(Label::new("无结果"))
+            .child(Label::new(i18n::t!("f1c9cc430f6e6725")))
             .child(
-                Label::new(format!("没有匹配“{}”的设置", search_query))
+                Label::new(i18n::t_args!("1e06439ec2306ac8", search_query))
                     .size(LabelSize::Small)
                     .color(Color::Muted),
             )
@@ -3705,7 +3706,7 @@ impl SettingsWindow {
         let mut page_content = v_flex()
             .id("settings-ui-page")
             .role(Role::Group)
-            .aria_label("设置内容")
+            .aria_label(i18n::t!("ed39c8a121d70a95"))
             .size_full();
 
         let has_active_search = !self.search_bar.read(cx).is_empty(cx);
@@ -3924,7 +3925,7 @@ impl SettingsWindow {
                         .flex_shrink_0()
                         .when(current_sub_page.link.in_json, |this| {
                             this.child(
-                                Button::new("open-in-settings-file", "在settings.json中编辑")
+                                Button::new("open-in-settings-file", i18n::t!("d467612e914e9ddf"))
                                     .tab_index(0_isize)
                                     .style(ButtonStyle::OutlinedGhost)
                                     .tooltip(Tooltip::for_action_title_in(
@@ -3942,7 +3943,7 @@ impl SettingsWindow {
                         })
                         .when(is_skills_page, |this| {
                             this.child(
-                                Button::new("open-skill-creator", "创建技能")
+                                Button::new("open-skill-creator", i18n::t!("04bcc5bd9b5e543d"))
                                     .tab_index(0_isize)
                                     .style(ButtonStyle::OutlinedGhost)
                                     .on_click(cx.listener(|this, _, window, cx| {
@@ -4000,7 +4001,7 @@ impl SettingsWindow {
                     )
                     .action_slot(
                         div().pr_1().pb_1().child(
-                            Button::new("fix-in-json", "在settings.json中修复")
+                            Button::new("fix-in-json", i18n::t!("a0c11a7031d160d8"))
                                 .tab_index(0_isize)
                                 .style(ButtonStyle::Tinted(ui::TintColor::Warning))
                                 .on_click(cx.listener(|this, _, window, cx| {
@@ -4017,7 +4018,7 @@ impl SettingsWindow {
                 .gap_2()
                 .when_some(parse_error, |this, err| {
                     this.child(banner(
-                        "无法加载您的设置。某些值可能不正确，更改可能会丢失。",
+                        i18n::t!("4d9634dc8759199f"),
                         err,
                         &mut self.shown_errors,
                         cx,
@@ -4025,11 +4026,11 @@ impl SettingsWindow {
                 })
                 .map(|this| match &error.migration_status {
                     settings::MigrationStatus::Succeeded => this.child(banner(
-                        "您的设置已过时，需要进行更新。",
+                        i18n::t!("fb0694f55e32ec85"),
                         match &self.current_file {
-                            SettingsUiFile::User => "可以自动迁移到最新版本。",
+                            SettingsUiFile::User => i18n::t!("1a0e78504c64a352"),
                             SettingsUiFile::Server(_) | SettingsUiFile::Project(_) => {
-                                "必须手动迁移到最新版本。"
+                                i18n::t!("7795a0e99ddf3af7")
                             }
                         }
                         .to_string(),
@@ -4038,7 +4039,7 @@ impl SettingsWindow {
                     )),
                     settings::MigrationStatus::Failed { error: err } if !parse_failed => this
                         .child(banner(
-                            "您的设置文件已过时，自动迁移失败",
+                            i18n::t!("646097ebf2c465de"),
                             err.clone(),
                             &mut self.shown_errors,
                             cx,
@@ -4070,7 +4071,7 @@ impl SettingsWindow {
                         v_flex()
                             .my_0p5()
                             .gap_0p5()
-                            .child(Label::new("受限模式"))
+                            .child(Label::new(i18n::t!("7453d4c7fedb2942")))
                             .child(
                                 Label::new(
                                     "This project is in restricted mode. Some project settings may not apply.",
@@ -4081,7 +4082,7 @@ impl SettingsWindow {
                     )
                     .action_slot(
                         div().pr_2().pb_1().child(
-                            Button::new("manage-trust", "管理信任")
+                            Button::new("manage-trust", i18n::t!("1c141c529e80e288"))
                                 .style(ButtonStyle::Tinted(ui::TintColor::Warning))
                                 .on_click(cx.listener(move |_this, _, window, cx| {
                                     if let Some(original_window) = original_window {
@@ -4450,7 +4451,7 @@ impl SettingsWindow {
         self.skill_creator_page = Some((page.clone(), subscription));
 
         let sub_page_link = SubPageLink {
-            title: "创建技能".into(),
+            title: i18n::t!("04bcc5bd9b5e543d").into(),
             r#type: SubPageType::SkillCreator,
             description: None,
             search_aliases: &[],
@@ -4579,8 +4580,8 @@ impl SettingsWindow {
                 self.skill_creator_page = None;
             }
             if popped.link.json_path == Some("llm_providers")
-                && (popped.link.title.starts_with("添加 ")
-                    || popped.link.title.starts_with("编辑提供商："))
+                && (popped.link.title.starts_with(i18n::t!("7a8a11ead50742a2"))
+                    || popped.link.title.starts_with(i18n::t!("100eee7abac56bb0")))
             {
                 self.llm_provider_form = None;
             }
@@ -5235,6 +5236,80 @@ where
     .into_any_element()
 }
 
+fn render_language_dropdown(
+    field: SettingField<settings::UiLanguage>,
+    file: SettingsUiFile,
+    _metadata: Option<&SettingsFieldMetadata>,
+    title: &'static str,
+    description: &'static str,
+    window: &mut Window,
+    cx: &mut App,
+) -> AnyElement {
+    let current_id: SharedString = SettingsStore::global(cx)
+        .get_value_from_file(file.to_settings(), field.pick)
+        .1
+        .map(|language| SharedString::from(language.as_str()))
+        .unwrap_or_else(|| SharedString::from(i18n::Locale::DEFAULT.id()));
+
+    let options: Vec<(SharedString, SharedString)> = i18n::language_names()
+        .into_iter()
+        .map(|(id, name)| (SharedString::from(id), SharedString::from(name)))
+        .collect();
+
+    let current_label = options
+        .iter()
+        .find(|(id, _)| *id == current_id)
+        .map(|(_, label)| label.clone())
+        .unwrap_or_else(|| current_id.clone());
+
+    let context_menu = window.use_keyed_state(current_id.clone(), cx, move |window, cx| {
+        ContextMenu::new(window, cx, move |mut menu, _, _| {
+            for (id, label) in options.iter() {
+                let id = id.clone();
+                let file = file.clone();
+                let selected = id == current_id;
+                menu = menu.toggleable_entry(
+                    label.clone(),
+                    selected,
+                    IconPosition::End,
+                    None,
+                    move |window, cx| {
+                        let id = id.clone();
+                        update_settings_file(
+                            file.clone(),
+                            field.json_path,
+                            window,
+                            cx,
+                            move |settings, app| {
+                                (field.write)(
+                                    settings,
+                                    Some(settings::UiLanguage(id.to_string())),
+                                    app,
+                                );
+                            },
+                        )
+                        .log_err();
+                    },
+                );
+            }
+            menu
+        })
+    });
+
+    DropdownMenu::new("interface-language-dropdown", current_label, context_menu)
+        .aria_label(title)
+        .when(!description.is_empty(), |this| {
+            this.aria_description(description)
+        })
+        .trigger_size(ButtonSize::Medium)
+        .style(DropdownStyle::Outlined)
+        .offset(gpui::Point {
+            x: px(0.0),
+            y: px(2.0),
+        })
+        .into_any_element()
+}
+
 fn render_picker_trigger_button(id: SharedString, label: SharedString) -> Button {
     Button::new(id, label)
         .aria_role(Role::ComboBox)
@@ -5386,7 +5461,7 @@ fn render_translation_provider_picker(
         .unwrap_or_default();
 
     let trigger_value: SharedString = if current_value.is_empty() {
-        "选择一个渠道…".into()
+        i18n::t!("b97606e7830ef8b2").into()
     } else {
         current_value.clone()
     };
@@ -5471,9 +5546,9 @@ fn render_translation_model_picker(
         .unwrap_or_default();
 
     let trigger_value: SharedString = if provider_id.is_empty() {
-        "请先选择翻译渠道…".into()
+        i18n::t!("8b4c4da881f0a4ab").into()
     } else if current_value.is_empty() {
-        "选择一个模型…".into()
+        i18n::t!("ea98dd3eea22f57e").into()
     } else {
         current_value.clone()
     };

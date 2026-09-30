@@ -89,7 +89,7 @@ fn connection_log_text(output: &str) -> String {
         .trim();
     let first_token = text.split_whitespace().next().unwrap_or_default();
     if first_token.len() == 64 && first_token.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return "SHA-256 已返回".to_owned();
+        return i18n::t!("efa28ad7305f9722").to_owned();
     }
     let mut text = text
         .chars()
@@ -110,7 +110,7 @@ fn verify_custom_server_digest(output: &str, expected: &str) -> Result<bool> {
     let actual = output.split_whitespace().next().unwrap_or_default();
     anyhow::ensure!(
         actual.len() == 64 && actual.eq_ignore_ascii_case(expected),
-        "已有 Zed CN 远程服务与对应发布产物不一致，已停止连接；请先关闭使用该服务的工作区再处理该文件"
+        i18n::t!("9298bd3df0c7e67c")
     );
     Ok(true)
 }
@@ -1041,7 +1041,13 @@ impl SshRemoteConnection {
             paths::remote_server_dir_relative().join(RelPath::from_unix_str(&binary_name).unwrap());
 
         let display_version = custom_tag.as_deref().unwrap_or(&version_str);
-        delegate.set_status(Some(&format!("正在检查远程开发服务 {display_version}")), cx);
+        delegate.set_status(
+            Some(&i18n::t!(
+                "928f0d81c6e96aa8",
+                display_version = display_version
+            )),
+            cx,
+        );
         delegate.append_connection_log("正在校验远程开发服务文件", cx);
         let binary_exists_on_server = if let Some(tag) = &custom_tag {
             self.verify_custom_server_binary(&dst_path, tag, delegate, cx)
@@ -1167,7 +1173,7 @@ impl SshRemoteConnection {
                     }
                 }
                 Ok(None) => {
-                    let error = anyhow!("没有可供远程主机使用的下载地址");
+                    let error = anyhow!(i18n::t!("5bd5e338c21649e7"));
                     delegate.set_status(Some("无法远程下载，正在改用本地下载"), cx);
                     remote_download_error = Some(error);
                 }
@@ -1946,7 +1952,7 @@ impl SshSocket {
         cx: &AsyncApp,
     ) -> Result<()> {
         if remote_os == RemoteOs::Windows {
-            anyhow::bail!("Zed 专属 SSH 密钥暂不支持自动部署到 Windows 远程主机");
+            anyhow::bail!(i18n::t!("6e6d79aff3c785d7"));
         }
 
         let remote_username = self
@@ -1962,7 +1968,7 @@ impl SshSocket {
             .trim()
             .to_string();
         if remote_username.is_empty() {
-            anyhow::bail!("远程主机没有返回当前 SSH 用户名");
+            anyhow::bail!(i18n::t!("794d70d04a2ea706"));
         }
 
         let generated = crate::managed_ssh_keys::generate_managed_ssh_key(
@@ -2093,14 +2099,14 @@ impl SshSocket {
             Ok(Ok(output)) => output,
             Ok(Err(error)) => {
                 self.delegate.append_connection_log(
-                    &format!("✗ {display} — 无法启动：{error}"),
+                    &i18n::t!("40dfc919a355f74d", display = display, error = error),
                     &mut cx.clone(),
                 );
                 return Err(error.into());
             }
             Err(error) => {
                 self.delegate.append_connection_log(
-                    &format!("✗ {display} — 等待超过 {} 秒", timeout.as_secs()),
+                    &i18n::t_mix!("711ed7d39d0cd6bf"; timeout.as_secs(); display = display),
                     &mut cx.clone(),
                 );
                 return Err(error)

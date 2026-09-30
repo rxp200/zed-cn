@@ -279,7 +279,9 @@ impl TranslationDiskCache {
                     .background_spawn(async move {
                         writer.write_if_current(epoch, || {
                             std::fs::write(&path, bytes).map_err(|error| {
-                                anyhow::anyhow!("保存翻译缓存失败 ({}): {error}", path.display())
+                                anyhow::anyhow!(
+                                    i18n::t_mix!("6baac6d5af2421c6"; path.display(); error = error)
+                                )
                             })
                         })
                     })

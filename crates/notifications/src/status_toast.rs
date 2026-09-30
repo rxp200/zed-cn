@@ -116,7 +116,7 @@ impl Render for StatusToast {
                         .shape(ui::IconButtonShape::Square)
                         .icon_size(IconSize::Small)
                         .icon_color(Color::Muted)
-                        .tooltip(Tooltip::text("关闭"))
+                        .tooltip(Tooltip::text(i18n::t!("3fd47edce45b3603")))
                         .on_click(move |_click_event, _window, cx| {
                             handle.update(cx, |_, cx| {
                                 cx.emit(DismissEvent);

@@ -132,6 +132,60 @@ message GetSystemStatsResponse {
   double load_average_five = 17;
   double load_average_fifteen = 18;
   int64 sampled_at_unix_seconds = 19;
+  repeated string local_ip_addresses = 20;
+}
+
+message CreatePersistentTerminal {
+  string creation_id = 1;
+  string program = 2;
+  repeated string args = 3;
+  map<string, string> env = 4;
+  optional string working_directory = 5;
+  uint32 rows = 6;
+  uint32 columns = 7;
+  uint32 pixel_width = 8;
+  uint32 pixel_height = 9;
+}
+
+message CreatePersistentTerminalResponse {
+  string server_instance_id = 1;
+  string terminal_id = 2;
+}
+
+message PersistentTerminalInput {
+  string server_instance_id = 1;
+  string terminal_id = 2;
+  uint64 sequence = 3;
+  bytes data = 4;
+}
+
+message ResizePersistentTerminal {
+  string server_instance_id = 1;
+  string terminal_id = 2;
+  uint32 rows = 3;
+  uint32 columns = 4;
+  uint32 pixel_width = 5;
+  uint32 pixel_height = 6;
+}
+
+message ReadPersistentTerminal {
+  string server_instance_id = 1;
+  string terminal_id = 2;
+  uint64 offset = 3;
+  uint32 max_bytes = 4;
+}
+
+message ReadPersistentTerminalResponse {
+  bytes data = 1;
+  uint64 next_offset = 2;
+  bool history_truncated = 3;
+  bool exited = 4;
+  optional int32 exit_code = 5;
+}
+
+message ClosePersistentTerminal {
+  string server_instance_id = 1;
+  string terminal_id = 2;
 }
 
 message RenameProjectEntry {

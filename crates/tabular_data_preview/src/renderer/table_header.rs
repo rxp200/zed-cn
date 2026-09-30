@@ -500,7 +500,7 @@ impl PickerDelegate for ColumnFilterDelegate {
                         .id("table-filter-clear-all")
                         .cursor_pointer()
                         .child(
-                            Label::new("清除全部")
+                            Label::new(i18n::t!("55f1033fab699842"))
                                 .size(LabelSize::Small)
                                 .color(Color::Accent),
                         )
@@ -679,7 +679,7 @@ impl TabularDataPreviewPane {
             })
             .toggle_state(has_active_filters),
             Tooltip::text(if has_active_filters {
-                "该列存在活动筛选条件。点击管理"
+                i18n::t!("fb3c49d3cda03b92")
             } else {
                 "No filters applied. Click to add filters"
             }),

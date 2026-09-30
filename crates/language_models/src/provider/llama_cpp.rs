@@ -604,9 +604,7 @@ impl LanguageModelProvider for LlamaCppLanguageModelProvider {
                 cx.new(|cx| ConfigurationView::new(state.clone(), window, cx))
                     .into()
             })
-            .description(InlineDescription::Text(
-                "使用 LlamaCpp 在您的机器上运行本地模型。".into(),
-            )),
+            .description(InlineDescription::Text(i18n::t!("09dec7e412665a55").into())),
         ))
     }
 }
@@ -1046,16 +1044,18 @@ struct ConfigurationView {
 
 impl ConfigurationView {
     pub fn new(state: Entity<State>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let api_key_editor = cx.new(|cx| InputField::new(window, cx, "sk-...").label("API 密钥"));
+        let api_key_editor =
+            cx.new(|cx| InputField::new(window, cx, "sk-...").label(i18n::t!("5f600b307b4eb0fb")));
 
         let api_url_editor = cx.new(|cx| {
-            let input = InputField::new(window, cx, LLAMA_CPP_API_URL).label("API 地址");
+            let input =
+                InputField::new(window, cx, LLAMA_CPP_API_URL).label(i18n::t!("d94c3fb876621695"));
             input.set_text(&LlamaCppLanguageModelProvider::api_url(cx), window, cx);
             input
         });
 
         let context_window_editor = cx.new(|cx| {
-            let input = InputField::new(window, cx, "8192").label("上下文窗口");
+            let input = InputField::new(window, cx, "8192").label(i18n::t!("bb074b86a98f6911"));
             if let Some(context_window) = LlamaCppLanguageModelProvider::settings(cx).context_window
             {
                 input.set_text(&context_window.to_string(), window, cx);
@@ -1212,49 +1212,37 @@ impl ConfigurationView {
     fn render_instructions(cx: &App) -> Div {
         v_flex()
             .gap_2()
-            .child(
-                Label::new(
-                    "使用 llama.cpp 的内置服务器在本地运行开放模型，或连接到远程 llama.cpp 服务器。",
-                )
-                .color(Color::Muted),
-            )
-            .child(Label::new("要使用本地 llama.cpp 服务器：").color(Color::Muted))
+            .child(Label::new(i18n::t!("602bb4f8f76c0513")).color(Color::Muted))
+            .child(Label::new(i18n::t!("0471c2503b1e6408")).color(Color::Muted))
             .child(
                 List::new()
                     .child(
                         ListBulletItem::new("")
-                            .child(Label::new("从以下位置安装 llama.cpp").color(Color::Muted))
+                            .child(Label::new(i18n::t!("bc2bf4fd78ff5bcd")).color(Color::Muted))
                             .child(ButtonLink::new("llama.app", LLAMA_CPP_DOWNLOAD_URL)),
                     )
                     .child(
                         ListBulletItem::new("")
-                            .child(
-                                Label::new("以路由模式启动服务器：").color(Color::Muted),
-                            )
+                            .child(Label::new(i18n::t!("cba6b30aa5b8137e")).color(Color::Muted))
                             .child(Label::new("llama serve").inline_code(cx)),
                     )
                     .child(
-                        ListBulletItem::new(
-                            "点击下方的'连接'开始在 Zed 中使用 llama.cpp",
-                        )
-                        .label_color(Color::Muted),
+                        ListBulletItem::new(i18n::t!("e1db7668b222221c")).label_color(Color::Muted),
                     ),
             )
-            .child(
-                Label::new(
-                    "或者，您可以通过指定远程 llama.cpp 服务器的 URL 和 API 密钥（通过 --api-key 设置，可能不需要）进行连接：",
-                )
-                .color(Color::Muted),
-            )
+            .child(Label::new(i18n::t!("872234ffa83fb755")).color(Color::Muted))
     }
 
     fn render_api_key_editor(&self, cx: &Context<Self>) -> impl IntoElement {
         let state = self.state.read(cx);
         let env_var_set = state.api_key_state.is_from_env_var();
         let configured_card_label = if env_var_set {
-            format!("API 密钥已在 {API_KEY_ENV_VAR_NAME} 环境变量中设置。")
+            i18n::t!(
+                "7038424f663d69bc",
+                API_KEY_ENV_VAR_NAME = API_KEY_ENV_VAR_NAME
+            )
         } else {
-            "API 密钥已配置".to_string()
+            i18n::t!("d95b24a24825e6c7").to_string()
         };
 
         let api_key_control = if !state.api_key_state.has_key() {
@@ -1264,8 +1252,9 @@ impl ConfigurationView {
                 .disabled(env_var_set)
                 .on_click(cx.listener(|this, _, window, cx| this.reset_api_key(window, cx)))
                 .when(env_var_set, |this| {
-                    this.tooltip_label(format!(
-                        "要重置您的 API 密钥，请取消设置 {API_KEY_ENV_VAR_NAME} 环境变量。"
+                    this.tooltip_label(i18n::t!(
+                        "d402e5e520ed1b1e",
+                        API_KEY_ENV_VAR_NAME = API_KEY_ENV_VAR_NAME
                     ))
                 })
                 .into_any_element()
@@ -1277,8 +1266,9 @@ impl ConfigurationView {
             .gap_1p5()
             .mb_2()
             .child(
-                Label::new(format!(
-                    "您也可以设置 {API_KEY_ENV_VAR_NAME} 环境变量并重新启动 Zed。"
+                Label::new(i18n::t!(
+                    "db72caa0fa37b7f9",
+                    API_KEY_ENV_VAR_NAME = API_KEY_ENV_VAR_NAME
                 ))
                 .size(LabelSize::Small)
                 .color(Color::Muted),
@@ -1301,13 +1291,13 @@ impl ConfigurationView {
                     h_flex()
                         .gap_1()
                         .child(Icon::new(IconName::Check).color(Color::Success))
-                        .child(Label::new(format!(
-                            "上下文窗口：{}",
+                        .child(Label::new(i18n::t_args!(
+                            "6fb140917bbb261d",
                             settings.context_window.unwrap_or_default()
                         ))),
                 )
                 .child(
-                    Button::new("reset-context-window", "重置")
+                    Button::new("reset-context-window", i18n::t!("cb5d682bac3d1a2d"))
                         .style(ButtonStyle::Outlined)
                         .label_size(LabelSize::Small)
                         .start_icon(Icon::new(IconName::Undo).size(IconSize::Small))
@@ -1327,7 +1317,7 @@ impl ConfigurationView {
                 .child(self.context_window_editor.clone())
                 .gap_1p5()
                 .child(
-                    Label::new("默认：从服务器发现")
+                    Label::new(i18n::t!("a9ef8718851db7b7"))
                         .size(LabelSize::Small)
                         .color(Color::Muted),
                 )
@@ -1353,7 +1343,7 @@ impl ConfigurationView {
                         .child(Label::new(api_url)),
                 )
                 .child(
-                    Button::new("reset-api-url", "重置API URL")
+                    Button::new("reset-api-url", i18n::t!("0bcccd1233b1d3fb"))
                         .style(ButtonStyle::Outlined)
                         .label_size(LabelSize::Small)
                         .start_icon(Icon::new(IconName::Undo).size(IconSize::Small))
@@ -1398,20 +1388,22 @@ impl Render for ConfigurationView {
                             .map(|this| {
                                 if is_authenticated {
                                     this.child(
-                                        Button::new("llama-cpp-webui", "打开WebUI")
-                                            .style(ButtonStyle::OutlinedGhost)
-                                            .size(ButtonSize::Medium)
-                                            .end_icon(
-                                                Icon::new(IconName::ArrowUpRight)
-                                                    .size(IconSize::XSmall)
-                                                    .color(Color::Muted),
-                                            )
-                                            .on_click(move |_, _, cx| {
-                                                let url =
-                                                    LlamaCppLanguageModelProvider::api_url(cx);
-                                                cx.open_url(&url);
-                                            })
-                                            .into_any_element(),
+                                        Button::new(
+                                            "llama-cpp-webui",
+                                            i18n::t!("040a6d234b9df79c"),
+                                        )
+                                        .style(ButtonStyle::OutlinedGhost)
+                                        .size(ButtonSize::Medium)
+                                        .end_icon(
+                                            Icon::new(IconName::ArrowUpRight)
+                                                .size(IconSize::XSmall)
+                                                .color(Color::Muted),
+                                        )
+                                        .on_click(move |_, _, cx| {
+                                            let url = LlamaCppLanguageModelProvider::api_url(cx);
+                                            cx.open_url(&url);
+                                        })
+                                        .into_any_element(),
                                     )
                                     .child(
                                         Button::new("llama-cpp-site", "llama.cpp")
@@ -1429,23 +1421,26 @@ impl Render for ConfigurationView {
                                     )
                                 } else {
                                     this.child(
-                                        Button::new("download_llama_cpp_button", "获取llama.cpp")
-                                            .style(ButtonStyle::OutlinedGhost)
-                                            .size(ButtonSize::Medium)
-                                            .end_icon(
-                                                Icon::new(IconName::ArrowUpRight)
-                                                    .size(IconSize::XSmall)
-                                                    .color(Color::Muted),
-                                            )
-                                            .on_click(move |_, _, cx| {
-                                                cx.open_url(LLAMA_CPP_DOWNLOAD_URL)
-                                            })
-                                            .into_any_element(),
+                                        Button::new(
+                                            "download_llama_cpp_button",
+                                            i18n::t!("fc8b1685156b74ce"),
+                                        )
+                                        .style(ButtonStyle::OutlinedGhost)
+                                        .size(ButtonSize::Medium)
+                                        .end_icon(
+                                            Icon::new(IconName::ArrowUpRight)
+                                                .size(IconSize::XSmall)
+                                                .color(Color::Muted),
+                                        )
+                                        .on_click(move |_, _, cx| {
+                                            cx.open_url(LLAMA_CPP_DOWNLOAD_URL)
+                                        })
+                                        .into_any_element(),
                                     )
                                 }
                             })
                             .child(
-                                Button::new("view-models", "浏览GGUF模型")
+                                Button::new("view-models", i18n::t!("6af4e565938d7bed"))
                                     .style(ButtonStyle::OutlinedGhost)
                                     .size(ButtonSize::Medium)
                                     .end_icon(
@@ -1465,12 +1460,12 @@ impl Render for ConfigurationView {
                                         h_flex()
                                             .gap_1()
                                             .child(Icon::new(IconName::Check).color(Color::Success))
-                                            .child(Label::new("已连接")),
+                                            .child(Label::new(i18n::t!("5be0323e8adcaeae"))),
                                     )
                                     .child(
                                         IconButton::new("refresh-models", IconName::RotateCcw)
                                             .icon_size(IconSize::Small)
-                                            .tooltip(Tooltip::text("刷新模型"))
+                                            .tooltip(Tooltip::text(i18n::t!("a76952e53abfc0d9")))
                                             .on_click(cx.listener(|this, _, window, cx| {
                                                 this.state.update(cx, |state, _| {
                                                     state.fetched_models.clear();
@@ -1481,7 +1476,7 @@ impl Render for ConfigurationView {
                             )
                         } else {
                             this.child(
-                                Button::new("retry_llama_cpp_models", "连接")
+                                Button::new("retry_llama_cpp_models", i18n::t!("a5574109f0208e89"))
                                     .style(ButtonStyle::Outlined)
                                     .size(ButtonSize::Medium)
                                     .start_icon(

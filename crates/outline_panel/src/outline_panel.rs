@@ -1072,7 +1072,7 @@ impl OutlinePanel {
         cx.new(|cx| {
             let filter_editor = cx.new(|cx| {
                 let mut editor = Editor::single_line(window, cx);
-                editor.set_placeholder_text("搜索缓冲区符号…", window, cx);
+                editor.set_placeholder_text(i18n::t!("e91ad374cf85632a"), window, cx);
                 editor
             });
             let filter_update_subscription = cx.subscribe_in(
@@ -5148,7 +5148,7 @@ impl OutlinePanel {
                     h_flex()
                         .gap_1()
                         .justify_center()
-                        .child(Label::new("切换面板方式").color(Color::Muted))
+                        .child(Label::new(i18n::t!("32a0c71b85c05235")).color(Color::Muted))
                         .child({
                             let key_binding = match self.position(window, cx) {
                                 DockPosition::Left => {
@@ -5330,9 +5330,9 @@ impl OutlinePanel {
         let show_symbols_toggle = self.multi_buffer_active(cx);
         let hide_symbols = self.hide_symbols_active(cx);
         let (hide_symbols_icon, hide_symbols_tooltip) = if hide_symbols {
-            (IconName::FileCodeOff, "显示符号")
+            (IconName::FileCodeOff, i18n::t!("d27ac93dd575e204"))
         } else {
-            (IconName::FileCode, "隐藏符号")
+            (IconName::FileCode, i18n::t!("1c183e690a9a315e"))
         };
 
         h_flex()
@@ -5358,7 +5358,7 @@ impl OutlinePanel {
                         this.child(
                             IconButton::new("clear_filter", IconName::Close)
                                 .shape(IconButtonShape::Square)
-                                .tooltip(Tooltip::text("清除筛选"))
+                                .tooltip(Tooltip::text(i18n::t!("657d9cbf45ec9e6a")))
                                 .on_click(cx.listener(|outline_panel, _, window, cx| {
                                     outline_panel.filter_editor.update(cx, |editor, cx| {
                                         editor.set_text("", window, cx);
@@ -5641,7 +5641,7 @@ impl Render for OutlinePanel {
                         .gap_0p5()
                         .border_b_1()
                         .border_color(cx.theme().colors().border_variant)
-                        .child(Label::new("正在搜索：").color(Color::Muted))
+                        .child(Label::new(i18n::t!("0f7df62bdd1df7cf")).color(Color::Muted))
                         .child(Label::new(query_text)),
                 )
             })

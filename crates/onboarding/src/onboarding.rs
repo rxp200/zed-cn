@@ -351,11 +351,11 @@ impl Render for Onboarding {
                                             .child(
                                                 v_flex()
                                                     .child(
-                                                        Headline::new("欢迎使用 Zed")
+                                                        Headline::new(i18n::t!("87e07242edd54599"))
                                                             .size(HeadlineSize::Small),
                                                     )
                                                     .child(
-                                                        Label::new("为未来而生的编辑器")
+                                                        Label::new(i18n::t!("ed09def8a1841f9e"))
                                                             .color(Color::Muted)
                                                             .size(LabelSize::Small)
                                                             .italic(),
@@ -363,7 +363,7 @@ impl Render for Onboarding {
                                             ),
                                     )
                                     .child({
-                                        Button::new("finish_setup", "完成设置")
+                                        Button::new("finish_setup", i18n::t!("fda1eb4d1923549f"))
                                             .style(ButtonStyle::Filled)
                                             .size(ButtonSize::Medium)
                                             .width(rems_from_px(200_f32))
@@ -486,7 +486,7 @@ pub async fn handle_import_vscode_settings(
                     gpui::PromptLevel::Info,
                     &format!("Could not find or load a {source} settings file"),
                     None,
-                    &["确定"],
+                    &[i18n::t!("fac2a67ad87807c4")],
                 );
                 return;
             }

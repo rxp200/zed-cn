@@ -44,11 +44,11 @@ pub fn buffer_text_style(cx: &App) -> gpui::TextStyle {
 /// Returns the platform-appropriate label for the "reveal in file manager" action.
 pub fn reveal_in_file_manager_label(is_remote: bool) -> &'static str {
     if cfg!(target_os = "macos") && !is_remote {
-        "在访达中显示"
+        i18n::t!("ded07da9efc6846c")
     } else if cfg!(target_os = "windows") && !is_remote {
-        "在文件资源管理器中显示"
+        i18n::t!("59eb1eedf3341ea2")
     } else {
-        "在文件管理器中显示"
+        i18n::t!("978ef51c888c950f")
     }
 }
 

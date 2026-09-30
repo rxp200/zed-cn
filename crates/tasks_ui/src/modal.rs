@@ -569,7 +569,7 @@ impl PickerDelegate for TasksModalDelegate {
                                         .checked_sub(1);
                                     picker.refresh(window, cx);
                                 }))
-                                .tooltip(|_, cx| Tooltip::simple("从最近任务中删除", cx)),
+                                .tooltip(|_, cx| Tooltip::simple(i18n::t!("bf33ec0bd2deb076"), cx)),
                         );
                         item.end_slot_on_hover(delete_button)
                     } else {

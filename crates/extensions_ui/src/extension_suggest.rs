@@ -95,35 +95,38 @@ struct LanguageSuggestion {
     install_message: &'static str,
 }
 
-const SUGGESTIONS_BY_LANGUAGE: &[LanguageSuggestion] = &[LanguageSuggestion {
-    extension_id: "emmet",
-    languages: &[
-        "Angular",
-        "Blade",
-        "CSS",
-        "Django",
-        "ERB",
-        "Elixir",
-        "HEEx",
-        "HTML",
-        "HTML+ERB",
-        "JavaScript",
-        "Jinja2",
-        "LESS",
-        "Liquid",
-        "Nunjucks",
-        "PHP",
-        "SCSS",
-        "Statamic Antlers",
-        "TSX",
-        "Twig",
-        "Vue.js",
-    ],
-    title: "Emmet is available for this file",
-    description: "Emmet expands abbreviations such as `ul>li*3` into HTML and `m10` into CSS.",
-    docs_url: "https://zed.dev/docs/languages/emmet",
-    install_message: "Install Emmet",
-}];
+/// 语言建议。文案在运行时翻译，因此每次调用时构造（仅一条，开销可忽略）。
+fn suggestions_by_language() -> Vec<LanguageSuggestion> {
+    vec![LanguageSuggestion {
+        extension_id: "emmet",
+        languages: &[
+            "Angular",
+            "Blade",
+            "CSS",
+            "Django",
+            "ERB",
+            "Elixir",
+            "HEEx",
+            "HTML",
+            "HTML+ERB",
+            "JavaScript",
+            "Jinja2",
+            "LESS",
+            "Liquid",
+            "Nunjucks",
+            "PHP",
+            "SCSS",
+            "Statamic Antlers",
+            "TSX",
+            "Twig",
+            "Vue.js",
+        ],
+        title: i18n::t!("bc37ecf4be3cd7e2"),
+        description: i18n::t!("d89637f503e19ae0"),
+        docs_url: "https://zed.dev/docs/languages/emmet",
+        install_message: "Install Emmet",
+    }]
+}
 
 struct ExtensionSuggestionNotification;
 
@@ -277,7 +280,8 @@ fn suggest_for_buffer(
 
     match language_name {
         Some(language_name) => {
-            let Some(suggestion) = SUGGESTIONS_BY_LANGUAGE
+            let suggestions = suggestions_by_language();
+            let Some(suggestion) = suggestions
                 .iter()
                 .find(|suggestion| suggestion.languages.contains(&language_name.as_ref()))
             else {

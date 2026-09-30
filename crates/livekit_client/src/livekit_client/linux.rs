@@ -188,10 +188,7 @@ pub(crate) async fn start_wayland_desktop_capture(
         })?
         .ok_or_else(|| {
             stop_flag.store(true, Ordering::Relaxed);
-            anyhow::anyhow!(
-                "屏幕共享已取消、权限被拒绝或 PipeWire 连接失败。\
-                 你可以通过屏幕共享按钮重试。"
-            )
+            anyhow::anyhow!(i18n::t!("81e9c67f770a01e6"))
         })?;
 
     let track = super::LocalVideoTrack(track::LocalVideoTrack::create_video_track(

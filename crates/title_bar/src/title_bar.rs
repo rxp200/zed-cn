@@ -392,7 +392,7 @@ impl Render for TitleBar {
                 )
                 .when(is_signing_in, |this| {
                     this.child(
-                        Label::new("正在登录...")
+                        Label::new(i18n::t!("680b5441ecb079ca"))
                             .size(LabelSize::Small)
                             .color(Color::Muted)
                             .with_animation(
@@ -704,8 +704,8 @@ impl TitleBar {
                                         .size(ButtonSize::None)
                                         .icon_size(IconSize::XSmall)
                                         .icon_color(Color::Warning)
-                                        .aria_label("立即重新连接远程服务器")
-                                        .tooltip(Tooltip::text("立即重新连接"))
+                                        .aria_label(i18n::t!("2a1e632e53eff23e"))
+                                        .tooltip(Tooltip::text(i18n::t!("928f38ec2cd79b34")))
                                         .on_click(
                                             move |_, _, cx| {
                                                 cx.stop_propagation();
@@ -748,7 +748,7 @@ impl TitleBar {
             return None;
         }
 
-        let button = Button::new("restricted_mode_trigger", "受限模式")
+        let button = Button::new("restricted_mode_trigger", i18n::t!("7453d4c7fedb2942"))
             .style(ButtonStyle::Tinted(TintColor::Warning))
             .label_size(LabelSize::Small)
             .color(Color::Warning)
@@ -790,7 +790,7 @@ impl TitleBar {
 
         if self.project.read(cx).is_disconnected(cx) {
             return Some(
-                Button::new("disconnected", "已断开")
+                Button::new("disconnected", i18n::t!("1f0ac6953e0411c0"))
                     .disabled(true)
                     .color(Color::Disabled)
                     .label_size(LabelSize::Small)
@@ -817,7 +817,7 @@ impl TitleBar {
                         host_user.username
                     );
 
-                    Tooltip::with_meta(tooltip_title, None, "Click to Follow", cx)
+                    Tooltip::with_meta(tooltip_title, None, i18n::t!("42f07c0a5ad4f8d4"), cx)
                 })
                 .on_click({
                     let host_peer_id = host.peer_id;
@@ -907,7 +907,11 @@ impl TitleBar {
                     .selected_style(ButtonStyle::Tinted(TintColor::Accent))
                     .when(!is_project_selected, |s| s.color(Color::Muted)),
                 move |_window, cx| {
-                    Tooltip::for_action("Recent Projects", &zed_actions::OpenRecent::default(), cx)
+                    Tooltip::for_action(
+                        i18n::t!("0fb712ece2d74fee"),
+                        &zed_actions::OpenRecent::default(),
+                        cx,
+                    )
                 },
             )
             .anchor(gpui::Anchor::TopLeft)
@@ -959,7 +963,11 @@ impl TitleBar {
                     .selected_style(ButtonStyle::Tinted(TintColor::Accent))
                     .when(!is_project_selected, |s| s.color(Color::Muted)),
                 move |_window, cx| {
-                    Tooltip::for_action("Recent Projects", &zed_actions::OpenRecent::default(), cx)
+                    Tooltip::for_action(
+                        i18n::t!("0fb712ece2d74fee"),
+                        &zed_actions::OpenRecent::default(),
+                        cx,
+                    )
                 },
             )
             .anchor(gpui::Anchor::TopLeft)
@@ -1081,7 +1089,7 @@ impl TitleBar {
                 };
 
                 let trigger = if is_detached_head {
-                    Button::new("project_branch_trigger", "创建分支")
+                    Button::new("project_branch_trigger", i18n::t!("c6fe4bf1b98122a1"))
                         .selected_style(ButtonStyle::Tinted(TintColor::Accent))
                         .label_size(LabelSize::Small)
                         .tab_index(0isize)
@@ -1200,7 +1208,7 @@ impl TitleBar {
                 div()
                     .id("disconnected")
                     .child(Icon::new(IconName::Disconnected).size(IconSize::Small))
-                    .tooltip(Tooltip::text("已断开"))
+                    .tooltip(Tooltip::text(i18n::t!("1f0ac6953e0411c0")))
                     .into_any_element(),
             ),
             client::Status::UpgradeRequired => {
@@ -1237,7 +1245,7 @@ impl TitleBar {
     pub fn render_sign_in_button(&mut self, _: &mut Context<Self>) -> Button {
         let client = self.client.clone();
         let workspace = self.workspace.clone();
-        Button::new("sign_in", "登录")
+        Button::new("sign_in", i18n::t!("1e2df9c3075ae9e4"))
             .label_size(LabelSize::Small)
             .tab_index(0isize)
             .on_click(move |_, window, cx| {
@@ -1356,7 +1364,10 @@ impl TitleBar {
                                     .w_full()
                                     .gap_1()
                                     .justify_between()
-                                    .child(Label::new("重新启动以更新 Zed").color(Color::Accent))
+                                    .child(
+                                        Label::new(i18n::t!("edd4c7bf841e2ece"))
+                                            .color(Color::Accent),
+                                    )
                                     .child(
                                         Icon::new(IconName::Download)
                                             .size(IconSize::Small)
@@ -1439,8 +1450,9 @@ impl TitleBar {
                         zed_actions::Extensions::default().boxed_clone(),
                     )
                     .when(ai_enabled, |menu| {
-                        menu.separator()
-                            .submenu("Panel Layout", move |menu, _window, _cx| {
+                        menu.separator().submenu(
+                            i18n::t!("f85ff10a6cc0dd8b"),
+                            move |menu, _window, _cx| {
                                 menu.toggleable_entry(
                                     "Classic",
                                     is_editor,
@@ -1466,7 +1478,8 @@ impl TitleBar {
                                             .disabled(true),
                                     )
                                 })
-                            })
+                            },
+                        )
                     })
                     .when(is_signed_in, |this| {
                         this.separator()

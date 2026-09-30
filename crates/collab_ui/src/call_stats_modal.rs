@@ -155,10 +155,10 @@ fn call_diagnostics(cx: &App) -> Option<Entity<CallDiagnostics>> {
 
 fn quality_label(quality: Option<ConnectionQuality>) -> (&'static str, Color) {
     match quality {
-        Some(ConnectionQuality::Excellent) => ("极佳", Color::Success),
-        Some(ConnectionQuality::Good) => ("良好", Color::Success),
-        Some(ConnectionQuality::Poor) => ("较差", Color::Warning),
-        Some(ConnectionQuality::Lost) => ("已断开", Color::Error),
+        Some(ConnectionQuality::Excellent) => (i18n::t!("234139afdb6e1f37"), Color::Success),
+        Some(ConnectionQuality::Good) => (i18n::t!("cfea0dce5c5d6d72"), Color::Success),
+        Some(ConnectionQuality::Poor) => (i18n::t!("895dcef3f1bda199"), Color::Warning),
+        Some(ConnectionQuality::Lost) => (i18n::t!("1f0ac6953e0411c0"), Color::Error),
         None => ("—", Color::Muted),
     }
 }
@@ -167,43 +167,43 @@ fn metric_rating(label: &str, value_ms: f64) -> (&'static str, Color) {
     match label {
         "延迟" => {
             if value_ms < 100.0 {
-                ("正常", Color::Success)
+                (i18n::t!("296de0e31f8c22d9"), Color::Success)
             } else if value_ms < 300.0 {
-                ("高", Color::Warning)
+                (i18n::t!("b1c27820fec23edb"), Color::Warning)
             } else {
-                ("差", Color::Error)
+                (i18n::t!("fc73c01de16319f7"), Color::Error)
             }
         }
         "抖动" => {
             if value_ms < 30.0 {
-                ("正常", Color::Success)
+                (i18n::t!("296de0e31f8c22d9"), Color::Success)
             } else if value_ms < 75.0 {
-                ("高", Color::Warning)
+                (i18n::t!("b1c27820fec23edb"), Color::Warning)
             } else {
-                ("差", Color::Error)
+                (i18n::t!("fc73c01de16319f7"), Color::Error)
             }
         }
-        _ => ("正常", Color::Success),
+        _ => (i18n::t!("296de0e31f8c22d9"), Color::Success),
     }
 }
 
 fn input_lag_rating(value_ms: u128) -> (&'static str, Color) {
     if value_ms < 20 {
-        ("正常", Color::Success)
+        (i18n::t!("296de0e31f8c22d9"), Color::Success)
     } else if value_ms < 50 {
-        ("高", Color::Warning)
+        (i18n::t!("b1c27820fec23edb"), Color::Warning)
     } else {
-        ("差", Color::Error)
+        (i18n::t!("fc73c01de16319f7"), Color::Error)
     }
 }
 
 fn packet_loss_rating(loss_pct: f64) -> (&'static str, Color) {
     if loss_pct < 1.0 {
-        ("正常", Color::Success)
+        (i18n::t!("296de0e31f8c22d9"), Color::Success)
     } else if loss_pct < 5.0 {
-        ("高", Color::Warning)
+        (i18n::t!("b1c27820fec23edb"), Color::Warning)
     } else {
-        ("差", Color::Error)
+        (i18n::t!("fc73c01de16319f7"), Color::Error)
     }
 }
 
@@ -296,7 +296,7 @@ impl Render for CallStatsModal {
             .child(
                 h_flex()
                     .justify_between()
-                    .child(Label::new("通话诊断").size(LabelSize::Large))
+                    .child(Label::new(i18n::t!("9c8cf460ce00d3ea")).size(LabelSize::Large))
                     .child(
                         Label::new(quality_text)
                             .size(LabelSize::Large)
@@ -308,7 +308,7 @@ impl Render for CallStatsModal {
                     h_flex()
                         .justify_center()
                         .child(
-                            Label::new("正在显示最近一次通话的诊断信息").color(Color::Muted),
+                            Label::new(i18n::t!("ae1e83d9e1c1dd9d")).color(Color::Muted),
                         ),
                 )
             })
@@ -317,7 +317,7 @@ impl Render for CallStatsModal {
                     h_flex()
                         .justify_center()
                         .py_4()
-                        .child(Label::new("暂无通话诊断信息").color(Color::Muted)),
+                        .child(Label::new(i18n::t!("7a364ea944e404eb")).color(Color::Muted)),
                 )
             })
             .when(has_diagnostics, |this| {
@@ -328,41 +328,38 @@ impl Render for CallStatsModal {
                         .max_h(rems(32.))
                         .overflow_y_scroll()
                         .child(
-                            Label::new(format!(
-                                "{sample_count} 个样本 · 保留 {:.0} 秒 · 最近 60 秒内有 {recent_issue_count} 个受影响的时间段",
-                                retained_duration.as_secs_f64()
-                            ))
+                            Label::new(i18n::t_mix!("6fa0abb3dba8cb93"; retained_duration.as_secs_f64(); sample_count = sample_count, recent_issue_count = recent_issue_count))
                             .size(LabelSize::Small)
                             .color(Color::Muted),
                         )
                         .child(
                             v_flex()
                                 .gap_1()
-                                .child(Label::new("网络").weight(FontWeight::SEMIBOLD))
+                                .child(Label::new(i18n::t!("97b31b5d63f57e51")).weight(FontWeight::SEMIBOLD))
                                 .child(self.render_metric_row(
-                                    "延迟",
-                                    "数据传输到服务器所需的时间",
+                                    i18n::t!("18045b8c40f135cd"),
+                                    i18n::t!("43feed3ba8c5620d"),
                                     stats.latency_ms,
                                     |v| format!("{:.0}ms", v),
-                                    |v| metric_rating("延迟", v),
+                                    |v| metric_rating(i18n::t!("18045b8c40f135cd"), v),
                                 ))
                                 .child(self.render_metric_row(
-                                    "抖动",
-                                    "延迟的变化或波动",
+                                    i18n::t!("7c7af45b7e00c1d4"),
+                                    i18n::t!("c3fb14fd5898b0b9"),
                                     stats.jitter_ms,
                                     |v| format!("{:.0}ms", v),
-                                    |v| metric_rating("抖动", v),
+                                    |v| metric_rating(i18n::t!("7c7af45b7e00c1d4"), v),
                                 ))
                                 .child(self.render_metric_row(
-                                    "丢包率",
-                                    "传输过程中丢失的数据量",
+                                    i18n::t!("37772187ab854191"),
+                                    i18n::t!("68983c19fc9830ae"),
                                     stats.packet_loss_pct,
                                     |v| format!("{:.1}%", v),
                                     packet_loss_rating,
                                 ))
                                 .child(self.render_metric_row(
-                                    "输入延迟",
-                                    "从音频捕获到 WebRTC 的延迟",
+                                    i18n::t!("71431fb005dfb3d2"),
+                                    i18n::t!("413a31b332b409e8"),
                                     stats.input_lag.map(|d| d.0.as_millis()),
                                     |v| format!("{}ms", v),
                                     input_lag_rating,
@@ -371,10 +368,10 @@ impl Render for CallStatsModal {
                         .child(
                             v_flex()
                                 .gap_1()
-                                .child(Label::new("入站音频").weight(FontWeight::SEMIBOLD))
+                                .child(Label::new(i18n::t!("bf307903c4be708f")).weight(FontWeight::SEMIBOLD))
                                 .when(remote_audio.is_empty(), |this| {
                                     this.child(
-                                        Label::new("正在等待入站音频统计信息")
+                                        Label::new(i18n::t!("b8744cc0eb488f3f"))
                                             .color(Color::Muted),
                                     )
                                 })
@@ -392,11 +389,11 @@ impl Render for CallStatsModal {
                         .justify_end()
                         .gap_2()
                         .child(
-                            Button::new("copy-call-diagnostics", "复制报告")
+                            Button::new("copy-call-diagnostics", i18n::t!("9da1918cdc89e6cc"))
                                 .on_click(cx.listener(|this, _, _, cx| this.copy_report(cx))),
                         )
                         .child(
-                            Button::new("save-call-diagnostics", "保存报告…")
+                            Button::new("save-call-diagnostics", i18n::t!("db22dc501479a0ed"))
                                 .on_click(cx.listener(|this, _, _, cx| this.save_report(cx))),
                         ),
                 )

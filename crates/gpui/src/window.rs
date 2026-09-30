@@ -1,3 +1,5 @@
+// Modified by the Zed CN project, 2026. See MODIFICATIONS.md.
+
 #[cfg(feature = "profiler")]
 use crate::DebugFrameOverlayMode;
 #[cfg(any(feature = "inspector", debug_assertions))]

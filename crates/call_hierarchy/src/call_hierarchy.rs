@@ -536,19 +536,19 @@ impl PickerDelegate for CallHierarchyDelegate {
     type ListItem = ListItem;
 
     fn name() -> &'static str {
-        "调用层次结构"
+        i18n::t!("9b05add60f67a49e")
     }
 
     fn placeholder_text(&self, _window: &mut Window, _cx: &mut App) -> Arc<str> {
         match (&self.root_item, self.mode) {
             (Some(root), CallHierarchyMode::Incoming) => {
-                Arc::from(format!("搜索对 `{}` 的调用...", root.name))
+                Arc::from(i18n::t_args!("b9efef0fbfc291b0", root.name))
             }
             (Some(root), CallHierarchyMode::Outgoing) => {
-                Arc::from(format!("搜索 `{}` 发出的调用...", root.name))
+                Arc::from(i18n::t_args!("8a81239e38769353", root.name))
             }
-            (None, CallHierarchyMode::Incoming) => Arc::from("搜索传入调用..."),
-            (None, CallHierarchyMode::Outgoing) => Arc::from("搜索传出调用..."),
+            (None, CallHierarchyMode::Incoming) => Arc::from(i18n::t!("db7eb3e6b8484ec0")),
+            (None, CallHierarchyMode::Outgoing) => Arc::from(i18n::t!("1b73745e841173a3")),
         }
     }
 
@@ -562,16 +562,16 @@ impl PickerDelegate for CallHierarchyDelegate {
 
     fn no_matches_text(&self, _window: &mut Window, _cx: &mut App) -> Option<SharedString> {
         Some(SharedString::new_static(match self.state {
-            FetchState::Loading => "正在获取调用层次结构…",
-            FetchState::NoSymbol => "光标下没有可调用的符号",
+            FetchState::Loading => i18n::t!("07f15566382e0879"),
+            FetchState::NoSymbol => i18n::t!("0761063ca196ccdc"),
             FetchState::Loaded => {
                 if self.calls.is_empty() {
                     match self.mode {
-                        CallHierarchyMode::Incoming => "未找到传入调用",
-                        CallHierarchyMode::Outgoing => "未找到传出调用",
+                        CallHierarchyMode::Incoming => i18n::t!("6264b4d81c83575d"),
+                        CallHierarchyMode::Outgoing => i18n::t!("f17bf670c3e1c67e"),
                     }
                 } else {
-                    "无匹配项"
+                    i18n::t!("336cba9a92414d13")
                 }
             }
         }))
@@ -697,8 +697,8 @@ impl PickerDelegate for CallHierarchyDelegate {
         }
         let focus_handle = self.focus_handle.clone();
         let expand_label = match self.mode {
-            CallHierarchyMode::Incoming => "显示调用方",
-            CallHierarchyMode::Outgoing => "显示被调用方",
+            CallHierarchyMode::Incoming => i18n::t!("4927c84269b8a769"),
+            CallHierarchyMode::Outgoing => i18n::t!("95af978f789dc461"),
         };
         Some(
             h_flex()
@@ -711,7 +711,7 @@ impl PickerDelegate for CallHierarchyDelegate {
                 .border_color(cx.theme().colors().border_variant)
                 .when(!self.root_stack.is_empty(), |this| {
                     this.child(
-                        Button::new("collapse-call", "返回")
+                        Button::new("collapse-call", i18n::t!("572cf45ba43634b3"))
                             .key_binding(
                                 KeyBinding::for_action_in(&menu::SelectParent, &focus_handle, cx)
                                     .map(|key_binding| key_binding.size(rems_from_px(12_f32))),
@@ -734,7 +734,7 @@ impl PickerDelegate for CallHierarchyDelegate {
                     )
                 })
                 .child(
-                    Button::new("toggle-direction", "切换方向")
+                    Button::new("toggle-direction", i18n::t!("14c2d57b1803e5d9"))
                         .key_binding(
                             KeyBinding::for_action_in(&ToggleDirection, &focus_handle, cx)
                                 .map(|key_binding| key_binding.size(rems_from_px(12_f32))),

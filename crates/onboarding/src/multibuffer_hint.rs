@@ -159,7 +159,7 @@ impl Render for MultibufferHint {
                             )),
                     )
                     .child(
-                        Button::new("open_docs", "了解更多")
+                        Button::new("open_docs", i18n::t!("ca66c2da6f5bf825"))
                             .end_icon(
                                 Icon::new(IconName::ArrowUpRight)
                                     .size(IconSize::Small)
@@ -180,7 +180,7 @@ impl Render for MultibufferHint {
                             ToolbarItemLocation::Hidden,
                         ))
                     }))
-                    .tooltip(Tooltip::text("关闭提示")),
+                    .tooltip(Tooltip::text(i18n::t!("d301bc1258334c7c"))),
             )
             .into_any_element()
     }

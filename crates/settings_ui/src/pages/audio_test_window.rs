@@ -219,13 +219,13 @@ impl Render for AudioTestWindow {
             .child(
                 v_flex()
                     .gap_1()
-                    .child(Label::new("输出设备"))
+                    .child(Label::new(i18n::t!("6538fe3f7e8275d0")))
                     .child(output_dropdown),
             )
             .child(
                 v_flex()
                     .gap_1()
-                    .child(Label::new("输入设备"))
+                    .child(Label::new(i18n::t!("10ca179a0200d384")))
                     .child(input_dropdown),
             )
             .child(

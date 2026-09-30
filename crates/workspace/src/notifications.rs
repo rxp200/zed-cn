@@ -365,23 +365,23 @@ impl Render for LanguageServerPrompt {
                                             "copy-description",
                                             request.message.clone(),
                                         )
-                                        .tooltip_label("复制描述"),
+                                        .tooltip_label(i18n::t!("f93c6c454f0b6512")),
                                     )
                                     .child(
                                         IconButton::new(close_id, close_icon)
                                             .tooltip(move |_window, cx| {
                                                 if suppress {
                                                     Tooltip::with_meta(
-                                                        "屏蔽",
+                                                        i18n::t!("5e2a947290d10e89"),
                                                         Some(&SuppressNotification),
-                                                        "点击关闭",
+                                                        i18n::t!("87d73b3afc58453a"),
                                                         cx,
                                                     )
                                                 } else {
                                                     Tooltip::with_meta(
-                                                        "关闭",
+                                                        i18n::t!("3fd47edce45b3603"),
                                                         Some(&menu::Cancel),
-                                                        "按住 Shift 点击屏蔽",
+                                                        i18n::t!("8b9ff3e482c3dadd"),
                                                         cx,
                                                     )
                                                 }
@@ -1000,7 +1000,7 @@ pub mod simple_message_notification {
                 .when_some(copy_text, |el, text| {
                     el.child(
                         CopyButton::new("copy-notification-message", text)
-                            .tooltip_label("复制消息"),
+                            .tooltip_label(i18n::t!("5d7fd21f1e3ca6b4")),
                     )
                 })
                 .when(show_close_button, |el| {
@@ -1009,20 +1009,24 @@ pub mod simple_message_notification {
                             .tooltip(move |_window, cx| {
                                 if suppress {
                                     Tooltip::with_meta(
-                                        "屏蔽",
+                                        i18n::t!("5e2a947290d10e89"),
                                         Some(&SuppressNotification),
-                                        "点击关闭",
+                                        i18n::t!("87d73b3afc58453a"),
                                         cx,
                                     )
                                 } else if show_suppress_button {
                                     Tooltip::with_meta(
-                                        "关闭",
+                                        i18n::t!("3fd47edce45b3603"),
                                         Some(&menu::Cancel),
-                                        "按住 Shift 点击屏蔽",
+                                        i18n::t!("8b9ff3e482c3dadd"),
                                         cx,
                                     )
                                 } else {
-                                    Tooltip::for_action("关闭", &menu::Cancel, cx)
+                                    Tooltip::for_action(
+                                        i18n::t!("3fd47edce45b3603"),
+                                        &menu::Cancel,
+                                        cx,
+                                    )
                                 }
                             })
                             .on_click(cx.listener(move |_, _, _, cx| {
@@ -1201,23 +1205,22 @@ pub mod simple_message_notification {
         }
 
         fn preview(_window: &mut Window, cx: &mut App) -> AnyElement {
-            let normal =
-                cx.new(|cx| MessageNotification::new("A regular informational notification.", cx));
+            let normal = cx.new(|cx| MessageNotification::new(i18n::t!("4974e37150dee2bc"), cx));
 
             let with_title = cx.new(|cx| {
-                MessageNotification::new("Some informational content for the user.", cx)
+                MessageNotification::new(i18n::t!("8a93b068f9792ef9"), cx)
                     .with_title("Notification Title")
             });
 
             let with_primary_action = cx.new(|cx| {
-                MessageNotification::new("A new version of Zed is available for download.", cx)
+                MessageNotification::new(i18n::t!("326de82911a39280"), cx)
                     .with_title("Update Available")
                     .primary_message("Restart Now")
                     .primary_icon(IconName::ArrowCircle)
             });
 
             let with_end_icon_action = cx.new(|cx| {
-                MessageNotification::new("Release notes for this version are available online.", cx)
+                MessageNotification::new(i18n::t!("6994f82cc84df1ca"), cx)
                     .with_title("What’s New")
                     .primary_message("Read Release Notes")
                     .primary_end_icon(IconName::ArrowUpRight)
@@ -1257,8 +1260,8 @@ pub mod simple_message_notification {
             let error_state =
                 cx.new(|cx| MessageNotification::from_workspace_error(PreviewError, cx));
 
-            let close_only = cx
-                .new(|cx| MessageNotification::new("Default header with just a close button.", cx));
+            let close_only =
+                cx.new(|cx| MessageNotification::new(i18n::t!("69b2ba03a68ef6d1"), cx));
 
             let copy_and_close = cx.new(|cx| {
                 let msg: SharedString = "This message can be copied to the clipboard.".into();
@@ -1266,8 +1269,7 @@ pub mod simple_message_notification {
             });
 
             let no_close = cx.new(|cx| {
-                MessageNotification::new("This notification can't be closed manually.", cx)
-                    .show_close_button(false)
+                MessageNotification::new(i18n::t!("fe4fafeb1f5fbfe9"), cx).show_close_button(false)
             });
 
             // --- Workspace errors ---
@@ -1320,7 +1322,7 @@ pub mod simple_message_notification {
                 }
                 fn primary_action(&self) -> ErrorAction {
                     ErrorAction::link(
-                        "查看文档",
+                        i18n::t!("d006830a9eb8b475"),
                         "https://zed.dev/docs/linux#i-cant-open-any-files",
                     )
                 }
@@ -1337,7 +1339,7 @@ pub mod simple_message_notification {
                     ErrorSeverity::Critical
                 }
                 fn primary_action(&self) -> ErrorAction {
-                    ErrorAction::link("更新 Zed", "https://zed.dev/releases")
+                    ErrorAction::link(i18n::t!("30c3a0164c1ce38c"), "https://zed.dev/releases")
                 }
                 fn secondary_action(&self) -> Option<ErrorAction> {
                     Some(ErrorAction::dismiss())
@@ -1360,63 +1362,66 @@ pub mod simple_message_notification {
                 .p_4()
                 .children(vec![
                     example_group_with_title(
-                        "状态",
+                        i18n::t!("6320b4a8722a851f"),
                         vec![
-                            single_example("普通", container().child(normal).into_any_element()),
                             single_example(
-                                "带标题",
+                                i18n::t!("de907d10df98b498"),
+                                container().child(normal).into_any_element(),
+                            ),
+                            single_example(
+                                i18n::t!("9f930e27f6e98cb5"),
                                 container().child(with_title).into_any_element(),
                             ),
                             single_example(
-                                "带主要操作（起始图标）",
+                                i18n::t!("86bd65198026e891"),
                                 container().child(with_primary_action).into_any_element(),
                             ),
                             single_example(
-                                "带主要操作（结束图标）",
+                                i18n::t!("1aa1aad3f98768c4"),
                                 container().child(with_end_icon_action).into_any_element(),
                             ),
                             single_example(
-                                "长内容 + 主要操作",
+                                i18n::t!("86914c9d4368b44f"),
                                 container()
                                     .child(with_long_content_and_action)
                                     .into_any_element(),
                             ),
                             single_example(
-                                "错误",
+                                i18n::t!("0bc1fb72ae1be5c5"),
                                 container().child(error_state).into_any_element(),
                             ),
                         ],
                     ),
                     example_group_with_title(
-                        "头部操作（右上角）",
+                        i18n::t!("74b59eb68b593a8f"),
                         vec![
                             single_example(
-                                "仅关闭",
+                                i18n::t!("798e16688462ea70"),
                                 container().child(close_only).into_any_element(),
                             ),
                             single_example(
-                                "复制 + 关闭",
+                                i18n::t!("c80ec8e8516e95f3"),
                                 container().child(copy_and_close).into_any_element(),
                             ),
                             single_example(
-                                "无关闭",
+                                i18n::t!("eb6bb0da552629b5"),
                                 container().child(no_close).into_any_element(),
                             ),
                         ],
                     ),
                     example_group_with_title(
-                        "工作区错误",
+                        i18n::t!("cd2d3f7b322ae0b0"),
                         vec![
                             single_example(
-                                "基础",
+                                i18n::t!("89e5e14c8db996da"),
                                 container().child(basic_error).into_any_element(),
                             ),
                             single_example(
-                                "带次要消息",
+                                i18n::t!("77b03b847b601759"),
                                 container().child(detailed_error).into_any_element(),
                             ),
                             single_example(
-                                "带文档链接",
+                                i18n::t!("837479c624d21a08"),
                                 container().child(docs_error).into_any_element(),
                             ),
                             single_example(
@@ -1684,7 +1689,13 @@ where
                         display.push('.');
                     }
                     let detail = f(err, window, cx).unwrap_or(display);
-                    window.prompt(PromptLevel::Critical, &msg, Some(&detail), &["确定"], cx)
+                    window.prompt(
+                        PromptLevel::Critical,
+                        &msg,
+                        Some(&detail),
+                        &[i18n::t!("fac2a67ad87807c4")],
+                        cx,
+                    )
                 }) {
                     prompt.await.ok();
                 }

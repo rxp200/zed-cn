@@ -48,7 +48,7 @@ pub(crate) fn settings_popover_menu(
             IconButton::new("table-settings-trigger", IconName::Filter)
                 .icon_size(IconSize::Small)
                 .size(ButtonSize::Compact),
-            Tooltip::text("表格设置"),
+            Tooltip::text(i18n::t!("974ec1c56f232101")),
         )
         .anchor(Anchor::TopRight)
         .menu(move |window, cx| {
@@ -60,34 +60,34 @@ pub(crate) fn settings_popover_menu(
                     let settings = view_entity.read(cx).settings.clone();
 
                     let menu = toggle_entry(
-                        menu.header("文本对齐"),
-                        "顶部",
-                        Some("选择单元格内的垂直文本对齐方式"),
+                        menu.header(i18n::t!("2527727872202c15")),
+                        i18n::t!("6f2a4a02e60e067c"),
+                        Some(i18n::t!("d3e29943e485320f")),
                         matches!(settings.vertical_alignment, VerticalAlignment::Top),
                         &view_entity,
                         |settings| settings.vertical_alignment = VerticalAlignment::Top,
                     );
                     let menu = toggle_entry(
                         menu,
-                        "居中",
+                        i18n::t!("4cc3885c182e419c"),
                         None,
                         matches!(settings.vertical_alignment, VerticalAlignment::Center),
                         &view_entity,
                         |settings| settings.vertical_alignment = VerticalAlignment::Center,
                     );
 
-                    let menu = menu.separator().header("筛选排序");
+                    let menu = menu.separator().header(i18n::t!("52f903208e38294c"));
                     let menu = toggle_entry(
                         menu,
-                        "A-Z，再按数量",
-                        Some("选择筛选菜单中筛选值的排序方式"),
+                        i18n::t!("bd5e9509fe14020e"),
+                        Some(i18n::t!("f61d4e621adf7e0a")),
                         settings.filter_sort_order == FilterSortOrder::AlphaThenCount,
                         &view_entity,
                         |settings| settings.filter_sort_order = FilterSortOrder::AlphaThenCount,
                     );
                     let menu = toggle_entry(
                         menu,
-                        "按数量，再按 A-Z",
+                        i18n::t!("0d53a24706341a87"),
                         None,
                         settings.filter_sort_order == FilterSortOrder::CountThenAlpha,
                         &view_entity,
@@ -96,11 +96,8 @@ pub(crate) fn settings_popover_menu(
 
                     let menu = toggle_entry(
                         menu.separator(),
-                        "显示多行单元格",
-                        Some(
-                            "启用时，行高将增长以显示所有内容。\
-                             禁用时，仅显示第一行——悬停在单元格上可查看其余内容。",
-                        ),
+                        i18n::t!("e4ca990d8bb868ff"),
+                        Some(i18n::t!("da034868dba9940e")),
                         settings.multiline_cells_enabled,
                         &view_entity,
                         |settings| {
@@ -125,21 +122,18 @@ fn append_dev_only_entries(
 ) -> ContextMenu {
     use crate::settings::RowRenderMechanism;
 
-    let menu = menu.separator().header("仅开发用：渲染模式");
+    let menu = menu.separator().header(i18n::t!("0451d2aa393f2240"));
     let menu = toggle_entry(
         menu,
-        "可变高度",
-        Some(
-            "仅开发用的调试部分。\n\
-             表格数据预览功能公开发布后将移除。",
-        ),
+        i18n::t!("5c317977bd20201a"),
+        Some(i18n::t!("1b40c8e317dca335")),
         settings.rendering_with == RowRenderMechanism::VariableList,
         view_entity,
         |settings| settings.rendering_with = RowRenderMechanism::VariableList,
     );
     let menu = toggle_entry(
         menu,
-        "统一高度",
+        i18n::t!("baff0125a227a78d"),
         None,
         settings.rendering_with == RowRenderMechanism::UniformList,
         view_entity,
@@ -148,7 +142,7 @@ fn append_dev_only_entries(
 
     let menu = toggle_entry(
         menu.separator(),
-        "显示性能指标",
+        i18n::t!("328ef20b05838596"),
         None,
         settings.show_perf_metrics_overlay,
         view_entity,
@@ -156,7 +150,7 @@ fn append_dev_only_entries(
     );
     toggle_entry(
         menu,
-        "显示单元格位置",
+        i18n::t!("8c101ef157cdc3e3"),
         None,
         settings.show_debug_info,
         view_entity,

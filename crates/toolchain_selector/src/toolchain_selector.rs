@@ -175,22 +175,24 @@ impl AddToolchainState {
                                 .p_1()
                                 .justify_between()
                                 .gap_2()
-                                .child(Label::new("选择工具链路径").color(Color::Muted).map(
-                                    |this| {
-                                        if is_loading {
-                                            this.with_animation(
-                                                "select-toolchain-label",
-                                                Animation::new(Duration::from_secs(2))
-                                                    .repeat()
-                                                    .with_easing(pulsating_between(0.4, 0.8)),
-                                                |label, delta| label.alpha(delta),
-                                            )
-                                            .into_any()
-                                        } else {
-                                            this.into_any_element()
-                                        }
-                                    },
-                                ))
+                                .child(
+                                    Label::new(i18n::t!("41bc618971d32aa0"))
+                                        .color(Color::Muted)
+                                        .map(|this| {
+                                            if is_loading {
+                                                this.with_animation(
+                                                    "select-toolchain-label",
+                                                    Animation::new(Duration::from_secs(2))
+                                                        .repeat()
+                                                        .with_easing(pulsating_between(0.4, 0.8)),
+                                                    |label, delta| label.alpha(delta),
+                                                )
+                                                .into_any()
+                                            } else {
+                                                this.into_any_element()
+                                            }
+                                        }),
+                                )
                                 .when_some(error, |this, error| {
                                     this.child(Label::new(error).color(Color::Error))
                                 }),
@@ -435,7 +437,7 @@ impl Render for AddToolchainState {
                             .child(
                                 v_flex()
                                     .child(
-                                        Label::new("作用域")
+                                        Label::new(i18n::t!("91d422af707c61f4"))
                                             .size(LabelSize::Small)
                                             .color(Color::Muted)
                                             .mt_1()
@@ -864,7 +866,7 @@ impl ToolchainSelectorDelegate {
                 Some(())
             }
         });
-        let placeholder_text = Arc::from("选择工具链…");
+        let placeholder_text = Arc::from(i18n::t!("eb5f58e72a437add"));
         Self {
             toolchain_selector,
             candidates: Default::default(),
@@ -1147,7 +1149,7 @@ impl PickerDelegate for ToolchainSelectorDelegate {
                                 }),
                         )
                         .child(
-                            Button::new("select", "选择")
+                            Button::new("select", i18n::t!("c11330b85234f9c0"))
                                 .key_binding(KeyBinding::for_action_in(
                                     &menu::Confirm,
                                     &self.focus_handle,

@@ -211,6 +211,7 @@ impl VsCodeSettings {
             image_viewer: None,
             markdown_preview: None,
             journal: None,
+            language: None,
             language_models: None,
             line_indicator_format: None,
             log: None,

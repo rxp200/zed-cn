@@ -336,7 +336,7 @@ impl BranchDiff {
             DiffMultibuffer::new(
                 branch_diff,
                 Capability::ReadWrite,
-                "没有更改",
+                i18n::t!("509169d76da10bf7"),
                 move |editor, cx| {
                     editor.set_diff_hunk_renderer(Some(Arc::new(HiddenDiffHunkRenderer)), cx);
                     editor.rhs_editor().update(cx, move |rhs_editor, _cx| {
@@ -869,13 +869,13 @@ impl Render for BranchDiffToolbar {
                                 .size(IconSize::XSmall)
                                 .color(Color::Muted),
                         ),
-                        Tooltip::text("选择基础分支"),
+                        Tooltip::text(i18n::t!("1461e488807f89e2")),
                     ),
             )
             .when(show_review_button, |this| {
                 let focus_handle = focus_handle.clone();
                 this.child(Divider::vertical()).child(
-                    Button::new("review-diff", "审查差异")
+                    Button::new("review-diff", i18n::t!("4805991f33e318aa"))
                         .start_icon(
                             Icon::new(IconName::ZedAssistant)
                                 .size(IconSize::Small)
@@ -883,9 +883,9 @@ impl Render for BranchDiffToolbar {
                         )
                         .tooltip(move |_, cx| {
                             Tooltip::with_meta_in(
-                                "查看差异",
+                                i18n::t!("b35001374ea98a40"),
                                 Some(&ReviewDiff),
-                                "发送此差异供您的上一个 Agent 审阅。",
+                                i18n::t!("3d9f2cf2324c6c25"),
                                 &focus_handle,
                                 cx,
                             )

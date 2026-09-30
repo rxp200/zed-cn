@@ -15,6 +15,10 @@
 //! and Tailwind-like styling that you can use to build your own custom elements. Div is
 //! constructed by combining these two systems into an all-in-one element.
 
+// Modified by the Zed CN project, 2026. See MODIFICATIONS.md.
+
+// Modified by the Zed CN project, 2026. See MODIFICATIONS.md.
+
 use crate::{
     Action, AnyDrag, AnyElement, AnyTooltip, AnyView, App, Bounds, ClickEvent, DispatchPhase,
     Display, Element, ElementId, Entity, EntityId, ExternalDragPayload, ExternalDragPayloadSource,

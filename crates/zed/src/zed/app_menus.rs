@@ -9,15 +9,15 @@ use zed_actions::{Quit, assistant, debug_panel, dev, git_panel, project_panel};
 pub fn app_menus(cx: &mut App) -> Vec<Menu> {
     let mut view_items = vec![
         MenuItem::action(
-            "放大",
+            i18n::t!("80f8fbcfa0117633"),
             zed_actions::IncreaseBufferFontSize { persist: false },
         ),
         MenuItem::action(
-            "缩小",
+            i18n::t!("290f68030501cd9c"),
             zed_actions::DecreaseBufferFontSize { persist: false },
         ),
         MenuItem::action(
-            "重置缩放",
+            i18n::t!("c9cdc9678c5163e9"),
             zed_actions::ResetBufferFontSize { persist: false },
         ),
         MenuItem::action("重置所有缩放", zed_actions::ResetAllZoom { persist: false }),
@@ -27,7 +27,7 @@ pub fn app_menus(cx: &mut App) -> Vec<Menu> {
         MenuItem::action("切换底部面板", workspace::ToggleBottomDock),
         MenuItem::action("切换所有面板", workspace::ToggleAllDocks),
         MenuItem::submenu(Menu {
-            name: "编辑器布局".into(),
+            name: i18n::t!("9099a016b2c604f7").into(),
             disabled: false,
             items: vec![
                 MenuItem::action("向上分割", workspace::SplitUp::default()),
@@ -68,7 +68,7 @@ pub fn app_menus(cx: &mut App) -> Vec<Menu> {
                 MenuItem::action("关于 Zed", zed_actions::About),
                 MenuItem::action("检查更新", auto_update::Check),
                 MenuItem::separator(),
-                MenuItem::submenu(Menu::new("设置").items([
+                MenuItem::submenu(Menu::new(i18n::t!("df3d58c7d84b85f2")).items([
                     MenuItem::action("打开设置", zed_actions::OpenSettings),
                     MenuItem::action("打开设置文件", super::OpenSettingsFile),
                     MenuItem::action("打开项目设置", zed_actions::OpenProjectSettings),
@@ -81,13 +81,13 @@ pub fn app_menus(cx: &mut App) -> Vec<Menu> {
                     MenuItem::separator(),
                     MenuItem::action("选择主题…", zed_actions::theme_selector::Toggle::default()),
                     MenuItem::action(
-                        "选择图标主题…",
+                        i18n::t!("b93536f1a11bcf35"),
                         zed_actions::icon_theme_selector::Toggle::default(),
                     ),
                 ])),
                 MenuItem::separator(),
                 #[cfg(target_os = "macos")]
-                MenuItem::os_submenu("服务", gpui::SystemMenuType::Services),
+                MenuItem::os_submenu(i18n::t!("ec309ab207ef7fa3"), gpui::SystemMenuType::Services),
                 MenuItem::separator(),
                 MenuItem::action("扩展", zed_actions::Extensions::default()),
                 #[cfg(not(target_os = "windows"))]
@@ -104,7 +104,7 @@ pub fn app_menus(cx: &mut App) -> Vec<Menu> {
             ],
         },
         Menu {
-            name: "文件".into(),
+            name: i18n::t!("39932f24fe11a6ba").into(),
             disabled: false,
             items: vec![
                 MenuItem::action("新建", workspace::NewFile),
@@ -114,9 +114,9 @@ pub fn app_menus(cx: &mut App) -> Vec<Menu> {
                 MenuItem::action("打开文件…", workspace::OpenFiles),
                 MenuItem::action(
                     if cfg!(not(target_os = "macos")) {
-                        "打开文件夹…"
+                        i18n::t!("15110e31656a5995")
                     } else {
-                        "打开…"
+                        i18n::t!("3429a4778824b823")
                     },
                     workspace::Open::default(),
                 ),
@@ -130,7 +130,7 @@ pub fn app_menus(cx: &mut App) -> Vec<Menu> {
                 MenuItem::action("全部保存", workspace::SaveAll { save_intent: None }),
                 MenuItem::separator(),
                 MenuItem::action(
-                    "关闭编辑器",
+                    i18n::t!("7951c0e8608ac003"),
                     workspace::CloseActiveItem {
                         save_intent: None,
                         close_pinned: true,
@@ -141,16 +141,36 @@ pub fn app_menus(cx: &mut App) -> Vec<Menu> {
             ],
         },
         Menu {
-            name: "编辑".into(),
+            name: i18n::t!("051836569928a9f9").into(),
             disabled: false,
             items: vec![
-                MenuItem::os_action("撤销", editor::actions::Undo, OsAction::Undo),
-                MenuItem::os_action("重做", editor::actions::Redo, OsAction::Redo),
+                MenuItem::os_action(
+                    i18n::t!("926a50b98ece2667"),
+                    editor::actions::Undo,
+                    OsAction::Undo,
+                ),
+                MenuItem::os_action(
+                    i18n::t!("03717b6f10700f87"),
+                    editor::actions::Redo,
+                    OsAction::Redo,
+                ),
                 MenuItem::separator(),
-                MenuItem::os_action("剪切", editor::actions::Cut, OsAction::Cut),
-                MenuItem::os_action("复制", editor::actions::Copy, OsAction::Copy),
+                MenuItem::os_action(
+                    i18n::t!("410a8e8a6bf253ac"),
+                    editor::actions::Cut,
+                    OsAction::Cut,
+                ),
+                MenuItem::os_action(
+                    i18n::t!("63d90d977348ab1f"),
+                    editor::actions::Copy,
+                    OsAction::Copy,
+                ),
                 MenuItem::action("复制并修剪", editor::actions::CopyAndTrim),
-                MenuItem::os_action("粘贴", editor::actions::Paste, OsAction::Paste),
+                MenuItem::os_action(
+                    i18n::t!("33517926747180e6"),
+                    editor::actions::Paste,
+                    OsAction::Paste,
+                ),
                 MenuItem::separator(),
                 MenuItem::action("查找", search::buffer_search::Deploy::find()),
                 MenuItem::action("在项目中查找", workspace::DeploySearch::default()),
@@ -159,38 +179,42 @@ pub fn app_menus(cx: &mut App) -> Vec<Menu> {
             ],
         },
         Menu {
-            name: "选择".into(),
+            name: i18n::t!("c11330b85234f9c0").into(),
             disabled: false,
             items: vec![
-                MenuItem::os_action("全选", editor::actions::SelectAll, OsAction::SelectAll),
+                MenuItem::os_action(
+                    i18n::t!("3a5040b68abf75f9"),
+                    editor::actions::SelectAll,
+                    OsAction::SelectAll,
+                ),
                 MenuItem::action("扩大选择", editor::actions::SelectLargerSyntaxNode),
                 MenuItem::action("缩小选择", editor::actions::SelectSmallerSyntaxNode),
                 MenuItem::action("选择下一个兄弟节点", editor::actions::SelectNextSyntaxNode),
                 MenuItem::action(
-                    "选择上一个兄弟节点",
+                    i18n::t!("657279064dd60d12"),
                     editor::actions::SelectPreviousSyntaxNode,
                 ),
                 MenuItem::separator(),
                 MenuItem::action(
-                    "在上方添加光标",
+                    i18n::t!("7ca54c1a537fee96"),
                     editor::actions::AddSelectionAbove {
                         skip_soft_wrap: true,
                     },
                 ),
                 MenuItem::action(
-                    "在下方添加光标",
+                    i18n::t!("6df7d5399d5de448"),
                     editor::actions::AddSelectionBelow {
                         skip_soft_wrap: true,
                     },
                 ),
                 MenuItem::action(
-                    "选择下一个出现",
+                    i18n::t!("3bb9955c65f66ece"),
                     editor::actions::SelectNext {
                         replace_newest: false,
                     },
                 ),
                 MenuItem::action(
-                    "选择上一个出现",
+                    i18n::t!("5abb5cc8496cfe6e"),
                     editor::actions::SelectPrevious {
                         replace_newest: false,
                     },
@@ -203,12 +227,12 @@ pub fn app_menus(cx: &mut App) -> Vec<Menu> {
             ],
         },
         Menu {
-            name: "视图".into(),
+            name: i18n::t!("1c5c067138704dda").into(),
             disabled: false,
             items: view_items,
         },
         Menu {
-            name: "导航".into(),
+            name: i18n::t!("e72622fe470d04bc").into(),
             disabled: false,
             items: vec![
                 MenuItem::action("后退", workspace::GoBack),
@@ -224,11 +248,11 @@ pub fn app_menus(cx: &mut App) -> Vec<Menu> {
                 MenuItem::action("转到定义", editor::actions::GoToDefinition::default()),
                 MenuItem::action("转到声明", editor::actions::GoToDeclaration::default()),
                 MenuItem::action(
-                    "转到类型定义",
+                    i18n::t!("7bb5e29bec31f254"),
                     editor::actions::GoToTypeDefinition::default(),
                 ),
                 MenuItem::action(
-                    "查找所有引用",
+                    i18n::t!("48efab5e6cb10205"),
                     editor::actions::FindAllReferences::default(),
                 ),
                 MenuItem::action("Show Incoming Calls", call_hierarchy::ShowIncomingCalls),
@@ -236,17 +260,17 @@ pub fn app_menus(cx: &mut App) -> Vec<Menu> {
                 MenuItem::separator(),
                 MenuItem::action("下一个问题", editor::actions::GoToDiagnostic::default()),
                 MenuItem::action(
-                    "上一个问题",
+                    i18n::t!("e175d0cd4920a8d5"),
                     editor::actions::GoToPreviousDiagnostic::default(),
                 ),
             ],
         },
         Menu {
-            name: "运行".into(),
+            name: i18n::t!("75b269496f698fae").into(),
             disabled: false,
             items: vec![
                 MenuItem::action(
-                    "启动任务",
+                    i18n::t!("05df3be85291fac6"),
                     zed_actions::Spawn::ViaModal {
                         reveal_target: None,
                     },
@@ -267,7 +291,7 @@ pub fn app_menus(cx: &mut App) -> Vec<Menu> {
             ],
         },
         Menu {
-            name: "窗口".into(),
+            name: i18n::t!("9efe01f647d67d91").into(),
             disabled: false,
             items: vec![
                 MenuItem::action("最小化", super::Minimize),
@@ -276,7 +300,7 @@ pub fn app_menus(cx: &mut App) -> Vec<Menu> {
             ],
         },
         Menu {
-            name: "帮助".into(),
+            name: i18n::t!("a57cfcb8428da408").into(),
             disabled: false,
             items: vec![
                 MenuItem::action("查看本地发布说明", auto_update_ui::ViewReleaseNotesLocally),
@@ -289,7 +313,7 @@ pub fn app_menus(cx: &mut App) -> Vec<Menu> {
                 MenuItem::action("联系我们…", zed_actions::feedback::EmailZed),
                 MenuItem::separator(),
                 MenuItem::action(
-                    "文档",
+                    i18n::t!("2687ccdbb1d2288a"),
                     super::OpenBrowser {
                         url: "https://zed.dev/docs".into(),
                     },
@@ -302,7 +326,7 @@ pub fn app_menus(cx: &mut App) -> Vec<Menu> {
                     },
                 ),
                 MenuItem::action(
-                    "加入我们",
+                    i18n::t!("7f6177618c2af828"),
                     super::OpenBrowser {
                         url: "https://zed.dev/jobs".into(),
                     },

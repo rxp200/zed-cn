@@ -989,12 +989,12 @@ impl ToolPermissionContext {
             return acp_thread::PermissionOptions::Flat(vec![
                 acp::PermissionOption::new(
                     acp::PermissionOptionId::new("allow"),
-                    "是",
+                    i18n::t!("b5141d3d19e9a048"),
                     acp::PermissionOptionKind::AllowOnce,
                 ),
                 acp::PermissionOption::new(
                     acp::PermissionOptionId::new("deny"),
-                    "否",
+                    i18n::t!("0c70665b6eb65f1a"),
                     acp::PermissionOptionKind::RejectOnce,
                 ),
             ]);
@@ -1005,12 +1005,12 @@ impl ToolPermissionContext {
             return acp_thread::PermissionOptions::Flat(vec![
                 acp::PermissionOption::new(
                     acp::PermissionOptionId::new("allow"),
-                    "允许",
+                    i18n::t!("ce7ef28b670ade58"),
                     acp::PermissionOptionKind::AllowOnce,
                 ),
                 acp::PermissionOption::new(
                     acp::PermissionOptionId::new("deny"),
-                    "拒绝",
+                    i18n::t!("136de7a8c46fc803"),
                     acp::PermissionOptionKind::RejectOnce,
                 ),
             ]);
@@ -1047,12 +1047,12 @@ impl ToolPermissionContext {
                     choices.push(acp_thread::PermissionOptionChoice {
                         allow: acp::PermissionOption::new(
                             acp::PermissionOptionId::new("allow"),
-                            "仅此一次",
+                            i18n::t!("3168027e4e2367d4"),
                             acp::PermissionOptionKind::AllowOnce,
                         ),
                         deny: acp::PermissionOption::new(
                             acp::PermissionOptionId::new("deny"),
-                            "仅此一次",
+                            i18n::t!("3168027e4e2367d4"),
                             acp::PermissionOptionKind::RejectOnce,
                         ),
                         sub_patterns: vec![],

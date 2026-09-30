@@ -1,3 +1,5 @@
+// Modified by the Zed CN project, 2026. See MODIFICATIONS.md.
+
 use std::{
     cell::{Cell, RefCell},
     ffi::{OsStr, OsString},

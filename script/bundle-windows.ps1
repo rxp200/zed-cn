@@ -116,12 +116,17 @@ function PrepareForBundle {
     New-Item -Path "$innoDir\appx" -ItemType Directory -Force
     New-Item -Path "$innoDir\bin" -ItemType Directory -Force
     New-Item -Path "$innoDir\tools" -ItemType Directory -Force
+    New-Item -Path "$innoDir\licenses" -ItemType Directory -Force
 
     rustup target add $target
 }
 
 function GenerateLicenses {
     . $PSScriptRoot/generate-licenses.ps1
+    Copy-Item -Path "$env:ZED_WORKSPACE\LICENSE-GPL" -Destination "$innoDir\licenses\LICENSE-GPL" -Force
+    Copy-Item -Path "$env:ZED_WORKSPACE\LICENSE-APACHE" -Destination "$innoDir\licenses\LICENSE-APACHE" -Force
+    Copy-Item -Path "$env:ZED_WORKSPACE\MODIFICATIONS.md" -Destination "$innoDir\licenses\MODIFICATIONS.md" -Force
+    Copy-Item -Path "$env:ZED_WORKSPACE\assets\licenses.md" -Destination "$innoDir\licenses\THIRD-PARTY-LICENSES.md" -Force
 }
 
 function BuildZedAndItsFriends {
@@ -150,7 +155,7 @@ function BuildRemoteServer {
     Write-Output "Building remote_server for $target"
     cargo --config .cargo/bundle-config.toml build --release --package remote_server --target $target
 
-    # Create zipped remote server binary
+    # Create zipped remote server binary and include the corresponding license notices.
     $remoteServerSrc = (Resolve-Path ".\$CargoOutDir\remote_server.exe").Path
 
     if ($canCodeSign) {
@@ -159,8 +164,17 @@ function BuildRemoteServer {
     }
 
     $remoteServerDst = "$env:ZED_WORKSPACE\target\zed-remote-server-windows-$Architecture.zip"
+    $remoteServerBundle = "$env:ZED_WORKSPACE\target\remote-server-windows-$Architecture"
+    Remove-Item -Path $remoteServerBundle -Recurse -Force -ErrorAction SilentlyContinue
+    New-Item -Path "$remoteServerBundle\licenses" -ItemType Directory -Force | Out-Null
+    Copy-Item -Path $remoteServerSrc -Destination "$remoteServerBundle\remote_server.exe" -Force
+    Copy-Item -Path "$env:ZED_WORKSPACE\LICENSE-GPL" -Destination "$remoteServerBundle\licenses\LICENSE-GPL" -Force
+    Copy-Item -Path "$env:ZED_WORKSPACE\LICENSE-APACHE" -Destination "$remoteServerBundle\licenses\LICENSE-APACHE" -Force
+    Copy-Item -Path "$env:ZED_WORKSPACE\MODIFICATIONS.md" -Destination "$remoteServerBundle\licenses\MODIFICATIONS.md" -Force
+    Copy-Item -Path "$env:ZED_WORKSPACE\assets\licenses.md" -Destination "$remoteServerBundle\licenses\THIRD-PARTY-LICENSES.md" -Force
     Write-Output "Compressing remote_server to $remoteServerDst"
-    Compress-Archive -Path $remoteServerSrc -DestinationPath $remoteServerDst -Force
+    Compress-Archive -Path "$remoteServerBundle\*" -DestinationPath $remoteServerDst -Force
+    Remove-Item -Path $remoteServerBundle -Recurse -Force
 
     Write-Output "Remote server compressed successfully"
 }
@@ -286,6 +300,10 @@ function CollectFiles {
 
 function BuildInstaller {
     $issFilePath = "$innoDir\zed.iss"
+    $appPublisher = "Zed Industries"
+    $appPublisherUrl = "https://www.zed.dev/"
+    $appSupportUrl = "https://www.zed.dev/"
+    $appUpdatesUrl = "https://www.zed.dev/"
     switch ($channel) {
         "stable" {
             $appId = "{{2DB0DA96-CA55-49BB-AF4F-64AF36A86712}"
@@ -302,6 +320,10 @@ function BuildInstaller {
             $appAppxFullName = "ZedIndustries.Zed_1.0.0.0_neutral__japxn1gcva8rg"
             # Must match CONTEXT_MENU_CLSID in crates/explorer_command_injector (stable)
             $appContextMenuClsid = "{ef6eda23-89b3-435f-816e-af20ff984938}"
+            $appPublisher = "Zed CN contributors"
+            $appPublisherUrl = "https://github.com/rxp200/zed-cn"
+            $appSupportUrl = "https://github.com/rxp200/zed-cn/issues"
+            $appUpdatesUrl = "https://github.com/rxp200/zed-cn/releases"
         }
         "preview" {
             $appId = "{{F70E4811-D0E2-4D88-AC99-D63752799F95}"
@@ -387,6 +409,10 @@ function BuildInstaller {
         "SourceDir"      = "$env:ZED_WORKSPACE"
         "AppxFullName"   = $appAppxFullName
         "ContextMenuClsid" = $appContextMenuClsid
+        "AppPublisher"    = $appPublisher
+        "AppPublisherURL" = $appPublisherUrl
+        "AppSupportURL"   = $appSupportUrl
+        "AppUpdatesURL"   = $appUpdatesUrl
     }
 
     $defs = @()

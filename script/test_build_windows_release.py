@@ -102,6 +102,23 @@ subprocess.run(['git', '--git-dir', os.environ['FIXTURE_REMOTE'], 'update-ref',
                              "${{ needs.validate_source.outputs.release_tag }}")
             self.assertEqual(JOBS[name]["env"]["ZED_COMMIT_SHA"], SOURCE)
 
+    def test_source_validation_checks_license_layout(self):
+        step = next(step for step in JOBS["validate_source"]["steps"]
+                    if step["name"] == "Validate open-source license layout")
+        self.assertEqual(step["run"], "./script/check-licenses")
+
+    def test_release_notes_link_exact_source_and_licenses(self):
+        step = next(step for step in JOBS["publish_release"]["steps"]
+                    if step["name"] == "Create or update GitHub Release")
+        for text in (
+            "## 源码与许可证",
+            "https://github.com/$GH_REPO/tree/$SOURCE_SHA",
+            "blob/$SOURCE_SHA/LICENSE-GPL",
+            "blob/$SOURCE_SHA/LICENSE-APACHE",
+            "blob/$SOURCE_SHA/MODIFICATIONS.md",
+        ):
+            self.assertIn(text, step["run"])
+
     def test_matching_lightweight_and_annotated_tags(self):
         for annotated in (False, True):
             with self.subTest(annotated=annotated):

@@ -301,9 +301,7 @@ impl LanguageModelProvider for OpenCodeLanguageModelProvider {
                 cx.new(|cx| ConfigurationView::new(state.clone(), window, cx))
                     .into()
             })
-            .description(InlineDescription::Text(
-                "要在 Zed 中使用 OpenCode 模型，您需要一个 API 密钥。".into(),
-            )),
+            .description(InlineDescription::Text(i18n::t!("8da4a8a38e97b6ce").into())),
         ))
     }
 }
@@ -786,7 +784,8 @@ struct ConfigurationView {
 impl ConfigurationView {
     fn new(state: Entity<State>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let api_key_editor = cx.new(|cx| {
-            InputField::new(window, cx, "sk-00000000000000000000000000000000").label("API 密钥")
+            InputField::new(window, cx, "sk-00000000000000000000000000000000")
+                .label(i18n::t!("5f600b307b4eb0fb"))
         });
 
         cx.observe(&state, |_, _, cx| {
@@ -878,13 +877,16 @@ impl Render for ConfigurationView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let env_var_set = self.state.read(cx).api_key_state.is_from_env_var();
         let configured_card_label = if env_var_set {
-            format!("API 密钥已在 {API_KEY_ENV_VAR_NAME} 环境变量中设置")
+            i18n::t!(
+                "76458a040bb8fcb7",
+                API_KEY_ENV_VAR_NAME = API_KEY_ENV_VAR_NAME
+            )
         } else {
             let api_url = OpenCodeLanguageModelProvider::api_url(cx);
             if api_url == OPENCODE_API_URL {
-                "API 密钥已配置".to_string()
+                i18n::t!("d95b24a24825e6c7").to_string()
             } else {
-                format!("已为 {} 配置 API 密钥", api_url)
+                i18n::t_args!("3113f909247641a1", api_url)
             }
         };
 
@@ -896,8 +898,9 @@ impl Render for ConfigurationView {
             ConfiguredApiCard::new("opencode-reset-key", configured_card_label)
                 .disabled(env_var_set)
                 .when(env_var_set, |this| {
-                    this.tooltip_label(format!(
-                        "要重置您的 API 密钥，请取消设置 {API_KEY_ENV_VAR_NAME} 环境变量。"
+                    this.tooltip_label(i18n::t!(
+                        "d402e5e520ed1b1e",
+                        API_KEY_ENV_VAR_NAME = API_KEY_ENV_VAR_NAME
                     ))
                 })
                 .on_click(cx.listener(|this, _, window, cx| this.reset_api_key(window, cx)))
@@ -906,31 +909,29 @@ impl Render for ConfigurationView {
 
         let api_key_section = v_flex()
             .on_action(cx.listener(Self::save_api_key))
-            .child(
-                Label::new("要在 Zed 中使用 OpenCode 模型，您需要一个 API 密钥：")
-                    .color(Color::Muted),
-            )
+            .child(Label::new(i18n::t!("b52cd45f2b152232")).color(Color::Muted))
             .child(
                 List::new()
                     .child(
                         ListBulletItem::new("")
-                            .child(Label::new("登录并获取您的密钥于").color(Color::Muted))
+                            .child(Label::new(i18n::t!("6c233ad9df453549")).color(Color::Muted))
                             .child(ButtonLink::new(
-                                "OpenCode 控制台",
+                                i18n::t!("f291b49e8011485f"),
                                 "https://opencode.ai/auth",
                             )),
                     )
                     .when(is_editing, |this| {
                         this.child(
-                            ListBulletItem::new("在下方粘贴您的 API 密钥并按回车开始使用 OpenCode")
+                            ListBulletItem::new(i18n::t!("2d5da040703dcc48"))
                                 .label_color(Color::Muted),
                         )
                     }),
             )
             .child(api_key_control)
             .child(
-                Label::new(format!(
-                    "您也可以设置 {API_KEY_ENV_VAR_NAME} 环境变量并重新启动 Zed。"
+                Label::new(i18n::t!(
+                    "db72caa0fa37b7f9",
+                    API_KEY_ENV_VAR_NAME = API_KEY_ENV_VAR_NAME
                 ))
                 .size(LabelSize::Small)
                 .color(Color::Muted)
@@ -939,7 +940,7 @@ impl Render for ConfigurationView {
             .into_any_element();
 
         if self.load_credentials_task.is_some() {
-            Label::new("正在加载凭据…").into_any_element()
+            Label::new(i18n::t!("301bd57882aa3f94")).into_any_element()
         } else {
             let settings = OpenCodeLanguageModelProvider::settings(cx);
             let show_zen = settings.show_zen_models;
@@ -947,11 +948,11 @@ impl Render for ConfigurationView {
 
             let subscription_toggles = v_flex()
                 .gap_2()
-                .child(Label::new("订阅"))
+                .child(Label::new(i18n::t!("cf8efc450f718fbf")))
                 .child(
                     Switch::new("opencode-show-zen-models", show_zen.into())
                         .full_width(true)
-                        .label("显示 Zen 模型")
+                        .label(i18n::t!("eb94cf0c7a03b1d1"))
                         .label_position(SwitchLabelPosition::Start)
                         .on_click(cx.listener(|this, state, window, cx| {
                             this.set_subscription_enabled(
@@ -966,7 +967,7 @@ impl Render for ConfigurationView {
                 .child(
                     Switch::new("opencode-show-go-models", show_go.into())
                         .full_width(true)
-                        .label("显示 Go 模型")
+                        .label(i18n::t!("a38092f134abd260"))
                         .label_position(SwitchLabelPosition::Start)
                         .on_click(cx.listener(|this, state, window, cx| {
                             this.set_subscription_enabled(
@@ -979,9 +980,11 @@ impl Render for ConfigurationView {
                 );
 
             let no_subscriptions_warning = if !show_zen && !show_go {
-                Some(Banner::new().severity(Severity::Warning).child(Label::new(
-                    "未启用任何订阅。请启用至少一个订阅以使用 OpenCode。",
-                )))
+                Some(
+                    Banner::new()
+                        .severity(Severity::Warning)
+                        .child(Label::new(i18n::t!("9d4c0a5a0933e137"))),
+                )
             } else {
                 None
             };

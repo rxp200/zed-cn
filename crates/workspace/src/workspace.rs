@@ -838,7 +838,7 @@ fn format_file_permalink_error(error: &anyhow::Error, copy: bool) -> String {
         })
         .map(str::to_string)
         .unwrap_or_else(|| error.to_string());
-    format!("无法{action}：{}", details.trim())
+    i18n::t_mix!("a5f5a14ed3fe2fea"; details.trim(); action = action)
 }
 
 impl PartialEq for Toast {
@@ -10857,25 +10857,19 @@ pub fn join_channel(
                     .update(cx, |_, window, cx| {
                         let detail: SharedString = match err.error_code() {
                             ErrorCode::SignedOut => "请先登录以继续。".into(),
-                            ErrorCode::UpgradeRequired => concat!(
-                                "你正在运行的 Zed 版本不受支持。",
-                                "请更新后继续。"
-                            )
-                            .into(),
-                            ErrorCode::NoSuchChannel => concat!(
-                                "未找到匹配的频道。",
-                                "请检查链接后重试。"
-                            )
-                            .into(),
+                            ErrorCode::UpgradeRequired => {
+                                concat!("你正在运行的 Zed 版本不受支持。", "请更新后继续。").into()
+                            }
+                            ErrorCode::NoSuchChannel => {
+                                concat!("未找到匹配的频道。", "请检查链接后重试。").into()
+                            }
                             ErrorCode::Forbidden => concat!(
                                 "此频道为私有频道，你没有访问权限。",
                                 "请让别人添加你后重试。"
                             )
                             .into(),
-                            ErrorCode::Disconnected => {
-                                "请检查你的网络连接后重试。".into()
-                            }
-                            _ => format!("{}\n\n请重试。", err).into(),
+                            ErrorCode::Disconnected => "请检查你的网络连接后重试。".into(),
+                            _ => i18n::t_args!("5b893f7179a5a122", err).into(),
                         };
                         window.prompt(
                             PromptLevel::Critical,

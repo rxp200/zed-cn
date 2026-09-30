@@ -162,7 +162,7 @@ async fn generate_managed_ssh_key_blocking(
     }
 
     fs::create_dir_all(&directory)
-        .with_context(|| format!("创建 Zed SSH 密钥目录失败：{}", directory.display()))?;
+        .with_context(|| i18n::t_args!("aad576c2fd5bae45", directory.display()))?;
     enforce_restricted_permissions(&directory, RestrictedPath::Directory)?;
 
     let target_hash = short_hash(&format!(
@@ -199,24 +199,24 @@ async fn generate_managed_ssh_key_blocking(
         .stderr(Stdio::piped())
         .output()
         .await
-        .context("无法启动 ssh-keygen；请先安装 OpenSSH 客户端")?;
+        .context(i18n::t!("d799d72c01c2b721"))?;
     if !output.status.success() {
         cleanup_key_pair(&temporary_path);
-        anyhow::bail!(
-            "创建 Zed SSH 密钥失败：{}",
+        anyhow::bail!(i18n::t_args!(
+            "6f9dcbdf78fcb5ab",
             String::from_utf8_lossy(&output.stderr).trim()
-        );
+        ));
     }
 
     let temporary_public_path = public_key_path(&temporary_path);
     let public_key = fs::read_to_string(&temporary_public_path)
-        .context("读取新建的 Zed SSH 公钥失败")?
+        .context(i18n::t!("6fe346879b76397c"))?
         .trim()
         .to_string();
     let key_id = public_key_identity(&public_key)?;
     fs::rename(&temporary_path, &private_key_path).context("保存 Zed SSH 私钥失败")?;
     if let Err(error) = fs::rename(&temporary_public_path, public_key_path(&private_key_path))
-        .context("保存 Zed SSH 公钥失败")
+        .context(i18n::t!("0f9eaee4a2a233a5"))
     {
         cleanup_key_pair(&private_key_path);
         return Err(error);
@@ -252,7 +252,7 @@ pub async fn mark_managed_ssh_key_verified(key_id: &str, cx: &AsyncApp) -> Resul
         let directory = managed_ssh_key_directory();
         let mut manifest = load_or_create_manifest_in(&directory)?;
         let Some(key) = manifest.keys.iter_mut().find(|key| key.key_id == key_id) else {
-            anyhow::bail!("找不到刚刚创建的 Zed SSH 密钥记录");
+            anyhow::bail!(i18n::t!("1099c582ba5e5f4e"));
         };
         key.deployment_state = ManagedSshKeyDeploymentState::Verified;
         key.last_used_at = Some(utc_timestamp());
@@ -288,10 +288,10 @@ async fn revoke_and_delete_managed_ssh_key_blocking(key_id: &str) -> Result<()> 
         .iter()
         .find(|key| key.key_id == key_id)
         .cloned()
-        .context("找不到要撤销的 Zed SSH 密钥")?;
+        .context(i18n::t!("d1e5d6f24ed51cee"))?;
     let private_key_path = managed_ssh_key_directory().join(&key.private_key_file);
     if !private_key_path.is_file() {
-        anyhow::bail!("本地私钥已不存在，无法安全登录远程主机撤销公钥");
+        anyhow::bail!(i18n::t!("bd1be775e40703b6"));
     }
 
     let destination = if key.ssh_destination.is_empty() {
@@ -325,12 +325,12 @@ async fn revoke_and_delete_managed_ssh_key_blocking(key_id: &str) -> Result<()> 
         .stderr(Stdio::piped())
         .output()
         .await
-        .context("无法启动 SSH 撤销命令")?;
+        .context(i18n::t!("d042ae63b1496556"))?;
     if !output.status.success() {
-        anyhow::bail!(
-            "远程撤销失败，本地密钥已保留：{}",
+        anyhow::bail!(i18n::t_args!(
+            "9ac468b1be9bc219",
             String::from_utf8_lossy(&output.stderr).trim()
-        );
+        ));
     }
     delete_local_managed_ssh_key_blocking(key_id)
 }
@@ -367,17 +367,18 @@ fn load_or_create_manifest_in(directory: &Path) -> Result<ManagedSshKeyManifest>
     let path = directory.join(MANIFEST_FILE_NAME);
     if path.is_file() {
         let manifest: ManagedSshKeyManifest = serde_json::from_slice(
-            &fs::read(&path).with_context(|| format!("读取 {} 失败", path.display()))?,
+            &fs::read(&path).with_context(|| i18n::t_args!("ec8ff65ffdda096d", path.display()))?,
         )
-        .with_context(|| format!("解析 {} 失败", path.display()))?;
+        .with_context(|| i18n::t_args!("3def0dff60ff9a05", path.display()))?;
         if manifest.version != MANIFEST_VERSION {
-            anyhow::bail!("不支持的 Zed SSH 密钥清单版本：{}", manifest.version);
+            anyhow::bail!(i18n::t_args!("d25c56c7987943d4", manifest.version));
         }
         repair_read_permissions(directory, &path, &manifest.keys)?;
         return Ok(manifest);
     }
 
-    fs::create_dir_all(directory).with_context(|| format!("创建 {} 失败", directory.display()))?;
+    fs::create_dir_all(directory)
+        .with_context(|| i18n::t_args!("e8d085945c1dddb1", directory.display()))?;
     enforce_restricted_permissions(directory, RestrictedPath::Directory)?;
     let manifest = ManagedSshKeyManifest {
         version: MANIFEST_VERSION,
@@ -396,10 +397,10 @@ fn save_manifest_in(directory: &Path, manifest: &ManagedSshKeyManifest) -> Resul
     let temporary_path = directory.join(format!(".{MANIFEST_FILE_NAME}-{}.tmp", Uuid::new_v4()));
     let bytes = serde_json::to_vec_pretty(manifest)?;
     fs::write(&temporary_path, bytes)
-        .with_context(|| format!("写入 {} 失败", temporary_path.display()))?;
+        .with_context(|| i18n::t_args!("b5b0f7e1fd5f45e9", temporary_path.display()))?;
     enforce_restricted_permissions(&temporary_path, RestrictedPath::File)?;
     replace_manifest_file(&temporary_path, &path)
-        .with_context(|| format!("替换 {} 失败", path.display()))?;
+        .with_context(|| i18n::t_args!("e74f668cff3fceb0", path.display()))?;
     Ok(())
 }
 
@@ -466,14 +467,14 @@ fn remove_file_if_present(path: &Path) -> Result<()> {
     match fs::remove_file(path) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error).with_context(|| format!("删除 {} 失败", path.display())),
+        Err(error) => Err(error).with_context(|| i18n::t_args!("01ae8b5fa27e309a", path.display())),
     }
 }
 
 fn public_key_identity(public_key: &str) -> Result<String> {
     let mut fields = public_key.split_whitespace();
-    let key_type = fields.next().context("公钥缺少类型")?;
-    let key_blob = fields.next().context("公钥缺少内容")?;
+    let key_type = fields.next().context(i18n::t!("f228702c1fadb2fb"))?;
+    let key_blob = fields.next().context(i18n::t!("6668d6cc8c40d5df"))?;
     Ok(format!("{}:{}", key_type, short_hash(key_blob)))
 }
 
@@ -606,12 +607,12 @@ fn repair_unix_mode(path: &Path, mode: u32) -> Result<()> {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(error) => {
-            return Err(error).with_context(|| format!("读取 {} 权限失败", path.display()));
+            return Err(error).with_context(|| i18n::t_args!("22c96b41edb574a6", path.display()));
         }
     };
     if metadata.permissions().mode() & 0o777 != mode {
         fs::set_permissions(path, fs::Permissions::from_mode(mode))
-            .with_context(|| format!("设置 {} 权限失败", path.display()))?;
+            .with_context(|| i18n::t_args!("bec42db568eddd46", path.display()))?;
     }
     Ok(())
 }
@@ -620,7 +621,7 @@ fn repair_unix_mode(path: &Path, mode: u32) -> Result<()> {
 fn restrict_directory_permissions(path: &Path) -> Result<()> {
     use std::os::unix::fs::PermissionsExt as _;
     fs::set_permissions(path, fs::Permissions::from_mode(0o700))
-        .with_context(|| format!("设置 {} 权限失败", path.display()))
+        .with_context(|| i18n::t_args!("bec42db568eddd46", path.display()))
 }
 
 #[cfg(windows)]
@@ -637,7 +638,7 @@ fn restrict_directory_permissions(_path: &Path) -> Result<()> {
 fn restrict_private_key_permissions(path: &Path) -> Result<()> {
     use std::os::unix::fs::PermissionsExt as _;
     fs::set_permissions(path, fs::Permissions::from_mode(0o600))
-        .with_context(|| format!("设置 {} 权限失败", path.display()))
+        .with_context(|| i18n::t_args!("bec42db568eddd46", path.display()))
 }
 
 #[cfg(windows)]
@@ -658,13 +659,13 @@ fn restrict_windows_permissions(path: &Path) -> Result<()> {
         .args(["/inheritance:r", "/grant:r"])
         .arg(format!("{username}:(F)"))
         .output()
-        .with_context(|| format!("无法设置 {} 的 Windows ACL", path.display()))?;
+        .with_context(|| i18n::t_args!("d5c6acb3da489960", path.display()))?;
     if !output.status.success() {
-        anyhow::bail!(
-            "设置 {} 的 Windows ACL 失败：{}",
+        anyhow::bail!(i18n::t_args!(
+            "7a0195bda43a86be",
             path.display(),
             String::from_utf8_lossy(&output.stderr).trim()
-        );
+        ));
     }
     Ok(())
 }

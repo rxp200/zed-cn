@@ -338,7 +338,7 @@ impl Component for DropdownMenu {
 
         let menu_with_submenu = ContextMenu::build(window, cx, |this, _, _| {
             this.entry("Toggle All Docks", None, |_, _| {})
-                .submenu("Editor Layout", |menu, _, _| {
+                .submenu(i18n::t!("90947f04106b6ad5"), |menu, _, _| {
                     menu.entry("Split Up", None, |_, _| {})
                         .entry("Split Down", None, |_, _| {})
                         .separator()

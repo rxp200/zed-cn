@@ -118,10 +118,10 @@ impl AgentImportStatus {
 
     fn tooltip_text(&self) -> Option<SharedString> {
         match self {
-            Self::Loading => Some("正在获取会话…".into()),
+            Self::Loading => Some(i18n::t!("e9f2eb42df89be1d").into()),
             Self::Ready { .. } => None,
-            Self::Unsupported => Some("无法从此代理导入线程，因为它不支持 ACP 的 session/list 能力。".into()),
-            Self::Error(error) => Some(format!("获取会话失败：{error}").into()),
+            Self::Unsupported => Some(i18n::t!("00fa8a22cc03a8ed").into()),
+            Self::Error(error) => Some(i18n::t!("d536bc1b66269dfe", error = error).into()),
         }
     }
 }
@@ -389,7 +389,7 @@ impl ThreadImportModal {
 
     fn show_imported_threads_toast(&self, imported_count: usize, cx: &mut App) {
         let status_toast = if imported_count == 0 {
-            StatusToast::new("未找到可导入的线程。", cx, |this, _cx| {
+            StatusToast::new(i18n::t!("f3ea9ed335cd8bac"), cx, |this, _cx| {
                 this.icon(
                     Icon::new(IconName::Info)
                         .size(IconSize::Small)
@@ -588,7 +588,7 @@ impl Render for ThreadImportModal {
                                 .when(has_agents, |this| this.children(agent_rows))
                                 .when(!has_agents, |this| {
                                     this.child(
-                                        Label::new("没有可用的外部 Agent。")
+                                        Label::new(i18n::t!("397d1862f18860b1"))
                                             .color(Color::Muted)
                                             .size(LabelSize::Small),
                                     )
@@ -607,7 +607,7 @@ impl Render for ThreadImportModal {
                                                 .color(Color::Muted)
                                                 .with_rotate_animation(3),
                                         )
-                                        .child(Label::new("正在获取 Agent 线程...")
+                                        .child(Label::new(i18n::t!("4492e9b9539e26d5"))
                                             .size(LabelSize::Small)
                                             .color(Color::Muted))
 
@@ -622,7 +622,7 @@ impl Render for ThreadImportModal {
                                 )
                             })
                             .end_slot(
-                                Button::new("import-threads", "导入线程")
+                                Button::new("import-threads", i18n::t!("b88cb652d8c5354a"))
                                     .loading(self.is_importing)
                                     .disabled(disabled_import_thread)
                                     .key_binding(
@@ -961,7 +961,7 @@ fn show_cross_channel_import_toast(
     cx: &mut App,
 ) {
     let status_toast = if imported_count == 0 {
-        StatusToast::new("未找到新的可导入线程。", cx, |this, _cx| {
+        StatusToast::new(i18n::t!("f4dc1b779e5eb69f"), cx, |this, _cx| {
             this.icon(Icon::new(IconName::Info).color(Color::Muted))
                 .dismiss_button(true)
         })

@@ -95,8 +95,22 @@ impl Global for CustomReleaseTag {}
 
 impl CustomReleaseTag {
     /// Returns a validated Stable tag matching the running application's version.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the release channel has not been initialized.
     pub fn current(cx: &App) -> Option<String> {
-        if ReleaseChannel::global(cx) != ReleaseChannel::Stable {
+        Self::validated(ReleaseChannel::global(cx), cx)
+    }
+
+    /// Like [`Self::current`], but returns `None` instead of panicking when the
+    /// release channel has not been initialized.
+    pub fn try_current(cx: &App) -> Option<String> {
+        Self::validated(ReleaseChannel::try_global(cx)?, cx)
+    }
+
+    fn validated(channel: ReleaseChannel, cx: &App) -> Option<String> {
+        if channel != ReleaseChannel::Stable {
             return None;
         }
         let tag = &cx.try_global::<Self>()?.0;
@@ -137,6 +151,18 @@ fn custom_remote_server_tag_requires_matching_stable_release(cx: &mut App) {
     cx.set_global(CustomReleaseTag("zed-cn-v1.19.2-r1".to_owned()));
     cx.set_global(GlobalReleaseChannel(ReleaseChannel::Dev));
     assert!(CustomReleaseTag::current(cx).is_none());
+}
+
+#[gpui::test]
+fn try_current_tolerates_an_uninitialized_release_channel(cx: &mut App) {
+    cx.set_global(GlobalAppVersion(Version::new(1, 19, 2)));
+    cx.set_global(CustomReleaseTag("zed-cn-v1.19.2-r1".to_owned()));
+    assert_eq!(CustomReleaseTag::try_current(cx), None);
+    cx.set_global(GlobalReleaseChannel(ReleaseChannel::Stable));
+    assert_eq!(
+        CustomReleaseTag::try_current(cx).as_deref(),
+        Some("zed-cn-v1.19.2-r1")
+    );
 }
 
 struct GlobalAppVersion(Version);

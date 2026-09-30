@@ -5,7 +5,8 @@ use gpui::{App, AppContext as _, Context, Entity, Task, WeakEntity};
 use futures::{FutureExt, future::Shared};
 use itertools::Itertools as _;
 use language::LanguageName;
-use remote::{Interactive, RemoteClient};
+use remote::{Interactive, RemoteClient, RemoteConnectionOptions};
+use rpc::proto;
 use settings::{Settings, SettingsLocation};
 use std::{
     borrow::Cow,
@@ -21,6 +22,7 @@ use terminal::{
 use util::{
     command::new_std_command, get_default_system_shell, get_system_shell, maybe, rel_path::RelPath,
 };
+use uuid::Uuid;
 
 use crate::{Project, ProjectPath};
 
@@ -396,34 +398,86 @@ impl Project {
             .await
             .unwrap_or_default();
 
-            let builder = project
-                .update(cx, move |_, cx| {
-                    let (shell, env) = {
-                        match remote_client {
+            let persistent_remote = remote_client.as_ref().filter(|remote_client| {
+                remote_client.read_with(cx, |remote_client, _| {
+                    remote_client.supports_persistent_terminals()
+                        && matches!(
+                            remote_client.connection_options(),
+                            RemoteConnectionOptions::Ssh(options)
+                                if options.remote_server_source == settings::RemoteServerSource::ZedCn
+                        )
+                })
+            });
+            let builder = if let Some(remote_client) = persistent_remote {
+                let persistent_shell = if activation_script.is_empty() {
+                    (shell.clone(), Vec::new())
+                } else {
+                    let separator = shell_kind.sequential_commands_separator();
+                    let command = format!(
+                        "{}{separator} exec {shell} -l",
+                        activation_script.join(&format!("{separator} "))
+                    );
+                    (shell.clone(), shell_kind.args_for_shell(true, command))
+                };
+                let response = remote_client
+                    .read_with(cx, |remote_client, _| {
+                        remote_client.proto_client().request(proto::CreatePersistentTerminal {
+                            creation_id: Uuid::new_v4().to_string(),
+                            program: persistent_shell.0.clone(),
+                            args: persistent_shell.1.clone(),
+                            env: env.clone().into_iter().collect(),
+                            working_directory: path.as_ref().map(|path| path.display().to_string()),
+                            rows: 24,
+                            columns: 80,
+                            pixel_width: 0,
+                            pixel_height: 0,
+                        })
+                    })
+                    .await?;
+                let client = remote_client.read_with(cx, |remote_client, _| remote_client.proto_client());
+                TerminalBuilder::new_remote(
+                    TerminalMode::interactive(),
+                    Shell::Program(shell),
+                    settings.cursor_shape,
+                    settings.alternate_scroll,
+                    settings.max_scroll_history_lines,
+                    settings.path_hyperlink_regexes,
+                    Duration::from_millis(settings.path_hyperlink_timeout_ms),
+                    project.entity_id().as_u64(),
+                    path_style,
+                    client,
+                    response.server_instance_id,
+                    response.terminal_id,
+                    cx.background_executor(),
+                )
+            } else {
+                project
+                    .update(cx, move |_, cx| {
+                        let (shell, env) = match remote_client {
                             Some(remote_client) => {
                                 create_remote_shell(None, env, path, remote_client, cx)?
                             }
                             None => (settings.shell, env),
-                        }
-                    };
-                    anyhow::Ok(TerminalBuilder::new(
-                        local_path.map(|path| path.to_path_buf()),
-                        TerminalMode::interactive(),
-                        shell,
-                        env,
-                        settings.cursor_shape,
-                        settings.alternate_scroll,
-                        settings.max_scroll_history_lines,
-                        settings.path_hyperlink_regexes,
-                        Duration::from_millis(settings.path_hyperlink_timeout_ms),
-                        is_via_remote,
-                        cx.entity_id().as_u64(),
-                        cx,
-                        activation_script,
-                        path_style,
-                    ))
-                })??
-                .await?;
+                        };
+                        anyhow::Ok(TerminalBuilder::new(
+                            local_path.map(|path| path.to_path_buf()),
+                            TerminalMode::interactive(),
+                            shell,
+                            env,
+                            settings.cursor_shape,
+                            settings.alternate_scroll,
+                            settings.max_scroll_history_lines,
+                            settings.path_hyperlink_regexes,
+                            Duration::from_millis(settings.path_hyperlink_timeout_ms),
+                            is_via_remote,
+                            cx.entity_id().as_u64(),
+                            cx,
+                            activation_script,
+                            path_style,
+                        ))
+                    })??
+                    .await?
+            };
             project.update(cx, move |this, cx| {
                 let terminal_handle = cx.new(|cx| builder.subscribe(cx));
 

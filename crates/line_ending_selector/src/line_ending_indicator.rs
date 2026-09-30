@@ -46,7 +46,9 @@ impl Render for LineEndingIndicator {
                             LineEndingSelector::toggle(editor, window, cx);
                         }
                     }))
-                    .tooltip(|_window, cx| Tooltip::for_action("选择行尾序列", &Toggle, cx)),
+                    .tooltip(|_window, cx| {
+                        Tooltip::for_action(i18n::t!("dd7929a983fd1993"), &Toggle, cx)
+                    }),
             )
         })
     }

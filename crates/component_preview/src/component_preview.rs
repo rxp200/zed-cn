@@ -403,7 +403,7 @@ impl ComponentPreview {
                 let selected = self.active_page == PreviewPage::AllComponents;
 
                 ListItem::new(ix)
-                    .child(Label::new("所有组件"))
+                    .child(Label::new(i18n::t!("3695f515896bead1")))
                     .selectable(true)
                     .toggle_state(selected)
                     .inset(true)
@@ -546,7 +546,7 @@ impl ComponentPreview {
                 .size_full()
                 .items_center()
                 .justify_center()
-                .child("未找到组件")
+                .child(i18n::t!("a9cfa7b2ed91a77c"))
                 .into_any_element()
         }
     }
@@ -644,7 +644,7 @@ impl Render for ComponentPreview {
                             .border_t_1()
                             .border_color(cx.theme().colors().border)
                             .child(
-                                Button::new("toast-test", "启动提示框")
+                                Button::new("toast-test", i18n::t!("c4b9167a93656360"))
                                     .full_width()
                                     .on_click(cx.listener({
                                         move |this, _, _window, cx| {

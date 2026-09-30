@@ -1077,7 +1077,7 @@ impl SettingsStore {
         match (path.clone(), kind, content) {
             (LocalSettingsPath::InWorktree(directory_path), LocalSettingsKind::Tasks, _) => {
                 return Err(InvalidSettingsError::Tasks {
-                    message: "Attempted to submit tasks into the settings store".to_string(),
+                    message: i18n::t!("c76bda9a6c1bf141").to_string(),
                     path: directory_path
                         .join(RelPath::from_unix_str(task_file_name()).unwrap())
                         .as_std_path()
@@ -1086,8 +1086,7 @@ impl SettingsStore {
             }
             (LocalSettingsPath::InWorktree(directory_path), LocalSettingsKind::Debug, _) => {
                 return Err(InvalidSettingsError::Debug {
-                    message: "Attempted to submit debugger config into the settings store"
-                        .to_string(),
+                    message: i18n::t!("9ee89bc70fb90dbb").to_string(),
                     path: directory_path
                         .join(RelPath::from_unix_str(task_file_name()).unwrap())
                         .as_std_path()

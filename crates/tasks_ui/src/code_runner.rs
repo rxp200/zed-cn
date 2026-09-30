@@ -42,24 +42,24 @@ fn run(
 ) {
     let project = workspace.project().clone();
     if project.read(cx).is_disconnected(cx) {
-        workspace.show_error("无法运行代码：远程连接已断开，请先重新连接。", cx);
+        workspace.show_error(i18n::t!("aa34a7f1d52758e8"), cx);
         return;
     }
     if project.read(cx).is_via_collab()
         || TrustedWorktrees::has_restricted_worktrees(&project.read(cx).worktree_store(), cx)
     {
-        workspace.show_error("无法运行代码：请在受信任的本地或远程项目中运行。", cx);
+        workspace.show_error(i18n::t!("e5fb6b592e80ac66"), cx);
         return;
     }
     let Some(buffer) = workspace
         .active_item_as::<Editor>(cx)
         .and_then(|editor| editor.read(cx).buffer().read(cx).as_singleton())
     else {
-        workspace.show_error("请先打开一个代码文件；多文件视图不支持直接运行。", cx);
+        workspace.show_error(i18n::t!("c894c7b41c27c266"), cx);
         return;
     };
     if buffer.read(cx).file().is_none() {
-        workspace.show_error("请先保存文件，再运行代码。", cx);
+        workspace.show_error(i18n::t!("7834a6e4aeedda97"), cx);
         return;
     }
     let language = buffer.read(cx).language().cloned();
@@ -68,16 +68,16 @@ fn run(
     let save = project.update(cx, |project, cx| project.save_buffer(buffer.clone(), cx));
     cx.spawn_in(window, async move |workspace, cx| {
         let result: anyhow::Result<()> = async {
-            save.await.context("运行前保存文件失败")?;
+            save.await.context(i18n::t!("19701fa78ba51b75"))?;
             if buffer.read_with(cx, |buffer, _| buffer.is_dirty()) {
-                bail!("文件在保存期间发生变化，请重新运行。");
+                bail!(i18n::t!("3d8196d6cc7c2b4f"));
             }
             let contexts = contexts.await;
             let context = contexts
                 .active_item_context
                 .as_ref()
                 .map(|(_, _, context)| context)
-                .context("无法获取当前文件的运行环境")?;
+                .context(i18n::t!("ae53095f2cab5538"))?;
             let tasks = project.update(cx, |project, cx| {
                 project
                     .task_store()
@@ -97,7 +97,7 @@ fn run(
                 .flatten()
                 .filter(|text| !text.trim().is_empty());
             if require_selection && selection.is_none() {
-                bail!("请先选中需要运行的代码。");
+                bail!(i18n::t!("7d79f6506abfee12"));
             }
             let mut overrides = match tasks {
                 Some(tasks) => tasks.await,
@@ -143,14 +143,14 @@ fn run(
                 let labels = overrides
                     .iter()
                     .map(|(_, task)| task.label.as_str())
-                    .chain(std::iter::once("取消"))
+                    .chain(std::iter::once(i18n::t!("2cd0f3be8738a86c")))
                     .collect::<Vec<_>>();
                 let choice = workspace
                     .update_in(cx, |_, window, cx| {
                         window.prompt(
                             gpui::PromptLevel::Info,
-                            "选择运行方式",
-                            Some("检测到多个运行任务，请选择本次需要运行的目标。"),
+                            i18n::t!("5844ee15f83e83f1"),
+                            Some(i18n::t!("97026d31d15bac35")),
                             &labels,
                             cx,
                         )
@@ -171,7 +171,7 @@ fn run(
                     .insert("CODE_RUNNER_MANAGED".into(), "1".into());
                 let resolved = template
                     .resolve_task(&source.to_id_base(), context)
-                    .context("自定义运行任务缺少必要变量，请检查 tasks.json")?;
+                    .context(i18n::t!("c04551c25ce2914b"))?;
                 (source, resolved)
             } else {
                 let name = language.as_ref().map(|language| language.name());
@@ -193,12 +193,12 @@ fn run(
             workspace.update_in(cx, |workspace, window, cx| {
                 let project = workspace.project().read(cx);
                 if project.is_disconnected(cx) {
-                    workspace.show_error("无法运行代码：远程连接已断开。", cx);
+                    workspace.show_error(i18n::t!("d544e2668f25b745"), cx);
                 } else if TrustedWorktrees::has_restricted_worktrees(&project.worktree_store(), cx)
                 {
-                    workspace.show_error("无法运行代码：项目已进入受限模式。", cx);
+                    workspace.show_error(i18n::t!("f13634512b00a9c7"), cx);
                 } else if buffer.read(cx).is_dirty() {
-                    workspace.show_error("文件在准备运行期间发生变化，请重新运行。", cx);
+                    workspace.show_error(i18n::t!("01a6c2875a26c03a"), cx);
                 } else {
                     workspace.schedule_resolved_task(source, resolved, false, window, cx);
                 }
@@ -209,7 +209,7 @@ fn run(
         if let Err(error) = result {
             workspace
                 .update(cx, |workspace, cx| {
-                    workspace.show_error(format!("运行代码失败：{error:#}"), cx);
+                    workspace.show_error(i18n::t!("2ef2befdd31d8947"), cx);
                 })
                 .log_err();
         }
@@ -224,7 +224,7 @@ fn selection_task(
     selection: &str,
 ) -> anyhow::Result<task::ResolvedTask> {
     if selection.len() > 16 * 1024 {
-        bail!("选区超过 16 KiB，请保存为文件后运行。");
+        bail!(i18n::t!("0823fb195aaf20e3"));
     }
     let mut resolved = builtin_task(language, windows, context)?;
     let (program, flags) = match language {
@@ -239,7 +239,7 @@ fn selection_task(
         "Julia" => ("julia", "-e"),
         "R" => ("Rscript", "-e"),
         "Elixir" => ("elixir", "-e"),
-        _ => bail!("{language} 暂不支持独立选区执行，请运行整个文件或配置 run-selection 任务。"),
+        _ => bail!(i18n::t!("76bafc515b7892e2", language = language)),
     };
     let command = if language == "Python" {
         let source = if windows {
@@ -268,14 +268,14 @@ fn selection_task(
     // Pass source as environment data so quotes and shell metacharacters stay literal.
     let mut template = resolved.original_task().clone();
     template.command = command;
-    template.label = format!("运行选中代码 · {language}");
+    template.label = i18n::t!("c91aff8f8f5232a8", language = language);
     template.env.insert(
         "CODE_RUNNER_SELECTION".into(),
         VariableName::SelectedText.template_value(),
     );
     resolved = template
         .resolve_task("code-runner-selection", context)
-        .context("无法生成选区运行任务")?;
+        .context(i18n::t!("91adc1fb80fffbd2"))?;
     Ok(resolved)
 }
 
@@ -284,17 +284,16 @@ fn builtin_task(
     windows: bool,
     context: &TaskContext,
 ) -> anyhow::Result<task::ResolvedTask> {
-    let recipe = recipe(language).with_context(|| format!(
-        "暂不支持直接运行 {language} 文件。请在 tasks.json 中定义带 run-current 标签的运行任务。"
-    ))?;
+    let recipe =
+        recipe(language).with_context(|| i18n::t!("8765f1a33468621e", language = language))?;
     let file = context
         .task_variables
         .get(&VariableName::File)
-        .context("请先保存当前文件")?;
+        .context(i18n::t!("5261643dedcb49cb"))?;
     context
         .task_variables
         .get(&VariableName::Dirname)
-        .context("无法确定文件目录")?;
+        .context(i18n::t!("9ba1b9d21e2775f5"))?;
     let mut script = if windows {
         windows_script(recipe)
     } else {
@@ -304,13 +303,13 @@ fn builtin_task(
         script = format!("{}\n{script}", project_guard(manifests, language, windows));
     }
     if language == "Kotlin" && !file.ends_with(".kts") {
-        bail!("Kotlin 单文件运行需要 .kts 脚本；.kt 项目请配置 run-current 任务。");
+        bail!(i18n::t!("300db66a1ddaab57"));
     }
     if [".jsx", ".h", ".hpp", ".hh", ".hxx"]
         .iter()
         .any(|extension| file.ends_with(extension))
     {
-        bail!("当前文件需要项目运行入口，请配置 run-current 任务。");
+        bail!(i18n::t!("46a3cf7bb1d14b44"));
     }
     let mut env = collections::HashMap::default();
     env.insert("CODE_RUNNER_MANAGED".into(), "1".into());
@@ -330,7 +329,7 @@ fn builtin_task(
         "${ZED_CUSTOM_PYTHON_ACTIVE_ZED_TOOLCHAIN:}".into(),
     );
     let template = TaskTemplate {
-        label: format!("运行当前文件 · {language}"),
+        label: i18n::t!("40374a3cb9da74d1", language = language),
         command: script,
         cwd: Some(VariableName::Dirname.template_value()),
         env,
@@ -350,7 +349,7 @@ fn builtin_task(
     };
     template
         .resolve_task("code-runner", context)
-        .context("无法生成运行命令")
+        .context(i18n::t!("1b825e22e8978b43"))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -415,10 +414,7 @@ fn project_guard(manifests: &[&str], language: &str, windows: bool) -> String {
             "cd \"$directory\" || exit 1; exec swift run --disable-automatic-resolution --skip-update",
             "Set-Location -LiteralPath $directory; & swift run --disable-automatic-resolution --skip-update; exit $LASTEXITCODE",
         ),
-        _ => (
-            "printf '%s\\n' '检测到工程构建配置，请通过带 run-current 标签的任务指定运行目标。' >&2; exit 2",
-            "throw '检测到工程构建配置，请通过带 run-current 标签的任务指定运行目标。'",
-        ),
+        _ => (i18n::t!("a14da8667fe5f810"), i18n::t!("3a388aac9adab5c2")),
     };
     if windows {
         let names = manifests
@@ -513,9 +509,7 @@ trap 'exit 143' TERM
 exit $?"#)
         }
     };
-    format!(
-        "need() {{ command -v \"$1\" >/dev/null 2>&1 || {{ printf '未找到运行工具：%s。请安装工具或配置 run-current 任务。\\n' \"$1\" >&2; exit 127; }}; }}\n{body}"
-    )
+    i18n::t!("c8567c95b4ac606e", body = body)
 }
 
 fn windows_script(recipe: Recipe) -> String {
@@ -579,9 +573,7 @@ try {{
 }} finally {{ Remove-Item -LiteralPath $output -Recurse -Force }}"#)
         }
     };
-    format!(
-        "$ErrorActionPreference = 'Stop'\nfunction Need($program) {{ if (!(Get-Command $program -ErrorAction SilentlyContinue)) {{ throw \"未找到运行工具：$program。请安装工具或配置 run-current 任务。\" }} }}\n{body}"
-    )
+    i18n::t!("c03b6518637ce86a", body = body)
 }
 
 #[cfg(test)]

@@ -494,7 +494,7 @@ impl MessageEditor {
                     menu.action("剪切", Box::new(editor::actions::Cut))
                         .action_disabled_when(
                             !has_selection,
-                            "复制",
+                            i18n::t!("63d90d977348ab1f"),
                             Box::new(editor::actions::Copy),
                         )
                         .action("粘贴", Box::new(editor::actions::Paste))

@@ -75,15 +75,13 @@ struct DevExtensionNotInstalledError {
 impl WorkspaceError for DevExtensionNotInstalledError {
     fn primary_message(&self) -> SharedString {
         match &self.extension_id {
-            Some(extension_id) => {
-                format!("开发扩展 '{extension_id}' 未安装。").into()
-            }
-            None => "尚未安装开发扩展。".into(),
+            Some(extension_id) => i18n::t!("70490b4e7188db55", extension_id = extension_id).into(),
+            None => i18n::t!("25c5ba3806967302").into(),
         }
     }
 
     fn primary_action(&self) -> ErrorAction {
-        ErrorAction::new("安装开发扩展", InstallDevExtension)
+        ErrorAction::new(i18n::t!("fb06edb32579373a"), InstallDevExtension)
     }
 
     fn severity(&self) -> ErrorSeverity {
@@ -218,10 +216,8 @@ pub fn init(cx: &mut App) {
                                     .update(cx, |workspace, cx| {
                                         // NOTE: using `anyhow::context` here ends up not printing
                                         // the error
-                                        workspace.show_error(
-                                            format!("安装开发扩展失败：{}", err),
-                                            cx,
-                                        );
+                                        workspace
+                                            .show_error(i18n::t_args!("649c8ccf25f393d3", err), cx);
                                     })
                                     .ok();
                             }
@@ -424,7 +420,7 @@ impl ExtensionsPage {
 
             let query_editor = cx.new(|cx| {
                 let mut input = Editor::single_line(window, cx);
-                input.set_placeholder_text("搜索扩展…", window, cx);
+                input.set_placeholder_text(i18n::t!("07d078b77d2764a1"), window, cx);
                 if let Some(id) = focus_extension_id {
                     input.set_text(format!("id:{id}"), window, cx);
                 }
@@ -1021,7 +1017,7 @@ impl ExtensionsPage {
         vim: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let docs_url_button = Button::new("open_docs", "查看文档")
+        let docs_url_button = Button::new("open_docs", i18n::t!("d006830a9eb8b475"))
             .end_icon(Icon::new(IconName::ArrowUpRight).size(IconSize::Small))
             .on_click({
                 move |_event, _window, cx| {
@@ -1052,7 +1048,7 @@ impl ExtensionsPage {
                                         h_flex()
                                             .pl_1()
                                             .gap_1()
-                                            .child(Label::new("启用 Vim 模式"))
+                                            .child(Label::new(i18n::t!("b0dafbdf609bb22d")))
                                             .child(
                                                 Switch::new(
                                                     "enable-vim",
@@ -1371,7 +1367,7 @@ impl PickerDelegate for DevExtensionRebuildPickerDelegate {
     }
 
     fn no_matches_text(&self, _window: &mut Window, _cx: &mut App) -> Option<SharedString> {
-        Some("未找到开发扩展".into())
+        Some(i18n::t!("e4d6e1455514fd5e").into())
     }
 }
 
@@ -1391,9 +1387,12 @@ impl Render for ExtensionsPage {
                             .w_full()
                             .gap_1p5()
                             .justify_between()
-                            .child(Headline::new("扩展").size(HeadlineSize::Large))
                             .child(
-                                Button::new("install-dev-extension", "安装开发扩展")
+                                Headline::new(i18n::t!("99a4e1e59743908f"))
+                                    .size(HeadlineSize::Large),
+                            )
+                            .child(
+                                Button::new("install-dev-extension", i18n::t!("fb06edb32579373a"))
                                     .style(ButtonStyle::Outlined)
                                     .size(ButtonSize::Medium)
                                     .on_click(|_event, window, cx| {
@@ -1462,7 +1461,7 @@ impl Render for ExtensionsPage {
                     .border_color(cx.theme().colors().border_variant)
                     .overflow_x_scroll()
                     .child(
-                        Button::new("filter-all-categories", "全部")
+                        Button::new("filter-all-categories", i18n::t!("5c55a67935af8f45"))
                             .when(self.provides_filter.is_none(), |button| {
                                 button.style(ButtonStyle::Filled)
                             })

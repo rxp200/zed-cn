@@ -186,7 +186,7 @@ struct RemoteServerSourcePickerDelegate {
 impl RemoteServerSourcePickerDelegate {
     fn label(source: settings::RemoteServerSource) -> &'static str {
         match source {
-            settings::RemoteServerSource::Official => "官方 Zed",
+            settings::RemoteServerSource::Official => i18n::t!("f4d01e6a6436dd7a"),
             settings::RemoteServerSource::ZedCn => "Zed CN",
         }
     }
@@ -212,8 +212,8 @@ impl PickerDelegate for RemoteServerSourcePickerDelegate {
     }
 
     fn placeholder_text(&self, _: &mut Window, _: &mut App) -> Arc<str> {
-        format!(
-            "选择 {} 的远程服务来源…",
+        i18n::t_args!(
+            "42031c6c944a4350",
             self.connection
                 .nickname
                 .as_deref()
@@ -285,10 +285,14 @@ impl PickerDelegate for RemoteServerSourcePickerDelegate {
         index: usize,
         selected: bool,
         _: &mut Window,
-        _: &mut Context<Picker<Self>>,
+        cx: &mut Context<Picker<Self>>,
     ) -> Option<AnyElement> {
         let source = *self.matches.get(index)?;
-        let current = source == self.connection.remote_server_source.unwrap_or_default();
+        let current = source
+            == self
+                .connection
+                .remote_server_source
+                .unwrap_or_else(|| remote::default_remote_server_source(cx));
         Some(
             ListItem::new(index)
                 .inset(true)
@@ -298,13 +302,19 @@ impl PickerDelegate for RemoteServerSourcePickerDelegate {
                         .child(Label::new(format!(
                             "{}{}",
                             Self::label(source),
-                            if current { "（当前）" } else { "" }
+                            if current {
+                                i18n::t!("58d8cd20d2e6b681")
+                            } else {
+                                ""
+                            }
                         )))
                         .child(
                             Label::new(match source {
-                                settings::RemoteServerSource::Official => "使用对应的官方版本",
+                                settings::RemoteServerSource::Official => {
+                                    i18n::t!("f9fdf830e4be4b67")
+                                }
                                 settings::RemoteServerSource::ZedCn => {
-                                    "使用与客户端相同的 Zed CN 发布修订版"
+                                    i18n::t!("5a7a2861c0df18b4")
                                 }
                             })
                             .size(LabelSize::Small)
@@ -323,18 +333,18 @@ impl PickerDelegate for RemoteServerSourcePickerDelegate {
                 .border_t_1()
                 .border_color(cx.theme().colors().border_variant)
                 .child(
-                    Label::new("通过本机代理下载后上传；缺少对应版本时不会切换来源。")
+                    Label::new(i18n::t!("6675c275c2ae4d5e"))
                         .size(LabelSize::Small)
                         .color(Color::Muted),
                 )
                 .child(
-                    Label::new("下次连接生效，不中断当前会话。")
+                    Label::new(i18n::t!("2944af31611a1489"))
                         .size(LabelSize::Small)
                         .color(Color::Muted),
                 )
                 .child(
                     h_flex().justify_end().child(
-                        Button::new("confirm-source", "选择")
+                        Button::new("confirm-source", i18n::t!("c11330b85234f9c0"))
                             .key_binding(KeyBinding::for_action(&menu::Confirm, cx))
                             .on_click(|_, window, cx| {
                                 window.dispatch_action(menu::Confirm.boxed_clone(), cx)
@@ -500,7 +510,7 @@ impl PickerDelegate for DevContainerPickerDelegate {
                 .border_t_1()
                 .border_color(cx.theme().colors().border_variant)
                 .child(
-                    Button::new("run-action", "启动开发容器")
+                    Button::new("run-action", i18n::t!("7a11dde8106f4719"))
                         .key_binding(
                             KeyBinding::for_action(&menu::Confirm, cx)
                                 .map(|kb| kb.size(rems_from_px(12_f32))),
@@ -510,7 +520,7 @@ impl PickerDelegate for DevContainerPickerDelegate {
                         }),
                 )
                 .child(
-                    Button::new("run-action-secondary", "打开devcontainer.json")
+                    Button::new("run-action-secondary", i18n::t!("22079da1a18a4968"))
                         .key_binding(
                             KeyBinding::for_action(&menu::SecondaryConfirm, cx)
                                 .map(|kb| kb.size(rems_from_px(12_f32))),
@@ -536,7 +546,7 @@ impl EditNicknameState {
             .and_then(|state| state.nickname)
             .filter(|text| !text.is_empty());
         this.editor.update(cx, |this, cx| {
-            this.set_placeholder_text("为此服务器添加昵称", window, cx);
+            this.set_placeholder_text(i18n::t!("bc7d2a6beb35891e"), window, cx);
             if let Some(starting_text) = starting_text {
                 this.set_text(starting_text, window, cx);
             }
@@ -1289,7 +1299,7 @@ impl PickerDelegate for RemoteServerPickerDelegate {
     }
 
     fn no_matches_text(&self, _window: &mut Window, _cx: &mut App) -> Option<SharedString> {
-        Some("没有匹配的远程项目。".into())
+        Some(i18n::t!("9d6ff14ffd52289c").into())
     }
 
     fn update_matches(
@@ -1490,12 +1500,18 @@ impl PickerDelegate for RemoteServerPickerDelegate {
             RemoteMatch::AddWsl => {
                 Some(self.render_action_item(ix, IconName::Plus, "Add WSL Distro", selected))
             }
-            RemoteMatch::EditSshConfig => {
-                Some(self.render_action_item(ix, IconName::Settings, "编辑本机 SSH 配置", selected))
-            }
-            RemoteMatch::ManageSshKeys => {
-                Some(self.render_action_item(ix, IconName::Server, "管理 Zed SSH 密钥", selected))
-            }
+            RemoteMatch::EditSshConfig => Some(self.render_action_item(
+                ix,
+                IconName::Settings,
+                i18n::t!("f3d694312a38e70c"),
+                selected,
+            )),
+            RemoteMatch::ManageSshKeys => Some(self.render_action_item(
+                ix,
+                IconName::Server,
+                i18n::t!("deb79a677604de8b"),
+                selected,
+            )),
             RemoteMatch::OpenFolder { .. } => {
                 Some(self.render_action_item(ix, IconName::Plus, "Open Folder", selected))
             }
@@ -1507,15 +1523,14 @@ impl PickerDelegate for RemoteServerPickerDelegate {
                 else {
                     return None;
                 };
-                Some(self.render_action_item(
-                    ix,
-                    IconName::Server,
-                    match connection.remote_server_source.unwrap_or_default() {
-                        settings::RemoteServerSource::Official => "远程服务来源：官方 Zed",
-                        settings::RemoteServerSource::ZedCn => "远程服务来源：Zed CN",
-                    },
-                    selected,
-                ))
+                let source = connection
+                    .remote_server_source
+                    .unwrap_or_else(|| remote::default_remote_server_source(cx));
+                let label = match source {
+                    settings::RemoteServerSource::Official => i18n::t!("4ea080c2c7c5be6d"),
+                    settings::RemoteServerSource::ZedCn => i18n::t!("e9b311484f597a82"),
+                };
+                Some(self.render_action_item(ix, IconName::Server, label, selected))
             }
             RemoteMatch::ViewServerOptions { .. } => Some(self.render_action_item(
                 ix,
@@ -1562,7 +1577,7 @@ impl PickerDelegate for RemoteServerPickerDelegate {
                                     .icon_size(IconSize::Small)
                                     .shape(IconButtonShape::Square)
                                     .size(ButtonSize::Large)
-                                    .tooltip(Tooltip::text("删除远程项目"))
+                                    .tooltip(Tooltip::text(i18n::t!("cde89afaae2fa759")))
                                     .on_click(cx.listener(move |_, _, _, cx| {
                                         let remote_project = remote_project.clone();
                                         remote_server_projects
@@ -1604,16 +1619,16 @@ impl PickerDelegate for RemoteServerPickerDelegate {
             h_flex()
                 .gap_1()
                 .child(
-                    Button::new("open_new_window", "新窗口")
+                    Button::new("open_new_window", i18n::t!("1a1281a5e5c48811"))
                         .key_binding(KeyBinding::for_action(&menu::SecondaryConfirm, cx))
                         .on_click(|_, window, cx| {
                             window.dispatch_action(menu::SecondaryConfirm.boxed_clone(), cx)
                         }),
                 )
-                .child(confirm_button("打开".into()))
+                .child(confirm_button(i18n::t!("c771248e511fbf93").into()))
                 .into_any_element()
         } else {
-            confirm_button("选择".into()).into_any_element()
+            confirm_button(i18n::t!("c11330b85234f9c0").into()).into_any_element()
         };
 
         Some(
@@ -1828,7 +1843,7 @@ impl RemoteServerProjects {
             return;
         }
 
-        let connection_options = match SshConnectionOptions::parse_command_line(&input) {
+        let mut connection_options = match SshConnectionOptions::parse_command_line(&input) {
             Ok(c) => c,
             Err(e) => {
                 self.mode = Mode::CreateRemoteServer(CreateRemoteServer {
@@ -1840,6 +1855,7 @@ impl RemoteServerProjects {
                 return;
             }
         };
+        connection_options.remote_server_source = remote::default_remote_server_source(cx);
         let ssh_prompt = cx.new(|cx| {
             RemoteConnectionPrompt::new(
                 connection_options.connection_string(),
@@ -1985,7 +2001,10 @@ impl RemoteServerProjects {
         let ServerIndex::Ssh(index) = index else {
             return;
         };
-        let selected_index = match connection.remote_server_source.unwrap_or_default() {
+        let selected_index = match connection
+            .remote_server_source
+            .unwrap_or_else(|| remote::default_remote_server_source(cx))
+        {
             settings::RemoteServerSource::Official => 0,
             settings::RemoteServerSource::ZedCn => 1,
         };
@@ -2295,7 +2314,7 @@ impl RemoteServerProjects {
                     gpui::PromptLevel::Critical,
                     "Failed to connect",
                     Some(&e.to_string()),
-                    &["确定"],
+                    &[i18n::t!("fac2a67ad87807c4")],
                 )
                 .await
                 .ok();
@@ -2529,7 +2548,7 @@ impl RemoteServerProjects {
                             gpui::PromptLevel::Critical,
                             "Failed to start Dev Container. See logs for details",
                             Some(&format!("{e}")),
-                            &["确定"],
+                            &[i18n::t!("fac2a67ad87807c4")],
                         )
                         .await
                         .ok();
@@ -2584,7 +2603,7 @@ impl RemoteServerProjects {
                     gpui::PromptLevel::Critical,
                     "Failed to connect",
                     Some(&e.to_string()),
-                    &["确定"],
+                    &[i18n::t!("fac2a67ad87807c4")],
                 )
                 .await
                 .ok();
@@ -2613,7 +2632,7 @@ impl RemoteServerProjects {
                                         .start_slot(
                                             Icon::new(IconName::XCircle).color(Color::Error),
                                         )
-                                        .child(Label::new("创建开发容器出错："))
+                                        .child(Label::new(i18n::t!("a9d49e3feeb54a6a")))
                                         .child(Label::new(message).buffer_font(cx)),
                                 ),
                             ),
@@ -2643,7 +2662,7 @@ impl RemoteServerProjects {
                                                 .color(Color::Muted)
                                                 .size(IconSize::Small),
                                         )
-                                        .child(Label::new("打开 Zed 日志"))
+                                        .child(Label::new(i18n::t!("19051a62bc3d1963")))
                                         .on_click(cx.listener(|_, _, window, cx| {
                                             window.dispatch_action(Box::new(OpenLog), cx);
                                             cx.emit(DismissEvent);
@@ -2674,7 +2693,7 @@ impl RemoteServerProjects {
                                                 .color(Color::Muted)
                                                 .size(IconSize::Small),
                                         )
-                                        .child(Label::new("退出"))
+                                        .child(Label::new(i18n::t!("498e1d59b4d787ee")))
                                         .on_click(cx.listener(|this, _, window, cx| {
                                             this.cancel(&menu::Cancel, window, cx);
                                             cx.notify();
@@ -2718,7 +2737,7 @@ impl RemoteServerProjects {
                                         h_flex()
                                             .opacity(0.6)
                                             .gap_1()
-                                            .child(Label::new("正在创建开发容器"))
+                                            .child(Label::new(i18n::t!("1157e08be113dd47")))
                                             .child(LoadingLabel::new("")),
                                     ),
                             ),
@@ -2803,7 +2822,7 @@ impl RemoteServerProjects {
                                         .size(LabelSize::Small),
                                     )
                                     .child(
-                                        Button::new("learn-more", "了解更多")
+                                        Button::new("learn-more", i18n::t!("ca66c2da6f5bf825"))
                                             .label_size(LabelSize::Small)
                                             .end_icon(
                                                 Icon::new(IconName::ArrowUpRight)
@@ -2928,7 +2947,7 @@ impl RemoteServerProjects {
                                         .start_slot(
                                             Icon::new(IconName::ArrowLeft).color(Color::Muted),
                                         )
-                                        .child(Label::new("返回"))
+                                        .child(Label::new(i18n::t!("572cf45ba43634b3")))
                                         .on_click(cx.listener(|this, _, window, cx| {
                                             this.mode =
                                                 Mode::default_mode(&this.ssh_config_servers, cx);
@@ -2966,13 +2985,13 @@ impl RemoteServerProjects {
                 window: &mut Window,
                 cx: &mut App,
             ) {
-                let prompt_message = format!("要移除 WSL 发行版 `{}` 吗？", distro_name);
+                let prompt_message = i18n::t_args!("20e976b1990be449", distro_name);
 
                 let confirmation = window.prompt(
                     PromptLevel::Warning,
                     &prompt_message,
                     None,
-                    &["是，移除", "否，保留"],
+                    &[i18n::t!("a0d088db90385b56"), i18n::t!("beb38893b76fefe3")],
                     cx,
                 );
 
@@ -3005,7 +3024,7 @@ impl RemoteServerProjects {
                         .inset(true)
                         .spacing(ui::ListItemSpacing::Sparse)
                         .start_slot(Icon::new(IconName::Trash).color(Color::Error))
-                        .child(Label::new("移除发行版").color(Color::Error))
+                        .child(Label::new(i18n::t!("c49c4ea4805cfae2")).color(Color::Error))
                         .on_click(cx.listener(move |_, _, window, cx| {
                             remove_wsl_distro(cx.entity(), index, distro_name.clone(), window, cx);
                         })),
@@ -3096,7 +3115,7 @@ impl RemoteServerProjects {
                             .inset(true)
                             .spacing(ui::ListItemSpacing::Sparse)
                             .start_slot(Icon::new(IconName::Copy).color(Color::Muted))
-                            .child(Label::new("复制服务器地址"))
+                            .child(Label::new(i18n::t!("4c2614bc71a0cb77")))
                             .end_slot(Label::new(connection_string.clone()).color(Color::Muted))
                             .show_end_slot_on_hover()
                             .on_click({
@@ -3115,13 +3134,13 @@ impl RemoteServerProjects {
                     window: &mut Window,
                     cx: &mut App,
                 ) {
-                    let prompt_message = format!("要移除服务器 `{}` 吗？", connection_string);
+                    let prompt_message = i18n::t_args!("d1fd2f8a98a29fca", connection_string);
 
                     let confirmation = window.prompt(
                         PromptLevel::Warning,
                         &prompt_message,
                         None,
-                        &["是，移除", "否，保留"],
+                        &[i18n::t!("a0d088db90385b56"), i18n::t!("beb38893b76fefe3")],
                         cx,
                     );
 
@@ -3160,7 +3179,7 @@ impl RemoteServerProjects {
                             .inset(true)
                             .spacing(ui::ListItemSpacing::Sparse)
                             .start_slot(Icon::new(IconName::Trash).color(Color::Error))
-                            .child(Label::new("移除服务器").color(Color::Error))
+                            .child(Label::new(i18n::t!("cc98dc08f5e9a890")).color(Color::Error))
                             .on_click(cx.listener(move |_, _, window, cx| {
                                 remove_ssh_server(
                                     cx.entity(),
@@ -3232,9 +3251,9 @@ impl RemoteServerProjects {
             Err(error) => {
                 let confirmation = window.prompt(
                     PromptLevel::Critical,
-                    "无法读取 Zed SSH 密钥",
+                    i18n::t!("93d0989ced68c7dc"),
                     Some(&error.to_string()),
-                    &["确定"],
+                    &[i18n::t!("fac2a67ad87807c4")],
                     cx,
                 );
                 cx.spawn(async move |_, _| {
@@ -3247,9 +3266,9 @@ impl RemoteServerProjects {
         if keys.is_empty() {
             let confirmation = window.prompt(
                 PromptLevel::Info,
-                "没有 Zed 管理的 SSH 密钥",
-                Some("在密码连接时勾选“创建此主机的 Zed 专属 SSH 密钥”后，密钥会显示在这里。"),
-                &["确定"],
+                i18n::t!("641dd3307518e1b9"),
+                Some(i18n::t!("5021a7dc57179f13")),
+                &[i18n::t!("fac2a67ad87807c4")],
                 cx,
             );
             cx.spawn(async move |_, _| {
@@ -3263,18 +3282,22 @@ impl RemoteServerProjects {
             .iter()
             .enumerate()
             .map(|(index, key)| {
-                format!(
-                    "{}. {}@{}:{}\n   创建：{}  最近使用：{}\n   指纹：{}  状态：{}",
+                i18n::t_args!(
+                    "7ba7b5706ee084b5",
                     index + 1,
                     key.remote_username,
                     key.host,
                     key.port,
                     key.created_at,
-                    key.last_used_at.as_deref().unwrap_or("从未"),
+                    key.last_used_at
+                        .as_deref()
+                        .unwrap_or(i18n::t!("5594f4797ae55d1a")),
                     key.key_id,
                     match key.deployment_state {
-                        remote::ManagedSshKeyDeploymentState::Pending => "待验证",
-                        remote::ManagedSshKeyDeploymentState::Verified => "已验证",
+                        remote::ManagedSshKeyDeploymentState::Pending =>
+                            i18n::t!("76a2e875d985af84"),
+                        remote::ManagedSshKeyDeploymentState::Verified =>
+                            i18n::t!("0a1b6f1b57f5198e"),
                     }
                 )
             })
@@ -3282,10 +3305,11 @@ impl RemoteServerProjects {
             .join("\n\n");
         let workspace = self.workspace.clone();
         cx.spawn_in(window, async move |_, cx| {
-            let mut target_buttons = vec!["关闭".to_string()];
-            target_buttons.extend(keys.iter().map(|key| {
-                format!("{}@{}:{}", key.remote_username, key.host, key.port)
-            }));
+            let mut target_buttons = vec![i18n::t!("3fd47edce45b3603").to_string()];
+            target_buttons.extend(
+                keys.iter()
+                    .map(|key| format!("{}@{}:{}", key.remote_username, key.host, key.port)),
+            );
             let target_button_refs = target_buttons
                 .iter()
                 .map(String::as_str)
@@ -3293,7 +3317,7 @@ impl RemoteServerProjects {
             let selected = cx
                 .prompt(
                     PromptLevel::Info,
-                    "Zed SSH 密钥管理",
+                    i18n::t!("9d823228218052ab"),
                     Some(&summary),
                     &target_button_refs,
                 )
@@ -3302,14 +3326,18 @@ impl RemoteServerProjects {
                 return Ok::<(), anyhow::Error>(());
             }
             let Some(key) = keys.get(selected - 1) else {
-                anyhow::bail!("选择的 SSH 密钥已不存在");
+                anyhow::bail!(i18n::t!("28d8d3cf78592487"));
             };
             let answer = cx
                 .prompt(
                     PromptLevel::Warning,
-                    &format!("管理 {}@{}:{}", key.remote_username, key.host, key.port),
-                    Some("远程撤销成功后才会删除本地私钥。仅删除本地密钥会在服务器上保留无法再由 Zed 自动清理的公钥。"),
-                    &["取消", "撤销远程并删除", "仅删除本地"],
+                    &i18n::t_args!("e56ec9128d0390c3", key.remote_username, key.host, key.port),
+                    Some(i18n::t!("d0b7e7ca2da217f2")),
+                    &[
+                        i18n::t!("2cd0f3be8738a86c"),
+                        i18n::t!("6f0bde02c11998ef"),
+                        i18n::t!("56b27cbf4eea18e2"),
+                    ],
                 )
                 .await?;
             match answer {
@@ -3322,7 +3350,7 @@ impl RemoteServerProjects {
                     workspace.show_toast(
                         Toast::new(
                             NotificationId::unique::<ManagedSshKeyManagementToast>(),
-                            "Zed SSH 密钥操作已完成",
+                            i18n::t!("ef5c1f17c13b506f"),
                         )
                         .autohide(),
                         cx,
@@ -3331,7 +3359,7 @@ impl RemoteServerProjects {
             }
             Ok(())
         })
-        .detach_and_prompt_err("SSH 密钥操作失败", window, cx, |_, _, _| None);
+        .detach_and_prompt_err(i18n::t!("d8732bec6533c2cc"), window, cx, |_, _, _| None);
     }
 
     fn edit_local_ssh_config(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -3342,7 +3370,7 @@ impl RemoteServerProjects {
             let fs = workspace.read_with(cx, |workspace, _| workspace.app_state().fs.clone())?;
             let parent = path
                 .parent()
-                .ok_or_else(|| anyhow::anyhow!("无法确定本机 SSH 配置目录"))?;
+                .ok_or_else(|| anyhow::anyhow!(i18n::t!("7381f51442c15e86")))?;
             fs.create_dir(parent).await?;
             fs.create_file(
                 &path,
@@ -3370,7 +3398,7 @@ impl RemoteServerProjects {
                 .await?;
             anyhow::Ok(())
         })
-        .detach_and_prompt_err("无法打开本机 SSH 配置", window, cx, |_, _, _| None);
+        .detach_and_prompt_err(i18n::t!("1f90e2131dc4784b"), window, cx, |_, _, _| None);
     }
 
     fn create_host_from_ssh_config(

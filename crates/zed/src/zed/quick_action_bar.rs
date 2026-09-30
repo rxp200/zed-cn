@@ -154,7 +154,7 @@ impl Render for QuickActionBar {
                     false,
                     Box::new(editor::RunCode),
                     focus_handle.clone(),
-                    "运行代码（选区或当前文件）",
+                    i18n::t!("a4db6bf6ba81bb4c"),
                     move |_, window, cx| {
                         window.dispatch_action(Box::new(editor::RunCode), cx);
                     },
@@ -168,7 +168,7 @@ impl Render for QuickActionBar {
                 false,
                 Box::new(editor::StopCode),
                 focus_handle.clone(),
-                "停止运行代码",
+                i18n::t!("c6455ca0810e1431"),
                 move |_, window, cx| {
                     window.dispatch_action(Box::new(editor::StopCode), cx);
                 },
@@ -295,7 +295,7 @@ impl Render for QuickActionBar {
                         .icon_size(IconSize::Small)
                         .style(ButtonStyle::Subtle)
                         .toggle_state(self.toggle_selections_handle.is_deployed()),
-                    Tooltip::text("选区控制"),
+                    Tooltip::text(i18n::t!("ef995fef871c4894")),
                 )
                 .with_handle(self.toggle_selections_handle.clone())
                 .anchor(Anchor::TopRight)
@@ -373,7 +373,7 @@ impl Render for QuickActionBar {
                     IconButton::new("toggle_editor_settings_icon", IconName::Filter)
                         .icon_size(IconSize::Small)
                         .toggle_state(self.toggle_settings_handle.is_deployed()),
-                    Tooltip::text("编辑器控制"),
+                    Tooltip::text(i18n::t!("4df051c852415a22")),
                 )
                 .anchor(Anchor::TopRight)
                 .with_handle(self.toggle_settings_handle.clone())
@@ -475,7 +475,7 @@ impl Render for QuickActionBar {
 
                             if supports_minimap {
                                 menu = menu.toggleable_entry(
-                                    "小地图",
+                                    i18n::t!("1e9d8e80c741c936"),
                                     minimap_enabled,
                                     IconPosition::Start,
                                     Some(editor::actions::ToggleMinimap.boxed_clone()),
@@ -497,34 +497,34 @@ impl Render for QuickActionBar {
                             }
 
                             if has_edit_prediction_provider {
-                                let mut edit_prediction_entry = ContextMenuEntry::new("编辑预测")
-                                    .toggleable(
-                                        IconPosition::Start,
-                                        edit_predictions_enabled_at_cursor && show_edit_predictions,
-                                    )
-                                    .disabled(!edit_predictions_enabled_at_cursor)
-                                    .action(editor::actions::ToggleEditPrediction.boxed_clone())
-                                    .handler({
-                                        let editor = editor.clone();
-                                        move |window, cx| {
-                                            editor
-                                                .update(cx, |editor, cx| {
-                                                    editor.toggle_edit_predictions(
-                                                        &editor::actions::ToggleEditPrediction,
-                                                        window,
-                                                        cx,
-                                                    );
-                                                })
-                                                .ok();
-                                        }
-                                    });
+                                let mut edit_prediction_entry =
+                                    ContextMenuEntry::new(i18n::t!("34627253269ac8a6"))
+                                        .toggleable(
+                                            IconPosition::Start,
+                                            edit_predictions_enabled_at_cursor
+                                                && show_edit_predictions,
+                                        )
+                                        .disabled(!edit_predictions_enabled_at_cursor)
+                                        .action(editor::actions::ToggleEditPrediction.boxed_clone())
+                                        .handler({
+                                            let editor = editor.clone();
+                                            move |window, cx| {
+                                                editor
+                                                    .update(cx, |editor, cx| {
+                                                        editor.toggle_edit_predictions(
+                                                            &editor::actions::ToggleEditPrediction,
+                                                            window,
+                                                            cx,
+                                                        );
+                                                    })
+                                                    .ok();
+                                            }
+                                        });
                                 if !edit_predictions_enabled_at_cursor {
                                     edit_prediction_entry = edit_prediction_entry
                                         .documentation_aside(DocumentationSide::Left, |_| {
-                                            Label::new(
-                                                "此文件在排除文件列表中，因此你无法切换编辑预测。",
-                                            )
-                                            .into_any_element()
+                                            Label::new(i18n::t!("902f987ef11d3641"))
+                                                .into_any_element()
                                         });
                                 }
 
@@ -535,7 +535,7 @@ impl Render for QuickActionBar {
 
                             if is_full {
                                 menu = menu.toggleable_entry(
-                                    "诊断",
+                                    i18n::t!("40ff6300f9817deb"),
                                     diagnostics_enabled,
                                     IconPosition::Start,
                                     Some(ToggleDiagnostics.boxed_clone()),
@@ -557,7 +557,7 @@ impl Render for QuickActionBar {
 
                                 if supports_inline_diagnostics {
                                     let mut inline_diagnostics_item =
-                                        ContextMenuEntry::new("内联诊断")
+                                        ContextMenuEntry::new(i18n::t!("874ee510372ec389"))
                                             .toggleable(
                                                 IconPosition::Start,
                                                 diagnostics_enabled && inline_diagnostics_enabled,
@@ -581,7 +581,7 @@ impl Render for QuickActionBar {
                                         inline_diagnostics_item = inline_diagnostics_item
                                             .disabled(true)
                                             .documentation_aside(DocumentationSide::Left, |_| {
-                                                Label::new("在启用常规诊断之前，内联诊断不可用。")
+                                                Label::new(i18n::t!("9aa3a9b02ee54401"))
                                                     .into_any_element()
                                             });
                                     }

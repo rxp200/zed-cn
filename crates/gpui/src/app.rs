@@ -1,3 +1,5 @@
+// Modified by the Zed CN project, 2026. See MODIFICATIONS.md.
+
 use scheduler::Instant;
 use std::{
     any::{TypeId, type_name},
@@ -839,6 +841,15 @@ pub struct App {
 }
 
 impl App {
+    /// 当前应用是否运行在测试模式（由 `TestAppContext` 创建）。
+    pub fn is_test(&self) -> bool {
+        match self.mode {
+            #[cfg(any(test, feature = "test-support"))]
+            GpuiMode::Test { .. } => true,
+            GpuiMode::Production => false,
+        }
+    }
+
     #[allow(clippy::new_ret_no_self)]
     pub(crate) fn new_app(
         platform: Rc<dyn Platform>,

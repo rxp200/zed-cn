@@ -429,7 +429,7 @@ impl PickerDelegate for TemplatePickerDelegate {
                 .border_t_1()
                 .border_color(cx.theme().colors().border_variant)
                 .child(
-                    Button::new("run-action", "继续")
+                    Button::new("run-action", i18n::t!("7c9691192f1b7340"))
                         .key_binding(
                             KeyBinding::for_action(&menu::Confirm, cx)
                                 .map(|kb| kb.size(rems_from_px(12_f32))),
@@ -626,7 +626,7 @@ impl PickerDelegate for FeaturePickerDelegate {
                 .border_t_1()
                 .border_color(cx.theme().colors().border_variant)
                 .child(
-                    Button::new("run-action", "选择功能")
+                    Button::new("run-action", i18n::t!("e02b10b58e6c6d28"))
                         .key_binding(
                             KeyBinding::for_action(&menu::Confirm, cx)
                                 .map(|kb| kb.size(rems_from_px(12_f32))),
@@ -636,7 +636,7 @@ impl PickerDelegate for FeaturePickerDelegate {
                         }),
                 )
                 .child(
-                    Button::new("run-action-secondary", "确认选择")
+                    Button::new("run-action-secondary", i18n::t!("2c8691449787b67b"))
                         .key_binding(
                             KeyBinding::for_action(&menu::SecondaryConfirm, cx)
                                 .map(|kb| kb.size(rems_from_px(12_f32))),
@@ -667,12 +667,11 @@ impl DevContainerModal {
         let mut view = Navigable::new(
             div()
                 .p_1()
-                .child(
-                    div().track_focus(&self.focus_handle).child(
-                        ModalHeader::new()
-                            .child(Headline::new("创建开发容器").size(HeadlineSize::XSmall)),
+                .child(div().track_focus(&self.focus_handle).child(
+                    ModalHeader::new().child(
+                        Headline::new(i18n::t!("1f6991fa4191205b")).size(HeadlineSize::XSmall),
                     ),
-                )
+                ))
                 .child(ListSeparator)
                 .child(
                     div()
@@ -698,7 +697,7 @@ impl DevContainerModal {
                                     );
                                     cx.notify();
                                 }))
-                                .child(Label::new("搜索开发容器模板")),
+                                .child(Label::new(i18n::t!("849bd0db509a064e"))),
                         ),
                 )
                 .into_any_element(),
@@ -763,7 +762,10 @@ impl DevContainerModal {
                         .track_focus(&self.focus_handle)
                         .child(
                             ModalHeader::new()
-                                .child(Headline::new("模板选项：").size(HeadlineSize::XSmall))
+                                .child(
+                                    Headline::new(i18n::t!("d8a408667792e702"))
+                                        .size(HeadlineSize::XSmall),
+                                )
                                 .child(
                                     Headline::new(&next_option_entries.option_name)
                                         .size(HeadlineSize::XSmall),
@@ -842,7 +844,7 @@ impl DevContainerModal {
                                     this.accept_message(DevContainerMessage::GoBack, window, cx);
                                     cx.notify();
                                 }))
-                                .child(Label::new("返回")),
+                                .child(Label::new(i18n::t!("572cf45ba43634b3"))),
                         ),
                 )
                 .into_any_element(),
@@ -883,7 +885,10 @@ impl DevContainerModal {
                     div().track_focus(&self.focus_handle).child(
                         ModalHeader::new()
                             .icon(Icon::new(IconName::Warning).color(Color::Warning))
-                            .child(Headline::new("覆盖现有配置？").size(HeadlineSize::XSmall)),
+                            .child(
+                                Headline::new(i18n::t!("aec8af08e68d5f55"))
+                                    .size(HeadlineSize::XSmall),
+                            ),
                     ),
                 )
                 .child(
@@ -917,7 +922,7 @@ impl DevContainerModal {
                                     );
                                     cx.notify();
                                 }))
-                                .child(Label::new("覆盖")),
+                                .child(Label::new(i18n::t!("4ce4c98eb27e4b65"))),
                         ),
                 )
                 .child(
@@ -938,7 +943,7 @@ impl DevContainerModal {
                                     this.dismiss(&menu::Cancel, window, cx);
                                     cx.notify();
                                 }))
-                                .child(Label::new("取消")),
+                                .child(Label::new(i18n::t!("2cd0f3be8738a86c"))),
                         ),
                 )
                 .into_any_element(),
@@ -952,12 +957,11 @@ impl DevContainerModal {
     fn render_querying_templates(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         Navigable::new(
             div()
-                .child(
-                    div().track_focus(&self.focus_handle).child(
-                        ModalHeader::new()
-                            .child(Headline::new("创建开发容器").size(HeadlineSize::XSmall)),
+                .child(div().track_focus(&self.focus_handle).child(
+                    ModalHeader::new().child(
+                        Headline::new(i18n::t!("1f6991fa4191205b")).size(HeadlineSize::XSmall),
                     ),
-                )
+                ))
                 .child(ListSeparator)
                 .child(
                     div().child(
@@ -969,7 +973,7 @@ impl DevContainerModal {
                                     .color(Color::Muted)
                                     .with_rotate_animation(2),
                             )
-                            .child(Label::new("正在查询模板注册表…")),
+                            .child(Label::new(i18n::t!("547143d1e61fcacd"))),
                     ),
                 )
                 .child(ListSeparator)
@@ -991,7 +995,7 @@ impl DevContainerModal {
                                     this.accept_message(DevContainerMessage::GoBack, window, cx);
                                     cx.notify();
                                 }))
-                                .child(Label::new("返回")),
+                                .child(Label::new(i18n::t!("572cf45ba43634b3"))),
                         ),
                 )
                 .into_any_element(),
@@ -1003,12 +1007,11 @@ impl DevContainerModal {
     fn render_querying_features(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         Navigable::new(
             div()
-                .child(
-                    div().track_focus(&self.focus_handle).child(
-                        ModalHeader::new()
-                            .child(Headline::new("创建开发容器").size(HeadlineSize::XSmall)),
+                .child(div().track_focus(&self.focus_handle).child(
+                    ModalHeader::new().child(
+                        Headline::new(i18n::t!("1f6991fa4191205b")).size(HeadlineSize::XSmall),
                     ),
-                )
+                ))
                 .child(ListSeparator)
                 .child(
                     div().child(
@@ -1020,7 +1023,7 @@ impl DevContainerModal {
                                     .color(Color::Muted)
                                     .with_rotate_animation(2),
                             )
-                            .child(Label::new("正在查询功能…")),
+                            .child(Label::new(i18n::t!("f12a5107e8dccc6c"))),
                     ),
                 )
                 .child(ListSeparator)
@@ -1042,7 +1045,7 @@ impl DevContainerModal {
                                     this.accept_message(DevContainerMessage::GoBack, window, cx);
                                     cx.notify();
                                 }))
-                                .child(Label::new("返回")),
+                                .child(Label::new(i18n::t!("572cf45ba43634b3"))),
                         ),
                 )
                 .into_any_element(),

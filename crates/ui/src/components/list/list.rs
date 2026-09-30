@@ -113,17 +113,32 @@ impl Component for List {
                     single_example(
                         "Simple List",
                         List::new()
-                            .child(ListItem::new("item1").child(Label::new("项目 1")))
-                            .child(ListItem::new("item2").child(Label::new("项目 2")))
-                            .child(ListItem::new("item3").child(Label::new("项目 3")))
+                            .child(
+                                ListItem::new("item1")
+                                    .child(Label::new(i18n::t!("69a2f900c1997699"))),
+                            )
+                            .child(
+                                ListItem::new("item2")
+                                    .child(Label::new(i18n::t!("2b2d375b74b9aef2"))),
+                            )
+                            .child(
+                                ListItem::new("item3")
+                                    .child(Label::new(i18n::t!("01e49eaf1d9a955a"))),
+                            )
                             .into_any_element(),
                     ),
                     single_example(
                         "With Header",
                         List::new()
-                            .header(ListHeader::new("Section Header"))
-                            .child(ListItem::new("item1").child(Label::new("项目 1")))
-                            .child(ListItem::new("item2").child(Label::new("项目 2")))
+                            .header(ListHeader::new(i18n::t!("2fff9bf7e3bbab63")))
+                            .child(
+                                ListItem::new("item1")
+                                    .child(Label::new(i18n::t!("69a2f900c1997699"))),
+                            )
+                            .child(
+                                ListItem::new("item2")
+                                    .child(Label::new(i18n::t!("2b2d375b74b9aef2"))),
+                            )
                             .into_any_element(),
                     ),
                     single_example(

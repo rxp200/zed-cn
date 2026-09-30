@@ -187,9 +187,9 @@ impl RenderOnce for TerminalToolHeader {
                                     .icon_color(Color::Error)
                                     .tooltip(move |_window, cx| {
                                         Tooltip::with_meta(
-                                            "停止此命令",
+                                            i18n::t!("2d00c41d0fbe8c5e"),
                                             None,
-                                            "也可以将光标置于终端内，并使用常规终端快捷键停止。",
+                                            i18n::t!("585af3259b11f75c"),
                                             cx,
                                         )
                                     })
@@ -217,7 +217,10 @@ impl RenderOnce for TerminalToolHeader {
                             .icon_size(IconSize::Small)
                             .icon_color(Color::Error)
                             .when_some(exit_code, |this, code| {
-                                this.tooltip(Tooltip::text(format!("退出代码：{code}")))
+                                this.tooltip(Tooltip::text(i18n::t!(
+                                    "60bbae3867c3d9e5",
+                                    code = code
+                                )))
                             }),
                     )
             })

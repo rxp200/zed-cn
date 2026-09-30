@@ -802,8 +802,25 @@ impl ProjectPanel {
                         this.update_visible_entries(None, false, false, window, cx);
                         cx.notify();
                     }
+                    project::Event::WorktreeAdded(worktree_id) => {
+                        this.update_visible_entries(None, false, false, window, cx);
+                        cx.spawn({
+                            let project = project.clone();
+                            let worktree_id = *worktree_id;
+                            async move |_, cx| {
+                                editor::code_explanations::load_code_explanation_file_index_for_worktree(
+                                    project,
+                                    worktree_id,
+                                    cx,
+                                )
+                                .await
+                                .log_err();
+                            }
+                        })
+                        .detach();
+                        cx.notify();
+                    }
                     project::Event::WorktreeUpdatedEntries(_, _)
-                    | project::Event::WorktreeAdded(_)
                     | project::Event::WorktreeOrderChanged => {
                         this.update_visible_entries(None, false, false, window, cx);
                         cx.notify();
@@ -1221,7 +1238,7 @@ impl ProjectPanel {
                         })
                         .when(can_scan_selection, |menu| {
                             menu.separator().action(
-                                "完整扫描讲解所选文件",
+                                i18n::t!("b1844ba1b43e32a6"),
                                 Box::new(ScanSelectedEntriesForCodeExplanations),
                             )
                         })
@@ -1247,7 +1264,7 @@ impl ProjectPanel {
                             })
                             .when(can_scan_selection, |menu| {
                                 menu.separator().action(
-                                    "完整扫描讲解所选文件",
+                                    i18n::t!("b1844ba1b43e32a6"),
                                     Box::new(ScanSelectedEntriesForCodeExplanations),
                                 )
                             })
@@ -1269,13 +1286,25 @@ impl ProjectPanel {
                             .action("剪切", Box::new(Cut))
                             .action("复制", Box::new(Copy))
                             .action("生成副本", Box::new(Duplicate))
-                            .action_disabled_when(!has_pasteable_content, "粘贴", Box::new(Paste))
+                            .action_disabled_when(
+                                !has_pasteable_content,
+                                i18n::t!("33517926747180e6"),
+                                Box::new(Paste),
+                            )
                             .when(!is_collab, |menu| {
                                 let can_undo = self.undo_manager.can_undo();
                                 let can_redo = self.undo_manager.can_redo();
 
-                                menu.action_disabled_when(!can_undo, "撤销", Box::new(Undo))
-                                    .action_disabled_when(!can_redo, "重做", Box::new(Redo))
+                                menu.action_disabled_when(
+                                    !can_undo,
+                                    i18n::t!("926a50b98ece2667"),
+                                    Box::new(Undo),
+                                )
+                                .action_disabled_when(
+                                    !can_redo,
+                                    i18n::t!("03717b6f10700f87"),
+                                    Box::new(Redo),
+                                )
                             })
                             .when(is_remote, |menu| {
                                 menu.separator()
@@ -1284,20 +1313,20 @@ impl ProjectPanel {
                             .separator()
                             .action("复制路径", Box::new(zed_actions::workspace::CopyPath))
                             .action(
-                                "复制相对路径",
+                                i18n::t!("02bcdbc5a1453cb0"),
                                 Box::new(zed_actions::workspace::CopyRelativePath),
                             )
                             .when(has_git_repo, |menu| {
                                 menu.separator()
                                     .when(!is_dir && self.has_git_changes(entry_id), |menu| {
                                         menu.action(
-                                            "恢复文件",
+                                            i18n::t!("56c4ecf097bdf54b"),
                                             Box::new(git::RestoreFile { skip_prompt: false }),
                                         )
                                     })
                                     .action("添加到.gitignore", Box::new(git::AddToGitignore))
                                     .action(
-                                        "添加到.git/info/exclude",
+                                        i18n::t!("8d687cc65a2e45f0"),
                                         Box::new(git::AddToGitInfoExclude),
                                     )
                                     .when(has_history, |menu| {
@@ -1305,11 +1334,11 @@ impl ProjectPanel {
                                     })
                                     .when(!is_dir, |menu| {
                                         menu.action(
-                                            "打开文件永久链接",
+                                            i18n::t!("aa32d423e7138efa"),
                                             git::OpenFilePermalink.boxed_clone(),
                                         )
                                         .action(
-                                            "复制文件永久链接",
+                                            i18n::t!("d72898311fb0c0e3"),
                                             git::CopyFilePermalink.boxed_clone(),
                                         )
                                     })
@@ -1326,7 +1355,7 @@ impl ProjectPanel {
                             .when(!is_collab && is_root, |menu| {
                                 menu.separator()
                                     .action(
-                                        "添加文件夹到项目…",
+                                        i18n::t!("0fde73d53968b148"),
                                         Box::new(workspace::AddFolderToProject),
                                     )
                                     .action("从项目中移除", Box::new(RemoveFromProject))
@@ -2645,8 +2674,14 @@ impl ProjectPanel {
             let file_name = entry.path.file_name()?.to_string();
 
             let answer = if !action.skip_prompt {
-                let prompt = format!("确定放弃对 {} 的更改吗？", MarkdownInlineCode(&file_name));
-                Some(window.prompt(PromptLevel::Info, &prompt, None, &["恢复", "取消"], cx))
+                let prompt = i18n::t_args!("500237ba2e75ec5b", MarkdownInlineCode(&file_name));
+                Some(window.prompt(
+                    PromptLevel::Info,
+                    &prompt,
+                    None,
+                    &[i18n::t!("e0534b8a4e46a0cb"), i18n::t!("2cd0f3be8738a86c")],
+                    cx,
+                ))
             } else {
                 None
             };
@@ -2667,7 +2702,7 @@ impl ProjectPanel {
                 if let Err(e) = task.await {
                     panel
                         .update(cx, |panel, cx| {
-                            let message = format!("无法还原 {}：{}", file_name, e);
+                            let message = i18n::t_args!("c7a554c0d9879a43", file_name, e);
                             let toast = StatusToast::new(message, cx, |this, _| {
                                 this.icon(
                                     Icon::new(IconName::XCircle)
@@ -2739,7 +2774,7 @@ impl ProjectPanel {
                 if let Err(e) = receiver.await? {
                     if let Some(workspace) = workspace.upgrade() {
                         cx.update(|cx| {
-                            let message = format!("无法添加到 .gitignore：{}", e);
+                            let message = i18n::t_args!("6b15d16c82811ffe", e);
                             let toast = StatusToast::new(message, cx, |this, _| {
                                 this.icon(Icon::new(IconName::XCircle).color(Color::Error))
                                     .dismiss_button(true)
@@ -2786,7 +2821,7 @@ impl ProjectPanel {
                 if let Err(e) = receiver.await? {
                     if let Some(workspace) = workspace.upgrade() {
                         cx.update(|cx| {
-                            let message = format!("无法添加到 .git/info/exclude：{}", e);
+                            let message = i18n::t_args!("1088a8ac72262d44", e);
                             let toast = StatusToast::new(message, cx, |this, _| {
                                 this.icon(Icon::new(IconName::XCircle).color(Color::Error))
                                     .dismiss_button(true)
@@ -2820,8 +2855,16 @@ impl ProjectPanel {
         S: AsRef<str>,
     {
         let (message_start, confirmation_label, detail) = match kind {
-            RemovalKind::Trash => ("您确定要移到废纸篓", "移到废纸篓", None),
-            RemovalKind::Delete => ("您确定要永久删除", "删除", Some("此操作无法撤销。")),
+            RemovalKind::Trash => (
+                i18n::t!("e5adde10db0293d0"),
+                i18n::t!("fa5e1982038ca189"),
+                None,
+            ),
+            RemovalKind::Delete => (
+                i18n::t!("91d6d11df040c45a"),
+                i18n::t!("2f9daa828907b93f"),
+                Some(i18n::t!("77f4797d861e5875")),
+            ),
         };
 
         let mut message = match names {
@@ -2835,30 +2878,24 @@ impl ProjectPanel {
                     .collect::<Vec<_>>();
                 let omitted_count = names.len().saturating_sub(CUTOFF_POINT);
                 if omitted_count == 1 {
-                    listed_names.push(".. 未显示 1 个文件".into());
+                    listed_names.push(i18n::t!("25ea975dd7ccc210").into());
                 } else if omitted_count > 1 {
-                    listed_names.push(format!(".. 未显示 {omitted_count} 个文件"));
+                    listed_names.push(i18n::t!("a58d77ec897cf02f", omitted_count = omitted_count));
                 }
 
-                format!(
-                    "{message_start} 以下 {} 个文件？\n{}",
-                    names.len(),
-                    listed_names.join("\n")
-                )
+                i18n::t_mix!("d13191d4551c4fd2"; names.len(), listed_names.join("\n"); message_start = message_start)
             }
         };
         match dirty_buffers {
             0 => {}
             1 if names.len() == 1 => {
-                message.push_str("\n\n它含有未保存的更改，这些更改将丢失。");
+                message.push_str(i18n::t!("6b4bc2bda14363f0"));
             }
             1 => {
-                message.push_str("\n\n其中有 1 个含有未保存的更改，这些更改将丢失。");
+                message.push_str(i18n::t!("ac63ba71b9e1ec17"));
             }
             dirty_buffers => {
-                message.push_str(&format!(
-                    "\n\n其中有 {dirty_buffers} 个含有未保存的更改，这些更改将丢失。"
-                ));
+                message.push_str(&i18n::t!("3fe6bb056d23793f", dirty_buffers = dirty_buffers));
             }
         }
 
@@ -2924,7 +2961,7 @@ impl ProjectPanel {
                     PromptLevel::Info,
                     &prompt.message,
                     prompt.detail,
-                    &[prompt.confirmation_label, "取消"],
+                    &[prompt.confirmation_label, i18n::t!("2cd0f3be8738a86c")],
                     cx,
                 ))
             } else {
@@ -3010,10 +3047,26 @@ impl ProjectPanel {
         cx: &mut Context<Self>,
     ) {
         let message = match (trash, total_count) {
-            (true, 1) => format!("无法将 {failed_count}/{total_count} 个文件移入回收站。"),
-            (true, _) => format!("无法将 {failed_count}/{total_count} 个文件移入回收站。"),
-            (false, 1) => format!("无法删除 {failed_count}/{total_count} 个文件。"),
-            (false, _) => format!("无法删除 {failed_count}/{total_count} 个文件。"),
+            (true, 1) => i18n::t!(
+                "0130f0fac582b83a",
+                failed_count = failed_count,
+                total_count = total_count
+            ),
+            (true, _) => i18n::t!(
+                "0130f0fac582b83a",
+                failed_count = failed_count,
+                total_count = total_count
+            ),
+            (false, 1) => i18n::t!(
+                "018af154831a26fe",
+                failed_count = failed_count,
+                total_count = total_count
+            ),
+            (false, _) => i18n::t!(
+                "018af154831a26fe",
+                failed_count = failed_count,
+                total_count = total_count
+            ),
         };
 
         let toast = StatusToast::new(message, cx, |this, _| {
@@ -3879,7 +3932,7 @@ impl ProjectPanel {
             files: false,
             directories: true,
             multiple: false,
-            prompt: Some("选择下载目录".into()),
+            prompt: Some(i18n::t!("083b6bc980d41874").into()),
         });
 
         cx.spawn_in(window, async move |this, cx| {
@@ -4262,17 +4315,16 @@ impl ProjectPanel {
     fn scan_selected_entries_for_code_explanations(
         &mut self,
         _: &ScanSelectedEntriesForCodeExplanations,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let Some(paths) = self.selected_code_explanation_paths(cx) else {
             return;
         };
-        editor::code_explanations::show_selected_project_scan_confirmation(
+        editor::code_explanations::start_selected_project_scan(
             self.project.clone(),
             self.workspace.clone(),
             paths,
-            window,
             cx,
         );
     }
@@ -5034,7 +5086,7 @@ impl ProjectPanel {
                                 PromptLevel::Info,
                                 &prompt_message,
                                 None,
-                                &["替换", "取消"],
+                                &[i18n::t!("131b13aa265996df"), i18n::t!("2cd0f3be8738a86c")],
                                 cx,
                             )
                         })?
@@ -5067,7 +5119,7 @@ impl ProjectPanel {
                         paths
                             .first()
                             .map(|path| path.display().to_string())
-                            .unwrap_or_else(|| "文件".into()),
+                            .unwrap_or_else(|| i18n::t!("39932f24fe11a6ba").into()),
                         worktree
                             .read(cx)
                             .absolutize(&target_directory)

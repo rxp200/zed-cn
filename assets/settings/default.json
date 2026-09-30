@@ -155,6 +155,9 @@
   "hover_popover_hiding_delay": 300,
   // Whether to confirm before quitting Zed.
   "confirm_quit": false,
+  // Interface language (BCP-47 tag). Available languages live in the
+  // repository's `locales/` directory; unknown values fall back to zh-Hans.
+  "language": "zh-Hans",
   // Whether to restore last closed project when fresh Zed instance is opened
   // May take 3 values:
   //  1. All workspaces open during last session
@@ -911,7 +914,7 @@
     // Default width of the project panel.
     "default_width": 240,
     // Where to dock the project panel. Can be 'left' or 'right'.
-    "dock": "right",
+    "dock": "left",
     // Spacing between worktree entries in the project panel. Can be 'comfortable' or 'standard'.
     "entry_spacing": "comfortable",
     // Whether to show file icons in the project panel.

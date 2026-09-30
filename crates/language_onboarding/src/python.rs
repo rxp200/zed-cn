@@ -48,27 +48,37 @@ impl Render for BasedPyrightBanner {
                         .child(
                             v_flex()
                                 .gap_0p5()
-                                .child(Label::new("Basedpyright 现在是 Python 的唯一默认语言服务器").mt_0p5())
-                                .child(Label::new("我们默认已禁用 PyRight 和 pylsp。你可以在设置中重新启用它们。").size(LabelSize::Small).color(Color::Muted))
+                                .child(Label::new(i18n::t!("cb44a7eac52ef6b9")).mt_0p5())
+                                .child(
+                                    Label::new(i18n::t!("49c4b00dc6da0187"))
+                                        .size(LabelSize::Small)
+                                        .color(Color::Muted),
+                                ),
                         )
                         .action_slot(
                             h_flex()
                                 .gap_0p5()
                                 .child(
-                                    Button::new("learn-more", "了解更多")
+                                    Button::new("learn-more", i18n::t!("ca66c2da6f5bf825"))
                                         .label_size(LabelSize::Small)
-                                        .end_icon(Icon::new(IconName::ArrowUpRight).size(IconSize::XSmall).color(Color::Muted))
+                                        .end_icon(
+                                            Icon::new(IconName::ArrowUpRight)
+                                                .size(IconSize::XSmall)
+                                                .color(Color::Muted),
+                                        )
                                         .on_click(|_, _, cx| {
                                             cx.open_url("https://zed.dev/docs/languages/python")
                                         }),
                                 )
-                                .child(IconButton::new("dismiss", IconName::Close).icon_size(IconSize::Small).on_click(
-                                    cx.listener(|this, _, _, cx| {
-                                        this.dismissed = true;
-                                        Self::set_dismissed(true, cx);
-                                        cx.notify();
-                                    }),
-                                ))
+                                .child(
+                                    IconButton::new("dismiss", IconName::Close)
+                                        .icon_size(IconSize::Small)
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.dismissed = true;
+                                            Self::set_dismissed(true, cx);
+                                            cx.notify();
+                                        })),
+                                ),
                         )
                         .into_any_element(),
                 )

@@ -129,7 +129,12 @@ impl<T: 'static> Render for PromptEditor<T> {
             .icon_color(Color::Muted)
             .when(!menu_visible, |this| {
                 this.tooltip(move |_window, cx| {
-                    Tooltip::with_meta("添加上下文", None, "或输入 @ 以包含上下文", cx)
+                    Tooltip::with_meta(
+                        i18n::t!("949c38196f10a3e3"),
+                        None,
+                        i18n::t!("e827f16ee89acc6d"),
+                        cx,
+                    )
                 })
             })
             .on_click(cx.listener(move |this, _, window, cx| {
@@ -357,7 +362,7 @@ impl<T: 'static> PromptEditor<T> {
         self.editor = cx.new(|cx| {
             let mut editor = Editor::auto_height(1, Self::MAX_LINES as usize, window, cx);
             editor.set_soft_wrap_mode(language::language_settings::SoftWrap::EditorWidth, cx);
-            editor.set_placeholder_text("添加提示…", window, cx);
+            editor.set_placeholder_text(i18n::t!("8dd6223e12e9a410"), window, cx);
             editor.set_text(prompt, window, cx);
             creases = insert_message_creases(&mut editor, &existing_creases, window, cx);
 
@@ -596,7 +601,7 @@ impl<T: 'static> PromptEditor<T> {
     fn thumbs_up(&mut self, _: &ThumbsUpResult, _window: &mut Window, cx: &mut Context<Self>) {
         match &self.session_state.completion {
             CompletionState::Pending => {
-                self.toast("正在生成中，无法评分…", None, cx);
+                self.toast(i18n::t!("420367a1b5395936"), None, cx);
                 return;
             }
             CompletionState::Rated => {
@@ -611,7 +616,7 @@ impl<T: 'static> PromptEditor<T> {
                 let model_info = self.model_selector.read(cx).active_model(cx);
                 let (model_id, use_streaming_tools) = {
                     let Some(configured_model) = model_info else {
-                        self.toast("未配置模型", None, cx);
+                        self.toast(i18n::t!("4b50c9fa24dcafa3"), None, cx);
                         return;
                     };
                     (
@@ -659,7 +664,7 @@ impl<T: 'static> PromptEditor<T> {
     fn thumbs_down(&mut self, _: &ThumbsDownResult, _window: &mut Window, cx: &mut Context<Self>) {
         match &self.session_state.completion {
             CompletionState::Pending => {
-                self.toast("正在生成中，无法评分…", None, cx);
+                self.toast(i18n::t!("420367a1b5395936"), None, cx);
                 return;
             }
             CompletionState::Rated => {
@@ -674,7 +679,7 @@ impl<T: 'static> PromptEditor<T> {
                 let model_info = self.model_selector.read(cx).active_model(cx);
                 let (model_telemetry_id, use_streaming_tools) = {
                     let Some(configured_model) = model_info else {
-                        self.toast("未配置模型", None, cx);
+                        self.toast(i18n::t!("4b50c9fa24dcafa3"), None, cx);
                         return;
                     };
                     (

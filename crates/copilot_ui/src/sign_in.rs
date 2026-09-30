@@ -282,13 +282,10 @@ impl CopilotCodeVerification {
             .gap_2p5()
             .items_center()
             .text_center()
-            .child(Headline::new("在 Zed 中使用 GitHub Copilot 编辑预测").size(HeadlineSize::Large))
-            .child(
-                Label::new("使用 Copilot 编辑预测需要在 GitHub 上拥有有效订阅。")
-                    .color(Color::Muted),
-            )
+            .child(Headline::new(i18n::t!("e8e85d91d5deb01c")).size(HeadlineSize::Large))
+            .child(Label::new(i18n::t!("ae269fc10765564f")).color(Color::Muted))
             .child(Self::render_device_code(data, cx))
-            .child(Label::new("点击下方按钮后，将此代码粘贴到 GitHub 中。").color(Color::Muted))
+            .child(Label::new(i18n::t!("f4a1815687e2e04c")).color(Color::Muted))
             .child(
                 v_flex()
                     .w_full()
@@ -348,7 +345,7 @@ impl CopilotCodeVerification {
                             }),
                     )
                     .child(
-                        Button::new("copilot-enable-cancel-button", "取消")
+                        Button::new("copilot-enable-cancel-button", i18n::t!("2cd0f3be8738a86c"))
                             .full_width()
                             .size(ButtonSize::Medium)
                             .on_click(cx.listener(|_, _, _, cx| {
@@ -363,10 +360,10 @@ impl CopilotCodeVerification {
             .gap_2()
             .text_center()
             .justify_center()
-            .child(Headline::new("已启用 Copilot 编辑预测！").size(HeadlineSize::Large))
-            .child(Label::new("您已准备好使用 Copilot 编辑预测了。").color(Color::Muted))
+            .child(Headline::new(i18n::t!("78a996c33ecf8f68")).size(HeadlineSize::Large))
+            .child(Label::new(i18n::t!("684bcc45b26babda")).color(Color::Muted))
             .child(
-                Button::new("copilot-enabled-done-button", "完成")
+                Button::new("copilot-enabled-done-button", i18n::t!("c0b3fbff51ccc40b"))
                     .full_width()
                     .style(ButtonStyle::Outlined)
                     .size(ButtonSize::Medium)
@@ -386,22 +383,23 @@ impl CopilotCodeVerification {
             .gap_2()
             .text_center()
             .justify_center()
-            .child(
-                Headline::new("你必须拥有有效的 GitHub Copilot 订阅。").size(HeadlineSize::Large),
-            )
+            .child(Headline::new(i18n::t!("079a2b2511df9bdc")).size(HeadlineSize::Large))
             .child(Label::new(description).color(Color::Warning))
             .child(
-                Button::new("copilot-subscribe-button", "在GitHub上订阅")
+                Button::new("copilot-subscribe-button", i18n::t!("573f5d82f05b0642"))
                     .full_width()
                     .style(ButtonStyle::Outlined)
                     .size(ButtonSize::Medium)
                     .on_click(move |_, _, cx| cx.open_url(&sign_up_url)),
             )
             .child(
-                Button::new("copilot-subscribe-cancel-button", "取消")
-                    .full_width()
-                    .size(ButtonSize::Medium)
-                    .on_click(cx.listener(|_, _, _, cx| cx.emit(DismissEvent))),
+                Button::new(
+                    "copilot-subscribe-cancel-button",
+                    i18n::t!("2cd0f3be8738a86c"),
+                )
+                .full_width()
+                .size(ButtonSize::Medium)
+                .on_click(cx.listener(|_, _, _, cx| cx.emit(DismissEvent))),
             )
     }
 
@@ -410,22 +408,21 @@ impl CopilotCodeVerification {
             .gap_2()
             .text_center()
             .justify_center()
-            .child(Headline::new("发生错误").size(HeadlineSize::Large))
+            .child(Headline::new(i18n::t!("0cb3fb5b86d7dec6")).size(HeadlineSize::Large))
             .child(Label::new(ERROR_LABEL).color(Color::Muted))
             .child(
-                Button::new(
-                    "copilot-subscribe-button",
-                    "重新安装 Copilot 编辑预测并登录",
-                )
-                .full_width()
-                .style(ButtonStyle::Outlined)
-                .size(ButtonSize::Medium)
-                .start_icon(
-                    Icon::new(IconName::Download)
-                        .size(IconSize::Small)
-                        .color(Color::Muted),
-                )
-                .on_click(move |_, window, cx| reinstall_and_sign_in(copilot.clone(), window, cx)),
+                Button::new("copilot-subscribe-button", i18n::t!("15646fa068f22b4f"))
+                    .full_width()
+                    .style(ButtonStyle::Outlined)
+                    .size(ButtonSize::Medium)
+                    .start_icon(
+                        Icon::new(IconName::Download)
+                            .size(IconSize::Small)
+                            .color(Color::Muted),
+                    )
+                    .on_click(move |_, window, cx| {
+                        reinstall_and_sign_in(copilot.clone(), window, cx)
+                    }),
             )
     }
 
@@ -595,10 +592,10 @@ impl CopilotChatCodeVerification {
             .gap_2p5()
             .items_center()
             .text_center()
-            .child(Headline::new("在 Zed 中使用 GitHub Copilot Chat").size(HeadlineSize::Large))
-            .child(Label::new("使用 Copilot Chat 需要有效的 GitHub 订阅。").color(Color::Muted))
+            .child(Headline::new(i18n::t!("8c3b950c12314f79")).size(HeadlineSize::Large))
+            .child(Label::new(i18n::t!("6de1ca041bc9d8b2")).color(Color::Muted))
             .child(Self::render_device_code(&device_flow.user_code, cx))
-            .child(Label::new("点击下方按钮后，将此代码粘贴到 GitHub。").color(Color::Muted))
+            .child(Label::new(i18n::t!("da80bcf12de88cba")).color(Color::Muted))
             .child(
                 v_flex()
                     .w_full()
@@ -633,7 +630,7 @@ impl CopilotChatCodeVerification {
             .text_center()
             .justify_center()
             .child(Headline::new("Copilot Chat Enabled!").size(HeadlineSize::Large))
-            .child(Label::new("You're all set to use Copilot Chat.").color(Color::Muted))
+            .child(Label::new(i18n::t!("68b1e28c9b077810")).color(Color::Muted))
             .child(
                 Button::new("copilot-chat-enabled-done-button", "Done")
                     .full_width()
@@ -648,7 +645,7 @@ impl CopilotChatCodeVerification {
             .gap_2()
             .text_center()
             .justify_center()
-            .child(Headline::new("发生错误").size(HeadlineSize::Large))
+            .child(Headline::new(i18n::t!("0cb3fb5b86d7dec6")).size(HeadlineSize::Large))
             .child(Label::new(message.to_owned()).color(Color::Muted))
             .child(
                 Button::new("copilot-chat-error-cancel-button", "Cancel")
@@ -938,7 +935,7 @@ impl ConfigurationView {
                     v_flex()
                         .w_full()
                         .max_w_1_2()
-                        .child(Label::new("认证以使用"))
+                        .child(Label::new(i18n::t!("5a4141d2fa87724f")))
                         .child(
                             Label::new(description)
                                 .color(Color::Muted)

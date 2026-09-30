@@ -285,7 +285,7 @@ pub fn deploy_context_menu(
                     cx.action("格式化选中内容", Box::new(FormatSelections))
                 })
                 .action(
-                    "显示代码操作",
+                    i18n::t!("25525feb1c2e60c1"),
                     Box::new(ToggleCodeActions {
                         deployed_from: None,
                         quick_launch: false,
@@ -314,17 +314,25 @@ pub fn deploy_context_menu(
                 })
                 .when(is_html, |builder| {
                     builder.action(
-                        "在浏览器中实时预览",
+                        i18n::t!("a4ee2aac68093b23"),
                         Box::new(zed_actions::preview::web::OpenPreview),
                     )
                 })
-                .action_disabled_when(!has_reveal_target, "在终端中打开", Box::new(OpenInTerminal))
+                .action_disabled_when(
+                    !has_reveal_target,
+                    i18n::t!("a04c3bc562c5f568"),
+                    Box::new(OpenInTerminal),
+                )
                 .action_disabled_when(
                     !has_git_repo,
-                    "复制此行的永久链接",
+                    i18n::t!("dc6e209683b5f98c"),
                     Box::new(CopyPermalinkToLine),
                 )
-                .action_disabled_when(!has_git_repo, "查看文件历史", Box::new(git::FileHistory));
+                .action_disabled_when(
+                    !has_git_repo,
+                    i18n::t!("9a676f737e6757e4"),
+                    Box::new(git::FileHistory),
+                );
             match focus {
                 Some(focus) => builder.context(focus),
                 None => builder,

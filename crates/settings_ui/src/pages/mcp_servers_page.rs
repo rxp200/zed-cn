@@ -55,11 +55,13 @@ pub(crate) fn render_mcp_servers_page(
                 .px_8()
                 .gap_2()
                 .child(
-                    v_flex().child(Label::new("已配置的服务器")).child(
-                        Label::new("管理直接或通过扩展连接的服务器。")
-                            .size(LabelSize::Small)
-                            .color(Color::Muted),
-                    ),
+                    v_flex()
+                        .child(Label::new(i18n::t!("6c3f10e1df687146")))
+                        .child(
+                            Label::new(i18n::t!("5f09a235f2afb37b"))
+                                .size(LabelSize::Small)
+                                .color(Color::Muted),
+                        ),
                 )
                 .child(server_list)
                 .child(Divider::horizontal()),
@@ -74,8 +76,8 @@ fn render_context_server_timeout(
     cx: &mut Context<SettingsWindow>,
 ) -> AnyElement {
     let item = SettingsPageItem::SettingItem(SettingItem {
-        title: "MCP 服务器超时",
-        description: "MCP 服务器工具调用的默认超时时间（秒）。",
+        title: i18n::t!("da1ca1d3e546453e"),
+        description: i18n::t!("ac8debadc63f61ad"),
         field: Box::new(SettingField {
             organization_override: None,
             json_path: Some("context_server_timeout"),
@@ -108,7 +110,7 @@ fn render_empty_state(cx: &App) -> AnyElement {
         .border_color(cx.theme().colors().border.opacity(0.6))
         .rounded_sm()
         .child(
-            Label::new("尚未添加 MCP 服务器。点击「添加服务器」开始使用。")
+            Label::new(i18n::t!("c8d8589c31a581e2"))
                 .color(Color::Muted)
                 .size(LabelSize::Small),
         )
@@ -124,7 +126,7 @@ fn render_no_project_state(cx: &App) -> AnyElement {
         .border_color(cx.theme().colors().border.opacity(0.6))
         .rounded_sm()
         .child(
-            Label::new("未找到活动项目。打开工作区以管理 MCP 服务器。")
+            Label::new(i18n::t!("1a9c6c2aa355aa2e"))
                 .color(Color::Muted)
                 .size(LabelSize::Small),
         )
@@ -197,9 +199,9 @@ fn render_context_server(
 
     let tool_label = if is_running && tool_count > 0 {
         Some(if tool_count == 1 {
-            SharedString::from("1 个工具")
+            SharedString::from(i18n::t!("b377afe651b0e461"))
         } else {
-            SharedString::from(format!("{} 个工具", tool_count))
+            SharedString::from(i18n::t_args!("0e452cbdbf08c643", tool_count))
         })
     } else {
         None
@@ -281,7 +283,7 @@ fn render_configure_button(
     )
     .icon_size(IconSize::Small)
     .tab_index(0isize)
-    .tooltip(Tooltip::text("配置MCP服务器"))
+    .tooltip(Tooltip::text(i18n::t!("feaf718d3afd94eb")))
     .on_click(move |_event, window, cx| {
         let transport = match &server_settings {
             Some(ContextServerSettings::Http { .. }) => McpTransport::Http,
@@ -310,7 +312,7 @@ fn render_uninstall_button(
     )
     .icon_size(IconSize::Small)
     .tab_index(0isize)
-    .tooltip(Tooltip::text("卸载MCP服务器"))
+    .tooltip(Tooltip::text(i18n::t!("4069aad70f8e4810")))
     .on_click(move |_event, _window, cx| {
         uninstall_server(&context_server_id, provided_by_extension, cx);
     })
@@ -408,7 +410,7 @@ fn render_status_details(
                     )
                     .when(should_show_logout, |this| {
                         this.child(
-                            Button::new("error-logout", "登出")
+                            Button::new("error-logout", i18n::t!("057f31bc16c89da7"))
                                 .style(ButtonStyle::Outlined)
                                 .label_size(LabelSize::Small)
                                 .on_click({
@@ -441,13 +443,13 @@ fn render_status_details(
                                     .color(Color::Muted),
                             )
                             .child(
-                                Label::new("认证以连接此服务器")
+                                Label::new(i18n::t!("f4fed30d4bb5887f"))
                                     .color(Color::Muted)
                                     .size(LabelSize::Small),
                             ),
                     )
                     .child(
-                        Button::new("authenticate-server", "认证")
+                        Button::new("authenticate-server", i18n::t!("d2d648bd1c94b7f9"))
                             .style(ButtonStyle::Outlined)
                             .label_size(LabelSize::Small)
                             .on_click({
@@ -474,7 +476,7 @@ fn render_status_details(
                                 .color(Color::Muted),
                         )
                         .child(
-                            Label::new("连接此服务器需要客户端密钥")
+                            Label::new(i18n::t!("d16142d9c624b03a"))
                                 .color(Color::Muted)
                                 .size(LabelSize::Small),
                         ),
@@ -489,7 +491,7 @@ fn render_status_details(
                 .gap_2()
                 .child(div().size_3().flex_shrink_0())
                 .child(
-                    Label::new("正在认证...")
+                    Label::new(i18n::t!("7619bc748eb68691"))
                         .color(Color::Muted)
                         .size(LabelSize::Small),
                 )
@@ -504,7 +506,7 @@ fn render_status_details(
                     .w_full()
                     .justify_end()
                     .child(
-                        Button::new("running-logout", "登出")
+                        Button::new("running-logout", i18n::t!("057f31bc16c89da7"))
                             .style(ButtonStyle::Outlined)
                             .label_size(LabelSize::Small)
                             .on_click(move |_event, _window, cx| {
@@ -544,7 +546,7 @@ pub(crate) fn render_add_server_popover(
 
     let popover = PopoverMenu::new("add-mcp-server-popover")
         .trigger(
-            Button::new("add-mcp-server", "添加服务器")
+            Button::new("add-mcp-server", i18n::t!("ebf91996f8fe08e9"))
                 .style(ButtonStyle::Outlined)
                 .track_focus(&focus_handle)
                 .start_icon(
@@ -559,7 +561,7 @@ pub(crate) fn render_add_server_popover(
             move |window, cx| {
                 let settings_window = settings_window.clone();
                 Some(ContextMenu::build(window, cx, move |menu, _window, _cx| {
-                    menu.entry("添加本地服务器", None, {
+                    menu.entry(i18n::t!("b421f21b3f2e5346"), None, {
                         let settings_window = settings_window.clone();
                         move |window, cx| {
                             settings_window
@@ -575,7 +577,7 @@ pub(crate) fn render_add_server_popover(
                                 .log_err();
                         }
                     })
-                    .entry("添加远程服务器", None, {
+                    .entry(i18n::t!("779afe18007a71fa"), None, {
                         let settings_window = settings_window.clone();
                         move |window, cx| {
                             settings_window
@@ -592,7 +594,7 @@ pub(crate) fn render_add_server_popover(
                         }
                     })
                     .separator()
-                    .entry("从扩展安装", None, {
+                    .entry(i18n::t!("a6c7ec281419e92a"), None, {
                         move |_window, cx| {
                             if let Some(original_window) = original_window.as_ref() {
                                 cx.activate(true);
@@ -804,7 +806,7 @@ impl McpServerForm {
             ),
             timeout: new_input("60", timeout_initial.as_deref(), window, cx),
             oauth_client_id: new_input(
-                "可选的 OAuth 客户端 ID",
+                i18n::t!("d851ea5fb316c340"),
                 oauth_initial.as_deref(),
                 window,
                 cx,
@@ -850,8 +852,8 @@ fn new_kv_row(
     cx: &mut Context<SettingsWindow>,
 ) -> KeyValueRow {
     KeyValueRow {
-        key: new_input("键", key, window, cx),
-        value: new_input("值", value, window, cx),
+        key: new_input(i18n::t!("721b00cbfa23cc25"), key, window, cx),
+        value: new_input(i18n::t!("cda1d55c5231b853"), value, window, cx),
     }
 }
 
@@ -867,17 +869,17 @@ pub(crate) fn open_mcp_server_form(
     settings_window.mcp_server_form = Some(McpServerForm::new(transport, existing, window, cx));
 
     let title = if is_edit {
-        "配置 MCP 服务器"
+        i18n::t!("5ad3dfd58651ec6e")
     } else {
         match transport {
-            McpTransport::Stdio => "添加本地 MCP 服务器",
-            McpTransport::Http => "添加远程 MCP 服务器",
+            McpTransport::Stdio => i18n::t!("1cdf4a7cef362112"),
+            McpTransport::Http => i18n::t!("ea7a22d474c47fe1"),
         }
     };
 
     settings_window.push_dynamic_sub_page(
         title,
-        "Agent 配置",
+        i18n::t!("9c2a11d4e1c407b6"),
         Some("context_servers"),
         false,
         render_mcp_server_form_page,
@@ -1050,7 +1052,7 @@ fn render_kv_section(
                             IconButton::new((kind.remove_id(), ix), IconName::Close)
                                 .icon_size(IconSize::Small)
                                 .icon_color(Color::Muted)
-                                .tooltip(Tooltip::text("移除"))
+                                .tooltip(Tooltip::text(i18n::t!("6135d4159e892541")))
                                 .on_click(cx.listener(move |this, _, _window, cx| {
                                     if let Some(form) = this.mcp_server_form.as_mut() {
                                         let rows = kind.rows_mut(form);
@@ -1065,7 +1067,7 @@ fn render_kv_section(
                 .child(input_box(&row.value, cx))
         }))
         .child(
-            Button::new(kind.add_id(), "添加")
+            Button::new(kind.add_id(), i18n::t!("7a8a11ead50742a2"))
                 .style(ButtonStyle::Outlined)
                 .label_size(LabelSize::Small)
                 .start_icon(
@@ -1117,7 +1119,7 @@ fn render_form_actions(cx: &mut Context<SettingsWindow>) -> impl IntoElement {
         .justify_end()
         .pt_2()
         .child(
-            Button::new("mcp-form-cancel", "取消")
+            Button::new("mcp-form-cancel", i18n::t!("2cd0f3be8738a86c"))
                 .style(ButtonStyle::Subtle)
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.mcp_server_form = None;
@@ -1125,7 +1127,7 @@ fn render_form_actions(cx: &mut Context<SettingsWindow>) -> impl IntoElement {
                 })),
         )
         .child(
-            Button::new("mcp-form-save", "保存")
+            Button::new("mcp-form-save", i18n::t!("a3030bf8f16dc63c"))
                 .style(ButtonStyle::Filled)
                 .on_click(cx.listener(|this, _, window, cx| {
                     save_mcp_server_form(this, window, cx);
@@ -1165,7 +1167,7 @@ fn save_mcp_server_form(
         });
     if collides_with_other_server {
         if let Some(form) = settings_window.mcp_server_form.as_mut() {
-            form.error = Some(format!("名为「{}」的服务器已存在。", id.0).into());
+            form.error = Some(i18n::t_args!("b91db7ac3025eb10", id.0).into());
         }
         cx.notify();
         return;
@@ -1247,7 +1249,7 @@ fn build_settings_from_values(
 > {
     let name = values.name.trim().to_string();
     if name.is_empty() {
-        return Err("服务器名称是必填项。".into());
+        return Err(i18n::t!("70aedbd734012de2").into());
     }
 
     let timeout = parse_timeout(&values.timeout)?;
@@ -1256,7 +1258,7 @@ fn build_settings_from_values(
         McpTransport::Stdio => {
             let command = values.command.trim().to_string();
             if command.is_empty() {
-                return Err("命令是必填项。".into());
+                return Err(i18n::t!("fbf58ea48615fb33").into());
             }
             let args = values
                 .args
@@ -1278,13 +1280,13 @@ fn build_settings_from_values(
         McpTransport::Http => {
             let url = values.url.trim().to_string();
             if url.is_empty() {
-                return Err("URL 是必填项。".into());
+                return Err(i18n::t!("0cb7e8f8713fb1f9").into());
             }
             // Validate the URL on save (a deliberate action) rather than on every
             // render, so a clearly invalid URL is reported to the user instead of
             // being silently written and failing later when the server starts.
             if let Err(error) = url::Url::parse(&url) {
-                return Err(format!("无效的 URL：{error}").into());
+                return Err(i18n::t!("0b090b208a8766f2", error = error).into());
             }
             let headers = collect_kv(&values.headers, "header")?;
             let oauth_client_id = values.oauth_client_id.trim().to_string();
@@ -1315,7 +1317,7 @@ fn build_settings_from_values(
 fn settings_validation_error(settings: Option<&ContextServerSettings>) -> Option<SharedString> {
     match settings? {
         ContextServerSettings::Http { url, .. } if url::Url::parse(url).is_err() => {
-            Some("设置中的 URL 无效。".into())
+            Some(i18n::t!("780f3ce239170c30").into())
         }
         _ => None,
     }
@@ -1339,7 +1341,7 @@ fn parse_timeout(text: &str) -> Result<Option<u64>, SharedString> {
     }
     text.parse::<u64>()
         .map(Some)
-        .map_err(|_| "超时时间必须是正整数秒数。".into())
+        .map_err(|_| i18n::t!("90a6bf79483e1430").into())
 }
 
 fn collect_kv(
@@ -1353,7 +1355,7 @@ fn collect_kv(
             continue;
         }
         if map.contains_key(&key) {
-            return Err(format!("重复的{label}「{key}」。").into());
+            return Err(i18n::t!("fbb9133c3c463cce", label = label, key = key).into());
         }
         map.insert(key, value.clone());
     }

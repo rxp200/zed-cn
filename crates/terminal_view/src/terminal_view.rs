@@ -90,15 +90,18 @@ fn create_local_temporary_clipboard_file(
 ) -> anyhow::Result<PathBuf> {
     anyhow::ensure!(
         bytes.len() <= MAX_TEMPORARY_CLIPBOARD_FILE_BYTES,
-        "剪贴板图片超过 100 MiB 限制"
+        i18n::t!("4cf47d6d42e6d1e5")
     );
     let original_name = suggested_name;
     let suggested_name = Path::new(original_name)
         .file_name()
         .and_then(|name| name.to_str())
         .filter(|name| !name.is_empty() && name.len() <= 255)
-        .context("剪贴板文件名无效")?;
-    anyhow::ensure!(suggested_name == original_name, "剪贴板文件名无效");
+        .context(i18n::t!("11a4c394cfe4051c"))?;
+    anyhow::ensure!(
+        suggested_name == original_name,
+        i18n::t!("11a4c394cfe4051c")
+    );
     let directory = std::env::temp_dir().join("zed-clipboard-files");
     std::fs::create_dir_all(&directory)?;
     cleanup_local_temporary_clipboard_files(&directory);
@@ -368,7 +371,7 @@ impl TerminalView {
                 .frozen_snapshot_builder(cx)
                 .subscribe(cx)
         });
-        let title = format!("[冻结] {}", self.tab_content_text(0, cx));
+        let title = i18n::t_args!("e5b6b8bc67e69536", self.tab_content_text(0, cx));
         let frozen_view = cx.new(|cx| {
             let mut view = TerminalView::new(
                 terminal,
@@ -588,8 +591,8 @@ impl TerminalView {
     /// Short human-readable label for the tab indicator and its tooltip.
     fn terminal_activity_description(&self) -> &'static str {
         match self.terminal_activity {
-            TerminalActivity::Active => "正在输出",
-            TerminalActivity::Idle => "暂无输出",
+            TerminalActivity::Active => i18n::t!("17d54634d4f46244"),
+            TerminalActivity::Idle => i18n::t!("ed45483647d6e663"),
         }
     }
 
@@ -728,6 +731,23 @@ impl TerminalView {
         self.custom_title.as_deref()
     }
 
+    /// Text shown for this terminal's tab.
+    ///
+    /// A manual rename is fixed until it is cleared. Otherwise the tab follows the
+    /// title the program running in the terminal reports, which is the same text as
+    /// the terminal breadcrumb, and falls back to the task/shell/process label when
+    /// the program reports no title.
+    fn display_title(&self, truncate: bool, cx: &App) -> String {
+        if let Some(custom_title) = self
+            .custom_title
+            .as_ref()
+            .filter(|title| !title.trim().is_empty())
+        {
+            return custom_title.clone();
+        }
+        self.terminal.read(cx).display_title(truncate)
+    }
+
     pub fn set_custom_title(&mut self, label: Option<String>, cx: &mut Context<Self>) {
         let label = label.filter(|l| !l.trim().is_empty());
         if self.custom_title != label {
@@ -765,7 +785,7 @@ impl TerminalView {
             } else {
                 // Only set custom_title if the text differs from the terminal's dynamic title.
                 // This prevents subtle layout changes when clicking away without making changes.
-                let terminal_title = self.terminal.read(cx).title(true);
+                let terminal_title = self.terminal.read(cx).display_title(true);
                 if new_label == terminal_title {
                     None
                 } else {
@@ -791,7 +811,7 @@ impl TerminalView {
         let current_label = self
             .custom_title
             .clone()
-            .unwrap_or_else(|| self.terminal.read(cx).title(true));
+            .unwrap_or_else(|| self.terminal.read(cx).display_title(true));
 
         let rename_editor = cx.new(|cx| Editor::single_line(window, cx));
         let rename_editor_subscription = cx.subscribe_in(&rename_editor, window, {
@@ -1321,19 +1341,19 @@ impl TerminalView {
             let mut remote_paths = Vec::with_capacity(files.len());
             for path in files {
                 let metadata = fs.metadata(&path).await?;
-                let metadata = metadata.context("无法读取剪贴板文件信息")?;
+                let metadata = metadata.context(i18n::t!("6177a344b20d6fe9"))?;
                 anyhow::ensure!(
                     !metadata.is_dir && !metadata.is_symlink && !metadata.is_fifo,
-                    "只能将普通文件暂存到远程终端"
+                    i18n::t!("5666db679f1d1f93")
                 );
                 anyhow::ensure!(
                     metadata.len <= MAX_TEMPORARY_CLIPBOARD_FILE_BYTES as u64,
-                    "剪贴板文件超过 100 MiB 限制"
+                    i18n::t!("c41c2823fd0ecc2d")
                 );
                 let name = path
                     .file_name()
                     .and_then(|name| name.to_str())
-                    .context("剪贴板文件名无效")?
+                    .context(i18n::t!("11a4c394cfe4051c"))?
                     .to_string();
                 let bytes = fs.load_bytes(&path).await?;
                 let task = project.read_with(cx, |project, cx| {
@@ -1428,9 +1448,9 @@ impl TerminalView {
                 if options.remote_server_source == settings::RemoteServerSource::Official
         );
         let message = if official {
-            "当前连接使用官方 Zed Remote Server，无法将本机剪贴板中的图片或文件暂存到远程终端。请在“查看服务器选项”中将远程服务来源切换为 Zed CN，然后重新连接。"
+            i18n::t!("a99947c272142556")
         } else {
-            "当前 Remote Server 不支持剪贴板临时文件。请升级 Zed CN Remote Server 并重新连接后再试。"
+            i18n::t!("0563b4a650b98e46")
         };
         self.workspace
             .update(cx, |workspace, cx| {
@@ -1586,7 +1606,9 @@ impl TerminalView {
                 .size(ButtonSize::Compact)
                 .icon_color(Color::Default)
                 .shape(ui::IconButtonShape::Square)
-                .tooltip(move |_window, cx| Tooltip::for_action("重新运行任务", &RerunTask, cx))
+                .tooltip(move |_window, cx| {
+                    Tooltip::for_action(i18n::t!("e43acd588110694c"), &RerunTask, cx)
+                })
                 .on_click(move |_, window, cx| {
                     window.dispatch_action(Box::new(terminal_rerun_override(&task_id)), cx);
                 }),
@@ -1729,7 +1751,11 @@ fn subscribe_for_terminal_events(
                         cx,
                     ),
                 },
-                Event::BreadcrumbsChanged => cx.emit(ItemEvent::UpdateBreadcrumbs),
+                Event::BreadcrumbsChanged => {
+                    // The tab label follows the title reported by the program.
+                    cx.emit(ItemEvent::UpdateTab);
+                    cx.emit(ItemEvent::UpdateBreadcrumbs);
+                }
                 Event::CloseTerminal => cx.emit(ItemEvent::CloseItem),
                 Event::SelectionsChanged => {
                     window.invalidate_character_coordinates();
@@ -1968,13 +1994,11 @@ impl Item for TerminalView {
 
     fn tab_tooltip_content(&self, cx: &App) -> Option<TabTooltipContent> {
         if self.read_only {
-            return Some(TabTooltipContent::Text(
-                "冻结终端快照 · 包含创建时保留的滚动历史 · 仅供查看".into(),
-            ));
+            return Some(TabTooltipContent::Text(i18n::t!("b0ea78e84b6e39d4").into()));
         }
         Some(TabTooltipContent::Custom(Box::new(Tooltip::element({
             let terminal = self.terminal().read(cx);
-            let title = terminal.title(false);
+            let title = self.display_title(false, cx);
             let pid = terminal.pid_getter()?.fallback_pid();
             let activity = self.terminal_activity_description();
 
@@ -1984,7 +2008,7 @@ impl Item for TerminalView {
                     .child(Label::new(title.clone()))
                     .child(h_flex().flex_grow_1().child(Divider::horizontal()))
                     .child(
-                        Label::new(format!("Process ID (PID): {}", pid))
+                        Label::new(i18n::t_args!("2dafbd603762b3e7", pid))
                             .color(Color::Muted)
                             .size(LabelSize::Small),
                     )
@@ -1999,13 +2023,8 @@ impl Item for TerminalView {
     }
 
     fn tab_content(&self, params: TabContentParams, _window: &Window, cx: &App) -> AnyElement {
+        let title = self.display_title(true, cx);
         let terminal = self.terminal().read(cx);
-        let title = self
-            .custom_title
-            .as_ref()
-            .filter(|title| !title.trim().is_empty())
-            .cloned()
-            .unwrap_or_else(|| terminal.title(true));
 
         let (icon, icon_color, rerun_button) = match terminal.task() {
             Some(terminal_task) => match &terminal_task.status {
@@ -2118,11 +2137,7 @@ impl Item for TerminalView {
     }
 
     fn tab_content_text(&self, detail: usize, cx: &App) -> SharedString {
-        if let Some(custom_title) = self.custom_title.as_ref().filter(|l| !l.trim().is_empty()) {
-            return custom_title.clone().into();
-        }
-        let terminal = self.terminal().read(cx);
-        terminal.title(detail == 0).into()
+        self.display_title(detail == 0, cx).into()
     }
 
     fn telemetry_event_text(&self) -> Option<&'static str> {
@@ -2286,9 +2301,12 @@ impl Item for TerminalView {
         cx: &mut Context<Self>,
     ) -> Vec<(SharedString, Box<dyn gpui::Action>)> {
         let mut actions: Vec<(SharedString, Box<dyn gpui::Action>)> = vec![
-            ("移动到新窗口".into(), Box::new(MoveTerminalToNewWindow)),
             (
-                "创建冻结终端页面".into(),
+                i18n::t!("5bb989a4055b9268").into(),
+                Box::new(MoveTerminalToNewWindow),
+            ),
+            (
+                i18n::t!("ac61fa98bfca49c9").into(),
                 Box::new(FreezeTerminalToNewWindow),
             ),
         ];
@@ -2743,6 +2761,7 @@ mod tests {
     use gpui::{TestAppContext, UpdateGlobal, VisualTestContext};
     use project::{Entry, Project, ProjectPath, Worktree};
     use remote::RemoteClient;
+    use std::cell::Cell;
     use std::path::{Path, PathBuf};
     use util::paths::PathStyle;
     use util::rel_path::RelPath;
@@ -3993,6 +4012,153 @@ mod tests {
             view.set_custom_title(None, cx);
             let text = view.tab_content_text(0, cx);
             assert_ne!(text.as_ref(), "my-server");
+        });
+    }
+
+    #[gpui::test]
+    async fn test_tab_content_follows_program_title(cx: &mut TestAppContext) {
+        cx.executor().allow_parking();
+
+        let (project, workspace) = init_test(cx).await;
+
+        let terminal = project
+            .update(cx, |project, cx| project.create_terminal_shell(None, cx))
+            .await
+            .unwrap();
+
+        let terminal_view = cx
+            .add_window(|window, cx| {
+                TerminalView::new(
+                    terminal.clone(),
+                    workspace.downgrade(),
+                    None,
+                    project.downgrade(),
+                    window,
+                    cx,
+                )
+            })
+            .root(cx)
+            .unwrap();
+
+        let tab_updates = Rc::new(Cell::new(0_usize));
+        cx.update(|cx| {
+            cx.subscribe(&terminal_view, {
+                let tab_updates = tab_updates.clone();
+                move |_, event: &ItemEvent, _| {
+                    if *event == ItemEvent::UpdateTab {
+                        tab_updates.set(tab_updates.get() + 1);
+                    }
+                }
+            })
+        })
+        .detach();
+
+        let updates_before_title = tab_updates.get();
+        terminal.update(cx, |terminal, cx| {
+            terminal.breadcrumb_text = "pi - zed".to_string();
+            cx.emit(terminal::Event::BreadcrumbsChanged);
+        });
+
+        terminal_view.update(cx, |view, cx| {
+            assert_eq!(view.tab_content_text(0, cx).as_ref(), "pi - zed");
+            assert_eq!(view.tab_content_text(1, cx).as_ref(), "pi - zed");
+        });
+        assert!(
+            tab_updates.get() > updates_before_title,
+            "a program title change must refresh the terminal tab"
+        );
+
+        terminal.update(cx, |terminal, cx| {
+            terminal.breadcrumb_text = "cargo build".to_string();
+            cx.emit(terminal::Event::BreadcrumbsChanged);
+        });
+        terminal_view.update(cx, |view, cx| {
+            assert_eq!(view.tab_content_text(0, cx).as_ref(), "cargo build");
+        });
+    }
+
+    #[gpui::test]
+    async fn test_custom_title_overrides_program_title(cx: &mut TestAppContext) {
+        cx.executor().allow_parking();
+
+        let (project, workspace) = init_test(cx).await;
+
+        let terminal = project
+            .update(cx, |project, cx| project.create_terminal_shell(None, cx))
+            .await
+            .unwrap();
+
+        let terminal_view = cx
+            .add_window(|window, cx| {
+                TerminalView::new(
+                    terminal.clone(),
+                    workspace.downgrade(),
+                    None,
+                    project.downgrade(),
+                    window,
+                    cx,
+                )
+            })
+            .root(cx)
+            .unwrap();
+
+        terminal.update(cx, |terminal, _| {
+            terminal.breadcrumb_text = "pi - zed".to_string();
+        });
+        terminal_view.update(cx, |view, cx| {
+            assert_eq!(view.tab_content_text(0, cx).as_ref(), "pi - zed");
+            view.set_custom_title(Some("my-server".to_string()), cx);
+            assert_eq!(view.tab_content_text(0, cx).as_ref(), "my-server");
+        });
+
+        terminal.update(cx, |terminal, _| {
+            terminal.breadcrumb_text = "somewhere else".to_string();
+        });
+        terminal_view.update(cx, |view, cx| {
+            assert_eq!(
+                view.tab_content_text(0, cx).as_ref(),
+                "my-server",
+                "a manual rename must not follow the program title"
+            );
+            view.set_custom_title(None, cx);
+            assert_eq!(view.tab_content_text(0, cx).as_ref(), "somewhere else");
+        });
+    }
+
+    #[gpui::test]
+    async fn test_tab_content_falls_back_without_program_title(cx: &mut TestAppContext) {
+        cx.executor().allow_parking();
+
+        let (project, workspace) = init_test(cx).await;
+
+        let terminal = project
+            .update(cx, |project, cx| project.create_terminal_shell(None, cx))
+            .await
+            .unwrap();
+
+        let terminal_view = cx
+            .add_window(|window, cx| {
+                TerminalView::new(
+                    terminal.clone(),
+                    workspace.downgrade(),
+                    None,
+                    project.downgrade(),
+                    window,
+                    cx,
+                )
+            })
+            .root(cx)
+            .unwrap();
+
+        terminal.update(cx, |terminal, _| terminal.breadcrumb_text.clear());
+        terminal_view.update(cx, |view, cx| {
+            let fallback = view.terminal().read(cx).title(true);
+            assert!(!fallback.is_empty());
+            assert_eq!(
+                view.tab_content_text(0, cx).as_ref(),
+                fallback,
+                "without a program title the tab keeps the shell/process label"
+            );
         });
     }
 

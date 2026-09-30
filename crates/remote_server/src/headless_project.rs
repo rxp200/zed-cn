@@ -51,6 +51,8 @@ use sysinfo::{Disks, Networks, ProcessRefreshKind, RefreshKind, System, UpdateKi
 use util::{ResultExt, paths::PathStyle, rel_path::RelPath};
 use worktree::Worktree;
 
+use crate::persistent_terminal::PersistentTerminalManager;
+
 struct SystemStatsSampler {
     system: System,
     disks: Disks,
@@ -87,12 +89,21 @@ impl SystemStatsSampler {
         let received: u64 = self.networks.values().map(|data| data.received()).sum();
         let transmitted: u64 = self.networks.values().map(|data| data.transmitted()).sum();
         let load = System::load_average();
+        let mut local_ip_addresses: Vec<std::net::IpAddr> = self
+            .networks
+            .values()
+            .flat_map(|data| data.ip_networks())
+            .map(|network| network.addr)
+            .filter(|address| is_local_address(*address))
+            .collect();
+        local_ip_addresses.sort();
+        local_ip_addresses.dedup();
 
         proto::GetSystemStatsResponse {
-            hostname: System::host_name().unwrap_or_else(|| "未知主机".into()),
+            hostname: System::host_name().unwrap_or_else(|| i18n::t!("26c953ee7077ba21").into()),
             os_name: System::long_os_version()
                 .or_else(System::name)
-                .unwrap_or_else(|| "未知系统".into()),
+                .unwrap_or_else(|| i18n::t!("8ba4d93bac24e511").into()),
             kernel_version: System::kernel_version().unwrap_or_default(),
             uptime_seconds: System::uptime(),
             cpu_usage_percent: self.system.global_cpu_usage(),
@@ -114,10 +125,31 @@ impl SystemStatsSampler {
             load_average_one: load.one,
             load_average_five: load.five,
             load_average_fifteen: load.fifteen,
+            local_ip_addresses: local_ip_addresses
+                .into_iter()
+                .map(|address| address.to_string())
+                .collect(),
             sampled_at_unix_seconds: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .map(|duration| duration.as_secs().try_into().unwrap_or(i64::MAX))
                 .unwrap_or_default(),
+        }
+    }
+}
+
+fn is_local_address(address: std::net::IpAddr) -> bool {
+    match address {
+        std::net::IpAddr::V4(address) => {
+            !address.is_loopback()
+                && !address.is_link_local()
+                && !address.is_unspecified()
+                && !address.is_broadcast()
+        }
+        std::net::IpAddr::V6(address) => {
+            !address.is_loopback()
+                && !address.is_unspecified()
+                && address.to_ipv4_mapped().is_none()
+                && (address.segments()[0] & 0xffc0) != 0xfe80
         }
     }
 }
@@ -144,6 +176,7 @@ pub struct HeadlessProject {
     // Local variant is used within LSP store, but that's a separate entity.
     pub _toolchain_store: Entity<ToolchainStore>,
     pub kernels: HashMap<String, Child>,
+    persistent_terminals: Arc<PersistentTerminalManager>,
 }
 
 pub struct HeadlessAppState {
@@ -398,6 +431,11 @@ impl HeadlessProject {
         session.add_request_handler(cx.weak_entity(), Self::handle_get_remote_profiling_data);
         session.add_request_handler(cx.weak_entity(), Self::handle_create_temporary_file);
         session.add_request_handler(cx.weak_entity(), Self::handle_get_system_stats);
+        session.add_request_handler(cx.weak_entity(), Self::handle_create_persistent_terminal);
+        session.add_request_handler(cx.weak_entity(), Self::handle_persistent_terminal_input);
+        session.add_request_handler(cx.weak_entity(), Self::handle_resize_persistent_terminal);
+        session.add_request_handler(cx.weak_entity(), Self::handle_read_persistent_terminal);
+        session.add_request_handler(cx.weak_entity(), Self::handle_close_persistent_terminal);
 
         session.add_entity_request_handler(Self::handle_add_worktree);
         session.add_request_handler(cx.weak_entity(), Self::handle_remove_worktree);
@@ -462,6 +500,7 @@ impl HeadlessProject {
             profiling_collector: gpui::ProfilingCollector::new(startup_time),
             _toolchain_store: toolchain_store,
             kernels: Default::default(),
+            persistent_terminals: Arc::new(PersistentTerminalManager::new()),
         }
     }
 
@@ -984,6 +1023,64 @@ impl HeadlessProject {
             Ok(sampler.sample())
         })
         .await
+    }
+
+    async fn handle_create_persistent_terminal(
+        this: Entity<Self>,
+        message: TypedEnvelope<proto::CreatePersistentTerminal>,
+        cx: AsyncApp,
+    ) -> Result<proto::CreatePersistentTerminalResponse> {
+        let manager = this.read_with(&cx, |this, _| this.persistent_terminals.clone());
+        cx.background_spawn(async move { manager.create(message.payload) })
+            .await
+    }
+
+    async fn handle_persistent_terminal_input(
+        this: Entity<Self>,
+        message: TypedEnvelope<proto::PersistentTerminalInput>,
+        cx: AsyncApp,
+    ) -> Result<proto::Ack> {
+        let manager = this.read_with(&cx, |this, _| this.persistent_terminals.clone());
+        cx.background_spawn(async move { manager.input(message.payload) })
+            .await?;
+        Ok(proto::Ack {})
+    }
+
+    async fn handle_resize_persistent_terminal(
+        this: Entity<Self>,
+        message: TypedEnvelope<proto::ResizePersistentTerminal>,
+        cx: AsyncApp,
+    ) -> Result<proto::Ack> {
+        let manager = this.read_with(&cx, |this, _| this.persistent_terminals.clone());
+        cx.background_spawn(async move { manager.resize(message.payload) })
+            .await?;
+        Ok(proto::Ack {})
+    }
+
+    async fn handle_read_persistent_terminal(
+        this: Entity<Self>,
+        message: TypedEnvelope<proto::ReadPersistentTerminal>,
+        cx: AsyncApp,
+    ) -> Result<proto::ReadPersistentTerminalResponse> {
+        let manager = this.read_with(&cx, |this, _| this.persistent_terminals.clone());
+        cx.background_spawn(async move { manager.read(message.payload) })
+            .await
+    }
+
+    async fn handle_close_persistent_terminal(
+        this: Entity<Self>,
+        message: TypedEnvelope<proto::ClosePersistentTerminal>,
+        cx: AsyncApp,
+    ) -> Result<proto::Ack> {
+        let manager = this.read_with(&cx, |this, _| this.persistent_terminals.clone());
+        cx.background_spawn(async move {
+            manager.close(
+                &message.payload.server_instance_id,
+                &message.payload.terminal_id,
+            )
+        })
+        .await?;
+        Ok(proto::Ack {})
     }
 
     async fn handle_create_temporary_file(

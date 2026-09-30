@@ -878,7 +878,7 @@ impl ConfigureContextServerModal {
                 } = &self.source
                 {
                     Some(
-                        Button::new("open-repository", "打开仓库")
+                        Button::new("open-repository", i18n::t!("809f2cef23cc41ac"))
                             .end_icon(
                                 Icon::new(IconName::ArrowUpRight)
                                     .size(IconSize::Small)
@@ -887,7 +887,12 @@ impl ConfigureContextServerModal {
                             .tooltip({
                                 let repository_url = repository_url.clone();
                                 move |_window, cx| {
-                                    Tooltip::with_meta("打开仓库", None, repository_url.clone(), cx)
+                                    Tooltip::with_meta(
+                                        i18n::t!("809f2cef23cc41ac"),
+                                        None,
+                                        repository_url.clone(),
+                                        cx,
+                                    )
                                 }
                             })
                             .on_click({
@@ -906,9 +911,9 @@ impl ConfigureContextServerModal {
                         Button::new(
                             "cancel",
                             if self.source.has_configuration_options() {
-                                "取消"
+                                i18n::t!("2cd0f3be8738a86c")
                             } else {
-                                "关闭"
+                                i18n::t!("3fd47edce45b3603")
                             },
                         )
                         .key_binding(
@@ -920,7 +925,7 @@ impl ConfigureContextServerModal {
                         ),
                     )
                     .children(self.source.has_configuration_options().then(|| {
-                        Button::new("configure-server", "配置服务器")
+                        Button::new("configure-server", i18n::t!("6121d0c5352ea54c"))
                             .disabled(is_busy)
                             .key_binding(
                                 KeyBinding::for_action_in(&menu::Confirm, &focus_handle, cx)
@@ -963,13 +968,13 @@ impl ConfigureContextServerModal {
                             .color(Color::Muted),
                     )
                     .child(
-                        Label::new("认证以连接此服务器")
+                        Label::new(i18n::t!("f4fed30d4bb5887f"))
                             .size(LabelSize::Small)
                             .color(Color::Muted),
                     ),
             )
             .child(
-                Button::new("authenticate-server", "认证")
+                Button::new("authenticate-server", i18n::t!("d2d648bd1c94b7f9"))
                     .style(ButtonStyle::Outlined)
                     .label_size(LabelSize::Small)
                     .on_click({
@@ -1041,7 +1046,7 @@ impl ConfigureContextServerModal {
                         },
                     )))
                     .child(
-                        Button::new("submit-client-secret", "提交")
+                        Button::new("submit-client-secret", i18n::t!("08a85f4ab4bab9ca"))
                             .style(ButtonStyle::Outlined)
                             .label_size(LabelSize::Small)
                             .on_click({
@@ -1069,13 +1074,13 @@ impl ConfigureContextServerModal {
                             .with_rotate_animation(3),
                     )
                     .child(
-                        Label::new("正在认证…")
+                        Label::new(i18n::t!("fac3a5ae559d5e86"))
                             .size(LabelSize::Small)
                             .color(Color::Muted),
                     ),
             )
             .child(
-                Button::new("cancel-authentication", "取消")
+                Button::new("cancel-authentication", i18n::t!("2cd0f3be8738a86c"))
                     .style(ButtonStyle::Outlined)
                     .label_size(LabelSize::Small)
                     .on_click({

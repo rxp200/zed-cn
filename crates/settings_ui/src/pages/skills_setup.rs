@@ -69,7 +69,7 @@ pub(crate) fn render_skills_setup_page(
                         .gap_2()
                         .child(Label::new(message).color(Color::Muted))
                         .child(
-                            Button::new("open-skill-creator-empty", "创建技能")
+                            Button::new("open-skill-creator-empty", i18n::t!("04bcc5bd9b5e543d"))
                                 .tab_index(0_isize)
                                 .style(ButtonStyle::Outlined)
                                 .start_icon(
@@ -149,7 +149,7 @@ fn render_skill_row(
             .shape(ui::IconButtonShape::Square)
             .icon_size(IconSize::Small)
             .icon_color(share_icon_color)
-            .tooltip(Tooltip::text("复制共享链接"))
+            .tooltip(Tooltip::text(i18n::t!("4300017090d2800c")))
             .visible_on_hover(&group)
             .on_click(cx.listener(move |_settings_window, _event, _window, cx| {
                 let skill_file_path = share_skill_file_path.clone();
@@ -219,7 +219,7 @@ fn render_skill_row(
                     )
                     .tab_index(0_isize)
                     .icon_size(IconSize::Small)
-                    .tooltip(Tooltip::text("删除技能"))
+                    .tooltip(Tooltip::text(i18n::t!("615d1b33ea0647f0")))
                     .on_click(cx.listener(
                         move |settings_window, _event, window, cx| {
                             let directory_path = directory_path.clone();
@@ -231,16 +231,13 @@ fn render_skill_row(
                             }
 
                             let prompt_message =
-                                format!("要删除{skill_scope}技能 \"{skill_name}\" 吗？");
-                            let prompt_detail = format!(
-                                "这会将 {} 移到废纸篓。此技能已共享给其他代理工具 {shared_scope}，因此这些工具也将无法再使用它。",
-                                directory_path.compact().display(),
-                            );
+                                i18n::t!("0e322e9fbf3e7bc1", skill_scope = skill_scope, skill_name = skill_name);
+                            let prompt_detail = i18n::t_mix!("b84e9c6031a03a3a"; directory_path.compact().display(); shared_scope = shared_scope);
                             let answer = window.prompt(
                                 PromptLevel::Info,
                                 &prompt_message,
                                 Some(&prompt_detail),
-                                &["删除", "取消"],
+                                &[i18n::t!("2f9daa828907b93f"), i18n::t!("2cd0f3be8738a86c")],
                                 cx,
                             );
 
@@ -295,7 +292,7 @@ fn render_skill_row(
                     )),
                 )
                 .child(
-                    Button::new(SharedString::from(format!("open-{}", skill.name)), "打开")
+                    Button::new(SharedString::from(format!("open-{}", skill.name)), i18n::t!("c771248e511fbf93"))
                         .tab_index(0_isize)
                         .style(ButtonStyle::OutlinedGhost)
                         .size(ButtonSize::Medium)

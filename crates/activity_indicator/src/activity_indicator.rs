@@ -107,19 +107,16 @@ impl ActivityIndicator {
                         .collect::<Vec<_>>()
                         .join("、");
                     let recovery = if remote_client.read(cx).was_manual_reconnect() {
-                        "重连成功"
+                        i18n::t!("27c4460bbc3152d9")
                     } else {
-                        "断联后自动重连成功"
+                        i18n::t!("2f22a5848e3fed83")
                     };
                     let toast = notifications::status_toast::StatusToast::new(
-                        format!(
-                            "{}项目{recovery}",
-                            if project_name.is_empty() {
-                                "远程"
+                        i18n::t_mix!("d5d72c783fdfd470"; if project_name.is_empty() {
+                                i18n::t!("7ba00927dde9122f")
                             } else {
                                 &project_name
-                            }
-                        ),
+                            }; recovery = recovery),
                         cx,
                         |this, _| {
                             this.icon(
@@ -430,16 +427,16 @@ impl ActivityIndicator {
             let remote_client = remote_client.read(cx);
             let message = match remote_client.connection_state() {
                 remote::ConnectionState::HeartbeatMissed => {
-                    Some("连接无响应，正在检测网络；确认断联后将自动重连…".to_string())
+                    Some(i18n::t!("a2c2e2c47484b683").to_string())
                 }
                 remote::ConnectionState::Reconnecting => Some(
                     remote_client
                         .reconnect_status()
-                        .unwrap_or("正在自动重连…")
+                        .unwrap_or(i18n::t!("fc42aaef78e2cf51"))
                         .to_string(),
                 ),
                 remote::ConnectionState::Disconnected => {
-                    Some("远程连接已断开，自动恢复未成功；请重新打开远程项目".to_string())
+                    Some(i18n::t!("b43656e184c0e9b5").to_string())
                 }
                 _ => None,
             };
@@ -793,10 +790,8 @@ impl ActivityIndicator {
         }
         Some(Content {
             icon: ActivityIcon::Icon(IconName::Info),
-            message: "部分文件按需索引".to_string(),
-            tooltip_message: Some(
-                "Git 仓库之外、且深度超过 `file_scan_depth` 设置值的目录将按需索引。".to_string(),
-            ),
+            message: i18n::t!("c00cdc36f8a02133").to_string(),
+            tooltip_message: Some(i18n::t!("11eabee7c77c5d18").to_string()),
             on_click: Some(Arc::new(|this, _, cx| {
                 this.deferred_scan_message = DeferredScanMessage::Dismissed;
                 cx.notify();

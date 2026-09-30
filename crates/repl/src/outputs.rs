@@ -199,7 +199,7 @@ impl Output {
                     el.child(
                         IconButton::new(ElementId::Name("copy-output".into()), IconName::Copy)
                             .style(ButtonStyle::Transparent)
-                            .tooltip(Tooltip::text("复制输出"))
+                            .tooltip(Tooltip::text(i18n::t!("10ef549f29ab49a2")))
                             .on_click(move |_, window, cx| {
                                 let clipboard_content = v.clipboard_content(window, cx);
 
@@ -217,7 +217,7 @@ impl Output {
                             IconName::FileTextOutlined,
                         )
                         .style(ButtonStyle::Transparent)
-                        .tooltip(Tooltip::text("在缓冲区中打开"))
+                        .tooltip(Tooltip::text(i18n::t!("d78ade0e8894169a")))
                         .on_click({
                             let workspace = workspace.clone();
                             move |_, window, cx| {
@@ -323,7 +323,7 @@ impl Output {
                             let full_error = format!("{}: {}\n{}", ename, evalue, traceback_text);
 
                             CopyButton::new("copy-full-error", full_error)
-                                .tooltip_label("复制完整错误")
+                                .tooltip_label(i18n::t!("81faf28b52ada60b"))
                         })
                         .child(
                             IconButton::new(
@@ -331,7 +331,7 @@ impl Output {
                                 IconName::FileTextOutlined,
                             )
                             .style(ButtonStyle::Transparent)
-                            .tooltip(Tooltip::text("在缓冲区中打开完整错误"))
+                            .tooltip(Tooltip::text(i18n::t!("39460b3d1df5cdfe")))
                             .on_click({
                                 let ename = err.ename.clone();
                                 let evalue = err.evalue.clone();
@@ -536,7 +536,7 @@ impl ExecutionView {
 
             let editor = cx.new(|cx| {
                 let mut editor = Editor::single_line(window, cx);
-                editor.set_placeholder_text("在此输入并按回车", window, cx);
+                editor.set_placeholder_text(i18n::t!("03bdfdc02daf3ba5"), window, cx);
                 if password {
                     editor.set_masked(true, cx);
                 }

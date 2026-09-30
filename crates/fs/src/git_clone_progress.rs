@@ -35,25 +35,28 @@ pub(crate) fn failure_message(stderr: &[u8]) -> String {
 
 pub(crate) fn localized_progress(message: &str) -> String {
     let (prefix, message) = match message.strip_prefix("remote: ") {
-        Some(message) => ("远程：", message),
+        Some(message) => (i18n::t!("dfa0810c2a5893a4"), message),
         None => ("", message),
     };
     for (english, chinese) in [
-        ("Enumerating objects:", "正在枚举对象："),
-        ("Counting objects:", "正在统计对象："),
-        ("Compressing objects:", "正在压缩对象："),
-        ("Receiving objects:", "正在接收对象："),
-        ("Resolving deltas:", "正在解析差异："),
-        ("Updating files:", "正在更新文件："),
-        ("Checking out files:", "正在检出文件："),
-        ("Filtering content:", "正在筛选内容："),
-        ("Cloning into ", "正在克隆到 "),
+        ("Enumerating objects:", i18n::t!("e1673e87160921fb")),
+        ("Counting objects:", i18n::t!("adf6f979cbcd637f")),
+        ("Compressing objects:", i18n::t!("ab8bb0329547df27")),
+        ("Receiving objects:", i18n::t!("97c69aaff79bbb42")),
+        ("Resolving deltas:", i18n::t!("12f852c6e14a9a9d")),
+        ("Updating files:", i18n::t!("adbf5f4c7339ff21")),
+        ("Checking out files:", i18n::t!("2d181b217f1ea0ec")),
+        ("Filtering content:", i18n::t!("75363f413d013d1c")),
+        ("Cloning into ", i18n::t!("20b1124e3a3e0033")),
     ] {
         if let Some(detail) = message.strip_prefix(english) {
-            return format!("{prefix}{chinese}{}", detail.replace(", done.", "，完成。"));
+            return format!(
+                "{prefix}{chinese}{}",
+                detail.replace(", done.", i18n::t!("2be279916ea7d1a0"))
+            );
         }
     }
-    format!("{prefix}Git 克隆输出：{message}")
+    i18n::t!("68b4d43f2c9e4de3", prefix = prefix, message = message)
 }
 
 struct GitCloneProgress {

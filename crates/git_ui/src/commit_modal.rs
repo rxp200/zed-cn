@@ -296,7 +296,7 @@ impl CommitModal {
                             })
                             .when(has_previous_commit, |this| {
                                 this.toggleable_entry(
-                                    "修正提交",
+                                    i18n::t!("5dd9a77083d911cb"),
                                     amend_enabled,
                                     IconPosition::Start,
                                     Some(Box::new(Amend)),
@@ -313,7 +313,7 @@ impl CommitModal {
                                 )
                             })
                             .toggleable_entry(
-                                "签字确认",
+                                i18n::t!("412189be35e53bfa"),
                                 signoff_enabled,
                                 IconPosition::Start,
                                 Some(Box::new(Signoff)),
@@ -409,7 +409,7 @@ impl CommitModal {
             .with_handle(self.branch_list_handle.clone())
             .trigger_with_tooltip(
                 branch_picker_button,
-                Tooltip::for_action_title("Switch Branch", &zed_actions::git::Branch),
+                Tooltip::for_action_title(i18n::t!("27eae3e46e729194"), &zed_actions::git::Branch),
             )
             .anchor(Anchor::BottomLeft)
             .offset(gpui::Point {

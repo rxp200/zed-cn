@@ -349,7 +349,7 @@ impl Editor {
                     let focus_handle = self.focus_handle.clone();
                     move |_window, cx| {
                         Tooltip::for_action_in(
-                            "切换代码操作",
+                            i18n::t!("f5da67a2b5094974"),
                             &ToggleCodeActions {
                                 deployed_from: None,
                                 quick_launch: false,

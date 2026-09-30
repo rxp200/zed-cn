@@ -626,7 +626,7 @@ impl Editor {
         // Create the prompt editor for the review input
         let prompt_editor = cx.new(|cx| {
             let mut editor = Editor::single_line(window, cx);
-            editor.set_placeholder_text("添加审阅评论…", window, cx);
+            editor.set_placeholder_text(i18n::t!("d70bdfda95730808"), window, cx);
             editor
         });
 
@@ -1046,7 +1046,7 @@ impl Editor {
                     .border_color(icon_color.opacity(0.5))
             })
             .child(Icon::new(IconName::Plus).size(IconSize::Small))
-            .tooltip(Tooltip::text("添加审查（拖动以选择多行）"))
+            .tooltip(Tooltip::text(i18n::t!("b2ea760dcacccd10")))
             .on_mouse_down(
                 gpui::MouseButton::Left,
                 cx.listener(move |editor, _event: &gpui::MouseDownEvent, window, cx| {
@@ -1526,7 +1526,7 @@ impl Editor {
                 .ok();
             }
             Err(err) => {
-                let message = format!("复制此行的永久链接失败：{err}");
+                let message = i18n::t!("dc4e32b98396dbf7", err = err);
 
                 anyhow::Result::<()>::Err(err).log_err();
 
@@ -1567,7 +1567,7 @@ impl Editor {
                 .ok();
             }
             Err(err) => {
-                let message = format!("打开此行的永久链接失败：{err}");
+                let message = i18n::t!("c88a34b540842528", err = err);
 
                 anyhow::Result::<()>::Err(err).log_err();
 
@@ -2643,7 +2643,7 @@ impl Editor {
                                 IconButton::new("diff-review-close", IconName::Close)
                                     .icon_color(ui::Color::Muted)
                                     .icon_size(action_icon_size)
-                                    .tooltip(Tooltip::text("关闭"))
+                                    .tooltip(Tooltip::text(i18n::t!("3fd47edce45b3603")))
                                     .on_click(|_, window, cx| {
                                         window
                                             .dispatch_action(Box::new(crate::actions::Cancel), cx);
@@ -2653,7 +2653,7 @@ impl Editor {
                                 IconButton::new("diff-review-add", IconName::Return)
                                     .icon_color(ui::Color::Muted)
                                     .icon_size(action_icon_size)
-                                    .tooltip(Tooltip::text("添加评论"))
+                                    .tooltip(Tooltip::text(i18n::t!("c56d162dd9a0d4f1")))
                                     .on_click(|_, window, cx| {
                                         window.dispatch_action(
                                             Box::new(crate::actions::SubmitDiffReviewComment),
@@ -2813,7 +2813,7 @@ impl Editor {
                         )
                         .icon_color(ui::Color::Muted)
                         .icon_size(action_icon_size)
-                        .tooltip(Tooltip::text("取消"))
+                        .tooltip(Tooltip::text(i18n::t!("2cd0f3be8738a86c")))
                         .on_click(move |_, window, cx| {
                             window.dispatch_action(
                                 Box::new(crate::actions::CancelEditReviewComment {
@@ -2830,7 +2830,7 @@ impl Editor {
                         )
                         .icon_color(ui::Color::Muted)
                         .icon_size(action_icon_size)
-                        .tooltip(Tooltip::text("确认"))
+                        .tooltip(Tooltip::text(i18n::t!("36f33adaf0942634")))
                         .on_click(move |_, window, cx| {
                             window.dispatch_action(
                                 Box::new(crate::actions::ConfirmEditReviewComment {

@@ -142,7 +142,9 @@ impl RenderOnce for AlertModal {
             modal = modal.child(footer);
         } else if has_default_footer {
             let primary_action = self.primary_action.unwrap_or_else(|| "OK".into());
-            let dismiss_label = self.dismiss_label.unwrap_or_else(|| "取消".into());
+            let dismiss_label = self
+                .dismiss_label
+                .unwrap_or_else(|| i18n::t!("2cd0f3be8738a86c").into());
 
             modal = modal.child(
                 h_flex()
@@ -175,7 +177,7 @@ impl Component for AlertModal {
     }
 
     fn description() -> &'static str {
-        "一个模态对话框，显示带有主要和取消操作的提示消息。"
+        i18n::t!("581b9f2b19decf6f")
     }
 
     fn preview(_window: &mut Window, cx: &mut App) -> AnyElement {
@@ -184,18 +186,18 @@ impl Component for AlertModal {
                 .p_4()
                 .children(vec![
                     example_group(vec![single_example(
-                        "基本提示",
+                        i18n::t!("ec51167263cf2f72"),
                         AlertModal::new("simple-modal")
-                            .title("您要离开当前通话吗？")
+                            .title(i18n::t!("bb74a4300d908eb9"))
                             .child(
-                                "当前窗口将被关闭，与任何共享项目的连接将被终止。"
+                                i18n::t!("82b45da3777bb82f")
                             )
-                            .primary_action("离开通话")
-                            .dismiss_label("取消")
+                            .primary_action(i18n::t!("3446876b684782f8"))
+                            .dismiss_label(i18n::t!("2cd0f3be8738a86c"))
                             .into_any_element(),
                     )]),
                     example_group(vec![single_example(
-                        "自定义标题",
+                        i18n::t!("99ea19febe21c40c"),
                         AlertModal::new("custom-header-modal")
                             .header(
                                 v_flex()
@@ -206,7 +208,7 @@ impl Component for AlertModal {
                                         h_flex()
                                             .gap_1()
                                             .child(Icon::new(IconName::Warning).color(Color::Warning))
-                                            .child(Headline::new("无法识别的工作区").size(HeadlineSize::Small))
+                                            .child(Headline::new(i18n::t!("c38886c07f73630d")).size(HeadlineSize::Small))
                                     )
                                     .child(
                                         h_flex()
@@ -221,10 +223,10 @@ Review .zed/settings.json for any extensions or commands configured by this proj
                             .child(
                                 v_flex()
                                     .mt_1()
-                                    .child(Label::new("受限模式会阻止以下操作：").color(Color::Muted))
-                                    .child(ListBulletItem::new("应用项目设置"))
-                                    .child(ListBulletItem::new("运行语言服务器"))
-                                    .child(ListBulletItem::new("安装 MCP 集成"))
+                                    .child(Label::new(i18n::t!("8a9bf1e30f256317")).color(Color::Muted))
+                                    .child(ListBulletItem::new(i18n::t!("1026d9417051b164")))
+                                    .child(ListBulletItem::new(i18n::t!("f8baa675efb1604a")))
+                                    .child(ListBulletItem::new(i18n::t!("99a8ea274b0e5c8a")))
                             )
                             .footer(
                                 h_flex()
@@ -232,13 +234,13 @@ Review .zed/settings.json for any extensions or commands configured by this proj
                                     .justify_between()
                                     .child(
                                         Checkbox::new("trust-parent", ToggleState::Unselected)
-                                            .label("信任父目录中的所有项目")
+                                            .label(i18n::t!("f03cae31f21311fc"))
                                     )
                                     .child(
                                         h_flex()
                                             .gap_1()
-                                            .child(Button::new("restricted", "保持在受限模式").color(Color::Muted))
-                                            .child(Button::new("trust", "信任并继续").style(ButtonStyle::Filled))
+                                            .child(Button::new("restricted", i18n::t!("26cdeb4b4b278314")).color(Color::Muted))
+                                            .child(Button::new("trust", i18n::t!("1ac3a881cb626809")).style(ButtonStyle::Filled))
                                     )
                             )
                             .width(rems(40.))

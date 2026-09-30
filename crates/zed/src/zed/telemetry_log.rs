@@ -539,7 +539,7 @@ impl TelemetryLogToolbarItemView {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let search_editor = cx.new(|cx| {
             let mut editor = editor::Editor::single_line(window, cx);
-            editor.set_placeholder_text("筛选事件…", window, cx);
+            editor.set_placeholder_text(i18n::t!("d7643e56a370ee86"), window, cx);
             editor
         });
 
@@ -580,7 +580,7 @@ impl Render for TelemetryLogToolbarItemView {
             .child(
                 IconButton::new("clear_events", IconName::Trash)
                     .icon_size(IconSize::Small)
-                    .tooltip(Tooltip::text("清除事件"))
+                    .tooltip(Tooltip::text(i18n::t!("d3858f83e2c266d4")))
                     .disabled(!has_events)
                     .on_click(cx.listener(move |_this, _, _window, cx| {
                         telemetry_log_clone.update(cx, |log, cx| {
@@ -591,7 +591,7 @@ impl Render for TelemetryLogToolbarItemView {
             .child(
                 IconButton::new("open_log_file", IconName::File)
                     .icon_size(IconSize::Small)
-                    .tooltip(Tooltip::text("打开原始日志文件"))
+                    .tooltip(Tooltip::text(i18n::t!("70d57ac365ad067c")))
                     .on_click(|_, _window, cx| {
                         let path = Telemetry::log_file_path();
                         cx.open_url(&format!("file://{}", path.display()));

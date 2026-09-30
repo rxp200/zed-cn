@@ -4,6 +4,7 @@ mod editable_setting_control;
 mod editorconfig_store;
 mod granted_write_path;
 mod keymap_file;
+pub mod language;
 mod settings_file;
 mod settings_store;
 mod vscode_import;
@@ -130,6 +131,7 @@ pub fn init(cx: &mut App) {
     let settings = SettingsStore::new(cx, &default_settings());
     cx.set_global(settings);
     SettingsStore::observe_active_settings_profile_name(cx).detach();
+    language::init(cx);
 }
 
 pub fn default_settings() -> Cow<'static, str> {

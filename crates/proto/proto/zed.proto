@@ -526,7 +526,14 @@ message Envelope {
     CreateTemporaryFile create_temporary_file = 494;
     CreateTemporaryFileResponse create_temporary_file_response = 495;
     GetSystemStats get_system_stats = 496;
-    GetSystemStatsResponse get_system_stats_response = 497; // current max
+    GetSystemStatsResponse get_system_stats_response = 497;
+    CreatePersistentTerminal create_persistent_terminal = 498;
+    CreatePersistentTerminalResponse create_persistent_terminal_response = 499;
+    PersistentTerminalInput persistent_terminal_input = 500;
+    ResizePersistentTerminal resize_persistent_terminal = 501;
+    ReadPersistentTerminal read_persistent_terminal = 502;
+    ReadPersistentTerminalResponse read_persistent_terminal_response = 503;
+    ClosePersistentTerminal close_persistent_terminal = 504; // current max
   }
 
   reserved 87 to 88;

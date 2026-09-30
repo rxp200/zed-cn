@@ -1862,7 +1862,7 @@ impl<'a> ElicitationCard<'a> {
                                     .color(status_color),
                             )
                             .child(
-                                Label::new(format!("{} 请求输入", self.requester_name))
+                                Label::new(i18n::t_args!("7c4a1fec1d88bf21", self.requester_name))
                                     .size(LabelSize::Custom(tool_name_font_size))
                                     .truncate(),
                             ),

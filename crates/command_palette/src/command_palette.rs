@@ -459,9 +459,9 @@ impl CommandPaletteDelegate {
             })
             .child(
                 ButtonLike::new(("remove-command-history", ix))
-                    .aria_label("从命令历史中移除")
+                    .aria_label(i18n::t!("e8cc741b9ca7746c"))
                     .tooltip(Tooltip::for_action_title(
-                        "从命令历史中移除",
+                        i18n::t!("e8cc741b9ca7746c"),
                         &RemoveSelected,
                     ))
                     .child(
@@ -522,7 +522,7 @@ impl PickerDelegate for CommandPaletteDelegate {
     }
 
     fn placeholder_text(&self, _window: &mut Window, _cx: &mut App) -> Arc<str> {
-        "执行命令…".into()
+        i18n::t!("5bab4598e5b0e1c7").into()
     }
 
     fn select_history(
@@ -822,7 +822,7 @@ impl PickerDelegate for CommandPaletteDelegate {
 
         let focus_handle = &self.previous_focus_handle;
         let keybinding_buttons = if keybind.has_binding(window) {
-            Button::new("change", "更改键绑定…")
+            Button::new("change", i18n::t!("e92fffaa34031de5"))
                 .key_binding(
                     KeyBinding::for_action_in(&menu::SecondaryConfirm, focus_handle, cx)
                         .map(|kb| kb.size(rems_from_px(12_f32))),
@@ -831,7 +831,7 @@ impl PickerDelegate for CommandPaletteDelegate {
                     window.dispatch_action(menu::SecondaryConfirm.boxed_clone(), cx);
                 })
         } else {
-            Button::new("add", "添加键绑定…")
+            Button::new("add", i18n::t!("44e9043518360916"))
                 .key_binding(
                     KeyBinding::for_action_in(&menu::SecondaryConfirm, focus_handle, cx)
                         .map(|kb| kb.size(rems_from_px(12_f32))),
@@ -851,7 +851,7 @@ impl PickerDelegate for CommandPaletteDelegate {
                 .border_color(cx.theme().colors().border_variant)
                 .child(keybinding_buttons)
                 .child(
-                    Button::new("run-action", "运行")
+                    Button::new("run-action", i18n::t!("75b269496f698fae"))
                         .key_binding(
                             KeyBinding::for_action_in(&menu::Confirm, &focus_handle, cx)
                                 .map(|kb| kb.size(rems_from_px(12_f32))),

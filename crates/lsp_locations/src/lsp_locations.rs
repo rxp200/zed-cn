@@ -280,11 +280,11 @@ pub enum LspPickerKind {
 impl LspPickerKind {
     fn placeholder(self) -> &'static str {
         match self {
-            LspPickerKind::References => "筛选引用…",
-            LspPickerKind::Definition => "筛选定义…",
-            LspPickerKind::Declaration => "筛选声明…",
-            LspPickerKind::Implementation => "筛选实现…",
-            LspPickerKind::TypeDefinition => "筛选类型定义…",
+            LspPickerKind::References => i18n::t!("1ae88723ca38c2ab"),
+            LspPickerKind::Definition => i18n::t!("959cecb9a5216d7f"),
+            LspPickerKind::Declaration => i18n::t!("d5d8207544173b05"),
+            LspPickerKind::Implementation => i18n::t!("9d20156e5a87de47"),
+            LspPickerKind::TypeDefinition => i18n::t!("611dde849ac74de1"),
         }
     }
 
@@ -292,11 +292,11 @@ impl LspPickerKind {
     /// appear to silently do nothing.
     fn empty_message(self) -> &'static str {
         match self {
-            LspPickerKind::References => "未找到引用",
-            LspPickerKind::Definition => "未找到定义",
-            LspPickerKind::Declaration => "未找到声明",
-            LspPickerKind::Implementation => "未找到实现",
-            LspPickerKind::TypeDefinition => "未找到类型定义",
+            LspPickerKind::References => i18n::t!("1bea8d0212c4cbb2"),
+            LspPickerKind::Definition => i18n::t!("9665fe3a8baa2287"),
+            LspPickerKind::Declaration => i18n::t!("57cd2b6e160faf99"),
+            LspPickerKind::Implementation => i18n::t!("cd5f47824754ef9c"),
+            LspPickerKind::TypeDefinition => i18n::t!("a736e6d2229c30bf"),
         }
     }
 

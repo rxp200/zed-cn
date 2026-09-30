@@ -232,21 +232,24 @@ fn announcement_for_version(version: &Version, cx: &App) -> Option<AnnouncementC
             rules_to_skills_migration::migration_result().is_some_and(|result| !result.is_empty());
 
         let mut bullet_items: Vec<SharedString> = Vec::with_capacity(3);
-        bullet_items
-            .push(format!("技能位于 {GLOBAL_SKILLS_DIR_DISPLAY}/<name>/SKILL.md").into());
-        bullet_items.push("输入 / 可手动调用技能".into());
+        bullet_items.push(
+            i18n::t!(
+                "09bf5b5a840ba016",
+                GLOBAL_SKILLS_DIR_DISPLAY = GLOBAL_SKILLS_DIR_DISPLAY
+            )
+            .into(),
+        );
+        bullet_items.push(i18n::t!("cf3190a032d0c5f7").into());
         if migrated_anything {
-            bullet_items.push(
-                "规则库正被技能取代：你的默认规则现在位于全局 AGENTS.md 中，其他规则已转换为技能".into(),
-            );
+            bullet_items.push(i18n::t!("b992852ff4bf6d40").into());
         }
 
         Some(AnnouncementContent {
-            heading: "推出技能支持".into(),
-            description: "为代理添加针对性的指令和领域知识。".into(),
+            heading: i18n::t!("2fba84402b7bb0d4").into(),
+            description: i18n::t!("299411168f5a1da8").into(),
             bullet_items,
-            primary_action_label: "立即尝试".into(),
-            secondary_action_label: "阅读文档".into(),
+            primary_action_label: i18n::t!("c0d27db4765683c2").into(),
+            secondary_action_label: i18n::t!("ac5c3de1e8bafdf9").into(),
             primary_action_url: None,
             primary_action_callback: Some(Arc::new(move |window, cx| {
                 window.dispatch_action(Box::new(zed_actions::assistant::FocusAgent), cx);
@@ -359,7 +362,7 @@ fn show_update_notification(cx: &mut App) {
             move |cx| {
                 let workspace_handle = cx.entity().downgrade();
                 cx.new(|cx| {
-                    MessageNotification::new(format!("Updated to {app_name} {}", version), cx)
+                    MessageNotification::new(i18n::t_args!("7650f13b97d7af82", version), cx)
                         .primary_message("View Release Notes")
                         .primary_on_click(move |window, cx| {
                             if let Some(workspace) = workspace_handle.upgrade() {

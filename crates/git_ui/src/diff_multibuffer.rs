@@ -1023,24 +1023,28 @@ impl Render for DiffMultibuffer {
                         .child(h_flex().justify_around().child(Label::new(empty_label)))
                         .map(|el| match remote_button {
                             Some(button) => el.child(h_flex().justify_around().child(button)),
-                            None => el
-                                .child(h_flex().justify_around().child(Label::new("远程已是最新"))),
+                            None => el.child(
+                                h_flex()
+                                    .justify_around()
+                                    .child(Label::new(i18n::t!("6b6be6d277c7ab82"))),
+                            ),
                         })
                         .child(
                             h_flex().justify_around().mt_1().child(
-                                Button::new("project-diff-close-button", "关闭")
-                                    .key_binding(KeyBinding::for_action_in(
-                                        &CloseActiveItem::default(),
-                                        &keybinding_focus_handle,
-                                        cx,
-                                    ))
-                                    .on_click(move |_, window, cx| {
-                                        window.focus(&keybinding_focus_handle, cx);
-                                        window.dispatch_action(
-                                            Box::new(CloseActiveItem::default()),
-                                            cx,
-                                        );
-                                    }),
+                                Button::new(
+                                    "project-diff-close-button",
+                                    i18n::t!("3fd47edce45b3603"),
+                                )
+                                .key_binding(KeyBinding::for_action_in(
+                                    &CloseActiveItem::default(),
+                                    &keybinding_focus_handle,
+                                    cx,
+                                ))
+                                .on_click(move |_, window, cx| {
+                                    window.focus(&keybinding_focus_handle, cx);
+                                    window
+                                        .dispatch_action(Box::new(CloseActiveItem::default()), cx);
+                                }),
                             ),
                         ),
                 )

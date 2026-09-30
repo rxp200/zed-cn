@@ -12,8 +12,8 @@ use crate::{
     row_chunk::{RowChunkId, RowChunks},
     runnable::{self, RunnableRange},
     syntax_map::{
-        MAX_BYTES_TO_QUERY, SyntaxLayer, SyntaxMap, SyntaxMapCapture, SyntaxMapCaptures,
-        SyntaxMapMatch, SyntaxMapMatches, SyntaxSnapshot, ToTreeSitterPoint,
+        FOREGROUND_QUERY_TIMEOUT, MAX_BYTES_TO_QUERY, SyntaxLayer, SyntaxMap, SyntaxMapCapture,
+        SyntaxMapCaptures, SyntaxMapMatch, SyntaxMapMatches, SyntaxSnapshot, ToTreeSitterPoint,
         flattened_highlight_regions,
     },
     text_diff::text_diff,
@@ -4124,12 +4124,17 @@ impl BufferSnapshot {
 
     #[ztracing::instrument(skip_all)]
     fn get_highlights(&self, range: Range<usize>) -> (SyntaxMapCaptures<'_>, Vec<HighlightMap>) {
-        let captures = self.syntax.captures(range, &self.text, |grammar| {
-            grammar
-                .highlights_config
-                .as_ref()
-                .map(|config| &config.query)
-        });
+        let captures = self.syntax.captures_with_timeout(
+            range,
+            &self.text,
+            |grammar| {
+                grammar
+                    .highlights_config
+                    .as_ref()
+                    .map(|config| &config.query)
+            },
+            FOREGROUND_QUERY_TIMEOUT,
+        );
         let highlight_maps = captures
             .grammars()
             .iter()
@@ -4264,12 +4269,7 @@ impl BufferSnapshot {
     }
 
     fn compute_chunk_highlights(&self, range: Range<usize>) -> ResolvedHighlights {
-        let captures = self.syntax.captures(range.clone(), &self.text, |grammar| {
-            grammar
-                .highlights_config
-                .as_ref()
-                .map(|config| &config.query)
-        });
+        let (captures, _) = self.get_highlights(range.clone());
         let sources = captures
             .grammars()
             .iter()

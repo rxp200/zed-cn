@@ -91,7 +91,7 @@ fn developer_page(cx: &App) -> SettingsPage {
     if cx.feature_flag_overrides_enabled() {
         items.push(SettingsPageItem::SectionHeader("Feature Flags"));
         items.push(SettingsPageItem::SubPageLink(SubPageLink {
-            title: "功能标志".into(),
+            title: i18n::t!("50f87e4af37fb572").into(),
             r#type: Default::default(),
             description: None,
             search_aliases: &[],
@@ -102,10 +102,12 @@ fn developer_page(cx: &App) -> SettingsPage {
         }));
     }
 
-    items.push(SettingsPageItem::SectionHeader("仪器仪表"));
+    items.push(SettingsPageItem::SectionHeader(i18n::t!(
+        "83f2e6c57ab63dbf"
+    )));
     items.push(SettingsPageItem::SettingItem(SettingItem {
-        title: "性能分析器",
-        description: "收集前台和后台执行器任务的时间数据，以便通过 `zed: open performance profiler` 检查。可能会导致内存使用增加。",
+        title: i18n::t!("55f8aa09fcb0e8e8"),
+        description: i18n::t!("126b7c2c0585ea34"),
         field: Box::new(SettingField {
             organization_override: None,
             json_path: Some("instrumentation.performance_profiler.enabled"),
@@ -130,7 +132,7 @@ fn developer_page(cx: &App) -> SettingsPage {
     }));
 
     SettingsPage {
-        title: "开发者",
+        title: i18n::t!("38084d301e3f1a31"),
         items: items.into_boxed_slice(),
     }
 }
@@ -138,10 +140,10 @@ fn developer_page(cx: &App) -> SettingsPage {
 fn general_page(cx: &App) -> SettingsPage {
     fn general_settings_section(_cx: &App) -> Vec<SettingsPageItem> {
         vec![
-            SettingsPageItem::SectionHeader("通用设置"),
+            SettingsPageItem::SectionHeader(i18n::t!("18a9d61deeb3373d")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "无障碍模式",
-                description: "优化 Zed 界面以适配辅助技术（如屏幕阅读器）。启用后，默认折叠的控件将保持展开且可通过键盘访问。",
+                title: i18n::t!("0011112554026935"),
+                description: i18n::t!("2ff8e99695359021"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("accessible_mode"),
@@ -154,8 +156,8 @@ fn general_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "无标签页时关闭",
-                description: "当没有标签页时使用「关闭活动项」操作的行为。",
+                title: i18n::t!("94a5143840d13839"),
+                description: i18n::t!("68648cc8b6f4fcd4"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("when_closing_with_no_tabs"),
@@ -173,8 +175,8 @@ fn general_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "打开新窗口时",
-                description: "打开新窗口时显示的内容。",
+                title: i18n::t!("430a1ffc7492b510"),
+                description: i18n::t!("bf39996e71a45bf3"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("on_new_window"),
@@ -187,8 +189,8 @@ fn general_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "最后一个窗口关闭时",
-                description: "当最后一个窗口关闭时的行为。",
+                title: i18n::t!("497cae10a9114234"),
+                description: i18n::t!("7404121120333f5e"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("on_last_window_closed"),
@@ -203,8 +205,8 @@ fn general_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "使用系统路径提示",
-                description: "对「打开」和「另存为」使用原生操作系统对话框。",
+                title: i18n::t!("484a7f00ad7ccc09"),
+                description: i18n::t!("fb94b0ea927e2d81"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("use_system_path_prompts"),
@@ -219,8 +221,8 @@ fn general_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "使用系统提示",
-                description: "对确认操作使用原生操作系统对话框。",
+                title: i18n::t!("1955cc1e1e020c69"),
+                description: i18n::t!("a92718b5c1f700f0"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("use_system_prompts"),
@@ -233,8 +235,8 @@ fn general_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "编辑私有值",
-                description: "隐藏私有文件中变量的值。",
+                title: i18n::t!("a97ed73eef0ae006"),
+                description: i18n::t!("3f5597c781adf20c"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("redact_private_values"),
@@ -247,8 +249,8 @@ fn general_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "私有文件",
-                description: "用于匹配文件路径以确定文件是否为私有的全局模式。",
+                title: i18n::t!("e57f571d6140a6e5"),
+                description: i18n::t!("c85beffc5fc8cb97"),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -266,8 +268,8 @@ fn general_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "CLI 默认打开行为",
-                description: "当未指定标志时，`zed <path>` 打开目录的方式。",
+                title: i18n::t!("8850d86331664bfa"),
+                description: i18n::t!("46b02620639dcbfb"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("cli_default_open_behavior"),
@@ -288,8 +290,8 @@ fn general_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "已打开时显示",
-                description: "启用后，Zed 会优先显示已经打开的缓冲区。",
+                title: i18n::t!("28ea4ef555bfc0f1"),
+                description: i18n::t!("adb2700141113411"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("reveal_if_open"),
@@ -302,8 +304,8 @@ fn general_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "默认打开行为",
-                description: "项目从 UI 默认打开的方式。",
+                title: i18n::t!("3a28b3c4bae3afe1"),
+                description: i18n::t!("082fc6a07f61639a"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("default_open_behavior"),
@@ -324,10 +326,10 @@ fn general_page(cx: &App) -> SettingsPage {
     }
     fn security_section() -> [SettingsPageItem; 2] {
         [
-            SettingsPageItem::SectionHeader("安全"),
+            SettingsPageItem::SectionHeader(i18n::t!("afb63a620bdcff15")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "默认信任所有项目",
-                description: "打开 Zed 时，通过自动信任所有项目避免受限模式，无需为每个新项目授予权限即可使用所有功能。",
+                title: i18n::t!("b5d58f5a4aeb21b9"),
+                description: i18n::t!("0c7dac9871771a0d"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("session.trust_all_projects"),
@@ -352,10 +354,10 @@ fn general_page(cx: &App) -> SettingsPage {
 
     fn workspace_restoration_section() -> [SettingsPageItem; 3] {
         [
-            SettingsPageItem::SectionHeader("工作区恢复"),
+            SettingsPageItem::SectionHeader(i18n::t!("75d0f8540f72fa2d")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "恢复未保存的缓冲区",
-                description: "重启时是否恢复未保存的缓冲区。",
+                title: i18n::t!("9d915ae9f17bbb31"),
+                description: i18n::t!("3ec7ceeac4510475"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("session.restore_unsaved_buffers"),
@@ -376,8 +378,8 @@ fn general_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "启动时恢复",
-                description: "打开 Zed 时从上次会话恢复哪些内容。",
+                title: i18n::t!("0c7db6a74c3b2cdf"),
+                description: i18n::t!("2ce6e5e9c43d29c4"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("restore_on_startup"),
@@ -394,11 +396,11 @@ fn general_page(cx: &App) -> SettingsPage {
 
     fn scoped_settings_section() -> [SettingsPageItem; 3] {
         [
-            SettingsPageItem::SectionHeader("作用域设置"),
+            SettingsPageItem::SectionHeader(i18n::t!("10e4c125a796807d")),
             SettingsPageItem::SettingItem(SettingItem {
                 files: USER,
-                title: "预览通道",
-                description: "哪些设置仅在 Zed 预览版中激活。",
+                title: i18n::t!("7c7714a1fd7f5315"),
+                description: i18n::t!("5a1d783af6b7002a"),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -412,8 +414,8 @@ fn general_page(cx: &App) -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 files: USER,
-                title: "设置配置文件",
-                description: "临时应用于现有用户设置之上的任意数量的设置配置文件。",
+                title: i18n::t!("0e2d914fdf49c377"),
+                description: i18n::t!("c9ccbb2742139c80"),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -430,10 +432,10 @@ fn general_page(cx: &App) -> SettingsPage {
 
     fn privacy_section() -> [SettingsPageItem; 4] {
         [
-            SettingsPageItem::SectionHeader("隐私"),
+            SettingsPageItem::SectionHeader(i18n::t!("86651d17a401c55b")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "遥测诊断",
-                description: "发送调试信息，如崩溃报告。",
+                title: i18n::t!("58b224818bcc926a"),
+                description: i18n::t!("9bbab95bdaf2704d"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("telemetry.diagnostics"),
@@ -454,8 +456,8 @@ fn general_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "遥测指标",
-                description: "发送匿名使用数据，例如您正在使用 Zed 的哪些语言。",
+                title: i18n::t!("8373d3ec31d728ea"),
+                description: i18n::t!("38525d13fb1fe980"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("telemetry.metrics"),
@@ -473,8 +475,8 @@ fn general_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Anthropic 数据保留",
-                description: "允许向无法提供零数据保留的 Anthropic 模型发送请求。",
+                title: i18n::t!("0469ffab0e7b13aa"),
+                description: i18n::t!("12af6b29d0857418"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("telemetry.anthropic_retention"),
@@ -499,10 +501,10 @@ fn general_page(cx: &App) -> SettingsPage {
 
     fn auto_update_section() -> [SettingsPageItem; 2] {
         [
-            SettingsPageItem::SectionHeader("自动更新"),
+            SettingsPageItem::SectionHeader(i18n::t!("736cff237d7d9255")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "自动更新",
-                description: "是否自动检查更新。",
+                title: i18n::t!("736cff237d7d9255"),
+                description: i18n::t!("0a2b66530a9a451e"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("auto_update"),
@@ -517,10 +519,31 @@ fn general_page(cx: &App) -> SettingsPage {
         ]
     }
 
+    fn language_section() -> [SettingsPageItem; 2] {
+        [
+            SettingsPageItem::SectionHeader(i18n::t!("9f6fee1aba17a565")),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: i18n::t!("3d13868593ae4eeb"),
+                description: i18n::t!("502c405590993170"),
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("language"),
+                    pick: |settings_content| settings_content.language.as_ref(),
+                    write: |settings_content, value, _| {
+                        settings_content.language = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+        ]
+    }
+
     SettingsPage {
-        title: "通用",
+        title: i18n::t!("835b700e028c9b20"),
         items: concat_sections!(
             @vec,
+            language_section(),
             general_settings_section(cx),
             security_section(),
             workspace_restoration_section(),
@@ -535,37 +558,44 @@ fn general_page(cx: &App) -> SettingsPage {
 fn appearance_page() -> SettingsPage {
     fn theme_section() -> [SettingsPageItem; 3] {
         [
-            SettingsPageItem::SectionHeader("主题"),
+            SettingsPageItem::SectionHeader(i18n::t!("788db1cfec2a3db5")),
             SettingsPageItem::DynamicItem(DynamicItem {
                 discriminant: SettingItem {
                     files: USER,
-                    title: "主题模式",
-                    description: "选择静态固定主题，或根据外观和亮/暗模式动态选择主题。",
+                    title: i18n::t!("44fb814b166ed6ae"),
+                    description: i18n::t!("93e7de90e33550c8"),
                     field: Box::new(SettingField {
                         organization_override: None,
                         json_path: Some("theme$"),
                         pick: |settings_content| {
-                            Some(&dynamic_variants::<settings::ThemeSelection>()[
-                                settings_content
+                            Some(
+                                &dynamic_variants::<settings::ThemeSelection>()[settings_content
                                     .theme
                                     .theme
                                     .as_ref()?
-                                    .discriminant() as usize])
+                                    .discriminant()
+                                    as usize],
+                            )
                         },
                         write: |settings_content, value, app: &App| {
                             let Some(value) = value else {
                                 settings_content.theme.theme = None;
                                 return;
                             };
-                            let settings_value = settings_content.theme.theme.get_or_insert_default();
+                            let settings_value =
+                                settings_content.theme.theme.get_or_insert_default();
                             *settings_value = match value {
                                 settings::ThemeSelectionDiscriminants::Static => {
                                     let name = match settings_value {
                                         settings::ThemeSelection::Static(_) => return,
                                         settings::ThemeSelection::Dynamic { mode, light, dark } => {
                                             match mode {
-                                                theme_settings::ThemeAppearanceMode::Light => light.clone(),
-                                                theme_settings::ThemeAppearanceMode::Dark => dark.clone(),
+                                                theme_settings::ThemeAppearanceMode::Light => {
+                                                    light.clone()
+                                                }
+                                                theme_settings::ThemeAppearanceMode::Dark => {
+                                                    dark.clone()
+                                                }
                                                 theme_settings::ThemeAppearanceMode::System => {
                                                     if SystemAppearance::global(app).is_light() {
                                                         light.clone()
@@ -574,14 +604,16 @@ fn appearance_page() -> SettingsPage {
                                                     }
                                                 }
                                             }
-                                        },
+                                        }
                                     };
                                     settings::ThemeSelection::Static(name)
-                                },
+                                }
                                 settings::ThemeSelectionDiscriminants::Dynamic => {
                                     let static_name = match settings_value {
-                                        settings::ThemeSelection::Static(theme_name) => theme_name.clone(),
-                                        settings::ThemeSelection::Dynamic {..} => return,
+                                        settings::ThemeSelection::Static(theme_name) => {
+                                            theme_name.clone()
+                                        }
+                                        settings::ThemeSelection::Dynamic { .. } => return,
                                     };
 
                                     settings::ThemeSelection::Dynamic {
@@ -589,7 +621,7 @@ fn appearance_page() -> SettingsPage {
                                         light: static_name.clone(),
                                         dark: static_name,
                                     }
-                                },
+                                }
                             };
                         },
                     }),
@@ -598,171 +630,194 @@ fn appearance_page() -> SettingsPage {
                 pick_discriminant: |settings_content| {
                     Some(settings_content.theme.theme.as_ref()?.discriminant() as usize)
                 },
-                fields: dynamic_variants::<settings::ThemeSelection>().into_iter().map(|variant| {
-                    match variant {
-                        settings::ThemeSelectionDiscriminants::Static => vec![
-                            SettingItem {
-                                files: USER,
-                                title: "主题名称",
-                                description: "您所选主题的名称。",
-                                field: Box::new(SettingField {
-                                    organization_override: None,
-                                    json_path: Some("theme"),
-                                    pick: |settings_content| {
-                                        match settings_content.theme.theme.as_ref() {
-                                            Some(settings::ThemeSelection::Static(name)) => Some(name),
-                                            _ => None
+                fields: dynamic_variants::<settings::ThemeSelection>()
+                    .into_iter()
+                    .map(|variant| match variant {
+                        settings::ThemeSelectionDiscriminants::Static => vec![SettingItem {
+                            files: USER,
+                            title: i18n::t!("e479c05c94a10744"),
+                            description: i18n::t!("6a7d5983eb67f3e0"),
+                            field: Box::new(SettingField {
+                                organization_override: None,
+                                json_path: Some("theme"),
+                                pick: |settings_content| match settings_content.theme.theme.as_ref()
+                                {
+                                    Some(settings::ThemeSelection::Static(name)) => Some(name),
+                                    _ => None,
+                                },
+                                write: |settings_content, value, _| {
+                                    let Some(value) = value else {
+                                        return;
+                                    };
+                                    match settings_content.theme.theme.get_or_insert_default() {
+                                        settings::ThemeSelection::Static(theme_name) => {
+                                            *theme_name = value
                                         }
-                                    },
-                                    write: |settings_content, value, _| {
-                                        let Some(value) = value else {
-                                            return;
-                                        };
-                                        match settings_content
-                                            .theme
-                                            .theme.get_or_insert_default() {
-                                                settings::ThemeSelection::Static(theme_name) => *theme_name = value,
-                                                _ => return
-                                            }
-                                    },
-                                }),
-                                metadata: None,
-                            }
-                        ],
+                                        _ => return,
+                                    }
+                                },
+                            }),
+                            metadata: None,
+                        }],
                         settings::ThemeSelectionDiscriminants::Dynamic => vec![
                             SettingItem {
                                 files: USER,
-                                title: "模式",
-                                description: "选择使用选定的亮或暗主题，或跟随操作系统外观配置。",
+                                title: i18n::t!("47a270081ab2892f"),
+                                description: i18n::t!("2b5b7cc4ccfa598e"),
                                 field: Box::new(SettingField {
                                     organization_override: None,
                                     json_path: Some("theme.mode"),
-                                    pick: |settings_content| {
-                                        match settings_content.theme.theme.as_ref() {
-                                            Some(settings::ThemeSelection::Dynamic { mode, ..}) => Some(mode),
-                                            _ => None
-                                        }
+                                    pick: |settings_content| match settings_content
+                                        .theme
+                                        .theme
+                                        .as_ref()
+                                    {
+                                        Some(settings::ThemeSelection::Dynamic {
+                                            mode, ..
+                                        }) => Some(mode),
+                                        _ => None,
                                     },
                                     write: |settings_content, value, _| {
                                         let Some(value) = value else {
                                             return;
                                         };
-                                        match settings_content
-                                            .theme
-                                            .theme.get_or_insert_default() {
-                                                settings::ThemeSelection::Dynamic{ mode, ..} => *mode = value,
-                                                _ => return
+                                        match settings_content.theme.theme.get_or_insert_default() {
+                                            settings::ThemeSelection::Dynamic { mode, .. } => {
+                                                *mode = value
                                             }
+                                            _ => return,
+                                        }
                                     },
                                 }),
                                 metadata: None,
                             },
                             SettingItem {
                                 files: USER,
-                                title: "亮色主题",
-                                description: "当模式设置为亮色，或模式设置为系统且处于亮色模式时使用的主题。",
+                                title: i18n::t!("4bab51186df53fc0"),
+                                description: i18n::t!("d5cd89e02d9af4a3"),
                                 field: Box::new(SettingField {
                                     organization_override: None,
                                     json_path: Some("theme.light"),
-                                    pick: |settings_content| {
-                                        match settings_content.theme.theme.as_ref() {
-                                            Some(settings::ThemeSelection::Dynamic { light, ..}) => Some(light),
-                                            _ => None
-                                        }
+                                    pick: |settings_content| match settings_content
+                                        .theme
+                                        .theme
+                                        .as_ref()
+                                    {
+                                        Some(settings::ThemeSelection::Dynamic {
+                                            light, ..
+                                        }) => Some(light),
+                                        _ => None,
                                     },
                                     write: |settings_content, value, _| {
                                         let Some(value) = value else {
                                             return;
                                         };
-                                        match settings_content
-                                            .theme
-                                            .theme.get_or_insert_default() {
-                                                settings::ThemeSelection::Dynamic{ light, ..} => *light = value,
-                                                _ => return
+                                        match settings_content.theme.theme.get_or_insert_default() {
+                                            settings::ThemeSelection::Dynamic { light, .. } => {
+                                                *light = value
                                             }
+                                            _ => return,
+                                        }
                                     },
                                 }),
                                 metadata: None,
                             },
                             SettingItem {
                                 files: USER,
-                                title: "暗色主题",
-                                description: "当模式设置为暗色，或模式设置为系统且处于暗色模式时使用的主题。",
+                                title: i18n::t!("352a598cd470b1e1"),
+                                description: i18n::t!("d8ba08df42e60a61"),
                                 field: Box::new(SettingField {
                                     organization_override: None,
                                     json_path: Some("theme.dark"),
-                                    pick: |settings_content| {
-                                        match settings_content.theme.theme.as_ref() {
-                                            Some(settings::ThemeSelection::Dynamic { dark, ..}) => Some(dark),
-                                            _ => None
-                                        }
+                                    pick: |settings_content| match settings_content
+                                        .theme
+                                        .theme
+                                        .as_ref()
+                                    {
+                                        Some(settings::ThemeSelection::Dynamic {
+                                            dark, ..
+                                        }) => Some(dark),
+                                        _ => None,
                                     },
                                     write: |settings_content, value, _| {
                                         let Some(value) = value else {
                                             return;
                                         };
-                                        match settings_content
-                                            .theme
-                                            .theme.get_or_insert_default() {
-                                                settings::ThemeSelection::Dynamic{ dark, ..} => *dark = value,
-                                                _ => return
+                                        match settings_content.theme.theme.get_or_insert_default() {
+                                            settings::ThemeSelection::Dynamic { dark, .. } => {
+                                                *dark = value
                                             }
+                                            _ => return,
+                                        }
                                     },
                                 }),
                                 metadata: None,
-                            }
+                            },
                         ],
-                    }
-                }).collect(),
+                    })
+                    .collect(),
             }),
             SettingsPageItem::DynamicItem(DynamicItem {
                 discriminant: SettingItem {
                     files: USER,
-                    title: "图标主题",
-                    description: "Zed 将与文件和目录关联的自定义图标集。",
+                    title: i18n::t!("62aec9c5a86a0bff"),
+                    description: i18n::t!("82a7fd7370b147c9"),
                     field: Box::new(SettingField {
                         organization_override: None,
                         json_path: Some("icon_theme$"),
                         pick: |settings_content| {
-                            Some(&dynamic_variants::<settings::IconThemeSelection>()[
-                                settings_content
+                            Some(
+                                &dynamic_variants::<settings::IconThemeSelection>()[settings_content
                                     .theme
                                     .icon_theme
                                     .as_ref()?
-                                    .discriminant() as usize])
+                                    .discriminant()
+                                    as usize],
+                            )
                         },
                         write: |settings_content, value, app| {
                             let Some(value) = value else {
                                 settings_content.theme.icon_theme = None;
                                 return;
                             };
-                            let settings_value = settings_content.theme.icon_theme.get_or_insert_with(|| {
-                                settings::IconThemeSelection::Static(settings::IconThemeName(theme::default_icon_theme().name.clone().into()))
-                            });
+                            let settings_value =
+                                settings_content.theme.icon_theme.get_or_insert_with(|| {
+                                    settings::IconThemeSelection::Static(settings::IconThemeName(
+                                        theme::default_icon_theme().name.clone().into(),
+                                    ))
+                                });
                             *settings_value = match value {
                                 settings::IconThemeSelectionDiscriminants::Static => {
                                     let name = match settings_value {
                                         settings::IconThemeSelection::Static(_) => return,
-                                        settings::IconThemeSelection::Dynamic { mode, light, dark } => {
-                                            match mode {
-                                                theme_settings::ThemeAppearanceMode::Light => light.clone(),
-                                                theme_settings::ThemeAppearanceMode::Dark => dark.clone(),
-                                                theme_settings::ThemeAppearanceMode::System => {
-                                                    if SystemAppearance::global(app).is_light() {
-                                                        light.clone()
-                                                    } else {
-                                                        dark.clone()
-                                                    }
+                                        settings::IconThemeSelection::Dynamic {
+                                            mode,
+                                            light,
+                                            dark,
+                                        } => match mode {
+                                            theme_settings::ThemeAppearanceMode::Light => {
+                                                light.clone()
+                                            }
+                                            theme_settings::ThemeAppearanceMode::Dark => {
+                                                dark.clone()
+                                            }
+                                            theme_settings::ThemeAppearanceMode::System => {
+                                                if SystemAppearance::global(app).is_light() {
+                                                    light.clone()
+                                                } else {
+                                                    dark.clone()
                                                 }
                                             }
                                         },
                                     };
                                     settings::IconThemeSelection::Static(name)
-                                },
+                                }
                                 settings::IconThemeSelectionDiscriminants::Dynamic => {
                                     let static_name = match settings_value {
-                                        settings::IconThemeSelection::Static(theme_name) => theme_name.clone(),
-                                        settings::IconThemeSelection::Dynamic {..} => return,
+                                        settings::IconThemeSelection::Static(theme_name) => {
+                                            theme_name.clone()
+                                        }
+                                        settings::IconThemeSelection::Dynamic { .. } => return,
                                     };
 
                                     settings::IconThemeSelection::Dynamic {
@@ -770,7 +825,7 @@ fn appearance_page() -> SettingsPage {
                                         light: static_name.clone(),
                                         dark: static_name,
                                     }
-                                },
+                                }
                             };
                         },
                     }),
@@ -779,132 +834,151 @@ fn appearance_page() -> SettingsPage {
                 pick_discriminant: |settings_content| {
                     Some(settings_content.theme.icon_theme.as_ref()?.discriminant() as usize)
                 },
-                fields: dynamic_variants::<settings::IconThemeSelection>().into_iter().map(|variant| {
-                    match variant {
-                        settings::IconThemeSelectionDiscriminants::Static => vec![
-                            SettingItem {
-                                files: USER,
-                                title: "图标主题名称",
-                                description: "您所选图标主题的名称。",
-                                field: Box::new(SettingField {
-                                    organization_override: None,
-                                    json_path: Some("icon_theme$string"),
-                                    pick: |settings_content| {
-                                        match settings_content.theme.icon_theme.as_ref() {
-                                            Some(settings::IconThemeSelection::Static(name)) => Some(name),
-                                            _ => None
+                fields: dynamic_variants::<settings::IconThemeSelection>()
+                    .into_iter()
+                    .map(|variant| match variant {
+                        settings::IconThemeSelectionDiscriminants::Static => vec![SettingItem {
+                            files: USER,
+                            title: i18n::t!("f4cf8b83d5ab239d"),
+                            description: i18n::t!("24dea9cf0df255a7"),
+                            field: Box::new(SettingField {
+                                organization_override: None,
+                                json_path: Some("icon_theme$string"),
+                                pick: |settings_content| match settings_content
+                                    .theme
+                                    .icon_theme
+                                    .as_ref()
+                                {
+                                    Some(settings::IconThemeSelection::Static(name)) => Some(name),
+                                    _ => None,
+                                },
+                                write: |settings_content, value, _| {
+                                    let Some(value) = value else {
+                                        return;
+                                    };
+                                    match settings_content.theme.icon_theme.as_mut() {
+                                        Some(settings::IconThemeSelection::Static(theme_name)) => {
+                                            *theme_name = value
                                         }
-                                    },
-                                    write: |settings_content, value, _| {
-                                        let Some(value) = value else {
-                                            return;
-                                        };
-                                        match settings_content
-                                            .theme
-                                            .icon_theme.as_mut() {
-                                                Some(settings::IconThemeSelection::Static(theme_name)) => *theme_name = value,
-                                                _ => return
-                                            }
-                                    },
-                                }),
-                                metadata: None,
-                            }
-                        ],
+                                        _ => return,
+                                    }
+                                },
+                            }),
+                            metadata: None,
+                        }],
                         settings::IconThemeSelectionDiscriminants::Dynamic => vec![
                             SettingItem {
                                 files: USER,
-                                title: "模式",
-                                description: "选择使用选定的亮或暗图标主题，或跟随操作系统外观配置。",
+                                title: i18n::t!("47a270081ab2892f"),
+                                description: i18n::t!("9007a2953d994e93"),
                                 field: Box::new(SettingField {
                                     organization_override: None,
                                     json_path: Some("icon_theme"),
-                                    pick: |settings_content| {
-                                        match settings_content.theme.icon_theme.as_ref() {
-                                            Some(settings::IconThemeSelection::Dynamic { mode, ..}) => Some(mode),
-                                            _ => None
-                                        }
+                                    pick: |settings_content| match settings_content
+                                        .theme
+                                        .icon_theme
+                                        .as_ref()
+                                    {
+                                        Some(settings::IconThemeSelection::Dynamic {
+                                            mode,
+                                            ..
+                                        }) => Some(mode),
+                                        _ => None,
                                     },
                                     write: |settings_content, value, _| {
                                         let Some(value) = value else {
                                             return;
                                         };
-                                        match settings_content
-                                            .theme
-                                            .icon_theme.as_mut() {
-                                                Some(settings::IconThemeSelection::Dynamic{ mode, ..}) => *mode = value,
-                                                _ => return
-                                            }
+                                        match settings_content.theme.icon_theme.as_mut() {
+                                            Some(settings::IconThemeSelection::Dynamic {
+                                                mode,
+                                                ..
+                                            }) => *mode = value,
+                                            _ => return,
+                                        }
                                     },
                                 }),
                                 metadata: None,
                             },
                             SettingItem {
                                 files: USER,
-                                title: "亮色图标主题",
-                                description: "当模式设置为亮色，或模式设置为系统且处于亮色模式时使用的图标主题。",
+                                title: i18n::t!("c71bc97ae617a5ea"),
+                                description: i18n::t!("e2fb7f0e9ae17c5c"),
                                 field: Box::new(SettingField {
                                     organization_override: None,
                                     json_path: Some("icon_theme.light"),
-                                    pick: |settings_content| {
-                                        match settings_content.theme.icon_theme.as_ref() {
-                                            Some(settings::IconThemeSelection::Dynamic { light, ..}) => Some(light),
-                                            _ => None
-                                        }
+                                    pick: |settings_content| match settings_content
+                                        .theme
+                                        .icon_theme
+                                        .as_ref()
+                                    {
+                                        Some(settings::IconThemeSelection::Dynamic {
+                                            light,
+                                            ..
+                                        }) => Some(light),
+                                        _ => None,
                                     },
                                     write: |settings_content, value, _| {
                                         let Some(value) = value else {
                                             return;
                                         };
-                                        match settings_content
-                                            .theme
-                                            .icon_theme.as_mut() {
-                                                Some(settings::IconThemeSelection::Dynamic{ light, ..}) => *light = value,
-                                                _ => return
-                                            }
+                                        match settings_content.theme.icon_theme.as_mut() {
+                                            Some(settings::IconThemeSelection::Dynamic {
+                                                light,
+                                                ..
+                                            }) => *light = value,
+                                            _ => return,
+                                        }
                                     },
                                 }),
                                 metadata: None,
                             },
                             SettingItem {
                                 files: USER,
-                                title: "暗色图标主题",
-                                description: "当模式设置为暗色，或模式设置为系统且处于暗色模式时使用的图标主题。",
+                                title: i18n::t!("9b43fcaa46b8d4fb"),
+                                description: i18n::t!("176aeffe0d1066c9"),
                                 field: Box::new(SettingField {
                                     organization_override: None,
                                     json_path: Some("icon_theme.dark"),
-                                    pick: |settings_content| {
-                                        match settings_content.theme.icon_theme.as_ref() {
-                                            Some(settings::IconThemeSelection::Dynamic { dark, ..}) => Some(dark),
-                                            _ => None
-                                        }
+                                    pick: |settings_content| match settings_content
+                                        .theme
+                                        .icon_theme
+                                        .as_ref()
+                                    {
+                                        Some(settings::IconThemeSelection::Dynamic {
+                                            dark,
+                                            ..
+                                        }) => Some(dark),
+                                        _ => None,
                                     },
                                     write: |settings_content, value, _| {
                                         let Some(value) = value else {
                                             return;
                                         };
-                                        match settings_content
-                                            .theme
-                                            .icon_theme.as_mut() {
-                                                Some(settings::IconThemeSelection::Dynamic{ dark, ..}) => *dark = value,
-                                                _ => return
-                                            }
+                                        match settings_content.theme.icon_theme.as_mut() {
+                                            Some(settings::IconThemeSelection::Dynamic {
+                                                dark,
+                                                ..
+                                            }) => *dark = value,
+                                            _ => return,
+                                        }
                                     },
                                 }),
                                 metadata: None,
-                            }
+                            },
                         ],
-                    }
-                }).collect(),
+                    })
+                    .collect(),
             }),
         ]
     }
 
     fn buffer_font_section() -> [SettingsPageItem; 7] {
         [
-            SettingsPageItem::SectionHeader("缓冲区字体"),
+            SettingsPageItem::SectionHeader(i18n::t!("186e55deaf9d600b")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "字体系列",
-                description: "编辑器文本的字体系列。",
+                title: i18n::t!("c75431892ad1880c"),
+                description: i18n::t!("38f8f77dd0e34436"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("buffer_font_family"),
@@ -917,8 +991,8 @@ fn appearance_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "字体大小",
-                description: "编辑器文本的字体大小。",
+                title: i18n::t!("0c30c37c6ead953b"),
+                description: i18n::t!("e22ddb0ca2a11cba"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("buffer_font_size"),
@@ -931,8 +1005,8 @@ fn appearance_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "字体粗细",
-                description: "编辑器文本的字体粗细（100-900）。",
+                title: i18n::t!("db0c79d9d7d6c577"),
+                description: i18n::t!("4b70b60e6fbbb670"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("buffer_font_weight"),
@@ -947,8 +1021,8 @@ fn appearance_page() -> SettingsPage {
             SettingsPageItem::DynamicItem(DynamicItem {
                 discriminant: SettingItem {
                     files: USER,
-                    title: "行高",
-                    description: "编辑器文本的行高。",
+                    title: i18n::t!("6b44b7ba432abf47"),
+                    description: i18n::t!("e7632e55ead5db3f"),
                     field: Box::new(SettingField {
                         organization_override: None,
                         json_path: Some("buffer_line_height$"),
@@ -1007,8 +1081,8 @@ fn appearance_page() -> SettingsPage {
                         settings::BufferLineHeightDiscriminants::Standard => vec![],
                         settings::BufferLineHeightDiscriminants::Custom => vec![SettingItem {
                             files: USER,
-                            title: "自定义行高",
-                            description: "自定义行高值（必须至少为 1.0）。",
+                            title: i18n::t!("bbc3144ff5dbba47"),
+                            description: i18n::t!("7d1ffbddcebfbf73"),
                             field: Box::new(SettingField {
                                 organization_override: None,
                                 json_path: Some("buffer_line_height"),
@@ -1039,8 +1113,8 @@ fn appearance_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 files: USER,
-                title: "字体特性",
-                description: "在文本缓冲区中启用的 OpenType 特性。",
+                title: i18n::t!("cf2674acf2bbad54"),
+                description: i18n::t!("4b5a43a25fa5f0ff"),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -1058,8 +1132,8 @@ fn appearance_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 files: USER,
-                title: "后备字体",
-                description: "在文本缓冲区中渲染时使用的后备字体。",
+                title: i18n::t!("e037c3476fcbc213"),
+                description: i18n::t!("094ed8739a6c6686"),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -1080,10 +1154,10 @@ fn appearance_page() -> SettingsPage {
 
     fn ui_font_section() -> [SettingsPageItem; 6] {
         [
-            SettingsPageItem::SectionHeader("UI 字体"),
+            SettingsPageItem::SectionHeader(i18n::t!("a77a611a7c8298ed")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "字体系列",
-                description: "UI 元素的字体系列。",
+                title: i18n::t!("c75431892ad1880c"),
+                description: i18n::t!("6b1c1e42e29de331"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("ui_font_family"),
@@ -1096,8 +1170,8 @@ fn appearance_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "字体大小",
-                description: "UI 元素的字体大小。",
+                title: i18n::t!("0c30c37c6ead953b"),
+                description: i18n::t!("5b16dc095701bc9f"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("ui_font_size"),
@@ -1110,8 +1184,8 @@ fn appearance_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "字体粗细",
-                description: "UI 元素的字体粗细（100-900）。",
+                title: i18n::t!("db0c79d9d7d6c577"),
+                description: i18n::t!("5585c9b8f1361032"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("ui_font_weight"),
@@ -1125,8 +1199,8 @@ fn appearance_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 files: USER,
-                title: "字体特性",
-                description: "在 UI 元素中渲染时启用的 OpenType 特性。",
+                title: i18n::t!("cf2674acf2bbad54"),
+                description: i18n::t!("f008b89d5c0ee08f"),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -1142,8 +1216,8 @@ fn appearance_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 files: USER,
-                title: "后备字体",
-                description: "在 UI 中渲染时使用的后备字体。",
+                title: i18n::t!("e037c3476fcbc213"),
+                description: i18n::t!("4a6b40d42638980c"),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -1162,10 +1236,10 @@ fn appearance_page() -> SettingsPage {
 
     fn agent_panel_font_section() -> [SettingsPageItem; 5] {
         [
-            SettingsPageItem::SectionHeader("Agent 面板字体"),
+            SettingsPageItem::SectionHeader(i18n::t!("5373158eadbed7a4")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "UI 字体系列",
-                description: "Agent 面板中 Agent 回复文本的字体系列。回退到常规 UI 字体系列。",
+                title: i18n::t!("caa57f17b9d8386b"),
+                description: i18n::t!("8f112d03376f5482"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("agent_ui_font_family"),
@@ -1184,8 +1258,8 @@ fn appearance_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "UI 字体大小",
-                description: "Agent 面板中 Agent 回复文本的字体大小。回退到常规 UI 字体大小。",
+                title: i18n::t!("b107622308080eb1"),
+                description: i18n::t!("b303f07f5c38bd76"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("agent_ui_font_size"),
@@ -1204,8 +1278,8 @@ fn appearance_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "缓冲区字体系列",
-                description: "Agent 面板中用户消息的字体系列。回退到常规缓冲区字体系列。",
+                title: i18n::t!("57a6ff77dd42b65d"),
+                description: i18n::t!("33e6bde3aabba581"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("agent_buffer_font_family"),
@@ -1224,8 +1298,8 @@ fn appearance_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "缓冲区字体大小",
-                description: "Agent 面板中用户消息文本的字体大小。",
+                title: i18n::t!("59265ec3bf4a871d"),
+                description: i18n::t!("6db08a1c683ee3e3"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("agent_buffer_font_size"),
@@ -1248,10 +1322,10 @@ fn appearance_page() -> SettingsPage {
 
     fn markdown_preview_font_section() -> [SettingsPageItem; 4] {
         [
-            SettingsPageItem::SectionHeader("Markdown 预览字体"),
+            SettingsPageItem::SectionHeader(i18n::t!("a6ddab2ec94b01c1")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "字体系列",
-                description: "Markdown 预览的字体系列。回退到 UI 字体系列。",
+                title: i18n::t!("c75431892ad1880c"),
+                description: i18n::t!("2ad15be3c6cafe94"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("markdown_preview.font_family"),
@@ -1273,8 +1347,8 @@ fn appearance_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "代码字体系列",
-                description: "Markdown 预览中代码块的字体。回退到编辑器字体系列。",
+                title: i18n::t!("f9eef84daaf8157e"),
+                description: i18n::t!("d0c6dfe6fafc98d8"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("markdown_preview.code_font_family"),
@@ -1296,8 +1370,8 @@ fn appearance_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "字体大小",
-                description: "Markdown 预览的字体大小。回退到编辑器字体大小。",
+                title: i18n::t!("0c30c37c6ead953b"),
+                description: i18n::t!("71b093c6ec5912a2"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("markdown_preview.font_size"),
@@ -1323,10 +1397,10 @@ fn appearance_page() -> SettingsPage {
 
     fn text_rendering_section() -> [SettingsPageItem; 2] {
         [
-            SettingsPageItem::SectionHeader("文本渲染"),
+            SettingsPageItem::SectionHeader(i18n::t!("72bb8c9e6023e181")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "文本渲染模式",
-                description: "要使用的文本渲染模式。",
+                title: i18n::t!("7e428f9821e9119c"),
+                description: i18n::t!("0b3b638e41374680"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("text_rendering_mode"),
@@ -1345,10 +1419,10 @@ fn appearance_page() -> SettingsPage {
 
     fn cursor_section() -> [SettingsPageItem; 7] {
         [
-            SettingsPageItem::SectionHeader("光标"),
+            SettingsPageItem::SectionHeader(i18n::t!("47a75ca0b8fef37c")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "多光标修饰键",
-                description: "用于添加多个光标的修饰键。",
+                title: i18n::t!("19456bb1882a9d62"),
+                description: i18n::t!("a5704c1f95ac3cbf"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("multi_cursor_modifier"),
@@ -1361,8 +1435,8 @@ fn appearance_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "光标闪烁",
-                description: "编辑器中的光标是否闪烁。",
+                title: i18n::t!("9342b40e1c885cee"),
+                description: i18n::t!("5b7b4dca3b8136df"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("cursor_blink"),
@@ -1375,8 +1449,8 @@ fn appearance_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "光标动画",
-                description: "光标在编辑器中移动时是否显示平滑动画。",
+                title: i18n::t!("55000845a57808af"),
+                description: i18n::t!("9b63faf4f0acdbd6"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("cursor_animation.enabled"),
@@ -1400,8 +1474,8 @@ fn appearance_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "光标形状",
-                description: "编辑器的光标形状。",
+                title: i18n::t!("98ec5a07a6ee6050"),
+                description: i18n::t!("5ce23a27e0fe20e6"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("cursor_shape"),
@@ -1414,8 +1488,8 @@ fn appearance_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "隐藏鼠标",
-                description: "何时隐藏鼠标光标。",
+                title: i18n::t!("9e2bf7c699e18d4e"),
+                description: i18n::t!("a9668db274aa56d8"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("hide_mouse"),
@@ -1428,8 +1502,8 @@ fn appearance_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "减少动效",
-                description: "是否通过以静态状态渲染来减少非必要的动效（如加载旋转器）。",
+                title: i18n::t!("b4ec700fc0ee22a7"),
+                description: i18n::t!("5618d04c8832f162"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("reduce_motion"),
@@ -1446,10 +1520,10 @@ fn appearance_page() -> SettingsPage {
 
     fn highlighting_section() -> [SettingsPageItem; 6] {
         [
-            SettingsPageItem::SectionHeader("高亮"),
+            SettingsPageItem::SectionHeader(i18n::t!("05f954565f29b0b6")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "未使用代码淡出",
-                description: "未使用代码的淡出程度（0.0 - 0.9）。",
+                title: i18n::t!("bae28b05c12e963a"),
+                description: i18n::t!("f2ae47254b986d30"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("unnecessary_code_fade"),
@@ -1462,8 +1536,8 @@ fn appearance_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "当前行高亮",
-                description: "当前行的高亮方式。",
+                title: i18n::t!("78958d6e888cebed"),
+                description: i18n::t!("32332104b78785a9"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("current_line_highlight"),
@@ -1478,8 +1552,8 @@ fn appearance_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "选中高亮",
-                description: "高亮所有选中的文本出现位置。",
+                title: i18n::t!("4b0914fc8fb476f3"),
+                description: i18n::t!("cdb99a3ed55523f2"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("selection_highlight"),
@@ -1492,8 +1566,8 @@ fn appearance_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "圆角选区",
-                description: "文本选区是否应有圆角。",
+                title: i18n::t!("07389c9e4adf42e0"),
+                description: i18n::t!("a6027ce7357d023b"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("rounded_selection"),
@@ -1506,8 +1580,8 @@ fn appearance_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "高亮最小对比度",
-                description: "在高亮背景上渲染文本时要保持的最小 APCA 感知对比度。",
+                title: i18n::t!("1d4cf8a5ceec0781"),
+                description: i18n::t!("f2d37deac60d2b92"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("minimum_contrast_for_highlights"),
@@ -1529,10 +1603,10 @@ fn appearance_page() -> SettingsPage {
 
     fn guides_section() -> [SettingsPageItem; 3] {
         [
-            SettingsPageItem::SectionHeader("参考线"),
+            SettingsPageItem::SectionHeader(i18n::t!("b34ce4d70417d1dc")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "显示换行参考线",
-                description: "显示换行参考线（垂直标尺）。",
+                title: i18n::t!("fac02752ade29996"),
+                description: i18n::t!("0628263125af432c"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("show_wrap_guides"),
@@ -1557,8 +1631,8 @@ fn appearance_page() -> SettingsPage {
             }),
             // todo(settings_ui): This needs a custom component
             SettingsPageItem::SettingItem(SettingItem {
-                title: "换行参考线",
-                description: "显示换行参考线的字符数。",
+                title: i18n::t!("66a6577105c54d61"),
+                description: i18n::t!("35efd255d9312f85"),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -1596,7 +1670,7 @@ fn appearance_page() -> SettingsPage {
     );
 
     SettingsPage {
-        title: "外观",
+        title: i18n::t!("86a63f23a076b11e"),
         items,
     }
 }
@@ -1604,11 +1678,11 @@ fn appearance_page() -> SettingsPage {
 fn keymap_page() -> SettingsPage {
     fn keybindings_section() -> [SettingsPageItem; 2] {
         [
-            SettingsPageItem::SectionHeader("键绑定"),
+            SettingsPageItem::SectionHeader(i18n::t!("66239d367b0fb5ce")),
             SettingsPageItem::ActionLink(ActionLink {
-                title: "编辑键绑定".into(),
-                description: Some("在键位映射编辑器中自定义键绑定。".into()),
-                button_text: "打开键位映射".into(),
+                title: i18n::t!("8cd0663cb33f9b9b").into(),
+                description: Some(i18n::t!("05a72bbe589a24b4").into()),
+                button_text: i18n::t!("f6d844d023d08eac").into(),
                 on_click: Arc::new(|settings_window, window, cx| {
                     let Some(original_window) = settings_window.original_window else {
                         return;
@@ -1629,10 +1703,10 @@ fn keymap_page() -> SettingsPage {
 
     fn base_keymap_section() -> [SettingsPageItem; 2] {
         [
-            SettingsPageItem::SectionHeader("基础键位映射"),
+            SettingsPageItem::SectionHeader(i18n::t!("36f446e49bc9f495")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "基础键位映射",
-                description: "要使用的基础键绑定集名称。",
+                title: i18n::t!("36f446e49bc9f495"),
+                description: i18n::t!("c7ca2309c305d388"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("base_keymap"),
@@ -1652,10 +1726,10 @@ fn keymap_page() -> SettingsPage {
 
     fn modal_editing_section() -> [SettingsPageItem; 3] {
         [
-            SettingsPageItem::SectionHeader("模态编辑"),
+            SettingsPageItem::SectionHeader(i18n::t!("1033d4bbb19de4d9")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Vim 模式",
-                description: "启用 Vim 模式和键绑定。",
+                title: i18n::t!("10043421065bbf14"),
+                description: i18n::t!("68f9fe68bfcc38c2"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("vim_mode"),
@@ -1666,8 +1740,8 @@ fn keymap_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Helix 模式",
-                description: "启用 Helix 模式和键绑定。",
+                title: i18n::t!("d0ee3dbf6281161b"),
+                description: i18n::t!("11786261064ea1cf"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("helix_mode"),
@@ -1687,7 +1761,7 @@ fn keymap_page() -> SettingsPage {
     );
 
     SettingsPage {
-        title: "键位映射",
+        title: i18n::t!("166f65a9ea0b7fa3"),
         items,
     }
 }
@@ -1695,12 +1769,12 @@ fn keymap_page() -> SettingsPage {
 fn editor_page() -> SettingsPage {
     fn auto_save_section() -> [SettingsPageItem; 2] {
         [
-            SettingsPageItem::SectionHeader("自动保存"),
+            SettingsPageItem::SectionHeader(i18n::t!("f2db3712a685913a")),
             SettingsPageItem::DynamicItem(DynamicItem {
                 discriminant: SettingItem {
                     files: USER,
-                    title: "自动保存模式",
-                    description: "何时自动保存缓冲区更改。",
+                    title: i18n::t!("d16f0d0db09b2cdf"),
+                    description: i18n::t!("31ed5fe16138ac3f"),
                     field: Box::new(SettingField {
                         organization_override: None,
                         json_path: Some("autosave$"),
@@ -1756,8 +1830,8 @@ fn editor_page() -> SettingsPage {
                         settings::AutosaveSettingDiscriminants::Off => vec![],
                         settings::AutosaveSettingDiscriminants::AfterDelay => vec![SettingItem {
                             files: USER,
-                            title: "延迟（毫秒）",
-                            description: "在无操作一段时间后保存（毫秒）。",
+                            title: i18n::t!("3ce4972a8598de6f"),
+                            description: i18n::t!("73f9944cb7c1b403"),
                             field: Box::new(SettingField {
                                 organization_override: None,
                                 json_path: Some("autosave.after_delay.milliseconds"),
@@ -1796,10 +1870,10 @@ fn editor_page() -> SettingsPage {
 
     fn which_key_section() -> [SettingsPageItem; 3] {
         [
-            SettingsPageItem::SectionHeader("Which-key 菜单"),
+            SettingsPageItem::SectionHeader(i18n::t!("47084cf76ab6ec1a")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "显示 Which-key 菜单",
-                description: "等待多键快捷键的后续按键时，显示包含匹配绑定的 Which-key 菜单。待完成按键指示器仍然可见，但不显示其快捷键预览弹窗。",
+                title: i18n::t!("f26b86f913cca377"),
+                description: i18n::t!("22f48abc9e707f6a"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("which_key.enabled"),
@@ -1817,8 +1891,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "菜单延迟",
-                description: "Which-key 菜单出现前的延迟（毫秒）。",
+                title: i18n::t!("4b810df5eb96a054"),
+                description: i18n::t!("0328791a156d9a3b"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("which_key.delay_ms"),
@@ -1840,10 +1914,10 @@ fn editor_page() -> SettingsPage {
 
     fn multibuffer_section() -> [SettingsPageItem; 7] {
         [
-            SettingsPageItem::SectionHeader("多缓冲区"),
+            SettingsPageItem::SectionHeader(i18n::t!("5903780aba8c0f48")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "多缓冲区双击",
-                description: "在多缓冲区的某些摘录上双击时的行为。",
+                title: i18n::t!("44b5e97f3abb3346"),
+                description: i18n::t!("7eab52595711b12b"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("double_click_in_multibuffer"),
@@ -1858,8 +1932,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "展开摘录行",
-                description: "默认展开多缓冲区摘录的行数。",
+                title: i18n::t!("3ac51d203b3e1cea"),
+                description: i18n::t!("82049cfb813a124a"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("expand_excerpt_lines"),
@@ -1872,8 +1946,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "摘录上下文行",
-                description: "默认在多缓冲区摘录中提供的上下文行数。",
+                title: i18n::t!("05b36f579a7a1c3d"),
+                description: i18n::t!("7c07926653a9d1a7"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("excerpt_context_lines"),
@@ -1886,8 +1960,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "按深度展开大纲",
-                description: "当前文件中展开大纲项的默认深度。",
+                title: i18n::t!("8a09d7344f251ab3"),
+                description: i18n::t!("3e195af5b1d0e48a"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("outline_panel.expand_outlines_with_depth"),
@@ -1910,8 +1984,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "差异视图样式",
-                description: "在编辑器中显示差异的方式。",
+                title: i18n::t!("3f63841125a8f9de"),
+                description: i18n::t!("b612a64d35345623"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("diff_view_style"),
@@ -1924,8 +1998,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "最小分屏差异宽度",
-                description: "使用分屏差异视图的最小宽度（列数）。当编辑器更窄时，差异视图自动切换到统一模式。设置为 0 以禁用。",
+                title: i18n::t!("38fec55a06e010fe"),
+                description: i18n::t!("9505d8ee20770e29"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("minimum_split_diff_width"),
@@ -1944,10 +2018,10 @@ fn editor_page() -> SettingsPage {
 
     fn scrolling_section() -> [SettingsPageItem; 9] {
         [
-            SettingsPageItem::SectionHeader("滚动"),
+            SettingsPageItem::SectionHeader(i18n::t!("34dedaffd3cc55f0")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "滚动超过最后一行",
-                description: "编辑器是否会滚动超过最后一行。",
+                title: i18n::t!("bdf56e7a45ecac2c"),
+                description: i18n::t!("f63d943298d08df7"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("scroll_beyond_last_line"),
@@ -1962,8 +2036,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "垂直滚动边距",
-                description: "自动滚动时在光标上下方保持的行数。",
+                title: i18n::t!("42f357c86ce9aa31"),
+                description: i18n::t!("0f218add3762cfe1"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("vertical_scroll_margin"),
@@ -1978,8 +2052,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "水平滚动边距",
-                description: "使用鼠标滚动时在两侧保留的字符数。",
+                title: i18n::t!("e71b5db136ac64ac"),
+                description: i18n::t!("3b6a2434259da4ac"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("horizontal_scroll_margin"),
@@ -1994,8 +2068,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "滚动灵敏度",
-                description: "水平和垂直滚动的灵敏度倍数。",
+                title: i18n::t!("765866c4ff34c39d"),
+                description: i18n::t!("e9ff030661721b50"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("scroll_sensitivity"),
@@ -2008,8 +2082,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "鼠标滚轮缩放",
-                description: "是否在按住主修饰键时使用鼠标滚轮缩放编辑器字体大小。",
+                title: i18n::t!("1dd8407fe384f0db"),
+                description: i18n::t!("64f4432a7228aa33"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("mouse_wheel_zoom"),
@@ -2022,8 +2096,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "快速滚动灵敏度",
-                description: "水平和垂直快速滚动的灵敏度倍数。",
+                title: i18n::t!("4338420e8def24c6"),
+                description: i18n::t!("9c73477e1bd6a58e"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("fast_scroll_sensitivity"),
@@ -2038,8 +2112,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "点击自动滚动",
-                description: "单击可见文本区域边缘附近时是否滚动。",
+                title: i18n::t!("90116a03aad7b32c"),
+                description: i18n::t!("8c6985bf4fffc591"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("autoscroll_on_clicks"),
@@ -2052,8 +2126,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "粘性滚动",
-                description: "是否将作用域固定在编辑器顶部。",
+                title: i18n::t!("4455a54e440b6bb7"),
+                description: i18n::t!("4a9c80cf83146405"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("sticky_scroll.enabled"),
@@ -2080,10 +2154,10 @@ fn editor_page() -> SettingsPage {
 
     fn signature_help_section() -> [SettingsPageItem; 4] {
         [
-            SettingsPageItem::SectionHeader("签名帮助"),
+            SettingsPageItem::SectionHeader(i18n::t!("3e213486d69d019f")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "自动签名帮助",
-                description: "自动显示签名帮助弹出窗口。",
+                title: i18n::t!("6a9c86479a5fae46"),
+                description: i18n::t!("9d18f0d93269edea"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("auto_signature_help"),
@@ -2096,8 +2170,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "编辑后显示签名帮助",
-                description: "在插入补全或括号对后显示签名帮助弹出窗口。",
+                title: i18n::t!("d96ddd3fd8d80363"),
+                description: i18n::t!("568e869d3952235c"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("show_signature_help_after_edits"),
@@ -2115,8 +2189,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "代码片段排序顺序",
-                description: "确定代码片段相对于其他补全项的排序方式。",
+                title: i18n::t!("3768a9532b2d4500"),
+                description: i18n::t!("bffd933009e33378"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("snippet_sort_order"),
@@ -2133,10 +2207,10 @@ fn editor_page() -> SettingsPage {
 
     fn hover_translation_section() -> [SettingsPageItem; 8] {
         [
-            SettingsPageItem::SectionHeader("悬停翻译"),
+            SettingsPageItem::SectionHeader(i18n::t!("84f41f0b0c41982b")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "启用文档翻译",
-                description: "悬停弹出的文档中，非中文内容自动调用 AI 翻译，译文以下划线形式显示在原文下方。",
+                title: i18n::t!("9ba27619e4a34c53"),
+                description: i18n::t!("1f17ceb9ed561cad"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("hover_translation.enabled"),
@@ -2158,8 +2232,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "翻译渠道",
-                description: "用于翻译的语言模型提供商，对应 language_models 中配置的渠道（如 openai_compatible、anthropic、ollama）。留空则使用默认快速模型。快捷键翻译（editor::TranslateSelection）也使用该渠道。",
+                title: i18n::t!("148475fdd9ea8520"),
+                description: i18n::t!("32f62f10d655753a"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("hover_translation.provider"),
@@ -2181,8 +2255,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "翻译模型",
-                description: "用于翻译的模型名称，需由所选翻译渠道提供。",
+                title: i18n::t!("1b3ae8feb8b283ea"),
+                description: i18n::t!("33ec843199d56ac3"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("hover_translation.model"),
@@ -2200,8 +2274,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "目标语言",
-                description: "翻译的目标语言。",
+                title: i18n::t!("966a23e84aedeea5"),
+                description: i18n::t!("77e285dcda49b9ae"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("hover_translation.target_language"),
@@ -2223,8 +2297,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "最大翻译字符数",
-                description: "发送给模型翻译的文档最大字符数，超出部分将被截断，用于控制 token 消耗。",
+                title: i18n::t!("e42cebb3a2521580"),
+                description: i18n::t!("46f1de338f4324ea"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("hover_translation.max_chars"),
@@ -2246,8 +2320,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "持久化翻译缓存",
-                description: "将翻译结果保存到磁盘缓存，跨会话复用，避免重复调用模型翻译相同内容。",
+                title: i18n::t!("8818e0dd39df695f"),
+                description: i18n::t!("6027936434165b0d"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("hover_translation.cache_persist"),
@@ -2269,8 +2343,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "缓存大小上限",
-                description: "磁盘翻译缓存的最大字节数（默认 5 MiB）。超出后按使用频率、最近查看时间和占用大小淘汰最不常用的条目。",
+                title: i18n::t!("62b175a0af31aad1"),
+                description: i18n::t!("aced275fccbd996d"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("hover_translation.cache_max_bytes"),
@@ -2296,10 +2370,10 @@ fn editor_page() -> SettingsPage {
 
     fn hover_popover_section() -> [SettingsPageItem; 5] {
         [
-            SettingsPageItem::SectionHeader("悬停弹出"),
+            SettingsPageItem::SectionHeader(i18n::t!("27473887e269cc16")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "启用",
-                description: "在编辑器中将鼠标悬停在符号上时显示信息悬停框。",
+                title: i18n::t!("f4f0ead1116b5b62"),
+                description: i18n::t!("626ac00970222e6d"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("hover_popover_enabled"),
@@ -2313,8 +2387,8 @@ fn editor_page() -> SettingsPage {
             }),
             // todo(settings ui): add units to this number input
             SettingsPageItem::SettingItem(SettingItem {
-                title: "延迟",
-                description: "显示信息悬停框前等待的时间（毫秒）。",
+                title: i18n::t!("18045b8c40f135cd"),
+                description: i18n::t!("8dd87b135222720d"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("hover_popover_delay"),
@@ -2327,8 +2401,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "粘性",
-                description: "当鼠标移向悬停弹出时是否保持显示，允许与其内容交互。",
+                title: i18n::t!("ee3ed785cc97494f"),
+                description: i18n::t!("43c5f10cf17e430d"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("hover_popover_sticky"),
@@ -2342,8 +2416,8 @@ fn editor_page() -> SettingsPage {
             }),
             // todo(settings ui): add units to this number input
             SettingsPageItem::SettingItem(SettingItem {
-                title: "隐藏延迟",
-                description: "鼠标移开后隐藏悬停弹出前等待的时间（毫秒）。",
+                title: i18n::t!("18716faa275b8a69"),
+                description: i18n::t!("0031362a252d3e4a"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("hover_popover_hiding_delay"),
@@ -2362,10 +2436,10 @@ fn editor_page() -> SettingsPage {
 
     fn drag_and_drop_selection_section() -> [SettingsPageItem; 3] {
         [
-            SettingsPageItem::SectionHeader("拖放选择"),
+            SettingsPageItem::SectionHeader(i18n::t!("6fe152bffbe86018")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "启用",
-                description: "启用拖放选择。",
+                title: i18n::t!("f4f0ead1116b5b62"),
+                description: i18n::t!("015f590007de190b"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("drag_and_drop_selection.enabled"),
@@ -2388,8 +2462,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "延迟",
-                description: "拖放选择开始前的延迟（毫秒）。",
+                title: i18n::t!("18045b8c40f135cd"),
+                description: i18n::t!("7f252b23a98cd6b4"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("drag_and_drop_selection.delay"),
@@ -2416,10 +2490,10 @@ fn editor_page() -> SettingsPage {
 
     fn gutter_section() -> [SettingsPageItem; 10] {
         [
-            SettingsPageItem::SectionHeader("装订线"),
+            SettingsPageItem::SectionHeader(i18n::t!("17959d2bc972a09f")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "显示行号",
-                description: "在装订线中显示行号。",
+                title: i18n::t!("f7cfa333b5d14095"),
+                description: i18n::t!("99b6587c88233ad3"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("gutter.line_numbers"),
@@ -2442,8 +2516,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "相对行号",
-                description: "控制编辑器装订线中的行号显示。\"disabled\" 显示绝对行号，\"enabled\" 为每个绝对行显示相对行号，\"wrapped\" 为每行（包括换行行）显示相对行号。",
+                title: i18n::t!("9e6953efd4f8f098"),
+                description: i18n::t!("1580cb2658d30aa6"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("relative_line_numbers"),
@@ -2456,8 +2530,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "显示可运行按钮",
-                description: "在装订线中显示可运行按钮。",
+                title: i18n::t!("988742643affbed6"),
+                description: i18n::t!("9ba773654c04123c"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("gutter.runnables"),
@@ -2480,8 +2554,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "显示断点",
-                description: "在装订线中显示断点。",
+                title: i18n::t!("8ec39c792d765bed"),
+                description: i18n::t!("f3928cb2b4f4e2e7"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("gutter.breakpoints"),
@@ -2504,8 +2578,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "显示书签",
-                description: "在装订线中显示书签。",
+                title: i18n::t!("140b3a290cc0ed06"),
+                description: i18n::t!("ca197bee25b77ca6"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("gutter.bookmarks"),
@@ -2528,8 +2602,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "显示折叠",
-                description: "在装订线中显示代码折叠控件。",
+                title: i18n::t!("bbb8812ed5cc8237"),
+                description: i18n::t!("d1535a9fca6f25a2"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("gutter.folds"),
@@ -2548,8 +2622,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "最小行号位数",
-                description: "在装订线中保留的最小字符数。",
+                title: i18n::t!("2102dc89672900df"),
+                description: i18n::t!("5415d65f73dedc4a"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("gutter.min_line_number_digits"),
@@ -2573,8 +2647,8 @@ fn editor_page() -> SettingsPage {
             }),
             SettingsPageItem::DynamicItem(DynamicItem {
                 discriminant: SettingItem {
-                    title: "Git 装订线宽度",
-                    description: "装订线中 Git 差异指示器的宽度（像素）。未设置时，宽度随缓冲区字体大小缩放。",
+                    title: i18n::t!("d6e681d957c42897"),
+                    description: i18n::t!("26c416c201064d06"),
                     field: Box::new(SettingField {
                         organization_override: None,
                         json_path: Some("gutter.git_gutter_width$"),
@@ -2628,8 +2702,8 @@ fn editor_page() -> SettingsPage {
                         settings::GitGutterWidthDiscriminants::Default => vec![],
                         settings::GitGutterWidthDiscriminants::Custom => vec![SettingItem {
                             files: USER,
-                            title: "自定义宽度",
-                            description: "Git 差异指示器的宽度（像素）。",
+                            title: i18n::t!("07616794f0ad7344"),
+                            description: i18n::t!("2eef9c6cf29c2437"),
                             field: Box::new(SettingField {
                                 organization_override: None,
                                 json_path: Some("gutter.git_gutter_width"),
@@ -2663,8 +2737,8 @@ fn editor_page() -> SettingsPage {
                     .collect(),
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "内联代码操作",
-                description: "在缓冲区行开头显示代码操作按钮。",
+                title: i18n::t!("4201c13fbaaf1f85"),
+                description: i18n::t!("2305f749a9c9b088"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("inline_code_actions"),
@@ -2681,10 +2755,10 @@ fn editor_page() -> SettingsPage {
 
     fn scrollbar_section() -> [SettingsPageItem; 10] {
         [
-            SettingsPageItem::SectionHeader("滚动条"),
+            SettingsPageItem::SectionHeader(i18n::t!("53bcc015611bb7fa")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "显示",
-                description: "何时在编辑器中显示滚动条。",
+                title: i18n::t!("4e1449e7d5e50593"),
+                description: i18n::t!("7e8f2977ba35d157"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("scrollbar"),
@@ -2703,8 +2777,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "光标",
-                description: "在滚动条中显示光标位置。",
+                title: i18n::t!("47a75ca0b8fef37c"),
+                description: i18n::t!("0b6abe53d3cf5e60"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("scrollbar.cursors"),
@@ -2723,8 +2797,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Git 差异",
-                description: "在滚动条中显示 Git 差异指示器。",
+                title: i18n::t!("6a556c4bf3b83cf8"),
+                description: i18n::t!("90ab70ce8d6cf58f"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("scrollbar.git_diff"),
@@ -2748,8 +2822,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "搜索结果",
-                description: "在滚动条中显示缓冲区搜索结果指示器。",
+                title: i18n::t!("88d72ece7cf76737"),
+                description: i18n::t!("c2cdcdb63659ffb4"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("scrollbar.search_results"),
@@ -2773,8 +2847,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "选中文本",
-                description: "在滚动条中显示选中文本出现位置。",
+                title: i18n::t!("a12b558baecbdaf1"),
+                description: i18n::t!("abd8a64a96537351"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("scrollbar.selected_text"),
@@ -2798,8 +2872,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "选中符号",
-                description: "在滚动条中显示选中符号出现位置。",
+                title: i18n::t!("261d3ebb49628b68"),
+                description: i18n::t!("057291e45c93ed9b"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("scrollbar.selected_symbol"),
@@ -2823,8 +2897,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "诊断",
-                description: "在滚动条中显示哪些诊断指示器。",
+                title: i18n::t!("40ff6300f9817deb"),
+                description: i18n::t!("efe494fdfc63d189"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("scrollbar.diagnostics"),
@@ -2848,8 +2922,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "水平滚动条",
-                description: "为 false 时，强制禁用水平滚动条。",
+                title: i18n::t!("d1d1b9b2a5211a53"),
+                description: i18n::t!("cc3ab673d56b9c6b"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("scrollbar.axes.horizontal"),
@@ -2877,8 +2951,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "垂直滚动条",
-                description: "为 false 时，强制禁用垂直滚动条。",
+                title: i18n::t!("20f6657acf74d947"),
+                description: i18n::t!("75b10fc45555439a"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("scrollbar.axes.vertical"),
@@ -2910,10 +2984,10 @@ fn editor_page() -> SettingsPage {
 
     fn minimap_section() -> [SettingsPageItem; 7] {
         [
-            SettingsPageItem::SectionHeader("缩略图"),
+            SettingsPageItem::SectionHeader(i18n::t!("a623478771b1a95b")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "显示",
-                description: "何时在编辑器中显示缩略图。",
+                title: i18n::t!("4e1449e7d5e50593"),
+                description: i18n::t!("108588f49a7845af"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("minimap.show"),
@@ -2928,8 +3002,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "显示位置",
-                description: "在编辑器中的何处显示缩略图。",
+                title: i18n::t!("5ac9489c03e4e9f9"),
+                description: i18n::t!("a5ec68711d179605"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("minimap.display_in"),
@@ -2953,8 +3027,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "缩略图滑块",
-                description: "何时显示缩略图滑块。",
+                title: i18n::t!("9348e939e4965a5d"),
+                description: i18n::t!("f60900ba226b6c14"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("minimap.thumb"),
@@ -2973,8 +3047,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "滑块边框",
-                description: "缩略图滚动条滑块的边框样式。",
+                title: i18n::t!("eb95b663e64122bc"),
+                description: i18n::t!("7be4b2914954b0ea"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("minimap.thumb_border"),
@@ -2998,8 +3072,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "当前行高亮",
-                description: "在缩略图中高亮当前行的方式。",
+                title: i18n::t!("78958d6e888cebed"),
+                description: i18n::t!("40be6f0b2d899a33"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("minimap.current_line_highlight"),
@@ -3023,8 +3097,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "最大宽度列数",
-                description: "缩略图中显示的最大列数。",
+                title: i18n::t!("77c74c892a209547"),
+                description: i18n::t!("5f95d9a717cd1fc3"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("minimap.max_width_columns"),
@@ -3052,10 +3126,10 @@ fn editor_page() -> SettingsPage {
 
     fn toolbar_section() -> [SettingsPageItem; 6] {
         [
-            SettingsPageItem::SectionHeader("工具栏"),
+            SettingsPageItem::SectionHeader(i18n::t!("3166d8af51f15eb6")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "面包屑导航",
-                description: "显示面包屑导航。",
+                title: i18n::t!("6c3f7b6a12a97468"),
+                description: i18n::t!("1a0a8e89fb85c2dd"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("toolbar.breadcrumbs"),
@@ -3079,8 +3153,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "快速操作",
-                description: "显示快速操作按钮（如搜索、选择、编辑器控件等）。",
+                title: i18n::t!("2cf085b4eb79248a"),
+                description: i18n::t!("4a9160e69aba2741"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("toolbar.quick_actions"),
@@ -3104,8 +3178,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "选择菜单",
-                description: "在编辑器工具栏中显示选择菜单。",
+                title: i18n::t!("8d74a69aba011325"),
+                description: i18n::t!("9593120c17917448"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("toolbar.selections_menu"),
@@ -3129,8 +3203,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Agent 审查",
-                description: "在编辑器工具栏中显示 Agent 审查按钮。",
+                title: i18n::t!("6bdf9057c4e8df71"),
+                description: i18n::t!("cd0c48254fd226c9"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("toolbar.agent_review"),
@@ -3154,8 +3228,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "代码操作",
-                description: "在编辑器工具栏中显示代码操作按钮。",
+                title: i18n::t!("567c0d21fcd613b5"),
+                description: i18n::t!("8aad09c242a336bf"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("toolbar.code_actions"),
@@ -3185,8 +3259,8 @@ fn editor_page() -> SettingsPage {
         [
             SettingsPageItem::SectionHeader("Vim"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "默认模式",
-                description: "Vim 启动时的默认模式。",
+                title: i18n::t!("ca0e02c309a977df"),
+                description: i18n::t!("c7ae0c3ba33aaf51"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("vim.default_mode"),
@@ -3199,8 +3273,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "切换相对行号",
-                description: "在 Vim 模式中切换相对行号。",
+                title: i18n::t!("469e6d30e96519ea"),
+                description: i18n::t!("ad1e613da68ae482"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("vim.toggle_relative_line_numbers"),
@@ -3222,8 +3296,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "使用系统剪贴板",
-                description: "控制在 Vim 模式中何时使用系统剪贴板。",
+                title: i18n::t!("54241968a990dbaf"),
+                description: i18n::t!("000c1a4b303623f6"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("vim.use_system_clipboard"),
@@ -3241,8 +3315,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "使用智能大小写查找",
-                description: "在 Vim 模式中启用智能大小写搜索。",
+                title: i18n::t!("b048ed457a88bdbc"),
+                description: i18n::t!("ad4edb44a04a703e"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("vim.use_smartcase_find"),
@@ -3260,8 +3334,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "全局替换默认",
-                description: "启用后，:substitute 命令默认替换行中所有匹配项。'g' 标志随后切换此行为。",
+                title: i18n::t!("6dc3e367c159af87"),
+                description: i18n::t!("f25b0592e4d11dd8"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("vim.gdefault"),
@@ -3274,8 +3348,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "复制高亮持续时间",
-                description: "在 Vim 模式中高亮复制文本的持续时间（毫秒）。",
+                title: i18n::t!("3f953f0f3414ce68"),
+                description: i18n::t!("f9f5a9209bbed027"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("vim.highlight_on_yank_duration"),
@@ -3297,8 +3371,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "正则表达式搜索",
-                description: "在 Vim 搜索中默认使用正则表达式搜索。",
+                title: i18n::t!("1b7b160b02769846"),
+                description: i18n::t!("43a5517b903bbb1f"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("vim.use_regex_search"),
@@ -3316,8 +3390,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "在普通模式中显示编辑预测",
-                description: "是否在普通模式中显示编辑预测。默认情况下，仅在插入和替换模式中显示编辑预测。",
+                title: i18n::t!("5abf25647be21e73"),
+                description: i18n::t!("9533a149c969acd0"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("vim.show_edit_predictions_in_normal_mode"),
@@ -3339,8 +3413,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "光标形状 - 普通模式",
-                description: "普通模式的光标形状。",
+                title: i18n::t!("b794013a0ce6dfc2"),
+                description: i18n::t!("71242a773af93165"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("vim.cursor_shape.normal"),
@@ -3366,8 +3440,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "光标形状 - 插入模式",
-                description: "插入模式的光标形状。继承使用编辑器的光标形状。",
+                title: i18n::t!("7e9a7f0f048ea120"),
+                description: i18n::t!("3c2aa19adf2e5255"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("vim.cursor_shape.insert"),
@@ -3393,8 +3467,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "光标形状 - 替换模式",
-                description: "替换模式的光标形状。",
+                title: i18n::t!("a57c953ab965c06c"),
+                description: i18n::t!("d34b107ed872e031"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("vim.cursor_shape.replace"),
@@ -3420,8 +3494,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "光标形状 - 可视模式",
-                description: "可视模式的光标形状。",
+                title: i18n::t!("f0ed1ecb4616439e"),
+                description: i18n::t!("aa8ef27f70cdfa65"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("vim.cursor_shape.visual"),
@@ -3447,8 +3521,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "自定义二合字母",
-                description: "Vim 模式的自定义二合字母映射。",
+                title: i18n::t!("a110228e6a567c6c"),
+                description: i18n::t!("57e78bb05b1cb2ff"),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -3486,7 +3560,7 @@ fn editor_page() -> SettingsPage {
     );
 
     SettingsPage {
-        title: "编辑器",
+        title: i18n::t!("3b7f5965bdbfee34"),
         items: items,
     }
 }
@@ -3494,10 +3568,10 @@ fn editor_page() -> SettingsPage {
 fn languages_and_tools_page(cx: &App) -> SettingsPage {
     fn file_types_section() -> [SettingsPageItem; 2] {
         [
-            SettingsPageItem::SectionHeader("文件类型"),
+            SettingsPageItem::SectionHeader(i18n::t!("9a8457b3dc844478")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "文件类型关联",
-                description: "从语言到应被视为该语言的文件和文件扩展名的映射。",
+                title: i18n::t!("e94c16837e3ef00c"),
+                description: i18n::t!("3ada78fa15c834d4"),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -3519,10 +3593,10 @@ fn languages_and_tools_page(cx: &App) -> SettingsPage {
 
     fn diagnostics_section() -> [SettingsPageItem; 3] {
         [
-            SettingsPageItem::SectionHeader("诊断"),
+            SettingsPageItem::SectionHeader(i18n::t!("40ff6300f9817deb")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "最大严重级别",
-                description: "用于过滤编辑器中显示的诊断的级别。",
+                title: i18n::t!("52cf66734153babd"),
+                description: i18n::t!("740f4a182f929bdb"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("diagnostics_max_severity"),
@@ -3537,8 +3611,8 @@ fn languages_and_tools_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "包含警告",
-                description: "默认是否显示警告。",
+                title: i18n::t!("9e4cbe5f6cb51559"),
+                description: i18n::t!("83d1c2facd844f92"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("diagnostics.include_warnings"),
@@ -3564,10 +3638,10 @@ fn languages_and_tools_page(cx: &App) -> SettingsPage {
 
     fn inline_diagnostics_section() -> [SettingsPageItem; 5] {
         [
-            SettingsPageItem::SectionHeader("内联诊断"),
+            SettingsPageItem::SectionHeader(i18n::t!("874ee510372ec389")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "启用",
-                description: "是否内联显示诊断。",
+                title: i18n::t!("f4f0ead1116b5b62"),
+                description: i18n::t!("ad796846f8752204"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("diagnostics.inline.enabled"),
@@ -3593,8 +3667,8 @@ fn languages_and_tools_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "更新防抖",
-                description: "上次诊断更新后显示内联诊断的延迟时间（毫秒）。",
+                title: i18n::t!("a60a7904f66371d2"),
+                description: i18n::t!("50d4db21cbcc2aec"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("diagnostics.inline.update_debounce_ms"),
@@ -3620,8 +3694,8 @@ fn languages_and_tools_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "内边距",
-                description: "源代码行末尾与内联诊断开始之间的内边距量。",
+                title: i18n::t!("c2dc4da52ed35127"),
+                description: i18n::t!("ab162ef09644cb2a"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("diagnostics.inline.padding"),
@@ -3647,8 +3721,8 @@ fn languages_and_tools_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "最小列数",
-                description: "显示内联诊断的最小列数。",
+                title: i18n::t!("10f88762da79a5db"),
+                description: i18n::t!("0755192799d225a3"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("diagnostics.inline.min_column"),
@@ -3680,8 +3754,8 @@ fn languages_and_tools_page(cx: &App) -> SettingsPage {
         [
             SettingsPageItem::SectionHeader("LSP Pull Diagnostics"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "启用",
-                description: "是否拉取语言服务器提供的诊断信息。",
+                title: i18n::t!("f4f0ead1116b5b62"),
+                description: i18n::t!("a0b27328788dc9b0"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("diagnostics.lsp_pull_diagnostics.enabled"),
@@ -3708,8 +3782,8 @@ fn languages_and_tools_page(cx: &App) -> SettingsPage {
             }),
             // todo(settings_ui): Needs unit
             SettingsPageItem::SettingItem(SettingItem {
-                title: "防抖",
-                description: "从语言服务器拉取诊断信息前的最短等待时间。",
+                title: i18n::t!("1e9f8da0f725c8e8"),
+                description: i18n::t!("476baef0753e7de0"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("diagnostics.lsp_pull_diagnostics.debounce_ms"),
@@ -3741,8 +3815,8 @@ fn languages_and_tools_page(cx: &App) -> SettingsPage {
         [
             SettingsPageItem::SectionHeader("LSP Highlights"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "防抖",
-                description: "从语言查询高亮前的防抖延迟。",
+                title: i18n::t!("1e9f8da0f725c8e8"),
+                description: i18n::t!("b6840af071a8b24f"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("lsp_highlight_debounce"),
@@ -3762,38 +3836,35 @@ fn languages_and_tools_page(cx: &App) -> SettingsPage {
     fn languages_list_section(cx: &App) -> Box<[SettingsPageItem]> {
         // todo(settings_ui): Refresh on extension (un)/installed
         // Note that `crates/json_schema_store` solves the same problem, there is probably a way to unify the two
-        std::iter::once(SettingsPageItem::SectionHeader("语言"))
-            .chain(all_language_names(cx).into_iter().map(|language_name| {
-                let link = format!("languages.{language_name}");
-                SettingsPageItem::SubPageLink(SubPageLink {
-                    title: language_name,
-                    r#type: crate::SubPageType::Language,
-                    description: None,
-                    search_aliases: &[],
-                    json_path: Some(link.leak()),
-                    in_json: true,
-                    files: USER | PROJECT,
-                    render: |this, scroll_handle, window, cx| {
-                        let items: Box<[SettingsPageItem]> = concat_sections!(
-                            language_settings_data(),
-                            non_editor_language_settings_data(),
-                            edit_prediction_language_settings_section()
-                        );
-                        this.render_sub_page_items(
-                            items.iter().enumerate(),
-                            scroll_handle,
-                            window,
-                            cx,
-                        )
+        std::iter::once(SettingsPageItem::SectionHeader(i18n::t!(
+            "9f6fee1aba17a565"
+        )))
+        .chain(all_language_names(cx).into_iter().map(|language_name| {
+            let link = format!("languages.{language_name}");
+            SettingsPageItem::SubPageLink(SubPageLink {
+                title: language_name,
+                r#type: crate::SubPageType::Language,
+                description: None,
+                search_aliases: &[],
+                json_path: Some(link.leak()),
+                in_json: true,
+                files: USER | PROJECT,
+                render: |this, scroll_handle, window, cx| {
+                    let items: Box<[SettingsPageItem]> = concat_sections!(
+                        language_settings_data(),
+                        non_editor_language_settings_data(),
+                        edit_prediction_language_settings_section()
+                    );
+                    this.render_sub_page_items(items.iter().enumerate(), scroll_handle, window, cx)
                         .into_any_element()
-                    },
-                })
-            }))
-            .collect()
+                },
+            })
+        }))
+        .collect()
     }
 
     SettingsPage {
-        title: "语言与工具",
+        title: i18n::t!("c22e51a826c237d4"),
         items: {
             concat_sections!(
                 non_editor_language_settings_data(),
@@ -3813,8 +3884,8 @@ fn search_and_files_page() -> SettingsPage {
         [
             SettingsPageItem::SectionHeader("Search"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "全词匹配",
-                description: "默认搜索整个单词。",
+                title: i18n::t!("7fff7e76a48a8a43"),
+                description: i18n::t!("3a92d3d476d73751"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("search.whole_word"),
@@ -3833,8 +3904,8 @@ fn search_and_files_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "区分大小写",
-                description: "默认区分大小写搜索。",
+                title: i18n::t!("8c7e3447ec67023e"),
+                description: i18n::t!("81002dba1918879a"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("search.case_sensitive"),
@@ -3858,8 +3929,8 @@ fn search_and_files_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "使用智能大小写搜索",
-                description: "是否根据搜索查询自动启用区分大小写搜索。",
+                title: i18n::t!("23c9b65c53286e16"),
+                description: i18n::t!("e09c6c672c6dce97"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("use_smartcase_search"),
@@ -3872,8 +3943,8 @@ fn search_and_files_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "包含忽略文件",
-                description: "默认在搜索结果中包含被忽略的文件。",
+                title: i18n::t!("6beb9d61f866fa56"),
+                description: i18n::t!("9bb3857eae5d2b1d"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("search.include_ignored"),
@@ -3897,8 +3968,8 @@ fn search_and_files_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "正则表达式",
-                description: "默认使用正则表达式搜索。",
+                title: i18n::t!("af33e62808ca6837"),
+                description: i18n::t!("7727b66f3996e17a"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("search.regex"),
@@ -3913,8 +3984,8 @@ fn search_and_files_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "搜索循环",
-                description: "编辑器搜索结果是否循环。",
+                title: i18n::t!("0980a4f0243faa47"),
+                description: i18n::t!("edab5dfd459e859c"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("search_wrap"),
@@ -3927,8 +3998,8 @@ fn search_and_files_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "匹配居中",
-                description: "是否在编辑器中将当前匹配项居中显示",
+                title: i18n::t!("d59ebc3ac3464687"),
+                description: i18n::t!("d0e39a7ad9a63e78"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("editor.search.center_on_match"),
@@ -3951,8 +4022,8 @@ fn search_and_files_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "输入时搜索",
-                description: "在项目搜索中输入时立即开始搜索，无需按回车键。",
+                title: i18n::t!("c102d09dfbb304e3"),
+                description: i18n::t!("9547b158901d0dfa"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("editor.search.search_on_type"),
@@ -3975,8 +4046,8 @@ fn search_and_files_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "从光标处预填搜索查询",
-                description: "何时根据光标下的文本填充新搜索的查询。",
+                title: i18n::t!("33a6ca9eeb0c380e"),
+                description: i18n::t!("c743b387f155efb1"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("seed_search_query_from_cursor"),
@@ -4000,8 +4071,8 @@ fn search_and_files_page() -> SettingsPage {
         [
             SettingsPageItem::SectionHeader("Command Palette"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Use Command History",
-                description: "Whether to use command history ranking for sorting in the command palette.",
+                title: i18n::t!("d166cc48b6030749"),
+                description: i18n::t!("71f82b1ef2124fb0"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("command_palette.use_command_history"),
@@ -4027,11 +4098,11 @@ fn search_and_files_page() -> SettingsPage {
 
     fn file_finder_section() -> [SettingsPageItem; 4] {
         [
-            SettingsPageItem::SectionHeader("文件查找器"),
+            SettingsPageItem::SectionHeader(i18n::t!("6d2716c20338d09a")),
             // todo: null by default
             SettingsPageItem::SettingItem(SettingItem {
-                title: "搜索中包含忽略文件",
-                description: "搜索时使用 git 忽略的文件。",
+                title: i18n::t!("3c1ad49d05df20fa"),
+                description: i18n::t!("7dfc27b214eba22e"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("file_finder.include_ignored"),
@@ -4053,8 +4124,8 @@ fn search_and_files_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "文件图标",
-                description: "在文件查找器中显示文件图标。",
+                title: i18n::t!("f78d0dfd6e2b782c"),
+                description: i18n::t!("cc9b7122f281a503"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("file_finder.file_icons"),
@@ -4072,8 +4143,8 @@ fn search_and_files_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "搜索中跳过活动文件焦点",
-                description: "文件查找器是否应跳过搜索结果中活动文件的焦点。",
+                title: i18n::t!("f60a32c25631d135"),
+                description: i18n::t!("be754a8289c11207"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("file_finder.skip_focus_for_active_in_search"),
@@ -4099,10 +4170,10 @@ fn search_and_files_page() -> SettingsPage {
 
     fn file_scan_section() -> [SettingsPageItem; 7] {
         [
-            SettingsPageItem::SectionHeader("文件扫描"),
+            SettingsPageItem::SectionHeader(i18n::t!("bed24303d8574311")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "文件扫描排除项",
-                description: "将被 Zed 完全排除的文件或文件通配模式。它们在文件扫描、文件搜索期间将被跳过，且不会显示在项目文件树中。优先级高于「文件扫描包含项」。",
+                title: i18n::t!("ff570eb57b21d2ba"),
+                description: i18n::t!("26134494eacbf430"),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -4124,8 +4195,8 @@ fn search_and_files_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "文件扫描包含项",
-                description: "将被 Zed 包含的文件或文件通配模式，即使被 git 忽略。适用于未被 git 跟踪但对项目仍然重要的文件。请注意，过于宽泛的通配模式可能会减慢 Zed 的文件扫描速度。「文件扫描排除项」优先于这些包含项。",
+                title: i18n::t!("3221426d2e3862db"),
+                description: i18n::t!("2d19f1dcf2304b64"),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -4147,8 +4218,8 @@ fn search_and_files_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "文件扫描深度",
-                description: "在 Git 仓库之外主动索引的最大目录深度；达到或超过此深度的目录内容按需索引。根目录浅于此深度的仓库始终完整索引。在未以 Git 仓库为根的项目中，直接位于根文件夹内的仓库会立即启用其 Git 功能；更深的仓库在首次使用时启用。0 表示无限制并立即启用所有 Git 仓库。",
+                title: i18n::t!("24b496e200dfb02d"),
+                description: i18n::t!("c71504a08d04de3e"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("file_scan_depth"),
@@ -4163,8 +4234,8 @@ fn search_and_files_page() -> SettingsPage {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "扫描符号链接",
-                description: "何时扫描链接目录的内容。",
+                title: i18n::t!("63a4d42187dddfcc"),
+                description: i18n::t!("b3846057b956fbc0"),
                 field: Box::new(SettingField {
                     json_path: Some("scan_symlinks"),
                     organization_override: None,
@@ -4179,8 +4250,8 @@ fn search_and_files_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "恢复文件状态",
-                description: "重新打开时恢复先前的文件状态。",
+                title: i18n::t!("ee6da3d1dce0f7ef"),
+                description: i18n::t!("1c8c51ab48500baf"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("restore_on_file_reopen"),
@@ -4195,8 +4266,8 @@ fn search_and_files_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "删除时关闭文件",
-                description: "自动关闭已删除的文件。",
+                title: i18n::t!("75940ec05e8617bc"),
+                description: i18n::t!("bc8c98dba09b0865"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("close_on_file_delete"),
@@ -4214,7 +4285,7 @@ fn search_and_files_page() -> SettingsPage {
     }
 
     SettingsPage {
-        title: "搜索和文件",
+        title: i18n::t!("03d27c8d16837132"),
         items: concat_sections![
             search_section(),
             command_palette_section(),
@@ -4227,10 +4298,10 @@ fn search_and_files_page() -> SettingsPage {
 fn window_and_layout_page() -> SettingsPage {
     fn status_bar_section() -> [SettingsPageItem; 12] {
         [
-            SettingsPageItem::SectionHeader("状态栏"),
+            SettingsPageItem::SectionHeader(i18n::t!("c8592da567d69005")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "项目面板按钮",
-                description: "在状态栏中显示项目面板按钮。",
+                title: i18n::t!("1235e45b8400283c"),
+                description: i18n::t!("85d8c0c3fdf52ad6"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.button"),
@@ -4248,8 +4319,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "活动语言按钮",
-                description: "在状态栏中显示活动语言按钮。",
+                title: i18n::t!("e48a7a6cc0c0647b"),
+                description: i18n::t!("25e152ca00f17737"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("status_bar.active_language_button"),
@@ -4271,8 +4342,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "活动编码按钮",
-                description: "控制何时在状态栏中显示活动编码。",
+                title: i18n::t!("1b80f4823fa1b6c3"),
+                description: i18n::t!("6af14e1ebb3391ff"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("status_bar.active_encoding_button"),
@@ -4294,8 +4365,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "光标位置按钮",
-                description: "在状态栏中显示光标位置按钮。",
+                title: i18n::t!("8e1f63841c5d87a6"),
+                description: i18n::t!("8c4571d8652ab733"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("status_bar.cursor_position_button"),
@@ -4317,8 +4388,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "行尾按钮",
-                description: "在状态栏中显示活动行尾按钮。",
+                title: i18n::t!("6960e6fbd4298e2d"),
+                description: i18n::t!("7913d4a41d8a41e7"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("status_bar.line_endings_button"),
@@ -4340,8 +4411,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "待完成按键指示器",
-                description: "等待多键快捷键的后续按键时显示指示器；如果按键有超时限制，则显示倒计时，悬停时暂停计时。启用 Which-key 菜单后，不显示该指示器的快捷键预览弹窗。",
+                title: i18n::t!("2bf1bcb1c21d3169"),
+                description: i18n::t!("d0ca8c54581839c7"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("status_bar.pending_keystrokes_indicator"),
@@ -4363,8 +4434,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "终端按钮",
-                description: "在状态栏中显示终端按钮。",
+                title: i18n::t!("8c7f4de7be084cee"),
+                description: i18n::t!("d4f097c7d51ed616"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.button"),
@@ -4377,8 +4448,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "诊断按钮",
-                description: "在状态栏中显示项目诊断按钮。",
+                title: i18n::t!("04670c44935898c4"),
+                description: i18n::t!("4cdac2886a4bbbfb"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("diagnostics.button"),
@@ -4391,8 +4462,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "项目搜索按钮",
-                description: "在状态栏中显示项目搜索按钮。",
+                title: i18n::t!("e53231864c745408"),
+                description: i18n::t!("5d2afbf84c51dde2"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("search.button"),
@@ -4411,8 +4482,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "调试器按钮",
-                description: "在状态栏中显示调试器按钮。",
+                title: i18n::t!("62ab43dfc6943206"),
+                description: i18n::t!("4df77b026d91f9ec"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("debugger.button"),
@@ -4425,8 +4496,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "活动文件名",
-                description: "在状态栏中显示活动文件的名称。",
+                title: i18n::t!("d9cdce4a7dd52954"),
+                description: i18n::t!("5f7e42392f7b7849"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("status_bar.show_active_file"),
@@ -4452,10 +4523,10 @@ fn window_and_layout_page() -> SettingsPage {
 
     fn title_bar_section() -> [SettingsPageItem; 11] {
         [
-            SettingsPageItem::SectionHeader("标题栏"),
+            SettingsPageItem::SectionHeader(i18n::t!("c3ebe56c4633ef87")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "显示分支状态图标",
-                description: "在标题栏的分支图标上显示 git 状态指示器。",
+                title: i18n::t!("29409cc4faf25751"),
+                description: i18n::t!("315c790e7fbe87ef"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("title_bar.show_branch_status_icon"),
@@ -4477,8 +4548,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "显示分支名称",
-                description: "在标题栏中显示分支名称按钮。",
+                title: i18n::t!("b8c9f5e3118eaf80"),
+                description: i18n::t!("49e339d984aa6b6d"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("title_bar.show_branch_name"),
@@ -4500,8 +4571,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "显示工作树名称",
-                description: "在标题栏中显示工作树名称按钮。",
+                title: i18n::t!("24cceeaa0ee73a9a"),
+                description: i18n::t!("7eacc5d40cd6a1ad"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("title_bar.show_worktree_name"),
@@ -4523,8 +4594,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "显示项目项",
-                description: "在标题栏中显示项目主机和名称。",
+                title: i18n::t!("5710a6cfde9ee7c4"),
+                description: i18n::t!("60d2834a093a7f7a"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("title_bar.show_project_items"),
@@ -4546,8 +4617,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "显示引导横幅",
-                description: "在标题栏中显示宣布新功能的横幅。",
+                title: i18n::t!("010c44f6c6c10320"),
+                description: i18n::t!("bb76cb38c621852f"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("title_bar.show_onboarding_banner"),
@@ -4569,8 +4640,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "显示登录",
-                description: "在标题栏中显示登录按钮。",
+                title: i18n::t!("0713b4380997a283"),
+                description: i18n::t!("4344c4e4f18ad775"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("title_bar.show_sign_in"),
@@ -4588,8 +4659,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "显示用户菜单",
-                description: "在标题栏中显示用户菜单按钮。",
+                title: i18n::t!("426c5c81529899e6"),
+                description: i18n::t!("6cf1cf0052c85266"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("title_bar.show_user_menu"),
@@ -4607,8 +4678,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "显示用户头像",
-                description: "在标题栏中显示用户头像。",
+                title: i18n::t!("ca91bf43d61c966f"),
+                description: i18n::t!("7d1b70cf70b22fc1"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("title_bar.show_user_picture"),
@@ -4630,8 +4701,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "显示菜单",
-                description: "在标题栏中显示菜单。",
+                title: i18n::t!("b2734abb1a173cdf"),
+                description: i18n::t!("535fb088140ecdd1"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("title_bar.show_menus"),
@@ -4648,48 +4719,47 @@ fn window_and_layout_page() -> SettingsPage {
                 metadata: None,
                 files: USER,
             }),
-            SettingsPageItem::DynamicItem(
-                DynamicItem {
-                    discriminant: SettingItem {
-                        files: USER,
-                        title: "按钮布局",
-                        description: "（仅限 Linux）选择窗口控制按钮在标题栏中的布局方式。",
-                        field: Box::new(SettingField {
-                            organization_override: None,
-                            json_path: Some("title_bar.button_layout$"),
-                            pick: |settings_content| {
-                                Some(
-                                    &dynamic_variants::<settings::WindowButtonLayoutContent>()
-                                        [settings_content
-                                            .title_bar
-                                            .as_ref()?
-                                            .button_layout
-                                            .as_ref()?
-                                            .discriminant()
-                                            as usize],
-                                )
-                            },
-                            write: |settings_content, value, _| {
-                                let Some(value) = value else {
-                                    settings_content
+            SettingsPageItem::DynamicItem(DynamicItem {
+                discriminant: SettingItem {
+                    files: USER,
+                    title: i18n::t!("6d0bed22c93a94a0"),
+                    description: i18n::t!("975490bbef5929de"),
+                    field: Box::new(SettingField {
+                        organization_override: None,
+                        json_path: Some("title_bar.button_layout$"),
+                        pick: |settings_content| {
+                            Some(
+                                &dynamic_variants::<settings::WindowButtonLayoutContent>()
+                                    [settings_content
                                         .title_bar
-                                        .get_or_insert_default()
-                                        .button_layout = None;
-                                    return;
-                                };
-
-                                let current_custom_layout = settings_content
+                                        .as_ref()?
+                                        .button_layout
+                                        .as_ref()?
+                                        .discriminant()
+                                        as usize],
+                            )
+                        },
+                        write: |settings_content, value, _| {
+                            let Some(value) = value else {
+                                settings_content
                                     .title_bar
-                                    .as_ref()
-                                    .and_then(|title_bar| title_bar.button_layout.as_ref())
-                                    .and_then(|button_layout| match button_layout {
-                                        settings::WindowButtonLayoutContent::Custom(layout) => {
-                                            Some(layout.clone())
-                                        }
-                                        _ => None,
-                                    });
+                                    .get_or_insert_default()
+                                    .button_layout = None;
+                                return;
+                            };
 
-                                let button_layout = match value {
+                            let current_custom_layout = settings_content
+                                .title_bar
+                                .as_ref()
+                                .and_then(|title_bar| title_bar.button_layout.as_ref())
+                                .and_then(|button_layout| match button_layout {
+                                    settings::WindowButtonLayoutContent::Custom(layout) => {
+                                        Some(layout.clone())
+                                    }
+                                    _ => None,
+                                });
+
+                            let button_layout = match value {
                                 settings::WindowButtonLayoutContentDiscriminants::PlatformDefault => {
                                     settings::WindowButtonLayoutContent::PlatformDefault
                                 }
@@ -4705,39 +4775,36 @@ fn window_and_layout_page() -> SettingsPage {
                                 }
                             };
 
-                                settings_content
-                                    .title_bar
-                                    .get_or_insert_default()
-                                    .button_layout = Some(button_layout);
-                            },
-                        }),
-                        metadata: None,
-                    },
-                    pick_discriminant: |settings_content| {
-                        Some(
                             settings_content
                                 .title_bar
-                                .as_ref()?
-                                .button_layout
-                                .as_ref()?
-                                .discriminant() as usize,
-                        )
-                    },
-                    fields:
-                        dynamic_variants::<settings::WindowButtonLayoutContent>()
-                            .into_iter()
-                            .map(|variant| {
-                                match variant {
+                                .get_or_insert_default()
+                                .button_layout = Some(button_layout);
+                        },
+                    }),
+                    metadata: None,
+                },
+                pick_discriminant: |settings_content| {
+                    Some(
+                        settings_content
+                            .title_bar
+                            .as_ref()?
+                            .button_layout
+                            .as_ref()?
+                            .discriminant() as usize,
+                    )
+                },
+                fields: dynamic_variants::<settings::WindowButtonLayoutContent>()
+                    .into_iter()
+                    .map(|variant| match variant {
                         settings::WindowButtonLayoutContentDiscriminants::PlatformDefault => {
                             vec![]
                         }
                         settings::WindowButtonLayoutContentDiscriminants::Standard => vec![],
-                        settings::WindowButtonLayoutContentDiscriminants::Custom => vec![
-                            SettingItem {
+                        settings::WindowButtonLayoutContentDiscriminants::Custom => {
+                            vec![SettingItem {
                                 files: USER,
-                                title: "自定义按钮布局",
-                                description:
-                                    "GNOME 风格的布局字符串，如 \"close:minimize,maximize\"。",
+                                title: i18n::t!("39f14bd3657ede8b"),
+                                description: i18n::t!("c1cf3b34837b4047"),
                                 field: Box::new(SettingField {
                                     organization_override: None,
                                     json_path: Some("title_bar.button_layout"),
@@ -4756,30 +4823,28 @@ fn window_and_layout_page() -> SettingsPage {
                                         settings_content
                                             .title_bar
                                             .get_or_insert_default()
-                                            .button_layout = value
-                                            .map(settings::WindowButtonLayoutContent::Custom);
+                                            .button_layout =
+                                            value.map(settings::WindowButtonLayoutContent::Custom);
                                     },
                                 }),
                                 metadata: Some(Box::new(SettingsFieldMetadata {
                                     placeholder: Some("close:minimize,maximize"),
                                     ..Default::default()
                                 })),
-                            },
-                        ],
-                    }
-                            })
-                            .collect(),
-                },
-            ),
+                            }]
+                        }
+                    })
+                    .collect(),
+            }),
         ]
     }
 
     fn tab_bar_section() -> [SettingsPageItem; 9] {
         [
-            SettingsPageItem::SectionHeader("标签栏"),
+            SettingsPageItem::SectionHeader(i18n::t!("c62deb22f9b2f98c")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "显示标签栏",
-                description: "在编辑器中显示标签栏。",
+                title: i18n::t!("ba4571eb66942a71"),
+                description: i18n::t!("7065b0f0fd9097d8"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("tab_bar.show"),
@@ -4792,8 +4857,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "标签中显示 Git 状态",
-                description: "在标签项上显示 Git 文件状态。",
+                title: i18n::t!("005a50765b8c067b"),
+                description: i18n::t!("daf5b97050c6a911"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("tabs.git_status"),
@@ -4806,8 +4871,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "标签中显示文件图标",
-                description: "显示标签的文件图标。",
+                title: i18n::t!("ebdc862811f0ec0b"),
+                description: i18n::t!("b42b257184b631e8"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("tabs.file_icons"),
@@ -4820,8 +4885,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "标签关闭按钮位置",
-                description: "标签中关闭按钮的位置。",
+                title: i18n::t!("7892cad3b7219d60"),
+                description: i18n::t!("a24e4ee3e6a50c00"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("tabs.close_position"),
@@ -4837,8 +4902,8 @@ fn window_and_layout_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 files: USER,
-                title: "最大标签数",
-                description: "窗格中最大打开的标签数。不会关闭未保存的标签。",
+                title: i18n::t!("b15430bf745852eb"),
+                description: i18n::t!("c051a4747c0cfebf"),
                 // todo(settings_ui): The default for this value is null and it's use in code
                 // is complex, so I'm going to come back to this later
                 field: Box::new(
@@ -4855,8 +4920,8 @@ fn window_and_layout_page() -> SettingsPage {
                 metadata: None,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "显示导航历史按钮",
-                description: "在标签栏中显示导航历史按钮。",
+                title: i18n::t!("c7353e6fa4d7c820"),
+                description: i18n::t!("1777ba7728aa71c3"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("tab_bar.show_nav_history_buttons"),
@@ -4878,8 +4943,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "显示标签栏按钮",
-                description: "显示标签栏按钮（新建、拆分窗格、缩放）。",
+                title: i18n::t!("72744d02fee052d2"),
+                description: i18n::t!("9ab2c3ae4576d500"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("tab_bar.show_tab_bar_buttons"),
@@ -4901,8 +4966,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "固定标签布局",
-                description: "在未固定标签上方单独一行中显示固定标签。",
+                title: i18n::t!("03263dd9fed32aef"),
+                description: i18n::t!("66db8914fb43a80c"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("tab_bar.show_pinned_tabs_in_separate_row"),
@@ -4928,10 +4993,10 @@ fn window_and_layout_page() -> SettingsPage {
 
     fn tab_settings_section() -> [SettingsPageItem; 4] {
         [
-            SettingsPageItem::SectionHeader("标签设置"),
+            SettingsPageItem::SectionHeader(i18n::t!("9f7697216e24a014")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "关闭时激活",
-                description: "关闭当前标签后的行为。",
+                title: i18n::t!("945517953290058d"),
+                description: i18n::t!("bfbb827d22bc9231"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("tabs.activate_on_close"),
@@ -4949,8 +5014,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "标签显示诊断",
-                description: "在标签中标记哪些包含诊断错误/警告的文件。",
+                title: i18n::t!("25676f42dbc07103"),
+                description: i18n::t!("e71f4bf766e84f1d"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("tabs.show_diagnostics"),
@@ -4968,8 +5033,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "显示关闭按钮",
-                description: "控制标签关闭按钮的外观行为。",
+                title: i18n::t!("72404ccd86bfa2a5"),
+                description: i18n::t!("a6370b2b9ba53d6e"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("tabs.show_close_button"),
@@ -4991,10 +5056,10 @@ fn window_and_layout_page() -> SettingsPage {
 
     fn preview_tabs_section() -> [SettingsPageItem; 8] {
         [
-            SettingsPageItem::SectionHeader("预览标签"),
+            SettingsPageItem::SectionHeader(i18n::t!("b1781a3be7f2e6ca")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "启用预览标签",
-                description: "将打开的编辑器显示为预览标签。",
+                title: i18n::t!("1c2a5d250d4f8950"),
+                description: i18n::t!("468e9f2601e00ca3"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("preview_tabs.enabled"),
@@ -5012,8 +5077,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "从项目面板启用预览",
-                description: "通过单击或“打开”操作从项目面板打开文件时，是否以预览模式打开标签。",
+                title: i18n::t!("2fe2c1eb195ec986"),
+                description: i18n::t!("fc845d1226d611b2"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("preview_tabs.enable_preview_from_project_panel"),
@@ -5035,8 +5100,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "从文件查找器启用预览",
-                description: "从文件查找器选择时是否以预览模式打开标签。",
+                title: i18n::t!("a0691f6762a91637"),
+                description: i18n::t!("d4ff5987a3315c1f"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("preview_tabs.enable_preview_from_file_finder"),
@@ -5058,8 +5123,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "从多缓冲区启用预览",
-                description: "从多缓冲区打开时是否以预览模式打开标签。",
+                title: i18n::t!("4e4cf190b0f6ab93"),
+                description: i18n::t!("2344a2c163e0adb8"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("preview_tabs.enable_preview_from_multibuffer"),
@@ -5081,8 +5146,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "从代码导航启用多缓冲预览",
-                description: "使用代码导航打开多缓冲时是否以预览模式打开标签页。",
+                title: i18n::t!("e9f8381850388a7b"),
+                description: i18n::t!("0c937836c3d02b86"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("preview_tabs.enable_preview_multibuffer_from_code_navigation"),
@@ -5104,8 +5169,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "从代码导航启用文件预览",
-                description: "使用代码导航打开单个文件时是否以预览模式打开标签页。",
+                title: i18n::t!("99517f653adb629d"),
+                description: i18n::t!("8c3165d231880afe"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("preview_tabs.enable_preview_file_from_code_navigation"),
@@ -5127,8 +5192,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "代码导航时保持预览",
-                description: "使用代码导航离开标签页时是否保持预览模式。如果同时启用了「从代码导航启用文件预览」或「从代码导航启用多缓冲预览」，新标签页可能会替换现有标签页。",
+                title: i18n::t!("ce515128b40891c4"),
+                description: i18n::t!("0926f891e8455a29"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("preview_tabs.enable_keep_preview_on_code_navigation"),
@@ -5156,8 +5221,8 @@ fn window_and_layout_page() -> SettingsPage {
         [
             SettingsPageItem::SectionHeader("Layout"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "底部面板布局",
-                description: "底部面板的布局模式。",
+                title: i18n::t!("3be54f50e25210b0"),
+                description: i18n::t!("f513363043560320"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("bottom_dock_layout"),
@@ -5171,8 +5236,8 @@ fn window_and_layout_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 files: USER,
-                title: "居中布局左内边距",
-                description: "居中布局的左内边距。",
+                title: i18n::t!("e2c2a98aaa0e33e0"),
+                description: i18n::t!("4a28da9778662f06"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("centered_layout.left_padding"),
@@ -5196,8 +5261,8 @@ fn window_and_layout_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 files: USER,
-                title: "居中布局右侧内边距",
-                description: "居中布局的右侧内边距。",
+                title: i18n::t!("e3f301540fd43f6e"),
+                description: i18n::t!("4fcc831ef24cfbd4"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("centered_layout.right_padding"),
@@ -5220,8 +5285,8 @@ fn window_and_layout_page() -> SettingsPage {
                 metadata: None,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "鼠标跟随焦点",
-                description: "鼠标悬停在窗格上时是否将焦点切换到该窗格。",
+                title: i18n::t!("45c0f0d76caf72ff"),
+                description: i18n::t!("3525c6d3801896dc"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("focus_follows_mouse.enabled"),
@@ -5244,8 +5309,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "鼠标跟随焦点去抖毫秒数",
-                description: "更改焦点之前等待的时间。",
+                title: i18n::t!("f10060f3d1fbb056"),
+                description: i18n::t!("71f44b176ce7f28f"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("focus_follows_mouse.debounce_ms"),
@@ -5274,8 +5339,8 @@ fn window_and_layout_page() -> SettingsPage {
         [
             SettingsPageItem::SectionHeader("Window"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "标题格式",
-                description: "窗口标题模板。可用变量：`${projectName}`、`${fileName}`、`${filePath}`、`${relativePath}`、`${fileStem}`、`${remoteName}`、`${remoteHost}`、`${appName}`、`${branch}` 和 `${separator}`。相邻变量为空时省略 `${separator}`，但保留普通文本。协作指示器（如有）会附加在模板生成的标题后。模板结果为空时使用默认模板。",
+                title: i18n::t!("aa0122a68568f559"),
+                description: i18n::t!("46e36dd4c6833888"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("window_title_format"),
@@ -5294,8 +5359,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "标题分隔符",
-                description: "窗口标题格式中替代 `${separator}` 的文本。请在值中包含分隔符两侧所需的空格。",
+                title: i18n::t!("548c3830e51260e8"),
+                description: i18n::t!("597f4d7c440fc8f7"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("window_title_separator"),
@@ -5314,8 +5379,8 @@ fn window_and_layout_page() -> SettingsPage {
             }),
             // todo(settings_ui): Should we filter by platform.as_ref()?
             SettingsPageItem::SettingItem(SettingItem {
-                title: "使用系统窗口标签",
-                description: "（仅 macOS）是否允许窗口合并标签。",
+                title: i18n::t!("9d8dfec636f8af98"),
+                description: i18n::t!("50e7d3cd0669dd9f"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("use_system_window_tabs"),
@@ -5330,8 +5395,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "全屏模式",
-                description: "（仅 macOS）全屏切换操作进入的全屏模式。",
+                title: i18n::t!("7d2f05b34a712f7b"),
+                description: i18n::t!("202b6ccad3157053"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("fullscreen_mode"),
@@ -5344,8 +5409,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "窗口装饰",
-                description: "（仅 Linux）Zed 或合成器是否应绘制窗口装饰。",
+                title: i18n::t!("005de36a9f46a273"),
+                description: i18n::t!("a54e5179dc17399d"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("window_decorations"),
@@ -5364,8 +5429,8 @@ fn window_and_layout_page() -> SettingsPage {
         [
             SettingsPageItem::SectionHeader("Pane Modifiers"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "非活动面板透明度",
-                description: "非活动面板的透明度（0.0 - 1.0）。",
+                title: i18n::t!("49f3986174d46768"),
+                description: i18n::t!("a47efb51e8ce41f0"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("active_pane_modifiers.inactive_opacity"),
@@ -5389,8 +5454,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "边框大小",
-                description: "活动窗格周围边框的大小。",
+                title: i18n::t!("17d2634a018f7f1b"),
+                description: i18n::t!("1dfd6b607d303f9f"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("active_pane_modifiers.border_size"),
@@ -5414,8 +5479,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "缩放内边距",
-                description: "显示缩放窗格的内边距。",
+                title: i18n::t!("028babcff3c57600"),
+                description: i18n::t!("b23235145f221155"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("zoomed_padding"),
@@ -5428,8 +5493,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "切换时关闭面板",
-                description: "面板已聚焦时再次调用其 ToggleFocus 操作，是否关闭面板，而不是仅将焦点移回编辑器。",
+                title: i18n::t!("e6edfe9a1e112b0d"),
+                description: i18n::t!("ed25880c7cfa22ef"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("close_panel_on_toggle"),
@@ -5450,8 +5515,8 @@ fn window_and_layout_page() -> SettingsPage {
         [
             SettingsPageItem::SectionHeader("Pane Split Direction"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "垂直分割方向",
-                description: "垂直分割的方向。",
+                title: i18n::t!("07fc08c582d57129"),
+                description: i18n::t!("142484dabffe051c"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("pane_split_direction_vertical"),
@@ -5469,8 +5534,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "水平分割方向",
-                description: "水平分割的方向。",
+                title: i18n::t!("05ee953c510bc4b6"),
+                description: i18n::t!("0ed9330e4b3f8c6d"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("pane_split_direction_horizontal"),
@@ -5491,7 +5556,7 @@ fn window_and_layout_page() -> SettingsPage {
     }
 
     SettingsPage {
-        title: "窗口和布局",
+        title: i18n::t!("5940f6c7ed446c6c"),
         items: concat_sections![
             status_bar_section(),
             title_bar_section(),
@@ -5511,8 +5576,8 @@ fn panels_page() -> SettingsPage {
         [
             SettingsPageItem::SectionHeader("Project Panel"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "项目面板停靠",
-                description: "项目面板的停靠位置。",
+                title: i18n::t!("63ce3040afaddfe1"),
+                description: i18n::t!("be7cba8d7690124d"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.dock"),
@@ -5525,8 +5590,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "项目面板默认宽度",
-                description: "项目面板的默认宽度（像素）。",
+                title: i18n::t!("9244fd0a960ceeef"),
+                description: i18n::t!("ea5af0512489598b"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.default_width"),
@@ -5549,8 +5614,8 @@ fn panels_page() -> SettingsPage {
             }),
             SettingsPageItem::DynamicItem(DynamicItem {
                 discriminant: SettingItem {
-                    title: "项目面板标题提示延迟",
-                    description: "项目面板标题提示显示前的延迟，单位为毫秒。",
+                    title: i18n::t!("6d4885d84bc954d3"),
+                    description: i18n::t!("fca63e9b0b25f2be"),
                     field: Box::new(SettingField {
                         organization_override: None,
                         json_path: Some("project_panel.title_tooltip_delay$"),
@@ -5609,8 +5674,8 @@ fn panels_page() -> SettingsPage {
                         settings::ProjectPanelTitleTooltipDelayDiscriminants::Custom => {
                             vec![SettingItem {
                                 files: USER,
-                                title: "自定义延迟",
-                                description: "项目面板标题提示的延迟，单位为毫秒。",
+                                title: i18n::t!("33c2c3d68ba7e4a5"),
+                                description: i18n::t!("31f958c56ce25eb8"),
                                 field: Box::new(SettingField {
                                     organization_override: None,
                                     json_path: Some("project_panel.title_tooltip_delay"),
@@ -5647,8 +5712,8 @@ fn panels_page() -> SettingsPage {
                     .collect(),
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "隐藏 .gitignore",
-                description: "是否在项目面板中隐藏 .gitignore 条目。",
+                title: i18n::t!("99ff55e1d0d81a90"),
+                description: i18n::t!("366d0c6199434366"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.hide_gitignore"),
@@ -5670,8 +5735,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "条目间距",
-                description: "项目面板中工作区条目之间的间距。",
+                title: i18n::t!("3e320caedd44f106"),
+                description: i18n::t!("fb393293c06f755f"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.entry_spacing"),
@@ -5693,8 +5758,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "文件图标",
-                description: "在项目面板中显示文件图标。",
+                title: i18n::t!("f78d0dfd6e2b782c"),
+                description: i18n::t!("c002c1269900f846"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.file_icons"),
@@ -5712,8 +5777,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "文件夹指示器",
-                description: "项目面板中的目录显示方式。",
+                title: i18n::t!("fb360e3288f59da9"),
+                description: i18n::t!("d232aba7d6279218"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.folder_indicator"),
@@ -5735,8 +5800,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Git 状态",
-                description: "在项目面板中显示 Git 状态。",
+                title: i18n::t!("54030c68e840e87d"),
+                description: i18n::t!("d5ca2daf51425d0c"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.git_status"),
@@ -5754,8 +5819,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "缩进大小",
-                description: "嵌套项的缩进量。",
+                title: i18n::t!("5ad91c4760bcade2"),
+                description: i18n::t!("f645294f8e082773"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.indent_size"),
@@ -5777,8 +5842,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "自动显示条目",
-                description: "当对应的项目条目变为活动时，是否自动在项目面板中显示该条目。",
+                title: i18n::t!("56e61454db9a0c8c"),
+                description: i18n::t!("45ace7bb0f932a59"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.auto_reveal_entries"),
@@ -5800,8 +5865,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "启动时打开",
-                description: "项目面板是否应在启动时打开。",
+                title: i18n::t!("5e0500491910a5b9"),
+                description: i18n::t!("8ca7c953ba2e1a32"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.starts_open"),
@@ -5823,8 +5888,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "自动折叠目录",
-                description: "是否自动折叠目录并在目录仅包含一个子目录时显示紧凑文件夹。",
+                title: i18n::t!("c50dcc2d5c4bb179"),
+                description: i18n::t!("b245fd2dc036d084"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.auto_fold_dirs"),
@@ -5846,8 +5911,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "加粗文件夹标签",
-                description: "是否在项目面板中以粗体显示文件夹名称。",
+                title: i18n::t!("5a350cdeb5c54bd4"),
+                description: i18n::t!("8b876aa8fe2342f6"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.bold_folder_labels"),
@@ -5869,8 +5934,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "显示滚动条",
-                description: "在项目面板中显示滚动条。",
+                title: i18n::t!("c647d06905390229"),
+                description: i18n::t!("de929dfa4f137d44"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.scrollbar.show"),
@@ -5898,8 +5963,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "水平滚动",
-                description: "是否允许在项目面板中水平滚动。禁用时，视图始终锁定在最左侧位置，长文件名将被截断。",
+                title: i18n::t!("d8e6506f4650c614"),
+                description: i18n::t!("dc3ca466a3c0b57b"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.scrollbar.horizontal_scroll"),
@@ -5925,8 +5990,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "显示诊断",
-                description: "在项目面板中标记哪些包含诊断错误/警告的文件。",
+                title: i18n::t!("36bca67cb267c768"),
+                description: i18n::t!("2bde22e7ea9f98bf"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.show_diagnostics"),
@@ -5948,8 +6013,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "诊断徽章",
-                description: "在项目面板中的文件名旁显示错误和警告计数徽章。",
+                title: i18n::t!("bdf863e18d4f1efa"),
+                description: i18n::t!("0399266c17412e57"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.diagnostic_badges"),
@@ -5971,8 +6036,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Git 状态指示器",
-                description: "在项目面板中的文件名旁显示 git 状态指示器。",
+                title: i18n::t!("c045d9b62c44c695"),
+                description: i18n::t!("a29ab27a1ea82493"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.git_status_indicator"),
@@ -5994,8 +6059,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "粘性滚动",
-                description: "是否将父目录固定在项目面板顶部。",
+                title: i18n::t!("4455a54e440b6bb7"),
+                description: i18n::t!("b414b441b1f032fa"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.sticky_scroll"),
@@ -6018,8 +6083,8 @@ fn panels_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 files: USER,
-                title: "显示缩进参考线",
-                description: "在项目面板中显示缩进参考线。",
+                title: i18n::t!("46f58252bbc80887"),
+                description: i18n::t!("44a51aa30f64a2a2"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.indent_guides.show"),
@@ -6044,8 +6109,8 @@ fn panels_page() -> SettingsPage {
                 metadata: None,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "拖放",
-                description: "是否在项目面板中启用拖放操作。",
+                title: i18n::t!("1cf6dead9cf5f062"),
+                description: i18n::t!("8d1664b1c4d71ace"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.drag_and_drop"),
@@ -6067,8 +6132,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "隐藏根目录",
-                description: "当窗口中只打开一个文件夹时是否隐藏根条目。",
+                title: i18n::t!("ad7ff46e4a5d37e4"),
+                description: i18n::t!("cb64fec7fd708ec7"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.hide_root"),
@@ -6086,8 +6151,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "隐藏隐藏文件",
-                description: "是否在项目面板中隐藏隐藏条目。",
+                title: i18n::t!("c4eca2d409677f54"),
+                description: i18n::t!("5c7aafbcb627a843"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.hide_hidden"),
@@ -6109,8 +6174,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "排序模式",
-                description: "项目面板中条目的排序顺序。",
+                title: i18n::t!("3c1f0a5d3f436693"),
+                description: i18n::t!("cfb4ae7a99393e94"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.sort_mode"),
@@ -6128,8 +6193,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "排序顺序",
-                description: "是否在项目面板中区分大小写排序文件和文件夹名称。",
+                title: i18n::t!("a4ab9e7aadd8e3f1"),
+                description: i18n::t!("6508435f4a6349bc"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     pick: |settings_content| {
@@ -6147,8 +6212,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "创建时自动打开文件",
-                description: "是否在编辑器中自动打开新创建的文件。",
+                title: i18n::t!("0d2ffb71dcad2867"),
+                description: i18n::t!("f97a02cd34348aec"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.auto_open.on_create"),
@@ -6174,8 +6239,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "粘贴时自动打开文件",
-                description: "粘贴或复制文件后是否自动打开。",
+                title: i18n::t!("a88fd39b7668b177"),
+                description: i18n::t!("5aeb9865027da0ca"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.auto_open.on_paste"),
@@ -6201,8 +6266,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "拖放时自动打开文件",
-                description: "是否自动打开从外部来源拖放的文件。",
+                title: i18n::t!("599169572965101d"),
+                description: i18n::t!("a219144683701419"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.auto_open.on_drop"),
@@ -6228,8 +6293,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "隐藏文件",
-                description: "用于匹配被视为\"隐藏\"并可从项目面板中隐藏的文件的 glob 模式。",
+                title: i18n::t!("10f6c8db8a48e1da"),
+                description: i18n::t!("2fceeaa27c6d2f83"),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -6253,8 +6318,8 @@ fn panels_page() -> SettingsPage {
         [
             SettingsPageItem::SectionHeader("Terminal Panel"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "终端停靠位置",
-                description: "终端面板的停靠位置。",
+                title: i18n::t!("74e7958da58c458a"),
+                description: i18n::t!("8efc9a18df123a4c"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.dock"),
@@ -6267,8 +6332,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "启动时打开",
-                description: "是否在启动时打开终端面板。",
+                title: i18n::t!("5e0500491910a5b9"),
+                description: i18n::t!("086db6874f5df527"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.starts_open"),
@@ -6286,8 +6351,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "终端面板弹性大小",
-                description: "终端面板停靠在左侧或右侧时是否使用弹性大小。",
+                title: i18n::t!("fd019327f574df1e"),
+                description: i18n::t!("0bc367ff5446314b"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.flexible"),
@@ -6300,8 +6365,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "显示数量徽章",
-                description: "在终端面板图标上显示带打开终端数量的徽章。",
+                title: i18n::t!("aad5920997259f70"),
+                description: i18n::t!("454f93b4a344bfce"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.show_count_badge"),
@@ -6329,8 +6394,8 @@ fn panels_page() -> SettingsPage {
         [
             SettingsPageItem::SectionHeader("Outline Panel"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "大纲面板按钮",
-                description: "在状态栏中显示大纲面板按钮。",
+                title: i18n::t!("91f66898fc193df4"),
+                description: i18n::t!("5db7d02f6ebb72b1"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("outline_panel.button"),
@@ -6348,8 +6413,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "大纲面板停靠位置",
-                description: "大纲面板的停靠位置。",
+                title: i18n::t!("9dc2c72bdc49b005"),
+                description: i18n::t!("1033b81e3f601e47"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("outline_panel.dock"),
@@ -6362,8 +6427,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "大纲面板默认宽度",
-                description: "大纲面板的默认宽度（像素）。",
+                title: i18n::t!("9106b73f268d304f"),
+                description: i18n::t!("81d8a921c3a6f8e9"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("outline_panel.default_width"),
@@ -6385,8 +6450,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "文件图标",
-                description: "在大纲面板中显示文件图标。",
+                title: i18n::t!("f78d0dfd6e2b782c"),
+                description: i18n::t!("d26938ed8db7fb38"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("outline_panel.file_icons"),
@@ -6404,8 +6469,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "文件夹指示器",
-                description: "大纲面板中的目录显示方式。",
+                title: i18n::t!("fb360e3288f59da9"),
+                description: i18n::t!("41850017763e939d"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("outline_panel.folder_indicator"),
@@ -6427,8 +6492,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Git 状态",
-                description: "在大纲面板中显示 Git 状态。",
+                title: i18n::t!("54030c68e840e87d"),
+                description: i18n::t!("26a4282f39316720"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("outline_panel.git_status"),
@@ -6446,8 +6511,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "缩进大小",
-                description: "嵌套项的缩进量。",
+                title: i18n::t!("5ad91c4760bcade2"),
+                description: i18n::t!("f645294f8e082773"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("outline_panel.indent_size"),
@@ -6469,8 +6534,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "自动显示条目",
-                description: "当对应的大纲条目变为活动时是否自动显示。",
+                title: i18n::t!("56e61454db9a0c8c"),
+                description: i18n::t!("cc8b513037450947"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("outline_panel.auto_reveal_entries"),
@@ -6492,8 +6557,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "自动折叠目录",
-                description: "是否在目录仅包含一个子目录时自动折叠目录。",
+                title: i18n::t!("c50dcc2d5c4bb179"),
+                description: i18n::t!("bf6a2e5ffd6dbae7"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("outline_panel.auto_fold_dirs"),
@@ -6516,8 +6581,8 @@ fn panels_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 files: USER,
-                title: "显示缩进参考线",
-                description: "何时在大纲面板中显示缩进参考线。",
+                title: i18n::t!("46f58252bbc80887"),
+                description: i18n::t!("9ead645588bf8db6"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("outline_panel.indent_guides.show"),
@@ -6542,8 +6607,8 @@ fn panels_page() -> SettingsPage {
                 metadata: None,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "在多缓冲区中隐藏符号",
-                description: "多缓冲区视图处于活动状态时，是否在大纲面板中隐藏符号、摘录和搜索匹配项。",
+                title: i18n::t!("b34f5fc1b520746b"),
+                description: i18n::t!("9ec655ec499ba59a"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("outline_panel.multi_buffer_hide_symbols"),
@@ -6571,8 +6636,8 @@ fn panels_page() -> SettingsPage {
         [
             SettingsPageItem::SectionHeader("Git Panel"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Git 面板按钮",
-                description: "在状态栏中显示 Git 面板按钮。",
+                title: i18n::t!("b7146d8b96befc16"),
+                description: i18n::t!("df2a2022a7625151"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git_panel.button"),
@@ -6585,8 +6650,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Git 面板停靠位置",
-                description: "Git 面板的停靠位置。",
+                title: i18n::t!("522916e808778031"),
+                description: i18n::t!("6836da87c818b8c8"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git_panel.dock"),
@@ -6599,8 +6664,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "启动时打开",
-                description: "是否在启动时打开 Git 面板。",
+                title: i18n::t!("5e0500491910a5b9"),
+                description: i18n::t!("8922a5e142449269"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git_panel.starts_open"),
@@ -6618,8 +6683,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Git 面板默认宽度",
-                description: "Git 面板的默认宽度（像素）。",
+                title: i18n::t!("ad5cf22cd20e03cd"),
+                description: i18n::t!("8225941aecbd4d6e"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git_panel.default_width"),
@@ -6637,8 +6702,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Git 面板状态样式",
-                description: "条目状态的显示方式。",
+                title: i18n::t!("11cb320353141dac"),
+                description: i18n::t!("07859d05329367c2"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git_panel.status_style"),
@@ -6656,8 +6721,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "后备分支名称",
-                description: "当 Git 中未设置 init.defaultBranch 时的默认分支名称。",
+                title: i18n::t!("379d53bc64cfede1"),
+                description: i18n::t!("77a711c33b2fd396"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git_panel.fallback_branch_name"),
@@ -6679,8 +6744,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "排序方式",
-                description: "如何排序 Git 面板中的条目。",
+                title: i18n::t!("1ce6b1d7c95ce2ee"),
+                description: i18n::t!("1e65f71321b35885"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git_panel.sort_by"),
@@ -6693,8 +6758,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "分组方式",
-                description: "如何分组 Git 面板中的条目。",
+                title: i18n::t!("72148c2201764726"),
+                description: i18n::t!("629bfdc2013fd82b"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git_panel.group_by"),
@@ -6707,8 +6772,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "折叠未跟踪差异",
-                description: "是否在差异面板中折叠未跟踪的文件。",
+                title: i18n::t!("cb230abecb75e659"),
+                description: i18n::t!("fdf261a7d3a65450"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git_panel.collapse_untracked_diff"),
@@ -6730,8 +6795,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "树形视图",
-                description: "启用以树形视图列表显示条目，禁用则以扁平视图列表显示。",
+                title: i18n::t!("64f1f87721d5d160"),
+                description: i18n::t!("e8d4a7dc8ff8c255"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git_panel.tree_view"),
@@ -6746,8 +6811,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "文件图标",
-                description: "在 Git 状态图标旁显示文件图标。",
+                title: i18n::t!("f78d0dfd6e2b782c"),
+                description: i18n::t!("23cb492dd5525756"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git_panel.file_icons"),
@@ -6765,8 +6830,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "文件夹指示器",
-                description: "Git 面板中的目录显示方式。",
+                title: i18n::t!("fb360e3288f59da9"),
+                description: i18n::t!("5c56c09026010e35"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git_panel.folder_indicator"),
@@ -6788,8 +6853,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "差异统计",
-                description: "是否在 Git 面板中每个文件旁显示添加/删除更改计数。",
+                title: i18n::t!("8966b3ba4a5ecea7"),
+                description: i18n::t!("f4115a7d484bf52c"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git_panel.diff_stats"),
@@ -6807,8 +6872,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "主点击行为",
-                description: "在 Git 面板中单击更改文件时的默认操作。",
+                title: i18n::t!("e259b1a21335a96d"),
+                description: i18n::t!("fb743eed213e40d3"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git_panel.entry_primary_click_action"),
@@ -6830,8 +6895,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "显示计数徽章",
-                description: "是否在 Git 面板图标上显示未提交更改数量的徽章。",
+                title: i18n::t!("5d20c06ff82bbc4c"),
+                description: i18n::t!("8b2f538111c2929a"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git_panel.show_count_badge"),
@@ -6853,8 +6918,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "提交标题最大长度",
-                description: "提交消息标题的最大长度，超过将显示警告。设置为 0 以禁用。",
+                title: i18n::t!("248b851da508dbb6"),
+                description: i18n::t!("57738efd9d4f064a"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git_panel.commit_title_max_length"),
@@ -6876,8 +6941,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "滚动条",
-                description: "滚动条的显示方式和时机。",
+                title: i18n::t!("53bcc015611bb7fa"),
+                description: i18n::t!("8ab140f77a34dbfa"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git_panel.scrollbar.show"),
@@ -6909,10 +6974,10 @@ fn panels_page() -> SettingsPage {
 
     fn debugger_panel_section() -> [SettingsPageItem; 2] {
         [
-            SettingsPageItem::SectionHeader("调试器面板"),
+            SettingsPageItem::SectionHeader(i18n::t!("66c849d89d539e9e")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "调试器面板停靠",
-                description: "调试面板的停靠位置。",
+                title: i18n::t!("765be2fd92c66af9"),
+                description: i18n::t!("4455a5b23567c5a4"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("debugger.dock"),
@@ -6929,10 +6994,10 @@ fn panels_page() -> SettingsPage {
 
     fn collaboration_panel_section() -> [SettingsPageItem; 4] {
         [
-            SettingsPageItem::SectionHeader("协作面板"),
+            SettingsPageItem::SectionHeader(i18n::t!("538fd707c82e7e9b")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "协作面板按钮",
-                description: "在状态栏中显示协作面板按钮。",
+                title: i18n::t!("fefcce3784f47e72"),
+                description: i18n::t!("49710fcc320ca5d6"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("collaboration_panel.button"),
@@ -6954,8 +7019,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "协作面板停靠",
-                description: "协作面板的停靠位置。",
+                title: i18n::t!("186d472198e5f531"),
+                description: i18n::t!("0e68bcdfaca9c7b5"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("collaboration_panel.dock"),
@@ -6973,8 +7038,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "协作面板默认宽度",
-                description: "协作面板的默认宽度（像素）。",
+                title: i18n::t!("97e23d68713e3a21"),
+                description: i18n::t!("807b613f5e5e9145"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("collaboration_panel.dock"),
@@ -7000,10 +7065,10 @@ fn panels_page() -> SettingsPage {
 
     fn agent_panel_section() -> [SettingsPageItem; 7] {
         [
-            SettingsPageItem::SectionHeader("Agent 面板"),
+            SettingsPageItem::SectionHeader(i18n::t!("3bb0698e654c0693")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Agent 面板按钮",
-                description: "是否在状态栏中显示 Agent 面板按钮。",
+                title: i18n::t!("1ee4f777a32227c4"),
+                description: i18n::t!("db7a6982a63b3e53"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("agent.button"),
@@ -7016,8 +7081,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Agent 面板停靠",
-                description: "Agent 面板的停靠位置。",
+                title: i18n::t!("aa82728fc30d680f"),
+                description: i18n::t!("bf94af22003a927e"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("agent.dock"),
@@ -7030,8 +7095,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Agent 面板灵活调整大小",
-                description: "Agent 面板停靠在左侧或右侧时是否按比例调整大小。启用后，默认宽度不再控制面板宽度；重置面板会恢复默认比例。",
+                title: i18n::t!("2df257a79e2dbb40"),
+                description: i18n::t!("35e7185def0da785"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("agent.flexible"),
@@ -7044,8 +7109,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Agent 面板默认宽度",
-                description: "关闭灵活调整大小后，Agent 面板停靠在左侧或右侧时的默认固定宽度。",
+                title: i18n::t!("99de6b0502429398"),
+                description: i18n::t!("23ed39607f6a4ef4"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("agent.default_width"),
@@ -7060,8 +7125,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Agent 面板默认高度",
-                description: "Agent 面板停靠在底部时的默认高度。",
+                title: i18n::t!("54c749e086ce046f"),
+                description: i18n::t!("68fb222eb91d2723"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("agent.default_height"),
@@ -7081,8 +7146,8 @@ fn panels_page() -> SettingsPage {
             SettingsPageItem::DynamicItem(DynamicItem {
                 discriminant: SettingItem {
                     files: USER,
-                    title: "限制内容宽度",
-                    description: "是否将 Agent 面板内容限制为最大宽度，面板更宽时居中显示，以获得最佳可读性。",
+                    title: i18n::t!("a56775aeae3f1d3b"),
+                    description: i18n::t!("0e46e48786fbf355"),
                     field: Box::new(SettingField::<bool> {
                         organization_override: None,
                         json_path: Some("agent.limit_content_width"),
@@ -7114,8 +7179,8 @@ fn panels_page() -> SettingsPage {
                     vec![],
                     vec![SettingItem {
                         files: USER,
-                        title: "最大内容宽度",
-                        description: "最大内容宽度（像素）。面板宽于此值时内容将居中。",
+                        title: i18n::t!("f6fb5b8116113851"),
+                        description: i18n::t!("a338a4121e13f4ee"),
                         field: Box::new(SettingField {
                             organization_override: None,
                             json_path: Some("agent.max_content_width"),
@@ -7137,7 +7202,7 @@ fn panels_page() -> SettingsPage {
     }
 
     SettingsPage {
-        title: "面板",
+        title: i18n::t!("3c8c5939d685319a"),
         items: concat_sections![
             project_panel_section(),
             terminal_panel_section(),
@@ -7153,10 +7218,10 @@ fn panels_page() -> SettingsPage {
 fn debugger_page() -> SettingsPage {
     fn general_section() -> [SettingsPageItem; 6] {
         [
-            SettingsPageItem::SectionHeader("常规"),
+            SettingsPageItem::SectionHeader(i18n::t!("40fae00b7c6d8ac0")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "步进粒度",
-                description: "确定调试操作的步进粒度。",
+                title: i18n::t!("7ecf48280a19f20b"),
+                description: i18n::t!("db54cf415942cd0b"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("debugger.stepping_granularity"),
@@ -7178,8 +7243,8 @@ fn debugger_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "保存断点",
-                description: "断点是否应在 Zed 会话之间重复使用。",
+                title: i18n::t!("0bec6de8fbcd5bc6"),
+                description: i18n::t!("ed80dae8bc3a5109"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("debugger.save_breakpoints"),
@@ -7201,8 +7266,8 @@ fn debugger_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "超时",
-                description: "连接到 TCP 调试适配器时的超时时间（毫秒）。",
+                title: i18n::t!("e512cf016f960728"),
+                description: i18n::t!("c31d73dd415fc283"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("debugger.timeout"),
@@ -7215,8 +7280,8 @@ fn debugger_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "记录 DAP 通信",
-                description: "是否记录活动调试适配器与 Zed 之间的消息。",
+                title: i18n::t!("22218a0cfa089715"),
+                description: i18n::t!("53085bfc4e45e95f"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("debugger.log_dap_communications"),
@@ -7238,8 +7303,8 @@ fn debugger_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "格式化 DAP 日志消息",
-                description: "将 DAP 消息添加到调试适配器日志时是否格式化。",
+                title: i18n::t!("f3d44df700bce24e"),
+                description: i18n::t!("5997a772f9947dfb"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("debugger.format_dap_log_messages"),
@@ -7264,7 +7329,7 @@ fn debugger_page() -> SettingsPage {
     }
 
     SettingsPage {
-        title: "调试器",
+        title: i18n::t!("20fe3f3e72ca01b8"),
         items: concat_sections![general_section()],
     }
 }
@@ -7272,12 +7337,12 @@ fn debugger_page() -> SettingsPage {
 fn terminal_page() -> SettingsPage {
     fn environment_section() -> [SettingsPageItem; 5] {
         [
-            SettingsPageItem::SectionHeader("环境"),
+            SettingsPageItem::SectionHeader(i18n::t!("904dd029c768820d")),
             SettingsPageItem::DynamicItem(DynamicItem {
                 discriminant: SettingItem {
                     files: USER | PROJECT,
                     title: "Shell",
-                    description: "打开终端时使用的 shell。",
+                    description: i18n::t!("3599a6b9724ffd11"),
                     field: Box::new(SettingField {
                         organization_override: None,
                         json_path: Some("terminal.shell$"),
@@ -7365,8 +7430,8 @@ fn terminal_page() -> SettingsPage {
                         settings::ShellDiscriminants::System => vec![],
                         settings::ShellDiscriminants::Program => vec![SettingItem {
                             files: USER | PROJECT,
-                            title: "程序",
-                            description: "要使用的 shell 程序。",
+                            title: i18n::t!("5d942dbe52a46039"),
+                            description: i18n::t!("3a61a2b4358ea645"),
                             field: Box::new(SettingField {
                                 organization_override: None,
                                 json_path: Some("terminal.shell"),
@@ -7401,8 +7466,8 @@ fn terminal_page() -> SettingsPage {
                         settings::ShellDiscriminants::WithArguments => vec![
                             SettingItem {
                                 files: USER | PROJECT,
-                                title: "程序",
-                                description: "要运行的 shell 程序。",
+                                title: i18n::t!("5d942dbe52a46039"),
+                                description: i18n::t!("2db41c8e0c9e7988"),
                                 field: Box::new(SettingField {
                                     organization_override: None,
                                     json_path: Some("terminal.shell.program"),
@@ -7441,8 +7506,8 @@ fn terminal_page() -> SettingsPage {
                             },
                             SettingItem {
                                 files: USER | PROJECT,
-                                title: "参数",
-                                description: "传递给 shell 程序的参数。",
+                                title: i18n::t!("9634fb0832be624f"),
+                                description: i18n::t!("55b325b4e3795806"),
                                 field: Box::new(
                                     SettingField {
                                         organization_override: None,
@@ -7484,8 +7549,8 @@ fn terminal_page() -> SettingsPage {
                             },
                             SettingItem {
                                 files: USER | PROJECT,
-                                title: "标题覆盖",
-                                description: "覆盖终端标签标题的可选字符串。",
+                                title: i18n::t!("725e9f0fe15ef49c"),
+                                description: i18n::t!("4eab0b9a4f9a1edb"),
                                 field: Box::new(SettingField {
                                     organization_override: None,
                                     json_path: Some("terminal.shell.title_override"),
@@ -7525,8 +7590,8 @@ fn terminal_page() -> SettingsPage {
             SettingsPageItem::DynamicItem(DynamicItem {
                 discriminant: SettingItem {
                     files: USER | PROJECT,
-                    title: "工作目录",
-                    description: "启动终端时使用的工作目录。",
+                    title: i18n::t!("3db7b06b5f6de0e0"),
+                    description: i18n::t!("8aaf537636a72b64"),
                     field: Box::new(SettingField {
                         organization_override: None,
                         json_path: Some("terminal.working_directory$"),
@@ -7602,8 +7667,8 @@ fn terminal_page() -> SettingsPage {
                         settings::WorkingDirectoryDiscriminants::AlwaysHome => vec![],
                         settings::WorkingDirectoryDiscriminants::Always => vec![SettingItem {
                             files: USER | PROJECT,
-                            title: "目录",
-                            description: "要使用的目录路径（将进行 shell 扩展）。",
+                            title: i18n::t!("52daa71ebc310581"),
+                            description: i18n::t!("0cb9d3da5aa05987"),
                             field: Box::new(SettingField {
                                 organization_override: None,
                                 json_path: Some("terminal.working_directory.always"),
@@ -7641,8 +7706,8 @@ fn terminal_page() -> SettingsPage {
                     .collect(),
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "环境变量",
-                description: "要添加到终端环境的键值对。",
+                title: i18n::t!("ae27b474ea4d6ee6"),
+                description: i18n::t!("b71e9c60d83925ac"),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -7664,8 +7729,8 @@ fn terminal_page() -> SettingsPage {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "检测虚拟环境",
-                description: "如果在终端的工作目录中找到 Python 虚拟环境，则激活它。",
+                title: i18n::t!("06c1aca06a1a9c16"),
+                description: i18n::t!("f0bbe114c1db38e0"),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -7698,8 +7763,8 @@ fn terminal_page() -> SettingsPage {
         [
             SettingsPageItem::SectionHeader("Font"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "字体大小",
-                description: "终端文本的字体大小。如果未设置，默认为缓冲区字体大小。",
+                title: i18n::t!("0c30c37c6ead953b"),
+                description: i18n::t!("2ef749159c9477c1"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.font_size"),
@@ -7718,8 +7783,8 @@ fn terminal_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "字体",
-                description: "终端文本的字体。如果未设置，默认为缓冲区字体。",
+                title: i18n::t!("078838da4218490b"),
+                description: i18n::t!("ef4960f417a6aef7"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.font_family"),
@@ -7741,8 +7806,8 @@ fn terminal_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "后备字体",
-                description: "终端文本的后备字体。如果未设置，默认为缓冲区后备字体。",
+                title: i18n::t!("e037c3476fcbc213"),
+                description: i18n::t!("c80d7075ff6299cd"),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -7767,8 +7832,8 @@ fn terminal_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "字体粗细",
-                description: "终端文本的字体粗细，CSS 粗细单位（100-900）。",
+                title: i18n::t!("db0c79d9d7d6c577"),
+                description: i18n::t!("c9b5d2c5547ae26d"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.font_weight"),
@@ -7786,8 +7851,8 @@ fn terminal_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "字体特性",
-                description: "终端文本的字体特性。",
+                title: i18n::t!("cf2674acf2bbad54"),
+                description: i18n::t!("63c434526f4662b0"),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -7818,8 +7883,8 @@ fn terminal_page() -> SettingsPage {
         [
             SettingsPageItem::SectionHeader("Display Settings"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "行高",
-                description: "终端文本的行高。",
+                title: i18n::t!("6b44b7ba432abf47"),
+                description: i18n::t!("1648db4664860e2d"),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -7840,8 +7905,8 @@ fn terminal_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "光标形状",
-                description: "终端的默认光标形状（竖线、方块、下划线或空心）。",
+                title: i18n::t!("98ec5a07a6ee6050"),
+                description: i18n::t!("6263f867863ca78f"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.cursor_shape"),
@@ -7859,8 +7924,8 @@ fn terminal_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "光标闪烁",
-                description: "设置终端中的光标闪烁行为。",
+                title: i18n::t!("9342b40e1c885cee"),
+                description: i18n::t!("456ec0e3f9555db9"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.blinking"),
@@ -7873,8 +7938,8 @@ fn terminal_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "备用滚动",
-                description: "是否默认启用备用滚动模式（将鼠标滚轮转换为 Vim 等应用程序中的箭头键）。",
+                title: i18n::t!("7083b782cefe7a44"),
+                description: i18n::t!("15e5f96ba2225dec"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.alternate_scroll"),
@@ -7896,8 +7961,8 @@ fn terminal_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "最小对比度",
-                description: "前景色和背景色之间的最小 APCA 感知对比度（0-106）。",
+                title: i18n::t!("4d880ba1b2d6976c"),
+                description: i18n::t!("d1f168ee46f4af26"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.minimum_contrast"),
@@ -7923,10 +7988,10 @@ fn terminal_page() -> SettingsPage {
 
     fn behavior_settings_section() -> [SettingsPageItem; 6] {
         [
-            SettingsPageItem::SectionHeader("行为设置"),
+            SettingsPageItem::SectionHeader(i18n::t!("865b5c594bca761b")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Option 作为 Meta",
-                description: "Option 键是否作为 meta 键。",
+                title: i18n::t!("77c9b917a55647e8"),
+                description: i18n::t!("96fd7000e41a2ab0"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.option_as_meta"),
@@ -7944,8 +8009,8 @@ fn terminal_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "选择时复制",
-                description: "在终端中选择文本时是否自动复制到系统剪贴板。",
+                title: i18n::t!("082f4459ba955599"),
+                description: i18n::t!("e67f8c328cbe6ed5"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.copy_on_select"),
@@ -7963,8 +8028,8 @@ fn terminal_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "复制后保留选区",
-                description: "复制到剪贴板后是否保留文本选区。",
+                title: i18n::t!("a7d13e4290ceda8a"),
+                description: i18n::t!("5579f7ed989b9b21"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.keep_selection_on_copy"),
@@ -7986,8 +8051,8 @@ fn terminal_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "鼠标模式下打开链接",
-                description: "即使在终端应用程序启用了鼠标报告时，cmd-单击（Linux 和 Windows 上为 ctrl-单击）是否打开超链接。禁用时，这些单击将转发给应用程序；仍可通过 shift-cmd-单击打开链接。",
+                title: i18n::t!("cb93cdcdc0b4124b"),
+                description: i18n::t!("7c64bd1a094d391f"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.open_links_in_mouse_mode"),
@@ -8009,8 +8074,8 @@ fn terminal_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "声音提示",
-                description: "当打印 BEL 字符（`\\a`、`0x07`）时是否播放声音。",
+                title: i18n::t!("fd1eae3f0f49ff87"),
+                description: i18n::t!("52bff65cee92e46c"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.bell"),
@@ -8027,10 +8092,10 @@ fn terminal_page() -> SettingsPage {
 
     fn layout_settings_section() -> [SettingsPageItem; 3] {
         [
-            SettingsPageItem::SectionHeader("布局设置"),
+            SettingsPageItem::SectionHeader(i18n::t!("c27e95dbdcae100d")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "默认宽度",
-                description: "终端停靠在左侧或右侧时的默认宽度（像素）。",
+                title: i18n::t!("5d9918272ebc486a"),
+                description: i18n::t!("922f474db6ca149c"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.default_width"),
@@ -8048,8 +8113,8 @@ fn terminal_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "默认高度",
-                description: "终端停靠在底部时的默认高度（像素）。",
+                title: i18n::t!("3bd02fe3c0363409"),
+                description: i18n::t!("614f418b6c3a1e9a"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.default_height"),
@@ -8071,10 +8136,10 @@ fn terminal_page() -> SettingsPage {
 
     fn advanced_settings_section() -> [SettingsPageItem; 3] {
         [
-            SettingsPageItem::SectionHeader("高级设置"),
+            SettingsPageItem::SectionHeader(i18n::t!("44455611b9108b91")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "最大滚动历史行数",
-                description: "在回滚历史中保留的最大行数（最大：100,000；0 禁用滚动）。",
+                title: i18n::t!("5a2766516b0c64ee"),
+                description: i18n::t!("01351f7658584678"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.max_scroll_history_lines"),
@@ -8096,8 +8161,8 @@ fn terminal_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "滚动倍数",
-                description: "使用鼠标滚轮在终端中滚动的倍数。",
+                title: i18n::t!("8f04460e874acb5e"),
+                description: i18n::t!("28771ac11b886532"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.scroll_multiplier"),
@@ -8123,10 +8188,10 @@ fn terminal_page() -> SettingsPage {
 
     fn toolbar_section() -> [SettingsPageItem; 2] {
         [
-            SettingsPageItem::SectionHeader("工具栏"),
+            SettingsPageItem::SectionHeader(i18n::t!("3166d8af51f15eb6")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "面包屑导航",
-                description: "在终端窗格的面包屑中显示终端标题。",
+                title: i18n::t!("6c3f7b6a12a97468"),
+                description: i18n::t!("f441673b0faef4ec"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.toolbar.breadcrumbs"),
@@ -8156,10 +8221,10 @@ fn terminal_page() -> SettingsPage {
 
     fn scrollbar_section() -> [SettingsPageItem; 2] {
         [
-            SettingsPageItem::SectionHeader("滚动条"),
+            SettingsPageItem::SectionHeader(i18n::t!("53bcc015611bb7fa")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "显示滚动条",
-                description: "何时在终端中显示滚动条。",
+                title: i18n::t!("c647d06905390229"),
+                description: i18n::t!("5d69e690433ba672"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.scrollbar.show"),
@@ -8190,7 +8255,7 @@ fn terminal_page() -> SettingsPage {
     }
 
     SettingsPage {
-        title: "终端",
+        title: i18n::t!("e2a76ef1f12e147f"),
         items: concat_sections![
             environment_section(),
             font_section(),
@@ -8207,12 +8272,12 @@ fn terminal_page() -> SettingsPage {
 fn version_control_page() -> SettingsPage {
     fn git_integration_section() -> [SettingsPageItem; 2] {
         [
-            SettingsPageItem::SectionHeader("Git 集成"),
+            SettingsPageItem::SectionHeader(i18n::t!("53191ac96b572350")),
             SettingsPageItem::DynamicItem(DynamicItem {
                 discriminant: SettingItem {
                     files: USER,
-                    title: "禁用 Git 集成",
-                    description: "禁用 Zed 中的所有 Git 集成功能。",
+                    title: i18n::t!("6b116198324968d2"),
+                    description: i18n::t!("feb1e5889907f8f0"),
                     field: Box::new(SettingField::<bool> {
                         organization_override: None,
                         json_path: Some("git.disable_git"),
@@ -8251,8 +8316,8 @@ fn version_control_page() -> SettingsPage {
                     vec![
                         SettingItem {
                             files: USER,
-                            title: "启用 Git 状态",
-                            description: "在编辑器中显示 Git 状态信息。",
+                            title: i18n::t!("a50f2d9ab0491514"),
+                            description: i18n::t!("217ba1f1299a6685"),
                             field: Box::new(SettingField::<bool> {
                                 organization_override: None,
                                 json_path: Some("git.enable_status"),
@@ -8278,8 +8343,8 @@ fn version_control_page() -> SettingsPage {
                         },
                         SettingItem {
                             files: USER,
-                            title: "启用 Git 差异",
-                            description: "在编辑器中显示 Git 差异信息。",
+                            title: i18n::t!("6059874f6c760f94"),
+                            description: i18n::t!("f6eb32b31f2ee2a2"),
                             field: Box::new(SettingField::<bool> {
                                 organization_override: None,
                                 json_path: Some("git.enable_diff"),
@@ -8311,10 +8376,10 @@ fn version_control_page() -> SettingsPage {
 
     fn git_gutter_section() -> [SettingsPageItem; 3] {
         [
-            SettingsPageItem::SectionHeader("Git 装订线"),
+            SettingsPageItem::SectionHeader(i18n::t!("3984a1d67996fbf8")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "可见性",
-                description: "控制是否在编辑器的装订线中显示 Git 状态。",
+                title: i18n::t!("7e228d4688a260d3"),
+                description: i18n::t!("eed5e57a734c9b34"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git.git_gutter"),
@@ -8328,8 +8393,8 @@ fn version_control_page() -> SettingsPage {
             }),
             // todo(settings_ui): Figure out the right default for this value in default.json
             SettingsPageItem::SettingItem(SettingItem {
-                title: "去抖",
-                description: "去抖阈值（毫秒），之后更改将反映在 Git 装订线中。",
+                title: i18n::t!("4c4ed8a01ec725eb"),
+                description: i18n::t!("d7848676aa85ee2f"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git.gutter_debounce"),
@@ -8348,11 +8413,11 @@ fn version_control_page() -> SettingsPage {
 
     fn inline_git_blame_section() -> [SettingsPageItem; 6] {
         [
-            SettingsPageItem::SectionHeader("内联 Git 追溯"),
+            SettingsPageItem::SectionHeader(i18n::t!("31bf21d98197fb54")),
             SettingsPageItem::DynamicItem(DynamicItem {
                 discriminant: SettingItem {
-                    title: "启用",
-                    description: "是否显示当前焦点行的 Git 追溯数据。",
+                    title: i18n::t!("f4f0ead1116b5b62"),
+                    description: i18n::t!("2030e4c9853da8f9"),
                     field: Box::new(SettingField {
                         organization_override: None,
                         json_path: Some("git.inline_blame.enabled"),
@@ -8391,8 +8456,8 @@ fn version_control_page() -> SettingsPage {
                 fields: vec![
                     vec![],
                     vec![SettingItem {
-                        title: "位置",
-                        description: "启用 Git 追溯时的渲染位置。",
+                        title: i18n::t!("1fb4d574da92f1c1"),
+                        description: i18n::t!("486348116120664f"),
                         field: Box::new(SettingField {
                             organization_override: None,
                             json_path: Some("git.inline_blame.location"),
@@ -8420,8 +8485,8 @@ fn version_control_page() -> SettingsPage {
                 ],
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "延迟",
-                description: "显示内联追溯信息前的延迟。",
+                title: i18n::t!("18045b8c40f135cd"),
+                description: i18n::t!("71d970a9d5aeb9d6"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git.inline_blame.delay_ms"),
@@ -8447,8 +8512,8 @@ fn version_control_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "内边距",
-                description: "源代码行末尾与内联追溯开头之间的列间距。",
+                title: i18n::t!("c2dc4da52ed35127"),
+                description: i18n::t!("96c537fc1762c357"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git.inline_blame.padding"),
@@ -8474,8 +8539,8 @@ fn version_control_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "最小列",
-                description: "显示内联追溯信息的最小列号。",
+                title: i18n::t!("dce0114c58004cf4"),
+                description: i18n::t!("a28adc541ec7f198"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git.inline_blame.min_column"),
@@ -8501,8 +8566,8 @@ fn version_control_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "显示提交摘要",
-                description: "在内联追溯中显示提交摘要。",
+                title: i18n::t!("afc7a9c4d858fc42"),
+                description: i18n::t!("9848898abbe8b4e5"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git.inline_blame.show_commit_summary"),
@@ -8532,10 +8597,10 @@ fn version_control_page() -> SettingsPage {
 
     fn git_blame_view_section() -> [SettingsPageItem; 2] {
         [
-            SettingsPageItem::SectionHeader("Git 追溯视图"),
+            SettingsPageItem::SectionHeader(i18n::t!("db4c94b7360c48bb")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "显示头像",
-                description: "显示提交作者的头像。",
+                title: i18n::t!("02a53df5f4003a89"),
+                description: i18n::t!("a9fc4fd93ec04f63"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git.blame.show_avatar"),
@@ -8565,10 +8630,10 @@ fn version_control_page() -> SettingsPage {
 
     fn branch_picker_section() -> [SettingsPageItem; 2] {
         [
-            SettingsPageItem::SectionHeader("分支选择器"),
+            SettingsPageItem::SectionHeader(i18n::t!("c8dd9a8ccc750a2c")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "显示作者姓名",
-                description: "在分支选择器中显示作者姓名作为提交信息的一部分。",
+                title: i18n::t!("94eb0eb869e5c0ac"),
+                description: i18n::t!("1c532c24fea5fbb8"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git.branch_picker.show_author_name"),
@@ -8598,10 +8663,10 @@ fn version_control_page() -> SettingsPage {
 
     fn git_hunks_section() -> [SettingsPageItem; 5] {
         [
-            SettingsPageItem::SectionHeader("Git 块"),
+            SettingsPageItem::SectionHeader(i18n::t!("fb48af6f4dbc580d")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "块样式",
-                description: "Git 块在编辑器中的视觉显示方式。",
+                title: i18n::t!("8f82ddc193d62cac"),
+                description: i18n::t!("f0c563dbe81999c0"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git.hunk_style"),
@@ -8614,8 +8679,8 @@ fn version_control_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "差异基准",
-                description: "Git 功能是相对于 HEAD（未提交的更改）还是默认分支（当前分支上的所有更改）显示更改。",
+                title: i18n::t!("4d49cbee517ccf9b"),
+                description: i18n::t!("ac546edaf7f55b98"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git.diff_base"),
@@ -8628,8 +8693,8 @@ fn version_control_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "路径样式",
-                description: "名称或路径在 Git 视图中优先显示哪个。",
+                title: i18n::t!("1148ddeaf12dc80d"),
+                description: i18n::t!("6a2c48aa52d4eea0"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git.path_style"),
@@ -8642,8 +8707,8 @@ fn version_control_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "显示暂存/恢复按钮",
-                description: "是否在差异块上显示暂存和恢复按钮。",
+                title: i18n::t!("ae66b438017feae4"),
+                description: i18n::t!("3561987887316114"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git.show_stage_restore_buttons"),
@@ -8669,10 +8734,10 @@ fn version_control_page() -> SettingsPage {
 
     fn file_diff_section() -> [SettingsPageItem; 2] {
         [
-            SettingsPageItem::SectionHeader("文件差异"),
+            SettingsPageItem::SectionHeader(i18n::t!("8764e343564f13ef")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "默认显示完整文件",
-                description: "新打开的文件差异是否显示完整文件而不是仅显示更改。",
+                title: i18n::t!("62b34050692a4c7d"),
+                description: i18n::t!("be7c7ae7b1f367c9"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git.file_diff.show_full_file"),
@@ -8701,7 +8766,7 @@ fn version_control_page() -> SettingsPage {
     }
 
     SettingsPage {
-        title: "版本控制",
+        title: i18n::t!("c031c36068c60f86"),
         items: concat_sections![
             git_integration_section(),
             git_gutter_section(),
@@ -8717,10 +8782,10 @@ fn version_control_page() -> SettingsPage {
 fn collaboration_page() -> SettingsPage {
     fn calls_section() -> [SettingsPageItem; 3] {
         [
-            SettingsPageItem::SectionHeader("通话"),
+            SettingsPageItem::SectionHeader(i18n::t!("3d5b23d1a15d06ae")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "加入时静音",
-                description: "加入频道或通话时是否应将麦克风静音。",
+                title: i18n::t!("085564ed766f1f44"),
+                description: i18n::t!("cb48f988cd1c815d"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("calls.mute_on_join"),
@@ -8733,8 +8798,8 @@ fn collaboration_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "加入时共享",
-                description: "加入空频道时是否共享当前项目。",
+                title: i18n::t!("11ec5eeb88d7fe0d"),
+                description: i18n::t!("929e7e972cefac04"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("calls.share_on_join"),
@@ -8754,17 +8819,17 @@ fn collaboration_page() -> SettingsPage {
     fn audio_settings() -> [SettingsPageItem; 3] {
         [
             SettingsPageItem::ActionLink(ActionLink {
-                title: "测试音频".into(),
-                description: Some("测试您的麦克风和扬声器设置".into()),
-                button_text: "测试音频".into(),
+                title: i18n::t!("dd1df075f74320a4").into(),
+                description: Some(i18n::t!("fe80e6f484586b90").into()),
+                button_text: i18n::t!("dd1df075f74320a4").into(),
                 on_click: Arc::new(|_settings_window, window, cx| {
                     open_audio_test_window(window, cx);
                 }),
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "输出音频设备",
-                description: "选择输出音频设备",
+                title: i18n::t!("b79205ef8c43a49f"),
+                description: i18n::t!("129ba95513bb085d"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("audio.experimental.output_audio_device"),
@@ -8787,8 +8852,8 @@ fn collaboration_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "输入音频设备",
-                description: "选择输入音频设备",
+                title: i18n::t!("807d643aff00b6be"),
+                description: i18n::t!("92ca34ff34daf687"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("audio.experimental.input_audio_device"),
@@ -8814,17 +8879,17 @@ fn collaboration_page() -> SettingsPage {
     }
 
     SettingsPage {
-        title: "协作",
+        title: i18n::t!("19bf536853e2e78a"),
         items: concat_sections![calls_section(), audio_settings()],
     }
 }
 
 fn code_explanations_section() -> [SettingsPageItem; 12] {
     [
-        SettingsPageItem::SectionHeader("代码讲解"),
+        SettingsPageItem::SectionHeader(i18n::t!("16ece1acc00be44a")),
         SettingsPageItem::SettingItem(SettingItem {
-            title: "讲解语言",
-            description: "代码讲解的输出语言，默认中文。",
+            title: i18n::t!("24453781bc0e3043"),
+            description: i18n::t!("639e8d4930fd5c4a"),
             field: Box::new(SettingField {
                 organization_override: None,
                 json_path: Some("code_explanations.target_language"),
@@ -8840,8 +8905,8 @@ fn code_explanations_section() -> [SettingsPageItem; 12] {
             files: USER,
         }),
         SettingsPageItem::SettingItem(SettingItem {
-            title: "讲解渠道",
-            description: "代码仅发送给明确选择的渠道，不自动回退到其他服务。",
+            title: i18n::t!("4abe198a7a3869f5"),
+            description: i18n::t!("359c97c1f596e474"),
             field: Box::new(SettingField {
                 organization_override: None,
                 json_path: Some("code_explanations.provider"),
@@ -8854,8 +8919,8 @@ fn code_explanations_section() -> [SettingsPageItem; 12] {
             files: USER,
         }),
         SettingsPageItem::SettingItem(SettingItem {
-            title: "讲解模型",
-            description: "用于代码讲解的模型。",
+            title: i18n::t!("0f16310584adb487"),
+            description: i18n::t!("914e936b494e5a19"),
             field: Box::new(SettingField {
                 organization_override: None,
                 json_path: Some("code_explanations.model"),
@@ -8868,8 +8933,8 @@ fn code_explanations_section() -> [SettingsPageItem; 12] {
             files: USER,
         }),
         SettingsPageItem::SettingItem(SettingItem {
-            title: "原有注释优先",
-            description: "跳过已有注释说明的语法单元。",
+            title: i18n::t!("1af345c17ce268f1"),
+            description: i18n::t!("109a36df07e8642e"),
             field: Box::new(SettingField {
                 organization_override: None,
                 json_path: Some("code_explanations.prefer_existing_comments"),
@@ -8891,8 +8956,8 @@ fn code_explanations_section() -> [SettingsPageItem; 12] {
             files: USER,
         }),
         SettingsPageItem::SettingItem(SettingItem {
-            title: "持久缓存",
-            description: "将讲解保存至本机 SQLite 数据库，不写入项目目录。讲解可能包含敏感代码信息。",
+            title: i18n::t!("087e804ea52c252b"),
+            description: i18n::t!("581a074491460678"),
             field: Box::new(SettingField {
                 organization_override: None,
                 json_path: Some("code_explanations.cache_persist"),
@@ -8908,8 +8973,8 @@ fn code_explanations_section() -> [SettingsPageItem; 12] {
             files: USER,
         }),
         SettingsPageItem::SettingItem(SettingItem {
-            title: "项目缓存字节上限",
-            description: "每项目讲解内容的缓存预算，默认 50 MiB。",
+            title: i18n::t!("bfc1d294381c8179"),
+            description: i18n::t!("62704fe91d7b2afb"),
             field: Box::new(SettingField {
                 organization_override: None,
                 json_path: Some("code_explanations.cache_max_bytes"),
@@ -8925,8 +8990,8 @@ fn code_explanations_section() -> [SettingsPageItem; 12] {
             files: USER,
         }),
         SettingsPageItem::SettingItem(SettingItem {
-            title: "启用代码讲解",
-            description: "将可见代码及必要上下文发送给所选 AI 服务，只在编辑器显示，不修改文件。",
+            title: i18n::t!("769a2f0db1f64f03"),
+            description: i18n::t!("9f5eee44d146b69a"),
             field: Box::new(SettingField {
                 organization_override: None,
                 json_path: Some("code_explanations.enabled"),
@@ -8939,8 +9004,8 @@ fn code_explanations_section() -> [SettingsPageItem; 12] {
             files: USER,
         }),
         SettingsPageItem::SettingItem(SettingItem {
-            title: "整文件讲解行数上限",
-            description: "文件不超过此行数且单次请求不超过 64 KiB 时整体讲解；否则按函数或顶层语法单元拆分。超长函数仍会单独询问。",
+            title: i18n::t!("4b3c79c7aec094b4"),
+            description: i18n::t!("d261d83a4133f761"),
             field: Box::new(SettingField {
                 organization_override: None,
                 json_path: Some("code_explanations.max_function_lines"),
@@ -8962,8 +9027,8 @@ fn code_explanations_section() -> [SettingsPageItem; 12] {
             files: USER,
         }),
         SettingsPageItem::SettingItem(SettingItem {
-            title: "最大并发请求数",
-            description: "每个项目独立同时执行的代码讲解请求数量；切换项目不会共享额度，默认值为 5，不设最大限制。较高的数值会增加内存、网络、模型服务压力和费用。",
+            title: i18n::t!("babef8581dfa7e5a"),
+            description: i18n::t!("c96216bcfe43bca0"),
             field: Box::new(SettingField {
                 organization_override: None,
                 json_path: Some("code_explanations.max_concurrent_requests"),
@@ -8985,8 +9050,8 @@ fn code_explanations_section() -> [SettingsPageItem; 12] {
             files: USER,
         }),
         SettingsPageItem::SettingItem(SettingItem {
-            title: "预加载行数",
-            description: "除可见区域外，提前讲解视口上方和下方各多少行，默认各 100 行。",
+            title: i18n::t!("e1b59b01297f7af0"),
+            description: i18n::t!("d94b0ed7d0b5b021"),
             field: Box::new(SettingField {
                 organization_override: None,
                 json_path: Some("code_explanations.preload_lines"),
@@ -9002,8 +9067,8 @@ fn code_explanations_section() -> [SettingsPageItem; 12] {
             files: USER,
         }),
         SettingsPageItem::SettingItem(SettingItem {
-            title: "详细讲解",
-            description: "自动讲解补充语句、参数及语法说明；选区的单独深度讲解始终使用语法级深度。",
+            title: i18n::t!("d8f750ac52b2f47b"),
+            description: i18n::t!("b0105a23c91e5905"),
             field: Box::new(SettingField {
                 organization_override: None,
                 json_path: Some("code_explanations.detailed"),
@@ -9021,10 +9086,10 @@ fn code_explanations_section() -> [SettingsPageItem; 12] {
 fn ai_page(cx: &App) -> SettingsPage {
     fn general_section() -> [SettingsPageItem; 8] {
         [
-            SettingsPageItem::SectionHeader("基础设置"),
+            SettingsPageItem::SectionHeader(i18n::t!("692873ddd8f40e66")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "禁用 AI",
-                description: "是否禁用 Zed 中的所有 AI 功能。",
+                title: i18n::t!("af571f248d7bf8f8"),
+                description: i18n::t!("9b246e4584710db1"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("disable_ai"),
@@ -9037,8 +9102,8 @@ fn ai_page(cx: &App) -> SettingsPage {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "线程侧边栏位置",
-                description: "线程侧边栏显示在窗口的哪一侧。",
+                title: i18n::t!("86837a4449e60b81"),
+                description: i18n::t!("53374aa15301e281"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("agent.threads_sidebar.position"),
@@ -9062,8 +9127,8 @@ fn ai_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "线程侧边栏默认宽度",
-                description: "线程侧边栏的默认宽度。修改此设置也会更新手动调整后的宽度；双击分隔线可恢复为该宽度。",
+                title: i18n::t!("a8a43ac220365f28"),
+                description: i18n::t!("c598b5661f4eddb4"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("agent.threads_sidebar.default_width"),
@@ -9087,8 +9152,8 @@ fn ai_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "自动打开线程侧边栏",
-                description: "在现有窗口中打开文件夹时是否自动打开线程侧边栏。",
+                title: i18n::t!("daa5f89292ed82a9"),
+                description: i18n::t!("307b267fe715c9d9"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("agent.threads_sidebar.auto_open"),
@@ -9112,10 +9177,10 @@ fn ai_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SubPageLink(SubPageLink {
-                title: "语言模型提供商".into(),
+                title: i18n::t!("1eabe31d01dca963").into(),
                 r#type: Default::default(),
                 json_path: Some("llm_providers"),
-                description: Some("管理 Agent 使用的模型服务与 API 密钥；翻译、代码讲解和编辑预测分别选择模型或提供商。".into()),
+                description: Some(i18n::t!("edaa7302dd7d8531").into()),
                 search_aliases: &[
                     "ai",
                     "amazon",
@@ -9147,12 +9212,10 @@ fn ai_page(cx: &App) -> SettingsPage {
                 render: render_llm_providers_page,
             }),
             SettingsPageItem::SubPageLink(SubPageLink {
-                title: "外部 Agent".into(),
+                title: i18n::t!("8dc040d2283eab03").into(),
                 r#type: Default::default(),
                 json_path: Some("agent_servers"),
-                description: Some(
-                    "管理通过 Agent 客户端协议连接的外部 Agent。".into(),
-                ),
+                description: Some(i18n::t!("735025642c0d702c").into()),
                 search_aliases: &[
                     "acp",
                     "agent client protocol",
@@ -9174,12 +9237,10 @@ fn ai_page(cx: &App) -> SettingsPage {
                 render: render_external_agents_page,
             }),
             SettingsPageItem::SubPageLink(SubPageLink {
-                title: "MCP 服务器".into(),
+                title: i18n::t!("a203f86cf6a6a841").into(),
                 r#type: Default::default(),
                 json_path: Some("context_servers"),
-                description: Some(
-                    "管理向 Agent 提供工具与上下文的 MCP 服务器。".into(),
-                ),
+                description: Some(i18n::t!("02e19b1c0aebe736").into()),
                 search_aliases: &["context server", "mcp", "model context protocol"],
                 in_json: false,
                 files: USER,
@@ -9189,21 +9250,23 @@ fn ai_page(cx: &App) -> SettingsPage {
     }
 
     fn agent_configuration_section(_cx: &App) -> Box<[SettingsPageItem]> {
-        let mut items = vec![SettingsPageItem::SectionHeader("Agent 配置")];
+        let mut items = vec![SettingsPageItem::SectionHeader(i18n::t!(
+            "9c2a11d4e1c407b6"
+        ))];
 
         items.extend([
             SettingsPageItem::SubPageLink(SubPageLink {
-                title: "技能".into(),
+                title: i18n::t!("99aea2f9131ad6da").into(),
                 r#type: Default::default(),
                 json_path: Some(zed_actions::AGENT_SKILLS_SETTINGS_PATH),
-                description: Some("管理全局和项目中的 Agent 技能。".into()),
+                description: Some(i18n::t!("f78eaae8d47089bf").into()),
                 search_aliases: &["agent skill", "agent skills", "custom instructions", "skill", "skills"],
                 in_json: false,
                 files: USER | PROJECT,
                 render: render_skills_setup_page,
             }),
             SettingsPageItem::SubPageLink(SubPageLink {
-                title: "沙箱".into(),
+                title: i18n::t!("05fdf30411d98d32").into(),
                 r#type: Default::default(),
                 json_path: Some(zed_actions::AGENT_SANDBOX_SETTINGS_PATH),
                 description: Some(
@@ -9224,7 +9287,7 @@ fn ai_page(cx: &App) -> SettingsPage {
                 render: render_sandbox_settings_page,
             }),
             SettingsPageItem::SubPageLink(SubPageLink {
-                title: "工具权限".into(),
+                title: i18n::t!("a2b60a34a75b7a8e").into(),
                 r#type: Default::default(),
                 json_path: Some("agent.tool_permissions"),
                 description: Some("Set up regex patterns to auto-allow, auto-deny, or always request confirmation, for specific tool inputs.".into()),
@@ -9237,8 +9300,8 @@ fn ai_page(cx: &App) -> SettingsPage {
 
         items.extend([
             SettingsPageItem::SettingItem(SettingItem {
-                title: "单文件审查",
-                description: "启用后，Agent 的编辑也将在单文件缓冲区中显示以供审查。",
+                title: i18n::t!("315377cc99066a95"),
+                description: i18n::t!("a69260570adcba4f"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("agent.single_file_review"),
@@ -9256,13 +9319,15 @@ fn ai_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "启用反馈",
-                description: "显示投票赞/踩图标按钮，用于对 Agent 编辑提供反馈。",
+                title: i18n::t!("689723ab0d18014d"),
+                description: i18n::t!("77e583e55fe84b99"),
                 field: Box::new(SettingField {
-                    organization_override: Some(|org_config| if org_config.is_agent_thread_feedback_enabled {
-                        None
-                    } else {
-                        Some(&false)
+                    organization_override: Some(|org_config| {
+                        if org_config.is_agent_thread_feedback_enabled {
+                            None
+                        } else {
+                            Some(&false)
+                        }
                     }),
                     json_path: Some("agent.enable_feedback"),
                     pick: |settings_content| {
@@ -9279,8 +9344,8 @@ fn ai_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Agent 等待时通知",
-                description: "当 Agent 完成回复或在运行工具操作前需要确认时，在何处显示通知。",
+                title: i18n::t!("7a5f49b13d03da1b"),
+                description: i18n::t!("0daea386c0e32815"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("agent.notify_when_agent_waiting"),
@@ -9302,8 +9367,8 @@ fn ai_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Agent 完成时播放声音",
-                description: "当 Agent 完成回复或需要用户输入时播放声音的时机。",
+                title: i18n::t!("6d61ab97328dafe5"),
+                description: i18n::t!("957e458af07aae8c"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("agent.play_sound_when_agent_done"),
@@ -9325,8 +9390,8 @@ fn ai_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "阻止系统休眠",
-                description: "Agent 线程运行时是否保持系统唤醒。",
+                title: i18n::t!("05ad0bb85d819ebd"),
+                description: i18n::t!("bfe0ee394bf97fbb"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("agent.prevent_idle_sleep"),
@@ -9344,8 +9409,8 @@ fn ai_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "展开编辑卡片",
-                description: "是否在 Agent 面板中展开编辑卡片，显示差异预览。",
+                title: i18n::t!("054028aa1835c851"),
+                description: i18n::t!("ad31ccc50556dad4"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("agent.expand_edit_card"),
@@ -9363,8 +9428,8 @@ fn ai_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "展开终端卡片",
-                description: "是否在 Agent 面板中展开终端卡片，显示完整的命令输出。",
+                title: i18n::t!("5e55a521541bbcd4"),
+                description: i18n::t!("61a000e3ba751132"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("agent.expand_terminal_card"),
@@ -9386,8 +9451,8 @@ fn ai_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "终端线程初始化命令",
-                description: "Zed 在 Agent 面板中创建终端线程 shell 时自动运行的命令。在您配置的 shell 中运行。",
+                title: i18n::t!("1c92a6eafef10588"),
+                description: i18n::t!("d452e3a8e0083b88"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("agent.terminal_init_command"),
@@ -9416,17 +9481,13 @@ fn ai_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "思考显示",
-                description: "思考块默认的显示方式。「自动」在流式传输时完全展开，完成后自动折叠。「预览」在流式传输时自动展开并带高度限制。「始终展开」显示完整内容。「始终折叠」保持折叠状态。",
+                title: i18n::t!("779707adf31b1163"),
+                description: i18n::t!("834115938ff3429d"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("agent.thinking_display"),
                     pick: |settings_content| {
-                        settings_content
-                            .agent
-                            .as_ref()?
-                            .thinking_display
-                            .as_ref()
+                        settings_content.agent.as_ref()?.thinking_display.as_ref()
                     },
                     write: |settings_content, value, _| {
                         settings_content
@@ -9439,8 +9500,8 @@ fn ai_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "终端停止时取消生成",
-                description: "单击运行中终端工具的停止按钮是否也应取消 Agent 的生成。注意仅适用于停止按钮，不适用于终端内的 ctrl+c。",
+                title: i18n::t!("d4ef5ec56497e679"),
+                description: i18n::t!("ddd5d7e735b037fc"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("agent.cancel_generation_on_terminal_stop"),
@@ -9462,8 +9523,8 @@ fn ai_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "使用修饰键发送",
-                description: "是否始终使用 cmd-enter（Linux 或 Windows 上为 ctrl-enter）发送消息。",
+                title: i18n::t!("ac5b10d3c5c6b2d8"),
+                description: i18n::t!("c56b9a52913af2a4"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("agent.use_modifier_to_send"),
@@ -9485,8 +9546,8 @@ fn ai_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "消息编辑器最小行数",
-                description: "Agent 消息编辑器中显示的最小行数。",
+                title: i18n::t!("19785e06a679ca9a"),
+                description: i18n::t!("3047f4cb99c8f4ef"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("agent.message_editor_min_lines"),
@@ -9508,8 +9569,8 @@ fn ai_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "显示轮次统计",
-                description: "是否显示轮次统计信息，如生成过程中的经过时间和最终轮次时长。",
+                title: i18n::t!("b64bafd3eb399704"),
+                description: i18n::t!("5b5a3e6df5c00289"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("agent.show_turn_stats"),
@@ -9527,13 +9588,17 @@ fn ai_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "显示合并冲突指示器",
-                description: "是否在状态栏中显示合并冲突指示器，提供使用 Agent 解决冲突的选项。",
+                title: i18n::t!("f43ccf2b6fc77695"),
+                description: i18n::t!("f74bda4a991e7a67"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("agent.show_merge_conflict_indicator"),
                     pick: |settings_content| {
-                        settings_content.agent.as_ref()?.show_merge_conflict_indicator.as_ref()
+                        settings_content
+                            .agent
+                            .as_ref()?
+                            .show_merge_conflict_indicator
+                            .as_ref()
                     },
                     write: |settings_content, value, _| {
                         settings_content
@@ -9549,8 +9614,8 @@ fn ai_page(cx: &App) -> SettingsPage {
 
         items.extend([
             SettingsPageItem::SettingItem(SettingItem {
-                title: "自动压缩",
-                description: "当 Agent 上下文过大时自动压缩，总结早期消息以释放模型上下文窗口中的空间。",
+                title: i18n::t!("5c8f67f0721e29b7"),
+                description: i18n::t!("ad0fb89817253e7b"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("agent.auto_compact.enabled"),
@@ -9576,8 +9641,8 @@ fn ai_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "自动压缩阈值",
-                description: "自动压缩运行的时机。百分比字符串如\"90%\"相对于上下文窗口衡量。正整数表示在使用的 token 数量达到该值后压缩。负整数表示上下文窗口中剩余 token 数量少于该值时压缩。",
+                title: i18n::t!("87b3056583c36c45"),
+                description: i18n::t!("5c47bd41e0bb805b"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("agent.auto_compact.threshold"),
@@ -9612,8 +9677,8 @@ fn ai_page(cx: &App) -> SettingsPage {
 
     fn edit_prediction_display_sub_section() -> [SettingsPageItem; 1] {
         [SettingsPageItem::SettingItem(SettingItem {
-            title: "显示模式",
-            description: "何时在缓冲区中显示编辑预测预览。急切模式内联显示，而微妙模式仅在按住修饰键时显示。",
+            title: i18n::t!("8b91a131263f2b5f"),
+            description: i18n::t!("0182d67ca14ff066"),
             field: Box::new(SettingField {
                 organization_override: None,
                 json_path: Some("edit_prediction.display_mode"),
@@ -9657,10 +9722,10 @@ fn ai_page(cx: &App) -> SettingsPage {
 fn network_page() -> SettingsPage {
     fn network_section() -> [SettingsPageItem; 3] {
         [
-            SettingsPageItem::SectionHeader("网络"),
+            SettingsPageItem::SectionHeader(i18n::t!("97b31b5d63f57e51")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "代理",
-                description: "用于网络请求的代理。",
+                title: i18n::t!("5e84ea61e8386af7"),
+                description: i18n::t!("1a0081da0b64c4ef"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("proxy"),
@@ -9676,8 +9741,8 @@ fn network_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "服务器 URL",
-                description: "要连接的 Zed 服务器 URL。",
+                title: i18n::t!("ee58ddc56a6304aa"),
+                description: i18n::t!("1ae1a9c68224b3bc"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("server_url"),
@@ -9697,10 +9762,10 @@ fn network_page() -> SettingsPage {
 
     fn remote_server_section() -> [SettingsPageItem; 2] {
         [
-            SettingsPageItem::SectionHeader("远程服务器"),
+            SettingsPageItem::SectionHeader(i18n::t!("9beed95cb3cfacc9")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "中国服务器适配",
-                description: "启用后，不再尝试由远程主机直接下载远程开发服务，而是立即由本机通过已配置的代理下载，再经 SSH 上传到远程主机。适用于无法访问 Zed 发布资源的国内服务器。",
+                title: i18n::t!("45507efef78ba917"),
+                description: i18n::t!("bd435dd3a1eee5d7"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("china_server_adaptation"),
@@ -9718,7 +9783,7 @@ fn network_page() -> SettingsPage {
     }
 
     SettingsPage {
-        title: "网络",
+        title: i18n::t!("97b31b5d63f57e51"),
         items: concat_sections![network_section(), remote_server_section()],
     }
 }
@@ -9761,10 +9826,10 @@ fn language_settings_field_mut<T>(
 fn language_settings_data() -> Box<[SettingsPageItem]> {
     fn indentation_section() -> [SettingsPageItem; 5] {
         [
-            SettingsPageItem::SectionHeader("缩进"),
+            SettingsPageItem::SectionHeader(i18n::t!("66c740387e6b3827")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "制表符大小",
-                description: "一个制表符应占用的列数。",
+                title: i18n::t!("376be073a8d2f506"),
+                description: i18n::t!("2c5a08e1f9cad17e"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).tab_size"), // TODO(cameron): not JQ syntax because not URL-safe
@@ -9783,8 +9848,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "硬制表符",
-                description: "是否使用制表符缩进行，而不是多个空格。",
+                title: i18n::t!("5cabf599ffe684d7"),
+                description: i18n::t!("3502ed2c29622228"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).hard_tabs"),
@@ -9803,8 +9868,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "自动缩进",
-                description: "控制输入时的自动缩进行为。",
+                title: i18n::t!("e5eea15164c04dbe"),
+                description: i18n::t!("ade4f6246c24c68f"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).auto_indent"),
@@ -9823,8 +9888,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "粘贴时自动缩进",
-                description: "是否根据上下文调整粘贴内容的缩进。",
+                title: i18n::t!("628749307ab6f0b2"),
+                description: i18n::t!("7d67d36f71e22cf9"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).auto_indent_on_paste"),
@@ -9847,10 +9912,10 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
 
     fn wrapping_section() -> [SettingsPageItem; 6] {
         [
-            SettingsPageItem::SectionHeader("换行"),
+            SettingsPageItem::SectionHeader(i18n::t!("bd609a8e2d40f3ef")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "软换行",
-                description: "如何软换行长文本行。",
+                title: i18n::t!("77a01689bd6dd157"),
+                description: i18n::t!("520243f8eebe1c73"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).soft_wrap"),
@@ -9869,8 +9934,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "显示换行参考线",
-                description: "在编辑器中显示换行参考线。",
+                title: i18n::t!("fac02752ade29996"),
+                description: i18n::t!("9e61da96e7dcb7ff"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).show_wrap_guides"),
@@ -9889,8 +9954,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "首选行长度",
-                description: "启用软换行的缓冲区中软换行的列号。",
+                title: i18n::t!("b5b9d9cd79c0285e"),
+                description: i18n::t!("6315dab1c7efb456"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).preferred_line_length"),
@@ -9909,8 +9974,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "换行参考线",
-                description: "在编辑器中显示换行参考线的字符数。",
+                title: i18n::t!("66a6577105c54d61"),
+                description: i18n::t!("23a9b0556f89d830"),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -9936,8 +10001,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "允许重新换行",
-                description: "控制此语言允许 `editor::rewrap` 操作的范围。",
+                title: i18n::t!("286453355ca21440"),
+                description: i18n::t!("70ba715c021d728b"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).allow_rewrap"),
@@ -9960,10 +10025,10 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
 
     fn indent_guides_section() -> [SettingsPageItem; 6] {
         [
-            SettingsPageItem::SectionHeader("缩进参考线"),
+            SettingsPageItem::SectionHeader(i18n::t!("6ad938c8c789f951")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "已启用",
-                description: "在编辑器中显示缩进参考线。",
+                title: i18n::t!("dfb802238b38fbd4"),
+                description: i18n::t!("88f25dc7f2c7dcb8"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).indent_guides.enabled"),
@@ -9985,8 +10050,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "线条宽度",
-                description: "缩进参考线的宽度（像素），介于 1 到 10 之间。",
+                title: i18n::t!("5eb9f4e84a63fb27"),
+                description: i18n::t!("efab44b0a6db76aa"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).indent_guides.line_width"),
@@ -10008,8 +10073,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "活动线条宽度",
-                description: "活动缩进参考线的宽度（像素），介于 1 到 10 之间。",
+                title: i18n::t!("62e66562fc72c865"),
+                description: i18n::t!("d987bf8d5c56aa27"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).indent_guides.active_line_width"),
@@ -10034,8 +10099,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "着色",
-                description: "确定缩进参考线的着色方式。",
+                title: i18n::t!("7b6fd1f9a75ed3df"),
+                description: i18n::t!("179418cb9bffada7"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).indent_guides.coloring"),
@@ -10057,8 +10122,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "背景着色",
-                description: "确定缩进参考线背景的着色方式。",
+                title: i18n::t!("98d41705630f0df5"),
+                description: i18n::t!("7a2d3d2de3ddfd35"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).indent_guides.background_coloring"),
@@ -10088,8 +10153,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
         [
             SettingsPageItem::SectionHeader("Formatting"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "保存时格式化",
-                description: "开启：格式化整个缓冲区。\n关闭：不格式化。\n仅修改：仅格式化有未暂存更改的行；当 git diff 或 LSP 范围格式化不可用时跳过格式化。\n如果可用则仅修改：同上，但回退为格式化整个缓冲区。",
+                title: i18n::t!("23365ae4886a70f9"),
+                description: i18n::t!("09512500b9f07089"),
                 field: Box::new(
                     // TODO(settings_ui): this setting should just be a bool
                     SettingField {
@@ -10115,8 +10180,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "保存时删除尾随空白",
-                description: "是否在保存前删除缓冲区行尾的任何尾随空白。",
+                title: i18n::t!("805a56f2b74ccc0f"),
+                description: i18n::t!("fa0fd2bd3b3b22d6"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).remove_trailing_whitespace_on_save"),
@@ -10135,8 +10200,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "保存时确保末尾换行",
-                description: "是否在保存时确保缓冲区末尾有一个换行符。",
+                title: i18n::t!("49a57e2bed8b3f99"),
+                description: i18n::t!("d205ce1e6cd4951f"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).ensure_final_newline_on_save"),
@@ -10155,8 +10220,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "换行符",
-                description: "新文件以及格式化和保存操作期间如何处理换行符。",
+                title: i18n::t!("58872d8055045153"),
+                description: i18n::t!("19e88cff5b60ca18"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).line_ending"),
@@ -10178,8 +10243,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "格式化器",
-                description: "如何执行缓冲区格式化。",
+                title: i18n::t!("1c968521e85255c7"),
+                description: i18n::t!("8762f8c56ce498ef"),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -10205,8 +10270,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "输入时格式化",
-                description: "是否在每次输入 LSP 服务器能力定义的\"触发器\"符号后使用额外的 LSP 查询来格式化（和修正）代码。",
+                title: i18n::t!("092abf62dce6f65a"),
+                description: i18n::t!("e9542ab8829ac793"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).use_on_type_format"),
@@ -10225,8 +10290,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "格式化时代码操作",
-                description: "格式化时要运行的额外代码操作。",
+                title: i18n::t!("0c258d86ce02f0c8"),
+                description: i18n::t!("f6c37aafa9999a43"),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -10258,8 +10323,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
         [
             SettingsPageItem::SectionHeader("Autoclose"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "自动关闭",
-                description: "是否自动为您输入闭合字符。例如，当您输入 '('，Zed 会自动在正确位置添加闭合的 ')'。",
+                title: i18n::t!("f0a46252de308641"),
+                description: i18n::t!("e0114f0db9a492d9"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).use_autoclose"),
@@ -10278,8 +10343,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "自动包围",
-                description: "是否自动用字符包围所选文本。例如，当您选择文本并输入 '('，Zed 会自动将文本用 () 包围。",
+                title: i18n::t!("83241d462b1e1e1a"),
+                description: i18n::t!("b6118ebe10455abe"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).use_auto_surround"),
@@ -10298,8 +10363,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "始终将括号视为自动关闭",
-                description: "控制是否无论闭合字符如何插入都始终跳过和自动删除它们。",
+                title: i18n::t!("1852cf079a43ef8a"),
+                description: i18n::t!("22bd0a29dfc54759"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).always_treat_brackets_as_autoclosed"),
@@ -10318,8 +10383,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "JSX 标签自动关闭",
-                description: "是否自动关闭 JSX 标签。",
+                title: i18n::t!("891d310253e5ab81"),
+                description: i18n::t!("df481f3d759529db"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).jsx_tag_auto_close"),
@@ -10345,8 +10410,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
         [
             SettingsPageItem::SectionHeader("Whitespace"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "显示空白字符",
-                description: "是否在编辑器中显示制表符和空格。",
+                title: i18n::t!("1439be2bfa25c6d3"),
+                description: i18n::t!("8f0dd8960ea60bca"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).show_whitespaces"),
@@ -10365,8 +10430,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "空格指示符",
-                description: "当 show_whitespaces 启用时用于渲染空格字符的可见字符（默认：\"•\"）",
+                title: i18n::t!("c14f6dbdc86e4b67"),
+                description: i18n::t!("71e80fe90b03c341"),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -10392,8 +10457,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "制表符指示符",
-                description: "当 show_whitespaces 启用时用于渲染制表符的可见字符（默认：\"→\"）",
+                title: i18n::t!("a5186f4ebfb121a8"),
+                description: i18n::t!("8775903c17a7cfd3"),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -10425,8 +10490,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
         [
             SettingsPageItem::SectionHeader("Completions"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "输入时显示补全",
-                description: "是否在编辑器中输入时自动弹出补全菜单，无需显式请求。",
+                title: i18n::t!("0757e1c1af31c04e"),
+                description: i18n::t!("764934dda34bb2ff"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).show_completions_on_input"),
@@ -10445,8 +10510,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "显示补全文档",
-                description: "是否在补全菜单中内联和并排显示条目的文档。",
+                title: i18n::t!("0557a24b555e76d3"),
+                description: i18n::t!("0f386770f5cbee5c"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).show_completion_documentation"),
@@ -10465,8 +10530,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "词语",
-                description: "控制词语的补全方式。",
+                title: i18n::t!("f3b5980f18ff903e"),
+                description: i18n::t!("efd88b03ff8bfaee"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).completions.words"),
@@ -10485,8 +10550,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "词语最小长度",
-                description: "补全查询中至少需要多少个字符才能自动显示基于词语的补全。",
+                title: i18n::t!("cbc4c284d1d7f6aa"),
+                description: i18n::t!("8c12d10d54bd0201"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).completions.words_min_length"),
@@ -10508,8 +10573,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "补全菜单滚动条",
-                description: "何时在补全菜单中显示滚动条。",
+                title: i18n::t!("5a0fca58e2c4cbe2"),
+                description: i18n::t!("d8a6bab6cfc71d40"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("editor.completion_menu_scrollbar"),
@@ -10524,8 +10589,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "补全详情对齐",
-                description: "在代码补全上下文菜单中详情文本是左对齐还是右对齐。",
+                title: i18n::t!("36f0178704be373c"),
+                description: i18n::t!("0c1efa29126e9622"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("editor.completion_detail_alignment"),
@@ -10540,8 +10605,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "补全菜单项类型",
-                description: "如何在补全菜单中显示每个条目的 LSP 项类型（函数、方法、变量等）。",
+                title: i18n::t!("b77d7a296775eef2"),
+                description: i18n::t!("ad53f76e20e346d9"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("editor.completion_menu_item_kind"),
@@ -10560,10 +10625,10 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
 
     fn inlay_hints_section() -> [SettingsPageItem; 10] {
         [
-            SettingsPageItem::SectionHeader("内联提示"),
+            SettingsPageItem::SectionHeader(i18n::t!("b3a81b56d7f63e8c")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "已启用",
-                description: "全局开关，用于打开或关闭提示。",
+                title: i18n::t!("dfb802238b38fbd4"),
+                description: i18n::t!("0f076b5e96f758f0"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).inlay_hints.enabled"),
@@ -10582,8 +10647,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "显示值提示",
-                description: "全局开关，用于在调试时打开或关闭内联值显示。",
+                title: i18n::t!("2ade72ddf164a27f"),
+                description: i18n::t!("4e22635a7b598894"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).inlay_hints.show_value_hints"),
@@ -10605,8 +10670,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "显示类型提示",
-                description: "是否显示类型提示。",
+                title: i18n::t!("fdcb0d42c70ccec2"),
+                description: i18n::t!("a9a79f9da735c1d2"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).inlay_hints.show_type_hints"),
@@ -10625,8 +10690,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "显示参数提示",
-                description: "是否显示参数提示。",
+                title: i18n::t!("ef58f97477e750bf"),
+                description: i18n::t!("db287e854fe6cbec"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).inlay_hints.show_parameter_hints"),
@@ -10648,8 +10713,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "显示其他提示",
-                description: "是否显示其他提示。",
+                title: i18n::t!("286fa862654bf77c"),
+                description: i18n::t!("38e55af13fd8f0f5"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).inlay_hints.show_other_hints"),
@@ -10671,8 +10736,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "显示背景",
-                description: "为内联提示显示背景。",
+                title: i18n::t!("6a35332ddb66fd7f"),
+                description: i18n::t!("012de2df1b1a314e"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).inlay_hints.show_background"),
@@ -10691,8 +10756,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "编辑去抖毫秒数",
-                description: "是否在缓冲区编辑后对内联提示更新进行去抖（设置为 0 以禁用去抖）。",
+                title: i18n::t!("7eb07228ffa8c4d2"),
+                description: i18n::t!("2250e63535353c83"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).inlay_hints.edit_debounce_ms"),
@@ -10714,8 +10779,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "滚动去抖毫秒数",
-                description: "是否在缓冲区滚动后对内联提示更新进行去抖（设置为 0 以禁用去抖）。",
+                title: i18n::t!("1eb021c2d86389ab"),
+                description: i18n::t!("26215649c4f68872"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).inlay_hints.scroll_debounce_ms"),
@@ -10737,8 +10802,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "按下修饰键时切换",
-                description: "当用户按下指定的修饰键时切换内联提示（隐藏或显示）。",
+                title: i18n::t!("246da760a74227b8"),
+                description: i18n::t!("67823628b87ea87d"),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -10777,10 +10842,10 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
 
     fn tasks_section() -> [SettingsPageItem; 4] {
         [
-            SettingsPageItem::SectionHeader("任务"),
+            SettingsPageItem::SectionHeader(i18n::t!("5253040db8643c85")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "已启用",
-                description: "是否为此语言启用任务。",
+                title: i18n::t!("dfb802238b38fbd4"),
+                description: i18n::t!("b24886f7f89484fb"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).tasks.enabled"),
@@ -10799,8 +10864,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "变量",
-                description: "为特定语言设置的额外任务变量。",
+                title: i18n::t!("a772fa4ebe36b63d"),
+                description: i18n::t!("28f1dd506aac8cd6"),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -10826,8 +10891,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "优先使用 LSP",
-                description: "优先使用 LSP 任务而非 Zed 语言扩展任务。",
+                title: i18n::t!("4c8852ac266ef37c"),
+                description: i18n::t!("8002c8f500d405e9"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).tasks.prefer_lsp"),
@@ -10852,8 +10917,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
         [
             SettingsPageItem::SectionHeader("Miscellaneous"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "语言检测",
-                description: "是否为未保存的缓冲区启用自动语言检测。",
+                title: i18n::t!("bce42437c31f4fc1"),
+                description: i18n::t!("df049040f7a79950"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("language_detection"),
@@ -10866,8 +10931,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "启用词语差异",
-                description: "是否在编辑器中启用词语差异高亮。启用后，修改行内更改的词语会被高亮显示以精确展示更改内容。",
+                title: i18n::t!("d3424ce0d61f2b56"),
+                description: i18n::t!("a1f966e1383d34d0"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).word_diff_enabled"),
@@ -10886,8 +10951,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "调试器",
-                description: "此语言的首选调试器。",
+                title: i18n::t!("20fe3f3e72ca01b8"),
+                description: i18n::t!("f2fa43f200fb29e7"),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -10913,8 +10978,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "中键粘贴",
-                description: "在 Linux 上启用中键粘贴。",
+                title: i18n::t!("d3f6f1d5395c6598"),
+                description: i18n::t!("be3f033b3c65c38f"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).editor.middle_click_paste"),
@@ -10927,8 +10992,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "换行时延续注释",
-                description: "当上一行也是注释时，是否在新行也以注释开头。",
+                title: i18n::t!("84e3bc0dad6ccd80"),
+                description: i18n::t!("71cb2ed278dbf919"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).extend_comment_on_newline"),
@@ -10947,8 +11012,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "括号着色",
-                description: "是否在编辑器中为括号着色。",
+                title: i18n::t!("23b02c2557996c35"),
+                description: i18n::t!("26757e6ec1960e32"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).colorize_brackets"),
@@ -10967,8 +11032,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Vim/Emacs 模式行支持",
-                description: "搜索模式行的行数（设置为 0 以禁用）。",
+                title: i18n::t!("27547de3cbac3f79"),
+                description: i18n::t!("d6b404da9277e4ee"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("modeline_lines"),
@@ -10986,8 +11051,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
     fn global_only_miscellaneous_sub_section() -> [SettingsPageItem; 4] {
         [
             SettingsPageItem::SettingItem(SettingItem {
-                title: "图片查看器",
-                description: "图片文件大小的单位。",
+                title: i18n::t!("166ed1e941490fac"),
+                description: i18n::t!("189beb5cf4fa55af"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("image_viewer.unit"),
@@ -11005,8 +11070,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "以预览模式打开 Markdown 文件",
-                description: "是否自动以预览模式打开 Markdown 文件。",
+                title: i18n::t!("ff691edfa683b148"),
+                description: i18n::t!("17928e418bae42a9"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("markdown_preview.open_markdown_files_in_preview"),
@@ -11030,8 +11095,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
             SettingsPageItem::DynamicItem(DynamicItem {
                 discriminant: SettingItem {
                     files: USER,
-                    title: "限制 Markdown 预览宽度",
-                    description: "是否限制 Markdown 预览内容的最大宽度，当窗格更宽时居中显示，以获得最佳可读性。",
+                    title: i18n::t!("ec048840b3f51843"),
+                    description: i18n::t!("ac2527f11f07ede8"),
                     field: Box::new(SettingField::<bool> {
                         organization_override: None,
                         json_path: Some("markdown_preview.limit_content_width"),
@@ -11063,8 +11128,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                     vec![],
                     vec![SettingItem {
                         files: USER,
-                        title: "最大宽度",
-                        description: "最大内容宽度（像素）。窗格宽于此值时内容将居中。",
+                        title: i18n::t!("d36a6a740ac75f4a"),
+                        description: i18n::t!("93c89d04cea63297"),
                         field: Box::new(SettingField {
                             organization_override: None,
                             json_path: Some("markdown_preview.max_width"),
@@ -11087,8 +11152,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 ],
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "拖放大小目标",
-                description: "编辑器中拖放目标的相对大小，拖放文件时将作为拆分窗格打开。",
+                title: i18n::t!("76c5a2a8b436ab80"),
+                description: i18n::t!("2f4bd1624d786e03"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("drop_target_size"),
@@ -11106,8 +11171,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
     let is_global = active_language().is_none();
 
     let code_lens_item = [SettingsPageItem::SettingItem(SettingItem {
-        title: "代码透镜",
-        description: "是否以及如何显示来自语言服务器的代码透镜。",
+        title: i18n::t!("3ca23395b0aaaec2"),
+        description: i18n::t!("b0a67da0d72cb736"),
         field: Box::new(SettingField {
             organization_override: None,
             json_path: Some("code_lens"),
@@ -11121,8 +11186,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
     })];
 
     let lsp_document_colors_item = [SettingsPageItem::SettingItem(SettingItem {
-        title: "LSP 文档颜色",
-        description: "如何在编辑器中渲染 LSP 颜色预览。",
+        title: i18n::t!("8c43d04815b785ac"),
+        description: i18n::t!("014dde7cfa3083a8"),
         field: Box::new(SettingField {
             organization_override: None,
             json_path: Some("lsp_document_colors"),
@@ -11175,8 +11240,8 @@ fn non_editor_language_settings_data() -> Box<[SettingsPageItem]> {
         [
             SettingsPageItem::SectionHeader("LSP"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "启用语言服务器",
-                description: "是否使用语言服务器提供代码智能。",
+                title: i18n::t!("0cd695db93a638f7"),
+                description: i18n::t!("543888ff18f9ea98"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).enable_language_server"),
@@ -11195,8 +11260,8 @@ fn non_editor_language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "语言服务器",
-                description: "用于此语言的语言服务器列表（或禁用的列表）。",
+                title: i18n::t!("09375000f874c8ec"),
+                description: i18n::t!("a878a583d2fcd92b"),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -11222,8 +11287,8 @@ fn non_editor_language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "链接编辑",
-                description: "是否对关联范围执行链接编辑（如果语言服务器支持）。例如，编辑开头的 <html> 标签时，结尾的 </html> 标签内容也将被编辑。",
+                title: i18n::t!("85c8d53febbf47b6"),
+                description: i18n::t!("aecb83cd54cd7ddb"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).linked_edits"),
@@ -11242,8 +11307,8 @@ fn non_editor_language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "转到定义回退",
-                description: "是否跟进语言服务器的空转到定义响应。",
+                title: i18n::t!("0dd114a5a9217b68"),
+                description: i18n::t!("67e50825b86bb2d4"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("go_to_definition_fallback"),
@@ -11258,8 +11323,8 @@ fn non_editor_language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "转到定义滚动策略",
-                description: "导航到定义或引用时如何将目标滚动到视图中。",
+                title: i18n::t!("4987408009427d78"),
+                description: i18n::t!("7b2b0b4e4f860145"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("go_to_definition_scroll_strategy"),
@@ -11277,8 +11342,8 @@ fn non_editor_language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "LSP 结果位置",
-                description: "在何处显示可包含多个位置的 LSP 结果（转到定义、转到实现、查找所有引用）。",
+                title: i18n::t!("fcfed20e9daf9a1b"),
+                description: i18n::t!("359e1b4ea0918697"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("lsp_results_location"),
@@ -11291,7 +11356,7 @@ fn non_editor_language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "语义标记",
+                title: i18n::t!("8e4fcf30ffb033a0"),
                 description: {
                     static DESCRIPTION: OnceLock<&'static str> = OnceLock::new();
                     DESCRIPTION.get_or_init(|| {
@@ -11327,8 +11392,8 @@ fn non_editor_language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "LSP 折叠范围",
-                description: "启用后，使用语言服务器的折叠范围而不是基于缩进的折叠。",
+                title: i18n::t!("804763e6388801e3"),
+                description: i18n::t!("81a936a4848c8835"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).document_folding_ranges"),
@@ -11347,8 +11412,8 @@ fn non_editor_language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "LSP 文档符号",
-                description: "启用后，使用语言服务器的文档符号作为大纲和面包屑导航，而不是 tree-sitter。",
+                title: i18n::t!("600eddee8d190fbf"),
+                description: i18n::t!("fa37699dd5f65d21"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).document_symbols"),
@@ -11371,10 +11436,10 @@ fn non_editor_language_settings_data() -> Box<[SettingsPageItem]> {
 
     fn lsp_completions_section() -> [SettingsPageItem; 4] {
         [
-            SettingsPageItem::SectionHeader("LSP 补全"),
+            SettingsPageItem::SectionHeader(i18n::t!("0f5be66b352bfe9b")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "启用",
-                description: "是否获取 LSP 补全。",
+                title: i18n::t!("f4f0ead1116b5b62"),
+                description: i18n::t!("6dfa8e74e68d2627"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).completions.lsp"),
@@ -11393,8 +11458,8 @@ fn non_editor_language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "获取超时（毫秒）",
-                description: "获取 LSP 补全时，确定等待特定服务器响应的最长时间（设置为 0 则无限等待）。",
+                title: i18n::t!("cab24754d8c3cac7"),
+                description: i18n::t!("8a6629862a4123dd"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).completions.lsp_fetch_timeout_ms"),
@@ -11416,8 +11481,8 @@ fn non_editor_language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "插入模式",
-                description: "控制如何插入 LSP 补全。",
+                title: i18n::t!("6d6f240895aca008"),
+                description: i18n::t!("020b6f5235aa09a5"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).completions.lsp_insert_mode"),
@@ -11440,10 +11505,10 @@ fn non_editor_language_settings_data() -> Box<[SettingsPageItem]> {
 
     fn debugger_section() -> [SettingsPageItem; 2] {
         [
-            SettingsPageItem::SectionHeader("调试器"),
+            SettingsPageItem::SectionHeader(i18n::t!("20fe3f3e72ca01b8")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "调试器",
-                description: "此语言的首选调试器。",
+                title: i18n::t!("20fe3f3e72ca01b8"),
+                description: i18n::t!("f2fa43f200fb29e7"),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -11475,8 +11540,8 @@ fn non_editor_language_settings_data() -> Box<[SettingsPageItem]> {
         [
             SettingsPageItem::SectionHeader("Prettier"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "允许",
-                description: "启用或禁用对给定语言使用 Prettier 格式化。",
+                title: i18n::t!("ce7ef28b670ade58"),
+                description: i18n::t!("9ede04faf4154db2"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).prettier.allowed"),
@@ -11495,8 +11560,8 @@ fn non_editor_language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "解析器",
-                description: "强制 Prettier 集成在格式化该语言文件时使用特定的解析器名称。",
+                title: i18n::t!("2a06708ff6b14f10"),
+                description: i18n::t!("960d5d8bd1729975"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).prettier.parser"),
@@ -11515,8 +11580,8 @@ fn non_editor_language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "插件",
-                description: "强制 Prettier 集成在格式化该语言文件时使用特定插件。",
+                title: i18n::t!("e806fbbe8ec6e82d"),
+                description: i18n::t!("590cf39c689d4358"),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -11542,8 +11607,8 @@ fn non_editor_language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "选项",
-                description: "默认 Prettier 选项，格式与 package.json 中 Prettier 部分相同。",
+                title: i18n::t!("bb7486f4410fd370"),
+                description: i18n::t!("500570e878149ca6"),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -11581,22 +11646,20 @@ fn non_editor_language_settings_data() -> Box<[SettingsPageItem]> {
 
 fn edit_prediction_language_settings_section() -> [SettingsPageItem; 5] {
     [
-        SettingsPageItem::SectionHeader("编辑预测"),
+        SettingsPageItem::SectionHeader(i18n::t!("34627253269ac8a6")),
         SettingsPageItem::SubPageLink(SubPageLink {
-            title: "配置编辑预测提供商".into(),
+            title: i18n::t!("4b08b9a69dd7a595").into(),
             r#type: Default::default(),
             json_path: Some("edit_predictions.providers"),
-            description: Some(
-                "编辑预测与 Agent 聊天模型分开配置；可选择 Zeta、Copilot 或其他兼容提供商。".into(),
-            ),
+            description: Some(i18n::t!("bc1739d9f184f06d").into()),
             search_aliases: &[],
             in_json: false,
             files: USER,
             render: render_edit_prediction_setup_page,
         }),
         SettingsPageItem::SettingItem(SettingItem {
-            title: "数据收集",
-            description: "控制使用 Zed 的编辑预测时是否可收集训练数据。仅针对检测为开源的项目中的文件收集数据。默认值使用先前通过状态栏开关设置的偏好，如果未存储偏好则为 false。",
+            title: i18n::t!("7d7b4beebaa2d4a3"),
+            description: i18n::t!("537709fe6a4e9547"),
             field: Box::new(SettingField {
                 organization_override: Some(|org_settings| {
                     const DATA_COLLECTION_DISABLED: EditPredictionDataCollectionChoice =
@@ -11631,8 +11694,8 @@ fn edit_prediction_language_settings_section() -> [SettingsPageItem; 5] {
             files: USER,
         }),
         SettingsPageItem::SettingItem(SettingItem {
-            title: "显示编辑预测",
-            description: "控制编辑预测是立即显示还是手动显示。",
+            title: i18n::t!("b7abea77feb0b8b9"),
+            description: i18n::t!("b68ba59b36f0d447"),
             field: Box::new(SettingField {
                 organization_override: None,
                 json_path: Some("languages.$(language).show_edit_predictions"),
@@ -11651,8 +11714,8 @@ fn edit_prediction_language_settings_section() -> [SettingsPageItem; 5] {
             files: USER | PROJECT,
         }),
         SettingsPageItem::SettingItem(SettingItem {
-            title: "在语言作用域中禁用",
-            description: "在指定的语言作用域（例如 \"comment\" 和 \"string\"）中禁用编辑预测。使用 \"...\" 可在不重复继承列表的情况下追加作用域。",
+            title: i18n::t!("6fe11c1f3b880f90"),
+            description: i18n::t!("71fc41d075e084f7"),
             field: Box::new(
                 SettingField {
                     organization_override: None,
@@ -11764,5 +11827,48 @@ mod tests {
         write_vim_mode_inner(&mut settings, Some(true));
         assert_eq!(settings.vim_mode, Some(true));
         assert_eq!(settings.helix_mode, Some(false));
+    }
+
+    #[gpui::test]
+    fn test_language_setting_round_trips(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            let page = general_page(cx);
+            let item = page
+                .items
+                .iter()
+                .find_map(|item| match item {
+                    SettingsPageItem::SettingItem(item)
+                        if item.title == i18n::t!("3d13868593ae4eeb") =>
+                    {
+                        Some(item)
+                    }
+                    _ => None,
+                })
+                .expect("general page should expose the interface language setting");
+
+            let field = item
+                .field
+                .as_any()
+                .downcast_ref::<SettingField<settings::UiLanguage>>()
+                .expect("interface language setting should use the UiLanguage field type");
+            assert_eq!(field.json_path, Some("language"));
+
+            let mut content = SettingsContent::default();
+            assert!((field.pick)(&content).is_none());
+
+            (field.write)(
+                &mut content,
+                Some(settings::UiLanguage("en".to_string())),
+                cx,
+            );
+            assert_eq!(
+                content.language.as_ref().map(|language| language.as_str()),
+                Some("en")
+            );
+            assert_eq!(
+                (field.pick)(&content).map(|language| language.as_str()),
+                Some("en")
+            );
+        });
     }
 }

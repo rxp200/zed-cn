@@ -86,6 +86,9 @@ jobs:
           REVIEW_RELEASE_TAG: ${{ steps.inputs.outputs.release_tag }}
         run: python3 script/release_notes.py --release-tag "$REVIEW_RELEASE_TAG"
 
+      - name: Validate open-source license layout
+        run: ./script/check-licenses
+
       - name: Validate source version and frozen public main source
         id: source
         shell: pwsh
@@ -707,6 +710,13 @@ jobs:
           - 代码签名：Windows 未签名，macOS 使用临时签名且未公证
 
           本次 Release 包含所有成功完成构建并通过验证的产物。失败平台的产物不会阻止其他平台发布，也不会作为空文件上传。所有已发布二进制的 SHA-256 见 \`SHA256SUMS.txt\`。Windows SmartScreen 和 macOS Gatekeeper 可能显示警告。
+
+          ## 源码与许可证
+
+          - 对应完整源码：[\`$SOURCE_SHA\`](https://github.com/$GH_REPO/tree/$SOURCE_SHA)
+          - 源码归档由本 Release 标签自动提供，并包含构建脚本、清单和锁文件。
+          - Zed 主程序及大部分源码采用 GPL-3.0-or-later；明确标注的组件采用 Apache-2.0；第三方组件和资源遵循各自许可证。
+          - [GPL-3.0-or-later](https://github.com/$GH_REPO/blob/$SOURCE_SHA/LICENSE-GPL) · [Apache-2.0](https://github.com/$GH_REPO/blob/$SOURCE_SHA/LICENSE-APACHE) · [修改声明](https://github.com/$GH_REPO/blob/$SOURCE_SHA/MODIFICATIONS.md)
           EOF
 
           if [[ -s release-artifacts/MISSING-ASSETS.txt ]]; then

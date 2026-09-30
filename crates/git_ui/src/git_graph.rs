@@ -305,7 +305,9 @@ impl ChangedFileEntry {
                 } else {
                     format!("{}/{}", dir_path, file_name).into()
                 };
-                move |_, cx| Tooltip::with_meta("查看更改", None, meta.clone(), cx)
+                move |_, cx| {
+                    Tooltip::with_meta(i18n::t!("12c4f49a77541afb"), None, meta.clone(), cx)
+                }
             })
             .on_click({
                 let entry = self.clone();
@@ -386,7 +388,9 @@ impl ChangedFileDirectoryEntry {
             )
             .tooltip({
                 let name = self.name.clone();
-                move |_, cx| Tooltip::with_meta("切换文件夹", None, name.clone(), cx)
+                move |_, cx| {
+                    Tooltip::with_meta(i18n::t!("47e688f4177ea7e3"), None, name.clone(), cx)
+                }
             })
             .on_click(move |_, _, cx| {
                 git_graph
@@ -2289,7 +2293,11 @@ impl GitGraph {
             email: author_email.clone(),
         });
         self.search_state.editor.update(cx, |editor, cx| {
-            editor.set_text(format!("作者：{author_name}"), window, cx);
+            editor.set_text(
+                i18n::t!("f49825f0a8f2eb19", author_name = author_name),
+                window,
+                cx,
+            );
         });
         self.search(author_email, cx);
     }

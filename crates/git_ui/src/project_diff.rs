@@ -873,7 +873,7 @@ impl Render for ProjectDiffToolbar {
                 h_group_sm()
                     .when(button_states.selection, |this| {
                         this.child(
-                            Button::new("stage", "切换暂存状态")
+                            Button::new("stage", i18n::t!("2a4fc0c3770a3b8f"))
                                 .tooltip(Tooltip::for_action_title_in(
                                     "Toggle Staged",
                                     &ToggleStaged,
@@ -887,7 +887,7 @@ impl Render for ProjectDiffToolbar {
                     })
                     .when(!button_states.selection, |this| {
                         this.child(
-                            Button::new("stage", "暂存")
+                            Button::new("stage", i18n::t!("e57b6dbedea3273f"))
                                 .disabled(!button_states.stage)
                                 .tooltip(Tooltip::for_action_title_in(
                                     "Stage and Go to Next Hunk",
@@ -899,7 +899,7 @@ impl Render for ProjectDiffToolbar {
                                 })),
                         )
                         .child(
-                            Button::new("unstage", "取消暂存")
+                            Button::new("unstage", i18n::t!("1140195090eddcff"))
                                 .disabled(!button_states.unstage)
                                 .tooltip(Tooltip::for_action_title_in(
                                     "Unstage and Go to Next Hunk",
@@ -917,7 +917,7 @@ impl Render for ProjectDiffToolbar {
                 button_states.unstage_all && !button_states.stage_all,
                 |this| {
                     this.child(
-                        Button::new("unstage-all", "取消全部暂存")
+                        Button::new("unstage-all", i18n::t!("4365aaf150f10ef8"))
                             .width(stage_all_button_width)
                             .tooltip(Tooltip::for_action_title_in(
                                 "Unstage All Changes",
@@ -934,7 +934,7 @@ impl Render for ProjectDiffToolbar {
                 !button_states.unstage_all || button_states.stage_all,
                 |this| {
                     this.child(
-                        Button::new("stage-all", "全部暂存")
+                        Button::new("stage-all", i18n::t!("75d12700d952ad04"))
                             .width(stage_all_button_width)
                             .disabled(!button_states.stage_all)
                             .tooltip(Tooltip::for_action_title_in(
@@ -950,8 +950,12 @@ impl Render for ProjectDiffToolbar {
             )
             .child(Divider::vertical())
             .child(
-                Button::new("commit", "提交")
-                    .tooltip(Tooltip::for_action_title_in("提交", &Commit, &focus_handle))
+                Button::new("commit", i18n::t!("08a85f4ab4bab9ca"))
+                    .tooltip(Tooltip::for_action_title_in(
+                        i18n::t!("08a85f4ab4bab9ca"),
+                        &Commit,
+                        &focus_handle,
+                    ))
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.dispatch_action(&Commit, window, cx);
                     })),

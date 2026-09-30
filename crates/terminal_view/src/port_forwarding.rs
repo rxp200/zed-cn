@@ -292,8 +292,8 @@ impl DiagnosticTail {
             Regex::new(r"(?i)(password|passwd|token|secret|authorization)([=: ]+)[^\s&]+|[a-z][a-z0-9+.-]*://[^\s/@]+:[^\s/@]+@").expect("diagnostic secret pattern")
         });
         text = SECRETS.replace_all(&text, "[已隐藏]").into_owned();
-        format!(
-            "{}{}\n诊断可能仍含连接信息。",
+        i18n::t_args!(
+            "ff876592329dfa4e",
             if self.truncated {
                 "[诊断已截断，仅保留末尾]\n"
             } else {
@@ -662,7 +662,7 @@ impl PortForwardManager {
                 return Ok(port);
             }
         }
-        Err(anyhow!("没有可用于网页预览的远端端口"))
+        Err(anyhow!(i18n::t!("c8c1564775a48d41")))
     }
 
     pub fn stop(&mut self, direction: ForwardDirection, port: u16, cx: &mut Context<Self>) {
@@ -904,8 +904,8 @@ async fn run_forward(
         }
         let exited = result.is_ok();
         let outcome = match result {
-            Ok(status) => format!("SSH 端口转发进程已退出：{status}"),
-            Err(error) => format!("无法等待 SSH 端口转发进程：{error}"),
+            Ok(status) => i18n::t!("34922cb45f442133", status = status),
+            Err(error) => i18n::t!("6872562fccf85da4", error = error),
         };
         last_error = Some(anyhow!(
             "{outcome}（{direction:?}，请求端口 {port}，本地端口 {local_port}，第 {} 次）{}\n{}",
@@ -934,8 +934,8 @@ async fn run_forward(
     }
 
     Err(last_error.unwrap_or_else(|| match direction {
-        ForwardDirection::RemoteToLocal => anyhow!("无法分配本地端口"),
-        ForwardDirection::LocalToRemote => anyhow!("无法建立反向 SSH 端口转发"),
+        ForwardDirection::RemoteToLocal => anyhow!(i18n::t!("16f0a4150c7d5647")),
+        ForwardDirection::LocalToRemote => anyhow!(i18n::t!("da2828975efd3347")),
     }))
 }
 
@@ -983,7 +983,7 @@ impl PortForwardModal {
     ) -> Self {
         let editor = cx.new(|cx| {
             let mut editor = Editor::single_line(window, cx);
-            editor.set_placeholder_text("端口，例如 9999", window, cx);
+            editor.set_placeholder_text(i18n::t!("2686e64c56c37f98"), window, cx);
             editor
         });
         cx.observe(&manager, |_, _, cx| cx.notify()).detach();
@@ -1128,12 +1128,12 @@ impl Render for PortForwardModal {
                                 format!("http://127.0.0.1:{local_port}")
                             }
                             ForwardDirection::LocalToRemote => {
-                                format!("远程 localhost:{remote_port} → 本地 127.0.0.1:{local_port}")
+                                i18n::t!("cc6b6c400b0b2b65", remote_port = remote_port, local_port = local_port)
                             }
                         },
                         Color::Muted,
                     ),
-                    ForwardStatus::Failed(error) => (format!("失败：{error}"), Color::Error),
+                    ForwardStatus::Failed(error) => (i18n::t!("377e359e55ec05ab", error = error), Color::Error),
                 };
                 h_flex()
                     .px_2()
@@ -1146,10 +1146,10 @@ impl Render for PortForwardModal {
                             .child(
                                 Label::new(match direction {
                                     ForwardDirection::RemoteToLocal => {
-                                        format!("远程端口 {remote_port} → 本地")
+                                        i18n::t!("22880116ce7d18fe", remote_port = remote_port)
                                     }
                                     ForwardDirection::LocalToRemote => {
-                                        format!("本地端口 {local_port} → 远程")
+                                        i18n::t!("f2e88cffef1ff16e", local_port = local_port)
                                     }
                                 })
                                 .size(LabelSize::Small),

@@ -45,7 +45,11 @@ pub(crate) fn render_llm_providers_page(
         .pb_16()
         .track_scroll(scroll_handle)
         .overflow_y_scroll()
-        .child(Label::new("先在此配置提供商和模型，然后到 Agent 的模型选择器选用。翻译、代码讲解与编辑预测分别配置，不会自动切换。").size(LabelSize::Small).color(Color::Muted))
+        .child(
+            Label::new(i18n::t!("6b011be6687aeb70"))
+                .size(LabelSize::Small)
+                .color(Color::Muted),
+        )
         .children(
             providers
                 .iter()
@@ -95,7 +99,7 @@ pub(crate) fn render_add_llm_provider_popover(
 
     PopoverMenu::new("add-llm-provider-popover")
         .trigger(
-            Button::new("add-llm-provider", "添加提供商")
+            Button::new("add-llm-provider", i18n::t!("a96064159efa96f8"))
                 .style(ButtonStyle::Outlined)
                 .track_focus(&focus_handle)
                 .label_size(LabelSize::Small)
@@ -113,7 +117,7 @@ pub(crate) fn render_add_llm_provider_popover(
         .menu(move |window, cx| {
             let settings_window = settings_window.clone();
             Some(ContextMenu::build(window, cx, move |menu, _window, _cx| {
-                menu.header("兼容 API")
+                menu.header(i18n::t!("f19fde529ae13c47"))
                     .entry("OpenAI", None, {
                         let settings_window = settings_window.clone();
                         move |window, cx| {
@@ -233,18 +237,18 @@ fn render_api_key_providers_item(
 
     if has_key {
         let configured_label = if is_from_env_var {
-            "API 密钥来自环境变量"
+            i18n::t!("7628f7e8d8a3a919")
         } else {
-            "API 密钥已配置"
+            i18n::t!("d95b24a24825e6c7")
         };
         let button_id = format!("reset-api-key-{}", provider_id.0);
 
         let card = ConfiguredApiCard::new(button_id, configured_label)
-            .button_label("重置密钥")
+            .button_label(i18n::t!("053a696c633ca1a6"))
             .button_tab_index(0)
             .disabled(is_from_env_var)
             .when(is_from_env_var, |this| {
-                this.tooltip_label(format!("若要重置密钥，请清除 {env_var_name} 环境变量。"))
+                this.tooltip_label(i18n::t!("b2a6bb525f03fd35", env_var_name = env_var_name))
             })
             .on_click({
                 let provider = provider.clone();
@@ -275,7 +279,7 @@ fn render_api_key_providers_item(
                         .min_w_0()
                         .max_w_1_2()
                         .gap_0p5()
-                        .child(Label::new("API 密钥"))
+                        .child(Label::new(i18n::t!("5f600b307b4eb0fb")))
                         .child(
                             h_flex()
                                 .w_full()
@@ -283,7 +287,7 @@ fn render_api_key_providers_item(
                                 .flex_wrap()
                                 .gap_0p5()
                                 .child(
-                                    Label::new("访问")
+                                    Label::new(i18n::t!("9cff688763e22a22"))
                                         .size(LabelSize::Small)
                                         .color(Color::Muted),
                                 )
@@ -297,17 +301,15 @@ fn render_api_key_providers_item(
                                     .label_color(Color::Muted),
                                 )
                                 .child(
-                                    Label::new("以生成 API 密钥。")
+                                    Label::new(i18n::t!("4776c33f2a626335"))
                                         .size(LabelSize::Small)
                                         .color(Color::Muted),
                                 ),
                         )
                         .child(
-                            Label::new(format!(
-                                "或设置 {env_var_name} 环境变量并重启 Zed 以生效。"
-                            ))
-                            .size(LabelSize::XSmall)
-                            .color(Color::Muted),
+                            Label::new(i18n::t!("7c36154c6b113d75", env_var_name = env_var_name))
+                                .size(LabelSize::XSmall)
+                                .color(Color::Muted),
                         ),
                 )
                 .child(
@@ -393,24 +395,27 @@ fn render_subpage_item(
                 .min_w_0()
                 .max_w_1_2()
                 .gap_0p5()
-                .child(Label::new("配置提供者"))
+                .child(Label::new(i18n::t!("ba97c7905b135af6")))
                 .when_some(description, |this, description| {
                     this.child(render_inline_description(provider_name, description))
                 }),
         )
         .child(
-            Button::new(format!("configure-{}", provider_id.0), "配置")
-                .style(ButtonStyle::OutlinedGhost)
-                .size(ButtonSize::Medium)
-                .end_icon(
-                    Icon::new(IconName::ChevronRight)
-                        .size(IconSize::Small)
-                        .color(Color::Muted),
-                )
-                .tab_index(0isize)
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    open_provider_configuration(this, provider_id.clone(), window, cx);
-                })),
+            Button::new(
+                format!("configure-{}", provider_id.0),
+                i18n::t!("148d195e21b05db5"),
+            )
+            .style(ButtonStyle::OutlinedGhost)
+            .size(ButtonSize::Medium)
+            .end_icon(
+                Icon::new(IconName::ChevronRight)
+                    .size(IconSize::Small)
+                    .color(Color::Muted),
+            )
+            .tab_index(0isize)
+            .on_click(cx.listener(move |this, _, window, cx| {
+                open_provider_configuration(this, provider_id.clone(), window, cx);
+            })),
         )
         .into_any_element()
 }
@@ -423,7 +428,7 @@ fn render_inline_description(
         InlineDescription::ApiKeyUrl(url) => h_flex()
             .gap_0p5()
             .child(
-                Label::new("要获取 API 密钥，请访问")
+                Label::new(i18n::t!("8feee8c1382b6238"))
                     .size(LabelSize::Small)
                     .color(Color::Muted),
             )
@@ -454,7 +459,7 @@ fn open_provider_configuration(
 
     settings_window.push_dynamic_sub_page(
         title,
-        "AI 设置",
+        i18n::t!("e3ce49ba838f9dbd"),
         Some("llm_providers"),
         true,
         render_provider_config_sub_page,
@@ -505,8 +510,8 @@ fn render_provider_config_sub_page(
                     .gap_2()
                     .pb_4()
                     .child(
-                        Label::new(format!(
-                            "{} 兼容接口 · {} 个模型 · {}",
+                        Label::new(i18n::t_args!(
+                            "19d62472a1e08556",
                             kind.label(),
                             count,
                             api_url
@@ -514,7 +519,7 @@ fn render_provider_config_sub_page(
                         .color(Color::Muted),
                     )
                     .child(
-                        Button::new("edit-compatible-provider", "编辑地址与模型")
+                        Button::new("edit-compatible-provider", i18n::t!("a26d9020c0ed5f94"))
                             .style(ButtonStyle::Outlined)
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 open_existing_llm_provider_form(
@@ -591,8 +596,8 @@ fn open_existing_llm_provider_form(
         kind, id, &api_url, models, window, cx,
     ));
     settings_window.push_dynamic_sub_page(
-        format!("编辑提供商：{id}"),
-        "AI 设置",
+        i18n::t!("0449faac00f2038c", id = id),
+        i18n::t!("e3ce49ba838f9dbd"),
         Some("llm_providers"),
         true,
         render_llm_provider_form_page,
@@ -738,8 +743,20 @@ impl ModelInput {
                 cx,
             ),
             max_completion_tokens: new_input("200000", Some("200000"), false, window, cx),
-            max_output_tokens: new_input("最大输出令牌数", Some("32000"), false, window, cx),
-            max_tokens: new_input("最大令牌数", Some("200000"), false, window, cx),
+            max_output_tokens: new_input(
+                i18n::t!("94409bc79114731f"),
+                Some("32000"),
+                false,
+                window,
+                cx,
+            ),
+            max_tokens: new_input(
+                i18n::t!("7c1d0708fac48697"),
+                Some("200000"),
+                false,
+                window,
+                cx,
+            ),
             reasoning_effort: OpenAiReasoningEffort::Medium,
             supports_tools: tools.into(),
             supports_images: images.into(),
@@ -882,8 +899,8 @@ fn open_llm_provider_form(
 ) {
     settings_window.llm_provider_form = Some(LlmProviderForm::new(kind, window, cx));
     settings_window.push_dynamic_sub_page(
-        format!("添加 {} 兼容提供商", kind.label()),
-        "AI 设置",
+        i18n::t_args!("0619cad6caf6fda1", kind.label()),
+        i18n::t!("e3ce49ba838f9dbd"),
         Some("llm_providers"),
         true,
         render_llm_provider_form_page,
@@ -914,38 +931,35 @@ fn render_llm_provider_form_page(
                 .gap_4()
                 .overflow_y_scroll()
                 .child(Label::new(match form.kind {
-                    CompatibleProviderKind::OpenAi => "此提供商将使用 OpenAI 兼容 API。",
+                    CompatibleProviderKind::OpenAi => i18n::t!("5ae8295bad0a7dde"),
                     CompatibleProviderKind::Anthropic => {
-                        "此提供商将使用 Anthropic Messages 兼容 API。"
+                        i18n::t!("589ab69acb7ee8f7")
                     }
                 }))
                 .child(Divider::horizontal().flex_shrink_0())
                 .when(form.editing_name.is_some(), |this| {
-                    this.child(
-                        Label::new("提供商名称是模型引用标识，编辑时不可更改。")
-                            .color(Color::Muted),
-                    )
+                    this.child(Label::new(i18n::t!("720bc01dc885d311")).color(Color::Muted))
                 })
                 .when(form.editing_name.is_none(), |this| {
                     this.child(render_form_field(
-                        "提供商名称",
-                        "用于标识此提供商的唯一名称。",
+                        i18n::t!("f2c043b16943ef53"),
+                        i18n::t!("7a7a82f011553f03"),
                         &form.provider_name,
                         cx,
                     ))
                 })
                 .child(render_form_field(
                     "API URL",
-                    "兼容 API 的基础 URL。更换地址需输入新地址的密钥。",
+                    i18n::t!("1e82a64d79f4f0bf"),
                     &form.api_url,
                     cx,
                 ))
                 .child(render_form_field(
                     "API Key",
                     if form.editing_name.is_some() {
-                        "可选：仅更换密钥时填写；留空沿用当前地址的凭据。自动获取模型则需重新输入密钥。密钥存储在系统密钥链中。"
+                        i18n::t!("c3d2c3e6b2c9ff11")
                     } else {
-                        "存储在系统密钥链中，而非 settings.json。"
+                        i18n::t!("f23c4b081a17b3d0")
                     },
                     &form.api_key,
                     cx,
@@ -963,7 +977,11 @@ fn render_llm_provider_form_page(
                     this.child(render_form_error(error))
                 })
                 .when_some(form.notice.clone(), |this, notice| {
-                    this.child(Label::new(notice).size(LabelSize::Small).color(Color::Success))
+                    this.child(
+                        Label::new(notice)
+                            .size(LabelSize::Small)
+                            .color(Color::Success),
+                    )
                 })
                 .child(render_form_actions(form.is_saving, cx)),
         )
@@ -1021,60 +1039,64 @@ fn render_models_section(
     cx: &mut Context<SettingsWindow>,
 ) -> impl IntoElement {
     let fetch_label = if form.is_fetching_models {
-        "正在获取…"
+        i18n::t!("85ab30269d8fc924")
     } else {
-        "自动获取"
+        i18n::t!("556f985a69d620d8")
     };
 
     v_flex()
         .mt_1()
         .gap_2()
         .child(
-            Label::new(
-                "自动获取需输入 API Key（不会保存）；新模型会合并，已有模型的人工参数保持不变。接口未报告的能力需自行确认。",
-            )
-            .size(LabelSize::Small)
-            .color(Color::Muted),
+            Label::new(i18n::t!("389f7369b58b6072"))
+                .size(LabelSize::Small)
+                .color(Color::Muted),
         )
         .child(
-            h_flex().justify_between().child(Label::new("模型")).child(
-                h_flex()
-                    .gap_1()
-                    .child(
-                        Button::new("fetch-models", fetch_label)
-                            .start_icon(
-                                Icon::new(IconName::ArrowCircle)
-                                    .size(IconSize::XSmall)
-                                    .color(Color::Muted),
-                            )
-                            .label_size(LabelSize::Small)
-                            .disabled(form.is_fetching_models || form.is_saving)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                fetch_llm_provider_models(this, window, cx);
-                            })),
-                    )
-                    .child(
-                        Button::new("add-model", "添加模型")
-                            .start_icon(
-                                Icon::new(IconName::Plus)
-                                    .size(IconSize::XSmall)
-                                    .color(Color::Muted),
-                            )
-                            .label_size(LabelSize::Small)
-                            .disabled(form.is_saving)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                if let Some(form) = this.llm_provider_form.as_mut() {
-                                    let index = form.models.len();
-                                    form.models.push(ModelInput::new(index, window, cx));
-                                }
-                                cx.notify();
-                            })),
-                    ),
-            ),
+            h_flex()
+                .justify_between()
+                .child(Label::new(i18n::t!("c98e118e0a43f078")))
+                .child(
+                    h_flex()
+                        .gap_1()
+                        .child(
+                            Button::new("fetch-models", fetch_label)
+                                .start_icon(
+                                    Icon::new(IconName::ArrowCircle)
+                                        .size(IconSize::XSmall)
+                                        .color(Color::Muted),
+                                )
+                                .label_size(LabelSize::Small)
+                                .disabled(form.is_fetching_models || form.is_saving)
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    fetch_llm_provider_models(this, window, cx);
+                                })),
+                        )
+                        .child(
+                            Button::new("add-model", i18n::t!("168e845a86bc3703"))
+                                .start_icon(
+                                    Icon::new(IconName::Plus)
+                                        .size(IconSize::XSmall)
+                                        .color(Color::Muted),
+                                )
+                                .label_size(LabelSize::Small)
+                                .disabled(form.is_saving)
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    if let Some(form) = this.llm_provider_form.as_mut() {
+                                        let index = form.models.len();
+                                        form.models.push(ModelInput::new(index, window, cx));
+                                    }
+                                    cx.notify();
+                                })),
+                        ),
+                ),
         )
-        .children(form.models.iter().enumerate().map(|(index, model)| {
-            render_model(form.kind, model, index, window, cx)
-        }))
+        .children(
+            form.models
+                .iter()
+                .enumerate()
+                .map(|(index, model)| render_model(form.kind, model, index, window, cx)),
+        )
 }
 
 fn fetch_llm_provider_models(
@@ -1094,7 +1116,7 @@ fn fetch_llm_provider_models(
     let api_url = form.api_url.read(cx).text(cx);
     let api_key = form.api_key.read(cx).text(cx);
     if api_url.trim().is_empty() || api_key.trim().is_empty() {
-        form.error = Some("获取模型需要 API URL 和密钥；此操作不会保存密钥".into());
+        form.error = Some(i18n::t!("676790accedbfb32").into());
         cx.notify();
         return;
     }
@@ -1117,7 +1139,7 @@ fn fetch_llm_provider_models(
                 &Default::default(),
             )
             .await
-            .context("无法从 OpenAI 兼容接口获取模型")
+            .context(i18n::t!("ecefdf3d55ecebcf"))
             .map(|models| {
                 models
                     .into_iter()
@@ -1145,7 +1167,7 @@ fn fetch_llm_provider_models(
             )
             .await
             .map_err(|error| anyhow::anyhow!("{error:?}"))
-            .context("无法从 Anthropic 兼容接口获取模型")
+            .context(i18n::t!("d183ee00dc4aef1f"))
             .map(|models| {
                 models
                     .into_iter()
@@ -1171,20 +1193,25 @@ fn fetch_llm_provider_models(
             form.is_fetching_models = false;
             match result {
                 Ok(models) if models.is_empty() => {
-                    form.error = Some("接口未返回可用模型，请手动添加".into());
+                    form.error = Some(i18n::t!("c7b3d64add4ec35e").into());
                 }
                 Ok(models) => {
                     let names = form.models.iter().map(|model| model.name.read(cx).text(cx));
                     let models = new_discovered_models(names, models);
                     let added = models.len();
                     for model in models {
-                        form.models.push(ModelInput::from_discovered(form.models.len(), model, window, cx));
+                        form.models.push(ModelInput::from_discovered(
+                            form.models.len(),
+                            model,
+                            window,
+                            cx,
+                        ));
                     }
-                    form.notice = Some(format!("获取完成：新增 {added} 个模型，已有模型及人工参数保持不变。请核对后保存。").into());
+                    form.notice = Some(i18n::t!("4e2791001ca690a5", added = added).into());
                 }
                 Err(error) => {
                     log::warn!("Compatible model discovery failed: {error:#}");
-                    form.error = Some("自动获取失败。请检查地址、密钥与模型列表接口，或手动添加模型。已有模型不会被删除。".into());
+                    form.error = Some(i18n::t!("ca2f5726f96dc2ac").into());
                 }
             }
             cx.notify();
@@ -1237,9 +1264,9 @@ fn render_model(
                     Button::new(
                         ("expand-model", index),
                         if model.expanded {
-                            "收起参数"
+                            i18n::t!("bf76bc5ea98fe0cd")
                         } else {
-                            "编辑参数"
+                            i18n::t!("5078505856cb904f")
                         },
                     )
                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -1256,8 +1283,8 @@ fn render_model(
         )
         .when(model.expanded, |this| {
             this.child(render_form_field(
-                "模型名称",
-                "模型在提供商 API 中的名称。",
+                i18n::t!("cb2f1709f983d2f4"),
+                i18n::t!("6514a7130bf4071c"),
                 &model.name,
                 cx,
             ))
@@ -1266,8 +1293,8 @@ fn render_model(
             model.expanded && matches!(kind, CompatibleProviderKind::OpenAi),
             |this| {
                 this.child(render_form_field(
-                    "最大补全令牌数",
-                    "OpenAI 兼容请求的最大补全令牌数。",
+                    i18n::t!("dc41e7648bb28044"),
+                    i18n::t!("1815716af4dac34f"),
                     &model.max_completion_tokens,
                     cx,
                 ))
@@ -1275,16 +1302,16 @@ fn render_model(
         )
         .when(model.expanded, |this| {
             this.child(render_form_field(
-                "最大输出令牌数",
-                "模型可以输出的最大令牌数。",
+                i18n::t!("94409bc79114731f"),
+                i18n::t!("da1d53395f6aa3b2"),
                 &model.max_output_tokens,
                 cx,
             ))
         })
         .when(model.expanded, |this| {
             this.child(render_form_field(
-                "最大令牌数",
-                "模型上下文窗口大小。",
+                i18n::t!("7c1d0708fac48697"),
+                i18n::t!("2656f7307edc0a88"),
                 &model.max_tokens,
                 cx,
             ))
@@ -1293,7 +1320,7 @@ fn render_model(
             this.child(render_model_capabilities(kind, model, index, window, cx))
         })
         .child(
-            Button::new(("remove-model", index), "移除模型")
+            Button::new(("remove-model", index), i18n::t!("11c67ef20336beed"))
                 .start_icon(
                     Icon::new(IconName::Trash)
                         .size(IconSize::XSmall)
@@ -1326,7 +1353,7 @@ fn render_model_capabilities(
         .child(render_capability_checkbox(
             "supports-tools",
             index,
-            "支持工具调用",
+            i18n::t!("c9954fa45c7dab88"),
             model.supports_tools,
             |model, state| model.supports_tools = state,
             cx,
@@ -1334,7 +1361,7 @@ fn render_model_capabilities(
         .child(render_capability_checkbox(
             "supports-images",
             index,
-            "支持图片输入",
+            i18n::t!("f1fff850de6df26a"),
             model.supports_images,
             |model, state| model.supports_images = state,
             cx,
@@ -1343,7 +1370,7 @@ fn render_model_capabilities(
             this.child(render_capability_checkbox(
                 "supports-parallel-tool-calls",
                 index,
-                "支持并行工具调用",
+                i18n::t!("afdfe6960a6fc0ab"),
                 model.supports_parallel_tool_calls,
                 |model, state| model.supports_parallel_tool_calls = state,
                 cx,
@@ -1351,7 +1378,7 @@ fn render_model_capabilities(
             .child(render_capability_checkbox(
                 "supports-prompt-cache-key",
                 index,
-                "支持提示缓存键",
+                i18n::t!("ea9383eb6d15eab5"),
                 model.supports_prompt_cache_key,
                 |model, state| model.supports_prompt_cache_key = state,
                 cx,
@@ -1359,7 +1386,7 @@ fn render_model_capabilities(
             .child(render_capability_checkbox(
                 "supports-chat-completions",
                 index,
-                "使用 /chat/completions 接口",
+                i18n::t!("ca73231a059e1c48"),
                 model.supports_chat_completions,
                 |model, state| model.supports_chat_completions = state,
                 cx,
@@ -1368,7 +1395,7 @@ fn render_model_capabilities(
                 this.child(render_capability_checkbox(
                     "max-tokens-parameter",
                     index,
-                    "使用 max_tokens 限制输出",
+                    i18n::t!("c0c797759ff5ddf9"),
                     model.max_tokens_parameter,
                     |model, state| model.max_tokens_parameter = state,
                     cx,
@@ -1377,7 +1404,7 @@ fn render_model_capabilities(
             .child(render_capability_checkbox(
                 "supports-thinking",
                 index,
-                "支持推理模式",
+                i18n::t!("ef810f2360d1100c"),
                 model.supports_thinking,
                 |model, state| model.supports_thinking = state,
                 cx,
@@ -1393,7 +1420,7 @@ fn render_model_capabilities(
                     this.child(render_capability_checkbox(
                         "interleaved-reasoning",
                         index,
-                        "在聊天历史中保留推理内容",
+                        i18n::t!("509c1018e3ecefb8"),
                         model.interleaved_reasoning,
                         |model, state| model.interleaved_reasoning = state,
                         cx,
@@ -1456,7 +1483,7 @@ fn render_reasoning_effort_selector(
 
     v_flex()
         .gap_1()
-        .child(Label::new("默认推理力度").size(LabelSize::Small))
+        .child(Label::new(i18n::t!("b0d949fca8e26ef5")).size(LabelSize::Small))
         .child(
             DropdownMenu::new(
                 ElementId::Name(format!("reasoning-effort-selector-{index}").into()),
@@ -1466,7 +1493,7 @@ fn render_reasoning_effort_selector(
             .style(DropdownStyle::Outlined)
             .trigger_size(ButtonSize::Compact)
             .full_width(true)
-            .aria_label("默认推理力度"),
+            .aria_label(i18n::t!("b0d949fca8e26ef5")),
         )
 }
 
@@ -1488,14 +1515,14 @@ fn render_form_actions(is_saving: bool, cx: &mut Context<SettingsWindow>) -> imp
         .gap_1()
         .justify_end()
         .child(
-            Button::new("llm-provider-form-cancel", "取消")
+            Button::new("llm-provider-form-cancel", i18n::t!("2cd0f3be8738a86c"))
                 .disabled(is_saving)
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.pop_sub_page(window, cx);
                 })),
         )
         .child(
-            Button::new("llm-provider-form-save", "保存提供商")
+            Button::new("llm-provider-form-save", i18n::t!("ab65008428009126"))
                 .style(ButtonStyle::Filled)
                 .disabled(is_saving)
                 .on_click(cx.listener(|this, _, window, cx| {
@@ -1641,13 +1668,13 @@ fn save_llm_provider_form(
 
             settings_update
                 .await
-                .map_err(|_| anyhow::anyhow!("设置写入已取消"))??;
+                .map_err(|_| anyhow::anyhow!(i18n::t!("f36e07af8e9558c1")))??;
 
             if !api_key.is_empty() {
                 let set_api_key = cx.update(|_window, cx| {
                     let provider = LanguageModelRegistry::read_global(cx)
                         .provider(&provider_id)
-                        .ok_or_else(|| anyhow::anyhow!("提供商尚未注册"))?;
+                        .ok_or_else(|| anyhow::anyhow!(i18n::t!("274e50973762b2a2")))?;
                     anyhow::Ok(provider.set_api_key(Some(api_key), cx))
                 })??;
                 set_api_key.await?;
@@ -1696,7 +1723,7 @@ fn validate_llm_provider_form(
 ) -> Result<(String, String, String, ParsedModels), SharedString> {
     let provider_name = values.provider_name.trim().to_string();
     if provider_name.is_empty() {
-        return Err("提供商名称不能为空".into());
+        return Err(i18n::t!("95cfcff3c0d1ef8b").into());
     }
 
     if values
@@ -1704,7 +1731,7 @@ fn validate_llm_provider_form(
         .as_deref()
         .is_some_and(|name| name != provider_name)
     {
-        return Err("编辑现有提供商时不能更改名称".into());
+        return Err(i18n::t!("17435c31ea11eb00").into());
     }
     if values.editing_name.is_none()
         && LanguageModelRegistry::read_global(cx)
@@ -1715,12 +1742,12 @@ fn validate_llm_provider_form(
                     || provider.name().0.as_ref() == provider_name.as_str()
             })
     {
-        return Err("提供商名称已被占用".into());
+        return Err(i18n::t!("05d915294bee06eb").into());
     }
 
     let api_url = values.api_url.trim().to_string();
     if api_url.is_empty() {
-        return Err("API URL 不能为空".into());
+        return Err(i18n::t!("b15ce5e6298d2cf2").into());
     }
 
     let api_key = values.api_key.trim().to_string();
@@ -1732,7 +1759,7 @@ fn validate_llm_provider_form(
     )?;
 
     if values.models.is_empty() {
-        return Err("请先自动获取或手动添加至少一个模型".into());
+        return Err(i18n::t!("639a0aaf68ca7fb0").into());
     }
 
     let models = match values.kind {
@@ -1762,7 +1789,7 @@ fn validate_llm_provider_form(
             .all(|model| model_names.insert(model.name.clone())),
     };
     if !model_names_are_unique {
-        return Err("模型名称必须唯一".into());
+        return Err(i18n::t!("dbd3af7b0881a5f4").into());
     }
 
     Ok((provider_name, api_url, api_key, models))
@@ -1775,10 +1802,10 @@ fn validate_credential_change(
     api_key: &str,
 ) -> Result<(), SharedString> {
     if api_key.is_empty() && editing_name.is_none() {
-        return Err("API 密钥不能为空".into());
+        return Err(i18n::t!("d8f8de45f8a719df").into());
     }
     if api_key.is_empty() && original_api_url != Some(api_url) {
-        return Err("修改 API URL 时需要提供新地址的 API 密钥".into());
+        return Err(i18n::t!("c7b5eb9d180ed235").into());
     }
     Ok(())
 }
@@ -1786,7 +1813,7 @@ fn validate_credential_change(
 fn parse_model_name(model: &ModelValues) -> Result<String, SharedString> {
     let name = model.name.trim();
     if name.is_empty() {
-        return Err("模型名称不能为空".into());
+        return Err(i18n::t!("1a8582fa6b62ac0e").into());
     }
     Ok(name.to_string())
 }
@@ -1800,8 +1827,10 @@ fn parse_open_ai_model(
         }
         _ => None,
     };
-    let max_output_tokens = parse_u64_field(&model.max_output_tokens, "最大输出令牌数")?;
-    let max_completion_tokens = parse_u64_field(&model.max_completion_tokens, "最大补全令牌数")?;
+    let max_output_tokens =
+        parse_u64_field(&model.max_output_tokens, i18n::t!("94409bc79114731f"))?;
+    let max_completion_tokens =
+        parse_u64_field(&model.max_completion_tokens, i18n::t!("dc41e7648bb28044"))?;
     Ok(OpenAiCompatibleAvailableModel {
         name: parse_model_name(model)?,
         display_name: original.and_then(|original| original.display_name.clone()),
@@ -1820,7 +1849,7 @@ fn parse_open_ai_model(
         } else {
             Some(max_output_tokens)
         },
-        max_tokens: parse_u64_field(&model.max_tokens, "最大令牌数")?,
+        max_tokens: parse_u64_field(&model.max_tokens, i18n::t!("7c1d0708fac48697"))?,
         reasoning_effort: model.supports_thinking.then_some(model.reasoning_effort),
         capabilities: OpenAiCompatibleModelCapabilities {
             tools: model.supports_tools,
@@ -1845,12 +1874,13 @@ fn parse_anthropic_model(
         }
         _ => None,
     };
-    let max_output_tokens = parse_u64_field(&model.max_output_tokens, "最大输出令牌数")?;
+    let max_output_tokens =
+        parse_u64_field(&model.max_output_tokens, i18n::t!("94409bc79114731f"))?;
     let mode = original.and_then(|original| original.mode);
     Ok(AnthropicCompatibleAvailableModel {
         name: parse_model_name(model)?,
         display_name: original.and_then(|original| original.display_name.clone()),
-        max_tokens: parse_u64_field(&model.max_tokens, "最大令牌数")?,
+        max_tokens: parse_u64_field(&model.max_tokens, i18n::t!("7c1d0708fac48697"))?,
         tool_override: original.and_then(|original| original.tool_override.clone()),
         max_output_tokens: if original.is_some_and(|original| original.max_output_tokens.is_none())
             && max_output_tokens == 32_000
@@ -1879,7 +1909,7 @@ fn parse_anthropic_model(
 fn parse_u64_field(value: &str, name: &str) -> Result<u64, SharedString> {
     value
         .parse::<u64>()
-        .map_err(|_| format!("{name} 必须是数字").into())
+        .map_err(|_| i18n::t!("d9fc7a248efd76b1", name = name).into())
 }
 
 #[cfg(test)]
