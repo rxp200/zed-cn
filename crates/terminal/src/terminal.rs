@@ -26,6 +26,7 @@ use async_channel::{Receiver, Sender};
 use collections::{HashMap, VecDeque};
 use futures::StreamExt;
 use pty_info::{ProcessIdGetter, PtyProcessInfo};
+use rpc::{AnyProtoClient, proto};
 use serde::{Deserialize, Serialize};
 use settings::Settings;
 use task::{HideStrategy, Shell, ShellKind, SpawnInTerminal};
@@ -977,6 +978,7 @@ impl TerminalMode {
 pub struct TerminalBuilder {
     terminal: Terminal,
     events_rx: UnboundedReceiver<PtyEvent>,
+    remote_input_rx: Option<Receiver<Vec<u8>>>,
 }
 
 impl TerminalBuilder {
@@ -1081,7 +1083,67 @@ impl TerminalBuilder {
         TerminalBuilder {
             terminal,
             events_rx,
+            remote_input_rx: None,
         }
+    }
+
+    pub fn new_remote(
+        mode: TerminalMode,
+        shell: Shell,
+        cursor_shape: SettingsCursorShape,
+        alternate_scroll: AlternateScroll,
+        max_scroll_history_lines: Option<usize>,
+        path_hyperlink_regexes: Vec<String>,
+        path_hyperlink_timeout: Duration,
+        window_id: u64,
+        path_style: PathStyle,
+        client: AnyProtoClient,
+        server_instance_id: String,
+        terminal_id: String,
+        background_executor: &BackgroundExecutor,
+    ) -> TerminalBuilder {
+        let mut builder = Self::new_display_only(
+            cursor_shape,
+            alternate_scroll,
+            max_scroll_history_lines,
+            window_id,
+            background_executor,
+            path_style,
+        );
+        let (task, completion_tx) = match mode.0 {
+            TerminalModeKind::Interactive => (None, None),
+            TerminalModeKind::InteractiveWithCompletion(completion_tx) => {
+                (None, Some(completion_tx))
+            }
+            TerminalModeKind::Task {
+                state,
+                completion_tx,
+            } => (Some(state), Some(completion_tx)),
+        };
+        builder.terminal.task = task;
+        builder.terminal.completion_tx = completion_tx;
+        builder.terminal.is_remote_terminal = true;
+        builder.terminal.hyperlink_regex_searches =
+            RegexSearches::new(&path_hyperlink_regexes, path_hyperlink_timeout);
+        builder.terminal.template = CopyTemplate {
+            shell,
+            env: HashMap::default(),
+            cursor_shape,
+            alternate_scroll,
+            max_scroll_history_lines,
+            path_hyperlink_regexes,
+            path_hyperlink_timeout,
+            window_id,
+        };
+        let (input_tx, input_rx) = async_channel::bounded(256);
+        builder.terminal.terminal_type = TerminalType::Remote(RemoteTerminal {
+            client,
+            server_instance_id,
+            terminal_id,
+            input_tx,
+        });
+        builder.remote_input_rx = Some(input_rx);
+        builder
     }
 
     pub fn new(
@@ -1402,12 +1464,88 @@ impl TerminalBuilder {
             Ok(TerminalBuilder {
                 terminal,
                 events_rx,
+                remote_input_rx: None,
             })
         };
         cx.background_spawn(fut)
     }
 
     pub fn subscribe(mut self, cx: &Context<Terminal>) -> Terminal {
+        if let TerminalType::Remote(remote) = &self.terminal.terminal_type {
+            let client = remote.client.clone();
+            let server_instance_id = remote.server_instance_id.clone();
+            let terminal_id = remote.terminal_id.clone();
+            let input_rx = self
+                .remote_input_rx
+                .take()
+                .expect("remote terminals have an input receiver");
+            cx.background_spawn({
+                let client = client.clone();
+                let server_instance_id = server_instance_id.clone();
+                let terminal_id = terminal_id.clone();
+                async move {
+                    let mut sequence = 1;
+                    while let Ok(data) = input_rx.recv().await {
+                        client
+                            .request(proto::PersistentTerminalInput {
+                                server_instance_id: server_instance_id.clone(),
+                                terminal_id: terminal_id.clone(),
+                                sequence,
+                                data,
+                            })
+                            .await?;
+                        sequence += 1;
+                    }
+                    anyhow::Ok(())
+                }
+            })
+            .detach();
+            cx.spawn(async move |terminal, cx| {
+                let mut offset = 0;
+                loop {
+                    let response = client
+                        .request(proto::ReadPersistentTerminal {
+                            server_instance_id: server_instance_id.clone(),
+                            terminal_id: terminal_id.clone(),
+                            offset,
+                            max_bytes: 256 * 1024,
+                        })
+                        .await;
+                    match response {
+                        Ok(response) => {
+                            offset = response.next_offset;
+                            let exited = response.exited;
+                            terminal.update(cx, |terminal, cx| {
+                                if response.history_truncated {
+                                    terminal.clear_for_init_command(cx);
+                                }
+                                if !response.data.is_empty() {
+                                    terminal.write_raw_output(&response.data, cx);
+                                }
+                                if exited && terminal.child_exited.is_none() {
+                                    terminal.register_task_finished(
+                                        response.exit_code.map(exit_status_from_code),
+                                        cx,
+                                    );
+                                }
+                            })?;
+                            if exited {
+                                break;
+                            }
+                        }
+                        Err(error) => {
+                            log::debug!("persistent terminal poll paused: {error:#}");
+                        }
+                    }
+                    cx.background_executor()
+                        .timer(Duration::from_millis(50))
+                        .await;
+                }
+                anyhow::Ok(())
+            })
+            .detach();
+        }
+
         //Event loop
         self.terminal.event_loop_task = cx.spawn(async move |terminal, cx| {
             while let Some(event) = self.events_rx.next().await {
@@ -1503,7 +1641,15 @@ enum TerminalType {
         resources: PtyResources,
         info: Arc<PtyProcessInfo>,
     },
+    Remote(RemoteTerminal),
     DisplayOnly,
+}
+
+struct RemoteTerminal {
+    client: AnyProtoClient,
+    server_instance_id: String,
+    terminal_id: String,
+    input_tx: Sender<Vec<u8>>,
 }
 
 pub struct Terminal {
@@ -1622,6 +1768,8 @@ const FIND_HYPERLINK_THROTTLE: Duration = Duration::from_millis(100);
 /// clipboard. Mirrors the drag threshold used by gpui's `div` element.
 const SELECTION_DRAG_THRESHOLD: f64 = 2.0;
 
+const TITLE_MAX_CHARS: usize = 25;
+
 impl Terminal {
     fn process_pty_event(&mut self, event: PtyEvent, cx: &mut Context<Self>) {
         match event {
@@ -1729,12 +1877,24 @@ impl Terminal {
                     self.last_content.terminal_bounds.num_columns() != new_bounds.num_columns();
                 self.last_content.terminal_bounds = new_bounds;
 
-                if let TerminalType::Pty {
-                    resources: PtyResources::Active(pty_tx),
-                    ..
-                } = &self.terminal_type
-                {
-                    pty_tx.resize(new_bounds);
+                match &self.terminal_type {
+                    TerminalType::Pty {
+                        resources: PtyResources::Active(pty_tx),
+                        ..
+                    } => pty_tx.resize(new_bounds),
+                    TerminalType::Remote(remote) => {
+                        self.background_executor
+                            .spawn(remote.client.request(proto::ResizePersistentTerminal {
+                                server_instance_id: remote.server_instance_id.clone(),
+                                terminal_id: remote.terminal_id.clone(),
+                                rows: new_bounds.num_lines().try_into().unwrap_or(u32::MAX),
+                                columns: new_bounds.num_columns().try_into().unwrap_or(u32::MAX),
+                                pixel_width: new_bounds.cell_width.as_f32().max(0.0) as u32,
+                                pixel_height: new_bounds.line_height.as_f32().max(0.0) as u32,
+                            }))
+                            .detach();
+                    }
+                    TerminalType::Pty { .. } | TerminalType::DisplayOnly => {}
                 }
 
                 resize(term, new_bounds);
@@ -1973,11 +2133,14 @@ impl Terminal {
         // This bypasses the PTY/event loop for display-only terminals.
         let mut previous_byte_was_cr = false;
         let converted = convert_lf_to_crlf(bytes, &mut previous_byte_was_cr);
+        self.write_raw_output(&converted, cx);
+    }
 
+    fn write_raw_output(&mut self, bytes: &[u8], cx: &mut Context<Self>) {
         let mut term = self.term.lock();
         self.output_processor
             .get_or_insert_with(Processor::<StdSyncHandler>::new)
-            .advance(&mut *term, &converted);
+            .advance(&mut *term, bytes);
         drop(term);
         self.note_program_output();
         self.detect_init_command_startup_marker();
@@ -2134,19 +2297,26 @@ impl Terminal {
         let input = input.into();
         #[cfg(any(test, feature = "test-support"))]
         self.pty_write_log.borrow_mut().push(input.to_vec());
-        if let TerminalType::Pty {
-            resources: PtyResources::Active(pty_tx),
-            ..
-        } = &self.terminal_type
-        {
-            if log::log_enabled!(log::Level::Debug) {
-                if let Ok(str) = str::from_utf8(&input) {
-                    log::debug!("Writing to PTY: {:?}", str);
-                } else {
-                    log::debug!("Writing to PTY: {:?}", input);
+        match &self.terminal_type {
+            TerminalType::Pty {
+                resources: PtyResources::Active(pty_tx),
+                ..
+            } => {
+                if log::log_enabled!(log::Level::Debug) {
+                    if let Ok(str) = str::from_utf8(&input) {
+                        log::debug!("Writing to PTY: {:?}", str);
+                    } else {
+                        log::debug!("Writing to PTY: {:?}", input);
+                    }
+                }
+                pty_tx.notify(input);
+            }
+            TerminalType::Remote(remote) => {
+                if remote.input_tx.try_send(input.into_owned()).is_err() {
+                    log::warn!("persistent terminal input queue is unavailable");
                 }
             }
-            pty_tx.notify(input);
+            TerminalType::Pty { .. } | TerminalType::DisplayOnly => {}
         }
     }
 
@@ -2226,7 +2396,10 @@ impl Terminal {
     }
 
     pub fn is_pty(&self) -> bool {
-        matches!(self.terminal_type, TerminalType::Pty { .. })
+        matches!(
+            self.terminal_type,
+            TerminalType::Pty { .. } | TerminalType::Remote(_)
+        )
     }
 
     pub fn write_init_command_after_startup(
@@ -2932,7 +3105,7 @@ impl Terminal {
                 .read()
                 .as_ref()
                 .and_then(|process| foreground_process_command_from_argv(&process.argv)),
-            TerminalType::DisplayOnly => None,
+            TerminalType::Remote(_) | TerminalType::DisplayOnly => None,
         }
     }
 
@@ -2949,7 +3122,7 @@ impl Terminal {
                 .read()
                 .as_ref()
                 .map(|process| process.cwd.clone()),
-            TerminalType::DisplayOnly => None,
+            TerminalType::Remote(_) | TerminalType::DisplayOnly => None,
         }
     }
 
@@ -3004,12 +3177,31 @@ impl Terminal {
         history_size.saturating_add(line)
     }
 
+    /// Title shown for this terminal outside the terminal itself, such as a tab.
+    ///
+    /// Prefers the title reported by the program running in the terminal, which is
+    /// the same text as the terminal breadcrumb, so it follows program-driven title
+    /// changes. Task terminals and terminals whose program reports no title keep the
+    /// task/shell/process label from [`Self::title`].
+    pub fn display_title(&self, truncate: bool) -> String {
+        if self.task.is_none() {
+            let program_title = self.breadcrumb_text.trim();
+            if !program_title.is_empty() {
+                return if truncate {
+                    truncate_and_trailoff(program_title, TITLE_MAX_CHARS)
+                } else {
+                    program_title.to_string()
+                };
+            }
+        }
+        self.title(truncate)
+    }
+
     pub fn title(&self, truncate: bool) -> String {
-        const MAX_CHARS: usize = 25;
         match &self.task {
             Some(task_state) => {
                 if truncate {
-                    truncate_and_trailoff(&task_state.spawned_task.label, MAX_CHARS)
+                    truncate_and_trailoff(&task_state.spawned_task.label, TITLE_MAX_CHARS)
                 } else {
                     task_state.spawned_task.full_label.clone()
                 }
@@ -3042,8 +3234,8 @@ impl Terminal {
                             );
                             let (process_file, process_name) = if truncate {
                                 (
-                                    truncate_and_trailoff(&process_file, MAX_CHARS),
-                                    truncate_and_trailoff(&process_name, MAX_CHARS),
+                                    truncate_and_trailoff(&process_file, TITLE_MAX_CHARS),
+                                    truncate_and_trailoff(&process_name, TITLE_MAX_CHARS),
                                 )
                             } else {
                                 (process_file, process_name)
@@ -3051,7 +3243,7 @@ impl Terminal {
                             format!("{process_file} — {process_name}")
                         })
                         .unwrap_or_else(|| "Terminal".to_string()),
-                    TerminalType::DisplayOnly => "Terminal".to_string(),
+                    TerminalType::Remote(_) | TerminalType::DisplayOnly => "Terminal".to_string(),
                 }),
         }
     }
@@ -3067,6 +3259,14 @@ impl Terminal {
                     // Then kill the shell itself so that the terminal exits properly
                     // and wait_for_completed_task can complete
                     info.kill_child_process();
+                }
+                TerminalType::Remote(remote) => {
+                    self.background_executor
+                        .spawn(remote.client.request(proto::ClosePersistentTerminal {
+                            server_instance_id: remote.server_instance_id.clone(),
+                            terminal_id: remote.terminal_id.clone(),
+                        }))
+                        .detach();
                 }
                 TerminalType::DisplayOnly => {
                     // Non-PTY task terminals own their subprocess directly.
@@ -3123,14 +3323,14 @@ impl Terminal {
     pub fn pid(&self) -> Option<sysinfo::Pid> {
         match &self.terminal_type {
             TerminalType::Pty { info, .. } => info.pid(),
-            TerminalType::DisplayOnly => None,
+            TerminalType::Remote(_) | TerminalType::DisplayOnly => None,
         }
     }
 
     pub fn pid_getter(&self) -> Option<&ProcessIdGetter> {
         match &self.terminal_type {
             TerminalType::Pty { info, .. } => Some(info.pid_getter()),
-            TerminalType::DisplayOnly => None,
+            TerminalType::Remote(_) | TerminalType::DisplayOnly => None,
         }
     }
 
@@ -3245,7 +3445,8 @@ impl Terminal {
             &builder.terminal.term.lock_unfair(),
             &builder.terminal.last_content,
         );
-        builder.terminal.title_override = Some(format!("[冻结] {}", self.title(false)));
+        builder.terminal.title_override =
+            Some(i18n::t_args!("e5b6b8bc67e69536", self.display_title(false)));
         builder
     }
 
@@ -3451,7 +3652,27 @@ impl Drop for Terminal {
         if let Some(subprocess) = self.subprocess.take() {
             subprocess.kill();
         }
+        if let TerminalType::Remote(remote) = &self.terminal_type {
+            self.background_executor
+                .spawn(remote.client.request(proto::ClosePersistentTerminal {
+                    server_instance_id: remote.server_instance_id.clone(),
+                    terminal_id: remote.terminal_id.clone(),
+                }))
+                .detach();
+        }
         self.release_pty_resources();
+    }
+}
+
+fn exit_status_from_code(code: i32) -> ExitStatus {
+    #[cfg(unix)]
+    {
+        ExitStatus::from_raw(code << 8)
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::ExitStatusExt as _;
+        ExitStatus::from_raw(code as u32)
     }
 }
 
@@ -5836,6 +6057,7 @@ mod tests {
                 info.pid_getter().fallback_pid(),
                 info.current.read().is_some()
             ),
+            TerminalType::Remote(_) => "remote".to_string(),
             TerminalType::DisplayOnly => "display-only".to_string(),
         });
         panic!(

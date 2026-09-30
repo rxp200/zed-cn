@@ -51,7 +51,7 @@ fn is_account_password_prompt(prompt: &str) -> bool {
     prompt.contains("password")
         && !prompt.contains("passphrase")
         && !prompt.contains("private key")
-        && !prompt.contains("密钥口令")
+        && !prompt.contains(i18n::t!("59a61ae5cc3a029b"))
 }
 
 impl Drop for RemoteConnectionPrompt {
@@ -170,7 +170,7 @@ impl RemoteConnectionPrompt {
     pub fn confirm(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some((_, tx)) = self.prompt.take() {
             self.prompt_cancellation_task.take();
-            self.status_message = Some("正在建立 SSH 连接".into());
+            self.status_message = Some(i18n::t!("541711902f1387da").into());
 
             let pw = self.editor.text(cx);
             if let Ok(secure) = EncryptedPassword::try_from(pw.as_ref()) {
@@ -253,22 +253,20 @@ impl Render for RemoteConnectionPrompt {
                                             "create-zed-managed-ssh-key",
                                             ToggleState::from(create_managed_key),
                                         )
-                                        .label("创建此主机的 Zed 专属 SSH 密钥")
-                                        .on_click(cx.listener(
-                                            |this, state: &ToggleState, _, cx| {
+                                        .label(i18n::t!("f14c1c37ad17bc3a"))
+                                        .on_click(
+                                            cx.listener(|this, state: &ToggleState, _, cx| {
                                                 this.create_managed_key
                                                     .store(state.selected(), Ordering::Relaxed);
                                                 cx.notify();
                                                 cx.stop_propagation();
-                                            },
-                                        )),
+                                            }),
+                                        ),
                                     )
                                     .child(
-                                        Label::new(
-                                            "连接成功后会自动部署并验证独立密钥，以后无需再次输入密码。",
-                                        )
-                                        .size(LabelSize::Small)
-                                        .color(Color::Muted),
+                                        Label::new(i18n::t!("ed9dbfd7f51517a2"))
+                                            .size(LabelSize::Small)
+                                            .color(Color::Muted),
                                     ),
                             )
                         }),
@@ -286,7 +284,7 @@ impl Render for RemoteConnectionPrompt {
                                     .color(Color::Muted),
                             )
                             .child(
-                                Label::new("大写锁定已开启。")
+                                Label::new(i18n::t!("d0ed2cc8cbbd8ec1"))
                                     .size(LabelSize::Small)
                                     .color(Color::Muted),
                             ),
@@ -358,7 +356,7 @@ impl Render for RemoteConnectionPrompt {
                                                     .color(Color::Muted),
                                             )
                                             .child(
-                                                Label::new("连接详情")
+                                                Label::new(i18n::t!("7d9f51408c51ed01"))
                                                     .size(LabelSize::XSmall)
                                                     .color(Color::Muted),
                                             ),
@@ -712,14 +710,14 @@ impl remote::RemoteClientDelegate for RemoteClientDelegate {
             )
             .await
             .with_context(|| {
-                format!(
-                    "下载远程开发服务失败（版本：{}，操作系统：{}，架构：{}）",
+                i18n::t_args!(
+                    "35357ea546145185",
                     version
                         .as_ref()
                         .map(|v| format!("{}", v))
-                        .unwrap_or("未知".to_string()),
+                        .unwrap_or(i18n::t!("4d8c1c5b42830791").to_string()),
                     platform.os,
-                    platform.arch,
+                    platform.arch
                 )
             })
         })
@@ -897,14 +895,14 @@ impl remote::RemoteClientDelegate for BackgroundRemoteClientDelegate {
             )
             .await
             .with_context(|| {
-                format!(
-                    "下载远程开发服务失败（版本：{}，操作系统：{}，架构：{}）",
+                i18n::t_args!(
+                    "35357ea546145185",
                     version
                         .as_ref()
                         .map(|v| format!("{v}"))
-                        .unwrap_or("未知".to_string()),
+                        .unwrap_or(i18n::t!("4d8c1c5b42830791").to_string()),
                     platform.os,
-                    platform.arch,
+                    platform.arch
                 )
             })
         })

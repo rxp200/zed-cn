@@ -633,8 +633,8 @@ impl Render for DapLogToolbarItemView {
             .child(
                 div()
                     .child(
-                        Button::new("clear_log_button", "清除").on_click(cx.listener(
-                            |this, _, window, cx| {
+                        Button::new("clear_log_button", i18n::t!("bce2377283c2455a")).on_click(
+                            cx.listener(|this, _, window, cx| {
                                 if let Some(log_view) = this.log_view.as_ref() {
                                     log_view.update(cx, |log_view, cx| {
                                         log_view.editor.update(cx, |editor, cx| {
@@ -644,8 +644,8 @@ impl Render for DapLogToolbarItemView {
                                         });
                                     })
                                 }
-                            },
-                        )),
+                            }),
+                        ),
                     )
                     .ml_2(),
             )

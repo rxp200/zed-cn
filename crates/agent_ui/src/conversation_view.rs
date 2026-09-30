@@ -2737,7 +2737,7 @@ impl ConversationView {
             }
             LoadError::FailedToInstall(msg) => ("安装失败", msg.to_string()),
             LoadError::Exited { status, stderr } => {
-                let mut message = format!("服务进程已退出，状态为 {status}");
+                let mut message = i18n::t!("5fa27e827c846df0", status = status);
                 if let Some(stderr) = stderr {
                     message.push_str("\n");
                     message.push_str(stderr);

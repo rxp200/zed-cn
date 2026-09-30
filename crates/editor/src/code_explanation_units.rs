@@ -613,7 +613,7 @@ mod tests {
         let output = (1..=200)
             .map(|line| Annotation {
                 line,
-                explanation: format!("解释 {line}"),
+                explanation: i18n::t!("793aba43e7d73e46", line = line),
             })
             .collect::<Vec<_>>();
         assert_eq!(

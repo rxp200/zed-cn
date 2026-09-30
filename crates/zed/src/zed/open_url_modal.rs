@@ -106,7 +106,7 @@ impl Render for OpenUrlModal {
                     })
                     .when(self.last_error.is_none(), |this| {
                         this.child(
-                            Label::new("粘贴 URL 以打开。")
+                            Label::new(i18n::t!("4ce66102cafb6c64"))
                                 .color(Color::Muted)
                                 .size(LabelSize::Small),
                         )

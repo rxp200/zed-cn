@@ -261,13 +261,13 @@ fn custom_release_notes_from_manifest(
         body.push_str(&release.tag_name);
         body.push_str(")\n\n");
         if release.tag_name == installed_tag {
-            body.push_str("*当前安装版本*\n\n");
+            body.push_str(i18n::t!("a517ae2a806ec22d"));
         }
         body.push_str(release.release_notes.trim());
     }
 
     Some(CustomReleaseNotes {
-        title: "Zed CN 发布说明".to_string(),
+        title: i18n::t!("7660244cfdc7f4ce").to_string(),
         body,
     })
 }
@@ -408,9 +408,9 @@ pub fn check(_: &Check, window: &mut Window, cx: &mut App) {
     {
         drop(window.prompt(
             gpui::PromptLevel::Info,
-            "Zed 是通过包管理器安装的。",
+            i18n::t!("cf25e0b7cd2a4e84"),
             Some(&message),
-            &["确定"],
+            &[i18n::t!("fac2a67ad87807c4")],
             cx,
         ));
         return;
@@ -428,9 +428,9 @@ pub fn check(_: &Check, window: &mut Window, cx: &mut App) {
     } else {
         drop(window.prompt(
             gpui::PromptLevel::Info,
-            "无法检查更新",
-            Some("已为非打包应用禁用自动更新。"),
-            &["确定"],
+            i18n::t!("2d0a571596da01d2"),
+            Some(i18n::t!("42da41740fade23d")),
+            &[i18n::t!("fac2a67ad87807c4")],
             cx,
         ));
     }
@@ -744,9 +744,9 @@ impl AutoUpdater {
         let uses_proxy = this.read_with(cx, |this, _| this.client.http_client().proxy().is_some());
         set_status(
             if uses_proxy {
-                "正在通过本地代理获取远程开发服务下载信息"
+                i18n::t!("790e5cf27f28d3a1")
             } else {
-                "正在通过本地网络获取远程开发服务下载信息"
+                i18n::t!("216ffcf987e4e9c3")
             },
             cx,
         );
@@ -762,7 +762,7 @@ impl AutoUpdater {
         )
         .with_timeout(REMOTE_SERVER_DOWNLOAD_IDLE_TIMEOUT, &executor)
         .await
-        .context("获取远程开发服务发布信息超时")??;
+        .context(i18n::t!("07073471087864d2"))??;
 
         let servers_dir = paths::remote_servers_dir();
         let channel_dir = servers_dir.join(release_channel.dev_name());
@@ -779,9 +779,9 @@ impl AutoUpdater {
             );
             set_status(
                 if uses_proxy {
-                    "正在通过本地代理下载远程开发服务"
+                    i18n::t!("9cb44e39b1764adc")
                 } else {
-                    "正在通过本地网络下载远程开发服务"
+                    i18n::t!("5f21763928401a14")
                 },
                 cx,
             );
@@ -813,7 +813,7 @@ impl AutoUpdater {
         let (this, source_sha) = cx.update(|cx| {
             anyhow::ensure!(
                 release_channel::CustomReleaseTag::current(cx).as_deref() == Some(tag.as_str()),
-                "Zed CN 远程服务必须与当前客户端的完整发布版本一致"
+                i18n::t!("88dd5efec4d36459")
             );
             Ok((
                 cx.default_global::<GlobalAutoUpdate>()
@@ -821,13 +821,13 @@ impl AutoUpdater {
                     .clone()
                     .context("auto-update not initialized")?,
                 AppCommitSha::try_global(cx)
-                    .context("客户端缺少源码版本标识")?
+                    .context(i18n::t!("dfe76433df45b337"))?
                     .full(),
             ))
         })?;
         anyhow::ensure!(
             matches!(os, "linux" | "macos" | "windows") && matches!(arch, "x86_64" | "aarch64"),
-            "不支持的远程服务平台"
+            i18n::t!("1b4762f17f09d131")
         );
         let extension = if os == "windows" { "zip" } else { "gz" };
         let directory = paths::remote_servers_dir()
@@ -835,14 +835,14 @@ impl AutoUpdater {
             .join(format!("{os}-{arch}"));
         let path = directory.join(format!("{tag}.{extension}"));
         if let Some(path) = cached_custom_remote_server(path.clone()).await? {
-            set_status("正在使用本地缓存的 Zed CN 远程服务", cx);
+            set_status(i18n::t!("c217f9edb3307e01"), cx);
             return Ok(path);
         }
 
         let client = this.read_with(cx, |this, _| this.client.http_client());
         let executor = cx.background_executor().clone();
         let base_url = format!("https://github.com/rxp200/zed-cn/releases/download/{tag}");
-        set_status("正在通过本地代理或网络校验 Zed CN 远程服务版本", cx);
+        set_status(i18n::t!("e9e77fe6d7b853cc"), cx);
         let metadata = read_remote_release_metadata(
             &client,
             &format!("{base_url}/update-metadata.json"),
@@ -861,7 +861,7 @@ impl AutoUpdater {
             .tempfile_in(&directory)?
             .into_temp_path();
         let staging_path = staging.to_path_buf();
-        set_status("正在通过本地代理或网络下载 Zed CN 远程服务", cx);
+        set_status(i18n::t!("c9792c6380e84493"), cx);
         download_remote_server_binary(
             &staging_path,
             ReleaseAsset {
@@ -897,7 +897,7 @@ impl AutoUpdater {
             Self::get_release_asset(&this, channel, version, "zed-remote-server", os, arch, cx)
                 .with_timeout(REMOTE_SERVER_DOWNLOAD_IDLE_TIMEOUT, &executor)
                 .await
-                .context("获取远程开发服务下载地址超时")??;
+                .context(i18n::t!("6f810a7d7f628cb1"))??;
 
         Ok(Some(release.url))
     }
@@ -1059,7 +1059,7 @@ impl AutoUpdater {
 
         let installer_dir = InstallerDir::new()
             .await
-            .context("创建安装程序目录失败")?;
+            .context(i18n::t!("9e62957481aafbe3"))?;
         let target_path = Self::target_path(&installer_dir).await?;
         let progress_entity = this.clone();
         let mut progress_cx = cx.clone();
@@ -1081,7 +1081,7 @@ impl AutoUpdater {
             },
         )
         .await
-        .with_context(|| format!("下载更新到 {} 失败", target_path.display()))?;
+        .with_context(|| i18n::t_args!("2407ab74730d1def", target_path.display()))?;
 
         if let Some(expected_sha256) = expected_sha256 {
             let target_path = target_path.clone();
@@ -1122,7 +1122,7 @@ impl AutoUpdater {
             .await
         };
         let new_binary_path = install_result
-            .with_context(|| format!("在 {} 安装更新失败", target_path.display()))?;
+            .with_context(|| i18n::t_args!("29e30c47ecd37b3f", target_path.display()))?;
         if let Some(new_binary_path) = new_binary_path {
             cx.update(|cx| cx.set_restart_path(new_binary_path));
         }
@@ -1537,12 +1537,7 @@ async fn copy_remote_server_binary(
                 .read(&mut buffer)
                 .with_timeout(idle_timeout, executor)
                 .await
-                .with_context(|| {
-                    format!(
-                        "下载远程开发服务连续 {} 秒没有收到数据",
-                        idle_timeout.as_secs()
-                    )
-                })??;
+                .with_context(|| i18n::t_args!("0a9ba9f1d6504a1f", idle_timeout.as_secs()))??;
             if bytes_read == 0 {
                 break;
             }
@@ -1556,7 +1551,7 @@ async fn copy_remote_server_binary(
     download
         .with_timeout(total_timeout, executor)
         .await
-        .with_context(|| format!("下载远程开发服务超过 {} 秒", total_timeout.as_secs()))??;
+        .with_context(|| i18n::t_args!("ba16b4aca9d56c80", total_timeout.as_secs()))??;
     Ok(())
 }
 

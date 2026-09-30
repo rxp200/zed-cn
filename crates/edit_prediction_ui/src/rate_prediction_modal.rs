@@ -797,7 +797,7 @@ impl RatePredictionsModal {
                     editor.set_show_wrap_guides(false, cx);
                     editor.set_show_indent_guides(false, cx);
                     editor.set_show_edit_predictions(Some(false), window, cx);
-                    editor.set_placeholder_text("添加反馈…", window, cx);
+                    editor.set_placeholder_text(i18n::t!("bf49c8b2fb58421d"), window, cx);
                     editor.set_completion_provider(Some(Rc::new(FeedbackCompletionProvider)));
                     if focus {
                         cx.focus_self(window);
@@ -880,7 +880,9 @@ impl RatePredictionsModal {
                                 .px_2()
                                 .border_b_1()
                                 .border_color(border_color)
-                                .child(Label::new("预测的补丁").size(LabelSize::Small)),
+                                .child(
+                                    Label::new(i18n::t!("d62efb70bea309ce")).size(LabelSize::Small),
+                                ),
                         )
                         .child(
                             div()
@@ -906,7 +908,9 @@ impl RatePredictionsModal {
                                 .gap_2()
                                 .border_b_1()
                                 .border_color(border_color)
-                                .child(Label::new("预期补丁").size(LabelSize::Small)),
+                                .child(
+                                    Label::new(i18n::t!("05479eacd2f23b7b")).size(LabelSize::Small),
+                                ),
                         )
                         .child(
                             div()
@@ -995,7 +999,9 @@ impl RatePredictionsModal {
                             )
                             .into_any_element()
                         } else {
-                            div().child("没有活动的补全".to_string()).into_any_element()
+                            div()
+                                .child(i18n::t!("33cce181d47851eb").to_string())
+                                .into_any_element()
                         }),
                 )
                 .id("raw-input-view"),
@@ -1142,7 +1148,7 @@ impl RatePredictionsModal {
                                             .size(IconSize::Small)
                                             .color(Color::Success),
                                     )
-                                    .child(Label::new("已评价补全。").color(Color::Muted)),
+                                    .child(Label::new(i18n::t!("53db3feb66fe3f8f")).color(Color::Muted)),
                             )
                         } else if active_prediction.prediction.edits.is_empty() {
                             Some(
@@ -1152,7 +1158,7 @@ impl RatePredictionsModal {
                                             .size(IconSize::Small)
                                             .color(Color::Warning),
                                     )
-                                    .child(Label::new("未产生任何编辑。").color(Color::Muted)),
+                                    .child(Label::new(i18n::t!("81703e7a62ba40e9")).color(Color::Muted)),
                             )
                         } else {
                             Some(label_container)
@@ -1161,7 +1167,7 @@ impl RatePredictionsModal {
                             h_flex()
                                 .gap_1()
                                 .child(
-                                    Button::new("bad", "不好的预测")
+                                    Button::new("bad", i18n::t!("6d04b70f4205c5ae"))
                                         .start_icon(Icon::new(IconName::ThumbsDown).size(IconSize::Small))
                                         .disabled(rated || feedback_empty)
                                         .when(feedback_empty, |this| {
@@ -1185,7 +1191,7 @@ impl RatePredictionsModal {
                                         })),
                                 )
                                 .child(
-                                    Button::new("good", "好的预测")
+                                    Button::new("good", i18n::t!("da8b60a2178b4bb9"))
                                         .start_icon(Icon::new(IconName::ThumbsUp).size(IconSize::Small))
                                         .disabled(rated)
                                         .key_binding(KeyBinding::for_action_in(
@@ -1354,7 +1360,7 @@ impl Render for RatePredictionsModal {
                             .border_color(border_color)
                             .child(Icon::new(icons.base).size(IconSize::Small))
                             .child(
-                                Label::new("从最近到最旧")
+                                Label::new(i18n::t!("4199c8c2cdd3d5f2"))
                                     .color(Color::Muted)
                                     .size(LabelSize::Small),
                             )

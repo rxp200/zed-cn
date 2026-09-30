@@ -105,10 +105,14 @@ impl Render for FileTransferIndicator {
                 let copies = active - uploads - downloads;
                 let failures = visible.iter().filter(|entry| entry.error).count();
                 if active == 0 && failures == 0 {
-                    "文件传输已完成".into()
+                    i18n::t!("8a5e582c9cb452e8").into()
                 } else {
-                    format!(
-                        "↑ 上传 {uploads} · ↓ 下载 {downloads} · 复制 {copies} · 失败 {failures}"
+                    i18n::t!(
+                        "69c9f552db697af6",
+                        uploads = uploads,
+                        downloads = downloads,
+                        copies = copies,
+                        failures = failures
                     )
                 }
             };
@@ -182,18 +186,17 @@ impl Render for TransferDetails {
             .child(
                 h_flex()
                     .justify_between()
-                    .child(Label::new("文件传输"))
+                    .child(Label::new(i18n::t!("f3c32e652f6592d1")))
                     .child(
-                        Button::new("clear-finished-transfers", "清除已结束").on_click(
-                            cx.listener(|this, _, _, cx| {
+                        Button::new("clear-finished-transfers", i18n::t!("6b14dd8a6a1c12ce"))
+                            .on_click(cx.listener(|this, _, _, cx| {
                                 this.transfers
                                     .update(cx, |transfers, cx| transfers.clear_finished(cx))
-                            }),
-                        ),
+                            })),
                     ),
             )
             .child(
-                Label::new("上传统计本机已发送字节，含消息开销；远端确认后才完成")
+                Label::new(i18n::t!("bf738c7556fc5ba0"))
                     .size(LabelSize::Small)
                     .color(Color::Muted),
             )
@@ -218,8 +221,7 @@ impl Render for TransferDetails {
                             let percentage = entry.completed_files as f32 / total as f32 * 100.;
                             element
                                 .child(
-                                    Label::new(format!("整体进度（按项目数）：{percentage:.0}%"))
-                                        .size(LabelSize::Small),
+                                    Label::new(i18n::t!("16fb23c8514e94a3")).size(LabelSize::Small),
                                 )
                                 .child(ui::ProgressBar::new(
                                     ("transfer-batch-progress", entry.id),
@@ -232,7 +234,7 @@ impl Render for TransferDetails {
                     .when_some(entry.percentage(), |element, percentage| {
                         element
                             .child(
-                                Label::new(format!("当前文件：{percentage}%"))
+                                Label::new(i18n::t!("c4bc5abcc47e115e", percentage = percentage))
                                     .size(LabelSize::Small),
                             )
                             .child(ui::ProgressBar::new(
@@ -243,13 +245,13 @@ impl Render for TransferDetails {
                             ))
                     })
                     .child(
-                        Label::new(format!(
-                            "当前文件 {} / {} · 已完成 {} / {} 项",
+                        Label::new(i18n::t_args!(
+                            "5acabdee0bde1674",
                             format_bytes(entry.bytes),
                             entry
                                 .total
                                 .map(format_bytes)
-                                .unwrap_or_else(|| "未知".into()),
+                                .unwrap_or_else(|| i18n::t!("4d8c1c5b42830791").into()),
                             entry.completed_files,
                             entry
                                 .total_entries

@@ -5567,6 +5567,48 @@ fn test_chunk_highlights_across_row_chunk_seeks(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn test_img2threejs_readme_highlighting_completes(cx: &mut TestAppContext) {
+    if std::env::var_os("ZED_DISABLE_HIGHLIGHT_CACHE").is_some() {
+        return;
+    }
+    cx.update(|cx| init_settings(cx, |_| {}));
+
+    let markdown = markdown_lang();
+    let markdown_inline = Arc::new(
+        Language::new(
+            LanguageConfig {
+                name: "Markdown-Inline".into(),
+                grammar: Some("markdown-inline".into()),
+                hidden: true,
+                ..Default::default()
+            },
+            Some(tree_sitter_md::INLINE_LANGUAGE.into()),
+        )
+        .with_queries(grammars::load_queries("markdown-inline"))
+        .unwrap(),
+    );
+    let registry = Arc::new(LanguageRegistry::test(cx.background_executor.clone()));
+    registry.add(markdown.clone());
+    registry.add(markdown_inline);
+
+    let buffer = cx.new(|cx| {
+        let mut buffer = Buffer::local(include_str!("../test_data/img2threejs_readme.md"), cx);
+        buffer.set_language_registry(registry);
+        buffer.set_language(Some(markdown), cx);
+        buffer
+    });
+    cx.run_until_parked();
+
+    buffer.read_with(cx, |buffer, _| {
+        let snapshot = buffer.snapshot();
+        assert!(
+            snapshot.cached_highlight_runs(0..snapshot.len()).is_some(),
+            "the regression fixture must stay within the cached-highlight chunk bound"
+        );
+    });
+}
+
+#[gpui::test]
 fn test_cached_highlights_skip_very_long_lines(cx: &mut TestAppContext) {
     if std::env::var_os("ZED_DISABLE_HIGHLIGHT_CACHE").is_some() {
         return;

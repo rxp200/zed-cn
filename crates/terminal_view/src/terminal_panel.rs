@@ -241,7 +241,7 @@ impl TerminalPanel {
                     .gap(DynamicSpacing::Base02.rems(cx))
                     .when(port_forwarding_available, |this| {
                         this.child(
-                            Button::new("manage-port-forwards", "端口")
+                            Button::new("manage-port-forwards", i18n::t!("e71ac32b544b0ebf"))
                                 .style(ButtonStyle::Subtle)
                                 .on_click(move |_, window, cx| {
                                     window.dispatch_action(ManagePortForwards.boxed_clone(), cx);
@@ -252,7 +252,7 @@ impl TerminalPanel {
                         PopoverMenu::new("terminal-tab-bar-popover-menu")
                             .trigger_with_tooltip(
                                 IconButton::new("plus", IconName::Plus).icon_size(IconSize::Small),
-                                Tooltip::text("新建…"),
+                                Tooltip::text(i18n::t!("0b0f7ee4a6703701")),
                             )
                             .anchor(Anchor::TopRight)
                             .with_handle(pane.new_item_context_menu_handle.clone())
@@ -286,7 +286,7 @@ impl TerminalPanel {
                             .trigger_with_tooltip(
                                 IconButton::new("terminal-pane-split", IconName::Split)
                                     .icon_size(IconSize::Small),
-                                Tooltip::text("分割窗格"),
+                                Tooltip::text(i18n::t!("5115c5b366985ba0")),
                             )
                             .anchor(Anchor::TopRight)
                             .with_handle(pane.split_item_context_menu_handle.clone())
@@ -787,9 +787,7 @@ impl TerminalPanel {
                 .task()
                 .is_some_and(|task| task.status == terminal::TaskStatus::Running);
             if running {
-                return Task::ready(Err(anyhow!(
-                    "代码仍在运行，请先停止当前任务（Ctrl+Alt+Shift+J）再重新运行。"
-                )));
+                return Task::ready(Err(anyhow!(i18n::t!("1e2fa6a35065ff4c"))));
             }
         }
         if task.allow_concurrent_runs {
@@ -1560,7 +1558,7 @@ impl Render for FailedToSpawnTerminal {
                     .items_center()
                     .justify_center()
                     .text_center()
-                    .child(Label::new("无法启动终端"))
+                    .child(Label::new(i18n::t!("4848086eda68be9f")))
                     .child(
                         Label::new(self.error.to_string())
                             .size(LabelSize::Small)
@@ -1569,7 +1567,7 @@ impl Render for FailedToSpawnTerminal {
                     )
                     .child(SplitButton::new(
                         ButtonLike::new("open-settings-ui")
-                            .child(Label::new("编辑设置").size(LabelSize::Small))
+                            .child(Label::new(i18n::t!("a54e5efbcb228cff")).size(LabelSize::Small))
                             .on_click(|_, window, cx| {
                                 window.dispatch_action(zed_actions::OpenSettings.boxed_clone(), cx);
                             }),
@@ -1585,7 +1583,7 @@ impl workspace::Item for FailedToSpawnTerminal {
     type Event = ();
 
     fn tab_content_text(&self, _detail: usize, _cx: &App) -> SharedString {
-        SharedString::new_static("终端启动失败")
+        SharedString::new_static(i18n::t!("58941f4cb09ce489"))
     }
 }
 
@@ -1607,9 +1605,9 @@ impl Render for TerminalPanel {
         let waiting_for_terminals = self.restoring || self.pending_terminals_to_add > 0;
         let restoring_placeholder = (waiting_for_terminals && no_items_in_panes).then(|| {
             let label = if self.restoring {
-                "正在恢复终端…"
+                i18n::t!("a6385d971b72f749")
             } else {
-                "正在启动终端…"
+                i18n::t!("f8cdbb94c0a2010e")
             };
             h_flex()
                 .absolute()
@@ -1988,7 +1986,12 @@ impl RenderOnce for InlineAssistTabBarButton {
                 }
             })
             .tooltip(move |_window, cx| {
-                Tooltip::for_action_in("Inline Assist", &InlineAssist::default(), &focus_handle, cx)
+                Tooltip::for_action_in(
+                    i18n::t!("3c0a5576ae323683"),
+                    &InlineAssist::default(),
+                    &focus_handle,
+                    cx,
+                )
             })
     }
 }

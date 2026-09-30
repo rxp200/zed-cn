@@ -181,11 +181,11 @@ impl Render for ProfileSelector {
         }
 
         if !self.provider.profiles_supported(cx) {
-            return Button::new("tools-not-supported-button", "不支持的工具")
+            return Button::new("tools-not-supported-button", i18n::t!("6deca7ef16b3423b"))
                 .disabled(true)
                 .label_size(LabelSize::Small)
                 .color(Color::Muted)
-                .tooltip(Tooltip::text("此模型不支持工具。"))
+                .tooltip(Tooltip::text(i18n::t!("6969ad2b5c0d3179")))
                 .into_any_element();
         }
 
@@ -231,7 +231,7 @@ impl Render for ProfileSelector {
                     .gap_1()
                     .child(
                         container()
-                            .child(Label::new("更改配置文件"))
+                            .child(Label::new(i18n::t!("e12f7689f84fc4e9")))
                             .child(KeyBinding::for_action(&ToggleProfileSelector, cx)),
                     )
                     .child(
@@ -239,7 +239,7 @@ impl Render for ProfileSelector {
                             .pt_1()
                             .border_t_1()
                             .border_color(cx.theme().colors().border_variant)
-                            .child(Label::new("循环切换配置文件"))
+                            .child(Label::new(i18n::t!("0c6627c838a48071")))
                             .child(KeyBinding::for_action(&CycleModeSelector, cx)),
                     )
                     .into_any()
@@ -486,9 +486,9 @@ impl PickerDelegate for ProfilePickerDelegate {
 
     fn no_matches_text(&self, _window: &mut Window, _cx: &mut App) -> Option<SharedString> {
         let text = if self.candidates.is_empty() {
-            "没有配置文件。".into()
+            i18n::t!("3b93c5a5bf01df04").into()
         } else {
-            "没有与你搜索匹配的配置文件。".into()
+            i18n::t!("38ccb71c3f3982b2").into()
         };
         Some(text)
     }
@@ -752,7 +752,8 @@ impl PickerDelegate for ProfilePickerDelegate {
                                                 .color(Color::Warning),
                                         )
                                         .child(
-                                            Label::new("在受限模式下已禁用").size(LabelSize::Small),
+                                            Label::new(i18n::t!("84a4de866fab5040"))
+                                                .size(LabelSize::Small),
                                         ),
                                 )
                                 .children(forbidden_tools.iter().map(|tool| {
@@ -789,7 +790,7 @@ impl PickerDelegate for ProfilePickerDelegate {
                         .border_color(cx.theme().colors().border_variant)
                         .p_1p5()
                         .child(
-                            Button::new("configure", "配置")
+                            Button::new("configure", i18n::t!("148d195e21b05db5"))
                                 .full_width()
                                 .style(ButtonStyle::Outlined)
                                 .key_binding(
@@ -816,7 +817,7 @@ impl PickerDelegate for ProfilePickerDelegate {
                             .border_color(cx.theme().colors().border_variant)
                             .p_1p5()
                             .child(
-                                Button::new("restricted-mode", "受限模式")
+                                Button::new("restricted-mode", i18n::t!("7453d4c7fedb2942"))
                                     .full_width()
                                     .style(ButtonStyle::Tinted(TintColor::Warning))
                                     .color(Color::Warning)

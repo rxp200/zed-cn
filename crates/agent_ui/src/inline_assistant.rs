@@ -278,7 +278,7 @@ impl InlineAssistant {
                             gpui::PromptLevel::Warning,
                             &error.to_string(),
                             None,
-                            &["配置", "取消"],
+                            &[i18n::t!("148d195e21b05db5"), i18n::t!("2cd0f3be8738a86c")],
                         )
                         .await
                         .ok();
@@ -1727,7 +1727,7 @@ impl InlineAssist {
                                         .ok();
                                 }
 
-                                let error = format!("内联助手错误：{}", error);
+                                let error = i18n::t_args!("4e3cccf00c2f85bf", error);
                                 workspace.update(cx, |workspace, cx| {
                                     struct InlineAssistantError;
 

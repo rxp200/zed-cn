@@ -340,9 +340,9 @@ pub fn register(editor: &mut Editor, cx: &mut Context<Vim>) {
     Vim::action(editor, cx, |_, _: &ArgumentRequired, window, cx| {
         let _ = window.prompt(
             gpui::PromptLevel::Critical,
-            "需要参数",
+            i18n::t!("76eb72d6b89771e9"),
             None,
-            &["取消"],
+            &[i18n::t!("2cd0f3be8738a86c")],
             cx,
         );
     });
@@ -377,9 +377,9 @@ pub fn register(editor: &mut Editor, cx: &mut Context<Vim>) {
                     else {
                         let _ = window.prompt(
                             gpui::PromptLevel::Warning,
-                            "没有文件名",
-                            Some("部分缓冲区写入需要文件名。"),
-                            &["取消"],
+                            i18n::t!("df09f17844415c96"),
+                            Some(i18n::t!("52766b74838d4c4f")),
+                            &[i18n::t!("2cd0f3be8738a86c")],
                             cx,
                         );
                         return;
@@ -407,9 +407,9 @@ pub fn register(editor: &mut Editor, cx: &mut Context<Vim>) {
                     if Some(SaveIntent::Overwrite) != action.save_intent {
                         let _ = window.prompt(
                             gpui::PromptLevel::Warning,
-                            "使用 ! 写入部分缓冲区",
-                            Some("用所选缓冲区内容覆盖当前文件需要使用 '!'。"),
-                            &["取消"],
+                            i18n::t!("6287496e07dc2864"),
+                            Some(i18n::t!("476279ab32c0615e")),
+                            &[i18n::t!("2cd0f3be8738a86c")],
                             cx,
                         );
                         return;
@@ -437,7 +437,7 @@ pub fn register(editor: &mut Editor, cx: &mut Context<Vim>) {
                                 Some(
                                     "A file or folder with the same name already exists. Replacing it will overwrite its current contents.",
                                 ),
-                                &["替换", "取消"],
+                                &[i18n::t!("131b13aa265996df"), i18n::t!("2cd0f3be8738a86c")],
                                 cx
                             )
                         });
@@ -518,7 +518,7 @@ pub fn register(editor: &mut Editor, cx: &mut Context<Vim>) {
                         "A file or folder with the same name already exists. \
                         Replacing it will overwrite its current contents.",
                     ),
-                    &["替换", "取消"],
+                    &[i18n::t!("131b13aa265996df"), i18n::t!("2cd0f3be8738a86c")],
                     cx,
                 );
                 cx.spawn_in(window, async move |editor, cx| {

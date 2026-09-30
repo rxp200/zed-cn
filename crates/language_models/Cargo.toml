@@ -16,6 +16,7 @@ doctest = false
 test-support = []
 
 [dependencies]
+i18n.workspace = true
 ai_onboarding.workspace = true
 async-lock.workspace = true
 anthropic = { workspace = true, features = ["schemars"] }

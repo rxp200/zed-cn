@@ -365,6 +365,13 @@ else
     echo "cargo::warning=Missing ${document_icon_source}; macOS document icons may not appear in Finder."
 fi
 
+license_directory="${app_path}/Contents/Resources/licenses"
+mkdir -p "${license_directory}"
+cp LICENSE-GPL "${license_directory}/LICENSE-GPL"
+cp LICENSE-APACHE "${license_directory}/LICENSE-APACHE"
+cp MODIFICATIONS.md "${license_directory}/MODIFICATIONS.md"
+cp assets/licenses.md "${license_directory}/THIRD-PARTY-LICENSES.md"
+
 cp "target/${target_triple}/${target_dir}/cli" "${app_path}/Contents/MacOS/cli"
 sign_app_binaries
 

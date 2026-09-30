@@ -41,6 +41,7 @@ pub struct SystemStats {
     pub network_transmitted_bytes_per_second: u64,
     pub process_count: u32,
     pub load_average: [f64; 3],
+    pub local_ip_addresses: Vec<String>,
 }
 
 impl From<GetSystemStatsResponse> for SystemStats {
@@ -66,6 +67,7 @@ impl From<GetSystemStatsResponse> for SystemStats {
                 stats.load_average_five,
                 stats.load_average_fifteen,
             ],
+            local_ip_addresses: stats.local_ip_addresses,
         }
     }
 }
@@ -105,12 +107,21 @@ impl LocalSampler {
         let load = System::load_average();
         let received: u64 = self.networks.values().map(|data| data.received()).sum();
         let transmitted: u64 = self.networks.values().map(|data| data.transmitted()).sum();
+        let mut local_ip_addresses: Vec<std::net::IpAddr> = self
+            .networks
+            .values()
+            .flat_map(|data| data.ip_networks())
+            .map(|network| network.addr)
+            .filter(|address| is_local_address(*address))
+            .collect();
+        local_ip_addresses.sort();
+        local_ip_addresses.dedup();
 
         SystemStats {
-            hostname: System::host_name().unwrap_or_else(|| "本机".into()),
+            hostname: System::host_name().unwrap_or_else(|| i18n::t!("8a94c4a1cdbd821e").into()),
             os_name: System::long_os_version()
                 .or_else(System::name)
-                .unwrap_or_else(|| "未知系统".into()),
+                .unwrap_or_else(|| i18n::t!("8ba4d93bac24e511").into()),
             kernel_version: System::kernel_version().unwrap_or_default(),
             uptime_seconds: System::uptime(),
             cpu_usage_percent: self.system.global_cpu_usage(),
@@ -130,6 +141,27 @@ impl LocalSampler {
             network_transmitted_bytes_per_second: (transmitted as f64 / elapsed) as u64,
             process_count: self.system.processes().len().try_into().unwrap_or(u32::MAX),
             load_average: [load.one, load.five, load.fifteen],
+            local_ip_addresses: local_ip_addresses
+                .into_iter()
+                .map(|address| address.to_string())
+                .collect(),
+        }
+    }
+}
+
+fn is_local_address(address: std::net::IpAddr) -> bool {
+    match address {
+        std::net::IpAddr::V4(address) => {
+            !address.is_loopback()
+                && !address.is_link_local()
+                && !address.is_unspecified()
+                && !address.is_broadcast()
+        }
+        std::net::IpAddr::V6(address) => {
+            !address.is_loopback()
+                && !address.is_unspecified()
+                && address.to_ipv4_mapped().is_none()
+                && (address.segments()[0] & 0xffc0) != 0xfe80
         }
     }
 }
@@ -164,9 +196,7 @@ impl SystemMonitorData {
                                     remote_client.read_with(cx, |client, _| client.system_stats());
                                 request.await.map(SystemStats::from)
                             } else {
-                                Err(anyhow::anyhow!(
-                                    "远程服务不支持系统监控，请选择 Zed CN 远程服务并重新连接"
-                                ))
+                                Err(anyhow::anyhow!(i18n::t!("83f186da8e216477")))
                             }
                         } else if let Some(sampler) = local_sampler.take() {
                             let (sampler, stats) = cx
@@ -179,7 +209,7 @@ impl SystemMonitorData {
                             local_sampler = Some(sampler);
                             Ok(stats)
                         } else {
-                            Err(anyhow::anyhow!("本机监控采样器不可用"))
+                            Err(anyhow::anyhow!(i18n::t!("2eb3f4971a546cad")))
                         };
                         if this
                             .update(cx, |this, cx| this.apply_sample(result, cx))
@@ -226,8 +256,8 @@ impl SystemMonitorData {
     fn target_label(&self) -> String {
         self.remote_name
             .as_ref()
-            .map(|name| format!("远程 · {name}"))
-            .unwrap_or_else(|| "本机".into())
+            .map(|name| i18n::t!("e0617c01f6481bd5", name = name))
+            .unwrap_or_else(|| i18n::t!("8a94c4a1cdbd821e").into())
     }
 
     fn tooltip_element(&self) -> gpui::AnyElement {
@@ -241,7 +271,10 @@ impl SystemMonitorData {
                         .min_w_0()
                         .justify_between()
                         .gap_2()
-                        .child(Label::new(format!("{}运行状态", self.target_label())))
+                        .child(Label::new(i18n::t_args!(
+                            "cdc503e6be35752e",
+                            self.target_label()
+                        )))
                         .child(
                             Label::new(stats.hostname.clone())
                                 .size(LabelSize::Small)
@@ -249,12 +282,18 @@ impl SystemMonitorData {
                                 .truncate(),
                         ),
                 )
+                .when(!stats.local_ip_addresses.is_empty(), |element| {
+                    element.child(metric_line(
+                        i18n::t!("572c01ee2bf2cf56"),
+                        stats.local_ip_addresses.join(" · "),
+                    ))
+                })
                 .child(metric_line(
                     "CPU",
                     format!("{:.0}%", stats.cpu_usage_percent),
                 ))
                 .child(metric_line(
-                    "内存",
+                    i18n::t!("7d8f8c37ec7885bc"),
                     format!(
                         "{} / {}",
                         format_bytes(stats.memory_used_bytes),
@@ -262,7 +301,7 @@ impl SystemMonitorData {
                     ),
                 ))
                 .child(metric_line(
-                    "磁盘",
+                    i18n::t!("de7b72a3f8525fba"),
                     format!(
                         "{} / {}",
                         format_bytes(stats.disk_used_bytes),
@@ -270,15 +309,26 @@ impl SystemMonitorData {
                     ),
                 ))
                 .child(metric_line(
-                    "网络",
+                    i18n::t!("97b31b5d63f57e51"),
                     format!(
                         "↓ {}/s  ↑ {}/s",
                         format_bytes(stats.network_received_bytes_per_second),
                         format_bytes(stats.network_transmitted_bytes_per_second)
                     ),
                 ))
+                .child(metric_line(
+                    i18n::t!("2b1548cd60511f35"),
+                    stats.process_count.to_string(),
+                ))
+                .child(metric_line(
+                    i18n::t!("385df7f41e0df22c"),
+                    format!(
+                        "{:.2} / {:.2} / {:.2}",
+                        stats.load_average[0], stats.load_average[1], stats.load_average[2]
+                    ),
+                ))
                 .child(
-                    Label::new("点击打开右侧系统监控")
+                    Label::new(i18n::t!("0a820399e5f4ee13"))
                         .size(LabelSize::Small)
                         .color(Color::Muted),
                 )
@@ -288,12 +338,15 @@ impl SystemMonitorData {
                 .w(px(280.))
                 .min_w_0()
                 .gap_1()
-                .child(Label::new(format!("{}运行状态", self.target_label())))
+                .child(Label::new(i18n::t_args!(
+                    "cdc503e6be35752e",
+                    self.target_label()
+                )))
                 .child(
                     Label::new(
                         self.error
                             .clone()
-                            .unwrap_or_else(|| "正在读取系统状态…".into()),
+                            .unwrap_or_else(|| i18n::t!("965effd910c76874").into()),
                     )
                     .size(LabelSize::Small)
                     .color(if self.error.is_some() {
@@ -344,7 +397,7 @@ impl Render for SystemMonitor {
             .icon_color(Color::Muted)
             .selected_icon_color(Color::Accent)
             .toggle_state(open)
-            .aria_label("系统监控")
+            .aria_label(i18n::t!("1c88f096249aeca7"))
             .aria_expanded(open)
             .tooltip(ui::Tooltip::element(move |_, cx| {
                 data.read(cx).tooltip_element()
@@ -439,12 +492,17 @@ impl Panel for SystemMonitorPanel {
         px(340.)
     }
 
+    /// The panel intentionally exposes no dock button icon.
+    ///
+    /// The status-bar gauge in `SystemMonitor` is the single toggle surface for
+    /// this panel; returning an icon here would render a second, identical
+    /// gauge button in the right dock.
     fn icon(&self, _: &Window, _: &App) -> Option<IconName> {
-        Some(IconName::Gauge)
+        None
     }
 
     fn icon_tooltip(&self, _: &Window, _: &App) -> Option<&'static str> {
-        Some("系统监控")
+        None
     }
 
     fn toggle_action(&self) -> Box<dyn gpui::Action> {
@@ -489,7 +547,9 @@ impl Render for SystemMonitorPanel {
                                     .size(IconSize::Small)
                                     .color(Color::Accent),
                             )
-                            .child(Label::new("系统监控").weight(FontWeight::MEDIUM)),
+                            .child(
+                                Label::new(i18n::t!("1c88f096249aeca7")).weight(FontWeight::MEDIUM),
+                            ),
                     )
                     .child(
                         Label::new(monitor.target_label())
@@ -519,7 +579,7 @@ impl Render for SystemMonitorPanel {
                         cx,
                     ))
                     .child(resource_card(
-                        "内存",
+                        i18n::t!("7d8f8c37ec7885bc"),
                         IconName::DatabaseZap,
                         percentage(stats.memory_used_bytes, stats.memory_total_bytes),
                         format!(
@@ -532,7 +592,7 @@ impl Render for SystemMonitorPanel {
                     ))
                     .child(network_card(stats, monitor, cx))
                     .child(resource_card(
-                        "磁盘",
+                        i18n::t!("de7b72a3f8525fba"),
                         IconName::Server,
                         percentage(stats.disk_used_bytes, stats.disk_total_bytes),
                         format!(
@@ -554,7 +614,7 @@ impl Render for SystemMonitorPanel {
                             monitor
                                 .error
                                 .clone()
-                                .unwrap_or_else(|| "正在读取系统状态…".into()),
+                                .unwrap_or_else(|| i18n::t!("965effd910c76874").into()),
                         )
                         .color(if monitor.error.is_some() {
                             Color::Error
@@ -619,20 +679,48 @@ fn system_card(stats: &SystemStats, cx: &App) -> impl IntoElement {
         )
         .when(!stats.kernel_version.is_empty(), |element| {
             element.child(
-                Label::new(format!("内核 {}", stats.kernel_version))
+                Label::new(i18n::t_args!("e1814aaaa1c70fa3", stats.kernel_version))
                     .size(LabelSize::Small)
                     .color(Color::Muted)
                     .truncate(),
             )
         })
-        .child(metric_line("进程", stats.process_count.to_string()))
+        .when(!stats.local_ip_addresses.is_empty(), |element| {
+            element.child(metric_line(
+                i18n::t!("572c01ee2bf2cf56"),
+                stats.local_ip_addresses.join(" · "),
+            ))
+        })
         .child(metric_line(
-            "负载",
+            i18n::t!("2b1548cd60511f35"),
+            stats.process_count.to_string(),
+        ))
+        .child(load_section(stats, cx))
+}
+
+fn load_section(stats: &SystemStats, cx: &App) -> impl IntoElement {
+    let core_count = stats.cpu_core_usage_percent.len().max(1);
+    let load_percent = (stats.load_average[0] / core_count as f64 * 100.) as f32;
+    v_flex()
+        .w_full()
+        .min_w_0()
+        .gap_1()
+        .child(metric_line(
+            i18n::t!("385df7f41e0df22c"),
             format!(
-                "{:.2} · {:.2} · {:.2}",
+                "{:.2} / {:.2} / {:.2}",
                 stats.load_average[0], stats.load_average[1], stats.load_average[2]
             ),
         ))
+        .child(
+            ProgressBar::new("system-load", load_percent, 100., cx)
+                .fg_color(usage_color(load_percent, cx)),
+        )
+        .child(
+            Label::new(i18n::t_args!("9ec5be02f7307945", core_count))
+                .size(LabelSize::XSmall)
+                .color(Color::Muted),
+        )
 }
 
 fn resource_card(
@@ -680,22 +768,22 @@ fn port_forwarding_card(entries: &[ForwardSnapshot], cx: &App) -> impl IntoEleme
                         .size(IconSize::Small)
                         .color(Color::Accent),
                 )
-                .child(Label::new("端口转发")),
+                .child(Label::new(i18n::t!("dae851b6621c1d1c"))),
         )
         .children(entries.iter().map(|entry| {
             let direction = match entry.direction {
-                ForwardDirection::RemoteToLocal => "远程 → 本地",
-                ForwardDirection::LocalToRemote => "本地 → 远程",
+                ForwardDirection::RemoteToLocal => i18n::t!("4e156a6242d654b7"),
+                ForwardDirection::LocalToRemote => i18n::t!("2fe4aee45e505d4a"),
             };
             let source = match entry.source {
-                ForwardSource::Automatic => "自动",
-                ForwardSource::Manual => "手动",
-                ForwardSource::Preview => "网页预览",
+                ForwardSource::Automatic => i18n::t!("7eb336e42cb5076b"),
+                ForwardSource::Manual => i18n::t!("962f41ef825b7266"),
+                ForwardSource::Preview => i18n::t!("07a1166b502215b7"),
             };
             let local_port = entry
                 .local_port
                 .map(|port| port.to_string())
-                .unwrap_or_else(|| "待分配".into());
+                .unwrap_or_else(|| i18n::t!("17bf181625e8da75").into());
             let ports = match entry.direction {
                 ForwardDirection::RemoteToLocal => {
                     format!("{} → {local_port}", entry.remote_port)
@@ -705,9 +793,9 @@ fn port_forwarding_card(entries: &[ForwardSnapshot], cx: &App) -> impl IntoEleme
                 }
             };
             let (status, status_color) = match entry.status {
-                ForwardStatus::Starting => ("启动中", Color::Muted),
-                ForwardStatus::RunningUnconfirmed => ("运行中", Color::Success),
-                ForwardStatus::Failed(_) => ("失败", Color::Error),
+                ForwardStatus::Starting => (i18n::t!("33439d263173fae0"), Color::Muted),
+                ForwardStatus::RunningUnconfirmed => (i18n::t!("1f0eb99b7ed094be"), Color::Success),
+                ForwardStatus::Failed(_) => (i18n::t!("28384d7afd2e4fa6"), Color::Error),
             };
             v_flex()
                 .w_full()
@@ -756,17 +844,17 @@ fn network_card(stats: &SystemStats, monitor: &SystemMonitorData, cx: &App) -> i
                         .size(IconSize::Small)
                         .color(Color::Accent),
                 )
-                .child(Label::new("网络")),
+                .child(Label::new(i18n::t!("97b31b5d63f57e51"))),
         )
         .child(network_row(
-            "下载",
+            i18n::t!("4673a23061656125"),
             &monitor.download_history,
             maximum,
             stats.network_received_bytes_per_second,
             cx.theme().status().info,
         ))
         .child(network_row(
-            "上传",
+            i18n::t!("9e07e3c0532d4976"),
             &monitor.upload_history,
             maximum,
             stats.network_transmitted_bytes_per_second,
@@ -887,11 +975,11 @@ fn format_uptime(seconds: u64) -> String {
     let hours = seconds % 86_400 / 3_600;
     let minutes = seconds % 3_600 / 60;
     if days > 0 {
-        format!("已运行 {days} 天 {hours} 小时")
+        i18n::t!("d9b7784e3853252f", days = days, hours = hours)
     } else if hours > 0 {
-        format!("已运行 {hours} 小时 {minutes} 分")
+        i18n::t!("2bfeae000bf3a9b4", hours = hours, minutes = minutes)
     } else {
-        format!("已运行 {minutes} 分钟")
+        i18n::t!("44a2145e240e5994", minutes = minutes)
     }
 }
 
@@ -941,10 +1029,31 @@ mod tests {
             load_average_five: 0.25,
             load_average_fifteen: 0.125,
             sampled_at_unix_seconds: 60,
+            local_ip_addresses: vec!["192.168.1.10".into(), "fe80::1".into()],
         });
         assert_eq!(stats.hostname, "dev-host");
         assert_eq!(stats.cpu_core_usage_percent, [25., 50.]);
         assert_eq!(stats.load_average, [0.5, 0.25, 0.125]);
         assert_eq!(stats.network_transmitted_bytes_per_second, 40);
+        assert_eq!(stats.local_ip_addresses, ["192.168.1.10", "fe80::1"]);
+    }
+
+    #[test]
+    fn filters_loopback_and_link_local_addresses() {
+        use std::net::IpAddr;
+        assert!(is_local_address(IpAddr::from([192, 168, 1, 10])));
+        assert!(is_local_address(IpAddr::from([10, 0, 0, 1])));
+        assert!(!is_local_address(IpAddr::from([127, 0, 0, 1])));
+        assert!(!is_local_address(IpAddr::from([169, 254, 1, 1])));
+        assert!(is_local_address(IpAddr::from([
+            0xfd00, 0, 0, 0, 0, 0, 0, 1
+        ])));
+        assert!(!is_local_address(IpAddr::from([0, 0, 0, 0, 0, 0, 0, 1])));
+        assert!(!is_local_address(IpAddr::from([
+            0xfe80, 0, 0, 0, 0, 0, 0, 1
+        ])));
+        assert!(!is_local_address(IpAddr::from([
+            0, 0, 0, 0, 0, 0xffff, 0xc0a8, 0x010a
+        ])));
     }
 }

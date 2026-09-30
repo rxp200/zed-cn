@@ -88,7 +88,7 @@ pub(crate) fn render_edit_prediction_setup_page(
                 IconName::AiOpenAiCompat,
                 "OpenAI Compatible API",
                 ApiKeyDocs::Custom {
-                    message: "API 密钥将通过 Authorization: Bearer {key} 发送。".into(),
+                    message: i18n::t!("ec2b957a6fa0ad05").into(),
                 },
                 open_ai_compatible_api_token(cx),
                 |cx| open_ai_compatible_api_url(cx),
@@ -155,7 +155,7 @@ fn render_provider_dropdown(window: &mut Window, cx: &mut App) -> AnyElement {
         .id("provider-selector")
         .min_w_0()
         .gap_1p5()
-        .child(SettingsSectionHeader::new("当前提供商").no_padding(true))
+        .child(SettingsSectionHeader::new(i18n::t!("4af8092acdf5ad17")).no_padding(true))
         .child(
             h_flex()
                 .pt_2p5()
@@ -167,9 +167,9 @@ fn render_provider_dropdown(window: &mut Window, cx: &mut App) -> AnyElement {
                         .w_full()
                         .min_w_0()
                         .max_w_1_2()
-                        .child(Label::new("提供者"))
+                        .child(Label::new(i18n::t!("c70ad5fa515a9447")))
                         .child(
-                            Label::new("选择用于编辑预测的提供者。")
+                            Label::new(i18n::t!("0cbe75af02b478eb"))
                                 .size(LabelSize::Small)
                                 .color(Color::Muted),
                         ),
@@ -261,7 +261,7 @@ fn render_api_key_provider(
             .flex_wrap()
             .gap_0p5()
             .child(
-                Label::new("访问")
+                Label::new(i18n::t!("9cff688763e22a22"))
                     .size(LabelSize::Small)
                     .color(Color::Muted),
             )
@@ -272,7 +272,7 @@ fn render_api_key_provider(
                     .label_color(Color::Muted),
             )
             .child(
-                Label::new("以生成 API 密钥。")
+                Label::new(i18n::t!("4776c33f2a626335"))
                     .size(LabelSize::Small)
                     .color(Color::Muted),
             ),
@@ -315,14 +315,12 @@ fn render_api_key_provider(
                         .min_w_0()
                         .max_w_1_2()
                         .gap_0p5()
-                        .child(Label::new("API 密钥"))
+                        .child(Label::new(i18n::t!("5f600b307b4eb0fb")))
                         .child(description)
                         .when_some(env_var_name, |this, env_var_name| {
                             this.child({
-                                let label = format!(
-                                    "或设置 {} 环境变量并重启 Zed。",
-                                    env_var_name.as_ref()
-                                );
+                                let label =
+                                    i18n::t_args!("c7dcb43e87c2267c", env_var_name.as_ref());
                                 Label::new(label).size(LabelSize::Small).color(Color::Muted)
                             })
                         }),
@@ -377,8 +375,8 @@ fn render_ollama_provider(
 fn ollama_settings() -> Box<[SettingsPageItem]> {
     Box::new([
         SettingsPageItem::SettingItem(SettingItem {
-            title: "API 地址",
-            description: "您的 Ollama 服务器的基础 URL。",
+            title: i18n::t!("d94c3fb876621695"),
+            description: i18n::t!("f79ef73771de0250"),
             field: Box::new(SettingField {
                 organization_override: None,
                 pick: |settings| {
@@ -411,8 +409,8 @@ fn ollama_settings() -> Box<[SettingsPageItem]> {
             files: USER,
         }),
         SettingsPageItem::SettingItem(SettingItem {
-            title: "模型",
-            description: "用于编辑预测的 Ollama 模型。",
+            title: i18n::t!("c98e118e0a43f078"),
+            description: i18n::t!("77c6233e7ae27576"),
             field: Box::new(SettingField {
                 organization_override: None,
                 pick: |settings| {
@@ -445,8 +443,8 @@ fn ollama_settings() -> Box<[SettingsPageItem]> {
             files: USER,
         }),
         SettingsPageItem::SettingItem(SettingItem {
-            title: "提示格式",
-            description: "请求预测时使用的提示格式。设置为 Infer，以根据模型名称推断格式。",
+            title: i18n::t!("9a2e947df0531ab8"),
+            description: i18n::t!("1f20cbacb26dbe77"),
             field: Box::new(SettingField {
                 organization_override: None,
                 pick: |settings| {
@@ -476,8 +474,8 @@ fn ollama_settings() -> Box<[SettingsPageItem]> {
             metadata: None,
         }),
         SettingsPageItem::SettingItem(SettingItem {
-            title: "最大输出令牌数",
-            description: "要生成的最大令牌数。",
+            title: i18n::t!("94409bc79114731f"),
+            description: i18n::t!("6ab9faec4eea8d3f"),
             field: Box::new(SettingField {
                 organization_override: None,
                 pick: |settings| {
@@ -507,8 +505,8 @@ fn ollama_settings() -> Box<[SettingsPageItem]> {
             files: USER,
         }),
         SettingsPageItem::SettingItem(SettingItem {
-            title: "预测防抖延迟",
-            description: "停止输入后自动请求预测前的延迟（毫秒）。设为 0 可立即请求预测。",
+            title: i18n::t!("153752bee125d695"),
+            description: i18n::t!("f22da6b9bd76cdf0"),
             field: Box::new(SettingField {
                 organization_override: None,
                 pick: |settings| {
@@ -543,8 +541,8 @@ fn ollama_settings() -> Box<[SettingsPageItem]> {
 fn open_ai_compatible_settings() -> Box<[SettingsPageItem]> {
     Box::new([
         SettingsPageItem::SettingItem(SettingItem {
-            title: "API 地址",
-            description: "您的 OpenAI 兼容服务器的补全 API 的 URL。",
+            title: i18n::t!("d94c3fb876621695"),
+            description: i18n::t!("2e8c154b52f30671"),
             field: Box::new(SettingField {
                 organization_override: None,
                 pick: |settings| {
@@ -577,8 +575,8 @@ fn open_ai_compatible_settings() -> Box<[SettingsPageItem]> {
             files: USER,
         }),
         SettingsPageItem::SettingItem(SettingItem {
-            title: "模型",
-            description: "传递给 OpenAI 兼容服务器的模型字符串。",
+            title: i18n::t!("c98e118e0a43f078"),
+            description: i18n::t!("46e04f29f90f6b0b"),
             field: Box::new(SettingField {
                 organization_override: None,
                 pick: |settings| {
@@ -611,8 +609,8 @@ fn open_ai_compatible_settings() -> Box<[SettingsPageItem]> {
             files: USER,
         }),
         SettingsPageItem::SettingItem(SettingItem {
-            title: "提示格式",
-            description: "请求预测时使用的提示格式。设置为 Infer，以根据模型名称推断格式。",
+            title: i18n::t!("9a2e947df0531ab8"),
+            description: i18n::t!("1f20cbacb26dbe77"),
             field: Box::new(SettingField {
                 organization_override: None,
                 pick: |settings| {
@@ -642,8 +640,8 @@ fn open_ai_compatible_settings() -> Box<[SettingsPageItem]> {
             metadata: None,
         }),
         SettingsPageItem::SettingItem(SettingItem {
-            title: "API 类型",
-            description: "Completions：文本补全接口（/v1/completions），适用于原生 FIM 模型；Chat Completions：对话补全接口（/v1/chat/completions），适用于聊天模型，Zed 会自动构造填空提示词。使用 Chat Completions 时，API 地址需指向 chat/completions 端点。",
+            title: i18n::t!("9abcc62354817a76"),
+            description: i18n::t!("4cda9d2951ee658d"),
             field: Box::new(SettingField {
                 organization_override: None,
                 pick: |settings| {
@@ -673,8 +671,8 @@ fn open_ai_compatible_settings() -> Box<[SettingsPageItem]> {
             metadata: None,
         }),
         SettingsPageItem::SettingItem(SettingItem {
-            title: "最大输出令牌数",
-            description: "要生成的最大令牌数。",
+            title: i18n::t!("94409bc79114731f"),
+            description: i18n::t!("6ab9faec4eea8d3f"),
             field: Box::new(SettingField {
                 organization_override: None,
                 pick: |settings| {
@@ -704,8 +702,8 @@ fn open_ai_compatible_settings() -> Box<[SettingsPageItem]> {
             files: USER,
         }),
         SettingsPageItem::SettingItem(SettingItem {
-            title: "预测防抖延迟",
-            description: "停止输入后自动请求预测前的延迟（毫秒）。设为 0 可立即请求预测。",
+            title: i18n::t!("153752bee125d695"),
+            description: i18n::t!("f22da6b9bd76cdf0"),
             field: Box::new(SettingField {
                 organization_override: None,
                 pick: |settings| {
@@ -740,8 +738,8 @@ fn open_ai_compatible_settings() -> Box<[SettingsPageItem]> {
 fn codestral_settings() -> Box<[SettingsPageItem]> {
     Box::new([
         SettingsPageItem::SettingItem(SettingItem {
-            title: "API 地址",
-            description: "用于 Codestral 的 API 地址。",
+            title: i18n::t!("d94c3fb876621695"),
+            description: i18n::t!("9845cb78077f9a51"),
             field: Box::new(SettingField {
                 organization_override: None,
                 pick: |settings| {
@@ -774,8 +772,8 @@ fn codestral_settings() -> Box<[SettingsPageItem]> {
             files: USER,
         }),
         SettingsPageItem::SettingItem(SettingItem {
-            title: "最大令牌数",
-            description: "要生成的最大令牌数。",
+            title: i18n::t!("7c1d0708fac48697"),
+            description: i18n::t!("6ab9faec4eea8d3f"),
             field: Box::new(SettingField {
                 organization_override: None,
                 pick: |settings| {
@@ -805,8 +803,8 @@ fn codestral_settings() -> Box<[SettingsPageItem]> {
             files: USER,
         }),
         SettingsPageItem::SettingItem(SettingItem {
-            title: "模型",
-            description: "要使用的 Codestral 模型 ID。",
+            title: i18n::t!("c98e118e0a43f078"),
+            description: i18n::t!("1298ad7465e5374c"),
             field: Box::new(SettingField {
                 organization_override: None,
                 pick: |settings| {
@@ -839,8 +837,8 @@ fn codestral_settings() -> Box<[SettingsPageItem]> {
             files: USER,
         }),
         SettingsPageItem::SettingItem(SettingItem {
-            title: "预测防抖延迟",
-            description: "停止输入后自动请求预测前的延迟（毫秒）。设为 0 可立即请求预测。",
+            title: i18n::t!("153752bee125d695"),
+            description: i18n::t!("f22da6b9bd76cdf0"),
             field: Box::new(SettingField {
                 organization_override: None,
                 pick: |settings| {
@@ -874,8 +872,8 @@ fn codestral_settings() -> Box<[SettingsPageItem]> {
 
 fn mercury_settings() -> Box<[SettingsPageItem]> {
     Box::new([SettingsPageItem::SettingItem(SettingItem {
-        title: "预测防抖延迟",
-        description: "停止输入后自动请求预测前的延迟（毫秒）。设为 0 可立即请求预测。",
+        title: i18n::t!("153752bee125d695"),
+        description: i18n::t!("f22da6b9bd76cdf0"),
         field: Box::new(SettingField {
             organization_override: None,
             pick: |settings| {
@@ -908,8 +906,8 @@ fn mercury_settings() -> Box<[SettingsPageItem]> {
 
 fn zed_settings() -> Box<[SettingsPageItem]> {
     Box::new([SettingsPageItem::SettingItem(SettingItem {
-        title: "预测防抖延迟",
-        description: "停止输入后自动请求预测前的延迟（毫秒）。设为 0 可立即请求预测。",
+        title: i18n::t!("153752bee125d695"),
+        description: i18n::t!("f22da6b9bd76cdf0"),
         field: Box::new(SettingField {
             organization_override: None,
             pick: |settings| {
@@ -956,7 +954,7 @@ fn render_zed_provider(
         .pt_8()
         .gap_1p5()
         .child(
-            SettingsSectionHeader::new("Zed 编辑预测")
+            SettingsSectionHeader::new(i18n::t!("65fd6bc85bf157f4"))
                 .icon(IconName::ZedPredict)
                 .no_padding(true),
         )
@@ -965,8 +963,8 @@ fn render_zed_provider(
 
 fn copilot_settings() -> Box<[SettingsPageItem]> {
     Box::new([SettingsPageItem::SettingItem(SettingItem {
-        title: "预测防抖延迟",
-        description: "停止输入后自动请求预测前的延迟（毫秒）。设为 0 可立即请求预测。",
+        title: i18n::t!("153752bee125d695"),
+        description: i18n::t!("f22da6b9bd76cdf0"),
         field: Box::new(SettingField {
             organization_override: None,
             pick: |settings| {

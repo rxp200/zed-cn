@@ -57,20 +57,20 @@ impl QuickActionBar {
             ),
             PreviewTarget::TabularData(_) => (
                 "toggle-tabular-preview",
-                "预览表格数据",
+                i18n::t!("b207215d6345e835"),
                 &tabular_data_preview::OpenPreview as &dyn gpui::Action,
             ),
             PreviewTarget::Web => {
                 if web_preview_active {
                     (
                         "open-web-preview",
-                        "停止网页实时预览",
+                        i18n::t!("ae36bd6e8f277bbf"),
                         &zed_actions::preview::web::StopPreview as &dyn gpui::Action,
                     )
                 } else {
                     (
                         "open-web-preview",
-                        "在浏览器中实时预览网页",
+                        i18n::t!("30cb88a1e62a867b"),
                         &zed_actions::preview::web::OpenPreview as &dyn gpui::Action,
                     )
                 }

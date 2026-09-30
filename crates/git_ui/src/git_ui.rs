@@ -588,7 +588,7 @@ impl RefPickerModal {
     ) -> Self {
         let editor = cx.new(|cx| {
             let mut editor = Editor::single_line(window, cx);
-            editor.set_placeholder_text("输入 Git 引用…", window, cx);
+            editor.set_placeholder_text(i18n::t!("398c4265c44044ac"), window, cx);
             editor
         });
 
@@ -773,7 +773,7 @@ impl Render for RefPickerModal {
                     .w_full()
                     .gap_1p5()
                     .child(Icon::new(IconName::Hash).size(IconSize::XSmall))
-                    .child(Headline::new("查看提交").size(HeadlineSize::XSmall)),
+                    .child(Headline::new(i18n::t!("f9241c1ae340b651")).size(HeadlineSize::XSmall)),
             )
             .child(div().px_3().w_full().child(self.editor.clone()))
             .when_some(commit_preview, |el, preview| {
@@ -1278,7 +1278,7 @@ impl GitCloneModal {
     pub fn show(panel: Entity<GitPanel>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let repo_input = cx.new(|cx| {
             let mut editor = Editor::single_line(window, cx);
-            editor.set_placeholder_text("输入仓库 URL…", window, cx);
+            editor.set_placeholder_text(i18n::t!("3cd1da214173427f"), window, cx);
             editor
         });
         let focus_handle = repo_input.focus_handle(cx);
@@ -1322,12 +1322,12 @@ impl Render for GitCloneModal {
                     .rounded_b_sm()
                     .bg(cx.theme().colors().editor_background)
                     .child(
-                        Label::new("从 GitHub 或其他来源克隆仓库。")
+                        Label::new(i18n::t!("2048bf308be64dd2"))
                             .color(Color::Muted)
                             .size(LabelSize::Small),
                     )
                     .child(
-                        Button::new("learn-more", "了解更多")
+                        Button::new("learn-more", i18n::t!("ca66c2da6f5bf825"))
                             .label_size(LabelSize::Small)
                             .end_icon(Icon::new(IconName::ArrowUpRight).size(IconSize::XSmall))
                             .on_click(|_, _, cx| {

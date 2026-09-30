@@ -85,9 +85,9 @@ impl Render for SecurityModal {
 
         let restricted_count = self.restricted_paths.len();
         let header_label: SharedString = if restricted_count == 1 {
-            "无法识别的项目".into()
+            i18n::t!("2f1c900db1ab5e53").into()
         } else {
-            format!("无法识别的项目 ({})", restricted_count).into()
+            i18n::t_args!("a33f234db9b6efa1", restricted_count).into()
         };
 
         let trust_label = self.build_trust_label();
@@ -177,23 +177,15 @@ impl Render for SecurityModal {
                     .gap_2()
                     .child(
                         v_flex()
-                            .child(
-                                Label::new("不受信任的项目将以受限模式打开，以保护您的系统。")
-                                    .color(Color::Muted),
-                            )
-                            .child(
-                                Label::new(
-                                    "检查 .zed/settings.json 中此项目配置的任何扩展或命令。",
-                                )
-                                .color(Color::Muted),
-                            ),
+                            .child(Label::new(i18n::t!("d3a85f4f112699ee")).color(Color::Muted))
+                            .child(Label::new(i18n::t!("38ff88dd79bbeb88")).color(Color::Muted)),
                     )
                     .child(
                         v_flex()
-                            .child(Label::new("受限模式会阻止以下操作：").color(Color::Muted))
-                            .child(ListBulletItem::new("应用项目设置"))
-                            .child(ListBulletItem::new("运行语言服务器"))
-                            .child(ListBulletItem::new("安装 MCP 服务器集成")),
+                            .child(Label::new(i18n::t!("8a9bf1e30f256317")).color(Color::Muted))
+                            .child(ListBulletItem::new(i18n::t!("1026d9417051b164")))
+                            .child(ListBulletItem::new(i18n::t!("f8baa675efb1604a")))
+                            .child(ListBulletItem::new(i18n::t!("a959e923b85abbe8"))),
                     )
                     .map(|this| {
                         let Some(trust_label) = trust_label else {
@@ -217,7 +209,7 @@ impl Render for SecurityModal {
                                                     "trust-parents",
                                                     ToggleState::from(self.trust_parents),
                                                 )
-                                                .label("信任所有项目于")
+                                                .label(i18n::t!("8dcf44b69b506aa2"))
                                                 .on_click(cx.listener(
                                                     |security_modal, state: &ToggleState, _, cx| {
                                                         let trust_parents = state.selected();
@@ -270,7 +262,7 @@ impl Render for SecurityModal {
                     .gap_1()
                     .justify_end()
                     .child(
-                        Button::new("rm", "保持在受限模式")
+                        Button::new("rm", i18n::t!("26cdeb4b4b278314"))
                             .key_binding(
                                 KeyBinding::for_action(&ToggleWorktreeSecurity, cx)
                                     .map(|kb| kb.size(rems_from_px(12_f32))),
@@ -282,7 +274,7 @@ impl Render for SecurityModal {
                             })),
                     )
                     .child(
-                        Button::new("tc", "信任并继续")
+                        Button::new("tc", i18n::t!("1ac3a881cb626809"))
                             .style(ButtonStyle::Filled)
                             .layer(ui::ElevationIndex::ModalSurface)
                             .key_binding(
@@ -306,7 +298,8 @@ impl SecurityModal {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let trust_path_input = cx.new(|cx| InputField::new(window, cx, "要信任的文件夹"));
+        let trust_path_input =
+            cx.new(|cx| InputField::new(window, cx, i18n::t!("baaebbeb1af7eef5")));
         let mut this = Self {
             worktree_store,
             remote_host: remote_host.map(|host| host.into()),
@@ -348,16 +341,16 @@ impl SecurityModal {
         match available_parents.len() {
             0 => {
                 if has_restricted_files {
-                    Some(Cow::Borrowed("信任所有单个文件"))
+                    Some(Cow::Borrowed(i18n::t!("a8fd8cf29a18b8c7")))
                 } else {
                     None
                 }
             }
-            1 => Some(Cow::Owned(format!(
-                "信任 {:} 文件夹中的所有项目",
+            1 => Some(Cow::Owned(i18n::t_args!(
+                "1d1c562a996248fe",
                 self.shorten_path(available_parents[0]).display()
             ))),
-            _ => Some(Cow::Borrowed("信任父文件夹中的所有项目")),
+            _ => Some(Cow::Borrowed(i18n::t!("da8653298fb5d887"))),
         }
     }
 
@@ -503,7 +496,7 @@ fn validate_trust_scope(
 ) -> Result<PathBuf, SharedString> {
     let trimmed = typed.trim();
     if trimmed.is_empty() {
-        return Err("输入要信任的文件夹".into());
+        return Err(i18n::t!("1a972ebbb99a8845").into());
     }
     let expanded = match (trimmed.strip_prefix('~'), home_dir) {
         (Some(rest), Some(home_dir)) => home_dir.join(
@@ -513,10 +506,10 @@ fn validate_trust_scope(
         _ => PathBuf::from(trimmed),
     };
     if !util::paths::is_absolute(&expanded.to_string_lossy(), path_style) {
-        return Err("输入绝对文件夹路径".into());
+        return Err(i18n::t!("de12010beaf47a87").into());
     }
     if !project.starts_with(&expanded) {
-        return Err("必须是项目的父文件夹".into());
+        return Err(i18n::t!("d3207b855525a4f0").into());
     }
     Ok(expanded)
 }

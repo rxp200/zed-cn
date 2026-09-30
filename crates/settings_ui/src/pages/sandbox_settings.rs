@@ -61,9 +61,9 @@ pub(crate) fn render_sandbox_settings_page(
         .child(
             SwitchField::new(
                 "sandbox-enabled",
-                Some("启用沙箱"),
+                Some(i18n::t!("999e7390bf30af65")),
                 Some(
-                    "将 Agent 运行的终端命令包装在操作系统级别的沙箱中。关闭时，命令以 Zed 自身的权限运行。"
+                    i18n::t!("9c00440c26b7089a")
                         .into(),
                 ),
                 sandbox_enabled,
@@ -76,11 +76,11 @@ pub(crate) fn render_sandbox_settings_page(
         .child({
             let docs_url =
                 client::zed_urls::sandboxing_docs(Some("persistent-sandbox-permissions"), cx);
-            let tooltip = format!("打开 {docs_url}");
+            let tooltip = i18n::t!("821481adfccf5c59", docs_url = docs_url);
             // Wrap in a row so the button shrinks to its content width instead
             // of stretching across the settings page.
             h_flex().child(
-                Button::new("sandbox-docs-link", "了解更多关于沙箱的信息")
+                Button::new("sandbox-docs-link", i18n::t!("df214f67345cb4ad"))
                     .label_size(LabelSize::Small)
                     .color(Color::Muted)
                     .end_icon(
@@ -99,7 +99,7 @@ pub(crate) fn render_sandbox_settings_page(
                     .severity(Severity::Warning)
                     .child(Label::new(error).size(LabelSize::Small))
                     .action_slot(
-                        Button::new("dismiss-sandbox-host-error", "关闭")
+                        Button::new("dismiss-sandbox-host-error", i18n::t!("3fd47edce45b3603"))
                             .style(ButtonStyle::Tinted(ui::TintColor::Warning))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.sandbox_host_validation_error = None;
@@ -111,13 +111,13 @@ pub(crate) fn render_sandbox_settings_page(
         .child(
             v_flex()
                 .gap_4()
-                .child(SettingsSectionHeader::new("网络").no_padding(true))
+                .child(SettingsSectionHeader::new(i18n::t!("97b31b5d63f57e51")).no_padding(true))
                 .child(
                     SwitchField::new(
                         "sandbox-allow-all-hosts",
-                        Some("允许所有域名"),
+                        Some(i18n::t!("d20730f5d0cd4d74")),
                         Some(
-                            "允许沙箱命令无需提示即可访问网络上的任何域名。"
+                            i18n::t!("ab9c480082ee94c1")
                                 .into(),
                         ),
                         permissions.allow_all_hosts,
@@ -128,7 +128,7 @@ pub(crate) fn render_sandbox_settings_page(
                     .tab_index(0),
                 )
                 .child(render_list_section(
-                    "允许的域名",
+                    i18n::t!("bcfd366a4b42449d"),
                     DOMAINS_DESCRIPTION,
                     host_rows,
                     add_host_input,
@@ -140,13 +140,13 @@ pub(crate) fn render_sandbox_settings_page(
         .child(
             v_flex()
                 .gap_4()
-                .child(SettingsSectionHeader::new("文件系统").no_padding(true))
+                .child(SettingsSectionHeader::new(i18n::t!("47b6174788b64db5")).no_padding(true))
                 .child(
                     SwitchField::new(
                         "sandbox-allow-fs-write-all",
-                        Some("允许所有文件系统写入"),
+                        Some(i18n::t!("73ce1d05d4565d73")),
                         Some(
-                            "允许沙箱命令无需提示即可写入除受保护的 Git 元数据之外的任何位置。"
+                            i18n::t!("d436cb9e5eeb90ae")
                                 .into(),
                         ),
                         permissions.allow_fs_write_all,
@@ -157,7 +157,7 @@ pub(crate) fn render_sandbox_settings_page(
                     .tab_index(0),
                 )
                 .child(render_list_section(
-                    "可写入路径",
+                    i18n::t!("0538c3e88f638ee8"),
                     WRITE_PATHS_DESCRIPTION,
                     path_rows,
                     add_path_input,
@@ -168,13 +168,13 @@ pub(crate) fn render_sandbox_settings_page(
         .child(
             v_flex()
                 .gap_4()
-                .child(SettingsSectionHeader::new("升级提示").no_padding(true))
+                .child(SettingsSectionHeader::new(i18n::t!("a739f24a9fd8a5d9")).no_padding(true))
                 .child(
                     SwitchField::new(
                         "sandbox-warn-confusable-unicode",
-                        Some("警告可疑的 Unicode 字符"),
+                        Some(i18n::t!("c98679b35e6eb8f7")),
                         Some(
-                            "当批准提示请求的域名或写入路径包含可能混淆的 Unicode 字符（如同形异字，即两个外观相似的符号，如西里尔字母「а」）时发出警告。"
+                            i18n::t!("0262971680d00660")
                                 .into(),
                         ),
                         permissions.warn_confusable_unicode,
@@ -244,7 +244,7 @@ fn render_empty_state(border_color: gpui::Hsla) -> AnyElement {
         .border_dashed()
         .border_color(border_color)
         .child(
-            Label::new("未配置任何内容")
+            Label::new(i18n::t!("141885d9be4d34ff"))
                 .size(LabelSize::Small)
                 .color(Color::Disabled),
         )
@@ -265,7 +265,7 @@ fn render_host_row(index: usize, host: String, cx: &mut Context<SettingsWindow>)
             IconButton::new(format!("sandbox-host-delete-{}", index), IconName::Trash)
                 .icon_size(IconSize::Small)
                 .icon_color(Color::Muted)
-                .tooltip(Tooltip::text("移除域"))
+                .tooltip(Tooltip::text(i18n::t!("e7e6ca663d7bba1e")))
                 .on_click(cx.listener(move |_, _, _, cx| {
                     remove_network_host(host_for_delete.clone(), cx);
                 })),
@@ -301,7 +301,7 @@ fn render_add_host_input(cx: &mut Context<SettingsWindow>) -> AnyElement {
     let settings_window = cx.entity().downgrade();
 
     SettingsInputField::new("sandbox-host-new")
-        .with_placeholder("添加域名（例如 github.com 或 *.npmjs.org）…")
+        .with_placeholder(i18n::t!("e3e3db50026668d3"))
         .tab_index(0)
         .with_buffer_font()
         .display_clear_button()
@@ -348,7 +348,7 @@ fn render_path_row(index: usize, path: PathBuf, cx: &mut Context<SettingsWindow>
             IconButton::new(format!("sandbox-path-delete-{}", index), IconName::Trash)
                 .icon_size(IconSize::Small)
                 .icon_color(Color::Muted)
-                .tooltip(Tooltip::text("移除路径"))
+                .tooltip(Tooltip::text(i18n::t!("45ae38534f427666")))
                 .on_click(cx.listener(move |_, _, _, cx| {
                     remove_write_path(path_for_delete.clone(), cx);
                 })),
@@ -375,7 +375,7 @@ fn render_add_path_input(cx: &mut Context<SettingsWindow>) -> AnyElement {
     let settings_window = cx.entity().downgrade();
 
     SettingsInputField::new("sandbox-path-new")
-        .with_placeholder("添加绝对路径（例如 /path/to/directory）…")
+        .with_placeholder(i18n::t!("26c1c58954be8f1f"))
         .tab_index(0)
         .with_buffer_font()
         .display_clear_button()

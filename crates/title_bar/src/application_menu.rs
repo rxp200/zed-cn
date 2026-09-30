@@ -197,7 +197,7 @@ impl ApplicationMenu {
                         .icon_size(IconSize::Small)
                         .tab_index(0isize)
                         .aria_label("Application menu"),
-                        Tooltip::text("打开应用程序菜单"),
+                        Tooltip::text(i18n::t!("bf063480b60bb64b")),
                     )
                     .with_handle(handle),
             )

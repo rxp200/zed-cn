@@ -842,9 +842,9 @@ impl LanguageModel for OpenAiSubscribedLanguageModel {
                         language_model::CompactionUpdate::Finished(context),
                     ) => {
                         if compacted_context.replace(context).is_some() {
-                            return Err(LanguageModelCompletionError::Other(anyhow!(
-                                "ChatGPT 订阅的上下文压缩返回了多个替换上下文"
-                            )));
+                            return Err(LanguageModelCompletionError::Other(anyhow!(i18n::t!(
+                                "cd867213081257e8"
+                            ))));
                         }
                     }
                     LanguageModelCompletionEvent::UsageUpdate(updated_usage) => {
@@ -855,9 +855,7 @@ impl LanguageModel for OpenAiSubscribedLanguageModel {
             }
 
             let context = compacted_context.ok_or_else(|| {
-                LanguageModelCompletionError::Other(anyhow!(
-                    "ChatGPT 订阅的上下文压缩未返回替换上下文"
-                ))
+                LanguageModelCompletionError::Other(anyhow!(i18n::t!("5858abd4f80550d6")))
             })?;
             Ok(CompactionResult { context, usage })
         })

@@ -1556,7 +1556,8 @@ impl DiagnosticPopover {
                             .message
                             .as_shared_string()
                             .clone();
-                        CopyButton::new("copy-diagnostic", message).tooltip_label("复制诊断信息")
+                        CopyButton::new("copy-diagnostic", message)
+                            .tooltip_label(i18n::t!("bbce140b7682f375"))
                     }))
                     .custom_scrollbars(
                         Scrollbars::for_settings::<EditorSettingsScrollbarProxy>()

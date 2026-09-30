@@ -169,6 +169,27 @@ pub enum ReduceMotionMode {
     Off,
 }
 
+/// The interface language, as a BCP-47 tag (`zh-Hans`, `en`, ...).
+///
+/// Only languages compiled into `locales/` are accepted; unknown values fall
+/// back to the default. Default: `zh-Hans`.
+#[with_fallible_options]
+#[derive(Clone, Default, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, MergeFrom)]
+#[serde(transparent)]
+pub struct UiLanguage(pub String);
+
+impl UiLanguage {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<String> for UiLanguage {
+    fn from(value: String) -> Self {
+        Self(value)
+    }
+}
+
 #[with_fallible_options]
 #[derive(Debug, PartialEq, Default, Clone, Serialize, JsonSchema, MergeFrom)]
 pub struct SettingsContent {
@@ -316,6 +337,12 @@ pub struct SettingsContent {
     /// Default: false
     pub vim_mode: Option<bool>,
 
+    /// Interface language, as a BCP-47 tag (`zh-Hans`, `en`, ...).
+    ///
+    /// Only languages compiled into `locales/` are accepted; unknown values
+    /// fall back to the default. Default: `zh-Hans`.
+    pub language: Option<UiLanguage>,
+
     // Settings related to calls in Zed
     pub calls: Option<CallSettingsContent>,
 
@@ -414,7 +441,7 @@ fallible_options::flattened_deserialize!(SettingsContent {
         global_lsp_settings, image_viewer, markdown_preview, repl, helix_mode, hide_mouse,
         journal, log, line_indicator_format, language_models, outline_panel, project_panel,
         node, proxy, reduce_motion, server_url, credentials_url, session, telemetry, terminal,
-        title_bar, vim_mode, calls, which_key, vim, modeline_lines, feature_flags,
+        title_bar, vim_mode, calls, which_key, vim, modeline_lines, feature_flags, language,
         instrumentation, hover_translation, code_explanations,
     },
     defaults: {},
@@ -1418,6 +1445,10 @@ pub struct SshConnection {
     // setting forces this behavior for every SSH connection.
     pub upload_binary_over_ssh: Option<bool>,
     /// Selects the Remote Server distribution for this SSH host.
+    ///
+    /// When left unset, Zed CN clients use the Remote Server matching their own
+    /// custom release, and clients without a validated custom release use Zed's
+    /// official Remote Server.
     pub remote_server_source: Option<RemoteServerSource>,
 
     pub port_forwards: Option<Vec<SshPortForwardOption>>,

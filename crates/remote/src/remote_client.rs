@@ -161,7 +161,7 @@ pub trait RemoteClientDelegate: Send + Sync {
         _tag: String,
         _cx: &mut AsyncApp,
     ) -> Task<Result<PathBuf>> {
-        Task::ready(Err(anyhow::anyhow!("当前连接不支持下载 Zed CN 远程服务")))
+        Task::ready(Err(anyhow::anyhow!(i18n::t!("d92bebe44d248a11"))))
     }
     fn set_status(&self, status: Option<&str>, cx: &mut AsyncApp);
     fn append_connection_log(&self, _line: &str, _cx: &mut AsyncApp) {}
@@ -173,6 +173,7 @@ pub trait RemoteClientDelegate: Send + Sync {
 
 pub const TEMPORARY_FILES_CAPABILITY: &str = "temporary_files_v1";
 pub const SYSTEM_STATS_CAPABILITY: &str = "system_stats_v1";
+pub const PERSISTENT_TERMINALS_CAPABILITY: &str = "persistent_terminals_v1";
 
 const MAX_MISSED_HEARTBEATS: usize = 5;
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
@@ -504,6 +505,20 @@ impl Settings for RemoteServerDownloadSettings {
     }
 }
 
+/// The Remote Server distribution an SSH connection uses when neither the
+/// saved connection nor the caller selects one.
+///
+/// Zed CN clients embed the exact custom release tag they were built from, so
+/// they match their own Remote Server revision. Clients without a validated
+/// custom tag keep using Zed's official release service.
+pub fn default_remote_server_source(cx: &App) -> settings::RemoteServerSource {
+    if release_channel::CustomReleaseTag::try_current(cx).is_some() {
+        settings::RemoteServerSource::ZedCn
+    } else {
+        settings::RemoteServerSource::Official
+    }
+}
+
 fn apply_remote_server_download_settings(
     mut connection_options: RemoteConnectionOptions,
     china_server_adaptation: bool,
@@ -520,21 +535,28 @@ fn connection_options_with_settings(
     connection_options: RemoteConnectionOptions,
     cx: &App,
 ) -> RemoteConnectionOptions {
-    let china_server_adaptation = RemoteServerDownloadSettings::try_get(cx)
+    let download_settings = RemoteServerDownloadSettings::try_get(cx);
+    let china_server_adaptation = download_settings
+        .as_ref()
         .is_some_and(|settings| settings.china_server_adaptation);
     let mut connection_options = connection_options;
-    if let RemoteConnectionOptions::Ssh(options) = &mut connection_options
-        && let Some(settings) = RemoteServerDownloadSettings::try_get(cx)
-    {
-        if let Some(connection) = settings.ssh_connections.iter().find(|connection| {
-            connection.host == options.host.to_string()
-                && connection.username == options.username
-                && connection.port == options.port
-        }) {
-            options.remote_server_source = connection.remote_server_source.unwrap_or_default();
-            if connection.remote_server_source.is_some() {
-                options.upload_binary_over_ssh = true;
-            }
+    if let RemoteConnectionOptions::Ssh(options) = &mut connection_options {
+        let saved_source = download_settings.as_ref().and_then(|settings| {
+            settings
+                .ssh_connections
+                .iter()
+                .find(|connection| {
+                    connection.host == options.host.to_string()
+                        && connection.username == options.username
+                        && connection.port == options.port
+                })
+                .and_then(|connection| connection.remote_server_source)
+        });
+        if let Some(saved_source) = saved_source {
+            options.remote_server_source = saved_source;
+            options.upload_binary_over_ssh = true;
+        } else {
+            options.remote_server_source = default_remote_server_source(cx);
         }
     }
     apply_remote_server_download_settings(connection_options, china_server_adaptation)
@@ -644,7 +666,7 @@ impl RemoteClient {
                     cx,
                 );
 
-                delegate.set_status(Some("正在等待远程开发服务响应"), cx);
+                delegate.set_status(Some(i18n::t!("ba858e2851c960eb")), cx);
                 let mut ready = client
                     .wait_for_remote_started()
                     .with_timeout(INITIAL_CONNECTION_TIMEOUT, cx.background_executor())
@@ -656,7 +678,7 @@ impl RemoteClient {
                         "Zed CN remote server did not respond during initial connection; restarting it once"
                     );
                     delegate.set_status(
-                        Some("远程开发服务未响应，正在强制停止并重新启动"),
+                        Some(i18n::t!("a70e847feae3dd0d")),
                         cx,
                     );
                     drop(io_task);
@@ -677,7 +699,7 @@ impl RemoteClient {
                         delegate.clone(),
                         cx,
                     );
-                    delegate.set_status(Some("正在等待重新启动的远程开发服务响应"), cx);
+                    delegate.set_status(Some(i18n::t!("fcbad6915676d4f5")), cx);
                     ready = client
                         .wait_for_remote_started()
                         .with_timeout(INITIAL_CONNECTION_TIMEOUT, cx.background_executor())
@@ -725,7 +747,7 @@ impl RemoteClient {
 
                 let heartbeat_task = Self::heartbeat(this.downgrade(), connection_activity_rx, cx);
 
-                delegate.set_status(Some("远程开发连接已建立"), cx);
+                delegate.set_status(Some(i18n::t!("2d521e949d4a0301")), cx);
                 this.update(cx, |this, _| {
                     this.state = Some(State::Connected {
                         remote_connection,
@@ -877,12 +899,13 @@ impl RemoteClient {
         let retry_delay = reconnect_delay(attempts);
         self.set_reconnect_status(
             if retry_delay.is_zero() {
-                format!("正在重连（第 {attempts}/{MAX_RECONNECT_ATTEMPTS} 次）")
-            } else {
-                format!(
-                    "连接中断，{} 秒后进行第 {attempts}/{MAX_RECONNECT_ATTEMPTS} 次重连",
-                    retry_delay.as_secs()
+                i18n::t!(
+                    "3b8e3b46b9bba533",
+                    attempts = attempts,
+                    MAX_RECONNECT_ATTEMPTS = MAX_RECONNECT_ATTEMPTS
                 )
+            } else {
+                i18n::t_mix!("d7f8aa509a49ca82"; retry_delay.as_secs(); attempts = attempts, MAX_RECONNECT_ATTEMPTS = MAX_RECONNECT_ATTEMPTS)
             },
             cx,
         );
@@ -911,8 +934,8 @@ impl RemoteClient {
             let reconnect_attempt = async {
                 if !retry_delay.is_zero() {
                     delegate.set_status(
-                        Some(&format!(
-                            "网络连接中断，{} 秒后进行第 {} 次重连",
+                        Some(&i18n::t_args!(
+                            "276b861c8b0e203c",
                             retry_delay.as_secs(),
                             attempts
                         )),
@@ -922,12 +945,21 @@ impl RemoteClient {
                 }
 
                 this.update(cx, |this, cx| {
-                    this.set_reconnect_status(format!("正在建立远程连接（第 {attempts}/{MAX_RECONNECT_ATTEMPTS} 次）"), cx);
-                }).log_err();
+                    this.set_reconnect_status(
+                        i18n::t!(
+                            "dc76dd64a973e5a6",
+                            attempts = attempts,
+                            MAX_RECONNECT_ATTEMPTS = MAX_RECONNECT_ATTEMPTS
+                        ),
+                        cx,
+                    );
+                })
+                .log_err();
                 delegate.set_status(
-                    Some(&format!(
-                        "正在重新连接远程开发服务（第 {}/{} 次）",
-                        attempts, MAX_RECONNECT_ATTEMPTS
+                    Some(&i18n::t_args!(
+                        "a5800901e1e64f76",
+                        attempts,
+                        MAX_RECONNECT_ATTEMPTS
                     )),
                     cx,
                 );
@@ -989,8 +1021,16 @@ impl RemoteClient {
                 };
 
                 this.update(cx, |this, cx| {
-                    this.set_reconnect_status(format!("正在等待远程服务响应并同步会话（第 {attempts}/{MAX_RECONNECT_ATTEMPTS} 次）"), cx);
-                }).log_err();
+                    this.set_reconnect_status(
+                        i18n::t!(
+                            "cd5a2f1ce1799ed0",
+                            attempts = attempts,
+                            MAX_RECONNECT_ATTEMPTS = MAX_RECONNECT_ATTEMPTS
+                        ),
+                        cx,
+                    );
+                })
+                .log_err();
                 let multiplex_task = Self::monitor(this.clone(), io_task, cx);
                 client.reconnect(incoming_rx, outgoing_tx, cx);
 
@@ -1001,7 +1041,7 @@ impl RemoteClient {
                     return State::ReconnectExhausted;
                 }
 
-                delegate.set_status(Some("远程开发连接已恢复"), cx);
+                delegate.set_status(Some(i18n::t!("6fc121581f98cbeb")), cx);
                 State::Connected {
                     remote_connection,
                     delegate,
@@ -1341,6 +1381,10 @@ impl RemoteClient {
         self.client.supports_system_stats.load(SeqCst)
     }
 
+    pub fn supports_persistent_terminals(&self) -> bool {
+        self.client.supports_persistent_terminals.load(SeqCst)
+    }
+
     pub fn system_stats(
         &self,
     ) -> impl Future<Output = Result<proto::GetSystemStatsResponse>> + use<> {
@@ -1397,7 +1441,7 @@ impl RemoteClient {
                     .send(())
                     .map_err(|_| anyhow!("active reconnect attempt already completed"))?;
                 self.manual_reconnect = true;
-                self.set_reconnect_status("已收到重连请求，正在重新建立连接…".into(), cx);
+                self.set_reconnect_status(i18n::t!("91c3abeadad40be2").into(), cx);
                 Ok(())
             }
             state => anyhow::bail!("cannot reconnect manually while connection is {state:?}"),
@@ -1676,7 +1720,7 @@ impl ConnectionPool {
                 if let Some(task) = task.upgrade() {
                     log::debug!("Connecting task is still alive");
                     cx.spawn(async move |cx| {
-                        delegate.set_status(Some("正在等待已有的连接任务"), cx)
+                        delegate.set_status(Some(i18n::t!("e16c88a58ccad899")), cx)
                     })
                     .detach();
                     return task;
@@ -2056,6 +2100,87 @@ mod tests {
         assert_eq!(
             reconnect_delay(MAX_RECONNECT_ATTEMPTS),
             Duration::from_secs(30)
+        );
+    }
+
+    #[gpui::test]
+    fn remote_server_source_defaults_to_the_zed_cn_remote_server(cx: &mut App) {
+        let version = Version::new(1, 19, 2);
+        release_channel::init_test(version.clone(), ReleaseChannel::Stable, cx);
+        cx.set_global(release_channel::CustomReleaseTag(format!(
+            "zed-cn-v{version}-r1"
+        )));
+        assert_eq!(
+            default_remote_server_source(cx),
+            settings::RemoteServerSource::ZedCn
+        );
+    }
+
+    #[gpui::test]
+    fn remote_server_source_defaults_to_official_without_a_validated_custom_release(cx: &mut App) {
+        release_channel::init_test(Version::new(1, 19, 2), ReleaseChannel::Dev, cx);
+        assert_eq!(
+            default_remote_server_source(cx),
+            settings::RemoteServerSource::Official
+        );
+
+        let version = Version::new(1, 19, 2);
+        release_channel::init_test(version.clone(), ReleaseChannel::Stable, cx);
+        cx.set_global(release_channel::CustomReleaseTag(
+            "zed-cn-v1.19.1-r1".into(),
+        ));
+        assert_eq!(
+            default_remote_server_source(cx),
+            settings::RemoteServerSource::Official
+        );
+    }
+
+    #[gpui::test]
+    fn connection_options_without_a_saved_source_use_the_default_source(cx: &mut App) {
+        settings::init(cx);
+        let version = Version::new(1, 19, 2);
+        release_channel::init_test(version.clone(), ReleaseChannel::Stable, cx);
+        cx.set_global(release_channel::CustomReleaseTag(format!(
+            "zed-cn-v{version}-r1"
+        )));
+        cx.update_global::<settings::SettingsStore, _>(|store, cx| {
+            store
+                .set_user_settings(
+                    r#"{"china_server_adaptation":false,"ssh_connections":[{"host":"example.com"},{"host":"official.com","remote_server_source":"official"}]}"#,
+                    cx,
+                )
+                .expect("settings");
+        });
+
+        let saved_without_source = connection_options_with_settings(
+            RemoteConnectionOptions::Ssh(SshConnectionOptions {
+                host: "example.com".into(),
+                ..Default::default()
+            }),
+            cx,
+        );
+        let RemoteConnectionOptions::Ssh(saved_without_source) = saved_without_source else {
+            panic!("SSH");
+        };
+        assert_eq!(
+            saved_without_source.remote_server_source,
+            settings::RemoteServerSource::ZedCn
+        );
+        assert!(!saved_without_source.upload_binary_over_ssh);
+
+        let saved_official = connection_options_with_settings(
+            RemoteConnectionOptions::Ssh(SshConnectionOptions {
+                host: "official.com".into(),
+                ..Default::default()
+            }),
+            cx,
+        );
+        let RemoteConnectionOptions::Ssh(saved_official) = saved_official else {
+            panic!("SSH");
+        };
+        assert_eq!(
+            saved_official.remote_server_source,
+            settings::RemoteServerSource::Official
         );
     }
 
@@ -2677,6 +2802,7 @@ pub(crate) struct ChannelClient {
     remote_started: Signal<()>,
     supports_temporary_files: AtomicBool,
     supports_system_stats: AtomicBool,
+    supports_persistent_terminals: AtomicBool,
     session_invalidated: Arc<Signal<String>>,
     session_is_invalid: Arc<AtomicBool>,
     has_wsl_interop: bool,
@@ -2710,6 +2836,7 @@ impl ChannelClient {
             remote_started: Signal::new(cx),
             supports_temporary_files: AtomicBool::new(false),
             supports_system_stats: AtomicBool::new(false),
+            supports_persistent_terminals: AtomicBool::new(false),
             session_invalidated: Arc::new(Signal::new(cx)),
             session_is_invalid: Arc::new(AtomicBool::new(false)),
             has_wsl_interop,
@@ -2731,6 +2858,7 @@ impl ChannelClient {
                     capabilities: vec![
                         TEMPORARY_FILES_CAPABILITY.to_string(),
                         SYSTEM_STATS_CAPABILITY.to_string(),
+                        PERSISTENT_TERMINALS_CAPABILITY.to_string(),
                     ],
                 }
                 .into_envelope(0, None, None);
@@ -2782,6 +2910,13 @@ impl ChannelClient {
                             .capabilities
                             .iter()
                             .any(|capability| capability == SYSTEM_STATS_CAPABILITY),
+                        SeqCst,
+                    );
+                    this.supports_persistent_terminals.store(
+                        started
+                            .capabilities
+                            .iter()
+                            .any(|capability| capability == PERSISTENT_TERMINALS_CAPABILITY),
                         SeqCst,
                     );
                     this.remote_started.set(());

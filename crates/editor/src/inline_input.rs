@@ -53,7 +53,11 @@ impl InlineInputPreview {
         let hidden_lines = line_count - max_lines;
         let shown = text.lines().take(max_lines).collect::<Vec<_>>().join("\n");
         (
-            format!("{shown}\n… 还有 {hidden_lines} 行"),
+            i18n::t!(
+                "f403a54c9fd47896",
+                shown = shown,
+                hidden_lines = hidden_lines
+            ),
             max_lines as u32 + 1,
         )
     }
@@ -356,8 +360,8 @@ mod tests {
         assert_eq!(height, 9);
         assert_eq!(
             shown,
-            format!(
-                "{}\n… 还有 4 行",
+            i18n::t_args!(
+                "280a98831e55b5c2",
                 text.lines().take(8).collect::<Vec<_>>().join("\n")
             )
         );

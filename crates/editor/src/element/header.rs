@@ -867,7 +867,7 @@ pub(crate) fn render_buffer_header(
                                             )
                                             .tooltip(move |_, cx| {
                                                 Tooltip::with_meta(
-                                                    "打开文件",
+                                                    i18n::t!("4c8a4e3da39e5c2a"),
                                                     None,
                                                     full_path.clone(),
                                                     cx,
@@ -935,19 +935,23 @@ pub(crate) fn render_buffer_header(
                                 })
                                 .when(show_open_file_button, |this| {
                                     this.child(
-                                        Button::new("open-file-button", "打开文件")
-                                            .style(ButtonStyle::OutlinedCustom(
-                                                cx.theme().colors().border.opacity(0.6),
+                                        Button::new(
+                                            "open-file-button",
+                                            i18n::t!("4c8a4e3da39e5c2a"),
+                                        )
+                                        .style(ButtonStyle::OutlinedCustom(
+                                            cx.theme().colors().border.opacity(0.6),
+                                        ))
+                                        .layer(ui::ElevationIndex::ElevatedSurface)
+                                        .when(is_selected, |this| {
+                                            this.key_binding(KeyBinding::for_action_in(
+                                                &OpenExcerpts,
+                                                &focus_handle,
+                                                cx,
                                             ))
-                                            .layer(ui::ElevationIndex::ElevatedSurface)
-                                            .when(is_selected, |this| {
-                                                this.key_binding(KeyBinding::for_action_in(
-                                                    &OpenExcerpts,
-                                                    &focus_handle,
-                                                    cx,
-                                                ))
-                                            })
-                                            .on_click(window.listener_for(editor, {
+                                        })
+                                        .on_click(
+                                            window.listener_for(editor, {
                                                 let jump_data = jump_data.clone();
                                                 move |editor, e: &ClickEvent, window, cx| {
                                                     editor.open_excerpts_common(
@@ -957,7 +961,8 @@ pub(crate) fn render_buffer_header(
                                                         cx,
                                                     );
                                                 }
-                                            })),
+                                            }),
+                                        ),
                                     )
                                 }),
                         )
@@ -1027,7 +1032,7 @@ pub(crate) fn render_buffer_header(
                     menu = menu
                         .when_some(abs_path, |menu, abs_path| {
                             menu.entry(
-                                "复制路径",
+                                i18n::t!("b97c49acb93028ec"),
                                 Some(Box::new(zed_actions::workspace::CopyPath)),
                                 window.handler_for(&editor, move |_, _, cx| {
                                     cx.write_to_clipboard(ClipboardItem::new_string(
@@ -1038,7 +1043,7 @@ pub(crate) fn render_buffer_header(
                         })
                         .when_some(relative_path, |menu, relative_path| {
                             menu.entry(
-                                "复制相对路径",
+                                i18n::t!("02bcdbc5a1453cb0"),
                                 Some(Box::new(zed_actions::workspace::CopyRelativePath)),
                                 window.handler_for(&editor, move |_, _, cx| {
                                     cx.write_to_clipboard(ClipboardItem::new_string(
@@ -1053,7 +1058,7 @@ pub(crate) fn render_buffer_header(
                         )
                         .when_some(reveal_in_project_panel, |menu, entry_id| {
                             menu.entry(
-                                "在项目面板中显示",
+                                i18n::t!("8ab39adcd02f4d5b"),
                                 Some(Box::new(RevealInProjectPanel::default())),
                                 window.handler_for(&editor, move |editor, _, cx| {
                                     if let Some(project) = &mut editor.project {
@@ -1066,7 +1071,7 @@ pub(crate) fn render_buffer_header(
                         })
                         .when_some(parent_abs_path, |menu, parent_abs_path| {
                             menu.entry(
-                                "在终端中打开",
+                                i18n::t!("a04c3bc562c5f568"),
                                 Some(Box::new(OpenInTerminal)),
                                 window.handler_for(&editor, move |_, window, cx| {
                                     window.dispatch_action(

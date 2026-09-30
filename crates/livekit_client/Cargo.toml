@@ -20,6 +20,7 @@ name = "test_app"
 test-support = ["collections/test-support", "gpui/test-support", "livekit_api/test-support"]
 
 [dependencies]
+i18n.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true
 audio.workspace = true

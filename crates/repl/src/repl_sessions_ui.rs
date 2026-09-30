@@ -252,7 +252,7 @@ impl Render for ReplSessionsPage {
                             .style(ButtonStyle::Filled)
                             .size(ButtonSize::Large)
                             .layer(ElevationIndex::ModalSurface)
-                            .child(Label::new("安装内核"))
+                            .child(Label::new(i18n::t!("cb5bf274c1e0c7f8")))
                             .on_click(move |_, _, cx| {
                                 cx.open_url(
                                     "https://zed.dev/docs/repl#language-specific-instructions",
@@ -266,7 +266,7 @@ impl Render for ReplSessionsPage {
         if sessions.is_empty() {
             let instructions = "To run code in a Jupyter kernel, select some code and use the 'repl::Run' command.";
 
-            return ReplSessionsContainer::new("没有 Jupyter 内核会话").child(
+            return ReplSessionsContainer::new(i18n::t!("76a258746cd001a3")).child(
                 v_flex()
                     .child(Label::new(instructions))
                     .child(KeyBinding::for_action(&Run, cx)),

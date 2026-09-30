@@ -399,7 +399,7 @@ impl Component for AiSettingItem {
                                 "Failed to connect: connection refused",
                             )
                             .child(
-                                Button::new("logout", "登出")
+                                Button::new("logout", i18n::t!("057f31bc16c89da7"))
                                     .style(ButtonStyle::Outlined)
                                     .label_size(LabelSize::Small),
                             ),

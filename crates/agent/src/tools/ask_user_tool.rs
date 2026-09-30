@@ -58,7 +58,9 @@ pub enum AskUserToolOutput {
 impl From<AskUserToolOutput> for LanguageModelToolResultContent {
     fn from(value: AskUserToolOutput) -> Self {
         match value {
-            AskUserToolOutput::Answered { selected } => format!("用户选择了：{selected}").into(),
+            AskUserToolOutput::Answered { selected } => {
+                i18n::t!("d920e08a909df273", selected = selected).into()
+            }
             AskUserToolOutput::Error { error } => error.into(),
         }
     }
@@ -83,7 +85,7 @@ impl AgentTool for AskUserTool {
     ) -> SharedString {
         match input {
             Ok(input) if !input.question.is_empty() => SharedString::from(input.question),
-            _ => "正在询问问题".into(),
+            _ => i18n::t!("7a9276750f217fde").into(),
         }
     }
 
@@ -103,10 +105,7 @@ impl AgentTool for AskUserTool {
 
             if !input.allow_free_text && input.options.len() < 2 {
                 return Err(AskUserToolOutput::Error {
-                    error:
-                        "`ask_user` 工具需要至少两个 `options`，或将 `allow_free_text` 设为 true。\
-                            请改用自然语言提出开放式问题。"
-                            .to_string(),
+                    error: i18n::t!("70e1d1caa9be6a41").to_string(),
                 });
             }
 
@@ -125,28 +124,29 @@ impl AgentTool for AskUserTool {
                     string_field(&content, OTHER_FIELD)
                         .or_else(|| string_field(&content, CHOICE_FIELD))
                         .ok_or_else(|| AskUserToolOutput::Error {
-                            error: "用户提交了表单但没有提供答案。".to_string(),
+                            error: i18n::t!("0679788de9a15a67").to_string(),
                         })?
                 }
                 acp::ElicitationAction::Decline => {
                     return Err(AskUserToolOutput::Error {
-                        error: "用户拒绝回答该问题。".to_string(),
+                        error: i18n::t!("00f75817737826d5").to_string(),
                     });
                 }
                 acp::ElicitationAction::Cancel => {
                     return Err(AskUserToolOutput::Error {
-                        error: "用户未作答即取消了问题。".to_string(),
+                        error: i18n::t!("159f67fd331ff43a").to_string(),
                     });
                 }
                 _ => {
                     return Err(AskUserToolOutput::Error {
-                        error: "问题在未得到回答时被关闭。".to_string(),
+                        error: i18n::t!("162b870e5e7916c0").to_string(),
                     });
                 }
             };
 
             event_stream.update_fields(
-                acp::ToolCallUpdateFields::new().title(format!("已回答：{selected}")),
+                acp::ToolCallUpdateFields::new()
+                    .title(i18n::t!("506225cf16411e86", selected = selected)),
             );
 
             Ok(AskUserToolOutput::Answered { selected })
@@ -171,7 +171,7 @@ fn build_schema(options: &[String], allow_free_text: bool) -> acp::ElicitationSc
         schema = schema.property(
             CHOICE_FIELD,
             acp::StringPropertySchema::new()
-                .title("选择一个选项")
+                .title(i18n::t!("6737034c3ffdacd0"))
                 .one_of(enum_options),
             !allow_free_text,
         );
@@ -179,9 +179,9 @@ fn build_schema(options: &[String], allow_free_text: bool) -> acp::ElicitationSc
 
     if allow_free_text {
         let title = if options.is_empty() {
-            "你的回答"
+            i18n::t!("b569e63acb04bb58")
         } else {
-            "或输入你自己的回答"
+            i18n::t!("1fd6a790f9a01214")
         };
         schema = schema.property(
             OTHER_FIELD,

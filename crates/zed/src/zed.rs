@@ -728,19 +728,12 @@ pub fn initialize_workspace(app_state: Arc<AppState>, cx: &mut App) {
 #[allow(unused)]
 fn initialize_file_watcher(fs: &dyn Fs, window: &mut Window, cx: &mut Context<Workspace>) {
     if let Err(e) = fs.start_native_watcher() {
-        let message = format!(
-            db::indoc! {r#"
-            inotify_init 返回 {}
-
-            这可能是由于系统对 inotify 实例数量的限制。排查方法请参见：https://zed.dev/docs/linux
-            "#},
-            e
-        );
+        let message = i18n::t_args!("0937d7289ff349a9", e);
         let prompt = window.prompt(
             PromptLevel::Critical,
-            "无法启动 inotify",
+            i18n::t!("ce619cb8ff567b6d"),
             Some(&message),
-            &["排查并退出"],
+            &[i18n::t!("3fcd24e7ea5b3d2d")],
             cx,
         );
         cx.spawn(async move |_, cx| {
@@ -759,19 +752,12 @@ fn initialize_file_watcher(fs: &dyn Fs, window: &mut Window, cx: &mut Context<Wo
 #[allow(unused)]
 fn initialize_file_watcher(fs: &dyn Fs, window: &mut Window, cx: &mut Context<Workspace>) {
     if let Err(e) = fs.start_native_watcher() {
-        let message = format!(
-            db::indoc! {r#"
-            ReadDirectoryChangesW 初始化失败：{}
-
-            这种情况可能发生在网络文件系统和 WSL 路径上。排查方法请参见：https://zed.dev/docs/windows
-            "#},
-            e
-        );
+        let message = i18n::t_args!("fa34a4067465b180", e);
         let prompt = window.prompt(
             PromptLevel::Critical,
-            "无法启动 ReadDirectoryChangesW",
+            i18n::t!("23351d48d7415574"),
             Some(&message),
-            &["排查并退出"],
+            &[i18n::t!("3fcd24e7ea5b3d2d")],
             cx,
         );
         cx.spawn(async move |_, cx| {
@@ -805,23 +791,17 @@ fn show_software_emulation_warning_if_needed(
                 "https://zed.dev/docs/linux#zed-fails-to-open-windows",
             )
         };
-        let message = format!(
-            db::indoc! {r#"
-            Zed 使用 {} 进行渲染，需要兼容的 GPU。
-
-            你当前使用的是软件模拟的 GPU（{}），
-            这将导致性能严重下降。
-
-            排查方法请参见：{}
-            设置环境变量 ZED_ALLOW_EMULATED_GPU=1 可永久跳过此检查。
-            "#},
-            graphics_api, specs.device_name, docs_url
+        let message = i18n::t_args!(
+            "4c21b811b64703d6",
+            graphics_api,
+            specs.device_name,
+            docs_url
         );
         let prompt = window.prompt(
             PromptLevel::Critical,
-            "不支持的 GPU",
+            i18n::t!("4cf71ffff25fcf81"),
             Some(&message),
-            &["跳过", "排查并退出"],
+            &[i18n::t!("fc50a99caae0cddc"), i18n::t!("3fcd24e7ea5b3d2d")],
             cx,
         );
         cx.spawn(async move |_, cx| {
@@ -1693,14 +1673,14 @@ fn open_about_window(cx: &mut App) {
                             .child(Headline::new(self.message.clone()))
                             .when_some(self.commit.clone(), |this, commit| {
                                 this.child(
-                                    Label::new("提交")
+                                    Label::new(i18n::t!("08a85f4ab4bab9ca"))
                                         .color(Color::Muted)
                                         .size(LabelSize::XSmall),
                                 )
                                 .child(Label::new(commit).size(LabelSize::Small))
                             })
                             .child(
-                                Label::new("版本")
+                                Label::new(i18n::t!("5f76b2bf82dd2c5d"))
                                     .color(Color::Muted)
                                     .size(LabelSize::XSmall),
                             )
@@ -1718,7 +1698,7 @@ fn open_about_window(cx: &mut App) {
                                         window.remove_window();
                                     }))
                                     .child(
-                                        Button::new("ok", "确定")
+                                        Button::new("ok", i18n::t!("fac2a67ad87807c4"))
                                             .full_width()
                                             .style(ButtonStyle::OutlinedGhost)
                                             .toggle_state(ok_is_focused)
@@ -1738,7 +1718,7 @@ fn open_about_window(cx: &mut App) {
                                         },
                                     ))
                                     .child(
-                                        Button::new("copy", "复制")
+                                        Button::new("copy", i18n::t!("63d90d977348ab1f"))
                                             .full_width()
                                             .style(ButtonStyle::Tinted(TintColor::Accent))
                                             .toggle_state(copy_is_focused)
@@ -1843,9 +1823,9 @@ fn quit(_: &Quit, cx: &mut App) {
                 .update(cx, |_, window, cx| {
                     window.prompt(
                         PromptLevel::Info,
-                        "确定要退出吗？",
+                        i18n::t!("a79e9f721dfd7f14"),
                         None,
-                        &["退出", "取消"],
+                        &[i18n::t!("498e1d59b4d787ee"), i18n::t!("2cd0f3be8738a86c")],
                         cx,
                     )
                 })
@@ -2004,7 +1984,7 @@ fn notify_settings_errors(result: settings::SettingsParseResult, is_user: bool, 
             } else {
                 show_app_notification(id, cx, move |cx| {
                     cx.new(|cx| {
-                        MessageNotification::new(format!("Invalid user settings file\n{error}"), cx)
+                        MessageNotification::new(i18n::t!("393088b05f8e0e9b", error = error), cx)
                             .primary_message("Open Settings File")
                             .primary_icon(IconName::Settings)
                             .primary_on_click(|window, cx| {
@@ -2059,12 +2039,12 @@ fn init_global_config_error_notifications(cx: &mut App) {
         cx.subscribe_self::<SettingsObserverEvent>(|_, event, cx| {
             let (result, file_kind, on_click): (_, _, fn(&mut Window, &mut App)) = match event {
                 SettingsObserverEvent::GlobalTasksUpdated(result) => {
-                    (result, "任务", |window, cx| {
+                    (result, i18n::t!("5253040db8643c85"), |window, cx| {
                         window.dispatch_action(OpenTasks.boxed_clone(), cx)
                     })
                 }
                 SettingsObserverEvent::GlobalDebugScenariosUpdated(result) => {
-                    (result, "调试场景", |window, cx| {
+                    (result, i18n::t!("ff7e1d20f987f473"), |window, cx| {
                         window.dispatch_action(OpenDebugTasks.boxed_clone(), cx)
                     })
                 }
@@ -2074,11 +2054,12 @@ fn init_global_config_error_notifications(cx: &mut App) {
             match result {
                 Ok(_) => dismiss_app_notification(&id, cx),
                 Err(error) => {
-                    let message = format!("全局 {file_kind} 文件无效\n{error}");
+                    let message =
+                        i18n::t!("6eca6a89f828a519", file_kind = file_kind, error = error);
                     show_app_notification(id, cx, move |cx| {
                         cx.new(|cx| {
                             MessageNotification::new(message.clone(), cx)
-                                .primary_message("打开文件")
+                                .primary_message(i18n::t!("4c8a4e3da39e5c2a"))
                                 .primary_icon(IconName::Settings)
                                 .primary_on_click(move |window, cx| {
                                     on_click(window, cx);
@@ -2714,7 +2695,7 @@ fn open_local_file(
         struct NoOpenFolders;
 
         workspace.show_notification(NotificationId::unique::<NoOpenFolders>(), cx, |cx| {
-            cx.new(|cx| MessageNotification::new("This project has no folders open.", cx))
+            cx.new(|cx| MessageNotification::new(i18n::t!("09f9b7e4ab735cda"), cx))
         });
         None
     }

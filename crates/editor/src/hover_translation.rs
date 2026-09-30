@@ -343,7 +343,9 @@ impl TranslationService {
         }
 
         cx.spawn(async move |_| {
-            let result = rx.await.map_err(|_| anyhow::anyhow!("翻译任务已取消"))?;
+            let result = rx
+                .await
+                .map_err(|_| anyhow::anyhow!(i18n::t!("091ddc24fa8961a6")))?;
             result.map_err(anyhow::Error::msg)
         })
     }
@@ -356,25 +358,25 @@ fn resolve_model(cx: &App) -> Result<ConfiguredModel> {
         (Some(provider_id), Some(model_name)) => {
             let provider = registry
                 .provider(&LanguageModelProviderId(provider_id.clone()))
-                .with_context(|| format!("配置的翻译模型提供商不可用：{provider_id}"))?;
+                .with_context(|| i18n::t!("f5aca7fe71bf5d1f", provider_id = provider_id))?;
             let model = provider
                 .provided_models(cx)
                 .into_iter()
                 .find(|model| model.id().0.as_ref() == model_name.as_str())
-                .with_context(|| format!("配置的翻译模型不可用：{provider_id}/{model_name}"))?;
+                .with_context(|| {
+                    i18n::t!(
+                        "6ae3539f811d5bad",
+                        provider_id = provider_id,
+                        model_name = model_name
+                    )
+                })?;
             Ok(ConfiguredModel { provider, model })
         }
         (None, None) => registry
             .default_fast_model(cx)
             .or_else(|| registry.default_model())
-            .context(
-                "未配置翻译模型：请在 settings.json 的 \"hover_translation\" 中填写 \
-                 \"provider\" 和 \"model\"，或先配置默认语言模型",
-            ),
-        _ => Err(anyhow::anyhow!(
-            "翻译模型配置不完整：请同时填写 \"hover_translation.provider\" 和 \
-             \"hover_translation.model\""
-        )),
+            .context(i18n::t!("f7e7b7f73d5c70b0")),
+        _ => Err(anyhow::anyhow!(i18n::t!("c70371b6a0586b63"))),
     }
 }
 
@@ -420,7 +422,7 @@ async fn request_translation(
         translation.push_str(&chunk);
     }
     let translation = translation.trim();
-    anyhow::ensure!(!translation.is_empty(), "翻译结果为空");
+    anyhow::ensure!(!translation.is_empty(), i18n::t!("0d88845ca53c345e"));
     Ok(SharedString::from(translation.to_string()))
 }
 
@@ -463,7 +465,7 @@ pub fn translate_selection(
         return;
     }
 
-    let markdown = cx.new(|cx| Markdown::new("翻译中…".into(), None, None, cx));
+    let markdown = cx.new(|cx| Markdown::new(i18n::t!("07f81963cdeb4dca").into(), None, None, cx));
     let subscription = cx.observe(&markdown, |_, _, cx| cx.notify());
 
     let translation = TranslationService::translate(text, cx);
@@ -472,7 +474,7 @@ pub fn translate_selection(
         async move |_, cx| {
             let content = match translation.await {
                 Ok(translation) => translation,
-                Err(err) => SharedString::from(format!("翻译失败：{err}")),
+                Err(err) => SharedString::from(i18n::t!("6312a196d155bd2d", err = err)),
             };
             markdown.update(cx, |markdown, cx| markdown.reset(content, cx));
         }

@@ -460,7 +460,7 @@ impl Render for CommitTooltip {
                                         .child(Divider::vertical())
                                         .child(
                                             CopyButton::new("copy-commit-sha", full_sha)
-                                                .tooltip_label("复制 SHA"),
+                                                .tooltip_label(i18n::t!("bf096e515eb6a7f4")),
                                         ),
                                 ),
                         ),
@@ -524,11 +524,9 @@ pub(crate) fn shallow_boundary_notice(
                     )
                     .child(
                         div().flex_1().min_w_0().child(
-                            Label::new(
-                                "浅克隆边界：缺少更早的历史记录，因此这些行可能来自更早的提交。",
-                            )
-                            .size(LabelSize::Small)
-                            .line_height_style(LineHeightStyle::UiLabel),
+                            Label::new(i18n::t!("c172ace009967671"))
+                                .size(LabelSize::Small)
+                                .line_height_style(LineHeightStyle::UiLabel),
                         ),
                     ),
             )
@@ -538,17 +536,15 @@ pub(crate) fn shallow_boundary_notice(
                         Button::new(
                             "fetch-unshallow",
                             if in_flight {
-                                "正在获取…"
+                                i18n::t!("85ab30269d8fc924")
                             } else {
-                                "获取缺失的历史记录"
+                                i18n::t!("9ce16a4ad8542f62")
                             },
                         )
                         .style(ButtonStyle::Outlined)
                         .label_size(LabelSize::Small)
                         .disabled(in_flight)
-                        .tooltip(Tooltip::text(
-                            "运行 `git fetch --unshallow` 下载完整历史记录",
-                        ))
+                        .tooltip(Tooltip::text(i18n::t!("72b05cfc42112180")))
                         .on_click(move |_, window, cx| {
                             cx.stop_propagation();
                             fetch_unshallow(repository.clone(), workspace.clone(), window, cx)
@@ -611,17 +607,14 @@ pub(crate) fn fetch_unshallow(
             match result {
                 Ok(_) => {
                     workspace.update(cx, |workspace, cx| {
-                        let toast = StatusToast::new(
-                            "已获取缺失的提交历史记录",
-                            cx,
-                            |this, _| {
+                        let toast =
+                            StatusToast::new(i18n::t!("528a8bb5b9f88894"), cx, |this, _| {
                                 this.icon(
                                     Icon::new(IconName::GitBranch)
                                         .size(IconSize::Small)
                                         .color(Color::Muted),
                                 )
-                            },
-                        );
+                            });
                         workspace.toggle_status_toast(toast, cx);
                     });
                     Ok(())

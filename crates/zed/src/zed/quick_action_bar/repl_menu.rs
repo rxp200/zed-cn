@@ -150,7 +150,7 @@ impl QuickActionBar {
                     )
                     .custom_entry(
                         move |_window, _cx| {
-                            Label::new("中断")
+                            Label::new(i18n::t!("f9d19345a067cbe1"))
                                 .size(LabelSize::Small)
                                 .color(Color::Error)
                                 .into_any_element()
@@ -164,7 +164,7 @@ impl QuickActionBar {
                     )
                     .custom_entry(
                         move |_window, _cx| {
-                            Label::new("清除输出")
+                            Label::new(i18n::t!("c5f73979e85d98d2"))
                                 .size(LabelSize::Small)
                                 .color(Color::Muted)
                                 .into_any_element()
@@ -179,7 +179,7 @@ impl QuickActionBar {
                     .separator()
                     .custom_entry(
                         move |_window, _cx| {
-                            Label::new("关闭内核")
+                            Label::new(i18n::t!("c3554fe0ae9201a7"))
                                 .size(LabelSize::Small)
                                 .color(Color::Error)
                                 .into_any_element()
@@ -193,7 +193,7 @@ impl QuickActionBar {
                     )
                     .custom_entry(
                         move |_window, _cx| {
-                            Label::new("重启内核")
+                            Label::new(i18n::t!("e1268a81b080ed5a"))
                                 .size(LabelSize::Small)
                                 .color(Color::Error)
                                 .into_any_element()
@@ -220,7 +220,7 @@ impl QuickActionBar {
                     )
                     .width(rems(1.))
                     .disabled(menu_state.popover_disabled),
-                Tooltip::text("REPL菜单"),
+                Tooltip::text(i18n::t!("10a3e27e6c17b7ff")),
             );
 
         let button = ButtonLike::new_rounded_left("toggle_repl_icon")
@@ -256,8 +256,10 @@ impl QuickActionBar {
         kernel_specification: KernelSpecification,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let tooltip: SharedString =
-            SharedString::from(format!("Start REPL for {}", kernel_specification.name()));
+        let tooltip: SharedString = SharedString::from(i18n::t_args!(
+            "34a76f80568b6f47",
+            kernel_specification.name()
+        ));
 
         Some(
             h_flex()
@@ -350,7 +352,7 @@ impl QuickActionBar {
                                     Label::new(if let Some(name) = current_kernel_name {
                                         name
                                     } else {
-                                        SharedString::from("选择内核")
+                                        SharedString::from(i18n::t!("a1bf097d671a51b0"))
                                     })
                                     .size(LabelSize::Small)
                                     .color(if current_kernelspec.is_some() {
@@ -367,7 +369,7 @@ impl QuickActionBar {
                                 .size(IconSize::XSmall),
                         ),
                 ),
-            Tooltip::text("选择内核"),
+            Tooltip::text(i18n::t!("a1bf097d671a51b0")),
         )
         .with_handle(menu_handle)
         .into_any_element()
@@ -403,7 +405,7 @@ fn session_state(session: Entity<Session>, cx: &mut App) -> ReplMenuState {
 
     let fill_fields = || {
         ReplMenuState {
-            tooltip: "Nothing running".into(),
+            tooltip: i18n::t!("c7dc9da11a038c05").into(),
             icon: IconName::ReplNeutral,
             icon_color: Color::Default,
             icon_is_animating: false,
@@ -454,7 +456,7 @@ fn session_state(session: Entity<Session>, cx: &mut App) -> ReplMenuState {
     };
 
     let shutdown = || ReplMenuState {
-        tooltip: "Nothing running".into(),
+        tooltip: i18n::t!("c7dc9da11a038c05").into(),
         icon: IconName::ReplNeutral,
         icon_color: Color::Default,
         icon_is_animating: false,

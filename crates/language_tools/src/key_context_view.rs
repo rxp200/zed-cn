@@ -138,7 +138,7 @@ impl Item for KeyContextView {
     fn to_item_events(_: &Self::Event, _: &mut dyn FnMut(workspace::item::ItemEvent)) {}
 
     fn tab_content_text(&self, _detail: usize, _cx: &App) -> SharedString {
-        "键盘上下文".into()
+        i18n::t!("fa1d3f18f741c034").into()
     }
 
     fn telemetry_event_text(&self) -> Option<&'static str> {
@@ -192,39 +192,46 @@ impl Render for KeyContextView {
                     });
                 }),
             )
-            .child(Label::new("键盘上下文").size(LabelSize::Large))
-            .child(Label::new("此视图帮助你确定 Zed 中创建自定义快捷键绑定的当前上下文栈。当触发键盘快捷键时，它还会显示所有可能触发它的上下文，以及实际匹配了哪一个。"))
+            .child(Label::new(i18n::t!("fa1d3f18f741c034")).size(LabelSize::Large))
+            .child(Label::new(i18n::t!("88eef2fbfca52141")))
             .child(
                 h_flex()
                     .mt_4()
                     .gap_4()
                     .child(
-                        Button::new("open_documentation", "打开文档")
+                        Button::new("open_documentation", i18n::t!("d1961d380a4d68c2"))
                             .style(ButtonStyle::Filled)
                             .on_click(|_, _, cx| cx.open_url("https://zed.dev/docs/key-bindings")),
                     )
                     .child(
-                        Button::new("view_default_keymap", "查看默认键位映射")
+                        Button::new("view_default_keymap", i18n::t!("176a83879bc17f01"))
                             .style(ButtonStyle::Filled)
                             .key_binding(ui::KeyBinding::for_action(
                                 &zed_actions::OpenDefaultKeymap,
-                                cx
+                                cx,
                             ))
                             .on_click(|_, window, cx| {
-                                window.dispatch_action(zed_actions::OpenDefaultKeymap.boxed_clone(), cx);
+                                window.dispatch_action(
+                                    zed_actions::OpenDefaultKeymap.boxed_clone(),
+                                    cx,
+                                );
                             }),
                     )
                     .child(
-                        Button::new("edit_your_keymap", "编辑键位映射文件")
+                        Button::new("edit_your_keymap", i18n::t!("647fb20c5ebe0115"))
                             .style(ButtonStyle::Filled)
-                            .key_binding(ui::KeyBinding::for_action(&zed_actions::OpenKeymapFile, cx))
+                            .key_binding(ui::KeyBinding::for_action(
+                                &zed_actions::OpenKeymapFile,
+                                cx,
+                            ))
                             .on_click(|_, window, cx| {
-                                window.dispatch_action(zed_actions::OpenKeymapFile.boxed_clone(), cx);
+                                window
+                                    .dispatch_action(zed_actions::OpenKeymapFile.boxed_clone(), cx);
                             }),
                     ),
             )
             .child(
-                Label::new("当前上下文栈")
+                Label::new(i18n::t!("76d83ef6ae9922b4"))
                     .size(LabelSize::Large)
                     .mt_8(),
             )
@@ -244,7 +251,11 @@ impl Render for KeyContextView {
                     Label::new(format!("{} {}", primary, secondary)).ml(px(12. * (i + 1) as f32))
                 })
             })
-            .child(Label::new("最后一次按键").mt_4().size(LabelSize::Large))
+            .child(
+                Label::new(i18n::t!("27c9cef09cd50920"))
+                    .mt_4()
+                    .size(LabelSize::Large),
+            )
             .when_some(self.pending_keystrokes.as_ref(), |el, keystrokes| {
                 el.child(
                     Label::new(format!(
@@ -275,16 +286,15 @@ impl Render for KeyContextView {
                     )
             })
             .when_some(key_equivalents, |el, key_equivalents| {
-                el.child(Label::new("按键等效项").mt_4().size(LabelSize::Large))
-                    .child(Label::new("使用某些字符定义的快捷键已重新映射，因此无需按住 Option 键即可输入快捷键。"))
-                    .children(
-                        key_equivalents
-                            .iter()
-                            .sorted()
-                            .map(|(key, equivalent)| {
-                                Label::new(format!("cmd-{} => cmd-{}", key, equivalent)).ml_8()
-                            }),
-                    )
+                el.child(
+                    Label::new(i18n::t!("41432a37b34ee790"))
+                        .mt_4()
+                        .size(LabelSize::Large),
+                )
+                .child(Label::new(i18n::t!("01e880c0e9b72d86")))
+                .children(key_equivalents.iter().sorted().map(|(key, equivalent)| {
+                    Label::new(format!("cmd-{} => cmd-{}", key, equivalent)).ml_8()
+                }))
             })
     }
 }

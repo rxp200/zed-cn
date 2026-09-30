@@ -72,7 +72,7 @@ impl PickerDelegate for ThemePickerDelegate {
     }
 
     fn placeholder_text(&self, _window: &mut Window, _cx: &mut App) -> Arc<str> {
-        "搜索主题…".into()
+        i18n::t!("465492abb5ef1305").into()
     }
 
     fn update_matches(

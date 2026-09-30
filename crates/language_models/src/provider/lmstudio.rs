@@ -323,9 +323,7 @@ impl LanguageModelProvider for LmStudioLanguageModelProvider {
                 cx.new(|cx| ConfigurationView::new(state.clone(), window, cx))
                     .into()
             })
-            .description(InlineDescription::Text(
-                "使用 LM Studio 运行本地 LLM，如 Llama、Phi 和 Qwen。".into(),
-            )),
+            .description(InlineDescription::Text(i18n::t!("93ee8ad0ac43b3cd").into())),
         ))
     }
 }
@@ -618,10 +616,12 @@ struct ConfigurationView {
 
 impl ConfigurationView {
     pub fn new(state: Entity<State>, _window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let api_key_editor = cx.new(|cx| InputField::new(_window, cx, "sk-...").label("API 密钥"));
+        let api_key_editor =
+            cx.new(|cx| InputField::new(_window, cx, "sk-...").label(i18n::t!("5f600b307b4eb0fb")));
 
         let api_url_editor = cx.new(|cx| {
-            let input = InputField::new(_window, cx, LMSTUDIO_API_URL).label("API 地址");
+            let input =
+                InputField::new(_window, cx, LMSTUDIO_API_URL).label(i18n::t!("d94c3fb876621695"));
             input.set_text(&LmStudioLanguageModelProvider::api_url(cx), _window, cx);
             input
         });
@@ -753,9 +753,12 @@ impl ConfigurationView {
         let state = self.state.read(cx);
         let env_var_set = state.api_key_state.is_from_env_var();
         let configured_card_label = if env_var_set {
-            format!("API 密钥已在 {API_KEY_ENV_VAR_NAME} 环境变量中设置。")
+            i18n::t!(
+                "7038424f663d69bc",
+                API_KEY_ENV_VAR_NAME = API_KEY_ENV_VAR_NAME
+            )
         } else {
-            "API 密钥已配置".to_string()
+            i18n::t!("d95b24a24825e6c7").to_string()
         };
 
         let api_key_control = if !state.api_key_state.has_key() {
@@ -765,8 +768,9 @@ impl ConfigurationView {
                 .disabled(env_var_set)
                 .on_click(cx.listener(|this, _, _window, cx| this.reset_api_key(_window, cx)))
                 .when(env_var_set, |this| {
-                    this.tooltip_label(format!(
-                        "要重置您的 API 密钥，请取消设置 {API_KEY_ENV_VAR_NAME} 环境变量。"
+                    this.tooltip_label(i18n::t!(
+                        "d402e5e520ed1b1e",
+                        API_KEY_ENV_VAR_NAME = API_KEY_ENV_VAR_NAME
                     ))
                 })
                 .into_any_element()
@@ -778,8 +782,9 @@ impl ConfigurationView {
             .gap_1p5()
             .mb_2()
             .child(
-                Label::new(format!(
-                    "您也可以设置 {API_KEY_ENV_VAR_NAME} 环境变量并重新启动 Zed。"
+                Label::new(i18n::t!(
+                    "db72caa0fa37b7f9",
+                    API_KEY_ENV_VAR_NAME = API_KEY_ENV_VAR_NAME
                 ))
                 .size(LabelSize::Small)
                 .color(Color::Muted),
@@ -798,16 +803,16 @@ impl Render for ConfigurationView {
                     .gap_1()
                     .child(Headline::new("LM Studio").size(HeadlineSize::Small))
                     .child(
-                        Label::new("运行本地大语言模型，如 Llama、Phi 和 Qwen。").color(Color::Muted),
+                        Label::new(i18n::t!("223d619944fda585")).color(Color::Muted),
                     )
                     .child(
                         List::new()
                             .child(ListBulletItem::new(
-                                "LM Studio 需要正在运行且至少已下载一个模型。",
+                                i18n::t!("51dd27c924207366"),
                             ).label_color(Color::Muted))
                             .child(
                                 ListBulletItem::new("")
-                                    .child(Label::new("要获取您的第一个模型，请尝试运行").color(Color::Muted))
+                                    .child(Label::new(i18n::t!("4dd4fb8c6081befb")).color(Color::Muted))
                                     .child(Label::new("lms get qwen2.5-coder-7b").inline_code(cx).color(Color::Muted).ml_1()),
                             ),
                     )
@@ -832,7 +837,7 @@ impl Render for ConfigurationView {
                             .map(|this| {
                                 if is_authenticated {
                                     this.child(
-                                        Button::new("lmstudio-site", "LM Studio")
+                                        Button::new("lmstudio-site", i18n::t!("6b9727908e373676"))
                                             .style(ButtonStyle::OutlinedGhost)
                                             .size(ButtonSize::Medium)
                                             .end_icon(
@@ -849,7 +854,7 @@ impl Render for ConfigurationView {
                                     this.child(
                                         Button::new(
                                             "download_lmstudio_button",
-                                            "下载 LM Studio",
+                                            i18n::t!("133313477aa50b6d"),
                                         )
                                         .style(ButtonStyle::OutlinedGhost)
                                         .size(ButtonSize::Medium)
@@ -866,7 +871,7 @@ impl Render for ConfigurationView {
                                 }
                             })
                             .child(
-                                Button::new("view-models", "查看模型")
+                                Button::new("view-models", i18n::t!("8135034002c770ac"))
                                     .style(ButtonStyle::OutlinedGhost)
                                     .size(ButtonSize::Medium)
                                     .end_icon(
@@ -888,11 +893,11 @@ impl Render for ConfigurationView {
                                         h_flex()
                                             .gap_1()
                                             .child(Icon::new(IconName::Check).color(Color::Success))
-                                            .child(Label::new("已连接"))
+                                            .child(Label::new(i18n::t!("5be0323e8adcaeae")))
                                     )
                                     .child(
                                         IconButton::new("refresh-models", IconName::RotateCcw)
-                                            .tooltip(Tooltip::text("刷新模型"))
+                                            .tooltip(Tooltip::text(i18n::t!("a76952e53abfc0d9")))
                                             .icon_size(IconSize::Small)
                                             .on_click(cx.listener(|this, _, _window, cx| {
                                                 this.state.update(cx, |state, _| {
@@ -904,7 +909,7 @@ impl Render for ConfigurationView {
                             )
                         } else {
                             this.child(
-                                Button::new("retry_lmstudio_models", "连接")
+                                Button::new("retry_lmstudio_models", i18n::t!("a5574109f0208e89"))
                                     .style(ButtonStyle::Outlined)
                                     .size(ButtonSize::Medium)
                                     .start_icon(

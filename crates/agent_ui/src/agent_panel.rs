@@ -863,9 +863,9 @@ fn build_conflict_resolution_prompt(conflicts: &[ConflictContent]) -> Vec<acp::C
     if conflicts.len() == 1 {
         let conflict = &conflicts[0];
 
-        blocks.push(acp::ContentBlock::Text(acp::TextContent::new(
-            "请解决以下合并冲突：",
-        )));
+        blocks.push(acp::ContentBlock::Text(acp::TextContent::new(i18n::t!(
+            "27c9a7308cb0d806"
+        ))));
         let mention = MentionUri::File {
             abs_path: PathBuf::from(conflict.file_path.clone()),
         };

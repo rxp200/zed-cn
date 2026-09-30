@@ -324,7 +324,7 @@ impl Render for PendingKeystrokesIndicator {
                                                     .color(Color::Accent),
                                                 )
                                                 .child(
-                                                    Label::new("正在等待后续按键")
+                                                    Label::new(i18n::t!("a5252e1435f5a715"))
                                                         .color(Color::Muted),
                                                 ),
                                         )
@@ -354,8 +354,8 @@ impl Render for PendingKeystrokesIndicator {
                                                 > MAX_TOOLTIP_BINDINGS,
                                             |el| {
                                                 el.child(
-                                                    Label::new(format!(
-                                                        "…另有 {} 项",
+                                                    Label::new(i18n::t_args!(
+                                                        "86dda195f4d040cd",
                                                         popover_render_state.bindings.len()
                                                             - MAX_TOOLTIP_BINDINGS
                                                     ))

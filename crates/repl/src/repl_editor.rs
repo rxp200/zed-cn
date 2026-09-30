@@ -241,7 +241,7 @@ pub fn run(
         let kernel_specification = store
             .read(cx)
             .active_kernelspec(project_path.worktree_id, Some(language.clone()), cx)
-            .with_context(|| format!("No kernel found for language: {}", language.name()))?;
+            .with_context(|| i18n::t_args!("d450bfd4483ca632", language.name()))?;
 
         let fs = store.read(cx).fs().clone();
 

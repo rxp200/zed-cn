@@ -332,7 +332,7 @@ impl PickerDelegate for IconThemeSelectorDelegate {
                 .border_t_1()
                 .border_color(cx.theme().colors().border_variant)
                 .child(
-                    Button::new("docs", "查看图标主题文档")
+                    Button::new("docs", i18n::t!("d0468db7435809fd"))
                         .end_icon(
                             Icon::new(IconName::ArrowUpRight)
                                 .size(IconSize::Small)
@@ -342,17 +342,19 @@ impl PickerDelegate for IconThemeSelectorDelegate {
                             cx.open_url("https://zed.dev/docs/icon-themes");
                         }),
                 )
-                .child(Button::new("more-icon-themes", "安装图标主题").on_click(
-                    move |_event, window, cx| {
-                        window.dispatch_action(
-                            Box::new(Extensions {
-                                category_filter: Some(ExtensionCategoryFilter::IconThemes),
-                                id: None,
-                            }),
-                            cx,
-                        );
-                    },
-                ))
+                .child(
+                    Button::new("more-icon-themes", i18n::t!("1391abb97c428642")).on_click(
+                        move |_event, window, cx| {
+                            window.dispatch_action(
+                                Box::new(Extensions {
+                                    category_filter: Some(ExtensionCategoryFilter::IconThemes),
+                                    id: None,
+                                }),
+                                cx,
+                            );
+                        },
+                    ),
+                )
                 .into_any_element(),
         )
     }

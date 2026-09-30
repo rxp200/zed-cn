@@ -332,7 +332,7 @@ impl ExampleSpec {
                     } else if title.eq_ignore_ascii_case(CURSOR_POSITION_HEADING) {
                         Section::CursorPosition
                     } else if title.eq_ignore_ascii_case(EXPECTED_PATCH_HEADING)
-                        || title == "预期补丁"
+                        || title == i18n::t!("05479eacd2f23b7b")
                     {
                         Section::ExpectedPatch
                     } else if title.eq_ignore_ascii_case(REJECTED_PATCH_HEADING) {

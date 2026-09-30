@@ -1268,7 +1268,7 @@ impl PickerDelegate for BranchListDelegate {
 
         let warning_banner = || {
             self.branch_list_error.as_deref().map(|error| {
-                let message = format!("无法加载部分分支：{error}");
+                let message = i18n::t!("d4d533c411efa01a", error = error);
                 div().p_1p5().child(
                     Banner::new()
                         .severity(Severity::Warning)

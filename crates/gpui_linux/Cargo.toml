@@ -51,6 +51,9 @@ screen-capture = [
 ]
 
 
+[dependencies]
+i18n.workspace = true
+
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
 accesskit.workspace = true
 accesskit_unix.workspace = true

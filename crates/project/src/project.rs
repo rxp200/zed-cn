@@ -279,16 +279,16 @@ impl DownloadingFile {
         let result = async {
             anyhow::ensure!(
                 self.chunks.len() as u64 == self.total_size,
-                "下载文件大小不匹配"
+                i18n::t!("f149bf73e30550ce")
             );
             if let Some(parent) = self.destination_path.parent() {
                 smol::fs::create_dir_all(parent)
                     .await
-                    .with_context(|| format!("无法创建下载目录 {}", parent.display()))?;
+                    .with_context(|| i18n::t_args!("82f83796064558c7", parent.display()))?;
             }
             smol::fs::write(&self.destination_path, &self.chunks)
                 .await
-                .with_context(|| format!("无法写入 {}", self.destination_path.display()))
+                .with_context(|| i18n::t_args!("ca501ea4078e56a6", self.destination_path.display()))
         }
         .await;
         if let Err(result) = self.completion.send(result) {
@@ -3367,12 +3367,12 @@ impl Project {
 
             log::debug!("download_file: got response, file_id={}", response.file_id);
             smol::future::or(
-                async { completed.await.context("下载在写入完成前中断")? },
+                async { completed.await.context(i18n::t!("138df8abaf1c8971"))? },
                 async {
                     cx.background_executor()
                         .timer(Duration::from_secs(60))
                         .await;
-                    anyhow::bail!("等待下载写入完成超时")
+                    anyhow::bail!(i18n::t!("87006af8ad166a78"))
                 },
             )
             .await
@@ -4047,7 +4047,7 @@ impl Project {
                     cx.emit(Event::Toast {
                         notification_id: format!("local-tasks-{path:?}").into(),
                         link: Some(ToastLink {
-                            label: "Open Tasks Documentation",
+                            label: i18n::t!("b9bf3d790d0e0433"),
                             url: "https://zed.dev/docs/tasks",
                         }),
                         message,

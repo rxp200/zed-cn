@@ -360,9 +360,9 @@ impl From<TerminalDockPosition> for DockPosition {
 impl DockPosition {
     fn label(&self) -> &'static str {
         match self {
-            Self::Left => "左侧",
-            Self::Bottom => "底部",
-            Self::Right => "右侧",
+            Self::Left => i18n::t!("6a24b14f33c72be4"),
+            Self::Bottom => i18n::t!("3f049887991b880c"),
+            Self::Right => i18n::t!("1cf1d4d0b24b0b16"),
         }
     }
 
@@ -1426,7 +1426,7 @@ impl Render for PanelButtons {
                     let action = dock.toggle_action();
 
                     let tooltip: SharedString =
-                        format!("Close {} Dock", dock.position.label()).into();
+                        i18n::t_args!("0d97e36cb959e873", dock.position.label()).into();
 
                     (action, tooltip)
                 } else {
@@ -1476,7 +1476,7 @@ impl Render for PanelButtons {
                                     let dock_for_flex = dock_for_menu.clone();
                                     let workspace_for_flex = workspace_for_menu.clone();
                                     menu = menu.toggleable_entry(
-                                        "弹性宽度",
+                                        i18n::t!("2ac4f4ec55b94298"),
                                         currently_flexible,
                                         IconPosition::Start,
                                         None,
@@ -1499,7 +1499,7 @@ impl Render for PanelButtons {
                                     let dock_for_fixed = dock_for_menu.clone();
                                     let workspace_for_fixed = workspace_for_menu.clone();
                                     menu = menu.toggleable_entry(
-                                        "固定宽度",
+                                        i18n::t!("4513e64a379360cd"),
                                         !currently_flexible,
                                         IconPosition::Start,
                                         None,

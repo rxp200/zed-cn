@@ -1,4 +1,5 @@
 mod headless_project;
+mod persistent_terminal;
 
 #[cfg(test)]
 mod remote_editing_tests;

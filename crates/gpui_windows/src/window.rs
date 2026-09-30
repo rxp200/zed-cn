@@ -1,5 +1,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
+// Modified by the Zed CN project, 2026. See MODIFICATIONS.md.
+
 use std::{
     cell::{Cell, RefCell},
     num::NonZeroIsize,

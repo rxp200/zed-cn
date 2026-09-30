@@ -75,18 +75,18 @@ impl DebuggerPaneItem {
             DebuggerPaneItem::Variables => {
                 "Shows current values of local and global variables in the current stack frame"
             }
-            DebuggerPaneItem::BreakpointList => "列出代码中设置的所有活动断点",
+            DebuggerPaneItem::BreakpointList => i18n::t!("e8bcf502de3bfeea"),
             DebuggerPaneItem::Frames => {
                 "Displays the call stack, letting you navigate between function calls"
             }
-            DebuggerPaneItem::Modules => "显示程序加载的所有模块或库",
+            DebuggerPaneItem::Modules => i18n::t!("70c487640aa422c9"),
             DebuggerPaneItem::LoadedSources => {
                 "Lists all source files currently loaded and used by the debugger"
             }
             DebuggerPaneItem::Terminal => {
                 "Provides an interactive terminal session within the debugging environment"
             }
-            DebuggerPaneItem::MemoryView => "允许检查内存内容",
+            DebuggerPaneItem::MemoryView => i18n::t!("f11f04067935fc59"),
         };
         SharedString::new_static(tooltip)
     }

@@ -1,5 +1,7 @@
 //! The main event loop which performs I/O on the pseudoterminal.
 
+// Modified by the Zed CN project, 2026. See MODIFICATIONS.md.
+
 use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::fmt::{self, Display, Formatter};

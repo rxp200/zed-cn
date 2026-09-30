@@ -51,7 +51,7 @@ impl AttachModalDelegate {
             intent,
             selected_index: 0,
             matches: Vec::default(),
-            placeholder_text: Arc::from("选择要附加调试器的进程"),
+            placeholder_text: Arc::from(i18n::t!("238aee045aa8a7bd")),
         }
     }
 }

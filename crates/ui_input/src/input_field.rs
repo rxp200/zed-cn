@@ -215,7 +215,11 @@ impl Render for InputField {
                             )
                             .icon_size(IconSize::Small)
                             .icon_color(Color::Muted)
-                            .tooltip(Tooltip::text(if is_masked { "显示" } else { "隐藏" }))
+                            .tooltip(Tooltip::text(if is_masked {
+                                i18n::t!("4e1449e7d5e50593")
+                            } else {
+                                i18n::t!("145219e726b87790")
+                            }))
                             .on_click(cx.listener(
                                 |this, _, window, cx| {
                                     if let Some(ref mut masked) = this.masked {
@@ -240,16 +244,18 @@ impl Component for InputField {
     }
 
     fn description() -> &'static str {
-        "用于搜索输入、表单字段等的单行文本字段，\
-        支持标签、占位符、前导图标和掩码内容。"
+        i18n::t!("89dae40b2ecd8d6d")
     }
 
     fn preview(window: &mut Window, cx: &mut App) -> AnyElement {
-        let input_small = cx.new(|cx| InputField::new(window, cx, "占位符").label("小标签"));
+        let input_small = cx.new(|cx| {
+            InputField::new(window, cx, i18n::t!("ecd79f3880770f4e"))
+                .label(i18n::t!("f0de33e237a8da5a"))
+        });
 
         let input_regular = cx.new(|cx| {
-            InputField::new(window, cx, "占位符")
-                .label("普通标签")
+            InputField::new(window, cx, i18n::t!("ecd79f3880770f4e"))
+                .label(i18n::t!("3aed953c840d99e9"))
                 .label_size(LabelSize::Default)
         });
 
@@ -257,10 +263,13 @@ impl Component for InputField {
             .gap_6()
             .children(vec![example_group(vec![
                 single_example(
-                    "小标签（默认）",
+                    i18n::t!("a858225a55ab1aa1"),
                     div().child(input_small).into_any_element(),
                 ),
-                single_example("普通标签", div().child(input_regular).into_any_element()),
+                single_example(
+                    i18n::t!("3aed953c840d99e9"),
+                    div().child(input_regular).into_any_element(),
+                ),
             ])])
             .into_any_element()
     }

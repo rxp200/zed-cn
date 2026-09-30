@@ -1254,7 +1254,7 @@ impl Item for Editor {
         cx: &mut Context<Self>,
     ) -> Vec<(SharedString, Box<dyn gpui::Action>)> {
         let mut actions = vec![(
-            "复制到新窗口".into(),
+            i18n::t!("44d25ef922100d91").into(),
             Box::new(workspace::CloneItemToNewWindow) as Box<dyn gpui::Action>,
         )];
 

@@ -144,16 +144,16 @@ impl Component for Banner {
             single_example(
                 "Default",
                 Banner::new()
-                    .child(Label::new("这是一个没有任何自定义的默认横幅"))
+                    .child(Label::new(i18n::t!("bb4f890b64a11251")))
                     .into_any_element(),
             ),
             single_example(
                 "Info",
                 Banner::new()
                     .severity(Severity::Info)
-                    .child(Label::new("这是一条信息性消息"))
+                    .child(Label::new(i18n::t!("b2b9e2a4bc1ec256")))
                     .action_slot(
-                        Button::new("learn-more", "了解更多")
+                        Button::new("learn-more", i18n::t!("ca66c2da6f5bf825"))
                             .end_icon(Icon::new(IconName::ArrowUpRight).size(IconSize::Small)),
                     )
                     .into_any_element(),
@@ -162,24 +162,24 @@ impl Component for Banner {
                 "Success",
                 Banner::new()
                     .severity(Severity::Success)
-                    .child(Label::new("操作成功完成"))
-                    .action_slot(Button::new("dismiss", "关闭"))
+                    .child(Label::new(i18n::t!("d00d706367547df4")))
+                    .action_slot(Button::new("dismiss", i18n::t!("3fd47edce45b3603")))
                     .into_any_element(),
             ),
             single_example(
                 "Warning",
                 Banner::new()
                     .severity(Severity::Warning)
-                    .child(Label::new("您的设置文件使用了已弃用的设置"))
-                    .action_slot(Button::new("update", "更新设置"))
+                    .child(Label::new(i18n::t!("8754a905d599fbf2")))
+                    .action_slot(Button::new("update", i18n::t!("cb2bec93a8f8deb2")))
                     .into_any_element(),
             ),
             single_example(
                 "Error",
                 Banner::new()
                     .severity(Severity::Error)
-                    .child(Label::new("连接错误：无法连接到服务器"))
-                    .action_slot(Button::new("reconnect", "重试"))
+                    .child(Label::new(i18n::t!("849efbccbe89bba9")))
+                    .action_slot(Button::new("reconnect", i18n::t!("b8784c8dd5636ff2")))
                     .into_any_element(),
             ),
         ];

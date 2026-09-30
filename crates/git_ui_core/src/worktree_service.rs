@@ -285,7 +285,7 @@ impl Render for WorktreeFetchFailedToast {
                 })),
             )
             .child(
-                Button::new("view-worktree-fetch-log", "显示错误日志")
+                Button::new("view-worktree-fetch-log", i18n::t!("88e5cebeafca6466"))
                     .color(Color::Muted)
                     .on_click(cx.listener(move |_, _event, window, cx| {
                         cx.emit(DismissEvent);

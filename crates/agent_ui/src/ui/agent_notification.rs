@@ -180,7 +180,7 @@ impl Render for AgentNotification {
                     .gap_1()
                     .items_center()
                     .child(
-                        Button::new("open", "查看")
+                        Button::new("open", i18n::t!("db8db0530432bd15"))
                             .style(ButtonStyle::Tinted(ui::TintColor::Accent))
                             .full_width()
                             .on_click({
@@ -189,11 +189,15 @@ impl Render for AgentNotification {
                                 })
                             }),
                     )
-                    .child(Button::new("dismiss", "关闭").full_width().on_click({
-                        cx.listener(move |this, _event, _, cx| {
-                            this.dismiss(cx);
-                        })
-                    })),
+                    .child(
+                        Button::new("dismiss", i18n::t!("3fd47edce45b3603"))
+                            .full_width()
+                            .on_click({
+                                cx.listener(move |this, _event, _, cx| {
+                                    this.dismiss(cx);
+                                })
+                            }),
+                    ),
             )
     }
 }

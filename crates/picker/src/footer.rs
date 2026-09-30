@@ -141,7 +141,7 @@ impl<D: PickerDelegate> Picker<D> {
 
         h_flex()
             .child(
-                Button::new("picker-preview-toggle", "预览")
+                Button::new("picker-preview-toggle", i18n::t!("13d61fea9f174905"))
                     .when(preview_visible, |this| this.color(Color::Accent))
                     .key_binding(
                         KeyBinding::for_action_in(&TogglePreview, &focus_handle, cx)
@@ -198,7 +198,7 @@ impl<D: PickerDelegate> Picker<D> {
         PopoverMenu::new("picker-actions-menu")
             .with_handle(self.actions_menu_handle.clone())
             .trigger(
-                Button::new("picker-actions-trigger", "操作…")
+                Button::new("picker-actions-trigger", i18n::t!("cfbd2638ddb6aa8b"))
                     .key_binding(
                         KeyBinding::for_action_in(&ToggleActionsMenu, &focus_handle, cx)
                             .size(rems_from_px(12_f32)),

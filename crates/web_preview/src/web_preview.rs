@@ -98,37 +98,37 @@ fn open_preview(
     cx: &mut Context<Workspace>,
 ) {
     let Some(editor) = workspace.active_item_as::<Editor>(cx) else {
-        workspace.show_error("请先打开要预览的 HTML 文件。", cx);
+        workspace.show_error(i18n::t!("717b21d6a2533ade"), cx);
         return;
     };
     let Some(buffer) = editor.read(cx).buffer().read(cx).as_singleton() else {
-        workspace.show_error("网页预览不支持多文件视图。", cx);
+        workspace.show_error(i18n::t!("0c3a3b87fe4bf824"), cx);
         return;
     };
     let Some(project_path) = buffer.read(cx).project_path(cx) else {
-        workspace.show_error("请先保存 HTML 文件，再打开网页预览。", cx);
+        workspace.show_error(i18n::t!("6e3ee785154131b6"), cx);
         return;
     };
     if !is_html_path(project_path.path.as_ref().as_std_path()) {
-        workspace.show_error("当前文件不是 HTML 页面。", cx);
+        workspace.show_error(i18n::t!("3200499bdffd1d66"), cx);
         return;
     }
     let project = workspace.project().clone();
     if project.read(cx).is_disconnected(cx) {
-        workspace.show_error("远程连接已断开，无法启动网页预览。", cx);
+        workspace.show_error(i18n::t!("966459d6f15e55df"), cx);
         return;
     }
     if project.read(cx).is_via_collab()
         || TrustedWorktrees::has_restricted_worktrees(&project.read(cx).worktree_store(), cx)
     {
-        workspace.show_error("请在受信任的本地或 SSH 项目中启动网页预览。", cx);
+        workspace.show_error(i18n::t!("7719f96750489b48"), cx);
         return;
     }
     let Some(worktree) = project
         .read(cx)
         .worktree_for_id(project_path.worktree_id, cx)
     else {
-        workspace.show_error("无法找到当前文件所属的项目目录。", cx);
+        workspace.show_error(i18n::t!("a39f02c39db04bad"), cx);
         return;
     };
     let root = worktree.read(cx).abs_path().to_path_buf();
@@ -139,16 +139,16 @@ fn open_preview(
 
     cx.spawn_in(window, async move |workspace, cx| {
         let result: Result<()> = async {
-            save.await.context("预览前保存文件失败")?;
+            save.await.context(i18n::t!("f74090096f5dd5fb"))?;
             if buffer.read_with(cx, |buffer, _| buffer.is_dirty()) {
-                bail!("文件在保存期间又发生了变化，请重试");
+                bail!(i18n::t!("b8236805d58908a7"));
             }
             if remote {
                 if !matches!(
                     remote_options,
                     Some(remote::RemoteConnectionOptions::Ssh(_))
                 ) {
-                    bail!("远程实时预览目前支持 SSH；WSL/Docker 请先通过任务启动服务器");
+                    bail!(i18n::t!("e7e19bfc96c1924e"));
                 }
                 start_remote_preview(&workspace, state, project, root, relative_path, cx).await
             } else {
@@ -159,7 +159,7 @@ fn open_preview(
         if let Err(error) = result {
             workspace
                 .update(cx, |workspace, cx| {
-                    workspace.show_error(format!("无法打开网页预览：{error:#}"), cx);
+                    workspace.show_error(i18n::t!("abd879ce7807cac2"), cx);
                 })
                 .log_err();
         }
@@ -182,7 +182,7 @@ async fn start_local_preview(
                 state
                     .local_server
                     .as_ref()
-                    .context("本地预览服务器未启动")?
+                    .context(i18n::t!("6c9125fdf62146de"))?
             }
         };
         Ok(preview_url(server.port, &relative_path))
@@ -205,7 +205,7 @@ async fn start_remote_preview(
             let manager = terminal_panel.read(cx).port_forward_manager();
             Some((terminal_panel, manager))
         })?
-        .context("终端面板尚未就绪，请稍后重试")?;
+        .context(i18n::t!("0b0bfc39e5218a6c"))?;
 
     let existing_port = state.read_with(cx, |state, _| state.remote_port);
     let remote_port = match existing_port {
@@ -222,7 +222,7 @@ async fn start_remote_preview(
         .active_item_context
         .as_ref()
         .map(|(_, _, context)| context)
-        .context("无法获取远程文件的任务环境")?;
+        .context(i18n::t!("c93d599fd352711e"))?;
     let resolved = remote_server_task(&root, remote_port, context)?;
     let task_id = resolved.id.clone();
 
@@ -262,9 +262,9 @@ async fn wait_for_forward(
         if let Some(snapshot) = snapshot {
             match snapshot.status {
                 ForwardStatus::RunningUnconfirmed => {
-                    return snapshot.local_port.context("SSH 转发没有本地端口");
+                    return snapshot.local_port.context(i18n::t!("b4315e90e22b46eb"));
                 }
-                ForwardStatus::Failed(error) => bail!("SSH 端口转发失败：{error}"),
+                ForwardStatus::Failed(error) => bail!(i18n::t!("45327346a6ea2cd0", error = error)),
                 ForwardStatus::Starting => {}
             }
         }
@@ -272,13 +272,13 @@ async fn wait_for_forward(
             .timer(Duration::from_millis(100))
             .await;
     }
-    bail!("等待 SSH 端口转发超时")
+    bail!(i18n::t!("8fe57c401bf137e4"))
 }
 
 fn remote_server_task(root: &Path, port: u16, context: &TaskContext) -> Result<task::ResolvedTask> {
     let command = remote_server_command(root, port)?;
     let template = TaskTemplate {
-        label: "网页实时预览".into(),
+        label: i18n::t!("ef161108fa4707e0").into(),
         command,
         args: Vec::new(),
         shell: Shell::Program("sh".into()),
@@ -292,11 +292,11 @@ fn remote_server_task(root: &Path, port: u16, context: &TaskContext) -> Result<t
     };
     template
         .resolve_task("web-preview", context)
-        .context("无法生成远程网页预览任务")
+        .context(i18n::t!("d553a8098239a68f"))
 }
 
 fn remote_server_command(root: &Path, port: u16) -> Result<String> {
-    let root = root.to_str().context("远程项目路径不是有效的 Unicode")?;
+    let root = root.to_str().context(i18n::t!("43711fc3a79e65c2"))?;
     let script_hex = hex_encode(include_str!("remote_preview_server.py").as_bytes());
     let root_hex = hex_encode(root.as_bytes());
     Ok(format!(
@@ -344,9 +344,9 @@ fn stop_preview(
         }
     }
     let message = if stopped_remote || project.read(cx).is_via_remote_server() {
-        "已停止远端网页预览和 SSH 端口转发。"
+        i18n::t!("e7cbc50ff401ac92")
     } else {
-        "已停止网页实时预览。"
+        i18n::t!("64abf2619c75f34e")
     };
     workspace.show_toast(
         Toast::new(NotificationId::unique::<PreviewState>(), message),
@@ -357,10 +357,10 @@ fn stop_preview(
 impl LocalServer {
     fn start(root: PathBuf, _cx: &mut App) -> Result<Self> {
         let listener = TcpListener::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
-            .context("无法监听本地预览端口")?;
+            .context(i18n::t!("a181134cee1db25c"))?;
         listener
             .set_nonblocking(true)
-            .context("无法配置本地预览端口")?;
+            .context(i18n::t!("35916b6c4facca69"))?;
         let port = listener.local_addr()?.port();
         let stop = Arc::new(AtomicBool::new(false));
         thread::Builder::new()
@@ -375,7 +375,7 @@ impl LocalServer {
                     }
                 }
             })
-            .context("无法启动本地预览线程")?;
+            .context(i18n::t!("4ae8b331fea53306"))?;
         Ok(Self { root, port, stop })
     }
 }
@@ -432,8 +432,11 @@ fn serve_connection(mut stream: TcpStream, root: &Path, stop: &AtomicBool) -> Re
     stream.set_write_timeout(Some(Duration::from_secs(5)))?;
     let mut request = [0_u8; MAX_REQUEST_BYTES];
     let count = stream.read(&mut request)?;
-    let request = std::str::from_utf8(&request[..count]).context("请求不是 UTF-8")?;
-    let first_line = request.lines().next().context("请求为空")?;
+    let request = std::str::from_utf8(&request[..count]).context(i18n::t!("12d8227fc6017981"))?;
+    let first_line = request
+        .lines()
+        .next()
+        .context(i18n::t!("7cf3f1b777b030df"))?;
     let mut parts = first_line.split_whitespace();
     let method = parts.next().unwrap_or_default();
     let target = parts.next().unwrap_or_default();
@@ -538,7 +541,7 @@ fn watched_paths(root: &Path, target: &str) -> Result<Vec<PathBuf>> {
         let encoded_path = encoded_path.replace('+', " ");
         let decoded = percent_decode_str(&encoded_path)
             .decode_utf8()
-            .context("资源路径不是 UTF-8")?;
+            .context(i18n::t!("0c4fd469089800ae"))?;
         let relative = safe_relative_path(decoded.as_ref())?;
         let Ok(canonical) = std::fs::canonicalize(root.join(relative)) else {
             continue;
@@ -565,14 +568,14 @@ fn watched_revision(paths: &[PathBuf]) -> String {
 fn safe_relative_path(path: &str) -> Result<PathBuf> {
     let decoded = percent_decode_str(path.trim_start_matches('/'))
         .decode_utf8()
-        .context("URL 路径不是 UTF-8")?;
+        .context(i18n::t!("e6aee5e1390880b5"))?;
     let mut result = PathBuf::new();
     for component in Path::new(decoded.as_ref()).components() {
         match component {
             Component::Normal(value) => result.push(value),
             Component::CurDir => {}
             Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
-                bail!("拒绝项目目录外的路径")
+                bail!(i18n::t!("e1f77b5902c23224"))
             }
         }
     }

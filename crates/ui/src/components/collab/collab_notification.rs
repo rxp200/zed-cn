@@ -79,8 +79,8 @@ impl Component for CollabNotification {
                     .child(
                         CollabNotification::new(
                             avatar,
-                            Button::new("accept", "接受"),
-                            Button::new("decline", "拒绝"),
+                            Button::new("accept", i18n::t!("329fcec61856d4e5")),
+                            Button::new("decline", i18n::t!("136de7a8c46fc803")),
                         )
                         .child(Label::new("the user is inviting you to a call")),
                     )
@@ -92,8 +92,8 @@ impl Component for CollabNotification {
                     .child(
                         CollabNotification::new(
                             avatar,
-                            Button::new("accept", "查看"),
-                            Button::new("decline", "忽略"),
+                            Button::new("accept", i18n::t!("db8db0530432bd15")),
+                            Button::new("decline", i18n::t!("6e90ac940752ebf1")),
                         )
                         .child(Label::new("the user is sharing their screen")),
                     )
@@ -105,8 +105,8 @@ impl Component for CollabNotification {
                     .child(
                         CollabNotification::new(
                             avatar,
-                            Button::new("accept", "打开"),
-                            Button::new("decline", "关闭"),
+                            Button::new("accept", i18n::t!("c771248e511fbf93")),
+                            Button::new("decline", i18n::t!("3fd47edce45b3603")),
                         )
                         .child(Label::new("the user is sharing a project"))
                         .child(Label::new("zed").color(Color::Muted)),
@@ -119,8 +119,8 @@ impl Component for CollabNotification {
                     .child(
                         CollabNotification::new(
                             avatar,
-                            Button::new("accept", "接受"),
-                            Button::new("decline", "拒绝"),
+                            Button::new("accept", i18n::t!("329fcec61856d4e5")),
+                            Button::new("decline", i18n::t!("136de7a8c46fc803")),
                         )
                         .child(Label::new(
                             "a_very_long_username_that_might_overflow is sharing a project in Zed:",
@@ -141,8 +141,8 @@ impl Component for CollabNotification {
                     .child(
                         CollabNotification::new(
                             avatar,
-                            Button::new("accept", "接受"),
-                            Button::new("decline", "拒绝"),
+                            Button::new("accept", i18n::t!("329fcec61856d4e5")),
+                            Button::new("decline", i18n::t!("136de7a8c46fc803")),
                         )
                         .child(Label::new("maxbrunsfeld wants to add you as a contact")),
                     )
@@ -154,8 +154,8 @@ impl Component for CollabNotification {
                     .child(
                         CollabNotification::new(
                             avatar,
-                            Button::new("dismiss", "关闭"),
-                            Button::new("close", "关闭"),
+                            Button::new("dismiss", i18n::t!("3fd47edce45b3603")),
+                            Button::new("close", i18n::t!("3fd47edce45b3603")),
                         )
                         .child(Label::new("maxbrunsfeld accepted your contact request")),
                     )
@@ -167,8 +167,8 @@ impl Component for CollabNotification {
                     .child(
                         CollabNotification::new(
                             avatar,
-                            Button::new("accept", "接受"),
-                            Button::new("decline", "拒绝"),
+                            Button::new("accept", i18n::t!("329fcec61856d4e5")),
+                            Button::new("decline", i18n::t!("136de7a8c46fc803")),
                         )
                         .child(Label::new(
                             "maxbrunsfeld invited you to join the #zed channel",

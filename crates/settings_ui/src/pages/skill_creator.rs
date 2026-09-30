@@ -183,7 +183,7 @@ impl SkillCreatorPage {
 
         let name_editor = cx.new(|cx| {
             InputField::new(window, cx, "my-new-skill")
-                .label("名称")
+                .label(i18n::t!("d44e9b3d3b31d37b"))
                 .tab_index(NAME_FIELD_TAB_INDEX)
                 .tab_stop(true)
         });
@@ -191,8 +191,8 @@ impl SkillCreatorPage {
         window.focus(&name_editor.focus_handle(cx), cx);
 
         let description_editor = cx.new(|cx| {
-            InputField::new(window, cx, "例如：按照此模板填写 PR 描述。")
-                .label("描述")
+            InputField::new(window, cx, i18n::t!("a1d15b8662173333"))
+                .label(i18n::t!("dc2ba467fc7ac962"))
                 .tab_index(DESCRIPTION_FIELD_TAB_INDEX)
                 .tab_stop(true)
         });
@@ -204,7 +204,7 @@ impl SkillCreatorPage {
                 buffer
             });
             let mut editor = Editor::for_buffer(buffer, None, window, cx);
-            editor.set_placeholder_text("添加技能内容...", window, cx);
+            editor.set_placeholder_text(i18n::t!("0885a615236610aa"), window, cx);
             editor.set_soft_wrap_mode(SoftWrap::EditorWidth, cx);
             editor.set_show_gutter(false, cx);
             editor.set_show_wrap_guides(false, cx);
@@ -408,7 +408,7 @@ impl SkillCreatorPage {
     fn recompute_body_error(&mut self, cx: &App) {
         let body = self.current_body(cx);
         self.body_error = if body.trim().is_empty() {
-            Some("内容主体是必需的。")
+            Some(i18n::t!("c526c8835571e4b4"))
         } else {
             None
         };
@@ -453,7 +453,7 @@ impl SkillCreatorPage {
         match parse_imported_skill(&content, "") {
             Ok(imported) => self.apply_imported_skill(imported, window, cx),
             Err(err) => {
-                self.save_error = Some(SharedString::from(format!("无法读取共享技能：{err}")));
+                self.save_error = Some(SharedString::from(i18n::t!("a58c9798f07abde0", err = err)));
                 cx.notify();
             }
         }
@@ -697,20 +697,17 @@ impl SkillCreatorPage {
             .child(
                 h_flex()
                     .gap_1()
-                    .child(Label::new("从 URL 导入"))
-                    .child(Label::new("（可选）").color(Color::Muted)),
+                    .child(Label::new(i18n::t!("d02426cea6110581")))
+                    .child(Label::new(i18n::t!("3d5c3c3dbaca6b32")).color(Color::Muted)),
             )
             .child(self.url_editor.clone())
             .child(match &self.url_import_status {
-                UrlImportStatus::Idle => Label::new(
-                    "粘贴 GitHub .md URL 以获取并填充表单。\
-                     对于私有文件，Zed 会使用 GITHUB_TOKEN（如有设置）重试。",
-                )
-                .size(LabelSize::Small)
-                .color(Color::Muted)
-                .into_any_element(),
+                UrlImportStatus::Idle => Label::new(i18n::t!("b741854e38bd5e3d"))
+                    .size(LabelSize::Small)
+                    .color(Color::Muted)
+                    .into_any_element(),
                 UrlImportStatus::Fetching => {
-                    LoadingLabel::new("正在获取和解析...").into_any_element()
+                    LoadingLabel::new(i18n::t!("0097c72840220124")).into_any_element()
                 }
                 UrlImportStatus::Error(error) => h_flex()
                     .gap_1()
@@ -737,7 +734,7 @@ impl SkillCreatorPage {
             .child(
                 v_flex()
                     .gap_2()
-                    .child(Label::new("前置元数据"))
+                    .child(Label::new(i18n::t!("06c2291944cd6abc")))
                     .child(self.name_editor.clone())
                     .child(self.description_editor.clone()),
             )
@@ -748,7 +745,7 @@ impl SkillCreatorPage {
                     .flex_grow_1()
                     .flex_shrink_0()
                     .gap_2()
-                    .child(Label::new("技能内容"))
+                    .child(Label::new(i18n::t!("b3e7383cb255c4df")))
                     .child(self.render_body_field(window, cx))
                     .when_some(self.body_error, |this, error| {
                         this.child(Label::new(error).size(LabelSize::Small).color(Color::Error))
@@ -761,8 +758,8 @@ impl SkillCreatorPage {
 
         SwitchField::new(
             "disable-model-invocation",
-            Some("禁用模型调用"),
-            Some("从模型目录中隐藏此技能。仍可通过斜杠命令调用它。".into()),
+            Some(i18n::t!("3a927755adc978a3")),
+            Some(i18n::t!("756f596afa583e11").into()),
             toggle_state,
             cx.listener(|this, _state: &ToggleState, _window, cx| {
                 this.toggle_disable_model_invocation(cx);
@@ -827,9 +824,9 @@ impl SkillCreatorPage {
     fn render_footer(&self, _window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let saving = self.saving;
         let main_action = if saving {
-            "正在保存..."
+            i18n::t!("91a18d716662cfe1")
         } else {
-            "保存技能"
+            i18n::t!("c6b2eecaf242c24c")
         };
 
         v_flex()
@@ -981,10 +978,13 @@ async fn fetch_imported_skill_from_url_with_github_token(
     }
 
     if body.len() > MAX_SKILL_FILE_SIZE {
-        anyhow::bail!("SKILL.md 文件超过最大大小 {}KB", MAX_SKILL_FILE_SIZE / 1024);
+        anyhow::bail!(i18n::t_args!(
+            "3522db0c3ccb7289",
+            MAX_SKILL_FILE_SIZE / 1024
+        ));
     }
 
-    let content = String::from_utf8(body).context("GitHub 响应不是有效的 UTF-8")?;
+    let content = String::from_utf8(body).context(i18n::t!("a36b8fe1145afd89"))?;
     parse_imported_skill(&content, raw_url.as_str())
 }
 
@@ -1007,21 +1007,18 @@ async fn fetch_skill_url(
     let request = Request::get(raw_url)
         .follow_redirects(redirect_policy)
         .when_some(github_token, |builder, token| {
-            builder.header("Authorization", format!("Bearer {token}"))
+            builder.header("Authorization", i18n::t!("bf733da73429e88a", token = token))
         })
         .body(AsyncBody::default())?;
 
     let mut response = http_client
         .send(request)
         .await
-        .with_context(|| format!("获取 {raw_url} 失败"))?;
+        .with_context(|| i18n::t!("9f94a4ca2a65d9f6", raw_url = raw_url))?;
 
     let status = response.status();
     if github_token.is_some() && status.is_redirection() {
-        anyhow::bail!(
-            "GitHub 返回了意外的重定向 ({})，来自向 {raw_url} 的已验证请求",
-            status.as_u16()
-        );
+        anyhow::bail!(i18n::t_mix!("db6c98afe0b366e2"; status.as_u16(); raw_url = raw_url));
     }
     let mut body = Vec::new();
     response
@@ -1029,16 +1026,16 @@ async fn fetch_skill_url(
         .take(MAX_SKILL_FILE_SIZE as u64 + 1)
         .read_to_end(&mut body)
         .await
-        .context("读取响应正文失败")?;
+        .context(i18n::t!("e35bc8f0794810f0"))?;
 
     Ok((status, body))
 }
 
 fn github_fetch_error(status: StatusCode, body: &[u8]) -> anyhow::Error {
     let mut message = if status == StatusCode::NOT_FOUND {
-        "GitHub 在获取技能时返回 404；此 URL 不存在仓库，或是私有仓库".to_string()
+        i18n::t!("5110930d8556a083").to_string()
     } else {
-        format!("GitHub 在获取技能时返回 {}", status.as_u16())
+        i18n::t_args!("5fa0f5be6a2dc325", status.as_u16())
     };
 
     let response_text = truncated_response_body_for_error(body);
@@ -1057,15 +1054,15 @@ pub(crate) fn is_supported_skill_url(input: &str) -> bool {
 fn github_raw_url(input: &str) -> Result<String> {
     let url = Url::parse(input.trim()).context("输入有效的 GitHub URL")?;
     if url.scheme() != "https" {
-        anyhow::bail!("GitHub 技能 URL 必须使用 https://");
+        anyhow::bail!(i18n::t!("a3ecf24c8e4736d2"));
     }
 
     let host = url
         .host_str()
-        .ok_or_else(|| anyhow!("输入有效的 GitHub URL"))?;
+        .ok_or_else(|| anyhow!(i18n::t!("8f11618b0ab22e2f")))?;
     let path_segments = url
         .path_segments()
-        .ok_or_else(|| anyhow!("输入有效的 GitHub URL"))?
+        .ok_or_else(|| anyhow!(i18n::t!("8f11618b0ab22e2f")))?
         .collect::<Vec<_>>();
 
     match host {
@@ -1074,17 +1071,17 @@ fn github_raw_url(input: &str) -> Result<String> {
             ensure_markdown_path(&path_segments)?;
             Ok(url.into())
         }
-        _ => anyhow::bail!("粘贴 GitHub .md URL"),
+        _ => anyhow::bail!(i18n::t!("6430e2f6dcd161a5")),
     }
 }
 
 fn github_blob_raw_url(path_segments: &[&str]) -> Result<String> {
     let [owner, repo, kind, reference, file_path @ ..] = path_segments else {
-        anyhow::bail!("粘贴指向 .md 文件的 GitHub blob URL");
+        anyhow::bail!(i18n::t!("caea843fbebb154c"));
     };
 
     if *kind != "blob" {
-        anyhow::bail!("粘贴指向 .md 文件的 GitHub blob URL");
+        anyhow::bail!(i18n::t!("caea843fbebb154c"));
     }
 
     ensure_markdown_path(file_path)?;
@@ -1096,11 +1093,11 @@ fn github_blob_raw_url(path_segments: &[&str]) -> Result<String> {
 
 fn ensure_markdown_path(path_segments: &[&str]) -> Result<()> {
     let Some(file_name) = path_segments.last() else {
-        anyhow::bail!("粘贴 GitHub .md URL");
+        anyhow::bail!(i18n::t!("6430e2f6dcd161a5"));
     };
 
     if !file_name.to_ascii_lowercase().ends_with(".md") {
-        anyhow::bail!("粘贴指向 .md 文件的 GitHub URL");
+        anyhow::bail!(i18n::t!("e1f77a81f4ef4526"));
     }
 
     Ok(())
@@ -1188,10 +1185,7 @@ async fn write_skill_to_disk(
     let skill_dir = skills_dir.join(name);
     match fs.metadata(&skill_dir).await {
         Ok(Some(metadata)) if metadata.is_dir => {
-            anyhow::bail!(
-                "名为 \"{name}\" 的技能已存在于 {}。请选择其他名称。",
-                skill_dir.display()
-            );
+            anyhow::bail!(i18n::t_mix!("995d78d0e8d46514"; skill_dir.display(); name = name));
         }
         Ok(Some(_)) => {
             // Something exists at this path, but it isn't a directory — e.g.
@@ -1199,16 +1193,15 @@ async fn write_skill_to_disk(
             // this branch we'd fall through to `create_dir`, which on the
             // real fs returns a generic "File exists" IO error that gives
             // the user no idea what's wrong or how to recover.
-            anyhow::bail!(
-                "文件（非技能目录）已存在于 {}。\
-                 请删除它或选择其他技能名称。",
-                skill_dir.display()
-            );
+            anyhow::bail!(i18n::t!(
+                "67f32358bf28ebd2",
+                skill_dir = skill_dir.display()
+            ));
         }
         Ok(None) => {}
         Err(err) => {
             return Err(err)
-                .with_context(|| format!("检查 {} 是否已存在时失败", skill_dir.display()));
+                .with_context(|| i18n::t_args!("8caab78851afc409", skill_dir.display()));
         }
     }
 
@@ -1216,11 +1209,11 @@ async fn write_skill_to_disk(
 
     fs.create_dir(&skill_dir)
         .await
-        .with_context(|| format!("创建技能目录 {} 失败", skill_dir.display()))?;
+        .with_context(|| i18n::t_args!("e25765e7d17ebec0", skill_dir.display()))?;
     let skill_file_path = skill_dir.join(SKILL_FILE_NAME);
     fs.write(&skill_file_path, content.as_bytes())
         .await
-        .with_context(|| format!("写入 {} 失败", skill_file_path.display()))?;
+        .with_context(|| i18n::t_args!("b5b0f7e1fd5f45e9", skill_file_path.display()))?;
 
     Ok(skill_file_path)
 }
@@ -1236,8 +1229,7 @@ fn format_skill_file(
         description: description.to_string(),
         disable_model_invocation,
     };
-    let frontmatter =
-        serde_yaml_ng::to_string(&metadata).context("技能前置元数据序列化为 YAML 失败")?;
+    let frontmatter = serde_yaml_ng::to_string(&metadata).context(i18n::t!("da5e24d0bc432354"))?;
 
     let mut content = String::with_capacity(frontmatter.len() + body.len() + 16);
     content.push_str("---\n");

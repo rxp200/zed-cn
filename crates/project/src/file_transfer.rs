@@ -14,9 +14,9 @@ pub enum TransferDirection {
 impl TransferDirection {
     pub fn label(self) -> &'static str {
         match self {
-            Self::Upload => "上传",
-            Self::Download => "下载",
-            Self::Copy => "复制",
+            Self::Upload => i18n::t!("9e07e3c0532d4976"),
+            Self::Download => i18n::t!("4673a23061656125"),
+            Self::Copy => i18n::t!("63d90d977348ab1f"),
         }
     }
 }
@@ -103,7 +103,7 @@ impl FileTransfers {
             total: None,
             completed_files: 0,
             total_entries: None,
-            status: "正在准备".into(),
+            status: i18n::t!("5f2ed701d82cd70e").into(),
             finished: None,
             error: false,
         });
@@ -144,19 +144,19 @@ impl TransferHandle {
                 entry.path = path;
                 entry.bytes = 0;
                 entry.total = None;
-                entry.status = "正在传输".into();
+                entry.status = i18n::t!("e0f3db545a0fe3d5").into();
             }
             worktree::FileTransferProgress::Bytes(bytes, total) => {
                 entry.bytes = bytes;
                 entry.total = Some(total);
                 entry.status = if bytes >= total {
                     match entry.direction {
-                        TransferDirection::Upload => "正在等待远端确认",
-                        TransferDirection::Download => "正在写入本地文件",
-                        TransferDirection::Copy => "正在等待复制完成",
+                        TransferDirection::Upload => i18n::t!("1482851dc28f43eb"),
+                        TransferDirection::Download => i18n::t!("2b15097c138fbffe"),
+                        TransferDirection::Copy => i18n::t!("5f3135e58a1e6010"),
                     }
                 } else {
-                    "正在传输"
+                    i18n::t!("e0f3db545a0fe3d5")
                 }
                 .into();
             }
@@ -173,8 +173,8 @@ impl TransferHandle {
             entry.finished = Some(Instant::now());
             entry.error = result.is_err();
             entry.status = match result {
-                Ok(()) => "已完成".into(),
-                Err(error) => format!("失败：{error:#}"),
+                Ok(()) => i18n::t!("f28461bb49c85647").to_string(),
+                Err(_) => i18n::t!("8f5d896ae85cd3aa").to_string(),
             };
             if result.is_ok() {
                 entry.completed_files = entry.total_entries.unwrap_or(entry.completed_files.max(1));
@@ -189,7 +189,9 @@ impl TransferHandle {
     ) -> Task<anyhow::Result<T>> {
         let handle = self.clone();
         let cancelled = handle.clone();
-        let guard = util::defer(move || cancelled.finish(&Err(anyhow::anyhow!("传输已中断"))));
+        let guard = util::defer(move || {
+            cancelled.finish(&Err(anyhow::anyhow!(i18n::t!("265b461c5c3d102a"))))
+        });
         cx.background_spawn(async move {
             let result = task.await;
             handle.finish(
@@ -305,7 +307,9 @@ mod tests {
         });
         let task = cx.update(|cx| {
             failed.track(
-                Task::<anyhow::Result<()>>::ready(Err(anyhow::anyhow!("磁盘写入失败"))),
+                Task::<anyhow::Result<()>>::ready(Err(anyhow::anyhow!(i18n::t!(
+                    "6b6cc7dd50c6ad6a"
+                )))),
                 cx,
             )
         });

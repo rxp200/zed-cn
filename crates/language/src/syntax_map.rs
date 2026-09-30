@@ -28,6 +28,8 @@ use tree_sitter::{
 };
 
 pub const MAX_BYTES_TO_QUERY: usize = 16 * 1024;
+pub const FOREGROUND_QUERY_TIMEOUT: Duration = Duration::from_millis(8);
+const BACKGROUND_PARSE_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub struct SyntaxMap {
     snapshot: SyntaxSnapshot,
@@ -175,6 +177,8 @@ struct SyntaxMapCapturesLayer<'a> {
     next_capture: Option<QueryCapture<'a>>,
     grammar_index: usize,
     _query_cursor: QueryCursorHandle,
+    _progress_callback:
+        Option<Box<Box<dyn FnMut(&tree_sitter::QueryCursorState) -> ControlFlow<()> + 'static>>>,
 }
 
 struct SyntaxMapMatchesLayer<'a> {
@@ -547,7 +551,20 @@ impl SyntaxSnapshot {
         registry: Option<Arc<LanguageRegistry>>,
         root_language: Arc<Language>,
     ) {
-        self.reparse_(text, registry, root_language, None).ok();
+        if self
+            .reparse_(
+                text,
+                registry,
+                root_language,
+                Some(BACKGROUND_PARSE_TIMEOUT),
+            )
+            .is_err()
+        {
+            log::warn!(
+                "Tree-sitter parsing exceeded {:?}; retaining the previous syntax tree",
+                BACKGROUND_PARSE_TIMEOUT
+            );
+        }
     }
 
     #[ztracing::instrument(skip_all)]
@@ -947,7 +964,8 @@ impl SyntaxSnapshot {
                             &expanded_ranges,
                             &mut injection_groups,
                             &mut queue,
-                        );
+                            budget,
+                        )?;
                     }
 
                     // Layers built from more than one included range don't cover their
@@ -1065,6 +1083,7 @@ impl SyntaxSnapshot {
             }]
             .into_iter(),
             query,
+            None,
         )
     }
 
@@ -1079,6 +1098,23 @@ impl SyntaxSnapshot {
             buffer.as_rope(),
             self.layers_for_range(range, buffer, true),
             query,
+            None,
+        )
+    }
+
+    pub fn captures_with_timeout<'a>(
+        &'a self,
+        range: Range<usize>,
+        buffer: &'a BufferSnapshot,
+        query: fn(&Grammar) -> Option<&Query>,
+        timeout: Duration,
+    ) -> SyntaxMapCaptures<'a> {
+        SyntaxMapCaptures::new(
+            range.clone(),
+            buffer.as_rope(),
+            self.layers_for_range(range, buffer, true),
+            query,
+            Some(timeout),
         )
     }
 
@@ -1210,7 +1246,9 @@ impl<'a> SyntaxMapCaptures<'a> {
         text: &'a Rope,
         layers: impl Iterator<Item = SyntaxLayer<'a>>,
         query: fn(&Grammar) -> Option<&Query>,
+        timeout: Option<Duration>,
     ) -> Self {
+        let deadline = timeout.map(|timeout| Instant::now() + timeout);
         let mut result = Self {
             layers: Vec::new(),
             grammars: Vec::new(),
@@ -1236,7 +1274,46 @@ impl<'a> SyntaxMapCaptures<'a> {
             };
 
             cursor.set_byte_range(range.clone());
-            let captures = cursor.captures(query, layer.node(), TextProvider(text));
+            let captures = if let Some(deadline) = deadline {
+                let progress_callback: Box<
+                    dyn FnMut(&tree_sitter::QueryCursorState) -> ControlFlow<()> + 'static,
+                > = Box::new(move |_: &tree_sitter::QueryCursorState| {
+                    if Instant::now() >= deadline {
+                        ControlFlow::Break(())
+                    } else {
+                        ControlFlow::Continue(())
+                    }
+                });
+                let mut progress_callback = Box::new(progress_callback);
+                let progress_callback_ref = unsafe {
+                    std::mem::transmute::<
+                        &mut Box<
+                            dyn FnMut(&tree_sitter::QueryCursorState) -> ControlFlow<()> + 'static,
+                        >,
+                        &'static mut Box<
+                            dyn FnMut(&tree_sitter::QueryCursorState) -> ControlFlow<()> + 'static,
+                        >,
+                    >(progress_callback.as_mut())
+                };
+                let captures = cursor.captures_with_options(
+                    query,
+                    layer.node(),
+                    TextProvider(text),
+                    tree_sitter::QueryCursorOptions::new().progress_callback(progress_callback_ref),
+                );
+                let captures = unsafe {
+                    std::mem::transmute::<
+                        QueryCaptures<'_, '_, '_, TextProvider<'_>, &'_ [u8]>,
+                        QueryCaptures<'a, 'a, 'static, TextProvider<'a>, &'a [u8]>,
+                    >(captures)
+                };
+                (captures, Some(progress_callback))
+            } else {
+                (
+                    cursor.captures(query, layer.node(), TextProvider(text)),
+                    None,
+                )
+            };
             let grammar_index = result
                 .grammars
                 .iter()
@@ -1249,8 +1326,9 @@ impl<'a> SyntaxMapCaptures<'a> {
                 depth: layer.depth,
                 grammar_index,
                 next_capture: None,
-                captures,
+                captures: captures.0,
                 _query_cursor: query_cursor,
+                _progress_callback: captures.1,
             };
 
             layer.advance();
@@ -1674,7 +1752,8 @@ fn get_injections(
     changed_ranges: &[Range<usize>],
     injection_groups: &mut HashMap<InjectionGroupKey, (Arc<Language>, Vec<tree_sitter::Range>)>,
     queue: &mut BinaryHeap<ParseStep>,
-) {
+    budget: &mut Option<Duration>,
+) -> Result<(), ParseTimeout> {
     let mut query_cursor = QueryCursorHandle::new();
     let mut prev_match = None;
 
@@ -1695,9 +1774,23 @@ fn get_injections(
         }
     }
 
+    let started_at = Instant::now();
+    let deadline = budget.map(|budget| started_at + budget);
     for query_range in changed_ranges {
         query_cursor.set_byte_range(query_range.start.saturating_sub(1)..query_range.end + 1);
-        let mut matches = query_cursor.matches(&config.query, node, TextProvider(text.as_rope()));
+        let mut progress_callback = move |_: &tree_sitter::QueryCursorState| {
+            if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+                ControlFlow::Break(())
+            } else {
+                ControlFlow::Continue(())
+            }
+        };
+        let mut matches = query_cursor.matches_with_options(
+            &config.query,
+            node,
+            TextProvider(text.as_rope()),
+            tree_sitter::QueryCursorOptions::new().progress_callback(&mut progress_callback),
+        );
         while let Some(mat) = matches.next() {
             let content_ranges = mat
                 .nodes_for_capture_index(config.content_capture_ix)
@@ -1798,6 +1891,13 @@ fn get_injections(
         }
     }
 
+    if let Some(budget) = budget {
+        *budget = budget.saturating_sub(started_at.elapsed());
+        if budget.is_zero() {
+            return Err(ParseTimeout);
+        }
+    }
+
     for (group_key, (language, mut included_ranges)) in injection_groups.drain() {
         included_ranges.sort_unstable_by(|a, b| {
             Ord::cmp(&a.start_byte, &b.start_byte).then_with(|| Ord::cmp(&a.end_byte, &b.end_byte))
@@ -1828,6 +1928,7 @@ fn get_injections(
             mode,
         })
     }
+    Ok(())
 }
 
 /// Updates the given list of included `ranges`, removing any ranges that intersect
