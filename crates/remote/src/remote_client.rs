@@ -928,7 +928,8 @@ impl RemoteClient {
         let client = self.client.clone();
         let (reconnect_cancellation_tx, reconnect_cancellation_rx) = oneshot::channel();
         self.reconnect_cancellation = Some(reconnect_cancellation_tx);
-        let cancelled_remote_connection = remote_connection.clone();
+        let attempt_connection = Arc::new(Mutex::new(remote_connection.clone()));
+        let cancelled_connection = attempt_connection.clone();
         let cancelled_delegate = delegate.clone();
         let reconnect_task = cx.spawn(async move |this, cx| {
             let reconnect_attempt = async {
@@ -1020,6 +1021,7 @@ impl RemoteClient {
                     }
                 };
 
+                *attempt_connection.lock() = remote_connection.clone();
                 this.update(cx, |this, cx| {
                     this.set_reconnect_status(
                         i18n::t!(
@@ -1031,12 +1033,27 @@ impl RemoteClient {
                     );
                 })
                 .log_err();
+                let (transport_closed_tx, transport_closed_rx) = oneshot::channel();
+                let io_task = cx.spawn(async move |_| {
+                    let result = io_task.await;
+                    if transport_closed_tx.send(()).is_err() {
+                        log::debug!("remote transport completed after session synchronization");
+                    }
+                    result
+                });
                 let multiplex_task = Self::monitor(this.clone(), io_task, cx);
                 client.reconnect(incoming_rx, outgoing_tx, cx);
-
-                if let Err(error) = client.resync(RECONNECT_SYNC_TIMEOUT).await {
+                let synchronization_started = std::time::Instant::now();
+                log::info!("remote reconnect attempt {attempts}: waiting for session synchronization");
+                let synchronization_result = synchronize_live_transport(
+                    client.resync(RECONNECT_SYNC_TIMEOUT),
+                    transport_closed_rx,
+                ).await;
+                if let Err(error) = synchronization_result {
+                    log::warn!("remote reconnect attempt {attempts}: session synchronization failed after {:?}: {error:#}", synchronization_started.elapsed());
                     failed!(error, attempts, remote_connection, delegate);
-                };
+                }
+                log::info!("remote reconnect attempt {attempts}: session synchronized after {:?}", synchronization_started.elapsed());
                 if client.session_is_invalid.load(SeqCst) {
                     return State::ReconnectExhausted;
                 }
@@ -1053,11 +1070,17 @@ impl RemoteClient {
             futures::pin_mut!(reconnect_cancellation_rx);
             select! {
                 new_state = reconnect_attempt.fuse() => new_state,
-                _ = reconnect_cancellation_rx.fuse() => State::ReconnectFailed {
-                    remote_connection: cancelled_remote_connection,
-                    delegate: cancelled_delegate,
-                    error: anyhow!("manual reconnect requested"),
-                    attempts: 0,
+                _ = reconnect_cancellation_rx.fuse() => {
+                    let remote_connection = cancelled_connection.lock().clone();
+                    if let Err(error) = remote_connection.kill().await {
+                        log::warn!("failed to stop cancelled reconnect transport: {error:#}");
+                    }
+                    State::ReconnectFailed {
+                        remote_connection,
+                        delegate: cancelled_delegate,
+                        error: anyhow!("manual reconnect requested"),
+                        attempts: 0,
+                    }
                 },
             }
         });
@@ -1141,23 +1164,27 @@ impl RemoteClient {
 
                         if missed_heartbeats != 0 {
                             missed_heartbeats = 0;
-                            let _ =this.update(cx, |this, cx| {
+                            let result = this.update(cx, |this, cx| {
                                 this.handle_heartbeat_result(missed_heartbeats, cx)
                             })?;
+                            if result.is_break() {
+                                return Ok(());
+                            }
                         }
+                        continue;
                     }
                     _ = keepalive_timer => {
                         log::debug!("Sending heartbeat to server...");
 
                         let result = select_biased! {
+                            ping_result = client.ping(HEARTBEAT_TIMEOUT).fuse() => {
+                                ping_result
+                            }
                             activity = connection_activity_rx.next().fuse() => {
                                 if activity.is_none() {
                                     anyhow::bail!("remote connection activity channel closed during heartbeat");
                                 }
                                 Ok(())
-                            }
-                            ping_result = client.ping(HEARTBEAT_TIMEOUT).fuse() => {
-                                ping_result
                             }
                         };
 
@@ -1252,7 +1279,9 @@ impl RemoteClient {
                     } else {
                         log::error!("proxy process terminated unexpectedly: {exit_code}");
                         this.update(cx, |this, cx| {
-                            this.reconnect(cx).ok();
+                            if !this.state_is(State::is_reconnecting) {
+                                this.reconnect(cx).log_err();
+                            }
                         })?;
                     }
                 }
@@ -1262,7 +1291,9 @@ impl RemoteClient {
                         error
                     );
                     this.update(cx, |this, cx| {
-                        this.reconnect(cx).ok();
+                        if !this.state_is(State::is_reconnecting) {
+                            this.reconnect(cx).log_err();
+                        }
                     })?;
                 }
             }
@@ -1864,11 +1895,48 @@ impl RemoteConnectionOptions {
     }
 }
 
+async fn synchronize_live_transport(
+    synchronization: impl Future<Output = Result<()>>,
+    transport_closed: oneshot::Receiver<()>,
+) -> Result<()> {
+    let synchronization = synchronization.fuse();
+    futures::pin_mut!(synchronization);
+    select_biased! {
+        _ = transport_closed.fuse() => anyhow::bail!("remote proxy exited before session synchronization completed"),
+        result = synchronization => result,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use gpui::TestAppContext;
     use rpc::{ErrorCodeExt, TypedEnvelope, proto::ErrorCode};
+
+    #[gpui::test]
+    async fn proxy_exit_ends_session_sync_immediately(cx: &mut TestAppContext) {
+        let (closed_tx, closed_rx) = oneshot::channel();
+        let task = cx.executor().spawn(synchronize_live_transport(
+            futures::future::pending(),
+            closed_rx,
+        ));
+        cx.run_until_parked();
+        closed_tx.send(()).expect("signal proxy exit");
+        assert!(
+            task.await
+                .expect_err("exit must interrupt sync")
+                .to_string()
+                .contains("proxy exited")
+        );
+    }
+
+    #[gpui::test]
+    async fn completed_session_sync_does_not_wait_for_proxy_exit(_cx: &mut TestAppContext) {
+        let (_closed_tx, closed_rx) = oneshot::channel();
+        synchronize_live_transport(async { Ok(()) }, closed_rx)
+            .await
+            .expect("sync succeeds with live transport");
+    }
 
     #[gpui::test]
     async fn successful_heartbeats_keep_their_interval(
@@ -1903,6 +1971,44 @@ mod tests {
             cx.run_until_parked();
             assert_eq!(pings.load(SeqCst), initial + expected);
         }
+    }
+
+    #[gpui::test]
+    async fn server_output_cannot_starve_client_heartbeats(
+        cx: &mut TestAppContext,
+        server_cx: &mut TestAppContext,
+    ) {
+        cx.update(|cx| release_channel::init(Version::new(0, 0, 0), cx));
+        let (options, server, guard) = RemoteClient::fake_server(cx, server_cx);
+        let handler = server_cx.new(|_| ());
+        let pings = Arc::new(AtomicU32::new(0));
+        server.add_request_handler(handler.downgrade(), {
+            let pings = pings.clone();
+            move |_, _: TypedEnvelope<proto::Ping>, _| {
+                pings.fetch_add(1, SeqCst);
+                async { Ok(proto::Ack {}) }
+            }
+        });
+        drop(guard);
+        let client = RemoteClient::connect_mock(options, cx).await;
+        let (mut activity_tx, activity_rx) = mpsc::channel(1);
+        let heartbeat =
+            RemoteClient::heartbeat(client.downgrade(), activity_rx, &mut cx.to_async());
+        client.update(cx, |client, _| match client.state.as_mut() {
+            Some(State::Connected { heartbeat_task, .. }) => *heartbeat_task = heartbeat,
+            _ => panic!("expected connected state"),
+        });
+        cx.run_until_parked();
+        let initial = pings.load(SeqCst);
+        for _ in 0..15 {
+            cx.executor().advance_clock(Duration::from_secs(1));
+            activity_tx.try_send(()).expect("send server activity");
+            cx.run_until_parked();
+        }
+        assert!(
+            pings.load(SeqCst) >= initial + 2,
+            "server output must not postpone client heartbeats"
+        );
     }
 
     #[gpui::test]
@@ -2125,7 +2231,7 @@ mod tests {
         );
 
         let version = Version::new(1, 19, 2);
-        release_channel::init_test(version.clone(), ReleaseChannel::Stable, cx);
+        release_channel::init_test(version, ReleaseChannel::Stable, cx);
         cx.set_global(release_channel::CustomReleaseTag(
             "zed-cn-v1.19.1-r1".into(),
         ));

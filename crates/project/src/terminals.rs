@@ -409,6 +409,13 @@ impl Project {
                 })
             });
             let builder = if let Some(remote_client) = persistent_remote {
+                // The Remote Server is launched over a non-PTY SSH session, so its own
+                // environment carries no terminal type; without these variables the
+                // hosted shell loses color and terminfo-based full-screen programs.
+                let persistent_env = persistent_terminal_env(
+                    env.clone(),
+                    &cx.update(|cx| release_channel::AppVersion::global(cx)),
+                );
                 let persistent_shell = if activation_script.is_empty() {
                     (shell.clone(), Vec::new())
                 } else {
@@ -425,7 +432,7 @@ impl Project {
                             creation_id: Uuid::new_v4().to_string(),
                             program: persistent_shell.0.clone(),
                             args: persistent_shell.1.clone(),
-                            env: env.clone().into_iter().collect(),
+                            env: persistent_env.into_iter().collect(),
                             working_directory: path.as_ref().map(|path| path.display().to_string()),
                             rows: 24,
                             columns: 80,
@@ -512,7 +519,11 @@ impl Project {
     ) -> Task<Result<Entity<Terminal>>> {
         // We cannot clone the task's terminal, as it will effectively re-spawn the task, which might not be desirable.
         // For now, create a new shell instead.
-        if terminal.read(cx).task().is_some() {
+        // A Remote Server-hosted terminal's PTY lives on the server, and its clone
+        // template holds the remote shell path rather than a client-side command, so
+        // cloning it would run that shell on the client. Request a new hosted
+        // terminal instead; legacy `ssh` terminals keep their client-side template.
+        if terminal.read(cx).task().is_some() || terminal.read(cx).is_server_hosted() {
             return self.create_terminal_shell(cwd, cx);
         }
         let local_path = if self.is_via_remote_server() {
@@ -695,6 +706,14 @@ fn create_remote_shell(
     ))
 }
 
+fn persistent_terminal_env(
+    mut env: HashMap<String, String>,
+    version: &impl std::fmt::Display,
+) -> HashMap<String, String> {
+    insert_zed_terminal_env(&mut env, version);
+    env
+}
+
 fn format_task_for_activation(
     spawn_task: &SpawnInTerminal,
     shell_kind: ShellKind,
@@ -828,6 +847,25 @@ mod tests {
             format_task_for_activation(&task, ShellKind::PowerShell, "powershell.exe", true),
             "&cmd.exe /S /C '\"echo It''s fine\"'"
         );
+    }
+
+    #[test]
+    fn persistent_remote_terminal_env_sets_terminal_type_and_keeps_project_env() {
+        let mut env = HashMap::default();
+        env.insert("TERM".to_string(), "dumb".to_string());
+        env.insert("PATH".to_string(), "/usr/bin".to_string());
+
+        let env = persistent_terminal_env(env, &"1.2.3");
+
+        assert_eq!(env.get("TERM").map(String::as_str), Some("xterm-256color"));
+        assert_eq!(env.get("COLORTERM").map(String::as_str), Some("truecolor"));
+        assert_eq!(env.get("TERM_PROGRAM").map(String::as_str), Some("zed"));
+        assert_eq!(env.get("ZED_TERM").map(String::as_str), Some("true"));
+        assert_eq!(
+            env.get("TERM_PROGRAM_VERSION").map(String::as_str),
+            Some("1.2.3")
+        );
+        assert_eq!(env.get("PATH").map(String::as_str), Some("/usr/bin"));
     }
 
     #[test]

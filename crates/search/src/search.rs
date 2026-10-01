@@ -4,7 +4,7 @@ pub use editor::HighlightKey;
 use editor::SearchSettings;
 use gpui::{Action, App, ClickEvent, Entity, FocusHandle, IntoElement, actions};
 use project::search::SearchQuery;
-pub use project_search::ProjectSearchView;
+pub use project_search::{ProjectSearchPanel, ProjectSearchView};
 use ui::{IconButtonShape, Tooltip, prelude::*};
 use util::paths::PathMatcher;
 use workspace::notifications::NotificationId;

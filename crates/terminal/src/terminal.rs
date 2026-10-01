@@ -653,7 +653,8 @@ const DEBUG_CELL_WIDTH: Pixels = px(5.);
 const DEBUG_LINE_HEIGHT: Pixels = px(5.);
 
 /// Inserts Zed-specific environment variables for terminal sessions.
-/// Used by both local terminals and remote terminals (via SSH).
+/// Used by local terminals, remote terminals (via SSH) and Remote Server-hosted
+/// terminals, whose PTY is spawned without a terminal type from the server process.
 pub fn insert_zed_terminal_env(
     env: &mut HashMap<String, String>,
     version: &impl std::fmt::Display,
@@ -2640,6 +2641,12 @@ impl Terminal {
         self.is_remote_terminal
     }
 
+    /// Whether this terminal's shell runs inside a Remote Server process rather
+    /// than as a client-side local or `ssh` child process.
+    pub fn is_server_hosted(&self) -> bool {
+        matches!(self.terminal_type, TerminalType::Remote(_))
+    }
+
     pub fn last_n_non_empty_lines(&self, n: usize) -> Vec<String> {
         let terminal = self.term.lock_unfair();
         last_non_empty_lines(&terminal, n)
@@ -3863,6 +3870,7 @@ mod tests {
     };
     use parking_lot::Mutex;
     use rand::{Rng, distr, rngs::StdRng};
+    use rpc::{ProtoClient, ProtoMessageHandlerSet};
     use task::{Shell, ShellBuilder};
 
     #[gpui::test]
@@ -6427,5 +6435,73 @@ mod tests {
 
         assert!(terminal.cwd_history.is_empty());
         assert_eq!(terminal.pending_cwd_boundary, None);
+    }
+
+    struct TestProtoClient {
+        handler_set: Mutex<ProtoMessageHandlerSet>,
+    }
+
+    impl ProtoClient for TestProtoClient {
+        fn request(
+            &self,
+            _: proto::Envelope,
+            request_type: &'static str,
+        ) -> futures::future::BoxFuture<'static, Result<proto::Envelope>> {
+            async move { anyhow::bail!("unexpected {request_type} request in test") }.boxed()
+        }
+
+        fn send(&self, _: proto::Envelope, _: &'static str) -> Result<()> {
+            Ok(())
+        }
+
+        fn send_response(&self, _: proto::Envelope, _: &'static str) -> Result<()> {
+            Ok(())
+        }
+
+        fn message_handler_set(&self) -> &Mutex<ProtoMessageHandlerSet> {
+            &self.handler_set
+        }
+
+        fn is_via_collab(&self) -> bool {
+            false
+        }
+
+        fn has_wsl_interop(&self) -> bool {
+            false
+        }
+    }
+
+    #[gpui::test]
+    fn server_hosted_terminal_is_distinguished_from_client_side_terminals(cx: &mut TestAppContext) {
+        let hosted = TerminalBuilder::new_remote(
+            TerminalMode::interactive(),
+            Shell::Program("bash".to_string()),
+            SettingsCursorShape::default(),
+            AlternateScroll::On,
+            None,
+            Vec::new(),
+            Duration::from_millis(0),
+            0,
+            PathStyle::local(),
+            AnyProtoClient::new(Arc::new(TestProtoClient {
+                handler_set: Mutex::new(ProtoMessageHandlerSet::default()),
+            })),
+            "server".to_string(),
+            "terminal".to_string(),
+            &cx.background_executor,
+        );
+        assert!(hosted.terminal.is_server_hosted());
+        assert!(hosted.terminal.is_remote_terminal());
+
+        let display_only = TerminalBuilder::new_display_only(
+            SettingsCursorShape::default(),
+            AlternateScroll::On,
+            None,
+            0,
+            &cx.background_executor,
+            PathStyle::local(),
+        );
+        assert!(!display_only.terminal.is_server_hosted());
+        assert!(!display_only.terminal.is_remote_terminal());
     }
 }

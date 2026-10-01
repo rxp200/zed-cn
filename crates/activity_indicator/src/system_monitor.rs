@@ -72,6 +72,14 @@ impl From<GetSystemStatsResponse> for SystemStats {
     }
 }
 
+impl SystemStats {
+    /// The sampler ranks local addresses so that the interface a user would
+    /// actually connect to comes first; the UI only ever needs that one.
+    fn primary_local_ip(&self) -> Option<&str> {
+        self.local_ip_addresses.first().map(String::as_str)
+    }
+}
+
 struct LocalSampler {
     system: System,
     disks: Disks,
@@ -107,15 +115,12 @@ impl LocalSampler {
         let load = System::load_average();
         let received: u64 = self.networks.values().map(|data| data.received()).sum();
         let transmitted: u64 = self.networks.values().map(|data| data.transmitted()).sum();
-        let mut local_ip_addresses: Vec<std::net::IpAddr> = self
-            .networks
-            .values()
-            .flat_map(|data| data.ip_networks())
-            .map(|network| network.addr)
-            .filter(|address| is_local_address(*address))
-            .collect();
-        local_ip_addresses.sort();
-        local_ip_addresses.dedup();
+        let local_ip_addresses =
+            ranked_local_ip_addresses(self.networks.iter().flat_map(|(name, data)| {
+                data.ip_networks()
+                    .iter()
+                    .map(move |network| (name.as_str(), network.addr))
+            }));
 
         SystemStats {
             hostname: System::host_name().unwrap_or_else(|| i18n::t!("8a94c4a1cdbd821e").into()),
@@ -164,6 +169,62 @@ fn is_local_address(address: std::net::IpAddr) -> bool {
                 && (address.segments()[0] & 0xffc0) != 0xfe80
         }
     }
+}
+
+fn is_virtual_interface(name: &str) -> bool {
+    const VIRTUAL_INTERFACE_PREFIXES: &[&str] = &[
+        "docker",
+        "veth",
+        "br-",
+        "virbr",
+        "vmnet",
+        "vboxnet",
+        "vethernet",
+        "hyper-v",
+        "tun",
+        "tap",
+        "wg",
+        "zt",
+        "tailscale",
+        "utun",
+        "awdl",
+        "llw",
+        "bridge",
+        "dummy",
+    ];
+    let name = name.to_ascii_lowercase();
+    VIRTUAL_INTERFACE_PREFIXES
+        .iter()
+        .any(|prefix| name.starts_with(prefix))
+}
+
+/// Orders local addresses by how likely they are to be the one a user wants to
+/// connect to: a private IPv4 on a physical interface first, then a public
+/// IPv4, and virtual/bridge or IPv6 addresses last. The UI shows only the
+/// first entry.
+fn ranked_local_ip_addresses<'a>(
+    interfaces: impl IntoIterator<Item = (&'a str, std::net::IpAddr)>,
+) -> Vec<std::net::IpAddr> {
+    let mut addresses: Vec<(u8, u8, std::net::IpAddr)> = interfaces
+        .into_iter()
+        .filter(|(_, address)| is_local_address(*address))
+        .map(|(name, address)| {
+            let interface_rank = u8::from(is_virtual_interface(name));
+            let family_rank = match address {
+                std::net::IpAddr::V4(address) => u8::from(!address.is_private()),
+                std::net::IpAddr::V6(_) => 2,
+            };
+            (interface_rank, family_rank, address)
+        })
+        .collect();
+    addresses.sort_by_key(|(interface_rank, family_rank, address)| {
+        (*interface_rank, *family_rank, *address)
+    });
+    addresses.dedup_by_key(|(_, _, address)| *address);
+    addresses
+        .into_iter()
+        .map(|(_, _, address)| address)
+        .collect()
 }
 
 pub struct SystemMonitorData {
@@ -282,10 +343,10 @@ impl SystemMonitorData {
                                 .truncate(),
                         ),
                 )
-                .when(!stats.local_ip_addresses.is_empty(), |element| {
+                .when_some(stats.primary_local_ip(), |element, address| {
                     element.child(metric_line(
                         i18n::t!("572c01ee2bf2cf56"),
-                        stats.local_ip_addresses.join(" · "),
+                        address.to_string(),
                     ))
                 })
                 .child(metric_line(
@@ -685,42 +746,23 @@ fn system_card(stats: &SystemStats, cx: &App) -> impl IntoElement {
                     .truncate(),
             )
         })
-        .when(!stats.local_ip_addresses.is_empty(), |element| {
+        .when_some(stats.primary_local_ip(), |element, address| {
             element.child(metric_line(
                 i18n::t!("572c01ee2bf2cf56"),
-                stats.local_ip_addresses.join(" · "),
+                address.to_string(),
             ))
         })
         .child(metric_line(
             i18n::t!("2b1548cd60511f35"),
             stats.process_count.to_string(),
         ))
-        .child(load_section(stats, cx))
-}
-
-fn load_section(stats: &SystemStats, cx: &App) -> impl IntoElement {
-    let core_count = stats.cpu_core_usage_percent.len().max(1);
-    let load_percent = (stats.load_average[0] / core_count as f64 * 100.) as f32;
-    v_flex()
-        .w_full()
-        .min_w_0()
-        .gap_1()
         .child(metric_line(
-            i18n::t!("385df7f41e0df22c"),
+            i18n::t!("dccf0e30783da005"),
             format!(
-                "{:.2} / {:.2} / {:.2}",
+                "{:.2} · {:.2} · {:.2}",
                 stats.load_average[0], stats.load_average[1], stats.load_average[2]
             ),
         ))
-        .child(
-            ProgressBar::new("system-load", load_percent, 100., cx)
-                .fg_color(usage_color(load_percent, cx)),
-        )
-        .child(
-            Label::new(i18n::t_args!("9ec5be02f7307945", core_count))
-                .size(LabelSize::XSmall)
-                .color(Color::Muted),
-        )
 }
 
 fn resource_card(
@@ -1055,5 +1097,32 @@ mod tests {
         assert!(!is_local_address(IpAddr::from([
             0, 0, 0, 0, 0, 0xffff, 0xc0a8, 0x010a
         ])));
+    }
+
+    #[test]
+    fn ranks_physical_private_ipv4_first() {
+        use std::net::IpAddr;
+        let addresses = ranked_local_ip_addresses([
+            ("docker0", IpAddr::from([172, 17, 0, 1])),
+            ("br-1a2b3c4d", IpAddr::from([172, 18, 0, 1])),
+            ("eth0", IpAddr::from([192, 168, 1, 13])),
+            ("eth0", IpAddr::from([0x2409, 0x8a55, 0, 0, 0, 0, 0, 1])),
+            ("eth0", IpAddr::from([203, 0, 113, 7])),
+        ]);
+        assert_eq!(addresses.first(), Some(&IpAddr::from([192, 168, 1, 13])));
+        assert_eq!(addresses.get(1), Some(&IpAddr::from([203, 0, 113, 7])));
+        assert_eq!(
+            addresses.get(2),
+            Some(&IpAddr::from([0x2409, 0x8a55, 0, 0, 0, 0, 0, 1]))
+        );
+        assert_eq!(addresses.get(3), Some(&IpAddr::from([172, 17, 0, 1])));
+        assert_eq!(addresses.get(4), Some(&IpAddr::from([172, 18, 0, 1])));
+    }
+
+    #[test]
+    fn falls_back_to_virtual_interfaces_without_a_physical_address() {
+        use std::net::IpAddr;
+        let addresses = ranked_local_ip_addresses([("docker0", IpAddr::from([172, 17, 0, 1]))]);
+        assert_eq!(addresses, [IpAddr::from([172, 17, 0, 1])]);
     }
 }

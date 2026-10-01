@@ -5,6 +5,7 @@ use theme_settings::ThemeSettings;
 use ui::{IconButton, IconButtonShape};
 use ui::{Tooltip, prelude::*};
 
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum HistoryNavigationDirection {
     Previous,
     Next,

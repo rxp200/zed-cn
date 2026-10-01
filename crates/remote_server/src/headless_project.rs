@@ -89,15 +89,12 @@ impl SystemStatsSampler {
         let received: u64 = self.networks.values().map(|data| data.received()).sum();
         let transmitted: u64 = self.networks.values().map(|data| data.transmitted()).sum();
         let load = System::load_average();
-        let mut local_ip_addresses: Vec<std::net::IpAddr> = self
-            .networks
-            .values()
-            .flat_map(|data| data.ip_networks())
-            .map(|network| network.addr)
-            .filter(|address| is_local_address(*address))
-            .collect();
-        local_ip_addresses.sort();
-        local_ip_addresses.dedup();
+        let local_ip_addresses =
+            ranked_local_ip_addresses(self.networks.iter().flat_map(|(name, data)| {
+                data.ip_networks()
+                    .iter()
+                    .map(move |network| (name.as_str(), network.addr))
+            }));
 
         proto::GetSystemStatsResponse {
             hostname: System::host_name().unwrap_or_else(|| i18n::t!("26c953ee7077ba21").into()),
@@ -152,6 +149,62 @@ fn is_local_address(address: std::net::IpAddr) -> bool {
                 && (address.segments()[0] & 0xffc0) != 0xfe80
         }
     }
+}
+
+fn is_virtual_interface(name: &str) -> bool {
+    const VIRTUAL_INTERFACE_PREFIXES: &[&str] = &[
+        "docker",
+        "veth",
+        "br-",
+        "virbr",
+        "vmnet",
+        "vboxnet",
+        "vethernet",
+        "hyper-v",
+        "tun",
+        "tap",
+        "wg",
+        "zt",
+        "tailscale",
+        "utun",
+        "awdl",
+        "llw",
+        "bridge",
+        "dummy",
+    ];
+    let name = name.to_ascii_lowercase();
+    VIRTUAL_INTERFACE_PREFIXES
+        .iter()
+        .any(|prefix| name.starts_with(prefix))
+}
+
+/// Orders local addresses by how likely they are to be the one a user wants to
+/// connect to: a private IPv4 on a physical interface first, then a public
+/// IPv4, and virtual/bridge or IPv6 addresses last. Kept in sync with the
+/// activity indicator's local sampler; the client shows only the first entry.
+fn ranked_local_ip_addresses<'a>(
+    interfaces: impl IntoIterator<Item = (&'a str, std::net::IpAddr)>,
+) -> Vec<std::net::IpAddr> {
+    let mut addresses: Vec<(u8, u8, std::net::IpAddr)> = interfaces
+        .into_iter()
+        .filter(|(_, address)| is_local_address(*address))
+        .map(|(name, address)| {
+            let interface_rank = u8::from(is_virtual_interface(name));
+            let family_rank = match address {
+                std::net::IpAddr::V4(address) => u8::from(!address.is_private()),
+                std::net::IpAddr::V6(_) => 2,
+            };
+            (interface_rank, family_rank, address)
+        })
+        .collect();
+    addresses.sort_by_key(|(interface_rank, family_rank, address)| {
+        (*interface_rank, *family_rank, *address)
+    });
+    addresses.dedup_by_key(|(_, _, address)| *address);
+    addresses
+        .into_iter()
+        .map(|(_, _, address)| address)
+        .collect()
 }
 
 pub struct HeadlessProject {

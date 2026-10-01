@@ -1601,6 +1601,9 @@ pub struct Workspace {
     left_dock: Entity<Dock>,
     bottom_dock: Entity<Dock>,
     right_dock: Entity<Dock>,
+    left_dock_buttons: Entity<PanelButtons>,
+    bottom_dock_buttons: Entity<PanelButtons>,
+    right_dock_buttons: Entity<PanelButtons>,
     panes: Vec<Entity<Pane>>,
     panes_by_item: HashMap<EntityId, WeakEntity<Pane>>,
     active_pane: Entity<Pane>,
@@ -2005,21 +2008,16 @@ impl Workspace {
         let left_dock = Dock::new(DockPosition::Left, modal_layer.clone(), window, cx);
         let bottom_dock = Dock::new(DockPosition::Bottom, modal_layer.clone(), window, cx);
         let right_dock = Dock::new(DockPosition::Right, modal_layer.clone(), window, cx);
-        let left_dock_buttons = cx.new(|cx| PanelButtons::new(left_dock.clone(), cx));
-        let bottom_dock_buttons = cx.new(|cx| PanelButtons::new(bottom_dock.clone(), cx));
-        let right_dock_buttons = cx.new(|cx| PanelButtons::new(right_dock.clone(), cx));
+        let left_dock_buttons = cx.new(|cx| PanelButtons::new(left_dock.clone(), cx).vertical());
+        let bottom_dock_buttons =
+            cx.new(|cx| PanelButtons::new(bottom_dock.clone(), cx).vertical());
+        let right_dock_buttons = cx.new(|cx| PanelButtons::new(right_dock.clone(), cx).vertical());
         let multi_workspace = window
             .root::<MultiWorkspace>()
             .flatten()
             .map(|mw| mw.downgrade());
-        let status_bar = cx.new(|cx| {
-            let mut status_bar =
-                StatusBar::new(&center_pane.clone(), multi_workspace.clone(), window, cx);
-            status_bar.add_left_item(left_dock_buttons, window, cx);
-            status_bar.add_right_item(right_dock_buttons, window, cx);
-            status_bar.add_right_item(bottom_dock_buttons, window, cx);
-            status_bar
-        });
+        let status_bar =
+            cx.new(|cx| StatusBar::new(&center_pane.clone(), multi_workspace.clone(), window, cx));
 
         let session_id = app_state.session.read(cx).id().to_owned();
 
@@ -2143,6 +2141,9 @@ impl Workspace {
             left_dock,
             bottom_dock,
             right_dock,
+            left_dock_buttons,
+            bottom_dock_buttons,
+            right_dock_buttons,
             _panels_task: None,
             project: project.clone(),
             follower_states: Default::default(),
@@ -9845,46 +9846,6 @@ impl Render for Workspace {
                             .border_t_1()
                             .border_b_1()
                             .border_color(colors.border)
-                            .child({
-                                let this = cx.entity();
-                                canvas(
-                                    move |bounds, window, cx| {
-                                        this.update(cx, |this, cx| {
-                                            let bounds_changed = this.bounds != bounds;
-                                            this.bounds = bounds;
-
-                                            if bounds_changed {
-                                                this.left_dock.update(cx, |dock, cx| {
-                                                    dock.clamp_panel_size(
-                                                        bounds.size.width,
-                                                        window,
-                                                        cx,
-                                                    )
-                                                });
-
-                                                this.right_dock.update(cx, |dock, cx| {
-                                                    dock.clamp_panel_size(
-                                                        bounds.size.width,
-                                                        window,
-                                                        cx,
-                                                    )
-                                                });
-
-                                                this.bottom_dock.update(cx, |dock, cx| {
-                                                    dock.clamp_panel_size(
-                                                        bounds.size.height,
-                                                        window,
-                                                        cx,
-                                                    )
-                                                });
-                                            }
-                                        })
-                                    },
-                                    |_, _, _, _| {},
-                                )
-                                .absolute()
-                                .size_full()
-                            })
                             .when(self.zoomed.is_none(), |this| {
                                 this.on_drag_move(cx.listener(
                                     move |workspace, e: &DragMoveEvent<DraggedDock>, window, cx| {
@@ -9925,8 +9886,93 @@ impl Render for Workspace {
                                     },
                                 ))
                             })
-                            .child({
-                                match bottom_dock_layout {
+                            .child(
+                                h_flex()
+                                    .size_full()
+                                    .child(
+                                        v_flex()
+                                            .id("activity-bar")
+                                            .h_full()
+                                            .w(px(48.))
+                                            .flex_none()
+                                            .bg(colors.title_bar_background)
+                                            .border_r_1()
+                                            .border_color(colors.border)
+                                            .pt_2()
+                                            .pb_1()
+                                            .gap_1()
+                                            .items_center()
+                                            .child(self.left_dock_buttons.clone())
+                                            .child(
+                                                v_flex()
+                                                    .id("activity-bar-bottom")
+                                                    .mt_auto()
+                                                    .gap_1()
+                                                    .items_center()
+                                                    .child(self.right_dock_buttons.clone())
+                                                    .child(self.bottom_dock_buttons.clone()),
+                                            ),
+                                    )
+                                    .child(
+                                        div()
+                                            .relative()
+                                            .flex()
+                                            .flex_col()
+                                            .flex_1()
+                                            .h_full()
+                                            .overflow_hidden()
+                                            .child({
+                                                let this = cx.entity();
+                                                canvas(
+                                                    move |bounds, window, cx| {
+                                                        this.update(cx, |this, cx| {
+                                                            let bounds_changed =
+                                                                this.bounds != bounds;
+                                                            this.bounds = bounds;
+
+                                                            if bounds_changed {
+                                                                this.left_dock.update(
+                                                                    cx,
+                                                                    |dock, cx| {
+                                                                        dock.clamp_panel_size(
+                                                                            bounds.size.width,
+                                                                            window,
+                                                                            cx,
+                                                                        )
+                                                                    },
+                                                                );
+
+                                                                this.right_dock.update(
+                                                                    cx,
+                                                                    |dock, cx| {
+                                                                        dock.clamp_panel_size(
+                                                                            bounds.size.width,
+                                                                            window,
+                                                                            cx,
+                                                                        )
+                                                                    },
+                                                                );
+
+                                                                this.bottom_dock.update(
+                                                                    cx,
+                                                                    |dock, cx| {
+                                                                        dock.clamp_panel_size(
+                                                                            bounds.size.height,
+                                                                            window,
+                                                                            cx,
+                                                                        )
+                                                                    },
+                                                                );
+                                                            }
+                                                        })
+                                                    },
+                                                    |_, _, _, _| {},
+                                                )
+                                                .absolute()
+                                                .size_full()
+                                            })
+                                            .child({
+                                                match bottom_dock_layout {
                                     BottomDockLayout::Full => div()
                                         .flex()
                                         .flex_col()
@@ -10161,7 +10207,9 @@ impl Render for Workspace {
                                             cx,
                                         )),
                                 }
-                            })
+                                            }),
+                                    ),
+                            )
                             .children(self.zoomed.as_ref().and_then(|view| {
                                 let zoomed_view = view.upgrade()?;
                                 let div = div()
@@ -15932,7 +15980,10 @@ mod tests {
             assert_eq!(center_column_count, 2);
 
             let dock = workspace.right_dock().read(cx);
-            assert_eq!(workspace.dock_size(&dock, window, cx).unwrap(), px(640.));
+            // Rendering between the `update_in` blocks repaints the bounds
+            // canvas, so `workspace.bounds` now reflects the real content area
+            // (test window width minus the 48px activity bar): 1872 / 3 = 624.
+            assert_eq!(workspace.dock_size(&dock, window, cx).unwrap(), px(624.));
 
             workspace.bounds.size.width = px(2400.);
 

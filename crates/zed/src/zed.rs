@@ -851,6 +851,15 @@ fn initialize_panels(window: &mut Window, cx: &mut Context<Workspace>) -> Task<a
             initialize_agent_panel(workspace_handle.clone(), cx.clone()).map(|r| r.log_err()),
         );
 
+        workspace_handle.update_in(cx, |workspace, window, cx| {
+            let weak_workspace = cx.entity().downgrade();
+            let project = workspace.project().clone();
+            let search_panel = cx.new(|cx| {
+                search::project_search::ProjectSearchPanel::new(weak_workspace, project, cx)
+            });
+            workspace.add_panel(search_panel, window, cx);
+        })?;
+
         workspace_handle.update(cx, |workspace, cx| {
             workspace.finish_dock_restoration(cx);
         })?;

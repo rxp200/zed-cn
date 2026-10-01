@@ -290,6 +290,8 @@ pub struct Dock {
     focus_follows_mouse: FocusFollowsMouse,
     restoration: DockRestoreState,
     zoom_layer_open: bool,
+    resize_drag_active: bool,
+    _resize_drag_release: Option<Subscription>,
     modal_layer: Entity<ModalLayer>,
     _subscriptions: [Subscription; 2],
 }
@@ -389,6 +391,7 @@ struct PanelEntry {
 
 pub struct PanelButtons {
     dock: Entity<Dock>,
+    vertical: bool,
     _settings_subscription: Subscription,
 }
 
@@ -458,6 +461,8 @@ impl Dock {
                 _subscriptions: [focus_subscription, zoom_subscription],
                 restoration: DockRestoreState::Restoring { pending: None },
                 zoom_layer_open: false,
+                resize_drag_active: false,
+                _resize_drag_release: None,
                 modal_layer,
             }
         });
@@ -1272,12 +1277,77 @@ impl Render for Dock {
         let dispatch_context = Self::dispatch_context();
         if let Some(entry) = self.visible_entry() {
             let position = self.position;
+            let accent = cx.theme().colors().border_focused;
+            let resize_drag_active = self.resize_drag_active;
+            let dock_entity = cx.weak_entity();
             let create_resize_handle = || {
+                // Mimics the VS Code sash: hovering (or dragging, which keeps
+                // the edge under the cursor) lights up the edge with an accent
+                // bar surrounded by a soft glow.
+                let (glow, bar) = match position {
+                    DockPosition::Left | DockPosition::Right => (
+                        div()
+                            .absolute()
+                            .top_0()
+                            .bottom_0()
+                            .left_0()
+                            .w(RESIZE_HANDLE_SIZE),
+                        div().absolute().top_0().bottom_0().left(px(2.)).w(px(2.)),
+                    ),
+                    DockPosition::Bottom => (
+                        div()
+                            .absolute()
+                            .left_0()
+                            .right_0()
+                            .top_0()
+                            .h(RESIZE_HANDLE_SIZE),
+                        div().absolute().left_0().right_0().top(px(2.)).h(px(2.)),
+                    ),
+                };
+                let glow = glow.rounded_full();
+                let bar = bar.rounded_full();
                 let handle = div()
                     .id("resize-handle")
-                    .on_drag(DraggedDock(position), |dock, _, _, cx| {
-                        cx.stop_propagation();
-                        cx.new(|_| dock.clone())
+                    .group("dock-resize-handle")
+                    .child(if resize_drag_active {
+                        glow.bg(accent.opacity(0.25))
+                    } else {
+                        glow.group_hover("dock-resize-handle", |style| {
+                            style.bg(accent.opacity(0.25))
+                        })
+                    })
+                    .child(if resize_drag_active {
+                        bar.bg(accent)
+                    } else {
+                        bar.group_hover("dock-resize-handle", |style| style.bg(accent))
+                    })
+                    .on_drag(DraggedDock(position), {
+                        let dock_entity = dock_entity.clone();
+                        move |dock, _, _, cx| {
+                            cx.stop_propagation();
+                            let drag_view = cx.new(|_| dock.clone());
+                            dock_entity
+                                .update(cx, |this, cx| {
+                                    this.resize_drag_active = true;
+                                    // The drag view entity is released when the
+                                    // drag ends, which clears the highlight.
+                                    this._resize_drag_release =
+                                        Some(cx.observe_release(&drag_view, {
+                                            let dock_entity = dock_entity.clone();
+                                            move |_, _, cx| {
+                                                dock_entity
+                                                    .update(cx, |this, cx| {
+                                                        this.resize_drag_active = false;
+                                                        cx.notify();
+                                                    })
+                                                    .ok();
+                                            }
+                                        }));
+                                    cx.notify();
+                                })
+                                .ok();
+                            drag_view
+                        }
                     })
                     .on_mouse_down(
                         MouseButton::Left,
@@ -1288,6 +1358,7 @@ impl Render for Dock {
                     .on_mouse_up(
                         MouseButton::Left,
                         cx.listener(|dock, e: &MouseUpEvent, window, cx| {
+                            dock.resize_drag_active = false;
                             if e.click_count == 2 {
                                 dock.reset_panel_sizes(window, cx);
                                 dock.workspace
@@ -1382,8 +1453,15 @@ impl PanelButtons {
         let settings_subscription = cx.observe_global::<SettingsStore>(|_, cx| cx.notify());
         Self {
             dock,
+            vertical: false,
             _settings_subscription: settings_subscription,
         }
+    }
+
+    /// Lays the buttons out vertically, as used by the activity bar.
+    pub fn vertical(mut self) -> Self {
+        self.vertical = true;
+        self
     }
 }
 
@@ -1394,9 +1472,23 @@ impl Render for PanelButtons {
         let is_open = dock.is_open;
         let dock_position = dock.position;
 
-        let (menu_anchor, menu_attach) = match dock.position {
-            DockPosition::Left => (Anchor::BottomLeft, Anchor::TopLeft),
-            DockPosition::Bottom | DockPosition::Right => (Anchor::BottomRight, Anchor::TopRight),
+        let vertical = self.vertical;
+        let (menu_anchor, menu_attach) = if vertical {
+            // In the activity bar the strip sits against the left window edge,
+            // so context menus open to the right of the button.
+            match dock.position {
+                DockPosition::Left => (Anchor::TopRight, Anchor::TopLeft),
+                DockPosition::Bottom | DockPosition::Right => {
+                    (Anchor::BottomRight, Anchor::BottomLeft)
+                }
+            }
+        } else {
+            match dock.position {
+                DockPosition::Left => (Anchor::BottomLeft, Anchor::TopLeft),
+                DockPosition::Bottom | DockPosition::Right => {
+                    (Anchor::BottomRight, Anchor::TopRight)
+                }
+            }
         };
 
         let dock_entity = self.dock.clone();
@@ -1569,6 +1661,15 @@ impl Render for PanelButtons {
 
         let has_buttons = !buttons.is_empty();
 
+        if vertical {
+            return v_flex()
+                .id("panel-buttons-vertical")
+                .gap_1()
+                .items_center()
+                .children(buttons)
+                .into_any_element();
+        }
+
         h_flex()
             .gap_1()
             .when(
@@ -1581,6 +1682,7 @@ impl Render for PanelButtons {
             .when(has_buttons && dock.position == DockPosition::Left, |this| {
                 this.child(Divider::vertical().color(DividerColor::Border))
             })
+            .into_any_element()
     }
 }
 
