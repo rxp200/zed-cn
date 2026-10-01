@@ -360,14 +360,22 @@ mod tests {
         assert_eq!(height, 9);
         assert_eq!(
             shown,
-            i18n::t_args!(
-                "280a98831e55b5c2",
-                text.lines().take(8).collect::<Vec<_>>().join("\n")
+            i18n::t!(
+                "f403a54c9fd47896",
+                shown = text.lines().take(8).collect::<Vec<_>>().join("\n"),
+                hidden_lines = 4
             )
         );
         let (shown, height) = preview.display_text(11);
         assert_eq!(height, 12);
-        assert_eq!(shown.lines().last(), Some("… +1 more line"));
+        assert_eq!(
+            shown,
+            i18n::t!(
+                "f403a54c9fd47896",
+                shown = text.lines().take(11).collect::<Vec<_>>().join("\n"),
+                hidden_lines = 1
+            )
+        );
         assert_eq!(preview.display_text(12), (text, 12));
     }
 }

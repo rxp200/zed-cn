@@ -1,8 +1,4 @@
-use std::sync::Arc;
-
-use agent_skills::GLOBAL_SKILLS_DIR_DISPLAY;
 use auto_update::{AutoUpdater, custom_release_notes, release_notes_url};
-use client::zed_urls;
 use db::kvp::Dismissable;
 use editor::{Editor, MultiBuffer};
 use gpui::{
@@ -10,12 +6,13 @@ use gpui::{
     prelude::*,
 };
 use markdown_preview::markdown_preview_view::{MarkdownPreviewMode, MarkdownPreviewView};
-use prompt_store::rules_to_skills_migration;
+use project::DisableAiSettings;
 use release_channel::{AppVersion, ReleaseChannel};
 use semver::Version;
 use serde::Deserialize;
+use settings::Settings as _;
 use smol::io::AsyncReadExt;
-use ui::{AnnouncementToast, ListBulletItem, SkillsIllustration, prelude::*};
+use ui::{AnnouncementToast, DeltaIllustration, ListBulletItem, prelude::*};
 use util::{ResultExt as _, maybe};
 use workspace::{
     Workspace,
@@ -73,7 +70,7 @@ fn notify_release_notes_failed_to_show(
 
     impl WorkspaceError for ReleaseNotesError {
         fn primary_message(&self) -> SharedString {
-            "Couldn't load release notes".into()
+            i18n::t!("5e295b3507164b6b").into()
         }
         fn severity(&self) -> ErrorSeverity {
             ErrorSeverity::Error
@@ -81,7 +78,7 @@ fn notify_release_notes_failed_to_show(
         fn primary_action(&self) -> ErrorAction {
             self.url
                 .clone()
-                .map(|url| ErrorAction::link("View in Browser", url))
+                .map(|url| ErrorAction::link(i18n::t!("863910b4ff1717af"), url))
                 .unwrap_or_else(ErrorAction::dismiss)
         }
     }
@@ -203,63 +200,38 @@ struct AnnouncementContent {
     bullet_items: Vec<SharedString>,
     primary_action_label: SharedString,
     secondary_action_label: SharedString,
-    primary_action_url: Option<SharedString>,
-    primary_action_callback: Option<Arc<dyn Fn(&mut Window, &mut App) + Send + Sync>>,
-    secondary_action_url: Option<SharedString>,
-    on_dismiss: Option<Arc<dyn Fn(&mut App) + Send + Sync>>,
+    primary_action_url: SharedString,
+    secondary_action_url: SharedString,
 }
 
-struct SkillsAnnouncement;
+struct DeltaAnnouncement;
 
-impl Dismissable for SkillsAnnouncement {
-    const KEY: &'static str = "skills_announcement_dismissed";
+impl Dismissable for DeltaAnnouncement {
+    const KEY: &'static str = "delta_announcement_dismissed";
 }
 
 fn announcement_for_version(version: &Version, cx: &App) -> Option<AnnouncementContent> {
-    let version_with_skills = match ReleaseChannel::global(cx) {
-        ReleaseChannel::Stable => Version::new(1, 4, 0),
-        ReleaseChannel::Dev | ReleaseChannel::Nightly | ReleaseChannel::Preview => {
-            Version::new(1, 4, 0)
-        }
-    };
-
-    if *version >= version_with_skills && !SkillsAnnouncement::dismissed(cx) {
-        // Only mention the Rules → Skills migration if the user actually
-        // had Rules that got migrated. New users (and existing users who
-        // never created a Rule) would otherwise be confused by a bullet
-        // referring to "your rules" that don't exist.
-        let migrated_anything =
-            rules_to_skills_migration::migration_result().is_some_and(|result| !result.is_empty());
-
-        let mut bullet_items: Vec<SharedString> = Vec::with_capacity(3);
-        bullet_items.push(
-            i18n::t!(
-                "09bf5b5a840ba016",
-                GLOBAL_SKILLS_DIR_DISPLAY = GLOBAL_SKILLS_DIR_DISPLAY
-            )
-            .into(),
-        );
-        bullet_items.push(i18n::t!("cf3190a032d0c5f7").into());
-        if migrated_anything {
-            bullet_items.push(i18n::t!("b992852ff4bf6d40").into());
-        }
-
-        Some(AnnouncementContent {
-            heading: i18n::t!("2fba84402b7bb0d4").into(),
-            description: i18n::t!("299411168f5a1da8").into(),
-            bullet_items,
-            primary_action_label: i18n::t!("c0d27db4765683c2").into(),
-            secondary_action_label: i18n::t!("ac5c3de1e8bafdf9").into(),
-            primary_action_url: None,
-            primary_action_callback: Some(Arc::new(move |window, cx| {
-                window.dispatch_action(Box::new(zed_actions::assistant::FocusAgent), cx);
-            })),
-            on_dismiss: Some(Arc::new(|cx| SkillsAnnouncement::set_dismissed(true, cx))),
-            secondary_action_url: Some(zed_urls::skills_docs(cx).into()),
-        })
-    } else {
-        None
+    let version_with_delta = Version::new(1, 22, 0);
+    if *version < version_with_delta
+        || DisableAiSettings::get_global(cx).disable_ai
+        || DeltaAnnouncement::dismissed(cx)
+    {
+        return None;
     }
+
+    Some(AnnouncementContent {
+        heading: i18n::t!("2c842b92d946046b").into(),
+        description: i18n::t!("233bb5172065660d").into(),
+        bullet_items: vec![
+            i18n::t!("5ad3110b18b5dd3d").into(),
+            i18n::t!("3ee779f935b82381").into(),
+            i18n::t!("d084da980d612dcf").into(),
+        ],
+        primary_action_label: i18n::t!("e93d126acd0c40f4").into(),
+        secondary_action_label: i18n::t!("8d8cd546b58d91c3").into(),
+        primary_action_url: "https://delta.dev/".into(),
+        secondary_action_url: "https://delta.dev/docs/getting-started".into(),
+    })
 }
 
 struct AnnouncementToastNotification {
@@ -277,9 +249,7 @@ impl AnnouncementToastNotification {
 
     fn dismiss(&mut self, cx: &mut Context<Self>) {
         cx.emit(DismissEvent);
-        if let Some(on_dismiss) = &self.content.on_dismiss {
-            on_dismiss(cx);
-        }
+        DeltaAnnouncement::set_dismissed(true, cx);
     }
 }
 
@@ -294,9 +264,9 @@ impl EventEmitter<SuppressEvent> for AnnouncementToastNotification {}
 impl Notification for AnnouncementToastNotification {}
 
 impl Render for AnnouncementToastNotification {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        AnnouncementToast::new()
-            .illustration(SkillsIllustration::new())
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let toast = AnnouncementToast::new()
+            .illustration(DeltaIllustration::new())
             .heading(self.content.heading.clone())
             .description(self.content.description.clone())
             .bullet_items(
@@ -309,31 +279,30 @@ impl Render for AnnouncementToastNotification {
             .secondary_action_label(self.content.secondary_action_label.clone())
             .primary_on_click(cx.listener({
                 let url = self.content.primary_action_url.clone();
-                let callback = self.content.primary_action_callback.clone();
-                move |this, _, window, cx| {
-                    telemetry::event!("Skills Announcement Main Click");
-                    if let Some(callback) = &callback {
-                        callback(window, cx);
-                    }
-                    if let Some(url) = &url {
-                        cx.open_url(url);
-                    }
+                move |this, _, _window, cx| {
+                    telemetry::event!("Delta Announcement Main Click");
+                    cx.open_url(&url);
                     this.dismiss(cx);
                 }
             }))
             .secondary_on_click(cx.listener({
                 let url = self.content.secondary_action_url.clone();
                 move |_, _, _window, cx| {
-                    telemetry::event!("Skills Announcement Secondary Click");
-                    if let Some(url) = &url {
-                        cx.open_url(url);
-                    }
+                    telemetry::event!("Delta Announcement Secondary Click");
+                    cx.open_url(&url);
                 }
             }))
             .dismiss_on_click(cx.listener(|this, _, _window, cx| {
-                telemetry::event!("Skills Announcement Dismiss");
+                telemetry::event!("Delta Announcement Dismiss");
                 this.dismiss(cx);
-            }))
+            }));
+
+        div()
+            .self_end()
+            .flex_none()
+            .w(rems_from_px(400_f32))
+            .max_w((window.viewport_size().width - window.rem_size() * 1.5).max(px(0.)))
+            .child(toast)
     }
 }
 
@@ -362,8 +331,11 @@ fn show_update_notification(cx: &mut App) {
             move |cx| {
                 let workspace_handle = cx.entity().downgrade();
                 cx.new(|cx| {
-                    MessageNotification::new(i18n::t_args!("7650f13b97d7af82", version), cx)
-                        .primary_message("View Release Notes")
+                    MessageNotification::new(
+                        i18n::t_mix!("7650f13b97d7af82"; version; app_name = app_name),
+                        cx,
+                    )
+                    .primary_message(i18n::t!("750579fa007c5b29"))
                         .primary_on_click(move |window, cx| {
                             if let Some(workspace) = workspace_handle.upgrade() {
                                 workspace.update(cx, |workspace, cx| {

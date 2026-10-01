@@ -1809,7 +1809,7 @@ impl<'a> ElicitationCard<'a> {
             (ElicitationStatus::Accepted, acp::ElicitationMode::Url(_))
         );
         let (status_label, status_icon, status_color) = match &self.elicitation.status {
-            ElicitationStatus::Pending { .. } => ("等待输入", IconName::Info, Color::Info),
+            ElicitationStatus::Pending { .. } => (i18n::t!("6569c6e69886e855"), IconName::Info, Color::Info),
             ElicitationStatus::Accepted if is_accepted_url => {
                 ("Waiting for completion", IconName::Info, Color::Info)
             }
@@ -2253,7 +2253,7 @@ impl<'a> ElicitationCard<'a> {
                             h_flex()
                                 .gap_1()
                                 .child(
-                                    Label::new("目标")
+                                    Label::new(i18n::t!("57060c88a36bf3d0"))
                                         .size(LabelSize::Small)
                                         .color(Color::Muted),
                                 )
@@ -2319,11 +2319,11 @@ impl<'a> ElicitationCard<'a> {
             open_url.is_some() && matches!(self.elicitation.status, ElicitationStatus::Accepted);
         let is_submitting = self.form_state.is_some_and(|state| state.is_submitting);
         let (accept_label, accept_icon, accept_icon_color) = if is_accepted_url {
-            ("再次打开", IconName::ArrowUpRight, Color::Muted)
+            (i18n::t!("29a2407a872863cb"), IconName::ArrowUpRight, Color::Muted)
         } else if open_url.is_some() {
-            ("打开", IconName::ArrowUpRight, Color::Muted)
+            (i18n::t!("c771248e511fbf93"), IconName::ArrowUpRight, Color::Muted)
         } else {
-            ("提交", IconName::Check, Color::Success)
+            (i18n::t!("08a85f4ab4bab9ca"), IconName::Check, Color::Success)
         };
         let border_color = cx.theme().colors().border.opacity(0.8);
         let on_submit = self.handlers.on_submit.clone();
@@ -2366,7 +2366,7 @@ impl<'a> ElicitationCard<'a> {
             )
             .when(!is_accepted_url, |this| {
                 this.child(
-                    Button::new(("elicitation-decline", self.entry_ix), "拒绝")
+                    Button::new(("elicitation-decline", self.entry_ix), i18n::t!("136de7a8c46fc803"))
                         .tab_index(0_isize)
                         .start_icon(
                             Icon::new(IconName::Close)
@@ -2379,7 +2379,7 @@ impl<'a> ElicitationCard<'a> {
                         }),
                 )
                 .child(
-                    Button::new(("elicitation-cancel", self.entry_ix), "取消")
+                    Button::new(("elicitation-cancel", self.entry_ix), i18n::t!("2cd0f3be8738a86c"))
                         .tab_index(0_isize)
                         .label_size(LabelSize::Small)
                         .on_click(move |_, window, cx| {
@@ -2389,7 +2389,7 @@ impl<'a> ElicitationCard<'a> {
             })
             .when(is_accepted_url, |this| {
                 this.child(
-                    Button::new(("elicitation-dismiss-url", self.entry_ix), "取消")
+                    Button::new(("elicitation-dismiss-url", self.entry_ix), i18n::t!("2cd0f3be8738a86c"))
                         .tab_index(0_isize)
                         .label_size(LabelSize::Small)
                         .on_click(move |_, window, cx| {

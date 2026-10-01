@@ -37,7 +37,9 @@ use rpc::{
 };
 use smol::{fs as async_fs, process::Child};
 
-use settings::initial_server_settings_content;
+use futures::{SinkExt, Stream, channel::mpsc};
+
+use settings::{Settings as _, SettingsLocation, initial_server_settings_content};
 use std::{
     num::NonZeroU64,
     path::{Path, PathBuf},
@@ -48,10 +50,11 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use sysinfo::{Disks, Networks, ProcessRefreshKind, RefreshKind, System, UpdateKind};
+use terminal::terminal_settings::TerminalSettings;
 use util::{ResultExt, paths::PathStyle, rel_path::RelPath};
 use worktree::Worktree;
 
-use crate::persistent_terminal::PersistentTerminalManager;
+use crate::persistent_terminal::{OutputPull, PersistentTerminalManager};
 
 struct SystemStatsSampler {
     system: System,
@@ -489,6 +492,14 @@ impl HeadlessProject {
         session.add_request_handler(cx.weak_entity(), Self::handle_resize_persistent_terminal);
         session.add_request_handler(cx.weak_entity(), Self::handle_read_persistent_terminal);
         session.add_request_handler(cx.weak_entity(), Self::handle_close_persistent_terminal);
+        session.add_stream_request_handler(
+            cx.weak_entity(),
+            Self::handle_subscribe_persistent_terminal,
+        );
+        session.add_request_handler(
+            cx.weak_entity(),
+            Self::handle_persistent_terminal_output_credit,
+        );
 
         session.add_entity_request_handler(Self::handle_add_worktree);
         session.add_request_handler(cx.weak_entity(), Self::handle_remove_worktree);
@@ -498,6 +509,7 @@ impl HeadlessProject {
         session.add_entity_request_handler(Self::handle_find_search_candidates);
         session.add_entity_request_handler(Self::handle_open_server_settings);
         session.add_entity_request_handler(Self::handle_get_directory_environment);
+        session.add_entity_request_handler(Self::handle_get_terminal_shell);
         session.add_entity_message_handler(Self::handle_toggle_lsp_logs);
         session.add_entity_request_handler(Self::handle_open_image_by_path);
         session.add_entity_request_handler(Self::handle_trust_worktrees);
@@ -1136,6 +1148,59 @@ impl HeadlessProject {
         Ok(proto::Ack {})
     }
 
+    async fn handle_subscribe_persistent_terminal(
+        this: Entity<Self>,
+        message: TypedEnvelope<proto::SubscribePersistentTerminal>,
+        cx: AsyncApp,
+    ) -> Result<impl Stream<Item = Result<proto::PersistentTerminalOutput>>> {
+        let manager = this.read_with(&cx, |this, _| this.persistent_terminals.clone());
+        let server_instance_id = message.payload.server_instance_id.clone();
+        let terminal_id = message.payload.terminal_id.clone();
+        let (generation, kick_rx) = cx
+            .background_spawn({
+                let manager = manager.clone();
+                async move { manager.subscribe(message.payload) }
+            })
+            .await?;
+
+        let (mut frame_tx, frame_rx) = mpsc::unbounded();
+        cx.background_spawn(async move {
+            loop {
+                match manager.pull_output(&server_instance_id, &terminal_id, generation) {
+                    Ok(OutputPull::Frame(frame)) => {
+                        let exited = frame.exited;
+                        if frame_tx.send(Ok(frame)).await.is_err() || exited {
+                            break;
+                        }
+                    }
+                    Ok(OutputPull::WaitForKick) => {
+                        if kick_rx.recv().await.is_err() {
+                            break;
+                        }
+                    }
+                    Ok(OutputPull::Superseded) => break,
+                    Err(error) => {
+                        log::debug!("persistent terminal output stream ended: {error:#}");
+                        break;
+                    }
+                }
+            }
+        })
+        .detach();
+        Ok(frame_rx)
+    }
+
+    async fn handle_persistent_terminal_output_credit(
+        this: Entity<Self>,
+        message: TypedEnvelope<proto::PersistentTerminalOutputCredit>,
+        cx: AsyncApp,
+    ) -> Result<proto::Ack> {
+        let manager = this.read_with(&cx, |this, _| this.persistent_terminals.clone());
+        cx.background_spawn(async move { manager.set_output_credit(message.payload) })
+            .await?;
+        Ok(proto::Ack {})
+    }
+
     async fn handle_create_temporary_file(
         _this: Entity<Self>,
         message: TypedEnvelope<proto::CreateTemporaryFile>,
@@ -1218,6 +1283,7 @@ impl HeadlessProject {
         envelope: TypedEnvelope<proto::ToggleLspLogs>,
         cx: AsyncApp,
     ) -> Result<()> {
+        let peer_id = envelope.original_sender_id.unwrap_or(envelope.sender_id);
         let server_id = LanguageServerId::from_proto(envelope.payload.server_id);
         let lsp_store = this.read_with(&cx, |this, _| this.lsp_store.downgrade());
         cx.update(|cx| {
@@ -1236,8 +1302,14 @@ impl HeadlessProject {
                 };
             let server_key =
                 LanguageServerLogKey::new(LanguageServerKind::LocalSsh { lsp_store }, server_id);
-            log_store.update(cx, |log_store, _| {
-                log_store.toggle_lsp_logs(&server_key, envelope.payload.enabled, toggled_log_kind);
+            log_store.update(cx, |log_store, cx| {
+                log_store.set_downstream_log_stream(
+                    &server_key,
+                    peer_id,
+                    toggled_log_kind,
+                    envelope.payload.enabled,
+                    cx,
+                );
             });
             anyhow::Ok(())
         })?;
@@ -1710,6 +1782,26 @@ impl HeadlessProject {
             .into_iter()
             .collect();
         Ok(proto::DirectoryEnvironment { environment })
+    }
+
+    async fn handle_get_terminal_shell(
+        _this: Entity<Self>,
+        envelope: TypedEnvelope<proto::GetTerminalShell>,
+        cx: AsyncApp,
+    ) -> Result<proto::GetTerminalShellResponse> {
+        let worktree_id = envelope.payload.worktree_id.map(WorktreeId::from_proto);
+        let shell = cx.update(|cx| {
+            let settings_location = worktree_id.map(|worktree_id| SettingsLocation {
+                worktree_id,
+                path: RelPath::empty(),
+            });
+            TerminalSettings::get(settings_location, cx).shell.clone()
+        });
+        log::debug!("handle_get_terminal_shell: resolved remote terminal shell setting: {shell:?}");
+
+        Ok(proto::GetTerminalShellResponse {
+            shell: Some(task::shell_to_proto(shell)),
+        })
     }
 }
 

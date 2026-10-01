@@ -209,7 +209,7 @@ fn run(
         if let Err(error) = result {
             workspace
                 .update(cx, |workspace, cx| {
-                    workspace.show_error(i18n::t!("2ef2befdd31d8947"), cx);
+                    workspace.show_error(i18n::t!("2ef2befdd31d8947", error = error), cx);
                 })
                 .log_err();
         }

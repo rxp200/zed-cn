@@ -965,6 +965,144 @@ mod tests {
             .unwrap();
     }
 
+    #[gpui::test]
+    async fn test_auto_recreate_when_server_not_running(
+        cx: &mut TestAppContext,
+        server_cx: &mut TestAppContext,
+    ) {
+        let app_state = init_test(cx);
+        let executor = cx.executor();
+
+        cx.update(|cx| {
+            release_channel::init(semver::Version::new(0, 0, 0), cx);
+        });
+        server_cx.update(|cx| {
+            release_channel::init(semver::Version::new(0, 0, 0), cx);
+        });
+
+        let (opts, server_session, connect_guard) = RemoteClient::fake_server(cx, server_cx);
+
+        let remote_fs = FakeFs::new(server_cx.executor());
+        remote_fs
+            .insert_tree(
+                path!("/project"),
+                json!({
+                    "src": {
+                        "main.rs": "fn main() {}",
+                    },
+                }),
+            )
+            .await;
+
+        server_cx.update(HeadlessProject::init);
+        let http_client = Arc::new(BlockedHttpClient);
+        let node_runtime = NodeRuntime::unavailable();
+        let languages = Arc::new(language::LanguageRegistry::new(server_cx.executor()));
+        let proxy = Arc::new(ExtensionHostProxy::new());
+
+        let _headless = server_cx.new(|cx| {
+            HeadlessProject::new(
+                HeadlessAppState {
+                    session: server_session,
+                    fs: remote_fs.clone(),
+                    http_client: http_client.clone(),
+                    node_runtime: node_runtime.clone(),
+                    languages: languages.clone(),
+                    extension_host_proxy: proxy.clone(),
+                    startup_time: std::time::Instant::now(),
+                },
+                false,
+                cx,
+            )
+        });
+
+        drop(connect_guard);
+
+        let paths = vec![PathBuf::from(path!("/project"))];
+        let mut async_cx = cx.to_async();
+        open_remote_project(
+            opts.clone(),
+            paths,
+            app_state,
+            workspace::OpenOptions::default(),
+            &mut async_cx,
+        )
+        .await
+        .expect("initial open should succeed");
+
+        executor.run_until_parked();
+
+        assert_eq!(cx.update(|cx| cx.windows().len()), 1);
+        let window = cx.update(|cx| cx.windows()[0].downcast::<MultiWorkspace>().unwrap());
+
+        // Register the replacement server before the old one is reported gone, so
+        // the automatic recreation has somewhere to connect.
+        let (server_session_2, connect_guard_2) =
+            RemoteClient::fake_server_with_opts(&opts, cx, server_cx);
+        let _headless_2 = server_cx.new(|cx| {
+            HeadlessProject::new(
+                HeadlessAppState {
+                    session: server_session_2,
+                    fs: remote_fs.clone(),
+                    http_client,
+                    node_runtime,
+                    languages,
+                    extension_host_proxy: proxy,
+                    startup_time: std::time::Instant::now(),
+                },
+                false,
+                cx,
+            )
+        });
+        drop(connect_guard_2);
+
+        // Report the old server as gone without clicking reconnect: the client must
+        // recreate the remote project on its own.
+        window
+            .update(cx, |multi_workspace, _, cx| {
+                let workspace = multi_workspace.workspace().clone();
+                workspace.update(cx, |workspace, cx| {
+                    let client = workspace
+                        .project()
+                        .read(cx)
+                        .remote_client()
+                        .expect("should have remote client");
+                    client.update(cx, |client, cx| {
+                        client.force_server_not_running(cx);
+                    });
+                });
+            })
+            .unwrap();
+
+        // Recreation performs a full asynchronous connect, so let every queued task
+        // settle before asserting that it replaced the disconnected project.
+        for _ in 0..10 {
+            executor.run_until_parked();
+        }
+
+        assert_eq!(cx.update(|cx| cx.windows().len()), 1);
+        window
+            .update(cx, |multi_workspace, _, cx| {
+                let workspace = multi_workspace.workspace().clone();
+                workspace.update(cx, |workspace, cx| {
+                    let project = workspace.project();
+                    assert!(
+                        project.read(cx).is_remote(),
+                        "project should stay remote after automatic recreation"
+                    );
+                    let client = project
+                        .read(cx)
+                        .remote_client()
+                        .expect("recreated project should have a remote client");
+                    assert!(
+                        client.read(cx).remote_connection().is_some(),
+                        "recreated project should have a live remote connection"
+                    );
+                });
+            })
+            .unwrap();
+    }
+
     fn init_test(cx: &mut TestAppContext) -> Arc<AppState> {
         cx.update(|cx| {
             let state = AppState::test(cx);

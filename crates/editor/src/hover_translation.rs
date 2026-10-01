@@ -23,10 +23,11 @@ use gpui::{
     App, AppContext as _, AsyncApp, Context, Entity, Global, ScrollHandle, SharedString, Task,
     Window,
 };
+use crate::code_explanations::ConfiguredModel;
 use itertools::Itertools as _;
 use language::CharKind;
 use language_model::{
-    ConfiguredModel, LanguageModelProviderId, LanguageModelRegistry, LanguageModelRequest,
+    LanguageModelProviderId, LanguageModelRegistry, LanguageModelRequest,
     LanguageModelRequestMessage, MessageContent, Role,
 };
 use markdown::Markdown;
@@ -372,10 +373,16 @@ fn resolve_model(cx: &App) -> Result<ConfiguredModel> {
                 })?;
             Ok(ConfiguredModel { provider, model })
         }
-        (None, None) => registry
-            .default_fast_model(cx)
-            .or_else(|| registry.default_model())
-            .context(i18n::t!("f7e7b7f73d5c70b0")),
+        (None, None) => {
+            let model = registry
+                .default_fast_model(cx)
+                .or_else(|| registry.default_model())
+                .context(i18n::t!("f7e7b7f73d5c70b0"))?;
+            let provider = registry
+                .provider(&model.provider_id)
+                .context(i18n::t!("e1d101dd283ff727"))?;
+            Ok(ConfiguredModel { provider, model })
+        }
         _ => Err(anyhow::anyhow!(i18n::t!("c70371b6a0586b63"))),
     }
 }
@@ -412,8 +419,8 @@ async fn request_translation(
     };
 
     let mut stream = model
-        .model
-        .stream_completion_text(request, cx)
+        .provider
+        .stream_completion_text(&model.model, request, cx)
         .await
         .map_err(|err| anyhow::anyhow!(err.to_string()))?;
     let mut translation = String::new();
@@ -506,7 +513,7 @@ mod tests {
         test::editor_test_context::EditorTestContext,
     };
     use gpui::BorrowAppContext;
-    use language_model::fake_provider::{FakeLanguageModel, FakeLanguageModelProvider};
+    use language_model::fake_provider::FakeLanguageModelProvider;
     use settings::SettingsStore;
     use std::sync::Arc;
 
@@ -546,23 +553,21 @@ mod tests {
         assert_eq!(truncate_text("你好世界", 2), "你好…");
     }
 
-    fn setup_fake_model(cx: &mut gpui::TestAppContext) -> Arc<FakeLanguageModel> {
+    fn setup_fake_model(
+        cx: &mut gpui::TestAppContext,
+    ) -> (Arc<FakeLanguageModelProvider>, language_model::LanguageModel) {
         cx.update(|cx| {
             LanguageModelRegistry::test(cx);
-            let model = Arc::new(FakeLanguageModel::default());
-            let provider =
-                Arc::new(FakeLanguageModelProvider::default().with_models(vec![model.clone()]));
+            let provider = Arc::new(FakeLanguageModelProvider::new(
+                LanguageModelProviderId::from("fake".to_string()),
+                language_model::LanguageModelProviderName::from("Fake".to_string()),
+            ));
+            let model = provider.model("fake");
             LanguageModelRegistry::global(cx).update(cx, |registry, cx| {
                 registry.register_provider(provider.clone(), cx);
-                registry.set_default_model(
-                    Some(ConfiguredModel {
-                        provider,
-                        model: model.clone(),
-                    }),
-                    cx,
-                );
+                registry.set_default_model(Some(model.clone()), cx);
             });
-            model
+            (provider, model)
         })
     }
 
@@ -579,7 +584,7 @@ mod tests {
     #[gpui::test]
     async fn test_translate_word_under_cursor(cx: &mut gpui::TestAppContext) {
         init_test_without_persistent_cache(cx);
-        let model = setup_fake_model(cx);
+        let (provider, model) = setup_fake_model(cx);
         let mut cx = EditorTestContext::new(cx).await;
 
         // The word under the cursor (bounded by punctuation) is translated.
@@ -591,13 +596,13 @@ mod tests {
             assert_eq!(popover_text(editor, cx), "翻译中…");
         });
 
-        let requests = model.pending_completions();
+        let requests = provider.pending_completions();
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0].messages[1].string_contents(), "bar");
         assert!(requests[0].messages[0].string_contents().contains("中文"));
 
-        model.send_last_completion_stream_text_chunk("柱");
-        model.end_last_completion_stream();
+        provider.send_last_text(&model, "柱");
+        provider.end_last(&model);
         cx.run_until_parked();
 
         cx.editor(|editor, _, cx| {
@@ -614,13 +619,13 @@ mod tests {
         cx.editor(|editor, _, cx| {
             assert_eq!(popover_text(editor, cx), "柱");
         });
-        assert!(model.pending_completions().is_empty());
+        assert!(provider.pending_completions().is_empty());
     }
 
     #[gpui::test]
     async fn test_in_flight_translation_survives_dropped_caller(cx: &mut gpui::TestAppContext) {
         init_test_without_persistent_cache(cx);
-        let model = setup_fake_model(cx);
+        let (provider, model) = setup_fake_model(cx);
 
         // Start a translation and drop the returned task before the model
         // responds — this is what happens when the hover popover is dismissed
@@ -631,38 +636,38 @@ mod tests {
         cx.run_until_parked();
 
         // The request is still running, not canceled.
-        assert_eq!(model.pending_completions().len(), 1);
+        assert_eq!(provider.pending_completions().len(), 1);
 
         // The detached request completes and caches the result.
-        model.send_last_completion_stream_text_chunk("你好世界");
-        model.end_last_completion_stream();
+        provider.send_last_text(&model, "你好世界");
+        provider.end_last(&model);
         cx.run_until_parked();
 
         // Translating the same text again is served from the cache and does
         // not issue another request.
         let task = cx.update(|cx| TranslationService::translate("hello world".into(), cx));
         assert_eq!(task.await.unwrap(), "你好世界");
-        assert!(model.pending_completions().is_empty());
+        assert!(provider.pending_completions().is_empty());
     }
 
     #[gpui::test]
     async fn test_in_flight_translation_is_deduplicated(cx: &mut gpui::TestAppContext) {
         init_test_without_persistent_cache(cx);
-        let model = setup_fake_model(cx);
+        let (provider, model) = setup_fake_model(cx);
         // Two callers translate the same text while the request is in flight;
         // only one model request should be issued.
         let task1 = cx.update(|cx| TranslationService::translate("hello world".into(), cx));
         let task2 = cx.update(|cx| TranslationService::translate("hello world".into(), cx));
         cx.run_until_parked();
-        assert_eq!(model.pending_completions().len(), 1);
+        assert_eq!(provider.pending_completions().len(), 1);
 
         // Both callers receive the result.
-        model.send_last_completion_stream_text_chunk("你好世界");
-        model.end_last_completion_stream();
+        provider.send_last_text(&model, "你好世界");
+        provider.end_last(&model);
         cx.run_until_parked();
         assert_eq!(task1.await.unwrap(), "你好世界");
         assert_eq!(task2.await.unwrap(), "你好世界");
-        assert!(model.pending_completions().is_empty());
+        assert!(provider.pending_completions().is_empty());
     }
 
     #[gpui::test]
@@ -672,14 +677,14 @@ mod tests {
         cx.update(|cx| {
             TranslationService::create(directory.path().join("translation_cache.json"), cx);
         });
-        let model = setup_fake_model(cx);
+        let (provider, model) = setup_fake_model(cx);
 
         let task = cx.update(|cx| TranslationService::translate("hello world".into(), cx));
         cx.run_until_parked();
-        assert_eq!(model.pending_completions().len(), 1);
+        assert_eq!(provider.pending_completions().len(), 1);
 
-        model.send_last_completion_stream_text_chunk("你好世界");
-        model.end_last_completion_stream();
+        provider.send_last_text(&model, "你好世界");
+        provider.end_last(&model);
         cx.run_until_parked();
         assert_eq!(task.await.unwrap(), "你好世界");
 
@@ -829,7 +834,7 @@ mod tests {
     #[gpui::test]
     async fn test_configured_translation_model_does_not_fall_back(cx: &mut gpui::TestAppContext) {
         init_test_without_persistent_cache(cx);
-        let default_model = setup_fake_model(cx);
+        let (default_provider, _default_model) = setup_fake_model(cx);
         cx.update(|cx| {
             cx.update_global(|store: &mut SettingsStore, cx| {
                 store.update_user_settings(cx, |settings: &mut SettingsContent| {
@@ -850,7 +855,7 @@ mod tests {
         cx.dispatch_action(TranslateSelection);
         cx.run_until_parked();
 
-        assert!(default_model.pending_completions().is_empty());
+        assert!(default_provider.pending_completions().is_empty());
         cx.editor(|editor, _, cx| {
             let text = popover_text(editor, cx);
             assert!(text.contains("配置的翻译模型提供商不可用"), "got: {text}");
@@ -860,7 +865,7 @@ mod tests {
     #[gpui::test]
     async fn test_translate_selection_range(cx: &mut gpui::TestAppContext) {
         init_test_without_persistent_cache(cx);
-        let model = setup_fake_model(cx);
+        let (provider, model) = setup_fake_model(cx);
         let mut cx = EditorTestContext::new(cx).await;
 
         // An explicit selection is translated as-is, even across word
@@ -869,17 +874,17 @@ mod tests {
         cx.dispatch_action(TranslateSelection);
         cx.run_until_parked();
 
-        let requests = model.pending_completions();
+        let requests = provider.pending_completions();
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0].messages[1].string_contents(), "foo.bar");
-        model.end_last_completion_stream();
+        provider.end_last(&model);
         cx.run_until_parked();
 
         // A Chinese selection is not translated.
         cx.set_state("let «变量ˇ» = 1;");
         cx.dispatch_action(TranslateSelection);
         cx.run_until_parked();
-        assert!(model.pending_completions().is_empty());
+        assert!(provider.pending_completions().is_empty());
         cx.editor(|editor, _, _| {
             assert!(editor.hover_state.info_popovers.is_empty());
         });

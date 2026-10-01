@@ -671,6 +671,7 @@ pub fn insert_zed_terminal_env(
 pub enum Event {
     TitleChanged,
     BreadcrumbsChanged,
+    OutputReplaced,
     CloseTerminal,
     Bell,
     Wakeup,
@@ -760,7 +761,7 @@ impl fmt::Debug for TerminalBackendEvent {
 }
 
 enum PtyEvent {
-    Event(TerminalBackendEvent),
+    Event(TerminalBackendEvent, u64),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -891,6 +892,16 @@ impl Display for TerminalError {
 // https://github.com/alacritty/alacritty/blob/cb3a79dbf6472740daca8440d5166c1d4af5029e/extra/man/alacritty.5.scd?plain=1#L207-L213
 const DEFAULT_SCROLL_HISTORY_LINES: usize = 10_000;
 pub const MAX_SCROLL_HISTORY_LINES: usize = 100_000;
+
+/// Upper bound for merging queued remote-terminal keystrokes into a single
+/// input message. Well under the server's 1 MiB input limit.
+const MAX_COALESCED_INPUT_BYTES: usize = 64 * 1024;
+/// How much streamed remote-terminal output the client applies before
+/// reporting a new credit offset to the server.
+const OUTPUT_CREDIT_GRANULARITY_BYTES: u64 = 256 * 1024;
+/// Consecutive output-stream failures tolerated before falling back to
+/// polling for the rest of the terminal's lifetime.
+const MAX_STREAM_FAILURES: u32 = 3;
 static NEXT_INIT_COMMAND_STARTUP_MARKER_ID: AtomicU64 = AtomicU64::new(1);
 
 const INIT_COMMAND_STARTUP_MARKER_PREFIX: &str = "__zed_init_command_ready_";
@@ -1019,7 +1030,13 @@ impl TerminalBuilder {
         let config = display_only_term_config(scrolling_history, cursor_shape);
 
         let (events_tx, events_rx) = unbounded();
-        let term = new_term(&config, terminal_bounds, events_tx, alternate_scroll);
+        let term = new_term(
+            &config,
+            terminal_bounds,
+            events_tx.clone(),
+            alternate_scroll,
+            0,
+        );
 
         let terminal = Terminal {
             task: None,
@@ -1029,6 +1046,8 @@ impl TerminalBuilder {
             term,
             term_config: config,
             output_processor: None,
+            output_events_tx: Some(events_tx),
+            output_generation: 0,
             title_override: None,
             events: VecDeque::with_capacity(10),
             last_content: Content {
@@ -1101,6 +1120,7 @@ impl TerminalBuilder {
         client: AnyProtoClient,
         server_instance_id: String,
         terminal_id: String,
+        streaming: bool,
         background_executor: &BackgroundExecutor,
     ) -> TerminalBuilder {
         let mut builder = Self::new_display_only(
@@ -1141,6 +1161,7 @@ impl TerminalBuilder {
             client,
             server_instance_id,
             terminal_id,
+            streaming,
             input_tx,
         });
         builder.remote_input_rx = Some(input_rx);
@@ -1284,6 +1305,7 @@ impl TerminalBuilder {
                 TerminalBounds::default(),
                 events_tx.clone(),
                 alternate_scroll,
+                0,
             );
 
             // When `no_pty` is set (headless hosts), run the task as a plain
@@ -1377,6 +1399,8 @@ impl TerminalBuilder {
                 term,
                 term_config: config,
                 output_processor: None,
+                output_events_tx: None,
+                output_generation: 0,
                 title_override: terminal_title_override,
                 events: VecDeque::with_capacity(10), //Should never get this high.
                 last_content: Default::default(),
@@ -1476,6 +1500,7 @@ impl TerminalBuilder {
             let client = remote.client.clone();
             let server_instance_id = remote.server_instance_id.clone();
             let terminal_id = remote.terminal_id.clone();
+            let streaming = remote.streaming;
             let input_rx = self
                 .remote_input_rx
                 .take()
@@ -1485,16 +1510,24 @@ impl TerminalBuilder {
                 let server_instance_id = server_instance_id.clone();
                 let terminal_id = terminal_id.clone();
                 async move {
+                    // Inputs are fire-and-forget: the transport is ordered and the
+                    // server rejects sequence gaps, so awaiting an Ack per keystroke
+                    // would multiply fast typing latency by the network round trip.
                     let mut sequence = 1;
-                    while let Ok(data) = input_rx.recv().await {
-                        client
-                            .request(proto::PersistentTerminalInput {
-                                server_instance_id: server_instance_id.clone(),
-                                terminal_id: terminal_id.clone(),
-                                sequence,
-                                data,
-                            })
-                            .await?;
+                    while let Ok(first) = input_rx.recv().await {
+                        let mut data = first;
+                        while data.len() < MAX_COALESCED_INPUT_BYTES {
+                            match input_rx.try_recv() {
+                                Ok(more) => data.extend_from_slice(&more),
+                                Err(_) => break,
+                            }
+                        }
+                        client.send(proto::PersistentTerminalInput {
+                            server_instance_id: server_instance_id.clone(),
+                            terminal_id: terminal_id.clone(),
+                            sequence,
+                            data,
+                        })?;
                         sequence += 1;
                     }
                     anyhow::Ok(())
@@ -1503,44 +1536,137 @@ impl TerminalBuilder {
             .detach();
             cx.spawn(async move |terminal, cx| {
                 let mut offset = 0;
+                let mut use_streaming = streaming;
+                let mut consecutive_stream_failures = 0;
                 loop {
-                    let response = client
-                        .request(proto::ReadPersistentTerminal {
-                            server_instance_id: server_instance_id.clone(),
-                            terminal_id: terminal_id.clone(),
-                            offset,
-                            max_bytes: 256 * 1024,
-                        })
-                        .await;
-                    match response {
-                        Ok(response) => {
-                            offset = response.next_offset;
-                            let exited = response.exited;
-                            terminal.update(cx, |terminal, cx| {
-                                if response.history_truncated {
-                                    terminal.clear_for_init_command(cx);
+                    if use_streaming {
+                        let frames = client
+                            .request_stream(proto::SubscribePersistentTerminal {
+                                server_instance_id: server_instance_id.clone(),
+                                terminal_id: terminal_id.clone(),
+                                offset,
+                            })
+                            .await;
+                        match frames {
+                            Err(error) => {
+                                log::debug!(
+                                    "persistent terminal output stream unavailable, falling back to polling: {error:#}"
+                                );
+                                use_streaming = false;
+                            }
+                            Ok(mut frames) => {
+                                let mut last_credit_offset = offset;
+                                let mut made_progress = false;
+                                'stream: loop {
+                                    let Some(frame) = frames.next().await else {
+                                        consecutive_stream_failures += 1;
+                                        break 'stream;
+                                    };
+                                    let frame = match frame {
+                                        Ok(frame) => frame,
+                                        Err(error) => {
+                                            log::debug!(
+                                                "persistent terminal output stream interrupted: {error:#}"
+                                            );
+                                            consecutive_stream_failures += 1;
+                                            break 'stream;
+                                        }
+                                    };
+                                    if frame.offset > offset && !frame.history_truncated {
+                                        // Missed bytes: resubscribe from the expected offset.
+                                        consecutive_stream_failures += 1;
+                                        break 'stream;
+                                    }
+                                    let skip = (offset.saturating_sub(frame.offset) as usize)
+                                        .min(frame.data.len());
+                                    let frame_end = frame.offset + frame.data.len() as u64;
+                                    let history_truncated = frame.history_truncated;
+                                    let exited = frame.exited;
+                                    let exit_code = frame.exit_code;
+                                    terminal.update(cx, |terminal, cx| {
+                                        if history_truncated {
+                                            terminal.clear_for_init_command(cx);
+                                        }
+                                        if skip < frame.data.len() {
+                                            terminal.write_raw_output(&frame.data[skip..], cx);
+                                        }
+                                        if exited && terminal.child_exited.is_none() {
+                                            terminal.register_task_finished(
+                                                exit_code.map(exit_status_from_code),
+                                                cx,
+                                            );
+                                        }
+                                    })?;
+                                    offset = offset.max(frame_end);
+                                    made_progress = true;
+                                    if offset - last_credit_offset
+                                        >= OUTPUT_CREDIT_GRANULARITY_BYTES
+                                    {
+                                        last_credit_offset = offset;
+                                        client.send(proto::PersistentTerminalOutputCredit {
+                                            server_instance_id: server_instance_id.clone(),
+                                            terminal_id: terminal_id.clone(),
+                                            offset,
+                                        })?;
+                                    }
+                                    if exited {
+                                        return anyhow::Ok(());
+                                    }
                                 }
-                                if !response.data.is_empty() {
-                                    terminal.write_raw_output(&response.data, cx);
+                                if made_progress {
+                                    consecutive_stream_failures = 0;
                                 }
-                                if exited && terminal.child_exited.is_none() {
-                                    terminal.register_task_finished(
-                                        response.exit_code.map(exit_status_from_code),
-                                        cx,
+                                if consecutive_stream_failures >= MAX_STREAM_FAILURES {
+                                    log::warn!(
+                                        "persistent terminal output stream failed repeatedly, falling back to polling"
                                     );
+                                    use_streaming = false;
+                                } else {
+                                    cx.background_executor()
+                                        .timer(Duration::from_millis(200))
+                                        .await;
                                 }
-                            })?;
-                            if exited {
-                                break;
                             }
                         }
-                        Err(error) => {
-                            log::debug!("persistent terminal poll paused: {error:#}");
+                    } else {
+                        let response = client
+                            .request(proto::ReadPersistentTerminal {
+                                server_instance_id: server_instance_id.clone(),
+                                terminal_id: terminal_id.clone(),
+                                offset,
+                                max_bytes: 256 * 1024,
+                            })
+                            .await;
+                        match response {
+                            Ok(response) => {
+                                offset = response.next_offset;
+                                let exited = response.exited;
+                                terminal.update(cx, |terminal, cx| {
+                                    if response.history_truncated {
+                                        terminal.clear_for_init_command(cx);
+                                    }
+                                    if !response.data.is_empty() {
+                                        terminal.write_raw_output(&response.data, cx);
+                                    }
+                                    if exited && terminal.child_exited.is_none() {
+                                        terminal.register_task_finished(
+                                            response.exit_code.map(exit_status_from_code),
+                                            cx,
+                                        );
+                                    }
+                                })?;
+                                if exited {
+                                    break;
+                                }
+                            }
+                            Err(error) => {
+                                log::debug!("persistent terminal poll paused: {error:#}");
+                            }
                         }
+                        cx.background_executor()
+                            .timer(Duration::from_millis(50))
+                            .await;
                     }
-                    cx.background_executor()
-                        .timer(Duration::from_millis(50))
-                        .await;
                 }
                 anyhow::Ok(())
             })
@@ -1566,17 +1692,17 @@ impl TerminalBuilder {
                         .timer(std::time::Duration::from_millis(4))
                         .fuse();
 
-                    let mut wakeup = false;
+                    let mut wakeup = None;
                     loop {
                         futures::select_biased! {
                             _ = timer => break,
                             event = self.events_rx.next() => {
                                 if let Some(event) = event {
-                                    if matches!(event, PtyEvent::Event(TerminalBackendEvent::Wakeup))
-                                    {
-                                        wakeup = true;
-                                    } else {
-                                        events.push(event);
+                                    match event {
+                                        PtyEvent::Event(TerminalBackendEvent::Wakeup, generation) => {
+                                            wakeup = Some(generation);
+                                        }
+                                        event => events.push(event),
                                     }
 
                                     if events.len() > 100 {
@@ -1589,14 +1715,17 @@ impl TerminalBuilder {
                         }
                     }
 
-                    if events.is_empty() && !wakeup {
+                    if events.is_empty() && wakeup.is_none() {
                         yield_now().await;
                         break 'outer;
                     }
 
                     terminal.update(cx, |this, cx| {
-                        if wakeup {
-                            this.process_event(TerminalBackendEvent::Wakeup, cx);
+                        if let Some(generation) = wakeup {
+                            this.process_pty_event(
+                                PtyEvent::Event(TerminalBackendEvent::Wakeup, generation),
+                                cx,
+                            );
                         }
 
                         for event in events {
@@ -1650,6 +1779,7 @@ struct RemoteTerminal {
     client: AnyProtoClient,
     server_instance_id: String,
     terminal_id: String,
+    streaming: bool,
     input_tx: Sender<Vec<u8>>,
 }
 
@@ -1662,6 +1792,8 @@ pub struct Terminal {
     term: Arc<AlacrittyTermLock>,
     term_config: AlacrittyTermConfig,
     output_processor: Option<Processor<StdSyncHandler>>,
+    output_events_tx: Option<futures::channel::mpsc::UnboundedSender<PtyEvent>>,
+    output_generation: u64,
     events: VecDeque<InternalEvent>,
     /// This is only used for mouse mode cell change detection
     last_mouse: Option<(Point, SelectionSide)>,
@@ -1774,7 +1906,11 @@ const TITLE_MAX_CHARS: usize = 25;
 impl Terminal {
     fn process_pty_event(&mut self, event: PtyEvent, cx: &mut Context<Self>) {
         match event {
-            PtyEvent::Event(event) => self.process_event(event, cx),
+            PtyEvent::Event(event, generation) => {
+                if self.output_events_tx.is_none() || generation == self.output_generation {
+                    self.process_event(event, cx);
+                }
+            }
         }
     }
 
@@ -2129,15 +2265,15 @@ impl Terminal {
         apply_config(&self.term, &self.term_config);
     }
 
+    /// Normalizes line endings so text captured outside a PTY starts each line at column zero.
     pub fn write_output(&mut self, bytes: &[u8], cx: &mut Context<Self>) {
-        // Inject bytes directly into the terminal emulator and refresh the UI.
-        // This bypasses the PTY/event loop for display-only terminals.
         let mut previous_byte_was_cr = false;
         let converted = convert_lf_to_crlf(bytes, &mut previous_byte_was_cr);
         self.write_raw_output(&converted, cx);
     }
 
-    fn write_raw_output(&mut self, bytes: &[u8], cx: &mut Context<Self>) {
+    /// Terminal byte streams already contain their control sequences and must not be normalized.
+    pub fn write_raw_output(&mut self, bytes: &[u8], cx: &mut Context<Self>) {
         let mut term = self.term.lock();
         self.output_processor
             .get_or_insert_with(Processor::<StdSyncHandler>::new)
@@ -2146,6 +2282,61 @@ impl Terminal {
         self.note_program_output();
         self.detect_init_command_startup_marker();
         cx.emit(Event::Wakeup);
+    }
+
+    /// Replaces all display-only output while retaining the terminal entity and its dimensions.
+    pub fn replace_display_output(&mut self, bytes: &[u8], cx: &mut Context<Self>) -> Result<()> {
+        if !matches!(self.terminal_type, TerminalType::DisplayOnly) || self.subprocess.is_some() {
+            bail!("cannot replace output of a process-backed terminal");
+        }
+        let Some(events_tx) = &self.output_events_tx else {
+            bail!("display-only terminal has no output event channel");
+        };
+        let Some(generation) = self.output_generation.checked_add(1) else {
+            bail!("display output generation exhausted");
+        };
+        let bounds = self.last_content.terminal_bounds;
+        let term = new_term(
+            &self.term_config,
+            bounds,
+            events_tx.clone(),
+            self.template.alternate_scroll,
+            generation,
+        );
+        self.output_generation = generation;
+        self.term = term;
+        self.output_processor = None;
+        // The new emulator already has the latest requested size; older resizes can truncate it.
+        self.events.clear();
+        self.last_content = Content {
+            terminal_bounds: bounds,
+            ..Default::default()
+        };
+        self.last_mouse = None;
+        self.mouse_down_position = None;
+        self.matches.clear();
+        self.selection_head = None;
+        self.breadcrumb_text.clear();
+        self.scroll_px = px(0.);
+        self.next_link_id = 0;
+        self.selection_phase = SelectionPhase::Ended;
+        self.hyperlink_regex_searches = RegexSearches::new(
+            &self.template.path_hyperlink_regexes,
+            self.template.path_hyperlink_timeout,
+        );
+        self.vi_mode_enabled = false;
+        self.last_hyperlink_search_position = None;
+        self.mouse_down_hyperlink = None;
+        self.cwd_history.clear();
+        self.pending_cwd_boundary = None;
+        self.write_raw_output(bytes, cx);
+        cx.emit(Event::BlinkChanged(
+            self.term.lock().cursor_style().blinking,
+        ));
+        cx.emit(Event::BreadcrumbsChanged);
+        cx.emit(Event::NewNavigationTarget(None));
+        cx.emit(Event::OutputReplaced);
+        Ok(())
     }
 
     pub fn total_lines(&self) -> usize {
@@ -3610,7 +3801,10 @@ fn spawn_task_subprocess(
                                     processor.advance(&mut *term, &converted);
                                 }
                                 events_tx
-                                    .unbounded_send(PtyEvent::Event(TerminalBackendEvent::Wakeup))
+                                    .unbounded_send(PtyEvent::Event(
+                                        TerminalBackendEvent::Wakeup,
+                                        0,
+                                    ))
                                     .ok();
                             }
                         }
@@ -3644,7 +3838,7 @@ fn spawn_task_subprocess(
                 Some(status) => TerminalBackendEvent::ChildExit(status),
                 None => TerminalBackendEvent::Exit,
             };
-            events_tx.unbounded_send(PtyEvent::Event(event)).ok();
+            events_tx.unbounded_send(PtyEvent::Event(event, 0)).ok();
         }
     });
 
@@ -4163,6 +4357,10 @@ mod tests {
             terminal.read_with(cx, |terminal, cx| terminal.wait_for_completed_task(cx));
         assert_eq!(exit_status.await, Some(ExitStatus::default()));
         assert_content_eventually(&terminal, "hello-from-subprocess", cx).await;
+        terminal.update(cx, |terminal, cx| {
+            assert!(terminal.replace_display_output(b"replacement", cx).is_err());
+            assert!(terminal.get_content().contains("hello-from-subprocess"));
+        });
     }
 
     fn init_terminal_test(cx: &mut TestAppContext, output: &[u8]) -> Entity<Terminal> {
@@ -5180,6 +5378,255 @@ mod tests {
         );
     }
 
+    fn display_only_terminal(cx: &mut TestAppContext) -> Entity<Terminal> {
+        cx.new(|cx| {
+            TerminalBuilder::new_display_only(
+                SettingsCursorShape::default(),
+                AlternateScroll::On,
+                None,
+                0,
+                cx.background_executor(),
+                PathStyle::local(),
+            )
+            .subscribe(cx)
+        })
+    }
+
+    fn raw_content(chunks: &[&[u8]], cx: &mut TestAppContext) -> Content {
+        let terminal = display_only_terminal(cx);
+        for chunk in chunks {
+            terminal.update(cx, |terminal, cx| terminal.write_raw_output(chunk, cx));
+        }
+        terminal.read_with(cx, |terminal, _| {
+            let term = terminal.term.lock_unfair();
+            make_content(&term, &terminal.last_content)
+        })
+    }
+
+    #[gpui::test]
+    async fn test_replace_display_output_rebuilds_screen_and_accepts_appends(
+        cx: &mut TestAppContext,
+    ) {
+        let bounds = TerminalBounds::new(
+            px(20.),
+            px(10.),
+            bounds(point(px(0.), px(0.)), size(px(300.), px(160.))),
+        );
+        let terminal = cx.new(|cx| {
+            TerminalBuilder::new_display_only_with_bounds(
+                SettingsCursorShape::default(),
+                AlternateScroll::On,
+                None,
+                0,
+                cx.background_executor(),
+                PathStyle::local(),
+                bounds,
+            )
+            .subscribe(cx)
+        });
+        let entity_id = terminal.entity_id();
+        terminal.update(cx, |terminal, cx| {
+            terminal.write_raw_output(b"old history\r\n\x1b[?1049h\x1b[Hold alternate", cx);
+            {
+                let mut term = terminal.term.lock();
+                alacritty::set_selection(
+                    &mut term,
+                    Some(&Selection::simple_range(Range::new(
+                        Point::new(0, 0),
+                        Point::new(0, 2),
+                    ))),
+                );
+                terminal.last_content = make_content(&term, &terminal.last_content);
+            }
+            assert_eq!(terminal.last_content.selection_text.as_deref(), Some("old"));
+            terminal.events.push_back(InternalEvent::Copy(None));
+            terminal
+                .events
+                .push_back(InternalEvent::ScrollToPoint(Point::new(0, 0)));
+            terminal
+                .matches
+                .push(Range::new(Point::new(0, 0), Point::new(0, 3)));
+            terminal
+                .replace_display_output(b"new", cx)
+                .expect("replace");
+            terminal.write_raw_output(b" content", cx);
+        });
+        terminal.read_with(cx, |terminal, _| {
+            assert_eq!(terminal.get_content().trim(), "new content");
+            assert_eq!(terminal.last_content.terminal_bounds, bounds);
+            assert_eq!(terminal.viewport_lines(), bounds.num_lines());
+            assert!(terminal.matches.is_empty());
+            assert!(terminal.last_content.selection_text.is_none());
+            assert!(terminal.events.is_empty());
+            assert!(
+                !terminal
+                    .term
+                    .lock_unfair()
+                    .mode()
+                    .contains(alacritty_terminal::term::TermMode::ALT_SCREEN)
+            );
+        });
+        assert_eq!(terminal.entity_id(), entity_id);
+    }
+
+    #[gpui::test]
+    async fn test_replace_display_output_discards_superseded_resizes(cx: &mut TestAppContext) {
+        let (terminal, cx) = init_terminal_test_with_window(cx, b"");
+        terminal.update_in(cx, |terminal, window, cx| {
+            let wide = TerminalBounds::new(
+                px(20.),
+                px(10.),
+                bounds(point(px(0.), px(0.)), size(px(400.), px(160.))),
+            );
+            let narrow = TerminalBounds::new(
+                px(20.),
+                px(10.),
+                bounds(point(px(0.), px(0.)), size(px(50.), px(160.))),
+            );
+            terminal.set_size(wide);
+            terminal.sync(window, cx);
+            terminal.set_size(narrow);
+            terminal.scroll_up_by(1);
+            terminal.set_size(wide);
+            terminal
+                .replace_display_output(b"\x1b[?1049habcdefghijklmnop", cx)
+                .expect("snapshot at latest dimensions");
+            assert_eq!(terminal.get_content().trim(), "abcdefghijklmnop");
+            terminal.sync(window, cx);
+            assert_eq!(terminal.get_content().trim(), "abcdefghijklmnop");
+            assert_eq!(terminal.last_content.terminal_bounds, wide);
+        });
+    }
+
+    #[gpui::test]
+    async fn test_replace_display_output_resets_parser_and_queued_title(cx: &mut TestAppContext) {
+        let terminal = display_only_terminal(cx);
+        terminal.update(cx, |terminal, cx| {
+            terminal.write_raw_output(b"\x1b]0;stale\x07\x1b[", cx);
+            terminal
+                .replace_display_output(b"fresh", cx)
+                .expect("replace");
+            terminal.write_raw_output(b"!", cx);
+        });
+        cx.run_until_parked();
+        terminal.read_with(cx, |terminal, _| {
+            assert_eq!(terminal.get_content().trim(), "fresh!");
+            assert!(terminal.breadcrumb_text.is_empty());
+        });
+        terminal.update(cx, |terminal, cx| {
+            terminal.write_raw_output(b"\xc3", cx);
+            terminal.replace_display_output(b"", cx).expect("clear");
+            terminal.write_raw_output(b"\x1b]0;current\x07ok", cx);
+        });
+        cx.run_until_parked();
+        terminal.read_with(cx, |terminal, _| {
+            assert_eq!(terminal.get_content().trim(), "ok");
+            assert_eq!(terminal.breadcrumb_text, "current");
+        });
+    }
+
+    #[gpui::test]
+    async fn test_write_raw_output_preserves_line_control_semantics(cx: &mut TestAppContext) {
+        let bytes = b"a\nb\rc\r\nd";
+        let raw = raw_content(&[bytes], cx);
+
+        let normalized_terminal = display_only_terminal(cx);
+        normalized_terminal.update(cx, |terminal, cx| terminal.write_output(bytes, cx));
+        let normalized = normalized_terminal.read_with(cx, |terminal, _| {
+            let term = terminal.term.lock_unfair();
+            make_content(&term, &terminal.last_content)
+        });
+
+        let raw_cells = raw
+            .cells
+            .iter()
+            .map(|cell| (cell.point.line, cell.point.column, cell.character()))
+            .collect::<Vec<_>>();
+        let normalized_cells = normalized
+            .cells
+            .iter()
+            .map(|cell| (cell.point.line, cell.point.column, cell.character()))
+            .collect::<Vec<_>>();
+
+        assert!(raw_cells.contains(&(0, 0, 'a')));
+        assert!(raw_cells.contains(&(1, 0, 'c')));
+        assert!(raw_cells.contains(&(1, 1, 'b')));
+        assert!(raw_cells.contains(&(2, 0, 'd')));
+        assert!(!normalized_cells.contains(&(1, 1, 'b')));
+        assert!(normalized_cells.contains(&(1, 0, 'c')));
+        assert!(normalized_cells.contains(&(2, 0, 'd')));
+        assert_eq!(raw.cursor.point, Point::new(2, 1));
+        assert_eq!(normalized.cursor.point, Point::new(2, 1));
+    }
+
+    #[gpui::test]
+    async fn test_write_raw_output_is_independent_of_chunk_boundaries(cx: &mut TestAppContext) {
+        let bytes = b"A\nB\rC\r\n\x1b[31mR\xc3\xa9\x1b[0m\x1b[2;6HX";
+        let whole = raw_content(&[bytes], cx);
+        let cells = |content: &Content| {
+            content
+                .cells
+                .iter()
+                .map(|cell| (cell.point, cell.cell.clone()))
+                .collect::<Vec<_>>()
+        };
+        let whole_cells = cells(&whole);
+        let whole_cursor = whole.cursor.point;
+
+        let red_r = whole
+            .cells
+            .iter()
+            .find(|cell| cell.character() == 'R')
+            .expect("raw output should contain the styled R");
+        assert_eq!(red_r.point, Point::new(2, 0));
+        assert_eq!(red_r.foreground(), Color::Named(NamedColor::Red));
+        let accented = whole
+            .cells
+            .iter()
+            .find(|cell| cell.character() == 'é')
+            .expect("raw output should contain the complete UTF-8 character");
+        assert_eq!(accented.point, Point::new(2, 1));
+        assert_eq!(accented.foreground(), Color::Named(NamedColor::Red));
+        let positioned = whole
+            .cells
+            .iter()
+            .find(|cell| cell.point == Point::new(1, 5))
+            .expect("cursor movement should position X");
+        assert_eq!(positioned.character(), 'X');
+        assert_eq!(
+            positioned.foreground(),
+            Color::Named(NamedColor::Foreground)
+        );
+        assert_eq!(
+            positioned.background(),
+            Color::Named(NamedColor::Background)
+        );
+        assert_eq!(whole_cursor, Point::new(1, 6));
+
+        for split in 0..=bytes.len() {
+            let (first, second) = bytes.split_at(split);
+            let split_content = raw_content(&[b"", first, b"", second, b""], cx);
+            assert_eq!(
+                cells(&split_content),
+                whole_cells,
+                "two-part split at byte {split}"
+            );
+            assert_eq!(
+                split_content.cursor.point, whole_cursor,
+                "two-part cursor at byte {split}"
+            );
+        }
+
+        let byte_chunks = bytes
+            .iter()
+            .map(std::slice::from_ref)
+            .chain(std::iter::once(&[][..]))
+            .collect::<Vec<_>>();
+        let bytewise = raw_content(&byte_chunks, cx);
+        assert_eq!(cells(&bytewise), whole_cells);
+        assert_eq!(bytewise.cursor.point, whole_cursor);
+    }
+
     #[gpui::test]
     async fn test_display_only_write_output_ignores_osc52(cx: &mut TestAppContext) {
         cx.update(|cx| {
@@ -5200,13 +5647,16 @@ mod tests {
             .subscribe(cx)
         });
 
-        terminal.update(cx, |terminal, cx| {
-            terminal.write_output(b"\x1b]52;c;b3ZlcndyaXR0ZW4=\x07", cx);
-        });
-        cx.run_until_parked();
+        for write_output in [Terminal::write_output, Terminal::write_raw_output] {
+            terminal.update(cx, |terminal, cx| {
+                write_output(terminal, b"\x1b]52;c;b3ZlcndyaXR0ZW4=\x07", cx);
+            });
+            cx.run_until_parked();
 
-        let clipboard_text = cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text()));
-        assert_eq!(clipboard_text.as_deref(), Some("original"));
+            let clipboard_text =
+                cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text()));
+            assert_eq!(clipboard_text.as_deref(), Some("original"));
+        }
     }
 
     mod hyperlinks {
@@ -6158,6 +6608,7 @@ mod tests {
 
         terminal.update(cx, |terminal, cx| {
             terminal.write_output(b"injected_before_release\n", cx);
+            terminal.write_raw_output(b"\x1b[", cx);
         });
         assert!(
             terminal.read_with(cx, |terminal, _| terminal.output_processor.is_some()),
@@ -6488,6 +6939,7 @@ mod tests {
             })),
             "server".to_string(),
             "terminal".to_string(),
+            false,
             &cx.background_executor,
         );
         assert!(hosted.terminal.is_server_hosted());

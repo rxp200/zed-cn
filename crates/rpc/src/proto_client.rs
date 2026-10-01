@@ -560,6 +560,58 @@ impl AnyProtoClient {
             );
     }
 
+    pub fn add_stream_request_handler<M, E, H, F, S>(&self, entity: gpui::WeakEntity<E>, handler: H)
+    where
+        M: RequestMessage,
+        E: 'static,
+        H: 'static + Sync + Fn(Entity<E>, TypedEnvelope<M>, AsyncApp) -> F + Send + Sync,
+        F: 'static + Future<Output = Result<S>>,
+        S: 'static + Stream<Item = Result<M::Response>>,
+    {
+        self.0
+            .client
+            .message_handler_set()
+            .lock()
+            .add_message_handler(
+                TypeId::of::<M>(),
+                entity.into(),
+                Arc::new(move |entity, envelope, client, cx| {
+                    let entity = entity.downcast::<E>().unwrap();
+                    let envelope = envelope.into_any().downcast::<TypedEnvelope<M>>().unwrap();
+                    let request_id = envelope.message_id();
+                    let stream = handler(entity, *envelope, cx);
+                    async move {
+                        // An Error response is itself a terminal stream frame on
+                        // both transports (Peer and ChannelClient), so we don't
+                        // need to follow it with an EndStream.
+                        match stream.await {
+                            Ok(stream) => {
+                                futures::pin_mut!(stream);
+                                while let Some(result) = stream.next().await {
+                                    match result {
+                                        Ok(response) => {
+                                            client.send_response(request_id, response)?
+                                        }
+                                        Err(error) => {
+                                            client.send_response(request_id, error.to_proto())?;
+                                            return Err(error);
+                                        }
+                                    }
+                                }
+                                client.send_response(request_id, proto::EndStream {})?;
+                                Ok(())
+                            }
+                            Err(error) => {
+                                client.send_response(request_id, error.to_proto())?;
+                                Err(error)
+                            }
+                        }
+                    }
+                    .boxed_local()
+                }),
+            )
+    }
+
     pub fn add_entity_stream_request_handler<M, E, H, F, S>(&self, handler: H)
     where
         M: EnvelopedMessage + RequestMessage + EntityMessage,

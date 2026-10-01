@@ -159,7 +159,7 @@ fn open_preview(
         if let Err(error) = result {
             workspace
                 .update(cx, |workspace, cx| {
-                    workspace.show_error(i18n::t!("abd879ce7807cac2"), cx);
+                    workspace.show_error(i18n::t!("abd879ce7807cac2", error = error), cx);
                 })
                 .log_err();
         }

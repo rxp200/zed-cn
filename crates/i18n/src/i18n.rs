@@ -52,11 +52,47 @@ pub fn try_translate(key: &str) -> Option<&'static str> {
     lookup(current_locale(), key)
 }
 
+/// 把占位符原样写回输出（含名字与说明符），用于调用方未提供实参或说明符不受支持时。
+fn push_placeholder(out: &mut String, inside: &str) {
+    out.push('{');
+    out.push_str(inside);
+    out.push('}');
+}
+
+/// 按格式说明符把值写入输出；说明符不受支持时返回 `false`，由调用方保留占位符原文。
+fn write_with_spec(out: &mut String, value: &dyn std::fmt::Display, spec: &str) -> bool {
+    let (alternate, rest) = match spec.strip_prefix('#') {
+        Some(rest) => (true, rest),
+        None => (false, spec),
+    };
+    if let Some(precision) = rest.strip_prefix('.').and_then(|value| value.parse::<usize>().ok()) {
+        let _ = if alternate {
+            write!(out, "{value:#.precision$}")
+        } else {
+            write!(out, "{value:.precision$}")
+        };
+        true
+    } else if rest.is_empty() {
+        let _ = if alternate {
+            write!(out, "{value:#}")
+        } else {
+            write!(out, "{value}")
+        };
+        true
+    } else {
+        false
+    }
+}
+
 /// 把翻译模板中的 `{}`（位置参数）与 `{name}`（命名参数）替换为实际值。
 ///
 /// Rust 的 `format!` 只接受字面量模板，而翻译文本来自编译期生成的静态表，
 /// 因此这里用等价的轻量插值实现；未提供的参数原样保留，便于发现遗漏。
 /// `{{` 按字面左花括号处理。
+///
+/// `{name:spec}` 中的格式说明符同样受支持，但值以 `&dyn Display` 传入，
+/// 因此只处理 Display 系列（`#`、`.N` 及其组合）；`?` 等 Debug 说明符
+/// 由调用点在传入前自行 `format!`，否则保留原文并由 `script/i18n_check.py` 拦截。
 pub fn interpolate(
     template: &str,
     positional: &[&dyn std::fmt::Display],
@@ -75,21 +111,24 @@ pub fn interpolate(
         }
         match after.find('}') {
             Some(close) => {
-                let name = &after[..close];
+                let inside = &after[..close];
+                let (name, spec) = match inside.split_once(':') {
+                    Some((name, spec)) => (name, spec),
+                    None => (inside, ""),
+                };
                 if name.is_empty() {
                     match positional.get(next_positional) {
-                        Some(value) => {
-                            let _ = write!(out, "{value}");
-                        }
+                        Some(value) if write_with_spec(&mut out, *value, spec) => {}
+                        Some(_) => push_placeholder(&mut out, inside),
                         None => out.push_str("{}"),
                     }
                     next_positional += 1;
                 } else if let Some((_, value)) = named.iter().find(|(key, _)| *key == name) {
-                    let _ = write!(out, "{value}");
+                    if !write_with_spec(&mut out, *value, spec) {
+                        push_placeholder(&mut out, inside);
+                    }
                 } else {
-                    out.push('{');
-                    out.push_str(name);
-                    out.push('}');
+                    push_placeholder(&mut out, inside);
                 }
                 rest = &after[close + 1..];
             }
@@ -254,5 +293,35 @@ mod tests {
             "列表：3 项"
         );
         assert_eq!(interpolate("{missing}", &[], &[]), "{missing}");
+    }
+
+    #[test]
+    fn interpolate_supports_display_format_specs() {
+        assert_eq!(
+            interpolate("进度：{percentage:.0}%", &[], &[("percentage", &42.6_f32)]),
+            "进度：43%"
+        );
+        assert_eq!(
+            interpolate("{} 个文件 · {:.2} MiB", &[&3, &1.5_f64], &[]),
+            "3 个文件 · 1.50 MiB"
+        );
+        assert_eq!(
+            interpolate("信任 {:} 文件夹", &[&"/tmp"], &[]),
+            "信任 /tmp 文件夹"
+        );
+        assert_eq!(
+            interpolate("失败：{error:#}", &[], &[("error", &"外层：内层")]),
+            "失败：外层：内层"
+        );
+    }
+
+    #[test]
+    fn interpolate_keeps_unsupported_and_missing_placeholders() {
+        // Debug 说明符无法用 `&dyn Display` 渲染，保留原文以便检查工具发现。
+        assert_eq!(
+            interpolate("从 {source:?} 复制", &[], &[("source", &"a")]),
+            "从 {source:?} 复制"
+        );
+        assert_eq!(interpolate("{}", &[], &[]), "{}");
     }
 }

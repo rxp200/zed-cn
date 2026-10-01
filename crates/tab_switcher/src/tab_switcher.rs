@@ -754,7 +754,7 @@ impl PickerDelegate for TabSwitcherDelegate {
     }
 
     fn no_matches_text(&self, _window: &mut Window, _cx: &mut App) -> Option<SharedString> {
-        Some("没有标签页".into())
+        Some(i18n::t!("53353aef06a94232").into())
     }
 
     fn match_count(&self) -> usize {

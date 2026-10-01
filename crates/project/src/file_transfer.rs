@@ -174,7 +174,7 @@ impl TransferHandle {
             entry.error = result.is_err();
             entry.status = match result {
                 Ok(()) => i18n::t!("f28461bb49c85647").to_string(),
-                Err(_) => i18n::t!("8f5d896ae85cd3aa").to_string(),
+                Err(error) => i18n::t!("8f5d896ae85cd3aa", error = error),
             };
             if result.is_ok() {
                 entry.completed_files = entry.total_entries.unwrap_or(entry.completed_files.max(1));

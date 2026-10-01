@@ -221,7 +221,11 @@ impl Render for TransferDetails {
                             let percentage = entry.completed_files as f32 / total as f32 * 100.;
                             element
                                 .child(
-                                    Label::new(i18n::t!("16fb23c8514e94a3")).size(LabelSize::Small),
+                                    Label::new(i18n::t!(
+                                        "16fb23c8514e94a3",
+                                        percentage = percentage
+                                    ))
+                                    .size(LabelSize::Small),
                                 )
                                 .child(ui::ProgressBar::new(
                                     ("transfer-batch-progress", entry.id),

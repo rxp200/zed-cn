@@ -658,7 +658,7 @@ impl StackFrameList {
                                     }
                                 }))
                                 .tooltip(move |window, cx| {
-                                    Tooltip::text("重新启动堆栈帧")(window, cx)
+                                    Tooltip::text(i18n::t!("7af27f51a45994ff"))(window, cx)
                                 }),
                             ),
                     )
@@ -906,8 +906,8 @@ impl StackFrameList {
 
     pub(crate) fn render_control_strip(&self) -> AnyElement {
         let tooltip_title = match self.list_filter {
-            StackFrameFilter::All => "显示项目中的堆栈帧",
-            StackFrameFilter::OnlyUserFrames => "显示所有堆栈帧",
+            StackFrameFilter::All => i18n::t!("ae35a965b95fe0b8"),
+            StackFrameFilter::OnlyUserFrames => i18n::t!("b8a0ba168c29a75c"),
         };
 
         h_flex()

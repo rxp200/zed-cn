@@ -573,8 +573,8 @@ impl<T: 'static> PromptEditor<T> {
             return;
         };
 
-        let model_telemetry_id = model.model.telemetry_id();
-        let model_provider_id = model.provider.id().to_string();
+        let model_telemetry_id = model.telemetry_id();
+        let model_provider_id = model.provider_id().to_string();
 
         let (kind, language_name) = match &self.mode {
             PromptEditorMode::Buffer { codegen, .. } => {
@@ -615,16 +615,13 @@ impl<T: 'static> PromptEditor<T> {
             CompletionState::Generated { completion_text } => {
                 let model_info = self.model_selector.read(cx).active_model(cx);
                 let (model_id, use_streaming_tools) = {
-                    let Some(configured_model) = model_info else {
+                    let Some(model) = model_info else {
                         self.toast(i18n::t!("4b50c9fa24dcafa3"), None, cx);
                         return;
                     };
                     (
-                        configured_model.model.telemetry_id(),
-                        CodegenAlternative::use_streaming_tools(
-                            configured_model.model.as_ref(),
-                            cx,
-                        ),
+                        model.telemetry_id(),
+                        CodegenAlternative::use_streaming_tools(&model, cx),
                     )
                 };
 
@@ -678,16 +675,13 @@ impl<T: 'static> PromptEditor<T> {
             CompletionState::Generated { completion_text } => {
                 let model_info = self.model_selector.read(cx).active_model(cx);
                 let (model_telemetry_id, use_streaming_tools) = {
-                    let Some(configured_model) = model_info else {
+                    let Some(model) = model_info else {
                         self.toast(i18n::t!("4b50c9fa24dcafa3"), None, cx);
                         return;
                     };
                     (
-                        configured_model.model.telemetry_id(),
-                        CodegenAlternative::use_streaming_tools(
-                            configured_model.model.as_ref(),
-                            cx,
-                        ),
+                        model.telemetry_id(),
+                        CodegenAlternative::use_streaming_tools(&model, cx),
                     )
                 };
 
@@ -1027,11 +1021,11 @@ impl<T: 'static> PromptEditor<T> {
         let disabled = matches!(codegen.status(cx), CodegenStatus::Idle);
 
         let model_registry = LanguageModelRegistry::read_global(cx);
-        let default_model = model_registry.default_model().map(|default| default.model);
+        let default_model = model_registry.default_model();
         let alternative_models = model_registry.inline_alternative_models();
 
         let get_model_name = |index: usize| -> String {
-            let name = |model: &Arc<dyn LanguageModel>| model.name().0.to_string();
+            let name = |model: &LanguageModel| model.name.0.to_string();
 
             match index {
                 0 => default_model.as_ref().map_or_else(String::new, name),
@@ -1206,7 +1200,7 @@ struct PromptEditorCompletionProviderDelegate;
 fn inline_assistant_model_supports_images(cx: &App) -> bool {
     LanguageModelRegistry::read_global(cx)
         .inline_assistant_model()
-        .map_or(false, |m| m.model.supports_images())
+        .map_or(false, |m| m.supports_images())
 }
 
 impl PromptCompletionProviderDelegate for PromptEditorCompletionProviderDelegate {

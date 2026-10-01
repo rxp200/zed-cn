@@ -289,6 +289,7 @@ pub enum CompatibilityType {
     #[default]
     Gguf,
     Mlx,
+    Splash,
 }
 
 pub async fn stream_chat_completion(

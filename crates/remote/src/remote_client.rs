@@ -174,6 +174,7 @@ pub trait RemoteClientDelegate: Send + Sync {
 pub const TEMPORARY_FILES_CAPABILITY: &str = "temporary_files_v1";
 pub const SYSTEM_STATS_CAPABILITY: &str = "system_stats_v1";
 pub const PERSISTENT_TERMINALS_CAPABILITY: &str = "persistent_terminals_v1";
+pub const PERSISTENT_TERMINAL_STREAMING_CAPABILITY: &str = "persistent_terminal_streaming_v1";
 
 const MAX_MISSED_HEARTBEATS: usize = 5;
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
@@ -937,8 +938,9 @@ impl RemoteClient {
                     delegate.set_status(
                         Some(&i18n::t_args!(
                             "276b861c8b0e203c",
-                            retry_delay.as_secs(),
-                            attempts
+                            attempts,
+                            MAX_RECONNECT_ATTEMPTS,
+                            retry_delay.as_secs()
                         )),
                         cx,
                     );
@@ -1033,10 +1035,12 @@ impl RemoteClient {
                     );
                 })
                 .log_err();
-                let (transport_closed_tx, transport_closed_rx) = oneshot::channel();
+                let (transport_closed_tx, transport_closed_rx) =
+                    oneshot::channel::<Option<i32>>();
                 let io_task = cx.spawn(async move |_| {
                     let result = io_task.await;
-                    if transport_closed_tx.send(()).is_err() {
+                    let exit_code = result.as_ref().ok().copied();
+                    if transport_closed_tx.send(exit_code).is_err() {
                         log::debug!("remote transport completed after session synchronization");
                     }
                     result
@@ -1050,6 +1054,18 @@ impl RemoteClient {
                     transport_closed_rx,
                 ).await;
                 if let Err(error) = synchronization_result {
+                    // A proxy that exits with the server-not-running code proves the
+                    // session is gone; retrying only races a retryable sync failure
+                    // against the terminal server-not-running state.
+                    if error
+                        .downcast_ref::<ProxyLaunchError>()
+                        .is_some_and(|error| matches!(error, ProxyLaunchError::ServerNotRunning))
+                    {
+                        log::warn!(
+                            "remote reconnect attempt {attempts}: remote server is not running; ending session"
+                        );
+                        return State::ServerNotRunning;
+                    }
                     log::warn!("remote reconnect attempt {attempts}: session synchronization failed after {:?}: {error:#}", synchronization_started.elapsed());
                     failed!(error, attempts, remote_connection, delegate);
                 }
@@ -1414,6 +1430,12 @@ impl RemoteClient {
 
     pub fn supports_persistent_terminals(&self) -> bool {
         self.client.supports_persistent_terminals.load(SeqCst)
+    }
+
+    pub fn supports_persistent_terminal_streaming(&self) -> bool {
+        self.client
+            .supports_persistent_terminal_streaming
+            .load(SeqCst)
     }
 
     pub fn system_stats(
@@ -1897,12 +1919,20 @@ impl RemoteConnectionOptions {
 
 async fn synchronize_live_transport(
     synchronization: impl Future<Output = Result<()>>,
-    transport_closed: oneshot::Receiver<()>,
+    transport_closed: oneshot::Receiver<Option<i32>>,
 ) -> Result<()> {
     let synchronization = synchronization.fuse();
     futures::pin_mut!(synchronization);
     select_biased! {
-        _ = transport_closed.fuse() => anyhow::bail!("remote proxy exited before session synchronization completed"),
+        exit_code = transport_closed.fuse() => match exit_code {
+            Ok(Some(exit_code)) => match ProxyLaunchError::from_exit_code(exit_code) {
+                Some(error) => Err(anyhow::Error::new(error)),
+                None => anyhow::bail!(
+                    "remote proxy exited before session synchronization completed"
+                ),
+            },
+            _ => anyhow::bail!("remote proxy exited before session synchronization completed"),
+        },
         result = synchronization => result,
     }
 }
@@ -1921,13 +1951,37 @@ mod tests {
             closed_rx,
         ));
         cx.run_until_parked();
-        closed_tx.send(()).expect("signal proxy exit");
+        closed_tx
+            .send(Some(1))
+            .expect("signal proxy exit with an unrelated code");
         assert!(
             task.await
                 .expect_err("exit must interrupt sync")
                 .to_string()
                 .contains("proxy exited")
         );
+    }
+
+    #[gpui::test]
+    async fn server_not_running_proxy_exit_ends_session_sync_with_launch_error(
+        cx: &mut TestAppContext,
+    ) {
+        let (closed_tx, closed_rx) = oneshot::channel();
+        let task = cx.executor().spawn(synchronize_live_transport(
+            futures::future::pending(),
+            closed_rx,
+        ));
+        cx.run_until_parked();
+        closed_tx
+            .send(Some(ProxyLaunchError::ServerNotRunning.to_exit_code()))
+            .expect("signal server-not-running proxy exit");
+        let error = task
+            .await
+            .expect_err("server-not-running must end session synchronization");
+        assert!(matches!(
+            error.downcast_ref::<ProxyLaunchError>(),
+            Some(ProxyLaunchError::ServerNotRunning)
+        ));
     }
 
     #[gpui::test]
@@ -2909,6 +2963,7 @@ pub(crate) struct ChannelClient {
     supports_temporary_files: AtomicBool,
     supports_system_stats: AtomicBool,
     supports_persistent_terminals: AtomicBool,
+    supports_persistent_terminal_streaming: AtomicBool,
     session_invalidated: Arc<Signal<String>>,
     session_is_invalid: Arc<AtomicBool>,
     has_wsl_interop: bool,
@@ -2943,6 +2998,7 @@ impl ChannelClient {
             supports_temporary_files: AtomicBool::new(false),
             supports_system_stats: AtomicBool::new(false),
             supports_persistent_terminals: AtomicBool::new(false),
+            supports_persistent_terminal_streaming: AtomicBool::new(false),
             session_invalidated: Arc::new(Signal::new(cx)),
             session_is_invalid: Arc::new(AtomicBool::new(false)),
             has_wsl_interop,
@@ -2965,6 +3021,7 @@ impl ChannelClient {
                         TEMPORARY_FILES_CAPABILITY.to_string(),
                         SYSTEM_STATS_CAPABILITY.to_string(),
                         PERSISTENT_TERMINALS_CAPABILITY.to_string(),
+                        PERSISTENT_TERMINAL_STREAMING_CAPABILITY.to_string(),
                     ],
                 }
                 .into_envelope(0, None, None);
@@ -3023,6 +3080,15 @@ impl ChannelClient {
                             .capabilities
                             .iter()
                             .any(|capability| capability == PERSISTENT_TERMINALS_CAPABILITY),
+                        SeqCst,
+                    );
+                    this.supports_persistent_terminal_streaming.store(
+                        started
+                            .capabilities
+                            .iter()
+                            .any(|capability| {
+                                capability == PERSISTENT_TERMINAL_STREAMING_CAPABILITY
+                            }),
                         SeqCst,
                     );
                     this.remote_started.set(());
@@ -3169,7 +3235,7 @@ impl ChannelClient {
     async fn resync(&self, timeout: Duration) -> Result<()> {
         anyhow::ensure!(
             !self.session_is_invalid.load(SeqCst),
-            "远程项目会话已失效，请重新打开项目"
+            i18n::t!("b171b71ed5e8a65a")
         );
         smol::future::or(
             async {
@@ -3323,7 +3389,7 @@ impl ChannelClient {
     fn send_buffered(&self, mut envelope: proto::Envelope) -> Result<()> {
         anyhow::ensure!(
             !self.session_is_invalid.load(SeqCst),
-            "远程项目会话已失效，请重新打开项目"
+            i18n::t!("b171b71ed5e8a65a")
         );
         envelope.ack_id = Some(self.max_received.load(SeqCst));
         self.buffer.lock().push_back(envelope.clone());
@@ -3336,7 +3402,7 @@ impl ChannelClient {
     fn send_unbuffered(&self, mut envelope: proto::Envelope) -> Result<()> {
         anyhow::ensure!(
             !self.session_is_invalid.load(SeqCst),
-            "远程项目会话已失效，请重新打开项目"
+            i18n::t!("b171b71ed5e8a65a")
         );
         envelope.ack_id = Some(self.max_received.load(SeqCst));
         self.outgoing_tx.lock().unbounded_send(envelope).ok();

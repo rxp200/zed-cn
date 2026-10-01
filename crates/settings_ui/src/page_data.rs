@@ -4521,7 +4521,7 @@ fn window_and_layout_page() -> SettingsPage {
         ]
     }
 
-    fn title_bar_section() -> [SettingsPageItem; 11] {
+    fn title_bar_section() -> [SettingsPageItem; 12] {
         [
             SettingsPageItem::SectionHeader(i18n::t!("c3ebe56c4633ef87")),
             SettingsPageItem::SettingItem(SettingItem {
@@ -4835,6 +4835,25 @@ fn window_and_layout_page() -> SettingsPage {
                         }
                     })
                     .collect(),
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: i18n::t!("749397d74a23065e"),
+                description: i18n::t!("664832180567d9bb"),
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("title_bar.open_menus_on_hover"),
+                    pick: |settings_content| {
+                        settings_content.title_bar.as_ref()?.open_menus_on_hover.as_ref()
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content
+                            .title_bar
+                            .get_or_insert_default()
+                            .open_menus_on_hover = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
             }),
         ]
     }
@@ -9409,8 +9428,31 @@ fn ai_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: i18n::t!("054028aa1835c851"),
-                description: i18n::t!("ad31ccc50556dad4"),
+                title: i18n::t!("03dff872ae6b9f32"),
+                description: i18n::t!("b7fc5f7fef26f494"),
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("agent.max_idle_retained_threads"),
+                    pick: |settings_content| {
+                        settings_content
+                            .agent
+                            .as_ref()?
+                            .max_idle_retained_threads
+                            .as_ref()
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content
+                            .agent
+                            .get_or_insert_default()
+                            .max_idle_retained_threads = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: i18n::t!("85c01169d106418b"),
+                description: i18n::t!("bb6216a31fbe7b0f"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("agent.expand_edit_card"),
@@ -9910,7 +9952,7 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
         ]
     }
 
-    fn wrapping_section() -> [SettingsPageItem; 6] {
+    fn wrapping_section() -> [SettingsPageItem; 7] {
         [
             SettingsPageItem::SectionHeader(i18n::t!("bd609a8e2d40f3ef")),
             SettingsPageItem::SettingItem(SettingItem {
@@ -9934,8 +9976,28 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: i18n::t!("fac02752ade29996"),
-                description: i18n::t!("9e61da96e7dcb7ff"),
+                title: i18n::t!("70700ef73581f803"),
+                description: i18n::t!("e25b84764e5405df"),
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("languages.$(language).soft_wrap_indent"),
+                    pick: |settings_content| {
+                        language_settings_field(settings_content, |language| {
+                            language.soft_wrap_indent.as_ref()
+                        })
+                    },
+                    write: |settings_content, value, _| {
+                        language_settings_field_mut(settings_content, value, |language, value| {
+                            language.soft_wrap_indent = value;
+                        })
+                    },
+                }),
+                metadata: None,
+                files: USER | PROJECT,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: i18n::t!("a422942fcc4a0141"),
+                description: i18n::t!("4bd0a2995869f353"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).show_wrap_guides"),

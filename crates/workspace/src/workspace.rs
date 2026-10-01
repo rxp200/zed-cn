@@ -825,9 +825,9 @@ fn handle_file_permalink(
 
 fn format_file_permalink_error(error: &anyhow::Error, copy: bool) -> String {
     let action = if copy {
-        "复制文件永久链接"
+        i18n::t!("d72898311fb0c0e3")
     } else {
-        "打开文件永久链接"
+        i18n::t!("aa32d423e7138efa")
     };
     let details = error
         .chain()
@@ -3807,9 +3807,9 @@ impl Workspace {
                     let answer = cx.update(|window, cx| {
                         window.prompt(
                             PromptLevel::Warning,
-                            "确定要离开当前通话吗？",
+                            i18n::t!("30a2544dd5887e90"),
                             None,
-                            &["关闭窗口并挂断", "取消"],
+                            &[i18n::t!("159160c673a8c3c0"), i18n::t!("2cd0f3be8738a86c")],
                             cx,
                         )
                     })?;
@@ -4055,9 +4055,9 @@ impl Workspace {
                         );
                         window.prompt(
                             PromptLevel::Warning,
-                            "要保存以下文件的所有更改吗？",
+                            i18n::t!("d0f4aa77b951c48a"),
                             Some(&detail),
-                            &["全部保存", "全部丢弃", "取消"],
+                            &[i18n::t!("592b52ba3cd3cd5a"), i18n::t!("2725e3b0b5b06397"), i18n::t!("2cd0f3be8738a86c")],
                             cx,
                         )
                     })?;
@@ -4359,7 +4359,7 @@ impl Workspace {
     ) {
         let project = self.project.read(cx);
         if project.is_via_collab() {
-            self.show_error("不能向他人的项目中添加文件夹", cx);
+            self.show_error(i18n::t!("7f26acf9e3d0434d"), cx);
             return;
         }
         let paths = self.prompt_for_open_path(
@@ -9613,8 +9613,8 @@ fn notify_if_database_failed(window: WindowHandle<MultiWorkspace>, cx: &mut Asyn
                         cx,
                         |cx| {
                             cx.new(|cx| {
-                                MessageNotification::new("Failed to load the database file.", cx)
-                                    .primary_message("File an Issue")
+                                MessageNotification::new(i18n::t!("ba62f60bc75e3981"), cx)
+                                    .primary_message(i18n::t!("d68b1fc586605299"))
                                     .primary_icon(IconName::Plus)
                                     .primary_on_click(|window, cx| {
                                         window.dispatch_action(Box::new(FileBugReport), cx)
@@ -9704,9 +9704,11 @@ impl Render for Workspace {
             log::info!("Rendered first frame");
         }
 
-        let centered_layout = self.centered_layout
+        let pad_center_pane = self.centered_layout
             && self.center.panes().len() == 1
             && self.active_item(cx).is_some();
+        let pad_zoomed_pane =
+            self.centered_layout && self.zoomed.is_some() && self.zoomed_position.is_none();
         let render_padding = |size| {
             (size > 0.0).then(|| {
                 div()
@@ -9716,7 +9718,11 @@ impl Render for Workspace {
                     .border_color(cx.theme().colors().pane_group_border)
             })
         };
-        let paddings = if centered_layout {
+        let render_centered_paddings = |enabled: bool| {
+            if !enabled {
+                return (None, None);
+            }
+
             let settings = WorkspaceSettings::get_global(cx).centered_layout;
             (
                 render_padding(Self::adjust_padding(
@@ -9726,9 +9732,9 @@ impl Render for Workspace {
                     settings.right_padding.map(|padding| padding.0),
                 )),
             )
-        } else {
-            (None, None)
         };
+        let centered_paddings = render_centered_paddings(pad_center_pane);
+        let zoomed_paddings = render_centered_paddings(pad_zoomed_pane);
         let ui_font = theme_settings::setup_ui_font(window, cx);
 
         let theme = cx.theme().clone();
@@ -9998,16 +10004,19 @@ impl Render for Workspace {
                                                         .child(
                                                             h_flex()
                                                                 .flex_1()
-                                                                .when_some(paddings.0, |this, p| {
-                                                                    this.child(p.border_r_1())
-                                                                })
+                                                                .when_some(
+                                                                    centered_paddings.0,
+                                                                    |this, p| {
+                                                                        this.child(p.border_r_1())
+                                                                    },
+                                                                )
                                                                 .child(self.render_center(
                                                                     &pane_render_context,
                                                                     window,
                                                                     cx,
                                                                 ))
                                                                 .when_some(
-                                                                    paddings.1,
+                                                                    centered_paddings.1,
                                                                     |this, p| {
                                                                         this.child(p.border_l_1())
                                                                     },
@@ -10059,7 +10068,7 @@ impl Render for Workspace {
                                                                     h_flex()
                                                                         .flex_1()
                                                                         .when_some(
-                                                                            paddings.0,
+                                                                            centered_paddings.0,
                                                                             |this, p| {
                                                                                 this.child(
                                                                                     p.border_r_1(),
@@ -10072,7 +10081,7 @@ impl Render for Workspace {
                                                                             cx,
                                                                         ))
                                                                         .when_some(
-                                                                            paddings.1,
+                                                                            centered_paddings.1,
                                                                             |this, p| {
                                                                                 this.child(
                                                                                     p.border_l_1(),
@@ -10126,7 +10135,7 @@ impl Render for Workspace {
                                                                     h_flex()
                                                                         .flex_1()
                                                                         .when_some(
-                                                                            paddings.0,
+                                                                            centered_paddings.0,
                                                                             |this, p| {
                                                                                 this.child(
                                                                                     p.border_r_1(),
@@ -10139,7 +10148,7 @@ impl Render for Workspace {
                                                                             cx,
                                                                         ))
                                                                         .when_some(
-                                                                            paddings.1,
+                                                                            centered_paddings.1,
                                                                             |this, p| {
                                                                                 this.child(
                                                                                     p.border_l_1(),
@@ -10181,17 +10190,19 @@ impl Render for Workspace {
                                                 .child(
                                                     h_flex()
                                                         .flex_1()
-                                                        .when_some(paddings.0, |this, p| {
-                                                            this.child(p.border_r_1())
-                                                        })
+                                                        .when_some(
+                                                            centered_paddings.0,
+                                                            |this, p| this.child(p.border_r_1()),
+                                                        )
                                                         .child(self.render_center(
                                                             &pane_render_context,
                                                             window,
                                                             cx,
                                                         ))
-                                                        .when_some(paddings.1, |this, p| {
-                                                            this.child(p.border_l_1())
-                                                        }),
+                                                        .when_some(
+                                                            centered_paddings.1,
+                                                            |this, p| this.child(p.border_l_1()),
+                                                        ),
                                                 )
                                                 .children(self.render_dock(
                                                     DockPosition::Bottom,
@@ -10212,25 +10223,51 @@ impl Render for Workspace {
                             )
                             .children(self.zoomed.as_ref().and_then(|view| {
                                 let zoomed_view = view.upgrade()?;
-                                let div = div()
+                                let zoomed_element = match zoomed_paddings {
+                                    (None, None) => zoomed_view.into_any_element(),
+                                    (left, right) => h_flex()
+                                        .size_full()
+                                        .when_some(left, |this, padding| {
+                                            this.child(padding.border_r_1().debug_selector(|| {
+                                                "zoomed_centered_layout_left_padding".into()
+                                            }))
+                                        })
+                                        .child(
+                                            div()
+                                                .size_full()
+                                                .debug_selector(|| {
+                                                    "zoomed_centered_layout_content".into()
+                                                })
+                                                .child(zoomed_view),
+                                        )
+                                        .when_some(right, |this, padding| {
+                                            this.child(padding.border_l_1().debug_selector(|| {
+                                                "zoomed_centered_layout_right_padding".into()
+                                            }))
+                                        })
+                                        .into_any_element(),
+                                };
+                                let overlay = div()
                                     .occlude()
                                     .absolute()
                                     .overflow_hidden()
                                     .border_color(colors.border)
                                     .bg(colors.background)
-                                    .child(zoomed_view)
+                                    .child(zoomed_element)
                                     .inset_0()
                                     .shadow_lg();
 
                                 if !WorkspaceSettings::get_global(cx).zoomed_padding {
-                                    return Some(div);
+                                    return Some(overlay);
                                 }
 
                                 Some(match self.zoomed_position {
-                                    Some(DockPosition::Left) => div.right_2().border_r_1(),
-                                    Some(DockPosition::Right) => div.left_2().border_l_1(),
-                                    Some(DockPosition::Bottom) => div.top_2().border_t_1(),
-                                    None => div.top_2().bottom_2().left_2().right_2().border_1(),
+                                    Some(DockPosition::Left) => overlay.right_2().border_r_1(),
+                                    Some(DockPosition::Right) => overlay.left_2().border_l_1(),
+                                    Some(DockPosition::Bottom) => overlay.top_2().border_t_1(),
+                                    None => {
+                                        overlay.top_2().bottom_2().left_2().right_2().border_1()
+                                    }
                                 })
                             }))
                             .children(self.render_notifications(window, cx)),
@@ -10697,9 +10734,9 @@ async fn join_channel_internal(
                 .update(cx, |_, window, cx| {
                     window.prompt(
                         PromptLevel::Warning,
-                        "要切换通话频道吗？",
-                        Some("离开当前通话将取消共享你当前的项目。"),
-                        &["是，加入频道", "取消"],
+                        i18n::t!("52c957b307a13e15"),
+                        Some(i18n::t!("ac9150f5d85ad5a5")),
+                        &[i18n::t!("1dc6a5fd793ff4d9"), i18n::t!("2cd0f3be8738a86c")],
                         cx,
                     )
                 })?
@@ -10904,26 +10941,33 @@ pub fn join_channel(
                 active_window
                     .update(cx, |_, window, cx| {
                         let detail: SharedString = match err.error_code() {
-                            ErrorCode::SignedOut => "请先登录以继续。".into(),
-                            ErrorCode::UpgradeRequired => {
-                                concat!("你正在运行的 Zed 版本不受支持。", "请更新后继续。").into()
-                            }
-                            ErrorCode::NoSuchChannel => {
-                                concat!("未找到匹配的频道。", "请检查链接后重试。").into()
-                            }
-                            ErrorCode::Forbidden => concat!(
-                                "此频道为私有频道，你没有访问权限。",
-                                "请让别人添加你后重试。"
+                            ErrorCode::SignedOut => i18n::t!("b75dd64201ffece6").into(),
+                            ErrorCode::UpgradeRequired => format!(
+                                "{}{}",
+                                i18n::t!("11bf41b80a400e93"),
+                                i18n::t!("aea77fa81401c42c")
                             )
                             .into(),
-                            ErrorCode::Disconnected => "请检查你的网络连接后重试。".into(),
+                            ErrorCode::NoSuchChannel => format!(
+                                "{}{}",
+                                i18n::t!("e946534f93b5157c"),
+                                i18n::t!("f06e0b78f7ccc942")
+                            )
+                            .into(),
+                            ErrorCode::Forbidden => format!(
+                                "{}{}",
+                                i18n::t!("b837145b50f2b727"),
+                                i18n::t!("c93402c1724b9dbb")
+                            )
+                            .into(),
+                            ErrorCode::Disconnected => i18n::t!("f31348f10849fd19").into(),
                             _ => i18n::t_args!("5b893f7179a5a122", err).into(),
                         };
                         window.prompt(
                             PromptLevel::Critical,
-                            "加入频道失败",
+                            i18n::t!("de33d136118087c5"),
                             Some(&detail),
-                            &["确定"],
+                            &[i18n::t!("fac2a67ad87807c4")],
                             cx,
                         )
                     })?
@@ -11516,11 +11560,12 @@ pub fn open_paths(
                     let workspace = multi_workspace.workspace().clone();
                     workspace.update(cx, |workspace, cx| {
                         workspace.show_notification(NotificationId::unique::<OpenInWsl>(), cx, move |cx| {
-                            let display_path = util::markdown::MarkdownInlineCode(&path.to_string_lossy());
-                            let msg = format!("{display_path} is inside a WSL filesystem, some features may not work unless you open it with WSL remote");
+                            let display_path =
+                                util::markdown::MarkdownInlineCode(&path.to_string_lossy());
+                            let msg = i18n::t!("1e39879f07639d9c", display_path = display_path);
                             cx.new(move |cx| {
                                 MessageNotification::new(msg, cx)
-                                    .primary_message("Open in WSL")
+                                    .primary_message(i18n::t!("fcee8b7672871a06"))
                                     .primary_icon(IconName::FolderOpen)
                                     .primary_on_click(move |window, cx| {
                                         window.dispatch_action(Box::new(remote::OpenWslPath {
@@ -11957,9 +12002,9 @@ pub fn reload(cx: &mut App) {
             .update(cx, |_, window, cx| {
                 window.prompt(
                     PromptLevel::Info,
-                    "确定要重启吗？",
+                    i18n::t!("ca6b531397bed9de"),
                     None,
-                    &["重启", "取消"],
+                    &[i18n::t!("562822892865b377"), i18n::t!("2cd0f3be8738a86c")],
                     cx,
                 )
             })
@@ -12145,7 +12190,6 @@ pub fn client_side_decorations(
     window: &mut Window,
     cx: &mut App,
 ) -> Stateful<Div> {
-    const BORDER_SIZE: Pixels = px(1.0);
     let decorations = window.window_decorations();
     let is_resizable = window.is_resizable();
     let tiling = match decorations {
@@ -12225,10 +12269,18 @@ pub fn client_side_decorations(
                     Decorations::Client { .. } => div
                         .border_color(cx.theme().colors().border)
                         .rounded_client_corners(tiling)
-                        .when(!tiling.top, |div| div.border_t(BORDER_SIZE))
-                        .when(!tiling.bottom, |div| div.border_b(BORDER_SIZE))
-                        .when(!tiling.left, |div| div.border_l(BORDER_SIZE))
-                        .when(!tiling.right, |div| div.border_r(BORDER_SIZE))
+                        .when(!tiling.top, |div| {
+                            div.border_t(theme::CLIENT_SIDE_DECORATION_BORDER)
+                        })
+                        .when(!tiling.bottom, |div| {
+                            div.border_b(theme::CLIENT_SIDE_DECORATION_BORDER)
+                        })
+                        .when(!tiling.left, |div| {
+                            div.border_l(theme::CLIENT_SIDE_DECORATION_BORDER)
+                        })
+                        .when(!tiling.right, |div| {
+                            div.border_r(theme::CLIENT_SIDE_DECORATION_BORDER)
+                        })
                         .when(!tiling.is_tiled(), |div| {
                             div.shadow(vec![
                                 gpui::BoxShadow::new(
@@ -15869,6 +15921,135 @@ mod tests {
             let result = render_center_group(workspace, window, cx);
             assert_eq!(result.decorated_pane_ix, Some(1));
         });
+    }
+
+    #[gpui::test]
+    async fn test_centered_layout_with_zoomed_pane(cx: &mut TestAppContext) {
+        init_test(cx);
+        let fs = FakeFs::new(cx.executor());
+        let project = Project::test(fs, None, cx).await;
+        let (workspace, cx) =
+            cx.add_window_view(|window, cx| Workspace::test_new(project, window, cx));
+
+        add_an_item_to_active_pane(cx, &workspace, 1);
+        let second_pane = split_pane(cx, &workspace);
+        add_an_item_to_active_pane(cx, &workspace, 2);
+
+        workspace.update_in(cx, |workspace, window, cx| {
+            workspace.toggle_centered_layout(&ToggleCenteredLayout, window, cx);
+        });
+        cx.run_until_parked();
+
+        assert_eq!(
+            zoomed_padding_bounds(cx),
+            (None, None),
+            "nothing is zoomed, so the zoom overlay should not be padded"
+        );
+
+        second_pane.update_in(cx, |pane, window, cx| pane.zoom_in(&ZoomIn, window, cx));
+        cx.run_until_parked();
+
+        workspace.read_with(cx, |workspace, _| {
+            assert_eq!(
+                workspace.zoomed,
+                Some(second_pane.downgrade().into()),
+                "the pane should be zoomed"
+            );
+            assert_eq!(
+                workspace.center.panes().len(),
+                2,
+                "the split should survive the zoom"
+            );
+        });
+
+        assert_zoomed_pane_is_padded(cx);
+
+        workspace.update_in(cx, |workspace, window, cx| {
+            workspace.toggle_centered_layout(&ToggleCenteredLayout, window, cx);
+        });
+        cx.run_until_parked();
+
+        assert_eq!(
+            zoomed_padding_bounds(cx),
+            (None, None),
+            "turning the centered layout off should remove the padding"
+        );
+
+        workspace.read_with(cx, |workspace, _| {
+            assert_eq!(
+                workspace.zoomed,
+                Some(second_pane.downgrade().into()),
+                "the pane should stay zoomed while toggling the centered layout"
+            );
+        });
+
+        workspace.update_in(cx, |workspace, window, cx| {
+            workspace.toggle_centered_layout(&ToggleCenteredLayout, window, cx);
+        });
+        cx.run_until_parked();
+
+        assert_zoomed_pane_is_padded(cx);
+    }
+
+    #[gpui::test]
+    async fn test_centered_layout_with_zoomed_dock(cx: &mut TestAppContext) {
+        init_test(cx);
+        let fs = FakeFs::new(cx.executor());
+        let project = Project::test(fs, None, cx).await;
+        let (workspace, cx) =
+            cx.add_window_view(|window, cx| Workspace::test_new(project, window, cx));
+
+        add_an_item_to_active_pane(cx, &workspace, 1);
+        let panel = workspace.update_in(cx, |workspace, window, cx| {
+            workspace.toggle_centered_layout(&ToggleCenteredLayout, window, cx);
+            let panel = cx.new(|cx| TestPanel::new(DockPosition::Right, 100, cx));
+            workspace.add_panel(panel.clone(), window, cx);
+            workspace.toggle_dock(DockPosition::Right, window, cx);
+            panel
+        });
+        cx.run_until_parked();
+
+        panel.update(cx, |_, cx| cx.emit(PanelEvent::ZoomIn));
+        cx.run_until_parked();
+
+        workspace.read_with(cx, |workspace, _| {
+            assert!(workspace.centered_layout);
+            assert_eq!(workspace.zoomed, Some(panel.to_any().downgrade()));
+            assert_eq!(workspace.zoomed_position, Some(DockPosition::Right));
+        });
+        assert_eq!(
+            zoomed_padding_bounds(cx),
+            (None, None),
+            "a zoomed dock should not receive centered layout padding"
+        );
+    }
+
+    fn zoomed_padding_bounds(
+        cx: &mut VisualTestContext,
+    ) -> (Option<Bounds<Pixels>>, Option<Bounds<Pixels>>) {
+        (
+            cx.debug_bounds("zoomed_centered_layout_left_padding"),
+            cx.debug_bounds("zoomed_centered_layout_right_padding"),
+        )
+    }
+
+    fn assert_zoomed_pane_is_padded(cx: &mut VisualTestContext) {
+        let (Some(left), Some(right)) = zoomed_padding_bounds(cx) else {
+            panic!("a centered zoomed pane should have padding on both sides");
+        };
+        let content = cx
+            .debug_bounds("zoomed_centered_layout_content")
+            .expect("a centered zoomed pane should render its content");
+        assert!(left.size.width > px(0.));
+        assert_eq!(
+            left.size.width, right.size.width,
+            "the zoomed pane should be horizontally centered"
+        );
+        assert!(content.size.width > px(0.));
+        assert!(
+            left.right() <= content.left() && content.right() <= right.left(),
+            "the zoomed pane should sit between the paddings: left {left:?}, content {content:?}, right {right:?}"
+        );
     }
 
     #[gpui::test]

@@ -1540,7 +1540,7 @@ impl GitGraph {
 
         let search_editor = cx.new(|cx| {
             let mut editor = Editor::single_line(window, cx);
-            editor.set_placeholder_text("搜索提交…", window, cx);
+            editor.set_placeholder_text(i18n::t!("3dca38b81747c58e"), window, cx);
             editor
         });
 
@@ -2027,7 +2027,7 @@ impl GitGraph {
                             let author_name = author_name.clone();
                             move |_, cx| {
                                 Tooltip::with_meta(
-                                    "查看该作者的全部提交",
+                                    i18n::t!("6ac7a508e97bdb53"),
                                     None,
                                     author_name.clone(),
                                     cx,
@@ -2247,7 +2247,7 @@ impl GitGraph {
         self.search_state.author_filter = None;
         let query = self.search_state.editor.read(cx).text(cx);
         let query = query.trim();
-        let author_query = ["作者:", "作者：", "author:"]
+        let author_query = [i18n::t!("d40e1a908e0ec999"), i18n::t!("82c0db872c4a7ffc"), "author:"]
             .into_iter()
             .find_map(|prefix| query.strip_prefix(prefix));
         let query = author_query
@@ -2399,11 +2399,11 @@ impl GitGraph {
 
         self.load_selected_commit_message(cx, &commit_message_handle, &repository);
 
-        let diff_receiver =
-            repository.update(cx, |repo, _| repo.load_commit_diff(diff_handle, false));
+        let diff_task =
+            repository.update(cx, |repo, cx| repo.load_commit_diff(diff_handle, false, cx));
 
         self._commit_diff_task = Some(cx.spawn(async move |this, cx| {
-            if let Ok(Ok(diff)) = diff_receiver.await {
+            if let Ok(diff) = diff_task.await {
                 this.update(cx, |this, cx| {
                     let stats = compute_diff_stats(&diff);
                     this.selected_commit_diff = Some(diff);
@@ -2762,9 +2762,9 @@ impl GitGraph {
     ) {
         let is_path_history = matches!(self.log_source, LogSource::Path(_));
         let columns: &[&str] = if is_path_history {
-            &["描述", "日期", "作者", "提交"]
+            &[i18n::t!("dc2ba467fc7ac962"), i18n::t!("70d0c1b33626ba4b"), i18n::t!("7d4146ca082798f0"), i18n::t!("08a85f4ab4bab9ca")]
         } else {
-            &["图", "描述", "日期", "作者", "提交"]
+            &[i18n::t!("8013578e5e8731a6"), i18n::t!("dc2ba467fc7ac962"), i18n::t!("70d0c1b33626ba4b"), i18n::t!("7d4146ca082798f0"), i18n::t!("08a85f4ab4bab9ca")]
         };
 
         let filter = self.column_visibility.clone();
@@ -2869,7 +2869,7 @@ impl GitGraph {
                             "git-graph-only-show-matches",
                             self.search_state.only_show_matches.into(),
                         )
-                        .label("是否只展示搜索结果")
+                        .label(i18n::t!("1571c065b8d9b2c1"))
                         .label_position(SwitchLabelPosition::Start)
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.toggle_only_show_matches(cx);
@@ -2883,7 +2883,7 @@ impl GitGraph {
                             .icon_size(IconSize::Small)
                             .tooltip(move |_, cx| {
                                 Tooltip::for_action_in(
-                                    "选择上一个匹配项",
+                                    i18n::t!("b8dbe233ed592f28"),
                                     &SelectPreviousMatch,
                                     &focus_handle,
                                     cx,
@@ -2906,7 +2906,7 @@ impl GitGraph {
                             .icon_size(IconSize::Small)
                             .tooltip(move |_, cx| {
                                 Tooltip::for_action_in(
-                                    "选择下一个匹配项",
+                                    i18n::t!("c0b43be5e905671b"),
                                     &SelectNextMatch,
                                     &focus_handle,
                                     cx,
@@ -3132,7 +3132,7 @@ impl GitGraph {
                             .child(
                                 Button::new("show-author-commits", author_name.clone())
                                     .style(ButtonStyle::Subtle)
-                                    .tooltip(Tooltip::text("查看该作者的全部提交"))
+                                    .tooltip(Tooltip::text(i18n::t!("6ac7a508e97bdb53")))
                                     .on_click({
                                         let author_email = author_email.clone();
                                         cx.listener(move |this, _, window, cx| {
@@ -3438,7 +3438,7 @@ impl GitGraph {
             .child(Divider::horizontal())
             .child(
                 h_flex().p_1p5().w_full().child(
-                    Button::new("view-commit", "查看提交")
+                    Button::new("view-commit", i18n::t!("f9241c1ae340b651"))
                         .full_width()
                         .start_icon(
                             Icon::new(IconName::GitCommit)
@@ -4096,20 +4096,20 @@ impl Render for GitGraph {
                                     if !is_path_history {
                                         TableRow::from_vec(
                                             vec![
-                                                Label::new("图形")
+                                                Label::new(i18n::t!("d3425cdb5f87a645"))
                                                     .color(Color::Muted)
                                                     .truncate()
                                                     .into_any_element(),
-                                                Label::new("描述")
+                                                Label::new(i18n::t!("dc2ba467fc7ac962"))
                                                     .color(Color::Muted)
                                                     .into_any_element(),
-                                                Label::new("日期")
+                                                Label::new(i18n::t!("70d0c1b33626ba4b"))
                                                     .color(Color::Muted)
                                                     .into_any_element(),
-                                                Label::new("作者")
+                                                Label::new(i18n::t!("7d4146ca082798f0"))
                                                     .color(Color::Muted)
                                                     .into_any_element(),
-                                                Label::new("提交")
+                                                Label::new(i18n::t!("08a85f4ab4bab9ca"))
                                                     .color(Color::Muted)
                                                     .into_any_element(),
                                             ],
@@ -4118,16 +4118,16 @@ impl Render for GitGraph {
                                     } else {
                                         TableRow::from_vec(
                                             vec![
-                                                Label::new("描述")
+                                                Label::new(i18n::t!("dc2ba467fc7ac962"))
                                                     .color(Color::Muted)
                                                     .into_any_element(),
-                                                Label::new("日期")
+                                                Label::new(i18n::t!("70d0c1b33626ba4b"))
                                                     .color(Color::Muted)
                                                     .into_any_element(),
-                                                Label::new("作者")
+                                                Label::new(i18n::t!("7d4146ca082798f0"))
                                                     .color(Color::Muted)
                                                     .into_any_element(),
-                                                Label::new("提交")
+                                                Label::new(i18n::t!("08a85f4ab4bab9ca"))
                                                     .color(Color::Muted)
                                                     .into_any_element(),
                                             ],

@@ -194,7 +194,7 @@ use language::{
     LocalFile, OffsetRangeExt, OutlineItem, Point, Selection, SelectionGoal, TextObject,
     TransactionId, TreeSitterOptions, WordsQuery,
     language_settings::{
-        self, AllLanguageSettings, LanguageSettings, LspInsertMode, RewrapBehavior,
+        self, AllLanguageSettings, LanguageSettings, LspInsertMode, RewrapBehavior, SoftWrapIndent,
         WordsCompletionMode, all_language_settings,
     },
     point_to_lsp, text_diff_with_options,
@@ -280,7 +280,7 @@ use workspace::{
     TabBarSettings, Toast, ViewId, Workspace, WorkspaceId, WorkspaceSettings,
     item::{ItemBufferKind, ItemHandle, PreviewTabsSettings, SaveOptions},
     notifications::{DetachAndPromptErr, NotificationId, NotifyResultExt, NotifyTaskExt},
-    searchable::SearchEvent,
+    searchable::{SearchEvent, SelectSearchOptions},
 };
 pub use zed_actions::editor::RevealInFileManager;
 use zed_actions::editor::{MoveDown, MoveUp};
@@ -332,9 +332,9 @@ enum ReportEditorEvent {
 impl ReportEditorEvent {
     pub fn event_type(&self) -> &'static str {
         match self {
-            Self::Saved { .. } => "编辑器已保存",
-            Self::EditorOpened => "编辑器已打开",
-            Self::Closed => "编辑器已关闭",
+            Self::Saved { .. } => i18n::t!("5868f3b90522396b"),
+            Self::EditorOpened => i18n::t!("bb8f8a48dd750b44"),
+            Self::Closed => i18n::t!("07b1f4fd110411bd"),
         }
     }
 }
@@ -1208,7 +1208,7 @@ pub struct Editor {
     refresh_folding_ranges_task: Task<()>,
     inlay_hints: Option<LspInlayHintData>,
     folding_newlines: Task<()>,
-    select_next_is_case_sensitive: Option<bool>,
+    select_next_options: Option<SelectSearchOptions>,
     pub lookup_key: Option<Box<dyn Any + Send + Sync>>,
     on_local_selections_changed:
         Option<Box<dyn Fn(Point, &mut Window, &mut Context<Self>) + 'static>>,
@@ -1712,8 +1712,8 @@ enum GutterButtonIntent {
 impl GutterButtonIntent {
     fn as_str(&self) -> &'static str {
         match self {
-            Self::SetBookmark => "设置书签",
-            Self::SetBreakpoint => "设置断点",
+            Self::SetBookmark => i18n::t!("d6042b9049c7853b"),
+            Self::SetBreakpoint => i18n::t!("587c60ff7b52bd83"),
         }
     }
 
@@ -2581,7 +2581,7 @@ impl Editor {
             selection_drag_state: SelectionDragState::None,
             folding_newlines: Task::ready(()),
             lookup_key: None,
-            select_next_is_case_sensitive: None,
+            select_next_options: None,
             on_local_selections_changed: None,
             suppress_selection_callback: false,
             applicable_language_settings: HashMap::default(),
@@ -2980,7 +2980,7 @@ impl Editor {
         cx: &mut Context<Workspace>,
     ) {
         Self::new_in_workspace(workspace, window, cx).detach_and_prompt_err(
-            "创建缓冲区失败",
+            i18n::t!("156d2f0095713ee8"),
             window,
             cx,
             |e, _, _| match e.error_code() {
@@ -3068,7 +3068,7 @@ impl Editor {
             })?;
             anyhow::Ok(())
         })
-        .detach_and_prompt_err("创建缓冲区失败", window, cx, |e, _, _| {
+        .detach_and_prompt_err(i18n::t!("156d2f0095713ee8"), window, cx, |e, _, _| {
             match e.error_code() {
                 ErrorCode::RemoteUpgradeRequired => Some(format!(
                 "The remote instance of Zed does not support this yet. It must be upgraded to {}",
@@ -4364,9 +4364,9 @@ impl Editor {
             }))
             .tooltip(move |_window, cx| {
                 Tooltip::with_meta_in(
-                    "移除书签",
+                    i18n::t!("88f343822f860138"),
                     Some(&ToggleBookmark),
-                    SharedString::from("右键点击查看更多选项"),
+                    SharedString::from(i18n::t!("cf35be2b6df8dc80")),
                     &focus_handle,
                     cx,
                 )
@@ -4454,47 +4454,47 @@ impl Editor {
             .map(|(anchor, bp)| (anchor, Arc::from(bp)));
 
         let log_breakpoint_msg = if breakpoint.as_ref().is_some_and(|bp| bp.1.message.is_some()) {
-            "编辑日志断点"
+            i18n::t!("ec4c4b2c5ecbc072")
         } else {
-            "设置日志断点"
+            i18n::t!("a7fca8b4a196198f")
         };
 
         let condition_breakpoint_msg = if breakpoint
             .as_ref()
             .is_some_and(|bp| bp.1.condition.is_some())
         {
-            "编辑条件断点"
+            i18n::t!("48533ca8da794ce7")
         } else {
-            "设置条件断点"
+            i18n::t!("2648de35fa820a99")
         };
 
         let hit_condition_breakpoint_msg = if breakpoint
             .as_ref()
             .is_some_and(|bp| bp.1.hit_condition.is_some())
         {
-            "编辑命中条件断点"
+            i18n::t!("a563db1ffb32fd7f")
         } else {
-            "设置命中条件断点"
+            i18n::t!("8dd2f9b014e5e147")
         };
 
         let set_breakpoint_msg = if breakpoint.as_ref().is_some() {
-            "移除断点"
+            i18n::t!("deef0c54dcd07db9")
         } else {
-            "设置断点"
+            i18n::t!("587c60ff7b52bd83")
         };
 
         let git_blame_msg = if self.show_git_blame_gutter {
-            "关闭 Git 追溯"
+            i18n::t!("df4ee7ba241de132")
         } else {
-            "打开 Git 追溯"
+            i18n::t!("18f9cac44671f3e3")
         };
 
         let bookmark = self.bookmark_at_row(row, window, cx);
 
         let set_bookmark_msg = if bookmark.as_ref().is_some() {
-            "移除书签"
+            i18n::t!("88f343822f860138")
         } else {
-            "添加书签"
+            i18n::t!("a60529441b4397a7")
         };
         let has_bookmark = bookmark.as_ref().is_some();
 
@@ -4512,10 +4512,10 @@ impl Editor {
         let toggle_state_entry: Option<(&str, Box<dyn Action>)> =
             breakpoint.as_ref().map(|bp| match bp.1.state {
                 BreakpointState::Enabled => {
-                    ("禁用", crate::actions::DisableBreakpoint.boxed_clone())
+                    (i18n::t!("7df5c456c765e4c3"), crate::actions::DisableBreakpoint.boxed_clone())
                 }
                 BreakpointState::Disabled => {
-                    ("启用", crate::actions::EnableBreakpoint.boxed_clone())
+                    (i18n::t!("f4f0ead1116b5b62"), crate::actions::EnableBreakpoint.boxed_clone())
                 }
             });
 
@@ -4528,7 +4528,7 @@ impl Editor {
                 .when_some(
                     clear_runnable_task_status,
                     |this, (buffer_id, buffer_row)| {
-                        this.entry("清除运行状态", None, {
+                        this.entry(i18n::t!("edbd68425a606cab"), None, {
                             let weak_editor = weak_editor.clone();
                             move |_window, cx| {
                                 weak_editor
@@ -4544,7 +4544,7 @@ impl Editor {
                 .when(run_to_cursor, |this| {
                     let weak_editor = weak_editor.clone();
                     this.entry(
-                        "运行到光标",
+                        i18n::t!("800844fdbd4f9fe3"),
                         Some(RunToCursor.boxed_clone()),
                         move |window, cx| {
                             weak_editor
@@ -4684,7 +4684,7 @@ impl Editor {
                 })
                 .when(has_bookmark, |this| {
                     this.entry(
-                        "编辑书签",
+                        i18n::t!("2c1b74bf946a6c9a"),
                         Some(EditBookmark.boxed_clone()),
                         move |window, cx| {
                             weak_editor
@@ -4736,7 +4736,7 @@ impl Editor {
         let has_context_menu = self.has_mouse_context_menu();
 
         let meta = if is_rejected {
-            SharedString::from("此行没有可执行的代码。")
+            SharedString::from(i18n::t!("e95b1a8a52646860"))
         } else if !breakpoint.is_disabled() {
             SharedString::from(format!(
                 "{alt_as_text}-click to disable\nright-click for more options"
@@ -5590,7 +5590,13 @@ impl Editor {
             let current_indent = snapshot.indent_size_for_line(MultiBufferRow(row));
             let indent_delta = match (current_indent.kind, indent_kind) {
                 (IndentKind::Space, IndentKind::Space) => {
-                    let columns_to_next_tab_stop = tab_size - (current_indent.len % tab_size);
+                    let columns_to_next_tab_stop = if delta_for_start_row > 0 {
+                        delta_for_start_row
+                    } else if has_multiple_rows {
+                        tab_size
+                    } else {
+                        tab_size - (current_indent.len % tab_size)
+                    };
                     IndentSize::spaces(columns_to_next_tab_stop)
                 }
                 (IndentKind::Tab, IndentKind::Space) => IndentSize::spaces(tab_size),
@@ -6263,7 +6269,7 @@ impl Editor {
             BreakpointPromptEditAction::Condition => {
                 "Condition when a breakpoint is hit. Expressions within {} are interpolated."
             }
-            BreakpointPromptEditAction::HitCondition => "忽略多少个断点命中",
+            BreakpointPromptEditAction::HitCondition => i18n::t!("61a4d840cb6d2792"),
         };
 
         let breakpoint = breakpoint.clone();
@@ -9406,19 +9412,22 @@ impl Editor {
         self.highlighted_rows
             .values()
             .flat_map(|highlighted_rows| {
-                let start_index = highlighted_rows.partition_point(|highlight| {
-                    highlight
-                        .range
-                        .end
-                        .cmp(&anchor_range.start, buffer_snapshot)
-                        .is_lt()
-                });
                 let end_index = highlighted_rows.partition_point(|highlight| {
                     highlight
                         .range
                         .start
                         .cmp(&anchor_range.end, buffer_snapshot)
                         .is_le()
+                });
+                // Search within `..end_index` so a highlight whose anchors
+                // have drifted to `start > end` can't produce an inverted
+                // slice; the filter below drops it either way.
+                let start_index = highlighted_rows[..end_index].partition_point(|highlight| {
+                    highlight
+                        .range
+                        .end
+                        .cmp(&anchor_range.start, buffer_snapshot)
+                        .is_lt()
                 });
                 highlighted_rows[start_index..end_index]
                     .iter()
@@ -12174,6 +12183,135 @@ impl EditorSnapshot {
             .language_at(position)
     }
 
+    pub fn display_row_for_inline_code_action(&self, buffer_point: Point) -> Option<DisplayRow> {
+        if self.is_line_folded(MultiBufferRow(buffer_point.row)) {
+            return None;
+        }
+
+        let line_indent = self
+            .display_snapshot
+            .buffer_snapshot()
+            .line_indent_for_row(MultiBufferRow(buffer_point.row));
+        if line_indent.is_line_blank() {
+            return None;
+        }
+
+        const INLINE_SLOT_CHAR_LIMIT: u32 = 4;
+        const MAX_ALTERNATE_DISTANCE: u32 = 8;
+
+        let is_valid_row = |row_candidate: u32| -> bool {
+            if self.is_line_folded(MultiBufferRow(row_candidate)) {
+                return false;
+            }
+            if buffer_point.row == row_candidate {
+                if buffer_point.column < INLINE_SLOT_CHAR_LIMIT {
+                    return false;
+                }
+            } else {
+                let candidate_point = MultiBufferPoint {
+                    row: row_candidate,
+                    column: 0,
+                };
+                let range = if candidate_point < buffer_point {
+                    candidate_point..buffer_point
+                } else {
+                    buffer_point..candidate_point
+                };
+                if self
+                    .display_snapshot
+                    .buffer_snapshot()
+                    .excerpt_containing(range)
+                    .is_none()
+                {
+                    return false;
+                }
+            }
+            let line_indent = self
+                .display_snapshot
+                .buffer_snapshot()
+                .line_indent_for_row(MultiBufferRow(row_candidate));
+            if line_indent.is_line_blank() {
+                true
+            } else {
+                let indent_size = self
+                    .display_snapshot
+                    .buffer_snapshot()
+                    .indent_size_for_line(MultiBufferRow(row_candidate));
+                if indent_size.len >= INLINE_SLOT_CHAR_LIMIT {
+                    true
+                } else if row_candidate == buffer_point.row {
+                    let display_row = self
+                        .display_snapshot
+                        .point_to_display_point(buffer_point, text::Bias::Left)
+                        .row();
+                    let line_start_display_row = self
+                        .display_snapshot
+                        .point_to_display_point(Point::new(buffer_point.row, 0), text::Bias::Left)
+                        .row();
+                    if display_row > line_start_display_row {
+                        self.display_snapshot
+                            .soft_wrap_indent(DisplayRow(display_row.0 - 1))
+                            .is_some_and(|indent| indent >= INLINE_SLOT_CHAR_LIMIT)
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
+            }
+        };
+
+        let new_buffer_row = if is_valid_row(buffer_point.row) {
+            Some(buffer_point.row)
+        } else {
+            let max_row = self.display_snapshot.buffer_snapshot().max_point().row;
+            (1..=MAX_ALTERNATE_DISTANCE).find_map(|offset| {
+                let row_above = buffer_point.row.saturating_sub(offset);
+                let row_below = buffer_point.row + offset;
+                if row_above != buffer_point.row && is_valid_row(row_above) {
+                    Some(row_above)
+                } else if row_below <= max_row && is_valid_row(row_below) {
+                    Some(row_below)
+                } else {
+                    None
+                }
+            })
+        }?;
+
+        let mut new_display_row = self
+            .display_snapshot
+            .point_to_display_point(
+                Point {
+                    row: new_buffer_row,
+                    column: buffer_point.column,
+                },
+                text::Bias::Left,
+            )
+            .row();
+
+        let line_start_display_row = self
+            .display_snapshot
+            .point_to_display_point(
+                Point {
+                    row: new_buffer_row,
+                    column: 0,
+                },
+                text::Bias::Left,
+            )
+            .row();
+
+        if new_display_row > line_start_display_row
+            && self
+                .display_snapshot
+                .soft_wrap_indent(DisplayRow(new_display_row.0 - 1))
+                .is_some_and(|indent| indent < INLINE_SLOT_CHAR_LIMIT)
+        {
+            new_display_row = line_start_display_row;
+        }
+
+        Some(new_display_row)
+    }
+
     pub fn is_focused(&self) -> bool {
         self.is_focused
     }
@@ -13049,7 +13187,7 @@ impl PromptEditor {
             .icon_color(Color::Muted)
             .shape(IconButtonShape::Square)
             .tooltip(move |_window, cx| {
-                Tooltip::for_action_in("取消", &menu::Cancel, &focus_handle, cx)
+                Tooltip::for_action_in(i18n::t!("2cd0f3be8738a86c"), &menu::Cancel, &focus_handle, cx)
             })
             .on_click(cx.listener(|this, _, window, cx| {
                 this.cancel(&menu::Cancel, window, cx);
@@ -13062,7 +13200,7 @@ impl PromptEditor {
             .icon_color(Color::Muted)
             .shape(IconButtonShape::Square)
             .tooltip(move |_window, cx| {
-                Tooltip::for_action_in("确认", &menu::Confirm, &focus_handle, cx)
+                Tooltip::for_action_in(i18n::t!("36f33adaf0942634"), &menu::Confirm, &focus_handle, cx)
             })
             .on_click(cx.listener(|this, _, window, cx| {
                 this.confirm(&menu::Confirm, window, cx);

@@ -1994,7 +1994,7 @@ fn notify_settings_errors(result: settings::SettingsParseResult, is_user: bool, 
                 show_app_notification(id, cx, move |cx| {
                     cx.new(|cx| {
                         MessageNotification::new(i18n::t!("393088b05f8e0e9b", error = error), cx)
-                            .primary_message("Open Settings File")
+                            .primary_message(i18n::t!("3018cf131663ad3f"))
                             .primary_icon(IconName::Settings)
                             .primary_on_click(|window, cx| {
                                 window.dispatch_action(
@@ -2030,7 +2030,7 @@ fn notify_settings_errors(result: settings::SettingsParseResult, is_user: bool, 
                             ),
                             cx,
                         )
-                        .primary_message("Open Settings File")
+                        .primary_message(i18n::t!("3018cf131663ad3f"))
                         .primary_icon(IconName::Settings)
                         .primary_on_click(|window, cx| {
                             window.dispatch_action(zed_actions::OpenSettingsFile.boxed_clone(), cx);
@@ -2318,7 +2318,7 @@ fn show_keymap_file_json_error(
     show_app_notification(notification_id, cx, move |cx| {
         cx.new(|cx| {
             MessageNotification::new(message.clone(), cx)
-                .primary_message("Open Keymap File")
+                .primary_message(i18n::t!("2eb78760a7b5a326"))
                 .primary_icon(IconName::Settings)
                 .primary_on_click(|window, cx| {
                     window.dispatch_action(zed_actions::OpenKeymapFile.boxed_clone(), cx);
@@ -6035,6 +6035,7 @@ mod tests {
                 "toolchain",
                 "variable_list",
                 "vim",
+                "which_key",
                 "window",
                 "workspace",
                 "worktree_picker",

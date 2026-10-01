@@ -608,7 +608,7 @@ impl RemoteConnection for SshRemoteConnection {
         cx: &mut AsyncApp,
     ) -> Task<Result<i32>> {
         const VARS: [&str; 3] = ["RUST_LOG", "RUST_BACKTRACE", "ZED_GENERATE_MINIDUMPS"];
-        delegate.set_status(Some("正在启动远程开发服务"), cx);
+        delegate.set_status(Some(i18n::t!("81ab7f063e9cd181")), cx);
 
         let Some(remote_binary_path) = self.remote_binary_path.clone() else {
             return Task::ready(Err(anyhow!("Remote binary path not set")));
@@ -804,7 +804,7 @@ impl SshRemoteConnection {
 
         #[cfg(not(windows))]
         let (socket, master_process_option) = if let Some(reused_path) = reused_socket {
-            delegate.set_status(Some("正在复用已有 SSH 连接"), cx);
+            delegate.set_status(Some(i18n::t!("2e0bf2888760610c")), cx);
             log::info!("reusing existing ControlMaster, skipping authentication");
             let socket = SshSocket::new(connection_options, delegate.clone(), reused_path).await?;
             (socket, None)
@@ -820,7 +820,7 @@ impl SshRemoteConnection {
                 askpass::AskPassSession::new(cx.background_executor().clone(), askpass_delegate)
                     .await?;
 
-            delegate.set_status(Some("正在建立 SSH 连接"), cx);
+            delegate.set_status(Some(i18n::t!("541711902f1387da")), cx);
 
             // Start the master SSH process, which does not do anything except
             // for establish the connection and keep it open, allowing other ssh
@@ -884,7 +884,7 @@ impl SshRemoteConnection {
                 askpass::AskPassSession::new(cx.background_executor().clone(), askpass_delegate)
                     .await?;
 
-            delegate.set_status(Some("正在建立 SSH 连接"), cx);
+            delegate.set_status(Some(i18n::t!("541711902f1387da")), cx);
 
             let mut master_process = MasterProcess::new(
                 askpass.script_path().as_ref(),
@@ -941,27 +941,27 @@ impl SshRemoteConnection {
             (socket, Some(master_process))
         };
 
-        delegate.set_status(Some("SSH 连接成功，正在检测远程操作系统"), cx);
+        delegate.set_status(Some(i18n::t!("de2bb82dfec7d996")), cx);
         let is_windows = socket.probe_is_windows(cx).await;
         log::info!("Remote is windows: {}", is_windows);
 
-        delegate.set_status(Some("正在检测远程 Shell"), cx);
+        delegate.set_status(Some(i18n::t!("394f7f9dd2671e5f")), cx);
         let ssh_shell = socket.shell(is_windows, cx).await;
         log::info!("Remote shell discovered: {}", ssh_shell);
 
-        delegate.set_status(Some("正在检测远程 CPU 架构"), cx);
+        delegate.set_status(Some(i18n::t!("541c44ea410a303d")), cx);
         let ssh_shell_kind = ShellKind::new(&ssh_shell, is_windows);
         let ssh_platform = socket.platform(ssh_shell_kind, is_windows, cx).await?;
         log::info!("Remote platform discovered: {:?}", ssh_platform);
 
-        delegate.set_status(Some("正在检测远程系统版本"), cx);
+        delegate.set_status(Some(i18n::t!("81e8fe262bdf9535")), cx);
         let ssh_os_version = socket.os_version(ssh_platform.os, ssh_shell_kind, cx).await;
         log::info!("Remote OS version discovered: {:?}", ssh_os_version);
 
         if let Some(managed_key) = managed_key {
             crate::managed_ssh_keys::mark_managed_ssh_key_used(&managed_key.key_id, cx).await?;
         } else if delegate.should_create_managed_ssh_key() {
-            delegate.set_status(Some("正在创建并部署 Zed 专属 SSH 密钥"), cx);
+            delegate.set_status(Some(i18n::t!("1f4e8181c46652af")), cx);
             socket
                 .create_and_deploy_managed_key(ssh_shell_kind, ssh_platform.os, cx)
                 .await?;
@@ -1048,7 +1048,7 @@ impl SshRemoteConnection {
             )),
             cx,
         );
-        delegate.append_connection_log("正在校验远程开发服务文件", cx);
+        delegate.append_connection_log(i18n::t!("dbc47acf91d29e59"), cx);
         let binary_exists_on_server = if let Some(tag) = &custom_tag {
             self.verify_custom_server_binary(&dst_path, tag, delegate, cx)
                 .await?
@@ -1093,11 +1093,11 @@ impl SshRemoteConnection {
         }
 
         if binary_exists_on_server {
-            delegate.set_status(Some("已找到远程开发服务"), cx);
+            delegate.set_status(Some(i18n::t!("bafe99071aee2afe")), cx);
             return Ok(dst_path.into());
         }
 
-        delegate.set_status(Some("远程开发服务不存在，正在准备安装"), cx);
+        delegate.set_status(Some(i18n::t!("ac6a43b01771ed1e")), cx);
         let wanted_version = cx.update(|cx| match release_channel {
             ReleaseChannel::Nightly => Ok(None),
             ReleaseChannel::Dev => {
@@ -1136,7 +1136,7 @@ impl SshRemoteConnection {
         );
         let mut remote_download_error = None;
         if custom_tag.is_none() && !self.socket.connection_options.upload_binary_over_ssh {
-            delegate.set_status(Some("正在获取远程开发服务下载地址"), cx);
+            delegate.set_status(Some(i18n::t!("0477f16d11c8f4bb")), cx);
             match delegate
                 .get_download_url(
                     self.ssh_platform,
@@ -1167,25 +1167,25 @@ impl SshRemoteConnection {
                                 "Failed to download remote server binary on host; falling back to a local download: {error:#}"
                             );
                             self.remove_remote_download(&tmp_path_compressed, cx).await;
-                            delegate.set_status(Some("远程主机下载失败，正在改用本地网络下载"), cx);
+                            delegate.set_status(Some(i18n::t!("3706f3332b6c2e8c")), cx);
                             remote_download_error = Some(error);
                         }
                     }
                 }
                 Ok(None) => {
                     let error = anyhow!(i18n::t!("5bd5e338c21649e7"));
-                    delegate.set_status(Some("无法远程下载，正在改用本地下载"), cx);
+                    delegate.set_status(Some(i18n::t!("f1617ba9948e848d")), cx);
                     remote_download_error = Some(error);
                 }
                 Err(error) => {
                     log::warn!("Failed to obtain a remote server download URL: {error:#}");
-                    delegate.set_status(Some("获取远程下载地址失败，正在改用本地下载"), cx);
+                    delegate.set_status(Some(i18n::t!("5d232f03080ab67d")), cx);
                     remote_download_error = Some(error);
                 }
             }
         } else {
             delegate.set_status(
-                Some("正在通过本机网络下载远程开发服务，完成后将经 SSH 上传"),
+                Some(i18n::t!("065419df547c2992")),
                 cx,
             );
         }
@@ -1233,7 +1233,7 @@ impl SshRemoteConnection {
             anyhow::ensure!(
                 self.verify_custom_server_binary(&dst_path, tag, delegate, cx)
                     .await?,
-                "安装后未找到 Zed CN 远程服务，已停止连接"
+                i18n::t!("eaed8ae33a3b06a6")
             );
         } else {
             self.extract_server_binary(&dst_path, &tmp_path_compressed, delegate, cx)
@@ -1268,7 +1268,7 @@ impl SshRemoteConnection {
             }
         }
 
-        delegate.set_status(Some("正在从远程主机下载远程开发服务"), cx);
+        delegate.set_status(Some(i18n::t!("84c2006b99ebf59d")), cx);
 
         let connection_timeout = self
             .socket
@@ -1490,8 +1490,8 @@ impl SshRemoteConnection {
         };
         let args = kind.args_for_shell(false, script);
         let arguments: Vec<&str> = args.iter().map(String::as_str).collect();
-        delegate.set_status(Some("正在校验 Zed CN 远程开发服务完整性"), cx);
-        delegate.append_connection_log("正在计算远程服务 SHA-256", cx);
+        delegate.set_status(Some(i18n::t!("534e123d64947dc4")), cx);
+        delegate.append_connection_log(i18n::t!("85ec458a84d7d3b2"), cx);
         let output = self
             .socket
             .run_command_with_timeout(
@@ -1576,7 +1576,7 @@ impl SshRemoteConnection {
         let size = src_stat.len();
 
         let t0 = Instant::now();
-        delegate.set_status(Some("正在上传远程开发服务到远程主机"), cx);
+        delegate.set_status(Some(i18n::t!("d913842c24ae4f66")), cx);
         log::info!(
             "uploading remote development server to {:?} ({}kb)",
             tmp_path,
@@ -1598,7 +1598,7 @@ impl SshRemoteConnection {
         delegate: &Arc<dyn RemoteClientDelegate>,
         cx: &mut AsyncApp,
     ) -> Result<()> {
-        delegate.set_status(Some("正在远程主机上解压远程开发服务"), cx);
+        delegate.set_status(Some(i18n::t!("08db93556b49c316")), cx);
         let started_at = Instant::now();
         log::info!("extracting remote development server to {dst_path:?}");
 
@@ -2000,7 +2000,7 @@ impl SshSocket {
         crate::managed_ssh_keys::mark_managed_ssh_key_verified(&generated.record.key_id, cx)
             .await?;
         self.delegate
-            .append_connection_log("✓ Zed 专属 SSH 密钥已部署并验证", &mut cx.clone());
+            .append_connection_log(i18n::t!("90fa343fb4cc0eaa"), &mut cx.clone());
         Ok(())
     }
 
@@ -2120,7 +2120,7 @@ impl SshSocket {
                 &format!(
                     "✗ {display} — {}",
                     if detail.is_empty() {
-                        "命令失败"
+                        i18n::t!("6eb1141858cf9632")
                     } else {
                         &detail
                     }

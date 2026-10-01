@@ -218,7 +218,8 @@ UI_CALL_RE = re.compile(
         Notification::new\( | SelectableButton::new\( | CheckboxWithLabel::new\( |
         SettingItem:: | SettingField:: |
         \.tooltip\( | \.label\( | \.placeholder\( | \.name\( | \.title\( |
-        \.message\( | \.text\( | \.description\( | \.confirm\( |
+        \.message\( | \.primary_message\( | \.secondary_message\( |
+        \.text\( | \.description\( | \.confirm\( | ErrorAction::link\( |
         one_line\( | two_lines\( | key_binding\( | validate\( | error_message\( |
         menu\( | submenu\( | section\( | header\( | footer\(
     )""",
@@ -233,8 +234,8 @@ KEYISH_RE = re.compile(
     re.VERBOSE,
 )
 
-TEST_FILE_SUFFIXES = ("_tests.rs", "_bench.rs", "_benches.rs")
-TEST_DIR_MARKERS = ("/tests/", "/benches/", "/examples/", "/benches/")
+TEST_FILE_SUFFIXES = ("_tests.rs", "_test.rs", "_bench.rs", "_benches.rs")
+TEST_DIR_MARKERS = ("/tests/", "/benches/", "/examples/", "/fixtures/")
 
 # i18n 工具链自身（含生成器与脚本），永远不作为 UI 文案
 TOOLING_DIRS = ("crates/i18n/",)
@@ -243,7 +244,9 @@ TOOLING_DIRS = ("crates/i18n/",)
 def is_test_file(path: str) -> bool:
     if path.startswith(TOOLING_DIRS) or f"/{TOOLING_DIRS[0]}" in path:
         return True
-    if path.endswith(TEST_FILE_SUFFIXES):
+    if path.endswith(TEST_FILE_SUFFIXES) or path.endswith("/test.rs"):
+        return True
+    if path.endswith("/visual_test_runner.rs"):
         return True
     if any(marker in path for marker in TEST_DIR_MARKERS):
         return True
@@ -252,31 +255,119 @@ def is_test_file(path: str) -> bool:
     return False
 
 
-def in_test_region(lines: list[str], index: int) -> bool:
-    """判断某行是否位于 #[cfg(test)] mod tests 或 #[test] fn 内（粗略括号计数）。"""
-    depth = 0
-    in_cfg_test = False
-    test_fn_depth = None
-    for i in range(index + 1):
-        line = lines[i]
-        stripped = line.strip()
-        if i == index:
-            if test_fn_depth is not None and depth >= test_fn_depth:
-                return True
-            return in_cfg_test
-        if "#[cfg(test)]" in line or "mod tests" in stripped:
-            in_cfg_test = True
-        if stripped.startswith("#[test]") or stripped.startswith("#[gpui::test]"):
-            # 沿着后续行找到 fn 签名，深度记为函数体起点
-            test_fn_depth = None
-            for j in range(i, min(i + 5, len(lines))):
-                if "fn " in lines[j]:
-                    test_fn_depth = depth + max(lines[j].count("{") - lines[j].count("}"), 1)
+RAW_STRING_START_RE = re.compile(r'(?:b|c|br|rb|cr|rc)?r(#*)"')
+CHAR_LITERAL_RE = re.compile(r"'(?:\\.|[^\\'])'")
+
+
+def mask_rust_line(line: str, in_block_comment: bool = False) -> tuple[str, bool]:
+    """把字符串/字符字面量与注释替换为等长空格，用于可靠地数花括号。
+
+    原始字符串（`r#"…"#`、`br"…"` 等）、转义与行注释、块注释都会被剔除，
+    这样花括号计数不会被字符串内容干扰。
+    """
+    out: list[str] = []
+    index = 0
+    length = len(line)
+    while index < length:
+        if in_block_comment:
+            end = line.find("*/", index)
+            if end == -1:
+                out.append(" " * (length - index))
+                return "".join(out), True
+            out.append(" " * (end + 2 - index))
+            index = end + 2
+            in_block_comment = False
+            continue
+        character = line[index]
+        if character == "/" and index + 1 < length and line[index + 1] == "/":
+            out.append(" " * (length - index))
+            break
+        if character == "/" and index + 1 < length and line[index + 1] == "*":
+            end = line.find("*/", index + 2)
+            if end == -1:
+                out.append(" " * (length - index))
+                return "".join(out), True
+            out.append(" " * (end + 2 - index))
+            index = end + 2
+            continue
+        raw_start = RAW_STRING_START_RE.match(line, index)
+        if raw_start is not None:
+            closing = '"' + raw_start.group(1)
+            end = line.find(closing, raw_start.end())
+            if end == -1:
+                out.append(" " * (length - index))
+                break
+            out.append(" " * (end + len(closing) - index))
+            index = end + len(closing)
+            continue
+        if character == '"':
+            end = index + 1
+            while end < length:
+                if line[end] == "\\":
+                    end += 2
+                    continue
+                if line[end] == '"':
                     break
-        if in_cfg_test and stripped.startswith("}") and depth == 0:
-            in_cfg_test = False
-        depth += line.count("{") - line.count("}")
-    return False
+                end += 1
+            end = min(end, length - 1)
+            out.append(" " * (end + 1 - index))
+            index = end + 1
+            continue
+        char_literal = CHAR_LITERAL_RE.match(line, index)
+        if char_literal is not None:
+            out.append(" " * (char_literal.end() - index))
+            index = char_literal.end()
+            continue
+        out.append(character)
+        index += 1
+    return "".join(out), in_block_comment
+
+
+def compute_test_regions(lines: list[str]) -> list[bool]:
+    """标记每个行索引是否位于 `#[cfg(test)]` 模块或测试函数体内。"""
+    regions = [False] * len(lines)
+    depth = 0
+    pending = False
+    test_depths: list[int] = []
+    in_block_comment = False
+    for index, line in enumerate(lines):
+        regions[index] = bool(test_depths)
+        masked, in_block_comment = mask_rust_line(line, in_block_comment)
+        stripped = masked.strip()
+        if re.match(r"#\[cfg\([^\]]*\btest\b", stripped) or re.match(
+            r"(?:pub\s+)?mod\s+tests\b", stripped
+        ):
+            pending = True
+        # gpui 组件预览（`impl Component`）与 `fn preview` 只是开发用的展示页，
+        # 其中的示例文案不是用户可见的界面文案。
+        if re.match(r"impl\s+Component\b", stripped) or re.match(r"(?:pub\s+)?fn\s+preview\w*\s*\(", stripped):
+            pending = True
+        delta = masked.count("{") - masked.count("}")
+        if pending and delta > 0:
+            test_depths.append(depth + delta)
+            pending = False
+            regions[index] = True
+        elif pending and ";" in masked:
+            pending = False
+        depth += delta
+        while test_depths and depth < test_depths[-1]:
+            test_depths.pop()
+    return regions
+
+
+_test_region_cache: tuple[int, list[str], list[bool]] | None = None
+
+
+def in_test_region(lines: list[str], index: int) -> bool:
+    """判断某行是否位于 `#[cfg(test)]` 模块或测试函数体内。
+
+    结果按 `lines` 对象缓存，`scan_code`/`extract` 对同一文件会反复调用。
+    """
+    global _test_region_cache
+    if _test_region_cache is None or _test_region_cache[0] != id(lines):
+        _test_region_cache = (id(lines), lines, compute_test_regions(lines))
+    regions = _test_region_cache[2]
+    return 0 <= index < len(regions) and regions[index]
 
 
 def enclosing_call(lines: list[str], index: int) -> str | None:

@@ -18,6 +18,7 @@ doctest = false
 
 [dependencies]
 anyhow.workspace = true
+i18n.workspace = true
 chrono.workspace = true
 collections.workspace = true
 futures.workspace = true

@@ -8,10 +8,10 @@ use client::proto;
 use db::kvp::KeyValueStore;
 
 use gpui::{
-    Action, Anchor, AnyView, App, Axis, Context, Entity, EntityId, EventEmitter, FocusHandle,
-    Focusable, IntoElement, KeyContext, MouseButton, MouseDownEvent, MouseUpEvent, ParentElement,
-    Render, SharedString, StyleRefinement, Styled, Subscription, WeakEntity, Window, deferred, div,
-    px,
+    Action, Anchor, AnyView, App, Axis, ClickEvent, Context, Entity, EntityId, EventEmitter,
+    FocusHandle, Focusable, IntoElement, KeyContext, MouseButton, MouseDownEvent, MouseUpEvent,
+    ParentElement, Render, Role, SharedString, StyleRefinement, Styled, Subscription, Toggled,
+    WeakEntity, Window, deferred, div, px,
 };
 use serde::{Deserialize, Serialize};
 use settings::{Settings, SettingsStore, TerminalDockPosition};
@@ -23,6 +23,15 @@ use ui::{
 use util::ResultExt as _;
 
 pub(crate) const RESIZE_HANDLE_SIZE: Pixels = px(6.);
+
+/// Size of the highlight and click target of one activity bar item.
+///
+/// The activity bar is 48px wide and stacks its items with a 4px gap, so a
+/// 44px box reproduces the 48px item pitch the VS Code activity bar uses.
+const ACTIVITY_BAR_ITEM_SIZE: Pixels = px(44.);
+
+/// Icon size inside an activity bar item, matching VS Code's 24px icons.
+const ACTIVITY_BAR_ICON_SIZE: f32 = 24.;
 
 pub enum PanelEvent {
     ZoomIn,
@@ -1096,6 +1105,16 @@ impl Dock {
         cx.notify();
     }
 
+    fn begin_resize_drag(&mut self, drag_view: &Entity<DraggedDock>, cx: &mut Context<Self>) {
+        self.resize_drag_active = true;
+        // Context::observe_release already leases this Dock for the callback.
+        self._resize_drag_release = Some(cx.observe_release(drag_view, |this, _, cx| {
+            this.resize_drag_active = false;
+            cx.notify();
+        }));
+        cx.notify();
+    }
+
     fn resize_active_panel(
         &mut self,
         size: Option<Pixels>,
@@ -1328,22 +1347,7 @@ impl Render for Dock {
                             let drag_view = cx.new(|_| dock.clone());
                             dock_entity
                                 .update(cx, |this, cx| {
-                                    this.resize_drag_active = true;
-                                    // The drag view entity is released when the
-                                    // drag ends, which clears the highlight.
-                                    this._resize_drag_release =
-                                        Some(cx.observe_release(&drag_view, {
-                                            let dock_entity = dock_entity.clone();
-                                            move |_, _, cx| {
-                                                dock_entity
-                                                    .update(cx, |this, cx| {
-                                                        this.resize_drag_active = false;
-                                                        cx.notify();
-                                                    })
-                                                    .ok();
-                                            }
-                                        }));
-                                    cx.notify();
+                                    this.begin_resize_drag(&drag_view, cx);
                                 })
                                 .ok();
                             drag_view
@@ -1622,34 +1626,101 @@ impl Render for PanelButtons {
                         })
                         .anchor(menu_anchor)
                         .attach(menu_attach)
-                        .trigger(move |is_active, _window, _cx| {
+                        .trigger(move |menu_is_open, _window, cx| {
                             // Include active state in element ID to invalidate the cached
                             // tooltip when panel state changes (e.g., via keyboard shortcut)
-                            let button = IconButton::new((name, is_active_button as u64), icon)
+                            let id = (name, is_active_button as u64);
+                            let on_click = {
+                                let action = action.boxed_clone();
+                                move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
+                                    window.focus(&focus_handle, cx);
+                                    window.dispatch_action(action.boxed_clone(), cx)
+                                }
+                            };
+                            let tooltip_builder = {
+                                let tooltip = tooltip.clone();
+                                let action = action;
+                                move |_window: &mut Window, cx: &mut App| {
+                                    Tooltip::for_action(tooltip.clone(), &*action, cx)
+                                }
+                            };
+                            let badge = icon_label
+                                .clone()
+                                .filter(|_| !is_active_button)
+                                .and_then(|label| label.parse::<usize>().ok());
+
+                            if vertical {
+                                let colors = cx.theme().colors();
+                                let icon_color = if is_active_button {
+                                    colors.icon
+                                } else {
+                                    colors.icon_muted
+                                };
+                                let hover_background = colors.ghost_element_hover;
+                                let focus_background = colors.ghost_element_selected;
+
+                                return div()
+                                    .id(id)
+                                    .relative()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .size(ACTIVITY_BAR_ITEM_SIZE)
+                                    .rounded(px(6.))
+                                    .cursor_pointer()
+                                    .tab_index(0isize)
+                                    .role(Role::Button)
+                                    .aria_label(icon_tooltip)
+                                    .aria_toggled(if is_active_button {
+                                        Toggled::True
+                                    } else {
+                                        Toggled::False
+                                    })
+                                    .when(is_active_button, |this| {
+                                        this.bg(colors.ghost_element_selected)
+                                    })
+                                    .when(!is_active_button, |this| {
+                                        this.hover(move |style| style.bg(hover_background))
+                                    })
+                                    .focus_visible(move |style| style.bg(focus_background))
+                                    .when(!menu_is_open, |this| this.tooltip(tooltip_builder))
+                                    .on_click(on_click)
+                                    .child(
+                                        Icon::new(icon)
+                                            .size(IconSize::Custom(rems_from_px(
+                                                ACTIVITY_BAR_ICON_SIZE,
+                                            )))
+                                            .color(Color::Custom(icon_color)),
+                                    )
+                                    .when_some(badge, |this, count| {
+                                        this.child(
+                                            // The wrapper only holds the offset; the badge
+                                            // keeps its own top-right alignment against it.
+                                            div()
+                                                .absolute()
+                                                .top(px(18.))
+                                                .right(px(2.))
+                                                .h(px(14.))
+                                                .min_w(px(14.))
+                                                .child(CountBadge::new(count)),
+                                        )
+                                    })
+                                    .into_any_element();
+                            }
+
+                            let button = IconButton::new(id, icon)
                                 .icon_size(IconSize::Small)
                                 .toggle_state(is_active_button)
                                 .tab_index(0isize)
                                 .aria_label(icon_tooltip)
-                                .on_click({
-                                    let action = action.boxed_clone();
-                                    move |_, window, cx| {
-                                        window.focus(&focus_handle, cx);
-                                        window.dispatch_action(action.boxed_clone(), cx)
-                                    }
-                                })
-                                .when(!is_active, |this| {
-                                    this.tooltip(move |_window, cx| {
-                                        Tooltip::for_action(tooltip.clone(), &*action, cx)
-                                    })
-                                });
+                                .on_click(on_click)
+                                .when(!menu_is_open, |this| this.tooltip(tooltip_builder));
 
-                            div().relative().child(button).when_some(
-                                icon_label
-                                    .clone()
-                                    .filter(|_| !is_active_button)
-                                    .and_then(|label| label.parse::<usize>().ok()),
-                                |this, count| this.child(CountBadge::new(count)),
-                            )
+                            div()
+                                .relative()
+                                .child(button)
+                                .when_some(badge, |this, count| this.child(CountBadge::new(count)))
+                                .into_any_element()
                         }),
                 )
             })
@@ -1719,6 +1790,39 @@ pub mod test {
         pub activation_priority: u32,
     }
     actions!(test_only, [ToggleTestPanel]);
+
+    #[gpui::test]
+    async fn test_dock_resize_drag_release_clears_highlight(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            let settings_store = settings::SettingsStore::test(cx);
+            cx.set_global(settings_store);
+            cx.set_global(db::AppDatabase::test_new());
+            theme_settings::init(theme::LoadThemes::JustBase, cx);
+        });
+        let fs = fs::FakeFs::new(cx.executor());
+        let project = project::Project::test(fs, [], cx).await;
+        let (workspace, cx) =
+            cx.add_window_view(|window, cx| Workspace::test_new(project, window, cx));
+
+        for position in [
+            DockPosition::Left,
+            DockPosition::Right,
+            DockPosition::Bottom,
+        ] {
+            let dock = workspace.read_with(cx, |workspace, _| {
+                workspace.dock_at_position(position).clone()
+            });
+            // Exercise repeated drags as well as the first release.
+            for _ in 0..2 {
+                let drag_view = cx.new(|_| DraggedDock(position));
+                dock.update(cx, |dock, cx| dock.begin_resize_drag(&drag_view, cx));
+                assert!(dock.read_with(cx, |dock, _| dock.resize_drag_active));
+                cx.update(|_, _| drop(drag_view));
+                cx.run_until_parked();
+                assert!(!dock.read_with(cx, |dock, _| dock.resize_drag_active));
+            }
+        }
+    }
 
     impl EventEmitter<PanelEvent> for TestPanel {}
 

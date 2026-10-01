@@ -10,8 +10,9 @@ use editor::{
 };
 use futures::StreamExt as _;
 use gpui::{App, Entity, Task};
+use editor::code_explanations::ConfiguredModel;
 use language_model::{
-    ConfiguredModel, LanguageModelRequest, LanguageModelRequestMessage, MessageContent, Role,
+    LanguageModelRequest, LanguageModelRequestMessage, MessageContent, Role,
 };
 use project::Project;
 use serde::Deserialize;
@@ -477,8 +478,8 @@ async fn request_json(
     use gpui::FutureExt as _;
     let executor = cx.background_executor().clone();
     let mut stream = model
-        .model
-        .stream_completion_text(request, cx)
+        .provider
+        .stream_completion_text(&model.model, request, cx)
         .with_timeout(Duration::from_secs(60), &executor)
         .await
         .context(i18n::t!("541b31e8bb3607cf"))?

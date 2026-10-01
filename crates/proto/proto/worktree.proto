@@ -188,6 +188,28 @@ message ClosePersistentTerminal {
   string terminal_id = 2;
 }
 
+message SubscribePersistentTerminal {
+  string server_instance_id = 1;
+  string terminal_id = 2;
+  uint64 offset = 3;
+}
+
+message PersistentTerminalOutput {
+  string server_instance_id = 1;
+  string terminal_id = 2;
+  uint64 offset = 3;
+  bytes data = 4;
+  bool history_truncated = 5;
+  bool exited = 6;
+  optional int32 exit_code = 7;
+}
+
+message PersistentTerminalOutputCredit {
+  string server_instance_id = 1;
+  string terminal_id = 2;
+  uint64 offset = 3;
+}
+
 message RenameProjectEntry {
   uint64 project_id = 1;
   uint64 entry_id = 2;

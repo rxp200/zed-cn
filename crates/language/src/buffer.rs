@@ -3,9 +3,13 @@ pub mod row_chunk;
 
 pub use bracket_ranges::BracketMatch;
 
+pub use crate::{
+    CaptureId, Grammar, HighlightId, HighlightMap, Language, LanguageRegistry,
+    diagnostic_set::DiagnosticSet, proto,
+};
 use crate::{
-    ByteContent, DebuggerTextObject, LanguageScope, ModelineSettings, Outline, OutlineConfig,
-    PLAIN_TEXT, RunnableTag, TextObject, TreeSitterOptions, analyze_byte_content,
+    DebuggerTextObject, LanguageScope, ModelineSettings, Outline, OutlineConfig, PLAIN_TEXT,
+    RunnableTag, TextObject, TreeSitterOptions,
     diagnostic_set::{DiagnosticEntry, DiagnosticEntryRef, DiagnosticGroup},
     language_settings::{AutoIndentMode, LanguageSettings},
     outline::OutlineItem,
@@ -19,16 +23,13 @@ use crate::{
     text_diff::text_diff,
     unified_diff_with_offsets,
 };
-pub use crate::{
-    CaptureId, Grammar, HighlightId, HighlightMap, Language, LanguageRegistry,
-    diagnostic_set::DiagnosticSet, proto,
-};
 
 use anyhow::{Context as _, Result};
 use clock::Lamport;
 pub use clock::ReplicaId;
 use collections::HashMap;
 use encoding_rs::Encoding;
+use file_content::{ByteContent, decode_byte_header};
 use fs::MTime;
 use futures::channel::oneshot;
 use futures_lite::future::yield_now;
@@ -476,6 +477,8 @@ pub trait LocalFile: File {
 pub enum AutoindentMode {
     /// Indent each line of inserted text.
     EachLine,
+    /// Autoindent multiline edits, but only apply syntax-triggered outdents to single-line edits.
+    PreserveSingleLine,
     /// Apply the same indentation adjustment to all of the lines
     /// in a given insertion.
     Block {
@@ -510,6 +513,7 @@ struct AutoindentRequestEntry {
     old_row: Option<u32>,
     indent_size: IndentSize,
     original_indent_column: Option<u32>,
+    only_explicit_outdents: bool,
 }
 
 #[derive(Debug)]
@@ -517,6 +521,7 @@ struct IndentSuggestion {
     basis_row: u32,
     delta: Ordering,
     within_error: bool,
+    explicit_outdent: bool,
 }
 
 struct BufferChunkHighlights<'a> {
@@ -1707,7 +1712,7 @@ impl Buffer {
             let bytes = load_bytes_task.await?;
 
             anyhow::ensure!(
-                analyze_byte_content(&bytes) != ByteContent::Binary,
+                decode_byte_header(&bytes).1 != ByteContent::Binary,
                 "Binary files are not supported"
             );
 
@@ -2153,7 +2158,11 @@ impl Buffer {
                     if let Some(old_row) = entry.old_row {
                         old_to_new_rows.insert(old_row, new_row);
                     }
-                    row_ranges.push((new_row..new_end_row, entry.original_indent_column));
+                    row_ranges.push((
+                        new_row..new_end_row,
+                        entry.original_indent_column,
+                        entry.only_explicit_outdents,
+                    ));
                 }
 
                 // Build a map containing the suggested indentation for each of the edited lines
@@ -2205,7 +2214,7 @@ impl Buffer {
                 // if they differ from the old suggestion for that line.
                 let mut language_indent_sizes = language_indent_sizes_by_new_row.iter().peekable();
                 let mut language_indent_size = IndentSize::default();
-                for (row_range, original_indent_column) in row_ranges {
+                for (row_range, original_indent_column, only_explicit_outdents) in row_ranges {
                     let new_edited_row_range = if request.is_block_mode {
                         row_range.start..row_range.start + 1
                     } else {
@@ -2241,7 +2250,8 @@ impl Buffer {
                                     suggested_indent != *old_indentation
                                         && (!suggestion.within_error || *was_within_error)
                                 },
-                            ) {
+                            ) && (!only_explicit_outdents || suggestion.explicit_outdent)
+                            {
                                 indent_sizes.insert(
                                     new_row,
                                     (suggested_indent, request.ignore_empty_lines),
@@ -3058,6 +3068,9 @@ impl Buffer {
                     }
 
                     AutoindentRequestEntry {
+                        only_explicit_outdents: matches!(mode, AutoindentMode::PreserveSingleLine)
+                            && old_start.row == old_end.row
+                            && !new_text.contains('\n'),
                         original_indent_column,
                         old_row: if first_line_is_new {
                             None
@@ -3130,6 +3143,7 @@ impl Buffer {
                 old_row: None,
                 indent_size: before_edit.language_indent_size_at(range.start, cx),
                 original_indent_column: None,
+                only_explicit_outdents: false,
             })
             .collect();
         self.autoindent_requests.push(Arc::new(AutoindentRequest {
@@ -4068,24 +4082,28 @@ impl BufferSnapshot {
                     basis_row: prev_row,
                     delta: Ordering::Equal,
                     within_error: within_error && !from_regex,
+                    explicit_outdent: true,
                 })
             } else if indent_from_prev_row {
                 Some(IndentSuggestion {
                     basis_row: prev_row,
                     delta: Ordering::Greater,
                     within_error: within_error && !from_regex,
+                    explicit_outdent: false,
                 })
             } else if outdent_to_row < prev_row {
                 Some(IndentSuggestion {
                     basis_row: outdent_to_row,
                     delta: Ordering::Equal,
                     within_error: within_error && !from_regex,
+                    explicit_outdent: true,
                 })
             } else if outdent_from_prev_row {
                 Some(IndentSuggestion {
                     basis_row: prev_row,
                     delta: Ordering::Less,
                     within_error: within_error && !from_regex,
+                    explicit_outdent: true,
                 })
             } else if config.auto_indent_using_last_non_empty_line || !self.is_line_blank(prev_row)
             {
@@ -4093,6 +4111,7 @@ impl BufferSnapshot {
                     basis_row: prev_row,
                     delta: Ordering::Equal,
                     within_error: within_error && !from_regex,
+                    explicit_outdent: false,
                 })
             } else {
                 None
@@ -4448,7 +4467,12 @@ impl BufferSnapshot {
             let mut range = None;
             loop {
                 let child_range = cursor.node().byte_range();
-                if !child_range.contains(&offset) {
+                let contains_offset = child_range.contains(&offset)
+                // `Range::contains` is end-exclusive, which rejects every node at EOF
+                // (including the root). Accept the end boundary only at the buffer's end,
+                // so mid-buffer behavior is unchanged.
+                    || (child_range.end == offset && offset == text.len());
+                if !contains_offset {
                     break;
                 }
 

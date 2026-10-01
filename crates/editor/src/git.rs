@@ -3076,13 +3076,13 @@ pub fn render_diff_hunk_controls(
                     || (!status.has_secondary_hunk() && supports_unstaging)),
             |el| {
                 el.child(if status.has_secondary_hunk() {
-                    Button::new(("stage", row as u64), "暂存")
+                    Button::new(("stage", row as u64), i18n::t!("e57b6dbedea3273f"))
                         .alpha(if status.is_pending() { 0.66 } else { 1.0 })
                         .tooltip({
                             let focus_handle = editor.focus_handle(cx);
                             move |_window, cx| {
                                 Tooltip::for_action_in(
-                                    "暂存块",
+                                    i18n::t!("42bb18eebe83b45a"),
                                     &::git::ToggleStaged,
                                     &focus_handle,
                                     cx,
@@ -3103,13 +3103,13 @@ pub fn render_diff_hunk_controls(
                             }
                         })
                 } else {
-                    Button::new(("unstage", row as u64), "取消暂存")
+                    Button::new(("unstage", row as u64), i18n::t!("1140195090eddcff"))
                         .alpha(if status.is_pending() { 0.66 } else { 1.0 })
                         .tooltip({
                             let focus_handle = editor.focus_handle(cx);
                             move |_window, cx| {
                                 Tooltip::for_action_in(
-                                    "取消暂存块",
+                                    i18n::t!("16fdaabe630c8f75"),
                                     &::git::ToggleStaged,
                                     &focus_handle,
                                     cx,
@@ -3134,11 +3134,11 @@ pub fn render_diff_hunk_controls(
         )
         .when(show_stage_restore && supports_restore, |el| {
             el.child(
-                Button::new(("restore", row as u64), "恢复")
+                Button::new(("restore", row as u64), i18n::t!("e0534b8a4e46a0cb"))
                     .tooltip({
                         let focus_handle = editor.focus_handle(cx);
                         move |_window, cx| {
-                            Tooltip::for_action_in("恢复块", &::git::Restore, &focus_handle, cx)
+                            Tooltip::for_action_in(i18n::t!("6db6ebcaf0a3e105"), &::git::Restore, &focus_handle, cx)
                         }
                     })
                     .on_click({
@@ -3165,7 +3165,7 @@ pub fn render_diff_hunk_controls(
                         .tooltip({
                             let focus_handle = editor.focus_handle(cx);
                             move |_window, cx| {
-                                Tooltip::for_action_in("下一个块", &GoToHunk, &focus_handle, cx)
+                                Tooltip::for_action_in(i18n::t!("f68b590220fa9d33"), &GoToHunk, &focus_handle, cx)
                             }
                         })
                         .on_click({
@@ -3197,7 +3197,7 @@ pub fn render_diff_hunk_controls(
                             let focus_handle = editor.focus_handle(cx);
                             move |_window, cx| {
                                 Tooltip::for_action_in(
-                                    "上一个块",
+                                    i18n::t!("695ad1b4e7ca96f3"),
                                     &GoToPreviousHunk,
                                     &focus_handle,
                                     cx,

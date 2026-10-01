@@ -1170,8 +1170,7 @@ impl AutoUpdater {
                 .context("无法连接 Zed CN 更新清单，请检查网络或稍后重试；也可从 https://github.com/rxp200/zed-cn/releases 手动下载")?;
             anyhow::ensure!(
                 response.status().is_success(),
-                "获取 Zed CN 更新清单失败（HTTP {}），请稍后重试或从 https://github.com/rxp200/zed-cn/releases 手动下载",
-                response.status(),
+                i18n::t_args!("d66555e3287c54de", response.status()),
             );
             let mut body = Vec::new();
             response
@@ -1266,7 +1265,7 @@ impl AutoUpdater {
         #[cfg(target_os = "macos")]
         anyhow::ensure!(
             which::which("rsync").is_ok(),
-            "无法自动更新，因为未找到所需的 rsync 工具。"
+            i18n::t!("3a7bfa39ddf3279c")
         );
 
         Ok(())
@@ -1414,8 +1413,7 @@ async fn cached_custom_remote_server(path: PathBuf) -> Result<Option<PathBuf>> {
         Ok(metadata) => {
             anyhow::ensure!(
                 metadata.is_file() && metadata.len() > 0,
-                "Zed CN 远程服务缓存不是非空普通文件：{}",
-                path.display()
+                i18n::t_args!("7ed392f576635cee", path.display())
             );
             Ok(Some(path))
         }
@@ -1433,7 +1431,7 @@ fn validate_custom_remote_server_metadata(body: &[u8], tag: &str, source_sha: &s
             && source_sha.bytes().all(|byte| byte.is_ascii_hexdigit())
             && !metadata.draft
             && !metadata.prerelease,
-        "Zed CN 发布记录与当前客户端源码不匹配，请安装对应的正式发布版"
+        i18n::t!("39bd895d267799f0")
     );
     Ok(())
 }
@@ -1470,8 +1468,7 @@ async fn read_remote_release_metadata(
         let mut response = client.get(url, Default::default(), true).await?;
         anyhow::ensure!(
             response.status().is_success(),
-            "无法获取对应版本的 Zed CN 发布校验信息：{}",
-            response.status()
+            i18n::t_args!("1aa30eb640c32dd0", response.status())
         );
         let mut body = Vec::new();
         response
@@ -1479,7 +1476,7 @@ async fn read_remote_release_metadata(
             .take(1024 * 1024 + 1)
             .read_to_end(&mut body)
             .await?;
-        anyhow::ensure!(body.len() <= 1024 * 1024, "Zed CN 发布校验信息过大");
+        anyhow::ensure!(body.len() <= 1024 * 1024, i18n::t!("6625acf8524ea84b"));
         anyhow::Ok(body)
     };
     read.with_timeout(REMOTE_SERVER_DOWNLOAD_IDLE_TIMEOUT, executor)
@@ -1516,7 +1513,7 @@ fn remote_server_checksum(checksums: &str, name: &str) -> Result<String> {
         matching.next().is_none()
             && checksum.len() == 64
             && checksum.bytes().all(|byte| byte.is_ascii_hexdigit()),
-        "远程服务校验和无效或重复"
+        i18n::t!("430136b81e0e7919")
     );
     Ok(checksum.to_ascii_lowercase())
 }
@@ -1615,13 +1612,13 @@ async fn cleanup_remote_server_cache(
 fn parse_update_manifest(body: &[u8]) -> Result<UpdateManifest> {
     anyhow::ensure!(
         body.len() as u64 <= UPDATE_MANIFEST_MAX_BYTES,
-        "Zed CN 更新清单过大"
+        i18n::t!("222b765d88f44430")
     );
     let manifest: UpdateManifest =
         serde_json::from_slice(body).context("Zed CN 更新清单格式无效，请稍后重试")?;
     anyhow::ensure!(
         manifest.schema_version == 1,
-        "不支持此 Zed CN 更新清单版本，请手动更新客户端"
+        i18n::t!("d723285c6411116c")
     );
     for release in &manifest.releases {
         anyhow::ensure!(
@@ -1630,17 +1627,17 @@ fn parse_update_manifest(body: &[u8]) -> Result<UpdateManifest> {
                     .target_commitish
                     .bytes()
                     .all(|byte| byte.is_ascii_hexdigit()),
-            "Zed CN 更新清单中的源码标识无效"
+            i18n::t!("a917dd73e0a27a0e")
         );
         anyhow::ensure!(
             parse_zed_cn_release_tag(&release.tag_name).is_some(),
-            "Zed CN 更新清单中的版本无效"
+            i18n::t!("2aa3b2b2228e1745")
         );
         for asset in &release.assets {
             anyhow::ensure!(
                 asset.sha256.len() == 64
                     && asset.sha256.bytes().all(|byte| byte.is_ascii_hexdigit()),
-                "Zed CN 更新清单中的文件校验值无效"
+                i18n::t!("06755ec269a66a90")
             );
             let expected_url = format!(
                 "https://github.com/rxp200/zed-cn/releases/download/{}/{}",
@@ -1650,7 +1647,7 @@ fn parse_update_manifest(body: &[u8]) -> Result<UpdateManifest> {
                 !asset.name.contains(['/', '\\'])
                     && !asset.name.contains("..")
                     && asset.browser_download_url == expected_url,
-                "Zed CN 更新清单中的下载地址无效"
+                i18n::t!("3540d5326fa43a24")
             );
         }
     }
@@ -1670,7 +1667,7 @@ async fn verify_update_checksum(path: &Path, expected: &str) -> Result<()> {
     }
     anyhow::ensure!(
         format!("{:x}", hasher.finalize()).eq_ignore_ascii_case(expected),
-        "Zed CN 更新文件 SHA-256 校验失败，已停止安装，请重新检查更新"
+        i18n::t!("342d1844aecd6026")
     );
     Ok(())
 }

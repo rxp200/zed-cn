@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use collections::HashMap;
 use gpui::{App, AppContext as _, Context, Entity, Task, WeakEntity};
 
@@ -355,6 +355,16 @@ impl Project {
         } else {
             self.remote_client.clone()
         };
+        let remote_shell_request = remote_client.as_ref().map(|remote_client| {
+            remote_client
+                .read(cx)
+                .proto_client()
+                .request(proto::GetTerminalShell {
+                    project_id: proto::REMOTE_SERVER_PROJECT_ID,
+                    worktree_id: settings_location
+                        .map(|settings_location| settings_location.worktree_id.to_proto()),
+                })
+        });
         let shell = match &remote_client {
             Some(remote_client) => remote_client
                 .read(cx)
@@ -375,7 +385,33 @@ impl Project {
 
         let lang_registry = self.languages.clone();
         cx.spawn(async move |project, cx| {
-            let shell_kind = ShellKind::new(&shell, path_style.is_windows());
+            let remote_shell = if let Some(remote_shell_request) = remote_shell_request {
+                match remote_shell_request.await {
+                    Ok(response) => {
+                        let shell = response
+                            .shell
+                            .context("remote server returned no terminal shell")?;
+                        let shell = task::shell_from_proto(shell)
+                            .context("remote server returned an invalid terminal shell")?;
+                        log::debug!(
+                            "create_terminal_shell_internal: using remote terminal shell setting: {shell:?}"
+                        );
+                        Some(shell)
+                    }
+                    Err(error) => {
+                        // Older official servers and every Zed CN server before this message
+                        // was upstreamed do not recognize it; keep the connection shell.
+                        log::warn!(
+                            "remote terminal shell settings unavailable, using connection shell: {error:#}"
+                        );
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+            let shell_program = remote_shell.as_ref().map(Shell::program).unwrap_or(shell);
+            let shell_kind = ShellKind::new(&shell_program, path_style.is_windows());
             let mut env = env_task.await.unwrap_or_default();
             env.extend(settings.env);
 
@@ -417,14 +453,14 @@ impl Project {
                     &cx.update(|cx| release_channel::AppVersion::global(cx)),
                 );
                 let persistent_shell = if activation_script.is_empty() {
-                    (shell.clone(), Vec::new())
+                    (shell_program.clone(), Vec::new())
                 } else {
                     let separator = shell_kind.sequential_commands_separator();
                     let command = format!(
-                        "{}{separator} exec {shell} -l",
+                        "{}{separator} exec {shell_program} -l",
                         activation_script.join(&format!("{separator} "))
                     );
-                    (shell.clone(), shell_kind.args_for_shell(true, command))
+                    (shell_program.clone(), shell_kind.args_for_shell(true, command))
                 };
                 let response = remote_client
                     .read_with(cx, |remote_client, _| {
@@ -442,9 +478,12 @@ impl Project {
                     })
                     .await?;
                 let client = remote_client.read_with(cx, |remote_client, _| remote_client.proto_client());
+                let streaming = remote_client.read_with(cx, |remote_client, _| {
+                    remote_client.supports_persistent_terminal_streaming()
+                });
                 TerminalBuilder::new_remote(
                     TerminalMode::interactive(),
-                    Shell::Program(shell),
+                    Shell::Program(shell_program.clone()),
                     settings.cursor_shape,
                     settings.alternate_scroll,
                     settings.max_scroll_history_lines,
@@ -455,6 +494,7 @@ impl Project {
                     client,
                     response.server_instance_id,
                     response.terminal_id,
+                    streaming,
                     cx.background_executor(),
                 )
             } else {
@@ -462,7 +502,15 @@ impl Project {
                     .update(cx, move |_, cx| {
                         let (shell, env) = match remote_client {
                             Some(remote_client) => {
-                                create_remote_shell(None, env, path, remote_client, cx)?
+                                let empty_args = Vec::new();
+                                let spawn_command = match remote_shell.as_ref() {
+                                    Some(Shell::System) | None => None,
+                                    Some(Shell::Program(program)) => Some((program, &empty_args)),
+                                    Some(Shell::WithArguments { program, args, .. }) => {
+                                        Some((program, args))
+                                    }
+                                };
+                                create_remote_shell(spawn_command, env, path, remote_client, cx)?
                             }
                             None => (settings.shell, env),
                         };

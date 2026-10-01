@@ -10,8 +10,8 @@ use gpui::{
     SharedString, Task,
 };
 use language_model::{
-    ConfiguredModel, LanguageModelProviderId, LanguageModelRegistry, LanguageModelRequest,
-    LanguageModelRequestMessage, MessageContent, Role,
+    LanguageModel, LanguageModelProvider, LanguageModelProviderId, LanguageModelRegistry,
+    LanguageModelRequest, LanguageModelRequestMessage, MessageContent, Role,
 };
 use markdown::{
     CodeBlockRenderer, CopyButtonVisibility, Markdown, MarkdownElement, MarkdownFont,
@@ -400,6 +400,15 @@ fn active_request_count(scope: gpui::EntityId) -> usize {
         .ok()
         .and_then(|requests| requests.get(&scope).map(Vec::len))
         .unwrap_or_default()
+}
+
+/// 按设置解析出的提供商与模型组合。
+///
+/// 上游在 LanguageModel 纯数据化重构中删除了同名类型；私有功能仍需要这个组合。
+#[derive(Clone)]
+pub struct ConfiguredModel {
+    pub provider: Arc<dyn LanguageModelProvider>,
+    pub model: LanguageModel,
 }
 
 pub fn resolve_model(settings: &CodeExplanationSettings, cx: &App) -> Result<ConfiguredModel> {
@@ -1402,13 +1411,15 @@ mod tests {
 
     #[gpui::test]
     async fn model_request_is_read_only_and_structured(cx: &mut gpui::TestAppContext) {
-        use language_model::fake_provider::{FakeLanguageModel, FakeLanguageModelProvider};
+        use language_model::fake_provider::FakeLanguageModelProvider;
         crate::editor_tests::init_test(cx, |_| {});
-        let model = Arc::new(FakeLanguageModel::default());
-        let provider =
-            Arc::new(FakeLanguageModelProvider::default().with_models(vec![model.clone()]));
+        let provider = Arc::new(FakeLanguageModelProvider::new(
+            LanguageModelProviderId::from("fake".to_string()),
+            language_model::LanguageModelProviderName::from("Fake".to_string()),
+        ));
+        let model = provider.model("fake");
         let configured = ConfiguredModel {
-            provider,
+            provider: provider.clone(),
             model: model.clone(),
         };
         let task = cx.spawn(async move |mut cx| {
@@ -1416,15 +1427,15 @@ mod tests {
             request(configured, settings, "1: let answer = 42;".into(), &mut cx).await
         });
         cx.run_until_parked();
-        let requests = model.pending_completions();
+        let requests = provider.pending_completions();
         assert_eq!(requests.len(), 1);
         assert!(
             requests[0].messages[0]
                 .string_contents()
                 .contains("只输出JSON数组")
         );
-        model.send_last_completion_stream_text_chunk(r#"[{"line":1,"explanation":"保存答案"}]"#);
-        model.end_last_completion_stream();
+        provider.send_last_text(&model, r#"[{"line":1,"explanation":"保存答案"}]"#);
+        provider.end_last(&model);
         let text = task.await.unwrap();
         assert_eq!(
             parse_annotations(&text, "let answer = 42;", &[])
@@ -1436,13 +1447,15 @@ mod tests {
 
     #[gpui::test]
     async fn deep_request_accepts_default_detail_and_streams(cx: &mut gpui::TestAppContext) {
-        use language_model::fake_provider::{FakeLanguageModel, FakeLanguageModelProvider};
+        use language_model::fake_provider::FakeLanguageModelProvider;
         crate::editor_tests::init_test(cx, |_| {});
-        let model = Arc::new(FakeLanguageModel::default());
+        let provider = Arc::new(FakeLanguageModelProvider::new(
+            LanguageModelProviderId::from("fake".to_string()),
+            language_model::LanguageModelProviderName::from("Fake".to_string()),
+        ));
+        let model = provider.model("fake");
         let configured = ConfiguredModel {
-            provider: Arc::new(
-                FakeLanguageModelProvider::default().with_models(vec![model.clone()]),
-            ),
+            provider: provider.clone(),
             model: model.clone(),
         };
         let task = cx.spawn(async move |mut cx| {
@@ -1458,15 +1471,15 @@ mod tests {
             .await
         });
         cx.run_until_parked();
-        assert_eq!(model.pending_completions().len(), 1);
-        model.send_last_completion_stream_text_chunk("## 目的\n保存数值");
-        model.end_last_completion_stream();
+        assert_eq!(provider.pending_completions().len(), 1);
+        provider.send_last_text(&model, "## 目的\n保存数值");
+        provider.end_last(&model);
         assert_eq!(task.await.unwrap().as_ref(), "## 目的\n保存数值");
     }
 
     #[gpui::test]
     async fn disabled_ai_rejects_model_request(cx: &mut gpui::TestAppContext) {
-        use language_model::fake_provider::{FakeLanguageModel, FakeLanguageModelProvider};
+        use language_model::fake_provider::FakeLanguageModelProvider;
         crate::editor_tests::init_test(cx, |_| {});
         cx.update(|cx| {
             cx.update_global::<settings::SettingsStore, _>(|store, cx| {
@@ -1478,11 +1491,13 @@ mod tests {
                     .unwrap();
             });
         });
-        let model = Arc::new(FakeLanguageModel::default());
-        let provider =
-            Arc::new(FakeLanguageModelProvider::default().with_models(vec![model.clone()]));
+        let provider = Arc::new(FakeLanguageModelProvider::new(
+            LanguageModelProviderId::from("fake".to_string()),
+            language_model::LanguageModelProviderName::from("Fake".to_string()),
+        ));
+        let model = provider.model("fake");
         let configured = ConfiguredModel {
-            provider,
+            provider: provider.clone(),
             model: model.clone(),
         };
         let task = cx.spawn(async move |mut cx| {
@@ -1490,20 +1505,22 @@ mod tests {
             request(configured, settings, "secret source".into(), &mut cx).await
         });
         assert!(task.await.is_err());
-        assert!(model.pending_completions().is_empty());
+        assert!(provider.pending_completions().is_empty());
     }
 
     #[gpui::test]
     async fn revoked_authorization_after_cache_wait_never_calls_model(
         cx: &mut gpui::TestAppContext,
     ) {
-        use language_model::fake_provider::{FakeLanguageModel, FakeLanguageModelProvider};
+        use language_model::fake_provider::FakeLanguageModelProvider;
         crate::editor_tests::init_test(cx, |_| {});
-        let model = Arc::new(FakeLanguageModel::default());
-        let provider =
-            Arc::new(FakeLanguageModelProvider::default().with_models(vec![model.clone()]));
+        let provider = Arc::new(FakeLanguageModelProvider::new(
+            LanguageModelProviderId::from("fake".to_string()),
+            language_model::LanguageModelProviderName::from("Fake".to_string()),
+        ));
+        let model = provider.model("fake");
         let configured = ConfiguredModel {
-            provider,
+            provider: provider.clone(),
             model: model.clone(),
         };
         let allowed = std::rc::Rc::new(std::cell::Cell::new(true));
@@ -1528,7 +1545,7 @@ mod tests {
         allowed.set(false);
         resume.send(()).unwrap();
         assert!(task.await.is_err());
-        assert!(model.pending_completions().is_empty());
+        assert!(provider.pending_completions().is_empty());
     }
 
     #[test]
@@ -1921,7 +1938,7 @@ pub fn deep_explain_selection(
         || !trust.update(cx, |trust, cx| trust.can_trust(&store, worktree_id, cx))
     {
         editor.explanations.last_error =
-            Some("当前文件为受保护内容或项目未允许 AI 讲解，未发送代码".into());
+            Some(i18n::t!("894f5a34a8b14fe6").into());
         cx.notify();
         return;
     }
@@ -1930,7 +1947,7 @@ pub fn deep_explain_selection(
         .text_for_range(selection.start..selection.end)
         .collect::<String>();
     if code.trim().is_empty() || code.len() > 64 * 1024 {
-        editor.explanations.last_error = Some("请选择非空且不超过 64 KiB 的代码后重试".into());
+        editor.explanations.last_error = Some(i18n::t!("c06f9daef472226b").into());
         cx.notify();
         return;
     }
@@ -1973,7 +1990,7 @@ pub fn deep_explain_selection(
     let provider_configuration = selected_provider_configuration(&settings, cx);
     let markdown = cx.new(|cx| {
         Markdown::new(
-            deep_explanation_markdown(&code, "正在排队，等待模型讲解……"),
+            deep_explanation_markdown(&code, i18n::t!("399172ca1f0ca325")),
             Some(languages.clone()),
             language.clone(),
             cx,
@@ -2060,9 +2077,9 @@ pub fn deep_explain_selection(
                     .update(|window, cx| {
                         window.prompt(
                             gpui::PromptLevel::Info,
-                            "是否把本地发现的关联定义加入深入讲解？",
+                            i18n::t!("40153a68686cfea0"),
                             Some(&details),
-                            &["加入并发送", "仅发送选区"],
+                            &[i18n::t!("107ac302ddadc2a0"), i18n::t!("511be034f94b52e6")],
                             cx,
                         )
                     })?
@@ -2081,7 +2098,7 @@ pub fn deep_explain_selection(
         };
         anyhow::ensure!(
             request_code.len() <= 64 * 1024,
-            "选区和确认的关联定义超过 64 KiB，请减少上下文"
+            i18n::t!("ee66d16eca137d65")
         );
 
         let request_key = format!("deep:{}", content_hash(&code));
@@ -2089,7 +2106,7 @@ pub fn deep_explain_selection(
             CodeExplanationRequestWaiter::new(project.entity_id(), request_key.clone(), 0)?;
         let permit = loop {
             if cancelled.load(Ordering::SeqCst) {
-                markdown.update(cx, |markdown, cx| markdown.replace("讲解已停止", cx));
+                markdown.update(cx, |markdown, cx| markdown.replace(i18n::t!("a095d9d5e35ba72c"), cx));
                 return anyhow::Ok(());
             }
             if editor_handle
@@ -2127,7 +2144,7 @@ pub fn deep_explain_selection(
         let result = if authorized {
             markdown.update(cx, |markdown, cx| {
                 markdown.replace(
-                    deep_explanation_markdown(&code, "正在连接模型并生成讲解……"),
+                    deep_explanation_markdown(&code, i18n::t!("eb37fc3399caa9b6")),
                     cx,
                 )
             });
@@ -2141,7 +2158,7 @@ pub fn deep_explain_selection(
                 |output, cx| {
                     anyhow::ensure!(
                         !cancelled.load(Ordering::SeqCst),
-                        "讲解已停止，已发送的请求可能仍计费"
+                        i18n::t!("988aca0875c41d8a")
                     );
                     anyhow::ensure!(
                         cx.update(|cx| {
@@ -2153,7 +2170,7 @@ pub fn deep_explain_selection(
                                     trust.can_trust(&store, worktree_id, cx)
                                 })
                         }),
-                        "代码或权限已变化，已停止讲解"
+                        i18n::t!("1fa0b889a0a9af69")
                     );
                     markdown.update(cx, |markdown, cx| {
                         markdown.replace(deep_explanation_markdown(&selected_code, output), cx);
@@ -2197,7 +2214,7 @@ pub fn deep_explain_selection(
         editor_handle.update(cx, |editor, cx| {
             if !still_authorized {
                 markdown.update(cx, |markdown, cx| {
-                    markdown.replace("代码或权限已变化，请重新选择代码后讲解。", cx)
+                    markdown.replace(i18n::t!("a7761fd72eba2f2a"), cx)
                 });
                 cx.notify();
                 return;
@@ -2224,7 +2241,7 @@ pub fn deep_explain_selection(
                         .icon_size(IconSize::XSmall)
                         .icon_color(Color::Muted)
                         .alpha(0.45)
-                        .tooltip(Tooltip::text("查看选中代码的深入讲解"))
+                        .tooltip(Tooltip::text(i18n::t!("8463c2a05d5aa14d")))
                         .on_click(move |_, window, cx| {
                             let Some(workspace) =
                                 workspace.as_ref().and_then(|workspace| workspace.upgrade())
@@ -2266,7 +2283,7 @@ async fn request_deep(
 ) -> Result<SharedString> {
     anyhow::ensure!(
         !cx.update(|cx| project::DisableAiSettings::get_global(cx).disable_ai),
-        "当前项目已禁用 AI，未发送代码"
+        i18n::t!("0f4b4b34fffd444a")
     );
     let request = LanguageModelRequest {
         messages: vec![
@@ -2293,8 +2310,8 @@ async fn request_deep(
     use gpui::FutureExt as _;
     let executor = cx.background_executor().clone();
     let mut stream = model
-        .model
-        .stream_completion_text(request, cx)
+        .provider
+        .stream_completion_text(&model.model, request, cx)
         .with_timeout(std::time::Duration::from_secs(60), &executor)
         .await
         .context("深入讲解请求超时")?
@@ -2311,27 +2328,27 @@ async fn request_deep(
     {
         anyhow::ensure!(
             !cx.update(|cx| project::DisableAiSettings::get_global(cx).disable_ai),
-            "当前项目已禁用 AI，已停止接收讲解"
+            i18n::t!("dd230cd531e27def")
         );
         output.push_str(&chunk.map_err(|error| anyhow::anyhow!(error.to_string()))?);
         anyhow::ensure!(
             started.elapsed() < std::time::Duration::from_secs(180),
-            "深入讲解超过三分钟，请缩小选区后重试"
+            i18n::t!("aee24bdcfec64d0c")
         );
-        anyhow::ensure!(output.len() <= 64 * 1024, "深入讲解输出超过长度限制");
+        anyhow::ensure!(output.len() <= 64 * 1024, i18n::t!("6de20e96b6e06ce3"));
         if last_update.elapsed() >= std::time::Duration::from_millis(100) {
             progress(&output, cx)?;
             last_update = std::time::Instant::now();
         }
     }
-    anyhow::ensure!(!output.trim().is_empty(), "模型返回了空讲解");
+    anyhow::ensure!(!output.trim().is_empty(), i18n::t!("20d86f25396ec566"));
     Ok(output.trim().to_string().into())
 }
 
 #[test]
 fn test_deep_explanation_markdown_preserves_code_fences() {
     let code = "fn example() {\n    let value = \"```rust\";\n}\n";
-    let explanation = "## 讲解\n\n这是 **代码**。";
+    let explanation = i18n::t!("83613503c8822ad2");
     assert_eq!(
         deep_explanation_markdown(code, explanation).as_ref(),
         format!("````\n{code}\n````\n\n{explanation}")
@@ -2404,7 +2421,7 @@ impl workspace::Item for DeepExplanationModal {
         emit(workspace::item::ItemEvent::CloseItem);
     }
     fn tab_content_text(&self, _: usize, _: &App) -> SharedString {
-        "代码讲解".into()
+        i18n::t!("16ece1acc00be44a").into()
     }
 }
 
@@ -2436,12 +2453,12 @@ impl gpui::Render for DeepExplanationModal {
             .child(
                 ModalHeader::new()
                     .show_dismiss_button(true)
-                    .headline("选中代码深入讲解"),
+                    .headline(i18n::t!("d18350e9052d513e")),
             )
             .when_some(self.source_editor.clone(), |this, source| {
                 let source_range = self.source_range.clone();
                 this.child(
-                    Button::new("return-to-explained-source", "返回源码编辑器").on_click(
+                    Button::new("return-to-explained-source", i18n::t!("8cd52c1af8febf66")).on_click(
                         move |_, window, cx| {
                             if let Some(editor) = source.upgrade() {
                                 editor.update(cx, |editor, cx| {
@@ -2463,7 +2480,7 @@ impl gpui::Render for DeepExplanationModal {
             })
             .when(self.workspace.is_some(), |this| {
                 this.child(
-                    Button::new("follow-up-explanation", "转到 Agent 草稿继续提问").on_click(
+                    Button::new("follow-up-explanation", i18n::t!("b09fe286c17bf635")).on_click(
                         cx.listener(|this, _, window, cx| {
                             if project::DisableAiSettings::get_global(cx).disable_ai {
                                 return;
@@ -2490,7 +2507,7 @@ impl gpui::Render for DeepExplanationModal {
             .when_some(self.workspace.clone(), |this, workspace| {
                 let pin_workspace = workspace.clone();
                 this.child(
-                    Button::new("pin-explanation", "在右侧固定讲解").on_click(cx.listener(
+                    Button::new("pin-explanation", i18n::t!("5323bbacebd32ca3")).on_click(cx.listener(
                         move |this, _, window, cx| {
                             let Some(workspace) = pin_workspace.upgrade() else {
                                 return;
@@ -2525,7 +2542,7 @@ impl gpui::Render for DeepExplanationModal {
                     )),
                 )
                 .child(
-                    Button::new("keep-explanation", "在编辑器中保留副本").on_click(cx.listener(
+                    Button::new("keep-explanation", i18n::t!("e04b69643cbdb136")).on_click(cx.listener(
                         move |this, _, window, cx| {
                             let Some(workspace) = workspace.upgrade() else {
                                 return;
@@ -2552,14 +2569,14 @@ impl gpui::Render for DeepExplanationModal {
                 )
             })
             .when_some(self.cancelled.clone(), |this, cancelled| {
-                this.child(Button::new("stop-deep-explanation", "停止生成").on_click(
+                this.child(Button::new("stop-deep-explanation", i18n::t!("9ad0aac32ea304be")).on_click(
                     move |_, _, _| {
                         cancelled.store(true, Ordering::SeqCst);
                     },
                 ))
             })
             .child(
-                Button::new("copy-deep-explanation", "复制全文").on_click(cx.listener(
+                Button::new("copy-deep-explanation", i18n::t!("6258a2c6f9c89143")).on_click(cx.listener(
                     |this, _, _, cx| {
                         let text = this.markdown.read(cx).source().to_string();
                         cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
@@ -2828,32 +2845,32 @@ impl gpui::Render for ProjectScanModal {
             .max_h(window.viewport_size().height * 0.85)
             .child(
                 Modal::new("project-code-explanation-scan", Some(self.scroll_handle.clone()))
-                    .header(ModalHeader::new().show_dismiss_button(true).headline("扫描项目并预生成代码讲解"))
+                    .header(ModalHeader::new().show_dismiss_button(true).headline(i18n::t!("201f47c673115f2e")))
                     .section(Section::new().child(
                         v_flex().gap_3()
                             .child(Label::new(i18n::t_args!("fdb4bd7cbdf3e9db", self.candidates.len(), bytes as f64 / (1024. * 1024.))))
                             .child(Label::new(i18n::t_args!("0659fa18b816c7da", self.model_label)))
-                            .child(Label::new("扫描范围：可见且受信任工作树中的 Git 已跟踪源码。未跟踪和被忽略的文件不会进入清单。").color(Color::Muted))
-                            .child(Label::new("还会排除敏感/私密文件、项目外链接、依赖与构建产物、配置与文档，以及超过 512 KiB 的文件。").color(Color::Muted))
-                            .child(Label::new("以下是候选清单，不代表最终请求数；读取后仍会检查语法支持、生成内容和超长行。内容与当前模型配置均未变化且缓存完整的文件会整文件跳过，只处理新增或变化的代码。").color(Color::Muted))
-                            .child(Label::new("只预生成本机讲解缓存，不修改项目文件。实际发送的源码可能产生模型费用；开始后可从书本菜单停止，已发送的请求仍可能计费。").color(Color::Warning))
-                            .when(self.candidates.is_empty() && self.error.is_none(), |this| this.child(Label::new("没有符合规则的候选源码。请检查 Git 跟踪状态、工作树信任和文件类型。").color(Color::Warning)))
+                            .child(Label::new(i18n::t!("7bd95da73b9541f2")).color(Color::Muted))
+                            .child(Label::new(i18n::t!("5c21dbb661225e8e")).color(Color::Muted))
+                            .child(Label::new(i18n::t!("43f74961c6aa09df")).color(Color::Muted))
+                            .child(Label::new(i18n::t!("097e611f0046f3d2")).color(Color::Warning))
+                            .when(self.candidates.is_empty() && self.error.is_none(), |this| this.child(Label::new(i18n::t!("652ecdcbcee652e4")).color(Color::Warning)))
                             .when_some(self.error.clone(), |this, error| this.child(Label::new(error).color(Color::Warning)))
-                            .child(Label::new("候选文件（序号 · 完整路径 · 源码大小）"))
+                            .child(Label::new(i18n::t!("4ebc15cb92de36ba")))
                             .child(div().id("scan-candidate-files").max_h(rems(24.)).overflow_y_scroll().overflow_x_scroll().children(
                                 self.candidates.iter().enumerate().map(|(index, candidate)| div().whitespace_nowrap().child(Label::new(format!("{}.  {}  ·  {:.2} KiB", index + 1, candidate.display_path, candidate.size as f64 / 1024.))))
                             ))
                     ))
                     .section(Section::new().child(
                         h_flex().justify_end().gap_2()
-                            .child(Button::new("copy-scan-list", "复制完整清单")
+                            .child(Button::new("copy-scan-list", i18n::t!("5a91e1cf5fdbcc38"))
                                 .disabled(self.candidates.is_empty())
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     let list = this.candidates.iter().map(|candidate| format!("{}\t{} bytes", candidate.display_path, candidate.size)).collect::<Vec<_>>().join("\n");
                                     cx.write_to_clipboard(gpui::ClipboardItem::new_string(list));
                                 })))
-                            .child(Button::new("cancel-scan", "取消").on_click(cx.listener(|_, _, _, cx| cx.emit(DismissEvent))))
-                            .child(Button::new("start-scan", "开始扫描")
+                            .child(Button::new("cancel-scan", i18n::t!("2cd0f3be8738a86c")).on_click(cx.listener(|_, _, _, cx| cx.emit(DismissEvent))))
+                            .child(Button::new("start-scan", i18n::t!("743497b67cd219dd"))
                                 .disabled(self.error.is_some() || self.candidates.is_empty())
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     if this.error.is_some() || this.candidates.is_empty() { return; }
@@ -2887,18 +2904,18 @@ fn show_project_scan_confirmation(
     let settings = CodeExplanationSettings::get_global(cx).clone();
     let model_label = format!(
         "{} / {}",
-        settings.provider.as_deref().unwrap_or("未选择渠道"),
-        settings.model.as_deref().unwrap_or("未选择模型")
+        settings.provider.as_deref().unwrap_or(i18n::t!("71da5563d66c1d94")),
+        settings.model.as_deref().unwrap_or(i18n::t!("9bb63745df8f62cb"))
     )
     .into();
     let scan_running = project_scan_state(&project, cx).read(cx).running;
     let error = if scan_running {
         Some(SharedString::from(
-            "当前项目已有完整扫描正在运行，请等待完成或先停止扫描。",
+            i18n::t!("d83664afd2308653"),
         ))
     } else {
         (resolve_model(&settings, cx).is_err() || !settings.cache_persist)
-            .then(|| SharedString::from("请先选择可用的代码讲解渠道和模型，并开启持久缓存。"))
+            .then(|| SharedString::from(i18n::t!("b30065caf5414bf4")))
     };
     let candidates = if error.is_none() {
         collect_project_scan_candidates(&project, selected_paths.as_deref(), cx)
@@ -2932,12 +2949,12 @@ pub fn start_selected_project_scan(
     }
     let error = if project_scan_state(&project, cx).read(cx).running {
         Some(SharedString::from(
-            "当前项目已有完整扫描正在运行，请等待完成或先停止扫描。",
+            i18n::t!("d83664afd2308653"),
         ))
     } else {
         let settings = CodeExplanationSettings::get_global(cx);
         (resolve_model(settings, cx).is_err() || !settings.cache_persist)
-            .then(|| SharedString::from("请先选择可用的代码讲解渠道和模型，并开启持久缓存。"))
+            .then(|| SharedString::from(i18n::t!("b30065caf5414bf4")))
     };
     let candidates = if error.is_none() {
         collect_project_scan_candidates(&project, Some(&selected_paths), cx)
@@ -2987,7 +3004,7 @@ fn start_project_scan(
         .first()
         .and_then(|candidate| candidate.display_path.split('/').next())
         .filter(|label| !label.is_empty())
-        .unwrap_or("项目")
+        .unwrap_or(i18n::t!("79f326be4409d51f"))
         .to_owned();
     state.update(cx, |state, cx| {
         *state = ProjectScanState {
@@ -3583,7 +3600,7 @@ impl gpui::Render for CodeExplanationIndicator {
                                     .as_ref()
                                     .is_some_and(|editor| editor.read(cx).explanations.dirty)
                                 {
-                                    "代码已修改，当前讲解待更新；保存或离开编辑器后刷新".into()
+                                    i18n::t!("76e16b507d13a3e5").into()
                                 } else if active_requests > 0 {
                                     i18n::t!("73dc10ecf6cf1fae", active_requests = active_requests)
                                 } else if scan_running {
@@ -3593,11 +3610,11 @@ impl gpui::Render for CodeExplanationIndicator {
                                         scan_progress.1
                                     )
                                 } else if busy {
-                                    "代码讲解：等待请求".into()
+                                    i18n::t!("fecfc5efb63609b5").into()
                                 } else if settings.enabled {
-                                    "代码讲解：已开启".into()
+                                    i18n::t!("aeff499b47e3db8c").into()
                                 } else {
-                                    "代码讲解：已关闭".into()
+                                    i18n::t!("e638de313ea1e28b").into()
                                 },
                             ))
                             .when(active_requests > 0, |button| {
@@ -3628,7 +3645,7 @@ impl gpui::Render for CodeExplanationIndicator {
                                     let message = if let Some(error) = &state.last_error {
                                         error.to_string()
                                     } else if state.dirty {
-                                        "代码已修改，当前讲解待更新".into()
+                                        i18n::t!("9e2d4efc08fa134e").into()
                                     } else {
                                         i18n::t_args!(
                                             "74d3b9f86e04008d",
@@ -3640,9 +3657,9 @@ impl gpui::Render for CodeExplanationIndicator {
                                 })
                                 .entry(
                                     if settings.enabled {
-                                        "关闭代码讲解"
+                                        i18n::t!("255c4678a33efac6")
                                     } else {
-                                        "开启讲解（向所选服务发送代码）"
+                                        i18n::t!("215c0038609b62e5")
                                     },
                                     None,
                                     move |_, cx| {
@@ -3664,7 +3681,7 @@ impl gpui::Render for CodeExplanationIndicator {
                                 .when_some(
                                     scan_running.then_some(scan_cancelled.clone()).flatten(),
                                     |menu, cancelled| {
-                                        menu.entry("停止扫描当前项目", None, move |_, _| {
+                                        menu.entry(i18n::t!("464c32bac9406908"), None, move |_, _| {
                                             cancelled.store(true, Ordering::SeqCst);
                                         })
                                     },
@@ -3672,7 +3689,7 @@ impl gpui::Render for CodeExplanationIndicator {
                                 .when(!scan_running && active_project.is_some(), |menu| {
                                     let project = active_project.clone();
                                     menu.entry(
-                                        "扫描当前项目并预生成讲解",
+                                        i18n::t!("db60a2f8702a6a6f"),
                                         None,
                                         move |window, cx| {
                                             let Some((project, workspace)) = project.clone() else {
@@ -3688,7 +3705,7 @@ impl gpui::Render for CodeExplanationIndicator {
                             menu = menu.when(!scan_diagnostics.is_empty(), |menu| {
                                 let diagnostics = scan_diagnostics.clone();
                                 menu.entry(
-                                    "复制项目扫描失败详情（最多 100 条）",
+                                    i18n::t!("da72a4729161bc38"),
                                     None,
                                     move |_, cx| {
                                         cx.write_to_clipboard(gpui::ClipboardItem::new_string(
@@ -3698,7 +3715,7 @@ impl gpui::Render for CodeExplanationIndicator {
                                 )
                             });
                             let failed_editor = active.clone();
-                            menu = menu.entry("重试失败的讲解", None, move |_, cx| {
+                            menu = menu.entry(i18n::t!("b21ed03849e84fbf"), None, move |_, cx| {
                                 if let Some(editor) = &failed_editor {
                                     editor.update(cx, |editor, cx| {
                                         if editor.explanations.busy {
@@ -3713,7 +3730,7 @@ impl gpui::Render for CodeExplanationIndicator {
                                 }
                             });
                             let stop_editor = active.clone();
-                            menu = menu.entry("停止当前讲解", None, move |_, cx| {
+                            menu = menu.entry(i18n::t!("315c2b678e53c937"), None, move |_, cx| {
                                 if let Some(editor) = &stop_editor {
                                     editor.update(cx, |editor, cx| {
                                         editor
@@ -3736,7 +3753,7 @@ impl gpui::Render for CodeExplanationIndicator {
                                 }
                             });
                             let retry_editor = active.clone();
-                            menu = menu.entry("重新讲解当前文件", None, move |_, cx| {
+                            menu = menu.entry(i18n::t!("7555297858bc72fb"), None, move |_, cx| {
                                 if let Some(editor) = &retry_editor {
                                     editor.update(cx, |editor, cx| {
                                         editor.explanations.memory.clear();
@@ -3786,7 +3803,7 @@ impl gpui::Render for CodeExplanationIndicator {
                                 );
                             }
                             menu.separator()
-                                .entry("清除全部讲解缓存", None, |_, cx| {
+                                .entry(i18n::t!("1f41c25f8a8429d7"), None, |_, cx| {
                                     code_explanation_file_index(cx).update(cx, |index, cx| {
                                         index.files.clear();
                                         cx.notify();
@@ -3815,7 +3832,7 @@ impl gpui::Render for CodeExplanationIndicator {
                                     })
                                     .detach_and_log_err(cx);
                                 })
-                                .entry("打开代码讲解设置", None, |window, cx| {
+                                .entry(i18n::t!("2325bc25f7d5722e"), None, |window, cx| {
                                     window.dispatch_action(
                                         zed_actions::OpenSettingsAt {
                                             path: "code_explanations".into(),
@@ -3868,7 +3885,7 @@ async fn request_if_authorized(
     for attempt in 0..3 {
         anyhow::ensure!(
             cx.update(&mut authorized),
-            "讲解权限或代码已变化，未发送代码"
+            i18n::t!("03d3044b30299a77")
         );
         match request(model.clone(), settings.clone(), code.clone(), cx).await {
             Ok(text) => return Ok(text),
@@ -3915,16 +3932,16 @@ pub(crate) async fn request(
 ) -> Result<SharedString> {
     anyhow::ensure!(
         !cx.update(|cx| project::DisableAiSettings::get_global(cx).disable_ai),
-        "当前项目已禁用 AI，未发送代码"
+        i18n::t!("0f4b4b34fffd444a")
     );
     anyhow::ensure!(
         code.len() <= 64 * 1024,
-        "代码单元超过单次讲解预算，需要按语法块拆分"
+        i18n::t!("e862135be0181f08")
     );
     let detail = if settings.detailed {
-        "深入到语法级解释语句结构、运算符、类型关系、参数、求值顺序、控制流和副作用"
+        i18n::t!("aeefb0767465904b")
     } else {
-        "按逻辑步骤解释，避免逐行复述显然的操作"
+        i18n::t!("1d1c4c26d7b8ade8")
     };
     let request = LanguageModelRequest {
         messages: vec![
@@ -3952,8 +3969,8 @@ pub(crate) async fn request(
     use gpui::FutureExt as _;
     let executor = cx.background_executor().clone();
     let mut stream = model
-        .model
-        .stream_completion_text(request, cx)
+        .provider
+        .stream_completion_text(&model.model, request, cx)
         .with_timeout(std::time::Duration::from_secs(60), &executor)
         .await
         .context("讲解请求超时；可从书本菜单重试失败单元")?
@@ -3970,17 +3987,17 @@ pub(crate) async fn request(
     {
         anyhow::ensure!(
             !cx.update(|cx| project::DisableAiSettings::get_global(cx).disable_ai),
-            "当前项目已禁用 AI，已停止接收讲解"
+            i18n::t!("dd230cd531e27def")
         );
         anyhow::ensure!(
             started.elapsed() < std::time::Duration::from_secs(120),
-            "讲解超过两分钟，请重试较小的代码单元"
+            i18n::t!("e0aef3d3a08a35ad")
         );
         chunks += 1;
-        anyhow::ensure!(chunks <= 8192, "讲解响应过长");
+        anyhow::ensure!(chunks <= 8192, i18n::t!("af73806c05db33d0"));
         output.push_str(&chunk.map_err(|error| anyhow::anyhow!(error.to_string()))?);
-        anyhow::ensure!(output.len() <= 32 * 1024, "讲解输出超过长度限制");
+        anyhow::ensure!(output.len() <= 32 * 1024, i18n::t!("c7bddbec8bb2317e"));
     }
-    anyhow::ensure!(!output.trim().is_empty(), "模型返回了空讲解");
+    anyhow::ensure!(!output.trim().is_empty(), i18n::t!("20d86f25396ec566"));
     Ok(output.trim().to_string().into())
 }

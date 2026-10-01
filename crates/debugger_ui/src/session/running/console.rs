@@ -476,13 +476,13 @@ impl Render for Console {
                             })
                             .layer(ui::ElevationIndex::ModalSurface)
                             .size(ui::ButtonSize::Compact)
-                            .child(Label::new("求值"))
+                            .child(Label::new(i18n::t!("b41ac387526ef7ff")))
                             .tooltip({
                                 let query_focus_handle = query_focus_handle.clone();
 
                                 move |_window, cx| {
                                     Tooltip::for_action_in(
-                                        "计算",
+                                        i18n::t!("e44976409a5d2b75"),
                                         &Confirm,
                                         &query_focus_handle,
                                         cx,

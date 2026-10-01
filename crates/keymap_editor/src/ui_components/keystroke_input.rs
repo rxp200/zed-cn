@@ -502,7 +502,7 @@ impl Render for KeystrokeInput {
             .rounded_sm()
             .child(recording_pulse(Color::Error))
             .child(
-                Label::new("录制")
+                Label::new(i18n::t!("4b6ef790032f7a87"))
                     .size(LabelSize::XSmall)
                     .weight(FontWeight::SEMIBOLD)
                     .color(Color::Error),
@@ -520,7 +520,7 @@ impl Render for KeystrokeInput {
             .rounded_sm()
             .child(recording_pulse(Color::Accent))
             .child(
-                Label::new("搜索")
+                Label::new(i18n::t!("44ce7ae909bbb28b"))
                     .size(LabelSize::XSmall)
                     .weight(FontWeight::SEMIBOLD)
                     .color(Color::Accent),
@@ -845,6 +845,19 @@ mod tests {
         }
 
         #[track_caller]
+        pub fn expect_recorded_keystrokes(&mut self, expected: &[&str]) -> &mut Self {
+            let actual = self.input.read_with(&self.cx, |input, _| {
+                input
+                    .keystrokes()
+                    .iter()
+                    .map(|keystroke| keystroke.inner().clone())
+                    .collect::<Vec<_>>()
+            });
+            Self::expect_keystrokes_equal(&actual, expected);
+            self
+        }
+
+        #[track_caller]
         pub fn expect_close_keystrokes(&mut self, expected: &[&str]) -> &mut Self {
             let actual = self
                 .input
@@ -1124,6 +1137,82 @@ mod tests {
             cx.add_window(|window, cx| MultiWorkspace::test_new(project.clone(), window, cx));
         let cx = VisualTestContext::from_window(window_handle.into(), cx);
         KeystrokeInputTestHelper::new(cx)
+    }
+
+    fn init_dispatch_test(cx: &mut TestAppContext, binding: &str) -> KeystrokeInputTestHelper {
+        cx.update(|cx| {
+            let settings_store = SettingsStore::test(cx);
+            cx.set_global(settings_store);
+            theme_settings::init(theme::LoadThemes::JustBase, cx);
+            cx.bind_keys([gpui::KeyBinding::new(
+                binding,
+                ClearKeystrokes,
+                Some(KEY_CONTEXT_VALUE),
+            )]);
+        });
+        let window = cx.add_window(|window, cx| KeystrokeInput::new(None, window, cx));
+        let input = window.root(cx).expect("keystroke input window");
+        let mut helper = KeystrokeInputTestHelper {
+            input,
+            current_modifiers: Modifiers::default(),
+            cx: VisualTestContext::from_window(window.into(), cx),
+        };
+        helper.cx.update(|window, _| window.activate_window());
+        helper.cx.run_until_parked();
+        helper.cx.update(|window, cx| window.draw(cx).clear(cx));
+        helper.start_recording();
+        helper.cx.update(|window, cx| window.draw(cx).clear(cx));
+        helper.input.read_with(&helper.cx, |input, _| {
+            assert!(input.intercept_subscription.is_some());
+        });
+        helper
+    }
+
+    fn simulate_standalone_shift(cx: &mut VisualTestContext) {
+        cx.simulate_modifiers_change(Modifiers::shift());
+        cx.simulate_modifiers_change(Modifiers::none());
+    }
+
+    fn simulate_shift_f1(cx: &mut VisualTestContext) {
+        let keystroke = Keystroke::parse("shift-f1").expect("valid keystroke");
+        cx.simulate_modifiers_change(Modifiers::shift());
+        cx.simulate_event(gpui::KeyDownEvent {
+            keystroke: keystroke.clone(),
+            is_held: false,
+            prefer_character_input: false,
+        });
+        cx.simulate_event(gpui::KeyUpEvent { keystroke });
+        cx.simulate_modifiers_change(Modifiers::none());
+    }
+
+    #[gpui::test]
+    fn test_dispatch_records_standalone_shift_without_running_bound_action(
+        cx: &mut TestAppContext,
+    ) {
+        let mut helper = init_dispatch_test(cx, "shift");
+
+        helper.cx.simulate_modifiers_change(Modifiers::shift());
+        helper.expect_recorded_keystrokes(&[]);
+        helper.cx.simulate_modifiers_change(Modifiers::none());
+        helper.expect_recorded_keystrokes(&["shift"]);
+
+        helper.stop_recording();
+        helper.cx.update(|window, cx| window.draw(cx).clear(cx));
+        simulate_standalone_shift(&mut helper.cx);
+        helper.expect_empty();
+    }
+
+    #[gpui::test]
+    fn test_dispatch_records_shift_f1_without_extra_shift_or_bound_action(cx: &mut TestAppContext) {
+        let mut helper = init_dispatch_test(cx, "shift-f1");
+
+        simulate_shift_f1(&mut helper.cx);
+        helper.expect_recorded_keystrokes(&["shift-f1"]);
+
+        helper.stop_recording();
+        helper.cx.update(|window, cx| window.draw(cx).clear(cx));
+        simulate_shift_f1(&mut helper.cx);
+        helper.expect_empty();
     }
 
     #[gpui::test]

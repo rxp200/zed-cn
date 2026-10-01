@@ -196,15 +196,13 @@ impl Output {
                 .pl_1()
                 .when(v.has_clipboard_content(window, cx), |el| {
                     let v = v.clone();
-                    el.child(
-                        IconButton::new(ElementId::Name("copy-output".into()), IconName::Copy)
-                            .style(ButtonStyle::Transparent)
-                            .tooltip(Tooltip::text(i18n::t!("10ef549f29ab49a2")))
-                            .on_click(move |_, window, cx| {
-                                let clipboard_content = v.clipboard_content(window, cx);
 
-                                if let Some(clipboard_content) = clipboard_content.as_ref() {
-                                    cx.write_to_clipboard(clipboard_content.clone());
+                    el.child(
+                        CopyButton::new(("copy-output", v.entity_id()), "")
+                            .tooltip_label("Copy Output")
+                            .custom_on_click(move |window, cx| {
+                                if let Some(clipboard_item) = v.clipboard_content(window, cx) {
+                                    cx.write_to_clipboard(clipboard_item);
                                 }
                             }),
                     )
@@ -753,7 +751,7 @@ impl ExecutionView {
 impl Render for ExecutionView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let status = match &self.status {
-            ExecutionStatus::ConnectingToKernel => Label::new("正在连接内核…")
+            ExecutionStatus::ConnectingToKernel => Label::new(i18n::t!("faa5a67edb6ad634"))
                 .color(Color::Muted)
                 .into_any_element(),
             ExecutionStatus::Executing => h_flex()
@@ -764,25 +762,25 @@ impl Render for ExecutionView {
                         .color(Color::Muted)
                         .with_rotate_animation(3),
                 )
-                .child(Label::new("正在执行…").color(Color::Muted))
+                .child(Label::new(i18n::t!("85a6abca5da94fa8")).color(Color::Muted))
                 .into_any_element(),
             ExecutionStatus::Finished => Icon::new(IconName::Check)
                 .size(IconSize::Small)
                 .into_any_element(),
-            ExecutionStatus::Unknown => Label::new("未知状态")
+            ExecutionStatus::Unknown => Label::new(i18n::t!("ec0d9bdb00a4a8f6"))
                 .color(Color::Muted)
                 .into_any_element(),
-            ExecutionStatus::ShuttingDown => Label::new("内核正在关闭…")
+            ExecutionStatus::ShuttingDown => Label::new(i18n::t!("1d28ab468fcb518a"))
                 .color(Color::Muted)
                 .into_any_element(),
-            ExecutionStatus::Restarting => Label::new("内核正在重启…")
+            ExecutionStatus::Restarting => Label::new(i18n::t!("469eebbf4650a9ef"))
                 .color(Color::Muted)
                 .into_any_element(),
-            ExecutionStatus::Shutdown => Label::new("内核已关闭")
+            ExecutionStatus::Shutdown => Label::new(i18n::t!("04ac40f5ad473261"))
                 .color(Color::Muted)
                 .into_any_element(),
-            ExecutionStatus::Queued => Label::new("排队中…").color(Color::Muted).into_any_element(),
-            ExecutionStatus::KernelErrored(error) => Label::new(format!("Kernel error: {}", error))
+            ExecutionStatus::Queued => Label::new(i18n::t!("f938cc565569c161")).color(Color::Muted).into_any_element(),
+            ExecutionStatus::KernelErrored(error) => Label::new(i18n::t_args!("222cba8ca30de9ab", error))
                 .color(Color::Error)
                 .into_any_element(),
         };

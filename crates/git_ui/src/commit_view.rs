@@ -218,12 +218,12 @@ impl CommitView {
         cx: &mut App,
     ) {
         let commit_diff = repo
-            .update(cx, |repo, _| {
-                repo.load_commit_diff(commit_sha.clone(), ignore_shallow_boundary)
+            .update(cx, |repo, cx| {
+                repo.load_commit_diff(commit_sha.clone(), ignore_shallow_boundary, cx)
             })
             .ok();
         let commit_details = repo
-            .update(cx, |repo, _| repo.show(commit_sha.clone()))
+            .update(cx, |repo, cx| repo.show_commit(commit_sha.clone(), cx))
             .ok();
 
         window
@@ -231,8 +231,8 @@ impl CommitView {
                 let commit_diff = commit_diff?;
                 let commit_details = commit_details?;
                 let (commit_diff, commit_details) = futures::join!(commit_diff, commit_details);
-                let mut commit_diff = commit_diff.log_err()?.log_err()?;
-                let commit_details = commit_details.log_err()?.log_err()?;
+                let mut commit_diff = commit_diff.log_err()?;
+                let commit_details = commit_details.log_err()?;
 
                 // Filter to specific file if requested
                 if let Some(ref filter_path) = file_filter {
@@ -621,11 +621,11 @@ impl CommitView {
             .justify_center()
             .gap_2()
             .child(
-                Label::new("此提交位于浅克隆的边界。").color(Color::Muted),
+                Label::new(i18n::t!("e7b4c723a42de198")).color(Color::Muted),
             )
             .child(
                 Label::new(
-                    "尚未获取其父提交历史，因此无法显示此提交引入的更改。",
+                    i18n::t!("9ce0aeb96cc0f7fa"),
                 )
                 .color(Color::Muted),
             )
@@ -641,15 +641,15 @@ impl CommitView {
                             Button::new(
                                 "fetch-unshallow",
                                 if fetch_in_flight {
-                                    "正在获取…"
+                                    i18n::t!("85ab30269d8fc924")
                                 } else {
-                                    "获取缺失的历史记录"
+                                    i18n::t!("9ce16a4ad8542f62")
                                 },
                             )
                                 .style(ButtonStyle::Filled)
                                 .disabled(fetch_in_flight)
                                 .tooltip(Tooltip::text(
-                                    "运行 `git fetch --unshallow` 下载完整历史记录，然后显示此提交的更改。",
+                                    i18n::t!("bbe9dc9817752172"),
                                 ))
                                 .on_click(move |_, window, cx| {
                                     let fetch = crate::commit_tooltip::fetch_unshallow(
@@ -903,7 +903,7 @@ impl CommitView {
                     )
                     .when(self.stash.is_none(), |this| {
                         this.child(
-                            Button::new("sha", "提交SHA")
+                            Button::new("sha", i18n::t!("bafc39af1e84c72a"))
                                 .start_icon(
                                     Icon::new(copy_icon)
                                         .size(IconSize::Small)
@@ -913,7 +913,7 @@ impl CommitView {
                                     let commit_sha = commit_sha.clone();
                                     move |_, cx| {
                                         Tooltip::with_meta(
-                                            "复制提交 SHA",
+                                            i18n::t!("867dbb14725075d6"),
                                             None,
                                             commit_sha.clone(),
                                             cx,
@@ -983,7 +983,7 @@ impl CommitView {
     fn apply_stash(workspace: &mut Workspace, window: &mut Window, cx: &mut App) {
         Self::stash_action(
             workspace,
-            "应用",
+            i18n::t!("63c73c4730f4473e"),
             window,
             cx,
             async move |repository, sha, stash, commit_view, workspace, cx| {
@@ -1010,7 +1010,7 @@ impl CommitView {
     fn pop_stash(workspace: &mut Workspace, window: &mut Window, cx: &mut App) {
         Self::stash_action(
             workspace,
-            "弹出",
+            i18n::t!("05cfd6ba003530c6"),
             window,
             cx,
             async move |repository, sha, stash, commit_view, workspace, cx| {
@@ -1037,7 +1037,7 @@ impl CommitView {
     fn remove_stash(workspace: &mut Workspace, window: &mut Window, cx: &mut App) {
         Self::stash_action(
             workspace,
-            "丢弃",
+            i18n::t!("b16f71b55691cdc3"),
             window,
             cx,
             async move |repository, sha, stash, commit_view, workspace, cx| {
@@ -1212,6 +1212,7 @@ pub(crate) async fn build_buffer(
             text,
         );
         let mut buffer = Buffer::build(buffer, Some(blob), Capability::ReadWrite, cx);
+        buffer.set_language_registry(language_registry.clone());
         buffer.set_language_async(language, cx);
         buffer
     });
@@ -1539,7 +1540,7 @@ impl Render for CommitViewToolbar {
                     .icon_size(IconSize::Small)
                     .tooltip(move |_, cx| {
                         Tooltip::for_action(
-                            "缓冲区搜索",
+                            i18n::t!("cd05d19e22d994e8"),
                             &zed_actions::buffer_search::Deploy::find(),
                             cx,
                         )
@@ -1555,7 +1556,7 @@ impl Render for CommitViewToolbar {
                 this.child(
                     IconButton::new("show-in-git-graph", IconName::GitGraph)
                         .icon_size(IconSize::Small)
-                        .tooltip(Tooltip::text("在Git图中显示"))
+                        .tooltip(Tooltip::text(i18n::t!("fafd39406ffc961b")))
                         .on_click(move |_, window, cx| {
                             window.dispatch_action(
                                 Box::new(crate::git_graph::OpenAtCommit {
@@ -1570,7 +1571,7 @@ impl Render for CommitViewToolbar {
 
                     IconButton::new("view_on_provider", icon)
                         .icon_size(IconSize::Small)
-                        .tooltip(Tooltip::text(format!("View on {}", provider_name)))
+                        .tooltip(Tooltip::text(i18n::t_args!("f2245eadbe3b33f0", provider_name)))
                         .on_click(move |_, _, cx| cx.open_url(&url))
                 }))
             })
@@ -1613,7 +1614,9 @@ fn stash_matches_index(sha: &str, stash_index: usize, repo: &Repository) -> bool
 mod tests {
     use super::*;
     use fs::FakeFs;
-    use gpui::TestAppContext;
+    use gpui::{EmptyView, TestAppContext};
+    use indoc::indoc;
+    use language::{Language, LanguageConfig, markdown_lang};
     use settings::SettingsStore;
     use std::path::Path;
 
@@ -1686,5 +1689,71 @@ mod tests {
         view.update_in(cx, |view, window, cx| {
             assert!(view.focus_handle(cx).is_focused(window))
         });
+    }
+
+    #[gpui::test]
+    async fn test_build_buffer_resolves_injected_languages(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            let store = SettingsStore::test(cx);
+            cx.set_global(store);
+        });
+
+        let language_registry = Arc::new(LanguageRegistry::test(cx.executor()));
+        language_registry.add(markdown_lang());
+        language_registry.add(Arc::new(markdown_inline_lang()));
+
+        let window = cx.add_window(|_, _| EmptyView);
+        let mut async_cx = window
+            .update(cx, |_, window, cx| window.to_async(cx))
+            .expect("window should be open");
+
+        let text = indoc! {"
+            # Title
+
+            Some *emphasized* text.
+        "}
+        .to_string();
+        let blob = Arc::new(GitBlob {
+            path: RepoPath::new("notes.md").unwrap(),
+            worktree_id: WorktreeId::from_usize(0),
+            is_deleted: false,
+            is_binary: false,
+            display_name: "abc1234 - notes.md".into(),
+        }) as Arc<dyn File>;
+
+        let buffer = build_buffer(text, blob, &language_registry, &mut async_cx)
+            .await
+            .expect("buffer should build");
+
+        cx.run_until_parked();
+
+        buffer.read_with(cx, |buffer, _| {
+            let language = buffer.language().expect("buffer should have a language");
+            assert_eq!(language.name().as_ref(), "Markdown");
+
+            let layers = buffer
+                .snapshot()
+                .syntax_layers()
+                .map(|layer| layer.language.name().to_string())
+                .collect::<Vec<_>>();
+            assert!(
+                layers.iter().any(|name| name == "Markdown-Inline"),
+                "emphasis, links, and fenced code blocks are highlighted by the injected \
+                 Markdown-Inline grammar, but the buffer parsed with layers {layers:?}",
+            );
+        });
+    }
+
+    fn markdown_inline_lang() -> Language {
+        Language::new(
+            LanguageConfig {
+                name: "Markdown-Inline".into(),
+                hidden: true,
+                ..LanguageConfig::default()
+            },
+            Some(tree_sitter_md::INLINE_LANGUAGE.into()),
+        )
+        .with_highlights_query("(emphasis) @emphasis")
+        .unwrap()
     }
 }
