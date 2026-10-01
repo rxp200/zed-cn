@@ -14,73 +14,98 @@ use util::shell::ShellKind;
 
 use crate::{SettingsWindow, components::SettingsInputField};
 
-const HARDCODED_RULES_DESCRIPTION: &str =
-    "`rm -rf` commands are always blocked when run on `$HOME`, `~`, `.`, `..`, or `/`";
-const SETTINGS_DISCLAIMER: &str = "Note: custom tool permissions only apply to the Zed native agent and don’t extend to external agents connected through the Agent Client Protocol (ACP).";
+fn hardcoded_rules_description() -> &'static str {
+    i18n::t!("436fafeb4605fecd")
+}
 
-/// Tools that support permission rules
-const TOOLS: &[ToolInfo] = &[
-    ToolInfo {
-        id: "terminal",
-        name: "Terminal",
-        description: "Commands executed in the terminal",
-        regex_explanation: "Patterns are matched against each command in the input. Commands chained with &&, ||, ;, or pipes are split and checked individually.",
-    },
-    ToolInfo {
-        id: "edit_file",
-        name: "Edit File",
-        description: "File editing operations",
-        regex_explanation: "Patterns are matched against the file path being edited.",
-    },
-    ToolInfo {
-        id: "write_file",
-        name: "Write File",
-        description: "File creation and overwrite operations",
-        regex_explanation: "Patterns are matched against the file path being written.",
-    },
-    ToolInfo {
-        id: "delete_path",
-        name: "Delete Path",
-        description: "File and directory deletion",
-        regex_explanation: "Patterns are matched against the path being deleted.",
-    },
-    ToolInfo {
-        id: "copy_path",
-        name: "Copy Path",
-        description: "File and directory copying",
-        regex_explanation: "Patterns are matched independently against the source path and the destination path. Enter either path below to test.",
-    },
-    ToolInfo {
-        id: "move_path",
-        name: "Move Path",
-        description: "File and directory moves/renames",
-        regex_explanation: "Patterns are matched independently against the source path and the destination path. Enter either path below to test.",
-    },
-    ToolInfo {
-        id: "create_directory",
-        name: "Create Directory",
-        description: "Directory creation",
-        regex_explanation: "Patterns are matched against the directory path being created.",
-    },
-    ToolInfo {
-        id: "fetch",
-        name: "Fetch",
-        description: "HTTP requests to URLs",
-        regex_explanation: "Patterns are matched against the URL being fetched.",
-    },
-    ToolInfo {
-        id: "search_web",
-        name: "Web Search",
-        description: "Web search queries",
-        regex_explanation: "Patterns are matched against the search query.",
-    },
-    ToolInfo {
-        id: "skill",
-        name: "Skill",
-        description: "Loading agent skill instructions",
-        regex_explanation: "Patterns are matched against the absolute path to the skill's SKILL.md file.",
-    },
+fn settings_disclaimer() -> &'static str {
+    i18n::t!("04d6f5ea01d38d4b")
+}
+
+/// Tool IDs in the same order as `tools()`; kept const so `tool_index` can
+/// validate tool IDs at compile time.
+const TOOL_IDS: &[&str] = &[
+    "terminal",
+    "edit_file",
+    "write_file",
+    "delete_path",
+    "copy_path",
+    "move_path",
+    "create_directory",
+    "fetch",
+    "search_web",
+    "skill",
 ];
+
+/// Tools that support permission rules. Built lazily because the labels are
+/// translated at runtime.
+fn tools() -> &'static [ToolInfo] {
+    static TOOLS: std::sync::OnceLock<Vec<ToolInfo>> = std::sync::OnceLock::new();
+    TOOLS.get_or_init(|| {
+        vec![
+            ToolInfo {
+                id: "terminal",
+                name: i18n::t!("e2a76ef1f12e147f"),
+                description: i18n::t!("dce7994bab6e963a"),
+                regex_explanation: i18n::t!("4c65bb2ff81c40b7"),
+            },
+            ToolInfo {
+                id: "edit_file",
+                name: i18n::t!("60ed265346273d74"),
+                description: i18n::t!("4b1fb5f351a40bfb"),
+                regex_explanation: i18n::t!("326f9efd5b77cd56"),
+            },
+            ToolInfo {
+                id: "write_file",
+                name: i18n::t!("7ed80e44eaf9c51c"),
+                description: i18n::t!("3a074d4ca85e3e8f"),
+                regex_explanation: "Patterns are matched against the file path being written.",
+            },
+            ToolInfo {
+                id: "delete_path",
+                name: i18n::t!("752848e8042f208d"),
+                description: i18n::t!("d6aec8284d00fdf8"),
+                regex_explanation: "Patterns are matched against the path being deleted.",
+            },
+            ToolInfo {
+                id: "copy_path",
+                name: i18n::t!("b97c49acb93028ec"),
+                description: i18n::t!("7405f1576a786644"),
+                regex_explanation: i18n::t!("fa617b05f4559067"),
+            },
+            ToolInfo {
+                id: "move_path",
+                name: i18n::t!("94621da0693bf1d7"),
+                description: i18n::t!("6d6dab7c26336ef5"),
+                regex_explanation: i18n::t!("fa617b05f4559067"),
+            },
+            ToolInfo {
+                id: "create_directory",
+                name: i18n::t!("c6fb1e689ea296dc"),
+                description: i18n::t!("9feb1e337fa00af7"),
+                regex_explanation: i18n::t!("92764c0250371f50"),
+            },
+            ToolInfo {
+                id: "fetch",
+                name: i18n::t!("3025ba82c94c2575"),
+                description: i18n::t!("a3a949d0e1735928"),
+                regex_explanation: i18n::t!("2687ae4a76948664"),
+            },
+            ToolInfo {
+                id: "search_web",
+                name: i18n::t!("298c8a1f26a60094"),
+                description: i18n::t!("f78eab657476a1a5"),
+                regex_explanation: i18n::t!("76f66ae141efbcbb"),
+            },
+            ToolInfo {
+                id: "skill",
+                name: i18n::t!("99aea2f9131ad6da"),
+                description: i18n::t!("0c539fc6b04bd18b"),
+                regex_explanation: i18n::t!("bdc315c4f9b57516"),
+            },
+        ]
+    })
+}
 
 pub(crate) struct ToolInfo {
     id: &'static str,
@@ -110,8 +135,8 @@ const fn const_str_eq(a: &str, b: &str) -> bool {
 /// function is validated at compile time.
 const fn tool_index(id: &str) -> usize {
     let mut i = 0;
-    while i < TOOLS.len() {
-        if const_str_eq(TOOLS[i].id, id) {
+    while i < TOOL_IDS.len() {
+        if const_str_eq(TOOL_IDS[i], id) {
             return i;
         }
         i += 1;
@@ -157,7 +182,7 @@ pub(crate) fn render_tool_permissions_setup_page(
     window: &mut Window,
     cx: &mut Context<SettingsWindow>,
 ) -> AnyElement {
-    let tool_items: Vec<AnyElement> = TOOLS
+    let tool_items: Vec<AnyElement> = tools()
         .iter()
         .enumerate()
         .map(|(i, tool)| render_tool_list_item(settings_window, tool, i, window, cx))
@@ -195,7 +220,7 @@ pub(crate) fn render_tool_permissions_setup_page(
         .track_scroll(scroll_handle)
         .child(
             Banner::new().child(
-                Label::new(SETTINGS_DISCLAIMER)
+                Label::new(settings_disclaimer())
                     .size(LabelSize::Small)
                     .color(Color::Muted)
                     .mt_0p5(),
@@ -207,7 +232,7 @@ pub(crate) fn render_tool_permissions_setup_page(
                 .child(Divider::horizontal())
                 .children(tool_items.into_iter().enumerate().flat_map(|(i, item)| {
                     let mut elements: Vec<AnyElement> = vec![item];
-                    if i + 1 < TOOLS.len() {
+                    if i + 1 < tools().len() {
                         elements.push(Divider::horizontal().into_any_element());
                     }
                     elements
@@ -274,26 +299,29 @@ fn render_tool_list_item(
         )
         .child({
             let tool_name = tool.name;
-            Button::new(format!("configure-{}", tool.id), "Configure")
-                .tab_index(tool_index as isize)
-                .style(ButtonStyle::OutlinedGhost)
-                .size(ButtonSize::Medium)
-                .end_icon(
-                    Icon::new(IconName::ChevronRight)
-                        .size(IconSize::Small)
-                        .color(Color::Muted),
-                )
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    this.push_dynamic_sub_page(
-                        tool_name,
-                        "Tool Permissions",
-                        None,
-                        true,
-                        render_fn,
-                        window,
-                        cx,
-                    );
-                }))
+            Button::new(
+                format!("configure-{}", tool.id),
+                i18n::t!("148d195e21b05db5"),
+            )
+            .tab_index(tool_index as isize)
+            .style(ButtonStyle::OutlinedGhost)
+            .size(ButtonSize::Medium)
+            .end_icon(
+                Icon::new(IconName::ChevronRight)
+                    .size(IconSize::Small)
+                    .color(Color::Muted),
+            )
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.push_dynamic_sub_page(
+                    tool_name,
+                    i18n::t!("a2b60a34a75b7a8e"),
+                    None,
+                    true,
+                    render_fn,
+                    window,
+                    cx,
+                );
+            }))
         })
         .into_any_element()
 }
@@ -375,7 +403,7 @@ pub(crate) fn render_tool_config_page(
                         .severity(Severity::Warning)
                         .child(Label::new(error).size(LabelSize::Small))
                         .action_slot(
-                            Button::new("dismiss-regex-error", "Dismiss")
+                            Button::new("dismiss-regex-error", i18n::t!("3fd47edce45b3603"))
                                 .style(ButtonStyle::Tinted(ui::TintColor::Warning))
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.regex_validation_error = None;
@@ -395,7 +423,7 @@ pub(crate) fn render_tool_config_page(
                 .child(Divider::horizontal().color(ui::DividerColor::BorderFaded))
                 .child(render_rule_section(
                     tool.id,
-                    "Always Deny",
+                    i18n::t!("ab727f8a9e183e08"),
                     "If any of these regexes match, the tool action will be denied.",
                     ToolPermissionMode::Deny,
                     &rules.always_deny,
@@ -404,7 +432,7 @@ pub(crate) fn render_tool_config_page(
                 .child(Divider::horizontal().color(ui::DividerColor::BorderFaded))
                 .child(render_rule_section(
                     tool.id,
-                    "Always Allow",
+                    i18n::t!("04c7fd9eef8d6804"),
                     "If any of these regexes match, the action will be approved—unless an Always Confirm or Always Deny matches.",
                     ToolPermissionMode::Allow,
                     &rules.always_allow,
@@ -413,7 +441,7 @@ pub(crate) fn render_tool_config_page(
                 .child(Divider::horizontal().color(ui::DividerColor::BorderFaded))
                 .child(render_rule_section(
                     tool.id,
-                    "Always Confirm",
+                    i18n::t!("25702a91d4f615d1"),
                     "If any of these regexes match, a confirmation will be shown unless an Always Deny regex matches.",
                     ToolPermissionMode::Confirm,
                     &rules.always_confirm,
@@ -441,7 +469,10 @@ fn render_hardcoded_rules(smaller_font_size: bool, cx: &App) -> AnyElement {
             }
         })
         .text_color(cx.theme().colors().text_muted)
-        .child(render_inline_code_markdown(HARDCODED_RULES_DESCRIPTION, cx))
+        .child(render_inline_code_markdown(
+            hardcoded_rules_description(),
+            cx,
+        ))
         .into_any_element()
 }
 
@@ -461,7 +492,7 @@ fn render_verification_section(
 
     let editor = window.use_keyed_state(input_id, cx, |window, cx| {
         let mut editor = editor::Editor::single_line(window, cx);
-        editor.set_placeholder_text("Enter a tool input to test your rules…", window, cx);
+        editor.set_placeholder_text(i18n::t!("61548216030739b7"), window, cx);
 
         let global_settings = ThemeSettings::get_global(cx);
         editor.set_text_style_refinement(TextStyleRefinement {
@@ -536,7 +567,7 @@ fn render_verification_section(
                 .border_color(color.border_variant)
                 .rounded_sm()
                 .child(
-                    Label::new("Test Your Rules")
+                    Label::new(i18n::t!("c688a3d4a52ab35b"))
                         .color(Color::Muted)
                         .size(LabelSize::Small),
                 )
@@ -556,7 +587,7 @@ fn render_verification_section(
                     this.when(patterns_agree, |this| {
                         if matched_patterns.is_empty() {
                             this.child(
-                                Label::new("No regex matches, using the default action.")
+                                Label::new(i18n::t!("1bff0f1ca5c7e879"))
                                     .size(LabelSize::Small)
                                     .color(Color::Muted),
                             )
@@ -685,9 +716,9 @@ fn render_matched_patterns(patterns: &[MatchedPattern], cx: &App) -> AnyElement 
         .gap_1()
         .children(patterns.iter().map(|pattern| {
             let (type_label, color) = match pattern.rule_type {
-                ToolPermissionMode::Deny => ("Always Deny", Color::Error),
-                ToolPermissionMode::Confirm => ("Always Confirm", Color::Warning),
-                ToolPermissionMode::Allow => ("Always Allow", Color::Success),
+                ToolPermissionMode::Deny => (i18n::t!("ab727f8a9e183e08"), Color::Error),
+                ToolPermissionMode::Confirm => (i18n::t!("25702a91d4f615d1"), Color::Warning),
+                ToolPermissionMode::Allow => (i18n::t!("04c7fd9eef8d6804"), Color::Success),
             };
 
             let type_color = if pattern.is_overridden {
@@ -770,9 +801,9 @@ fn implied_mode_from_patterns(
 
 fn mode_display_label(mode: ToolPermissionMode) -> &'static str {
     match mode {
-        ToolPermissionMode::Allow => "Allow",
-        ToolPermissionMode::Deny => "Deny",
-        ToolPermissionMode::Confirm => "Confirm",
+        ToolPermissionMode::Allow => i18n::t!("ce7ef28b670ade58"),
+        ToolPermissionMode::Deny => i18n::t!("136de7a8c46fc803"),
+        ToolPermissionMode::Confirm => i18n::t!("36f33adaf0942634"),
     }
 }
 
@@ -788,7 +819,7 @@ fn render_verdict_label(mode: ToolPermissionMode) -> AnyElement {
     h_flex()
         .gap_1()
         .child(
-            Label::new("Result:")
+            Label::new(i18n::t!("d104f60044d2a10c"))
                 .size(LabelSize::Small)
                 .color(Color::Muted),
         )
@@ -818,7 +849,7 @@ fn render_invalid_patterns_section(
                         .size(IconSize::Small)
                         .color(Color::Error),
                 )
-                .child(Label::new("Invalid Patterns").color(Color::Error)),
+                .child(Label::new(i18n::t!("dea5414b2babc0de")).color(Color::Error)),
         )
         .child(
             Label::new(
@@ -835,9 +866,9 @@ fn render_invalid_patterns_section(
                 .gap_1p5()
                 .children(invalid_patterns.iter().map(|invalid| {
                     let rule_type_label = match invalid.rule_type.as_str() {
-                        "always_allow" => "Always Allow",
-                        "always_deny" => "Always Deny",
-                        "always_confirm" => "Always Confirm",
+                        "always_allow" => i18n::t!("04c7fd9eef8d6804"),
+                        "always_deny" => i18n::t!("ab727f8a9e183e08"),
+                        "always_confirm" => i18n::t!("25702a91d4f615d1"),
                         other => other,
                     };
 
@@ -881,7 +912,7 @@ fn render_invalid_patterns_section(
                                     IconButton::new(delete_id, IconName::Trash)
                                         .icon_size(IconSize::Small)
                                         .icon_color(Color::Muted)
-                                        .tooltip(Tooltip::text("Delete Invalid Pattern"))
+                                        .tooltip(Tooltip::text(i18n::t!("8902af01287c21aa")))
                                         .on_click(cx.listener(move |_, _, _, cx| {
                                             delete_pattern(
                                                 &tool_id_for_delete,
@@ -956,7 +987,7 @@ fn render_pattern_empty_state(cx: &mut Context<SettingsWindow>) -> AnyElement {
         .border_dashed()
         .border_color(cx.theme().colors().border_variant)
         .child(
-            Label::new("No patterns configured")
+            Label::new(i18n::t!("069656c816acadd4"))
                 .size(LabelSize::Small)
                 .color(Color::Disabled),
         )
@@ -987,7 +1018,7 @@ fn render_user_pattern_row(
             IconButton::new(delete_id, IconName::Trash)
                 .icon_size(IconSize::Small)
                 .icon_color(Color::Muted)
-                .tooltip(Tooltip::text("Delete Pattern"))
+                .tooltip(Tooltip::text(i18n::t!("de3a1ab5994fcb44")))
                 .on_click(cx.listener(move |_, _, _, cx| {
                     delete_pattern(&tool_id_for_delete, rule_type, &pattern_for_delete, cx);
                 })),
@@ -1039,7 +1070,7 @@ fn render_add_pattern_input(
     let settings_window = cx.entity().downgrade();
 
     SettingsInputField::new(input_id)
-        .with_placeholder("Add regex pattern…")
+        .with_placeholder(i18n::t!("2beed8f0d742b07d"))
         .tab_index(0)
         .with_buffer_font()
         .display_clear_button()
@@ -1080,7 +1111,7 @@ fn render_global_default_mode_section(current_mode: ToolPermissionMode) -> AnyEl
             v_flex()
                 .w_full()
                 .min_w_0()
-                .child(Label::new("Default Permission"))
+                .child(Label::new(i18n::t!("4dbfbb41b6cd9165")))
                 .child(
                     Label::new(
                         "Controls the default behavior for all tool actions. Per-tool rules and patterns can override this.",
@@ -1100,13 +1131,13 @@ fn render_global_default_mode_section(current_mode: ToolPermissionMode) -> AnyEl
                 )
                 .menu(move |window, cx| {
                     Some(ContextMenu::build(window, cx, move |menu, _, _| {
-                        menu.entry("Confirm", None, move |_, cx| {
+                        menu.entry(i18n::t!("36f33adaf0942634"), None, move |_, cx| {
                             set_global_default_permission(ToolPermissionMode::Confirm, cx);
                         })
-                        .entry("Allow", None, move |_, cx| {
+                        .entry(i18n::t!("ce7ef28b670ade58"), None, move |_, cx| {
                             set_global_default_permission(ToolPermissionMode::Allow, cx);
                         })
-                        .entry("Deny", None, move |_, cx| {
+                        .entry(i18n::t!("136de7a8c46fc803"), None, move |_, cx| {
                             set_global_default_permission(ToolPermissionMode::Deny, cx);
                         })
                     }))
@@ -1122,9 +1153,9 @@ fn render_default_mode_section(
     _cx: &mut Context<SettingsWindow>,
 ) -> AnyElement {
     let mode_label = match current_mode {
-        ToolPermissionMode::Allow => "Allow",
-        ToolPermissionMode::Deny => "Deny",
-        ToolPermissionMode::Confirm => "Confirm",
+        ToolPermissionMode::Allow => i18n::t!("ce7ef28b670ade58"),
+        ToolPermissionMode::Deny => i18n::t!("136de7a8c46fc803"),
+        ToolPermissionMode::Confirm => i18n::t!("36f33adaf0942634"),
     };
 
     let tool_id_owned = tool_id.to_string();
@@ -1136,9 +1167,9 @@ fn render_default_mode_section(
             v_flex()
                 .w_full()
                 .min_w_0()
-                .child(Label::new("Default Action"))
+                .child(Label::new(i18n::t!("8d13533c78e91fc4")))
                 .child(
-                    Label::new("Action to take when no patterns match.")
+                    Label::new(i18n::t!("5edffd2535af1cc1"))
                         .size(LabelSize::Small)
                         .color(Color::Muted),
                 ),
@@ -1159,15 +1190,19 @@ fn render_default_mode_section(
                         let tool_id_allow = tool_id.clone();
                         let tool_id_deny = tool_id;
 
-                        menu.entry("Confirm", None, move |_, cx| {
+                        menu.entry(i18n::t!("36f33adaf0942634"), None, move |_, cx| {
                             set_default_mode(&tool_id_confirm, ToolPermissionMode::Confirm, cx);
                         })
-                        .entry("Allow", None, move |_, cx| {
+                        .entry(i18n::t!("ce7ef28b670ade58"), None, move |_, cx| {
                             set_default_mode(&tool_id_allow, ToolPermissionMode::Allow, cx);
                         })
-                        .entry("Deny", None, move |_, cx| {
-                            set_default_mode(&tool_id_deny, ToolPermissionMode::Deny, cx);
-                        })
+                        .entry(
+                            i18n::t!("136de7a8c46fc803"),
+                            None,
+                            move |_, cx| {
+                                set_default_mode(&tool_id_deny, ToolPermissionMode::Deny, cx);
+                            },
+                        )
                     }))
                 })
                 .anchor(gpui::Anchor::TopRight),
@@ -1375,7 +1410,7 @@ macro_rules! tool_config_page_fn {
             cx: &mut Context<SettingsWindow>,
         ) -> AnyElement {
             const INDEX: usize = tool_index($tool_id);
-            render_tool_config_page(&TOOLS[INDEX], settings_window, scroll_handle, window, cx)
+            render_tool_config_page(&tools()[INDEX], settings_window, scroll_handle, window, cx)
         }
     };
 }
@@ -1428,7 +1463,7 @@ mod tests {
             "spawn_agent",
         ];
 
-        let tool_info_ids: Vec<&str> = TOOLS.iter().map(|t| t.id).collect();
+        let tool_info_ids: Vec<&str> = tools().iter().map(|t| t.id).collect();
 
         for tool_name in agent::ALL_TOOL_NAMES {
             if EXCLUDED_TOOLS.contains(tool_name) {

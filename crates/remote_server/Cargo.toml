@@ -22,6 +22,7 @@ debug-embed = ["dep:rust-embed", "util/debug-embed"]
 test-support = ["fs/test-support"]
 
 [dependencies]
+i18n.workspace = true
 acp_thread.workspace = true
 anyhow.workspace = true
 async-channel.workspace = true
@@ -53,6 +54,7 @@ lsp.workspace = true
 net.workspace = true
 node_runtime.workspace = true
 paths.workspace = true
+portable-pty.workspace = true
 project.workspace = true
 proto.workspace = true
 release_channel.workspace = true
@@ -68,6 +70,7 @@ smol.workspace = true
 sysinfo.workspace = true
 task.workspace = true
 telemetry.workspace = true
+terminal.workspace = true
 util.workspace = true
 watch.workspace = true
 worktree.workspace = true

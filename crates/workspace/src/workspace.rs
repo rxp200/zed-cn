@@ -66,8 +66,8 @@ use gpui::{
     EventEmitter, FocusHandle, Focusable, Global, HitboxBehavior, Hsla, KeyContext, Keystroke,
     ManagedView, MouseButton, PathPromptOptions, Point, PromptLevel, Render, ResizeEdge, Size,
     Stateful, Subscription, SystemWindowTabController, Task, TaskExt, Tiling, WeakEntity,
-    WindowBounds, WindowHandle, WindowId, WindowOptions, actions, canvas, point, relative, size,
-    transparent_black,
+    WindowBounds, WindowHandle, WindowId, WindowOptions, actions, canvas, point, px, relative,
+    size, transparent_black,
 };
 pub use history_manager::*;
 pub use item::{
@@ -806,12 +806,7 @@ fn handle_file_permalink(
                 .ok();
             }
             Err(err) => {
-                let action = if copy {
-                    "copy file permalink"
-                } else {
-                    "open file permalink"
-                };
-                let message = format!("Failed to {action}: {err}");
+                let message = format_file_permalink_error(&err, copy);
                 anyhow::Result::<()>::Err(err).log_err();
 
                 workspace
@@ -826,6 +821,24 @@ fn handle_file_permalink(
             }
         })
         .detach();
+}
+
+fn format_file_permalink_error(error: &anyhow::Error, copy: bool) -> String {
+    let action = if copy {
+        i18n::t!("d72898311fb0c0e3")
+    } else {
+        i18n::t!("aa32d423e7138efa")
+    };
+    let details = error
+        .chain()
+        .find_map(|cause| {
+            cause
+                .downcast_ref::<proto::RpcError>()
+                .map(proto::RpcError::raw_message)
+        })
+        .map(str::to_string)
+        .unwrap_or_else(|| error.to_string());
+    i18n::t_mix!("a5f5a14ed3fe2fea"; details.trim(); action = action)
 }
 
 impl PartialEq for Toast {
@@ -1588,6 +1601,9 @@ pub struct Workspace {
     left_dock: Entity<Dock>,
     bottom_dock: Entity<Dock>,
     right_dock: Entity<Dock>,
+    left_dock_buttons: Entity<PanelButtons>,
+    bottom_dock_buttons: Entity<PanelButtons>,
+    right_dock_buttons: Entity<PanelButtons>,
     panes: Vec<Entity<Pane>>,
     panes_by_item: HashMap<EntityId, WeakEntity<Pane>>,
     active_pane: Entity<Pane>,
@@ -1654,6 +1670,7 @@ pub struct Workspace {
     persisted_recent_navigation_history: Vec<PathBuf>,
     last_active_project_path: Option<ProjectPath>,
     restoring_workspace: bool,
+    auxiliary: bool,
 }
 
 impl EventEmitter<Event> for Workspace {}
@@ -1705,6 +1722,26 @@ impl Workspace {
         workspace_id: Option<WorkspaceId>,
         project: Entity<Project>,
         app_state: Arc<AppState>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        Self::new_with_kind(workspace_id, project, app_state, false, window, cx)
+    }
+
+    pub fn new_auxiliary(
+        project: Entity<Project>,
+        app_state: Arc<AppState>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        Self::new_with_kind(None, project, app_state, true, window, cx)
+    }
+
+    fn new_with_kind(
+        workspace_id: Option<WorkspaceId>,
+        project: Entity<Project>,
+        app_state: Arc<AppState>,
+        auxiliary: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -1971,21 +2008,16 @@ impl Workspace {
         let left_dock = Dock::new(DockPosition::Left, modal_layer.clone(), window, cx);
         let bottom_dock = Dock::new(DockPosition::Bottom, modal_layer.clone(), window, cx);
         let right_dock = Dock::new(DockPosition::Right, modal_layer.clone(), window, cx);
-        let left_dock_buttons = cx.new(|cx| PanelButtons::new(left_dock.clone(), cx));
-        let bottom_dock_buttons = cx.new(|cx| PanelButtons::new(bottom_dock.clone(), cx));
-        let right_dock_buttons = cx.new(|cx| PanelButtons::new(right_dock.clone(), cx));
+        let left_dock_buttons = cx.new(|cx| PanelButtons::new(left_dock.clone(), cx).vertical());
+        let bottom_dock_buttons =
+            cx.new(|cx| PanelButtons::new(bottom_dock.clone(), cx).vertical());
+        let right_dock_buttons = cx.new(|cx| PanelButtons::new(right_dock.clone(), cx).vertical());
         let multi_workspace = window
             .root::<MultiWorkspace>()
             .flatten()
             .map(|mw| mw.downgrade());
-        let status_bar = cx.new(|cx| {
-            let mut status_bar =
-                StatusBar::new(&center_pane.clone(), multi_workspace.clone(), window, cx);
-            status_bar.add_left_item(left_dock_buttons, window, cx);
-            status_bar.add_right_item(right_dock_buttons, window, cx);
-            status_bar.add_right_item(bottom_dock_buttons, window, cx);
-            status_bar
-        });
+        let status_bar =
+            cx.new(|cx| StatusBar::new(&center_pane.clone(), multi_workspace.clone(), window, cx));
 
         let session_id = app_state.session.read(cx).id().to_owned();
 
@@ -2109,6 +2141,9 @@ impl Workspace {
             left_dock,
             bottom_dock,
             right_dock,
+            left_dock_buttons,
+            bottom_dock_buttons,
+            right_dock_buttons,
             _panels_task: None,
             project: project.clone(),
             follower_states: Default::default(),
@@ -2156,6 +2191,7 @@ impl Workspace {
             persisted_recent_navigation_history: Vec::new(),
             last_active_project_path: None,
             restoring_workspace: false,
+            auxiliary,
         }
     }
 
@@ -2263,6 +2299,7 @@ impl Workspace {
                 _ => requesting_window,
             };
 
+            let created_new_window = window_to_replace.is_none();
             let (window, workspace): (WindowHandle<MultiWorkspace>, Entity<Workspace>) =
                 if let Some(window) = window_to_replace {
                     let centered_layout = serialized_workspace
@@ -2361,6 +2398,12 @@ impl Workspace {
                         })?;
                     (window, workspace)
                 };
+
+            if created_new_window {
+                window
+                    .update(cx, |_, window, _cx| window.activate_window())
+                    .log_err();
+            }
 
             notify_if_database_failed(window, cx);
             // Check if this is an empty workspace (no paths to open)
@@ -2910,6 +2953,10 @@ impl Workspace {
         self.restoring_workspace
     }
 
+    pub fn is_auxiliary(&self) -> bool {
+        self.auxiliary
+    }
+
     #[cfg(any(test, feature = "test-support"))]
     pub fn set_restoring_workspace(&mut self, restoring: bool) {
         self.restoring_workspace = restoring;
@@ -2929,6 +2976,88 @@ impl Workspace {
 
     pub fn project(&self) -> &Entity<Project> {
         &self.project
+    }
+
+    pub fn detach_item_to_auxiliary_window<T: Item>(
+        source_item: Entity<T>,
+        source_pane: Entity<Pane>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> bool {
+        let Some(source_workspace) = source_pane.read(cx).workspace.upgrade() else {
+            return false;
+        };
+        let item_id = source_item.entity_id();
+        let project = source_workspace.read(cx).project.clone();
+        let app_state = source_workspace.read(cx).app_state.clone();
+        let size = window.viewport_size();
+        let position = window.window_bounds().get_bounds().origin + point(px(32.), px(32.));
+        let mut options = (app_state.build_window_options)(None, cx);
+        options.window_bounds = Some(WindowBounds::Windowed(Bounds::new(position, size)));
+
+        let result = cx.open_window(options, move |window, cx| {
+            let workspace = cx.new(|cx| Workspace::new_auxiliary(project, app_state, window, cx));
+            cx.new(|cx| MultiWorkspace::new(workspace, window, cx))
+        });
+        let Ok(destination_window) = result else {
+            return false;
+        };
+
+        source_pane.update(cx, |pane, cx| {
+            pane.remove_item(item_id, false, false, window, cx);
+        });
+        let move_result = destination_window.update(cx, |multi_workspace, destination, cx| {
+            let destination_workspace = multi_workspace.workspace().clone();
+            destination_workspace.update(cx, |workspace, cx| {
+                workspace.add_item_to_active_pane(
+                    Box::new(source_item.clone()),
+                    None,
+                    true,
+                    destination,
+                    cx,
+                );
+            });
+            destination.activate_window();
+        });
+
+        if move_result.is_err() {
+            destination_window
+                .update(cx, |_, destination, _| destination.remove_window())
+                .ok();
+            source_pane.update(cx, |pane, cx| {
+                pane.add_item(Box::new(source_item), true, true, None, window, cx);
+            });
+            return false;
+        }
+
+        true
+    }
+
+    pub fn open_item_clone_window(
+        source_workspace: Entity<Self>,
+        item: Box<dyn ItemHandle>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> bool {
+        let project = source_workspace.read(cx).project.clone();
+        let app_state = source_workspace.read(cx).app_state.clone();
+        let size = window.viewport_size();
+        let position = window.window_bounds().get_bounds().origin + point(px(32.), px(32.));
+        let mut options = (app_state.build_window_options)(None, cx);
+        options.window_bounds = Some(WindowBounds::Windowed(Bounds::new(position, size)));
+        let result = cx.open_window(options, move |window, cx| {
+            let workspace = cx.new(|cx| Workspace::new_auxiliary(project, app_state, window, cx));
+            workspace.update(cx, |workspace, cx| {
+                workspace.add_item_to_active_pane(item, None, true, window, cx);
+            });
+            cx.new(|cx| MultiWorkspace::new(workspace, window, cx))
+        });
+        let Ok(destination_window) = result else {
+            return false;
+        };
+        destination_window
+            .update(cx, |_, window, _| window.activate_window())
+            .is_ok()
     }
 
     pub fn path_style(&self, cx: &App) -> PathStyle {
@@ -3678,9 +3807,9 @@ impl Workspace {
                     let answer = cx.update(|window, cx| {
                         window.prompt(
                             PromptLevel::Warning,
-                            "Do you want to leave the current call?",
+                            i18n::t!("30a2544dd5887e90"),
                             None,
-                            &["Close window and hang up", "Cancel"],
+                            &[i18n::t!("159160c673a8c3c0"), i18n::t!("2cd0f3be8738a86c")],
                             cx,
                         )
                     })?;
@@ -3926,9 +4055,9 @@ impl Workspace {
                         );
                         window.prompt(
                             PromptLevel::Warning,
-                            "Do you want to save all changes in the following files?",
+                            i18n::t!("d0f4aa77b951c48a"),
                             Some(&detail),
-                            &["Save all", "Discard all", "Cancel"],
+                            &[i18n::t!("592b52ba3cd3cd5a"), i18n::t!("2725e3b0b5b06397"), i18n::t!("2cd0f3be8738a86c")],
                             cx,
                         )
                     })?;
@@ -4230,7 +4359,7 @@ impl Workspace {
     ) {
         let project = self.project.read(cx);
         if project.is_via_collab() {
-            self.show_error("You cannot add folders to someone else's project", cx);
+            self.show_error(i18n::t!("7f26acf9e3d0434d"), cx);
             return;
         }
         let paths = self.prompt_for_open_path(
@@ -4788,6 +4917,24 @@ impl Workspace {
 
         cx.notify();
         result_panel
+    }
+
+    /// Toggle whether the panel of the given type is visible, regardless of focus.
+    pub fn toggle_panel_visibility<T: Panel>(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let is_visible = self.all_docks().iter().any(|dock| {
+            let dock = dock.read(cx);
+            dock.visible_panel()
+                .is_some_and(|panel| panel.panel_key() == T::panel_key())
+        });
+        if is_visible {
+            self.close_panel::<T>(window, cx);
+        } else {
+            self.focus_panel::<T>(window, cx);
+        }
     }
 
     /// Open the panel of the given type
@@ -9466,8 +9613,8 @@ fn notify_if_database_failed(window: WindowHandle<MultiWorkspace>, cx: &mut Asyn
                         cx,
                         |cx| {
                             cx.new(|cx| {
-                                MessageNotification::new("Failed to load the database file.", cx)
-                                    .primary_message("File an Issue")
+                                MessageNotification::new(i18n::t!("ba62f60bc75e3981"), cx)
+                                    .primary_message(i18n::t!("d68b1fc586605299"))
                                     .primary_icon(IconName::Plus)
                                     .primary_on_click(|window, cx| {
                                         window.dispatch_action(Box::new(FileBugReport), cx)
@@ -9557,9 +9704,11 @@ impl Render for Workspace {
             log::info!("Rendered first frame");
         }
 
-        let centered_layout = self.centered_layout
+        let pad_center_pane = self.centered_layout
             && self.center.panes().len() == 1
             && self.active_item(cx).is_some();
+        let pad_zoomed_pane =
+            self.centered_layout && self.zoomed.is_some() && self.zoomed_position.is_none();
         let render_padding = |size| {
             (size > 0.0).then(|| {
                 div()
@@ -9569,7 +9718,11 @@ impl Render for Workspace {
                     .border_color(cx.theme().colors().pane_group_border)
             })
         };
-        let paddings = if centered_layout {
+        let render_centered_paddings = |enabled: bool| {
+            if !enabled {
+                return (None, None);
+            }
+
             let settings = WorkspaceSettings::get_global(cx).centered_layout;
             (
                 render_padding(Self::adjust_padding(
@@ -9579,9 +9732,9 @@ impl Render for Workspace {
                     settings.right_padding.map(|padding| padding.0),
                 )),
             )
-        } else {
-            (None, None)
         };
+        let centered_paddings = render_centered_paddings(pad_center_pane);
+        let zoomed_paddings = render_centered_paddings(pad_zoomed_pane);
         let ui_font = theme_settings::setup_ui_font(window, cx);
 
         let theme = cx.theme().clone();
@@ -9601,6 +9754,31 @@ impl Render for Workspace {
             project: &self.project,
             workspace: &self.weak_self,
         };
+
+        if self.auxiliary {
+            return div()
+                .relative()
+                .size_full()
+                .flex()
+                .flex_col()
+                .font(ui_font)
+                .text_color(colors.text)
+                .overflow_hidden()
+                .when_some(self.titlebar_item.clone(), |this, item| this.child(item))
+                .child(
+                    div()
+                        .id("auxiliary-workspace")
+                        .relative()
+                        .flex_1()
+                        .w_full()
+                        .overflow_hidden()
+                        .border_t_1()
+                        .border_color(colors.border)
+                        .child(self.render_center(&pane_render_context, window, cx))
+                        .children(self.render_notifications(window, cx)),
+                )
+                .child(self.toast_layer.clone());
+        }
 
         div()
             .relative()
@@ -9674,46 +9852,6 @@ impl Render for Workspace {
                             .border_t_1()
                             .border_b_1()
                             .border_color(colors.border)
-                            .child({
-                                let this = cx.entity();
-                                canvas(
-                                    move |bounds, window, cx| {
-                                        this.update(cx, |this, cx| {
-                                            let bounds_changed = this.bounds != bounds;
-                                            this.bounds = bounds;
-
-                                            if bounds_changed {
-                                                this.left_dock.update(cx, |dock, cx| {
-                                                    dock.clamp_panel_size(
-                                                        bounds.size.width,
-                                                        window,
-                                                        cx,
-                                                    )
-                                                });
-
-                                                this.right_dock.update(cx, |dock, cx| {
-                                                    dock.clamp_panel_size(
-                                                        bounds.size.width,
-                                                        window,
-                                                        cx,
-                                                    )
-                                                });
-
-                                                this.bottom_dock.update(cx, |dock, cx| {
-                                                    dock.clamp_panel_size(
-                                                        bounds.size.height,
-                                                        window,
-                                                        cx,
-                                                    )
-                                                });
-                                            }
-                                        })
-                                    },
-                                    |_, _, _, _| {},
-                                )
-                                .absolute()
-                                .size_full()
-                            })
                             .when(self.zoomed.is_none(), |this| {
                                 this.on_drag_move(cx.listener(
                                     move |workspace, e: &DragMoveEvent<DraggedDock>, window, cx| {
@@ -9754,8 +9892,93 @@ impl Render for Workspace {
                                     },
                                 ))
                             })
-                            .child({
-                                match bottom_dock_layout {
+                            .child(
+                                h_flex()
+                                    .size_full()
+                                    .child(
+                                        v_flex()
+                                            .id("activity-bar")
+                                            .h_full()
+                                            .w(px(48.))
+                                            .flex_none()
+                                            .bg(colors.title_bar_background)
+                                            .border_r_1()
+                                            .border_color(colors.border)
+                                            .pt_2()
+                                            .pb_1()
+                                            .gap_1()
+                                            .items_center()
+                                            .child(self.left_dock_buttons.clone())
+                                            .child(
+                                                v_flex()
+                                                    .id("activity-bar-bottom")
+                                                    .mt_auto()
+                                                    .gap_1()
+                                                    .items_center()
+                                                    .child(self.right_dock_buttons.clone())
+                                                    .child(self.bottom_dock_buttons.clone()),
+                                            ),
+                                    )
+                                    .child(
+                                        div()
+                                            .relative()
+                                            .flex()
+                                            .flex_col()
+                                            .flex_1()
+                                            .h_full()
+                                            .overflow_hidden()
+                                            .child({
+                                                let this = cx.entity();
+                                                canvas(
+                                                    move |bounds, window, cx| {
+                                                        this.update(cx, |this, cx| {
+                                                            let bounds_changed =
+                                                                this.bounds != bounds;
+                                                            this.bounds = bounds;
+
+                                                            if bounds_changed {
+                                                                this.left_dock.update(
+                                                                    cx,
+                                                                    |dock, cx| {
+                                                                        dock.clamp_panel_size(
+                                                                            bounds.size.width,
+                                                                            window,
+                                                                            cx,
+                                                                        )
+                                                                    },
+                                                                );
+
+                                                                this.right_dock.update(
+                                                                    cx,
+                                                                    |dock, cx| {
+                                                                        dock.clamp_panel_size(
+                                                                            bounds.size.width,
+                                                                            window,
+                                                                            cx,
+                                                                        )
+                                                                    },
+                                                                );
+
+                                                                this.bottom_dock.update(
+                                                                    cx,
+                                                                    |dock, cx| {
+                                                                        dock.clamp_panel_size(
+                                                                            bounds.size.height,
+                                                                            window,
+                                                                            cx,
+                                                                        )
+                                                                    },
+                                                                );
+                                                            }
+                                                        })
+                                                    },
+                                                    |_, _, _, _| {},
+                                                )
+                                                .absolute()
+                                                .size_full()
+                                            })
+                                            .child({
+                                                match bottom_dock_layout {
                                     BottomDockLayout::Full => div()
                                         .flex()
                                         .flex_col()
@@ -9781,16 +10004,19 @@ impl Render for Workspace {
                                                         .child(
                                                             h_flex()
                                                                 .flex_1()
-                                                                .when_some(paddings.0, |this, p| {
-                                                                    this.child(p.border_r_1())
-                                                                })
+                                                                .when_some(
+                                                                    centered_paddings.0,
+                                                                    |this, p| {
+                                                                        this.child(p.border_r_1())
+                                                                    },
+                                                                )
                                                                 .child(self.render_center(
                                                                     &pane_render_context,
                                                                     window,
                                                                     cx,
                                                                 ))
                                                                 .when_some(
-                                                                    paddings.1,
+                                                                    centered_paddings.1,
                                                                     |this, p| {
                                                                         this.child(p.border_l_1())
                                                                     },
@@ -9842,7 +10068,7 @@ impl Render for Workspace {
                                                                     h_flex()
                                                                         .flex_1()
                                                                         .when_some(
-                                                                            paddings.0,
+                                                                            centered_paddings.0,
                                                                             |this, p| {
                                                                                 this.child(
                                                                                     p.border_r_1(),
@@ -9855,7 +10081,7 @@ impl Render for Workspace {
                                                                             cx,
                                                                         ))
                                                                         .when_some(
-                                                                            paddings.1,
+                                                                            centered_paddings.1,
                                                                             |this, p| {
                                                                                 this.child(
                                                                                     p.border_l_1(),
@@ -9909,7 +10135,7 @@ impl Render for Workspace {
                                                                     h_flex()
                                                                         .flex_1()
                                                                         .when_some(
-                                                                            paddings.0,
+                                                                            centered_paddings.0,
                                                                             |this, p| {
                                                                                 this.child(
                                                                                     p.border_r_1(),
@@ -9922,7 +10148,7 @@ impl Render for Workspace {
                                                                             cx,
                                                                         ))
                                                                         .when_some(
-                                                                            paddings.1,
+                                                                            centered_paddings.1,
                                                                             |this, p| {
                                                                                 this.child(
                                                                                     p.border_l_1(),
@@ -9964,17 +10190,19 @@ impl Render for Workspace {
                                                 .child(
                                                     h_flex()
                                                         .flex_1()
-                                                        .when_some(paddings.0, |this, p| {
-                                                            this.child(p.border_r_1())
-                                                        })
+                                                        .when_some(
+                                                            centered_paddings.0,
+                                                            |this, p| this.child(p.border_r_1()),
+                                                        )
                                                         .child(self.render_center(
                                                             &pane_render_context,
                                                             window,
                                                             cx,
                                                         ))
-                                                        .when_some(paddings.1, |this, p| {
-                                                            this.child(p.border_l_1())
-                                                        }),
+                                                        .when_some(
+                                                            centered_paddings.1,
+                                                            |this, p| this.child(p.border_l_1()),
+                                                        ),
                                                 )
                                                 .children(self.render_dock(
                                                     DockPosition::Bottom,
@@ -9990,28 +10218,56 @@ impl Render for Workspace {
                                             cx,
                                         )),
                                 }
-                            })
+                                            }),
+                                    ),
+                            )
                             .children(self.zoomed.as_ref().and_then(|view| {
                                 let zoomed_view = view.upgrade()?;
-                                let div = div()
+                                let zoomed_element = match zoomed_paddings {
+                                    (None, None) => zoomed_view.into_any_element(),
+                                    (left, right) => h_flex()
+                                        .size_full()
+                                        .when_some(left, |this, padding| {
+                                            this.child(padding.border_r_1().debug_selector(|| {
+                                                "zoomed_centered_layout_left_padding".into()
+                                            }))
+                                        })
+                                        .child(
+                                            div()
+                                                .size_full()
+                                                .debug_selector(|| {
+                                                    "zoomed_centered_layout_content".into()
+                                                })
+                                                .child(zoomed_view),
+                                        )
+                                        .when_some(right, |this, padding| {
+                                            this.child(padding.border_l_1().debug_selector(|| {
+                                                "zoomed_centered_layout_right_padding".into()
+                                            }))
+                                        })
+                                        .into_any_element(),
+                                };
+                                let overlay = div()
                                     .occlude()
                                     .absolute()
                                     .overflow_hidden()
                                     .border_color(colors.border)
                                     .bg(colors.background)
-                                    .child(zoomed_view)
+                                    .child(zoomed_element)
                                     .inset_0()
                                     .shadow_lg();
 
                                 if !WorkspaceSettings::get_global(cx).zoomed_padding {
-                                    return Some(div);
+                                    return Some(overlay);
                                 }
 
                                 Some(match self.zoomed_position {
-                                    Some(DockPosition::Left) => div.right_2().border_r_1(),
-                                    Some(DockPosition::Right) => div.left_2().border_l_1(),
-                                    Some(DockPosition::Bottom) => div.top_2().border_t_1(),
-                                    None => div.top_2().bottom_2().left_2().right_2().border_1(),
+                                    Some(DockPosition::Left) => overlay.right_2().border_r_1(),
+                                    Some(DockPosition::Right) => overlay.left_2().border_l_1(),
+                                    Some(DockPosition::Bottom) => overlay.top_2().border_t_1(),
+                                    None => {
+                                        overlay.top_2().bottom_2().left_2().right_2().border_1()
+                                    }
                                 })
                             }))
                             .children(self.render_notifications(window, cx)),
@@ -10478,9 +10734,9 @@ async fn join_channel_internal(
                 .update(cx, |_, window, cx| {
                     window.prompt(
                         PromptLevel::Warning,
-                        "Do you want to switch channels?",
-                        Some("Leaving this call will unshare your current project."),
-                        &["Yes, Join Channel", "Cancel"],
+                        i18n::t!("52c957b307a13e15"),
+                        Some(i18n::t!("ac9150f5d85ad5a5")),
+                        &[i18n::t!("1dc6a5fd793ff4d9"), i18n::t!("2cd0f3be8738a86c")],
                         cx,
                     )
                 })?
@@ -10685,32 +10941,33 @@ pub fn join_channel(
                 active_window
                     .update(cx, |_, window, cx| {
                         let detail: SharedString = match err.error_code() {
-                            ErrorCode::SignedOut => "Please sign in to continue.".into(),
-                            ErrorCode::UpgradeRequired => concat!(
-                                "Your are running an unsupported version of Zed. ",
-                                "Please update to continue."
+                            ErrorCode::SignedOut => i18n::t!("b75dd64201ffece6").into(),
+                            ErrorCode::UpgradeRequired => format!(
+                                "{}{}",
+                                i18n::t!("11bf41b80a400e93"),
+                                i18n::t!("aea77fa81401c42c")
                             )
                             .into(),
-                            ErrorCode::NoSuchChannel => concat!(
-                                "No matching channel was found. ",
-                                "Please check the link and try again."
+                            ErrorCode::NoSuchChannel => format!(
+                                "{}{}",
+                                i18n::t!("e946534f93b5157c"),
+                                i18n::t!("f06e0b78f7ccc942")
                             )
                             .into(),
-                            ErrorCode::Forbidden => concat!(
-                                "This channel is private, and you do not have access. ",
-                                "Please ask someone to add you and try again."
+                            ErrorCode::Forbidden => format!(
+                                "{}{}",
+                                i18n::t!("b837145b50f2b727"),
+                                i18n::t!("c93402c1724b9dbb")
                             )
                             .into(),
-                            ErrorCode::Disconnected => {
-                                "Please check your internet connection and try again.".into()
-                            }
-                            _ => format!("{}\n\nPlease try again.", err).into(),
+                            ErrorCode::Disconnected => i18n::t!("f31348f10849fd19").into(),
+                            _ => i18n::t_args!("5b893f7179a5a122", err).into(),
                         };
                         window.prompt(
                             PromptLevel::Critical,
-                            "Failed to join channel",
+                            i18n::t!("de33d136118087c5"),
                             Some(&detail),
-                            &["OK"],
+                            &[i18n::t!("fac2a67ad87807c4")],
                             cx,
                         )
                     })?
@@ -10768,6 +11025,61 @@ pub fn activate_any_workspace_window(cx: &mut AsyncApp) -> Option<WindowHandle<M
     })
 }
 
+fn same_workspace_host(left: &RemoteConnectionOptions, right: &RemoteConnectionOptions) -> bool {
+    match (left, right) {
+        (RemoteConnectionOptions::Ssh(a), RemoteConnectionOptions::Ssh(b)) => {
+            (&a.host, &a.username, &a.port) == (&b.host, &b.username, &b.port)
+        }
+        (RemoteConnectionOptions::Wsl(a), RemoteConnectionOptions::Wsl(b)) => {
+            // The WSL username is not consistently populated in the workspace location, so ignore it for now.
+            a.distro_name == b.distro_name
+        }
+        (RemoteConnectionOptions::Docker(a), RemoteConnectionOptions::Docker(b)) => {
+            a.container_id == b.container_id
+        }
+        #[cfg(any(test, feature = "test-support"))]
+        (RemoteConnectionOptions::Mock(a), RemoteConnectionOptions::Mock(b)) => a.id == b.id,
+        _ => false,
+    }
+}
+
+fn workspace_matches_location(
+    workspace: &Entity<Workspace>,
+    serialized_location: &SerializedWorkspaceLocation,
+    cx: &App,
+) -> bool {
+    match (
+        workspace.read(cx).workspace_location(cx),
+        serialized_location,
+    ) {
+        (
+            WorkspaceLocation::Location(SerializedWorkspaceLocation::Local, _),
+            SerializedWorkspaceLocation::Local,
+        ) => true,
+        (
+            WorkspaceLocation::Location(SerializedWorkspaceLocation::Remote(left), _),
+            SerializedWorkspaceLocation::Remote(right),
+        ) => same_workspace_host(&left, right),
+        _ => false,
+    }
+}
+
+fn workspace_for_location(
+    multi_workspace: &MultiWorkspace,
+    serialized_location: &SerializedWorkspaceLocation,
+    cx: &App,
+) -> Option<Entity<Workspace>> {
+    let active_workspace = multi_workspace.workspace();
+    if workspace_matches_location(active_workspace, serialized_location, cx) {
+        return Some(active_workspace.clone());
+    }
+
+    multi_workspace
+        .workspaces()
+        .find(|workspace| workspace_matches_location(workspace, serialized_location, cx))
+        .cloned()
+}
+
 pub fn workspace_windows_for_location(
     serialized_location: &SerializedWorkspaceLocation,
     cx: &App,
@@ -10776,43 +11088,8 @@ pub fn workspace_windows_for_location(
         .into_iter()
         .filter_map(|window| window.downcast::<MultiWorkspace>())
         .filter(|multi_workspace| {
-            let same_host = |left: &RemoteConnectionOptions, right: &RemoteConnectionOptions| match (left, right) {
-                (RemoteConnectionOptions::Ssh(a), RemoteConnectionOptions::Ssh(b)) => {
-                    (&a.host, &a.username, &a.port) == (&b.host, &b.username, &b.port)
-                }
-                (RemoteConnectionOptions::Wsl(a), RemoteConnectionOptions::Wsl(b)) => {
-                    // The WSL username is not consistently populated in the workspace location, so ignore it for now.
-                    a.distro_name == b.distro_name
-                }
-                (RemoteConnectionOptions::Docker(a), RemoteConnectionOptions::Docker(b)) => {
-                    a.container_id == b.container_id
-                }
-                #[cfg(any(test, feature = "test-support"))]
-                (RemoteConnectionOptions::Mock(a), RemoteConnectionOptions::Mock(b)) => {
-                    a.id == b.id
-                }
-                _ => false,
-            };
-
             multi_workspace.read(cx).is_ok_and(|multi_workspace| {
-                multi_workspace.workspaces().any(|workspace| {
-                    match workspace.read(cx).workspace_location(cx) {
-                        WorkspaceLocation::Location(location, _) => {
-                            match (&location, serialized_location) {
-                                (
-                                    SerializedWorkspaceLocation::Local,
-                                    SerializedWorkspaceLocation::Local,
-                                ) => true,
-                                (
-                                    SerializedWorkspaceLocation::Remote(a),
-                                    SerializedWorkspaceLocation::Remote(b),
-                                ) => same_host(a, b),
-                                _ => false,
-                            }
-                        }
-                        _ => false,
-                    }
-                })
+                workspace_for_location(multi_workspace, serialized_location, cx).is_some()
             })
         })
         .collect()
@@ -10893,12 +11170,12 @@ pub async fn find_existing_workspace(
                     .and_then(|window| window.downcast::<MultiWorkspace>())
                     .filter(|window| windows.contains(window))
                     .or_else(|| windows.into_iter().next());
-                if let Some(window) = window {
-                    if let Ok(multi_workspace) = window.read(cx) {
-                        let active_workspace = multi_workspace.workspace().clone();
-                        existing = Some((window, active_workspace));
-                        open_visible = OpenVisible::None;
-                    }
+                if let Some(window) = window
+                    && let Ok(multi_workspace) = window.read(cx)
+                    && let Some(workspace) = workspace_for_location(multi_workspace, location, cx)
+                {
+                    existing = Some((window, workspace));
+                    open_visible = OpenVisible::None;
                 }
             });
         }
@@ -11005,6 +11282,7 @@ pub fn open_workspace_by_id(
 
         let centered_layout = serialized_workspace.centered_layout;
 
+        let created_new_window = requesting_window.is_none();
         let (window, workspace) = if let Some(window) = requesting_window {
             let workspace = window.update(cx, |multi_workspace, window, cx| {
                 let workspace = cx.new(|cx| {
@@ -11069,6 +11347,12 @@ pub fn open_workspace_by_id(
             (window, workspace)
         };
 
+        if created_new_window {
+            window
+                .update(cx, |_, window, _cx| window.activate_window())
+                .log_err();
+        }
+
         notify_if_database_failed(window, cx);
 
         // Restore items from the serialized workspace
@@ -11132,12 +11416,16 @@ pub fn open_paths(
                         .and_then(|window| window.downcast::<MultiWorkspace>())
                         .filter(|window| windows.contains(window))
                         .or_else(|| windows.into_iter().next());
-                    if let Some(window) = window {
-                        if let Ok(multi_workspace) = window.read(cx) {
-                            let active_workspace = multi_workspace.workspace().clone();
-                            existing = Some((window, active_workspace));
-                            open_visible = OpenVisible::None;
-                        }
+                    if let Some(window) = window
+                        && let Ok(multi_workspace) = window.read(cx)
+                        && let Some(workspace) = workspace_for_location(
+                            multi_workspace,
+                            &SerializedWorkspaceLocation::Local,
+                            cx,
+                        )
+                    {
+                        existing = Some((window, workspace));
+                        open_visible = OpenVisible::None;
                     }
                 });
             }
@@ -11272,11 +11560,12 @@ pub fn open_paths(
                     let workspace = multi_workspace.workspace().clone();
                     workspace.update(cx, |workspace, cx| {
                         workspace.show_notification(NotificationId::unique::<OpenInWsl>(), cx, move |cx| {
-                            let display_path = util::markdown::MarkdownInlineCode(&path.to_string_lossy());
-                            let msg = format!("{display_path} is inside a WSL filesystem, some features may not work unless you open it with WSL remote");
+                            let display_path =
+                                util::markdown::MarkdownInlineCode(&path.to_string_lossy());
+                            let msg = i18n::t!("1e39879f07639d9c", display_path = display_path);
                             cx.new(move |cx| {
                                 MessageNotification::new(msg, cx)
-                                    .primary_message("Open in WSL")
+                                    .primary_message(i18n::t!("fcee8b7672871a06"))
                                     .primary_icon(IconName::FolderOpen)
                                     .primary_on_click(move |window, cx| {
                                         window.dispatch_action(Box::new(remote::OpenWslPath {
@@ -11713,9 +12002,9 @@ pub fn reload(cx: &mut App) {
             .update(cx, |_, window, cx| {
                 window.prompt(
                     PromptLevel::Info,
-                    "Are you sure you want to restart?",
+                    i18n::t!("ca6b531397bed9de"),
                     None,
-                    &["Restart", "Cancel"],
+                    &[i18n::t!("562822892865b377"), i18n::t!("2cd0f3be8738a86c")],
                     cx,
                 )
             })
@@ -11901,7 +12190,6 @@ pub fn client_side_decorations(
     window: &mut Window,
     cx: &mut App,
 ) -> Stateful<Div> {
-    const BORDER_SIZE: Pixels = px(1.0);
     let decorations = window.window_decorations();
     let is_resizable = window.is_resizable();
     let tiling = match decorations {
@@ -11981,10 +12269,18 @@ pub fn client_side_decorations(
                     Decorations::Client { .. } => div
                         .border_color(cx.theme().colors().border)
                         .rounded_client_corners(tiling)
-                        .when(!tiling.top, |div| div.border_t(BORDER_SIZE))
-                        .when(!tiling.bottom, |div| div.border_b(BORDER_SIZE))
-                        .when(!tiling.left, |div| div.border_l(BORDER_SIZE))
-                        .when(!tiling.right, |div| div.border_r(BORDER_SIZE))
+                        .when(!tiling.top, |div| {
+                            div.border_t(theme::CLIENT_SIDE_DECORATION_BORDER)
+                        })
+                        .when(!tiling.bottom, |div| {
+                            div.border_b(theme::CLIENT_SIDE_DECORATION_BORDER)
+                        })
+                        .when(!tiling.left, |div| {
+                            div.border_l(theme::CLIENT_SIDE_DECORATION_BORDER)
+                        })
+                        .when(!tiling.right, |div| {
+                            div.border_r(theme::CLIENT_SIDE_DECORATION_BORDER)
+                        })
                         .when(!tiling.is_tiled(), |div| {
                             div.shadow(vec![
                                 gpui::BoxShadow::new(
@@ -12433,6 +12729,27 @@ mod tests {
     use settings::SettingsStore;
     use util::path;
     use util::rel_path::rel_path;
+
+    #[test]
+    fn test_file_permalink_error_is_localized_and_omits_rpc_framing() {
+        let error = proto::RpcError::from_proto(
+            &proto::Error {
+                message: "无法识别 Git 远程仓库“origin”对应的代码托管平台".to_string(),
+                code: proto::ErrorCode::Internal as i32,
+                tags: Vec::new(),
+            },
+            "GetFilePermalink",
+        );
+
+        assert_eq!(
+            format_file_permalink_error(&error, false),
+            "无法打开文件永久链接：无法识别 Git 远程仓库“origin”对应的代码托管平台"
+        );
+        assert_eq!(
+            format_file_permalink_error(&error, true),
+            "无法复制文件永久链接：无法识别 Git 远程仓库“origin”对应的代码托管平台"
+        );
+    }
 
     #[test]
     fn test_render_window_title_format_omits_empty_segments() {
@@ -13095,7 +13412,7 @@ mod tests {
             w.prepare_to_close(CloseIntent::CloseWindow, window, cx)
         });
         cx.executor().run_until_parked();
-        cx.simulate_prompt_answer("Cancel"); // cancel save all
+        cx.simulate_prompt_answer("取消"); // cancel save all
         cx.executor().run_until_parked();
         assert!(!cx.has_pending_prompt());
         assert!(!task.await.unwrap());
@@ -13178,7 +13495,7 @@ mod tests {
             .unwrap();
 
         // User cancels the save prompt from workspace B
-        cx.simulate_prompt_answer("Cancel");
+        cx.simulate_prompt_answer("取消");
         cx.run_until_parked();
 
         // Window should still exist because workspace B's close was cancelled
@@ -13255,7 +13572,7 @@ mod tests {
             .unwrap();
 
         // Cancel the prompt — user stays on workspace B.
-        cx.simulate_prompt_answer("Cancel");
+        cx.simulate_prompt_answer("取消");
         cx.run_until_parked();
         let removed = remove_task.await.unwrap();
         assert!(!removed, "removal should have been cancelled");
@@ -13287,7 +13604,7 @@ mod tests {
         cx.run_until_parked();
 
         // Accept the save prompt.
-        cx.simulate_prompt_answer("Don't Save");
+        cx.simulate_prompt_answer("不保存");
         cx.run_until_parked();
         let removed = remove_task.await.unwrap();
         assert!(removed, "removal should have succeeded");
@@ -13381,7 +13698,7 @@ mod tests {
             "closing a no-folder workspace with a dirty serializable item should prompt, \
              since the workspace will not be reachable after close"
         );
-        cx.simulate_prompt_answer("Don't Save");
+        cx.simulate_prompt_answer("不保存");
         cx.executor().run_until_parked();
 
         assert!(task.await.unwrap());
@@ -13527,7 +13844,7 @@ mod tests {
             "replacing a workspace with a dirty serializable item should prompt, \
              since the workspace will be detached afterwards"
         );
-        cx.simulate_prompt_answer("Don't Save");
+        cx.simulate_prompt_answer("不保存");
         cx.executor().run_until_parked();
 
         assert!(task.await.unwrap());
@@ -13606,7 +13923,7 @@ mod tests {
             "a save/discard prompt should be shown for the dirty scratch item \
              when its serialization fails"
         );
-        cx.simulate_prompt_answer("Don't Save");
+        cx.simulate_prompt_answer("不保存");
         cx.executor().run_until_parked();
 
         // Preparing to close succeeds, even though serialization failed.
@@ -13668,7 +13985,7 @@ mod tests {
         cx.executor().run_until_parked();
 
         assert!(cx.has_pending_prompt());
-        cx.simulate_prompt_answer("Save all");
+        cx.simulate_prompt_answer("全部保存");
 
         cx.executor().run_until_parked();
 
@@ -13683,7 +14000,7 @@ mod tests {
         assert!(cx.has_pending_prompt());
 
         // Cancel saving item 3.
-        cx.simulate_prompt_answer("Discard Edits");
+        cx.simulate_prompt_answer("丢弃更改");
         cx.executor().run_until_parked();
 
         // Item 3 is reloaded. There's a prompt to save item 4.
@@ -13825,7 +14142,7 @@ mod tests {
 
         // With best-effort close, cancelling item 1 keeps it open but items 4
         // and (3,4) still close since their entries exist in left pane.
-        cx.simulate_prompt_answer("Cancel");
+        cx.simulate_prompt_answer("取消");
         close.await;
 
         right_pane.read_with(cx, |pane, _| {
@@ -13859,7 +14176,7 @@ mod tests {
         // But we can only save whole items, so saving (2,3) for entry 3 includes 2.
         // assert!(!details.contains("2.txt"));
 
-        cx.simulate_prompt_answer("Save all");
+        cx.simulate_prompt_answer("全部保存");
         cx.executor().run_until_parked();
         close.await;
 
@@ -14571,6 +14888,42 @@ mod tests {
             let (top, nested) = nested_axis(workspace);
             assert_eq!(*top.flexes.lock(), vec![1.0; top.members.len()]);
             assert_eq!(*nested.flexes.lock(), vec![1.0; nested.members.len()]);
+        });
+    }
+
+    #[gpui::test]
+    async fn test_toggle_panel_visibility_independent_of_focus(cx: &mut gpui::TestAppContext) {
+        init_test(cx);
+        let fs = FakeFs::new(cx.executor());
+        let project = Project::test(fs, [], cx).await;
+        let (workspace, cx) =
+            cx.add_window_view(|window, cx| Workspace::test_new(project, window, cx));
+
+        let panel = workspace.update_in(cx, |workspace, window, cx| {
+            let panel = cx.new(|cx| TestPanel::new(DockPosition::Right, 100, cx));
+            workspace.add_panel(panel.clone(), window, cx);
+            panel
+        });
+
+        workspace.update_in(cx, |workspace, window, cx| {
+            workspace.toggle_panel_visibility::<TestPanel>(window, cx);
+            assert!(workspace.right_dock().read(cx).is_open());
+            assert!(panel.read(cx).focus_handle(cx).contains_focused(window, cx));
+        });
+
+        workspace.update_in(cx, |workspace, window, cx| {
+            workspace.toggle_panel_focus::<TestPanel>(window, cx);
+            assert!(!panel.read(cx).focus_handle(cx).contains_focused(window, cx));
+            assert!(workspace.right_dock().read(cx).is_open());
+            workspace.toggle_panel_visibility::<TestPanel>(window, cx);
+            assert!(!workspace.right_dock().read(cx).is_open());
+        });
+
+        workspace.update_in(cx, |workspace, window, cx| {
+            workspace.toggle_panel_visibility::<TestPanel>(window, cx);
+            assert!(workspace.right_dock().read(cx).is_open());
+            workspace.toggle_panel_visibility::<TestPanel>(window, cx);
+            assert!(!workspace.right_dock().read(cx).is_open());
         });
     }
 
@@ -15571,6 +15924,135 @@ mod tests {
     }
 
     #[gpui::test]
+    async fn test_centered_layout_with_zoomed_pane(cx: &mut TestAppContext) {
+        init_test(cx);
+        let fs = FakeFs::new(cx.executor());
+        let project = Project::test(fs, None, cx).await;
+        let (workspace, cx) =
+            cx.add_window_view(|window, cx| Workspace::test_new(project, window, cx));
+
+        add_an_item_to_active_pane(cx, &workspace, 1);
+        let second_pane = split_pane(cx, &workspace);
+        add_an_item_to_active_pane(cx, &workspace, 2);
+
+        workspace.update_in(cx, |workspace, window, cx| {
+            workspace.toggle_centered_layout(&ToggleCenteredLayout, window, cx);
+        });
+        cx.run_until_parked();
+
+        assert_eq!(
+            zoomed_padding_bounds(cx),
+            (None, None),
+            "nothing is zoomed, so the zoom overlay should not be padded"
+        );
+
+        second_pane.update_in(cx, |pane, window, cx| pane.zoom_in(&ZoomIn, window, cx));
+        cx.run_until_parked();
+
+        workspace.read_with(cx, |workspace, _| {
+            assert_eq!(
+                workspace.zoomed,
+                Some(second_pane.downgrade().into()),
+                "the pane should be zoomed"
+            );
+            assert_eq!(
+                workspace.center.panes().len(),
+                2,
+                "the split should survive the zoom"
+            );
+        });
+
+        assert_zoomed_pane_is_padded(cx);
+
+        workspace.update_in(cx, |workspace, window, cx| {
+            workspace.toggle_centered_layout(&ToggleCenteredLayout, window, cx);
+        });
+        cx.run_until_parked();
+
+        assert_eq!(
+            zoomed_padding_bounds(cx),
+            (None, None),
+            "turning the centered layout off should remove the padding"
+        );
+
+        workspace.read_with(cx, |workspace, _| {
+            assert_eq!(
+                workspace.zoomed,
+                Some(second_pane.downgrade().into()),
+                "the pane should stay zoomed while toggling the centered layout"
+            );
+        });
+
+        workspace.update_in(cx, |workspace, window, cx| {
+            workspace.toggle_centered_layout(&ToggleCenteredLayout, window, cx);
+        });
+        cx.run_until_parked();
+
+        assert_zoomed_pane_is_padded(cx);
+    }
+
+    #[gpui::test]
+    async fn test_centered_layout_with_zoomed_dock(cx: &mut TestAppContext) {
+        init_test(cx);
+        let fs = FakeFs::new(cx.executor());
+        let project = Project::test(fs, None, cx).await;
+        let (workspace, cx) =
+            cx.add_window_view(|window, cx| Workspace::test_new(project, window, cx));
+
+        add_an_item_to_active_pane(cx, &workspace, 1);
+        let panel = workspace.update_in(cx, |workspace, window, cx| {
+            workspace.toggle_centered_layout(&ToggleCenteredLayout, window, cx);
+            let panel = cx.new(|cx| TestPanel::new(DockPosition::Right, 100, cx));
+            workspace.add_panel(panel.clone(), window, cx);
+            workspace.toggle_dock(DockPosition::Right, window, cx);
+            panel
+        });
+        cx.run_until_parked();
+
+        panel.update(cx, |_, cx| cx.emit(PanelEvent::ZoomIn));
+        cx.run_until_parked();
+
+        workspace.read_with(cx, |workspace, _| {
+            assert!(workspace.centered_layout);
+            assert_eq!(workspace.zoomed, Some(panel.to_any().downgrade()));
+            assert_eq!(workspace.zoomed_position, Some(DockPosition::Right));
+        });
+        assert_eq!(
+            zoomed_padding_bounds(cx),
+            (None, None),
+            "a zoomed dock should not receive centered layout padding"
+        );
+    }
+
+    fn zoomed_padding_bounds(
+        cx: &mut VisualTestContext,
+    ) -> (Option<Bounds<Pixels>>, Option<Bounds<Pixels>>) {
+        (
+            cx.debug_bounds("zoomed_centered_layout_left_padding"),
+            cx.debug_bounds("zoomed_centered_layout_right_padding"),
+        )
+    }
+
+    fn assert_zoomed_pane_is_padded(cx: &mut VisualTestContext) {
+        let (Some(left), Some(right)) = zoomed_padding_bounds(cx) else {
+            panic!("a centered zoomed pane should have padding on both sides");
+        };
+        let content = cx
+            .debug_bounds("zoomed_centered_layout_content")
+            .expect("a centered zoomed pane should render its content");
+        assert!(left.size.width > px(0.));
+        assert_eq!(
+            left.size.width, right.size.width,
+            "the zoomed pane should be horizontally centered"
+        );
+        assert!(content.size.width > px(0.));
+        assert!(
+            left.right() <= content.left() && content.right() <= right.left(),
+            "the zoomed pane should sit between the paddings: left {left:?}, content {content:?}, right {right:?}"
+        );
+    }
+
+    #[gpui::test]
     async fn test_join_all_panes(cx: &mut gpui::TestAppContext) {
         init_test(cx);
         let fs = FakeFs::new(cx.executor());
@@ -15679,7 +16161,10 @@ mod tests {
             assert_eq!(center_column_count, 2);
 
             let dock = workspace.right_dock().read(cx);
-            assert_eq!(workspace.dock_size(&dock, window, cx).unwrap(), px(640.));
+            // Rendering between the `update_in` blocks repaints the bounds
+            // canvas, so `workspace.bounds` now reflects the real content area
+            // (test window width minus the 48px activity bar): 1872 / 3 = 624.
+            assert_eq!(workspace.dock_size(&dock, window, cx).unwrap(), px(624.));
 
             workspace.bounds.size.width = px(2400.);
 
@@ -17010,7 +17495,7 @@ mod tests {
             cx.has_pending_prompt(),
             "Dirty multi buffer should prompt a save dialog"
         );
-        cx.simulate_prompt_answer("Save");
+        cx.simulate_prompt_answer("保存");
         cx.background_executor.run_until_parked();
         close_multi_buffer_task
             .await

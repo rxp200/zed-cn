@@ -45,6 +45,7 @@
 
 - [Overview](./ai/overview.md)
 - [AI Quick Start](./ai/quick-start.md)
+- [AI 代码讲解](./code-explanations.md)
 - [AI by Company](./ai/by-company.md)
 - [Agents](./ai/agents.md)
   - [Zed Agent](./ai/zed-agent.md)
@@ -229,6 +230,7 @@
   - [FreeBSD](./development/freebsd.md)
   - [Using Debuggers](./development/debuggers.md)
   - [Performance](./performance.md)
+  - [UI/UX Checklist](./development/ui-checklist.md)
   - [Glossary](./development/glossary.md)
 - [Release Notes](./development/release-notes.md)
 - [Debugging Crashes](./development/debugging-crashes.md)

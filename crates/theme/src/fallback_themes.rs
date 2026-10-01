@@ -15,7 +15,7 @@ use crate::{
 pub fn zed_default_themes() -> ThemeFamily {
     ThemeFamily {
         id: "zed-default".to_string(),
-        name: "Zed Default".into(),
+        name: i18n::t!("2bae15d723599bfe").into(),
         author: "".into(),
         themes: vec![zed_default_dark()],
         scales: default_color_scales(),

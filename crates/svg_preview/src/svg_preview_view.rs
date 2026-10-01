@@ -294,12 +294,12 @@ impl Render for SvgPreviewView {
                             .p_4()
                             .gap_2()
                             .child(Icon::new(IconName::Warning))
-                            .child("Failed to load SVG image")
+                            .child(i18n::t!("5207d9051606b7cd"))
                             .into_any_element()
                     }))
                 }
                 Some(Err(e)) => this.child(div().p_4().child(e).into_any_element()),
-                None => this.child(div().p_4().child("No SVG file selected")),
+                None => this.child(div().p_4().child(i18n::t!("636f73c511314c62"))),
             })
     }
 }

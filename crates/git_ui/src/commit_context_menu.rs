@@ -25,6 +25,8 @@ const CUSTOM_GIT_COMMANDS_DOCS_SLUG: &str = "tasks#custom-git-commands";
 pub(crate) struct CommitContextMenuData {
     pub(crate) sha: Oid,
     pub(crate) tag_names: Vec<SharedString>,
+    pub(crate) author_name: Option<SharedString>,
+    pub(crate) author_email: Option<SharedString>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -59,33 +61,59 @@ pub(crate) fn commit_context_menu(
         context_menu
             .context(focus_handle)
             .header(header)
-            .entry("View Diff", Some(OpenCommitView.boxed_clone()), {
-                let repository = repository.clone();
-                let workspace = workspace.clone();
-                move |window, cx| {
-                    let Some(repository) = repository.clone() else {
-                        return;
-                    };
-                    CommitView::open(
-                        sha.to_string(),
-                        repository,
-                        workspace.clone(),
-                        None,
-                        None,
-                        window,
-                        cx,
-                    );
-                }
-            })
             .entry(
-                "Copy SHA",
+                i18n::t!("b35001374ea98a40"),
+                Some(OpenCommitView.boxed_clone()),
+                {
+                    let repository = repository.clone();
+                    let workspace = workspace.clone();
+                    move |window, cx| {
+                        let Some(repository) = repository.clone() else {
+                            return;
+                        };
+                        CommitView::open(
+                            sha.to_string(),
+                            repository,
+                            workspace.clone(),
+                            None,
+                            None,
+                            window,
+                            cx,
+                        );
+                    }
+                },
+            )
+            .entry(
+                i18n::t!("bf096e515eb6a7f4"),
                 Some(CopyCommitSha.boxed_clone()),
                 move |_window, cx| {
                     cx.write_to_clipboard(ClipboardItem::new_string(sha.to_string()));
                 },
             )
+            .when(
+                source == CommitContextMenuSource::GitGraph
+                    && commit.author_name.is_some()
+                    && commit.author_email.is_some(),
+                |menu| {
+                    let author_name = commit.author_name.clone().unwrap_or_default();
+                    let author_email = commit.author_email.clone().unwrap_or_default();
+                    menu.entry(
+                        i18n::t_args!("2cd1a5de0b4bdade", author_name),
+                        None,
+                        move |window, cx| {
+                            window.dispatch_action(
+                                Box::new(crate::git_graph::ShowAuthorCommits {
+                                    name: author_name.to_string(),
+                                    email: author_email.to_string(),
+                                }),
+                                cx,
+                            );
+                        },
+                    )
+                },
+            )
             .when_some(ref_name.clone(), |menu, ref_name| {
-                menu.entry("Copy Ref Name", None, move |_window, cx| {
+                menu.entry(i18n::t!("1b098861def3d887"), None, move |_window, cx| {
                     cx.write_to_clipboard(ClipboardItem::new_string(ref_name.to_string()));
                 })
             })
@@ -130,7 +158,7 @@ pub(crate) fn commit_context_menu(
                 })
             })
             .when(source == CommitContextMenuSource::GitPanel, |menu| {
-                menu.entry("Show in Git Graph", None, move |window, cx| {
+                menu.entry(i18n::t!("f85b68c5887f9d77"), None, move |window, cx| {
                     window.dispatch_action(
                         Box::new(crate::git_graph::OpenAtCommit {
                             sha: sha.to_string(),
@@ -140,7 +168,7 @@ pub(crate) fn commit_context_menu(
                 })
             })
             .map(|mut menu| {
-                menu = menu.separator().header("Custom Commands");
+                menu = menu.separator().header(i18n::t!("cbfc298326389fb1"));
 
                 if git_tasks.is_empty() {
                     return menu.item(

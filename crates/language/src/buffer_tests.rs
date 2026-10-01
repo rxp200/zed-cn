@@ -3443,6 +3443,80 @@ fn test_language_scope_at_with_rust(cx: &mut App) {
 }
 
 #[gpui::test]
+fn test_language_scope_at_end_of_buffer(cx: &mut App) {
+    init_settings(cx, |_| {});
+
+    let make_language = || {
+        Language::new(
+            LanguageConfig {
+                name: "C".into(),
+                brackets: BracketPairConfig {
+                    pairs: vec![
+                        BracketPair {
+                            start: "{".into(),
+                            end: "}".into(),
+                            close: true,
+                            surround: true,
+                            newline: false,
+                        },
+                        BracketPair {
+                            start: "'".into(),
+                            end: "'".into(),
+                            close: true,
+                            surround: true,
+                            newline: false,
+                        },
+                    ],
+                    disabled_scopes_by_bracket_ix: vec![
+                        Vec::new(),
+                        vec!["string".into(), "comment".into()],
+                    ],
+                },
+                ..Default::default()
+            },
+            Some(tree_sitter_c::LANGUAGE.into()),
+        )
+        .with_override_query(
+            r#"
+                (comment) @comment.inclusive
+                [(string_literal) (char_literal)] @string
+            "#,
+        )
+        .unwrap()
+    };
+
+    // Comment runs to EOF: the quote pair must be disabled at EOF.
+    cx.new(|cx| {
+        let text = "// it ''";
+        let buffer = Buffer::local(text, cx).with_language(Arc::new(make_language()), cx);
+        let snapshot = buffer.snapshot();
+
+        let eof_config = snapshot.language_scope_at(text.len()).unwrap();
+        assert_eq!(
+            eof_config.brackets().map(|e| e.1).collect::<Vec<_>>(),
+            &[true, false]
+        );
+
+        buffer
+    });
+
+    // Trailing newline: EOF is past the comment, so both pairs stay enabled.
+    cx.new(|cx| {
+        let text = "// it ''\n";
+        let buffer = Buffer::local(text, cx).with_language(Arc::new(make_language()), cx);
+        let snapshot = buffer.snapshot();
+
+        let eof_config = snapshot.language_scope_at(text.len()).unwrap();
+        assert_eq!(
+            eof_config.brackets().map(|e| e.1).collect::<Vec<_>>(),
+            &[true, true]
+        );
+
+        buffer
+    });
+}
+
+#[gpui::test]
 fn test_language_scope_at_with_combined_injections(cx: &mut App) {
     init_settings(cx, |_| {});
 
@@ -5564,6 +5638,70 @@ fn test_chunk_highlights_across_row_chunk_seeks(cx: &mut TestAppContext) {
         runs_after_seek, expected_last_row_runs,
         "seeking into another row chunk must refetch that chunk's highlights"
     );
+}
+
+#[gpui::test]
+fn test_img2threejs_readme_highlighting_completes(cx: &mut TestAppContext) {
+    if std::env::var_os("ZED_DISABLE_HIGHLIGHT_CACHE").is_some() {
+        return;
+    }
+    cx.update(|cx| init_settings(cx, |_| {}));
+
+    let markdown = markdown_lang();
+    let markdown_inline = Arc::new(
+        Language::new(
+            LanguageConfig {
+                name: "Markdown-Inline".into(),
+                grammar: Some("markdown-inline".into()),
+                hidden: true,
+                ..Default::default()
+            },
+            Some(tree_sitter_md::INLINE_LANGUAGE.into()),
+        )
+        .with_queries(grammars::load_queries("markdown-inline"))
+        .unwrap(),
+    );
+    let registry = Arc::new(LanguageRegistry::test(cx.background_executor.clone()));
+    registry.add(markdown.clone());
+    registry.add(markdown_inline);
+
+    let buffer = cx.new(|cx| {
+        let mut buffer = Buffer::local(include_str!("../test_data/img2threejs_readme.md"), cx);
+        buffer.set_language_registry(registry);
+        buffer.set_language(Some(markdown), cx);
+        buffer
+    });
+    cx.run_until_parked();
+
+    buffer.read_with(cx, |buffer, _| {
+        let snapshot = buffer.snapshot();
+        assert!(
+            snapshot.cached_highlight_runs(0..snapshot.len()).is_some(),
+            "the regression fixture must stay within the cached-highlight chunk bound"
+        );
+    });
+}
+
+#[gpui::test]
+fn test_cached_highlights_skip_very_long_lines(cx: &mut TestAppContext) {
+    if std::env::var_os("ZED_DISABLE_HIGHLIGHT_CACHE").is_some() {
+        return;
+    }
+    cx.update(|cx| init_settings(cx, |_| {}));
+
+    let language = keyword_and_function_lang();
+    let theme = keyword_and_function_theme();
+    language.set_theme(&theme);
+    let long_line = format!("fn skipped() {{}}{}", " ".repeat(MAX_HIGHLIGHTED_LINE_LEN));
+    let text = format!("fn before() {{}}\n{long_line}\nfn after() {{}}");
+    let buffer = cx.new(|cx| Buffer::local(text, cx).with_language(language, cx));
+    cx.run_until_parked();
+    let snapshot = buffer.read_with(cx, |buffer, _| buffer.snapshot());
+    let runs = merged_highlight_runs(&snapshot, 0..snapshot.len());
+
+    assert!(runs.iter().any(|(text, _)| text == "before"));
+    assert!(!runs.iter().any(|(text, _)| text == "skipped"));
+    assert!(runs.iter().any(|(text, _)| text == "after"));
 }
 
 #[gpui::test]

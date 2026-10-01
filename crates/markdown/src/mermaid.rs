@@ -596,10 +596,8 @@ pub(crate) fn render_mermaid_diagram(
                 render_mermaid_code_view(&parsed.contents.contents)
             } else {
                 let rasterized_scale = cached.map_or(1.0, |cached| cached.rasterized_scale);
-                let image_element =
-                    img(ImageSource::Render(render_image.clone())).with_fallback(|| {
-                        Label::new("Failed to Load Mermaid Diagram").into_any_element()
-                    });
+                let image_element = img(ImageSource::Render(render_image.clone()))
+                    .with_fallback(|| Label::new(i18n::t!("8e2276eca39ce1b6")).into_any_element());
                 let scroll_handle = markdown.update(cx, |markdown, _| {
                     markdown.mermaid_scroll_handle(source_offset)
                 });
@@ -659,7 +657,7 @@ pub(crate) fn render_mermaid_diagram(
                 let fallback_element =
                     img(ImageSource::Render(fallback.clone())).with_fallback(|| {
                         div()
-                            .child(Label::new("Failed to load mermaid diagram"))
+                            .child(Label::new(i18n::t!("8e2276eca39ce1b6")))
                             .into_any_element()
                     });
                 let scroll_handle = markdown.update(cx, |markdown, _| {
@@ -821,7 +819,7 @@ fn render_mermaid_tab_header(
         .gap_0p5()
         .mb_2p5()
         .child(
-            Button::new(preview_id, "Preview")
+            Button::new(preview_id, i18n::t!("13d61fea9f174905"))
                 .label_size(LabelSize::Small)
                 .selected_style(ButtonStyle::Tinted(TintColor::Accent))
                 .toggle_state(!showing_code)
@@ -835,7 +833,7 @@ fn render_mermaid_tab_header(
                 }),
         )
         .child(
-            Button::new(code_id, "Code")
+            Button::new(code_id, i18n::t!("e6f04ffbaa424001"))
                 .label_size(LabelSize::Small)
                 .selected_style(ButtonStyle::Tinted(TintColor::Accent))
                 .toggle_state(showing_code)
@@ -890,7 +888,7 @@ fn render_mermaid_zoom_indicator(
     h_flex()
         .gap_0p5()
         .child(
-            Label::new(format!("Zoom {percentage}%"))
+            Label::new(i18n::t!("a56e03fa3eb2bf67", percentage = percentage))
                 .size(LabelSize::Small)
                 .color(Color::Muted),
         )
@@ -901,7 +899,7 @@ fn render_mermaid_zoom_indicator(
             )
             .icon_size(IconSize::Small)
             .icon_color(Color::Muted)
-            .tooltip(Tooltip::text("Reset Zoom"))
+            .tooltip(Tooltip::text(i18n::t!("c9cdc9678c5163e9")))
             .on_click(move |_event, window, cx| {
                 let zoom_changed = markdown.update(cx, |markdown, cx| {
                     let current_zoom = markdown.mermaid_zoom_level(source_offset);

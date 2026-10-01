@@ -87,6 +87,7 @@ pub struct CommitView {
     remote: Option<GitRemote>,
     is_shallow_boundary: bool,
     file_filter: Option<RepoPath>,
+    explanation_controller: Entity<crate::diff_explanations::DiffExplanationController>,
     _load_diff_task: Task<Result<()>>,
 }
 
@@ -165,7 +166,7 @@ impl Addon for CommitDiffAddon {
         menu.when_some(file_to_open, |menu, file| {
             let commit_view = self.commit_view.clone();
             menu.entry(
-                "Open File in Project",
+                i18n::t!("5ab3a0a567587dd0"),
                 Some(Box::new(OpenFileAtHead)),
                 move |window, cx| {
                     commit_view
@@ -180,6 +181,11 @@ impl Addon for CommitDiffAddon {
 const FILE_NAMESPACE_SORT_PREFIX: u64 = 1;
 
 impl CommitView {
+    #[cfg(test)]
+    pub(crate) fn commit_sha_for_test(&self) -> &str {
+        self.commit.sha.as_ref()
+    }
+
     pub fn open(
         commit_sha: String,
         repo: WeakEntity<Repository>,
@@ -212,12 +218,12 @@ impl CommitView {
         cx: &mut App,
     ) {
         let commit_diff = repo
-            .update(cx, |repo, _| {
-                repo.load_commit_diff(commit_sha.clone(), ignore_shallow_boundary)
+            .update(cx, |repo, cx| {
+                repo.load_commit_diff(commit_sha.clone(), ignore_shallow_boundary, cx)
             })
             .ok();
         let commit_details = repo
-            .update(cx, |repo, _| repo.show(commit_sha.clone()))
+            .update(cx, |repo, cx| repo.show_commit(commit_sha.clone(), cx))
             .ok();
 
         window
@@ -225,8 +231,8 @@ impl CommitView {
                 let commit_diff = commit_diff?;
                 let commit_details = commit_details?;
                 let (commit_diff, commit_details) = futures::join!(commit_diff, commit_details);
-                let mut commit_diff = commit_diff.log_err()?.log_err()?;
-                let commit_details = commit_details.log_err()?.log_err()?;
+                let mut commit_diff = commit_diff.log_err()?;
+                let commit_details = commit_details.log_err()?;
 
                 // Filter to specific file if requested
                 if let Some(ref filter_path) = file_filter {
@@ -337,6 +343,8 @@ impl CommitView {
             editor
         });
         let commit_sha = Arc::<str>::from(commit.sha.as_ref());
+        let explanation_controller =
+            cx.new(|_| crate::diff_explanations::DiffExplanationController::default());
 
         let repository_clone = repository.clone();
         let project_clone = project.clone();
@@ -493,6 +501,7 @@ impl CommitView {
                         });
                     });
                 }
+                this.schedule_explanations(cx);
             })?;
 
             anyhow::Ok(())
@@ -527,8 +536,73 @@ impl CommitView {
             remote,
             is_shallow_boundary,
             file_filter,
+            explanation_controller,
             _load_diff_task: load_diff_task,
         }
+    }
+
+    fn schedule_explanations(&mut self, cx: &mut Context<Self>) {
+        let snapshot = self.multibuffer.read(cx).snapshot(cx);
+        let mut files = Vec::new();
+        for (buffer_snapshot, _) in snapshot.buffers_with_paths() {
+            let Some(file) = buffer_snapshot.file() else {
+                continue;
+            };
+            let Some(diff) = snapshot.diff_for_buffer_id(buffer_snapshot.remote_id()) else {
+                continue;
+            };
+            let mut hunks = Vec::new();
+            for (index, hunk) in diff
+                .hunks_intersecting_range(
+                    language::Anchor::min_max_range_for_buffer(buffer_snapshot.remote_id()),
+                    buffer_snapshot,
+                )
+                .enumerate()
+            {
+                let old_range = hunk.diff_base_byte_range.clone();
+                let new_range = hunk.buffer_range.to_offset(buffer_snapshot);
+                let anchor = snapshot
+                    .anchor_in_excerpt(hunk.buffer_range.start)
+                    .unwrap_or(multi_buffer::Anchor::Min);
+                hunks.push(crate::diff_explanations::DiffHunkInput {
+                    identifier: index + 1,
+                    old_start_line: diff.base_text().offset_to_point(old_range.start).row,
+                    new_start_line: buffer_snapshot.offset_to_point(new_range.start).row,
+                    old_text: diff.base_text().text_for_range(old_range).collect(),
+                    new_text: buffer_snapshot.text_for_range(new_range).collect(),
+                    anchor,
+                });
+            }
+            if hunks.is_empty() {
+                continue;
+            }
+            let anchor = snapshot
+                .excerpts_for_buffer(buffer_snapshot.remote_id())
+                .next()
+                .and_then(|excerpt| snapshot.anchor_in_excerpt(excerpt.context.start))
+                .unwrap_or_else(|| hunks[0].anchor);
+            files.push(crate::diff_explanations::DiffFileInput {
+                path: file.path().display(PathStyle::local()).to_string(),
+                language: buffer_snapshot
+                    .language()
+                    .map(|language| language.name().to_string())
+                    .unwrap_or_default(),
+                old_text: diff.base_text().text(),
+                new_text: buffer_snapshot.text(),
+                hunks,
+                anchor,
+                private: file.is_private(),
+                worktree_id: file.worktree_id(cx),
+            });
+        }
+        files.sort_by(|left, right| left.path.cmp(&right.path));
+        crate::diff_explanations::DiffExplanationController::schedule(
+            &self.explanation_controller,
+            self.editor.read(cx).rhs_editor().clone(),
+            self.project.clone(),
+            files,
+            cx,
+        );
     }
 
     fn render_shallow_boundary_notice(&self, cx: &App) -> impl IntoElement {
@@ -547,12 +621,11 @@ impl CommitView {
             .justify_center()
             .gap_2()
             .child(
-                Label::new("This commit is at the boundary of a shallow clone.")
-                    .color(Color::Muted),
+                Label::new(i18n::t!("e7b4c723a42de198")).color(Color::Muted),
             )
             .child(
                 Label::new(
-                    "Its parent history was not fetched, so the changes it introduced cannot be shown.",
+                    i18n::t!("9ce0aeb96cc0f7fa"),
                 )
                 .color(Color::Muted),
             )
@@ -568,15 +641,15 @@ impl CommitView {
                             Button::new(
                                 "fetch-unshallow",
                                 if fetch_in_flight {
-                                    "Fetching…"
+                                    i18n::t!("85ab30269d8fc924")
                                 } else {
-                                    "Fetch Missing History"
+                                    i18n::t!("9ce16a4ad8542f62")
                                 },
                             )
                                 .style(ButtonStyle::Filled)
                                 .disabled(fetch_in_flight)
                                 .tooltip(Tooltip::text(
-                                    "Run `git fetch --unshallow` to download the full history, then show this commit's changes.",
+                                    i18n::t!("bbe9dc9817752172"),
                                 ))
                                 .on_click(move |_, window, cx| {
                                     let fetch = crate::commit_tooltip::fetch_unshallow(
@@ -830,7 +903,7 @@ impl CommitView {
                     )
                     .when(self.stash.is_none(), |this| {
                         this.child(
-                            Button::new("sha", "Commit SHA")
+                            Button::new("sha", i18n::t!("bafc39af1e84c72a"))
                                 .start_icon(
                                     Icon::new(copy_icon)
                                         .size(IconSize::Small)
@@ -840,7 +913,7 @@ impl CommitView {
                                     let commit_sha = commit_sha.clone();
                                     move |_, cx| {
                                         Tooltip::with_meta(
-                                            "Copy Commit SHA",
+                                            i18n::t!("867dbb14725075d6"),
                                             None,
                                             commit_sha.clone(),
                                             cx,
@@ -910,7 +983,7 @@ impl CommitView {
     fn apply_stash(workspace: &mut Workspace, window: &mut Window, cx: &mut App) {
         Self::stash_action(
             workspace,
-            "Apply",
+            i18n::t!("63c73c4730f4473e"),
             window,
             cx,
             async move |repository, sha, stash, commit_view, workspace, cx| {
@@ -937,7 +1010,7 @@ impl CommitView {
     fn pop_stash(workspace: &mut Workspace, window: &mut Window, cx: &mut App) {
         Self::stash_action(
             workspace,
-            "Pop",
+            i18n::t!("05cfd6ba003530c6"),
             window,
             cx,
             async move |repository, sha, stash, commit_view, workspace, cx| {
@@ -964,7 +1037,7 @@ impl CommitView {
     fn remove_stash(workspace: &mut Workspace, window: &mut Window, cx: &mut App) {
         Self::stash_action(
             workspace,
-            "Drop",
+            i18n::t!("b16f71b55691cdc3"),
             window,
             cx,
             async move |repository, sha, stash, commit_view, workspace, cx| {
@@ -1375,6 +1448,8 @@ impl Item for CommitView {
                 remote: self.remote.clone(),
                 is_shallow_boundary: self.is_shallow_boundary,
                 file_filter: self.file_filter.clone(),
+                explanation_controller: cx
+                    .new(|_| crate::diff_explanations::DiffExplanationController::default()),
                 _load_diff_task: Task::ready(Ok(())),
             }
         })))
@@ -1384,6 +1459,7 @@ impl Item for CommitView {
 impl Render for CommitView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let is_stash = self.stash.is_some();
+        let editor_is_empty = self.editor.read(cx).rhs_editor().read(cx).is_empty(cx);
 
         v_flex()
             .key_context(if is_stash { "StashDiff" } else { "CommitDiff" })
@@ -1391,10 +1467,13 @@ impl Render for CommitView {
             .size_full()
             .bg(cx.theme().colors().editor_background)
             .child(self.render_header(window, cx))
-            .when(
-                !self.editor.read(cx).rhs_editor().read(cx).is_empty(cx),
-                |this| this.child(div().flex_grow(1.).child(self.editor.clone())),
-            )
+            // The advertised editor focus must remain in the tree even before diff loading completes.
+            .when(editor_is_empty, |this| {
+                this.track_focus(&self.editor.focus_handle(cx))
+            })
+            .when(!editor_is_empty, |this| {
+                this.child(div().flex_grow(1.).child(self.editor.clone()))
+            })
             .when(self.is_shallow_boundary, |this| {
                 this.child(self.render_shallow_boundary_notice(cx))
             })
@@ -1461,7 +1540,7 @@ impl Render for CommitViewToolbar {
                     .icon_size(IconSize::Small)
                     .tooltip(move |_, cx| {
                         Tooltip::for_action(
-                            "Buffer Search",
+                            i18n::t!("cd05d19e22d994e8"),
                             &zed_actions::buffer_search::Deploy::find(),
                             cx,
                         )
@@ -1477,7 +1556,7 @@ impl Render for CommitViewToolbar {
                 this.child(
                     IconButton::new("show-in-git-graph", IconName::GitGraph)
                         .icon_size(IconSize::Small)
-                        .tooltip(Tooltip::text("Show in Git Graph"))
+                        .tooltip(Tooltip::text(i18n::t!("fafd39406ffc961b")))
                         .on_click(move |_, window, cx| {
                             window.dispatch_action(
                                 Box::new(crate::git_graph::OpenAtCommit {
@@ -1492,7 +1571,7 @@ impl Render for CommitViewToolbar {
 
                     IconButton::new("view_on_provider", icon)
                         .icon_size(IconSize::Small)
-                        .tooltip(Tooltip::text(format!("View on {}", provider_name)))
+                        .tooltip(Tooltip::text(i18n::t_args!("f2245eadbe3b33f0", provider_name)))
                         .on_click(move |_, _, cx| cx.open_url(&url))
                 }))
             })
@@ -1534,10 +1613,83 @@ fn stash_matches_index(sha: &str, stash_index: usize, repo: &Repository) -> bool
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fs::FakeFs;
     use gpui::{EmptyView, TestAppContext};
     use indoc::indoc;
     use language::{Language, LanguageConfig, markdown_lang};
     use settings::SettingsStore;
+    use std::path::Path;
+
+    #[gpui::test]
+    async fn test_commit_view_focus_survives_diff_loading(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            let settings_store = SettingsStore::test(cx);
+            cx.set_global(settings_store);
+            theme_settings::init(theme::LoadThemes::JustBase, cx);
+            language_model::init(cx);
+            crate::init(cx);
+        });
+        let fs = FakeFs::new(cx.executor());
+        fs.insert_tree(
+            Path::new("/project"),
+            serde_json::json!({".git": {}, "file.txt": "content"}),
+        )
+        .await;
+        let project = Project::test(fs, [Path::new("/project")], cx).await;
+        cx.run_until_parked();
+        let repository = project.read_with(cx, |project, cx| {
+            project.active_repository(cx).expect("repository")
+        });
+        let (multi_workspace, cx) = cx.add_window_view(|window, cx| {
+            workspace::MultiWorkspace::test_new(project.clone(), window, cx)
+        });
+        let workspace = multi_workspace.read_with(cx, |multi, _| multi.workspace().clone());
+        let view = cx.new_window_entity(|window, cx| {
+            let view = CommitView::new(
+                CommitDetails {
+                    sha: "0101010101010101010101010101010101010101".into(),
+                    message: "Commit message".into(),
+                    ..Default::default()
+                },
+                CommitDiff {
+                    files: vec![project::git_store::CommitFile {
+                        path: RepoPath::new("file.txt").expect("path"),
+                        old_text: None,
+                        new_text: Some("content".into()),
+                        is_binary: false,
+                    }],
+                    is_shallow_boundary: false,
+                },
+                repository.clone(),
+                project.clone(),
+                workspace.clone(),
+                workspace.downgrade(),
+                None,
+                None,
+                window,
+                cx,
+            );
+            assert!(view.editor.read(cx).rhs_editor().read(cx).is_empty(cx));
+            view
+        });
+        workspace.update_in(cx, |workspace, window, cx| {
+            workspace.add_item_to_active_pane(Box::new(view.clone()), None, true, window, cx);
+        });
+        let load_task = view.update(cx, |view, _| {
+            std::mem::replace(&mut view._load_diff_task, Task::ready(Ok(())))
+        });
+        load_task.await.expect("diff should load");
+        cx.run_until_parked();
+        view.update_in(cx, |view, window, cx| {
+            let editor = view.editor.read(cx).rhs_editor();
+            assert!(!editor.read(cx).is_empty(cx));
+            assert!(view.focus_handle(cx).is_focused(window));
+        });
+        cx.run_until_parked();
+        view.update_in(cx, |view, window, cx| {
+            assert!(view.focus_handle(cx).is_focused(window))
+        });
+    }
 
     #[gpui::test]
     async fn test_build_buffer_resolves_injected_languages(cx: &mut TestAppContext) {

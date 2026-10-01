@@ -19,8 +19,9 @@ pub use settings::{
     AutoIndentMode, CompletionSettingsContent, ConfiguredLanguageServer,
     EditPredictionDataCollectionChoice, EditPredictionPromptFormatContent, EditPredictionProvider,
     EditPredictionsMode, FormatOnSave, Formatter, FormatterList, InlayHintKind,
-    LanguageSettingsContent, LineEndingSetting, LspInsertMode, REST_OF_LANGUAGE_SERVERS,
-    RewrapBehavior, ShowWhitespaceSetting, SoftWrap, WordsCompletionMode,
+    LanguageSettingsContent, LineEndingSetting, LspInsertMode, OpenAiCompatibleApiTypeContent,
+    REST_OF_LANGUAGE_SERVERS, RewrapBehavior, ShowWhitespaceSetting, SoftWrap, SoftWrapIndent,
+    WordsCompletionMode,
 };
 use settings::{RegisterSetting, Settings, SettingsLocation, SettingsStore, merge_from::MergeFrom};
 use shellexpand;
@@ -65,6 +66,8 @@ pub struct LanguageSettings {
     pub hard_tabs: bool,
     /// How to soft-wrap long lines of text.
     pub soft_wrap: settings::SoftWrap,
+    /// How to indent soft-wrapped continuation lines.
+    pub soft_wrap_indent: settings::SoftWrapIndent,
     /// The column at which to soft-wrap lines, for buffers where soft-wrap
     /// is enabled.
     pub preferred_line_length: u32,
@@ -645,8 +648,29 @@ pub struct OpenAiCompatibleEditPredictionSettings {
     /// The prompt format to use for completions. When `None`, the format
     /// will be derived from the model name at request time.
     pub prompt_format: EditPredictionPromptFormat,
+    /// The API type to use for edit predictions.
+    pub api_type: OpenAiCompatibleApiType,
     /// Automatic prediction debounce delay.
     pub prediction_debounce: DelayMs,
+}
+
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub enum OpenAiCompatibleApiType {
+    /// Text completion API (`/v1/completions`) using model-native FIM tokens.
+    #[default]
+    Completions,
+    /// Chat completion API (`/v1/chat/completions`) using an
+    /// instruction-based fill-in-the-middle prompt.
+    ChatCompletions,
+}
+
+impl From<OpenAiCompatibleApiTypeContent> for OpenAiCompatibleApiType {
+    fn from(value: OpenAiCompatibleApiTypeContent) -> Self {
+        match value {
+            OpenAiCompatibleApiTypeContent::Completions => Self::Completions,
+            OpenAiCompatibleApiTypeContent::ChatCompletions => Self::ChatCompletions,
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
@@ -840,6 +864,7 @@ impl settings::Settings for AllLanguageSettings {
                 tab_size: settings.tab_size.unwrap(),
                 hard_tabs: settings.hard_tabs.unwrap(),
                 soft_wrap: settings.soft_wrap.unwrap(),
+                soft_wrap_indent: settings.soft_wrap_indent.unwrap(),
                 preferred_line_length: settings.preferred_line_length.unwrap(),
                 show_wrap_guides: settings.show_wrap_guides.unwrap(),
                 wrap_guides: settings.wrap_guides.unwrap(),
@@ -977,6 +1002,7 @@ impl settings::Settings for AllLanguageSettings {
                 max_output_tokens: ollama.max_output_tokens.unwrap(),
                 api_url: ollama.api_url.unwrap().into(),
                 prompt_format: ollama.prompt_format.unwrap().into(),
+                api_type: OpenAiCompatibleApiType::Completions,
                 prediction_debounce: ollama.prediction_debounce.unwrap(),
             });
         let openai_compatible_settings = edit_predictions.open_ai_compatible_api.unwrap();
@@ -993,6 +1019,7 @@ impl settings::Settings for AllLanguageSettings {
                 max_output_tokens: openai_compatible_settings.max_output_tokens.unwrap(),
                 api_url: api_url.into(),
                 prompt_format: openai_compatible_settings.prompt_format.unwrap().into(),
+                api_type: openai_compatible_settings.api_type.unwrap().into(),
                 prediction_debounce: openai_compatible_settings.prediction_debounce.unwrap(),
             });
         let zed_settings = edit_predictions.zed.unwrap();

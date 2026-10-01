@@ -17,6 +17,7 @@ default = []
 test-support = ["remote/test-support"]
 
 [dependencies]
+i18n.workspace = true
 anyhow.workspace = true
 askpass.workspace = true
 auto_update.workspace = true

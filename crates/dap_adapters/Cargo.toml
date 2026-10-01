@@ -21,6 +21,7 @@ path = "src/dap_adapters.rs"
 doctest = false
 
 [dependencies]
+i18n.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true
 collections.workspace = true
@@ -29,7 +30,6 @@ dotenvy.workspace = true
 futures.workspace = true
 fs.workspace = true
 gpui.workspace = true
-json_dotpath.workspace = true
 language.workspace = true
 log.workspace = true
 paths.workspace = true

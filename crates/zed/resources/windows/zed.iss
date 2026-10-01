@@ -2,10 +2,10 @@
 AppId={#AppId}
 AppName={#AppName}
 AppVerName={#AppDisplayName}
-AppPublisher=Zed Industries
-AppPublisherURL=https://www.zed.dev/
-AppSupportURL=https://www.zed.dev/
-AppUpdatesURL=https://www.zed.dev/
+AppPublisher={#AppPublisher}
+AppPublisherURL={#AppPublisherURL}
+AppSupportURL={#AppSupportURL}
+AppUpdatesURL={#AppUpdatesURL}
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
 DisableReadyPage=yes
@@ -42,8 +42,8 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 
 [Languages]
-Name: "english"; MessagesFile: "compiler:Default.isl,{#ResourcesDir}\messages\en.isl"; LicenseFile: "script\terms\terms.rtf"
-Name: "simplifiedChinese"; MessagesFile: "{#ResourcesDir}\messages\Default.zh-cn.isl,{#ResourcesDir}\messages\zh-cn.isl"; LicenseFile: "script\terms\terms.rtf"
+Name: "english"; MessagesFile: "compiler:Default.isl,{#ResourcesDir}\messages\en.isl"; LicenseFile: "script\terms\zed-cn-license-notice.rtf"
+Name: "simplifiedChinese"; MessagesFile: "{#ResourcesDir}\messages\Default.zh-cn.isl,{#ResourcesDir}\messages\zh-cn.isl"; LicenseFile: "script\terms\zed-cn-license-notice.rtf"
 
 [UninstallDelete]
 ; Delete logs
@@ -68,6 +68,7 @@ Name: "{app}"; AfterInstall: DisableAppDirInheritance
 Source: "{#ResourcesDir}\Zed.exe"; DestDir: "{code:GetInstallDir}"; Flags: ignoreversion
 Source: "{#ResourcesDir}\bin\*"; DestDir: "{code:GetInstallDir}\bin"; Flags: ignoreversion
 Source: "{#ResourcesDir}\tools\*"; DestDir: "{app}\tools"; Flags: ignoreversion
+Source: "{#ResourcesDir}\licenses\*"; DestDir: "{app}\licenses"; Flags: ignoreversion
 Source: "{#ResourcesDir}\appx\*"; DestDir: "{app}\appx";  BeforeInstall: RemoveAppxPackage; AfterInstall: AddAppxPackage; Flags: ignoreversion; Check: IsWindows11OrLater
 #ifexist ResourcesDir + "\amd_ags_x64.dll"
 Source: "{#ResourcesDir}\amd_ags_x64.dll"; DestDir: "{app}"; Flags: ignoreversion
@@ -1262,6 +1263,15 @@ Root: HKCU; Subkey: "Software\Classes\zed\DefaultIcon"; ValueType: "string"; Val
 Root: HKCU; Subkey: "Software\Classes\zed\shell\open\command"; ValueType: "string"; ValueData: """{app}\Zed.exe"" ""%1"""
 
 [Code]
+var
+  AppxInstalled: Boolean;
+
+procedure RegisterContextMenuFallback();
+forward;
+
+procedure UnregisterContextMenuFallback();
+forward;
+
 function WizardNotSilent(): Boolean;
 begin
   Result := not WizardSilent();
@@ -1327,6 +1337,7 @@ begin
   if not CurUninstallStep = usUninstall then begin
     exit;
   end;
+  UnregisterContextMenuFallback();
   if not RegQueryStringValue(HKCU, 'Environment', 'Path', Path)
   then begin
     exit;
@@ -1360,12 +1371,46 @@ begin
   Exec(ExpandConstant('{sys}\icacls.exe'), ExpandConstant('"{app}" /inheritancelevel:r ') + Permissions, '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 end;
 
+procedure RegisterContextMenuFallback();
+var
+  Clsid: String;
+  DllPath: String;
+begin
+  Clsid := '{#ContextMenuClsid}';
+  DllPath := ExpandConstant('{app}\appx\zed_explorer_command_injector.dll');
+  RegWriteStringValue(HKCU, 'Software\Classes\CLSID\' + Clsid + '\InprocServer32', '', DllPath);
+  RegWriteStringValue(HKCU, 'Software\Classes\CLSID\' + Clsid + '\InprocServer32', 'ThreadingModel', 'Apartment');
+  RegWriteStringValue(HKCU, 'Software\Classes\*\shellex\ContextMenuHandlers\{#RegValueName}', '', Clsid);
+  RegWriteStringValue(HKCU, 'Software\Classes\Directory\shellex\ContextMenuHandlers\{#RegValueName}', '', Clsid);
+  RegWriteStringValue(HKCU, 'Software\Classes\Directory\Background\shellex\ContextMenuHandlers\{#RegValueName}', '', Clsid);
+  RegWriteStringValue(HKCU, 'Software\Classes\Drive\shellex\ContextMenuHandlers\{#RegValueName}', '', Clsid);
+end;
+
+procedure UnregisterContextMenuFallback();
+var
+  Clsid: String;
+begin
+  Clsid := '{#ContextMenuClsid}';
+  RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Classes\CLSID\' + Clsid);
+  RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Classes\*\shellex\ContextMenuHandlers\{#RegValueName}');
+  RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Classes\Directory\shellex\ContextMenuHandlers\{#RegValueName}');
+  RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Classes\Directory\Background\shellex\ContextMenuHandlers\{#RegValueName}');
+  RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Classes\Drive\shellex\ContextMenuHandlers\{#RegValueName}');
+end;
+
 procedure AddAppxPackage();
 var
   AddAppxPackageResultCode: Integer;
 begin
   if WizardIsTaskSelected('addcontextmenufiles') then begin
     ShellExec('', 'powershell.exe', '-Command ' + AddQuotes('Add-AppxPackage -Path ''' + ExpandConstant('{app}\appx\zed_explorer_command_injector.appx') + ''' -ExternalLocation ''' + ExpandConstant('{app}\appx') + ''''), '', SW_HIDE, ewWaitUntilTerminated, AddAppxPackageResultCode);
+    AppxInstalled := (AddAppxPackageResultCode = 0);
+    // If the appx cannot be registered (e.g. unsigned local builds), register
+    // the DLL directly as a classic context menu handler instead.
+    if AppxInstalled then
+      UnregisterContextMenuFallback()
+    else
+      RegisterContextMenuFallback();
     RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Classes\*\shell\{#RegValueName}');
     RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Classes\directory\shell\{#RegValueName}');
     RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Classes\directory\background\shell\{#RegValueName}');

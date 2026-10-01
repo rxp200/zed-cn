@@ -13,6 +13,7 @@ path = "src/theme_selector.rs"
 doctest = false
 
 [dependencies]
+i18n.workspace = true
 fs.workspace = true
 fuzzy.workspace = true
 gpui.workspace = true

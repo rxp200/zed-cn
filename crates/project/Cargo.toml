@@ -33,6 +33,7 @@ test-support = [
 ]
 
 [dependencies]
+i18n.workspace = true
 aho-corasick.workspace = true
 anyhow.workspace = true
 askpass.workspace = true
@@ -51,6 +52,7 @@ dap.workspace = true
 encoding_rs.workspace = true
 extension.workspace = true
 fancy-regex.workspace = true
+file_content.workspace = true
 fs.workspace = true
 futures.workspace = true
 fuzzy.workspace = true
@@ -99,6 +101,7 @@ toml.workspace = true
 tracing.workspace = true
 url.workspace = true
 util.workspace = true
+uuid.workspace = true
 watch.workspace = true
 wax.workspace = true
 which.workspace = true

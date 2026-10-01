@@ -25,11 +25,13 @@ path = "src/agent_servers.rs"
 doctest = false
 
 [dependencies]
+i18n.workspace = true
 acp_thread.workspace = true
 action_log.workspace = true
 async-channel.workspace = true
 agent-client-protocol.workspace = true
 anyhow.workspace = true
+base64.workspace = true
 chrono.workspace = true
 client.workspace = true
 collections.workspace = true
