@@ -1,6 +1,5 @@
 //! Which-key support for Zed.
 
-mod pending_bindings;
 mod pending_keystrokes_indicator;
 mod which_key_modal;
 mod which_key_settings;

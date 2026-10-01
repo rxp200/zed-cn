@@ -258,59 +258,62 @@ impl Component for Avatar {
         let example_avatar = "https://avatars.githubusercontent.com/u/1714999?v=4";
 
         v_flex()
-                .gap_6()
-                .children(vec![
-                    example_group(vec![
-                        single_example("Default", Avatar::new(example_avatar).into_any_element()),
-                        single_example(
-                            "Grayscale",
-                            Avatar::new(example_avatar)
-                                .grayscale(true)
-                                .into_any_element(),
-                        ),
-                        single_example(
-                            "Border",
-                            Avatar::new(example_avatar)
-                                .border_color(cx.theme().colors().border)
-                                .into_any_element(),
-                        ).description("Can be used to create visual space by setting the border color to match the background, which creates the appearance of a gap around the avatar."),
-                    ]),
-                    example_group_with_title(
-                        "Indicator Styles",
-                        vec![
-                            single_example(
-                                "Muted",
-                                Avatar::new(example_avatar)
-                                    .indicator(AvatarAudioStatusIndicator::new(AudioStatus::Muted))
-                                    .into_any_element(),
-                            ).description("Indicates the collaborator's mic is muted."),
-                            single_example(
-                                "Deafened",
-                                Avatar::new(example_avatar)
-                                    .indicator(AvatarAudioStatusIndicator::new(
-                                        AudioStatus::Deafened,
-                                    ))
-                                    .into_any_element(),
-                            ).description("Indicates that both the collaborator's mic and audio are muted."),
-                            single_example(
-                                "Availability: Free",
-                                Avatar::new(example_avatar)
-                                    .indicator(AvatarAvailabilityIndicator::new(
-                                        CollaboratorAvailability::Free,
-                                    ))
-                                    .into_any_element(),
-                            ).description("Indicates that the person is free, usually meaning they are not in a call."),
-                            single_example(
-                                "Availability: Busy",
-                                Avatar::new(example_avatar)
-                                    .indicator(AvatarAvailabilityIndicator::new(
-                                        CollaboratorAvailability::Busy,
-                                    ))
-                                    .into_any_element(),
-                            ).description("Indicates that the person is busy, usually meaning they are in a channel or direct call."),
-                        ],
+            .gap_6()
+            .children(vec![
+                example_group(vec![
+                    single_example("Default", Avatar::new(example_avatar).into_any_element()),
+                    single_example(
+                        "Grayscale",
+                        Avatar::new(example_avatar)
+                            .grayscale(true)
+                            .into_any_element(),
                     ),
-                ])
-                .into_any_element()
+                    single_example(
+                        "Border",
+                        Avatar::new(example_avatar)
+                            .border_color(cx.theme().colors().border)
+                            .into_any_element(),
+                    )
+                    .description(i18n::t!("d213b7bd6271832f")),
+                ]),
+                example_group_with_title(
+                    "Indicator Styles",
+                    vec![
+                        single_example(
+                            "Muted",
+                            Avatar::new(example_avatar)
+                                .indicator(AvatarAudioStatusIndicator::new(AudioStatus::Muted))
+                                .into_any_element(),
+                        )
+                        .description(i18n::t!("23a5ef17a45bce64")),
+                        single_example(
+                            "Deafened",
+                            Avatar::new(example_avatar)
+                                .indicator(AvatarAudioStatusIndicator::new(AudioStatus::Deafened))
+                                .into_any_element(),
+                        )
+                        .description(i18n::t!("815294e3d8482150")),
+                        single_example(
+                            "Availability: Free",
+                            Avatar::new(example_avatar)
+                                .indicator(AvatarAvailabilityIndicator::new(
+                                    CollaboratorAvailability::Free,
+                                ))
+                                .into_any_element(),
+                        )
+                        .description(i18n::t!("ce9457129e342ff2")),
+                        single_example(
+                            "Availability: Busy",
+                            Avatar::new(example_avatar)
+                                .indicator(AvatarAvailabilityIndicator::new(
+                                    CollaboratorAvailability::Busy,
+                                ))
+                                .into_any_element(),
+                        )
+                        .description(i18n::t!("30edcabe83f3f469")),
+                    ],
+                ),
+            ])
+            .into_any_element()
     }
 }

@@ -21,12 +21,8 @@ impl MetalAtlas {
         })))
     }
 
-    /// Returns the GPU texture backing `id`, or `None` once every tile in it
-    /// has been removed. A scene can still reference such a texture when a
-    /// cached view replays a paint from before the image was dropped, so
-    /// callers must skip those sprites rather than assume the texture exists.
-    pub(crate) fn metal_texture(&self, id: AtlasTextureId) -> Option<metal::Texture> {
-        Some(self.0.lock().backend.texture(id)?.metal_texture.clone())
+    pub(crate) fn metal_texture(&self, id: AtlasTextureId) -> metal::Texture {
+        self.0.lock().backend.texture(id).metal_texture.clone()
     }
 }
 
@@ -59,9 +55,7 @@ impl AtlasBackend for MetalAtlasTextures {
         bytes: &[u8],
     ) -> Result<AtlasTile> {
         let tile = self.allocate(size, kind).context("failed to allocate")?;
-        let texture = self
-            .texture(tile.texture_id)
-            .context("allocated tile refers to a missing texture")?;
+        let texture = self.texture(tile.texture_id);
         texture.upload(tile.bounds, bytes);
         Ok(tile)
     }
@@ -193,13 +187,13 @@ impl MetalAtlasTextures {
         .unwrap()
     }
 
-    fn texture(&self, id: AtlasTextureId) -> Option<&MetalAtlasTexture> {
+    fn texture(&self, id: AtlasTextureId) -> &MetalAtlasTexture {
         let textures = match id.kind {
             AtlasTextureKind::Monochrome => &self.monochrome_textures,
             AtlasTextureKind::Polychrome => &self.polychrome_textures,
             AtlasTextureKind::Subpixel => unreachable!(),
         };
-        textures.textures.get(id.index as usize)?.as_ref()
+        textures[id.index as usize].as_ref().unwrap()
     }
 }
 
@@ -340,30 +334,7 @@ mod tests {
         let tile_a2 = insert_tile(&atlas, key_a, small);
 
         // The texture must actually exist — this would panic before the fix.
-        assert!(atlas.metal_texture(tile_a2.texture_id).is_some());
-    }
-
-    #[test]
-    fn test_metal_texture_is_none_after_last_tile_removed() {
-        let Some(atlas) = create_atlas() else {
-            return;
-        };
-
-        let key = make_image_key(1, 0);
-        let tile = insert_tile(
-            &atlas,
-            key.clone(),
-            Size {
-                width: DevicePixels(64),
-                height: DevicePixels(64),
-            },
-        );
-        assert!(atlas.metal_texture(tile.texture_id).is_some());
-
-        // A scene built before the removal may still carry `tile`; looking its
-        // texture up must report the gap instead of panicking.
-        atlas.remove(&key);
-        assert!(atlas.metal_texture(tile.texture_id).is_none());
+        let _texture = atlas.metal_texture(tile_a2.texture_id);
     }
 
     #[test]

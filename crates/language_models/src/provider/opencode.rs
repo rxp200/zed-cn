@@ -1,12 +1,10 @@
-use anyhow::{Context as _, Result, anyhow, bail};
-use collections::{BTreeMap, HashMap};
+use anyhow::Result;
+use collections::BTreeMap;
 use credentials_provider::CredentialsProvider;
 use fs::Fs;
-use futures::{AsyncReadExt, FutureExt, StreamExt, future::BoxFuture};
-use gpui::{
-    App, AsyncApp, BackgroundExecutor, Context, Entity, SharedString, Task, TaskExt, Window,
-};
-use http_client::{AsyncBody, CustomHeaders, HttpClient, Method, Request, http};
+use futures::{FutureExt, StreamExt, future::BoxFuture};
+use gpui::{App, AsyncApp, Context, Entity, SharedString, Task, TaskExt, Window};
+use http_client::{AsyncBody, CustomHeaders, HttpClient, http};
 use language_model::{
     ApiKeyState, AuthenticateError, EnvVar, IconOrSvg, InlineDescription, LanguageModel,
     LanguageModelCompletionError, LanguageModelCompletionEvent, LanguageModelEffortLevel,
@@ -16,15 +14,11 @@ use language_model::{
     SubPageProviderSettings, env_var,
 };
 use opencode::{ApiProtocol, OPENCODE_API_URL, OpenCodeSubscription};
-use serde::Deserialize;
 pub use settings::OpenCodeApiProtocol;
 pub use settings::OpenCodeAvailableModel as AvailableModel;
 use settings::{Settings, SettingsStore, update_settings_file};
-use std::{
-    path::{Path, PathBuf},
-    sync::{Arc, LazyLock},
-    time::{Duration, SystemTime},
-};
+use std::sync::{Arc, LazyLock};
+use strum::IntoEnumIterator;
 use ui::{
     Banner, ButtonLink, ConfiguredApiCard, Divider, List, ListBulletItem, Severity, Switch,
     SwitchLabelPosition, ToggleState, prelude::*,
@@ -65,23 +59,12 @@ fn reasoning_effort_display(effort: ReasoningEffort) -> (&'static str, &'static 
     }
 }
 
-fn model_supports_thinking(model: &opencode::Model) -> bool {
-    model
-        .supported_reasoning_effort_levels()
-        .is_some_and(|levels| levels.iter().any(|effort| *effort != ReasoningEffort::None))
-}
-
 const PROVIDER_ID: LanguageModelProviderId = LanguageModelProviderId::new("opencode");
 const PROVIDER_NAME: LanguageModelProviderName = LanguageModelProviderName::new("OpenCode");
 
 const API_KEY_ENV_VAR_NAME: &str = "OPENCODE_API_KEY";
 static API_KEY_ENV_VAR: LazyLock<EnvVar> = env_var!(API_KEY_ENV_VAR_NAME);
 const OPENCODE_SESSION_HEADER_NAME: &str = "x-opencode-session";
-const RICH_MODEL_CATALOG_URL: &str = "https://models.opencode.ai/api.json";
-const MODEL_CATALOG_RESPONSE_LIMIT_BYTES: u64 = 8 * 1024 * 1024;
-const MODEL_CATALOG_FETCH_TIMEOUT: Duration = Duration::from_secs(15);
-const MODEL_CATALOG_DISK_FRESHNESS: Duration = Duration::from_secs(5 * 60);
-const MODEL_CATALOG_REFRESH_INTERVAL: Duration = Duration::from_secs(60 * 60);
 pub(crate) const RESERVED_HEADER_NAMES: &[&str] = &[OPENCODE_SESSION_HEADER_NAME];
 
 #[derive(Default, Clone, Debug, PartialEq)]
@@ -101,20 +84,6 @@ pub struct OpenCodeLanguageModelProvider {
 pub struct State {
     api_key_state: ApiKeyState,
     credentials_provider: Arc<dyn CredentialsProvider>,
-    http_client: Arc<dyn HttpClient>,
-    discovered_models: HashMap<OpenCodeSubscription, Vec<DiscoveredModel>>,
-    fetch_models_errors: HashMap<OpenCodeSubscription, SharedString>,
-    fetch_models_task: Option<Task<()>>,
-    refresh_models_task: Option<Task<()>>,
-    cache_path: PathBuf,
-    fs: Arc<dyn Fs>,
-}
-
-#[derive(Clone)]
-struct DiscoveredModel {
-    model: opencode::Model,
-    supports_images: bool,
-    supports_thinking: bool,
 }
 
 impl State {
@@ -125,196 +94,24 @@ impl State {
     fn set_api_key(&mut self, api_key: Option<String>, cx: &mut Context<Self>) -> Task<Result<()>> {
         let credentials_provider = self.credentials_provider.clone();
         let api_url = OpenCodeLanguageModelProvider::api_url(cx);
-        self.fetch_models_task = None;
-        self.refresh_models_task = None;
-        self.discovered_models.clear();
-        self.fetch_models_errors.clear();
-        let task = self.api_key_state.store(
+        self.api_key_state.store(
             api_url,
             api_key,
             |this| &mut this.api_key_state,
             credentials_provider,
             cx,
-        );
-        cx.notify();
-        cx.spawn(async move |this, cx| {
-            let result = task.await;
-            if result.is_ok() {
-                this.update(cx, |this, cx| this.restart_fetch_models_task(cx))
-                    .ok();
-            }
-            result
-        })
+        )
     }
 
     fn authenticate(&mut self, cx: &mut Context<Self>) -> Task<Result<(), AuthenticateError>> {
         let credentials_provider = self.credentials_provider.clone();
         let api_url = OpenCodeLanguageModelProvider::api_url(cx);
-        let task = self.api_key_state.load_if_needed(
+        self.api_key_state.load_if_needed(
             api_url,
             |this| &mut this.api_key_state,
             credentials_provider,
             cx,
-        );
-        cx.spawn(async move |this, cx| {
-            let result = task.await;
-            if result.is_ok() {
-                this.update(cx, |this, cx| this.restart_fetch_models_task(cx))
-                    .ok();
-            }
-            result
-        })
-    }
-
-    fn restart_fetch_models_task(&mut self, cx: &mut Context<Self>) {
-        self.fetch_models_task = None;
-        self.refresh_models_task = None;
-        let api_url = OpenCodeLanguageModelProvider::api_url(cx);
-        if self.api_key_state.key(&api_url).is_none() {
-            self.fetch_models_task = None;
-            cx.notify();
-            return;
-        }
-        let http_client = self.http_client.clone();
-        let fs = self.fs.clone();
-        let cache_path = self.cache_path.clone();
-        let executor = cx.background_executor().clone();
-        self.fetch_models_task = Some(cx.spawn(async move |this, cx| {
-            let cached_catalog = load_cached_catalog(fs.as_ref(), &cache_path).await;
-            if let Ok(Some((catalog, _))) = &cached_catalog {
-                let results = catalog_results(Ok(catalog));
-                this.update(cx, |this, cx| {
-                    apply_discovery_results(
-                        &mut this.discovered_models,
-                        &mut this.fetch_models_errors,
-                        results,
-                    );
-                    cx.notify();
-                })
-                .ok();
-            }
-
-            if cached_catalog
-                .as_ref()
-                .ok()
-                .and_then(|catalog| catalog.as_ref())
-                .is_some_and(|(_, is_fresh)| *is_fresh)
-            {
-                this.update(cx, |this, _| this.fetch_models_task = None)
-                    .ok();
-                return;
-            }
-
-            let catalog = fetch_model_catalog(http_client, executor).await;
-            let results = catalog_results(catalog.as_ref().map(String::as_str));
-            if results.iter().all(|(_, result)| result.is_ok())
-                && let Ok(catalog) = catalog
-                && let Err(error) = store_cached_catalog(fs.as_ref(), cache_path, catalog).await
-            {
-                log::warn!("Failed to cache OpenCode model catalog: {error:#}");
-            }
-            this.update(cx, |this, cx| {
-                apply_discovery_results(
-                    &mut this.discovered_models,
-                    &mut this.fetch_models_errors,
-                    results,
-                );
-                this.fetch_models_task = None;
-                cx.notify();
-            })
-            .ok();
-        }));
-
-        let http_client = self.http_client.clone();
-        let fs = self.fs.clone();
-        let cache_path = self.cache_path.clone();
-        let executor = cx.background_executor().clone();
-        self.refresh_models_task = Some(cx.spawn(async move |this, cx| {
-            loop {
-                executor.timer(MODEL_CATALOG_REFRESH_INTERVAL).await;
-                let catalog = fetch_model_catalog(http_client.clone(), executor.clone()).await;
-                let results = catalog_results(catalog.as_ref().map(String::as_str));
-                if results.iter().all(|(_, result)| result.is_ok())
-                    && let Ok(catalog) = catalog
-                    && let Err(error) =
-                        store_cached_catalog(fs.as_ref(), cache_path.clone(), catalog).await
-                {
-                    log::warn!("Failed to cache OpenCode model catalog: {error:#}");
-                }
-                if this
-                    .update(cx, |this, cx| {
-                        apply_discovery_results(
-                            &mut this.discovered_models,
-                            &mut this.fetch_models_errors,
-                            results,
-                        );
-                        cx.notify();
-                    })
-                    .is_err()
-                {
-                    break;
-                }
-            }
-        }));
-    }
-}
-
-fn catalog_results(
-    catalog: Result<&str, &anyhow::Error>,
-) -> [(OpenCodeSubscription, Result<Vec<DiscoveredModel>>); 2] {
-    [OpenCodeSubscription::Zen, OpenCodeSubscription::Go].map(|subscription| {
-        let result = catalog
-            .map_err(|error| anyhow!("{error:#}"))
-            .and_then(|catalog| parse_discovered_models(catalog, subscription));
-        if let Err(error) = &result {
-            log::warn!(
-                "Failed to fetch OpenCode {} models: {error:#}",
-                subscription.display_name()
-            );
-        }
-        (subscription, result)
-    })
-}
-
-async fn load_cached_catalog(fs: &dyn Fs, path: &Path) -> Result<Option<(String, bool)>> {
-    let Some(metadata) = fs.metadata(path).await? else {
-        return Ok(None);
-    };
-    let catalog = fs.load(path).await?;
-    for subscription in [OpenCodeSubscription::Zen, OpenCodeSubscription::Go] {
-        parse_discovered_models(&catalog, subscription)?;
-    }
-    let is_fresh = SystemTime::now()
-        .duration_since(metadata.mtime.timestamp_for_user())
-        .is_ok_and(|age| age < MODEL_CATALOG_DISK_FRESHNESS);
-    Ok(Some((catalog, is_fresh)))
-}
-
-async fn store_cached_catalog(fs: &dyn Fs, path: PathBuf, catalog: String) -> Result<()> {
-    let mut catalog = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&catalog)?;
-    catalog.retain(|provider, _| matches!(provider.as_str(), "opencode" | "opencode-go"));
-    if let Some(parent) = path.parent() {
-        fs.create_dir(parent).await?;
-    }
-    fs.atomic_write(path, serde_json::to_string(&catalog)?)
-        .await
-}
-
-fn apply_discovery_results(
-    discovered_models: &mut HashMap<OpenCodeSubscription, Vec<DiscoveredModel>>,
-    fetch_models_errors: &mut HashMap<OpenCodeSubscription, SharedString>,
-    results: [(OpenCodeSubscription, Result<Vec<DiscoveredModel>>); 2],
-) {
-    for (subscription, result) in results {
-        match result {
-            Ok(models) => {
-                discovered_models.insert(subscription, models);
-                fetch_models_errors.remove(&subscription);
-            }
-            Err(error) => {
-                fetch_models_errors.insert(subscription, format!("{error:#}").into());
-            }
-        }
+        )
     }
 }
 
@@ -324,69 +121,38 @@ impl OpenCodeLanguageModelProvider {
         credentials_provider: Arc<dyn CredentialsProvider>,
         cx: &mut App,
     ) -> Self {
-        Self::new_with_cache(
-            http_client,
-            credentials_provider,
-            <dyn Fs>::global(cx),
-            paths::temp_dir().join("opencode").join("models.json"),
-            cx,
-        )
-    }
-
-    fn new_with_cache(
-        http_client: Arc<dyn HttpClient>,
-        credentials_provider: Arc<dyn CredentialsProvider>,
-        fs: Arc<dyn Fs>,
-        cache_path: PathBuf,
-        cx: &mut App,
-    ) -> Self {
         let state = cx.new(|cx| {
-            cx.observe_global::<SettingsStore>({
-                let mut last_api_url = Self::api_url(cx);
-                move |this: &mut State, cx| {
-                    let api_url = Self::api_url(cx);
-                    if api_url != last_api_url {
-                        last_api_url = api_url;
-                        this.discovered_models.clear();
-                        this.fetch_models_errors.clear();
-                        this.fetch_models_task = None;
-                        this.refresh_models_task = None;
-                        this.authenticate(cx).detach();
-                    }
-                    cx.notify();
-                }
+            cx.observe_global::<SettingsStore>(|this: &mut State, cx| {
+                let credentials_provider = this.credentials_provider.clone();
+                let api_url = Self::api_url(cx);
+                this.api_key_state.handle_url_change(
+                    api_url,
+                    |this| &mut this.api_key_state,
+                    credentials_provider,
+                    cx,
+                );
+                cx.notify();
             })
             .detach();
             State {
                 api_key_state: ApiKeyState::new(Self::api_url(cx), (*API_KEY_ENV_VAR).clone()),
                 credentials_provider,
-                http_client: http_client.clone(),
-                discovered_models: HashMap::default(),
-                fetch_models_errors: HashMap::default(),
-                fetch_models_task: None,
-                refresh_models_task: None,
-                cache_path,
-                fs,
             }
         });
 
         Self { http_client, state }
     }
 
-    fn create_language_model_with_capabilities(
+    fn create_language_model(
         &self,
         model: opencode::Model,
         subscription: OpenCodeSubscription,
-        supports_images: bool,
-        supports_thinking: bool,
     ) -> Arc<dyn LanguageModel> {
         let id_str = format!("{}/{}", subscription.id_prefix(), model.id());
         Arc::new(OpenCodeLanguageModel {
             id: LanguageModelId::from(id_str),
             model,
             subscription,
-            supports_images,
-            supports_thinking,
             state: self.state.clone(),
             http_client: self.http_client.clone(),
             request_limiter: RateLimiter::new(4),
@@ -436,27 +202,51 @@ impl LanguageModelProvider for OpenCodeLanguageModelProvider {
         IconOrSvg::Icon(IconName::AiOpenCode)
     }
 
-    fn default_model(&self, _cx: &App) -> Option<Arc<dyn LanguageModel>> {
-        None
+    fn default_model(&self, cx: &App) -> Option<Arc<dyn LanguageModel>> {
+        if Self::subscription_enabled(OpenCodeSubscription::Go, cx) {
+            // If both Go and Zen are enabled, prefer Go since it's not pay-as-you-go
+            Some(
+                self.create_language_model(opencode::Model::default_go(), OpenCodeSubscription::Go),
+            )
+        } else if Self::subscription_enabled(OpenCodeSubscription::Zen, cx) {
+            Some(self.create_language_model(opencode::Model::default(), OpenCodeSubscription::Zen))
+        } else {
+            None
+        }
     }
 
-    fn default_fast_model(&self, _cx: &App) -> Option<Arc<dyn LanguageModel>> {
-        None
+    fn default_fast_model(&self, cx: &App) -> Option<Arc<dyn LanguageModel>> {
+        if Self::subscription_enabled(OpenCodeSubscription::Go, cx) {
+            // If both Go and Zen are enabled, prefer Go since it's not pay-as-you-go
+            Some(self.create_language_model(
+                opencode::Model::default_go_fast(),
+                OpenCodeSubscription::Go,
+            ))
+        } else if Self::subscription_enabled(OpenCodeSubscription::Zen, cx) {
+            Some(
+                self.create_language_model(
+                    opencode::Model::default_fast(),
+                    OpenCodeSubscription::Zen,
+                ),
+            )
+        } else {
+            None
+        }
     }
 
     fn provided_models(&self, cx: &App) -> Vec<Arc<dyn LanguageModel>> {
-        let mut models: BTreeMap<String, (DiscoveredModel, OpenCodeSubscription)> =
+        let mut models: BTreeMap<String, (opencode::Model, OpenCodeSubscription)> =
             BTreeMap::default();
         let settings = Self::settings(cx);
 
-        let discovered_models = &self.state.read(cx).discovered_models;
-        for subscription in [OpenCodeSubscription::Zen, OpenCodeSubscription::Go] {
-            if Self::subscription_enabled(subscription, cx) {
-                if let Some(discovered) = discovered_models.get(&subscription) {
-                    for model in discovered {
-                        let key = format!("{}/{}", subscription.id_prefix(), model.model.id());
-                        models.insert(key, (model.clone(), subscription));
-                    }
+        for model in opencode::Model::iter() {
+            if matches!(model, opencode::Model::Custom { .. }) {
+                continue;
+            }
+            for &subscription in model.available_subscriptions() {
+                if Self::subscription_enabled(subscription, cx) {
+                    let key = format!("{}/{}", subscription.id_prefix(), model.id());
+                    models.insert(key, (model.clone(), subscription));
                 }
             }
         }
@@ -476,40 +266,23 @@ impl LanguageModelProvider for OpenCodeLanguageModelProvider {
             if !Self::subscription_enabled(subscription, cx) {
                 continue;
             }
-            let custom_model = opencode::Model::new(
-                model.name.clone(),
-                model.display_name.clone(),
-                model.max_tokens,
-                model.max_output_tokens,
+            let custom_model = opencode::Model::Custom {
+                name: model.name.clone(),
+                display_name: model.display_name.clone(),
+                max_tokens: model.max_tokens,
+                max_output_tokens: model.max_output_tokens,
                 protocol,
-                model.reasoning_effort_levels.clone(),
-                model.custom_model_api_url.clone(),
-                model.interleaved_reasoning,
-            );
+                reasoning_effort_levels: model.reasoning_effort_levels.clone(),
+                custom_model_api_url: model.custom_model_api_url.clone(),
+                interleaved_reasoning: model.interleaved_reasoning,
+            };
             let key = format!("{}/{}", subscription.id_prefix(), model.name);
-            models.insert(
-                key,
-                (
-                    DiscoveredModel {
-                        supports_images: true,
-                        supports_thinking: model_supports_thinking(&custom_model),
-                        model: custom_model,
-                    },
-                    subscription,
-                ),
-            );
+            models.insert(key, (custom_model, subscription));
         }
 
         models
             .into_values()
-            .map(|(model, subscription)| {
-                self.create_language_model_with_capabilities(
-                    model.model,
-                    subscription,
-                    model.supports_images,
-                    model.supports_thinking,
-                )
-            })
+            .map(|(model, subscription)| self.create_language_model(model, subscription))
             .collect()
     }
 
@@ -528,9 +301,7 @@ impl LanguageModelProvider for OpenCodeLanguageModelProvider {
                 cx.new(|cx| ConfigurationView::new(state.clone(), window, cx))
                     .into()
             })
-            .description(InlineDescription::Text(
-                "To use OpenCode models in Zed, you need an API key.".into(),
-            )),
+            .description(InlineDescription::Text(i18n::t!("8da4a8a38e97b6ce").into())),
         ))
     }
 }
@@ -539,8 +310,6 @@ pub struct OpenCodeLanguageModel {
     id: LanguageModelId,
     model: opencode::Model,
     subscription: OpenCodeSubscription,
-    supports_images: bool,
-    supports_thinking: bool,
     state: Entity<State>,
     http_client: Arc<dyn HttpClient>,
     request_limiter: RateLimiter,
@@ -582,9 +351,14 @@ fn opencode_session_header_value(thread_id: Option<&str>) -> http::HeaderValue {
 
 impl OpenCodeLanguageModel {
     fn base_api_url(&self, cx: &AsyncApp) -> SharedString {
-        if let Some(url) = self.model.custom_model_api_url() {
+        // Custom models can override the API URL
+        if let opencode::Model::Custom {
+            custom_model_api_url: Some(url),
+            ..
+        } = &self.model
+        {
             if !url.is_empty() {
-                return url.to_string().into();
+                return url.clone().into();
             }
         }
 
@@ -786,11 +560,13 @@ impl LanguageModel for OpenCodeLanguageModel {
     }
 
     fn supports_images(&self) -> bool {
-        self.supports_images
+        self.model.supports_images()
     }
 
     fn supports_thinking(&self) -> bool {
-        self.supports_thinking
+        self.model
+            .supported_reasoning_effort_levels()
+            .is_some_and(|levels| levels.iter().any(|effort| *effort != ReasoningEffort::None))
     }
 
     fn supports_disabling_thinking(&self) -> bool {
@@ -804,26 +580,13 @@ impl LanguageModel for OpenCodeLanguageModel {
             .supported_reasoning_effort_levels()
             .map(|levels| {
                 let levels = levels
-                    .iter()
-                    .copied()
+                    .into_iter()
                     .filter(|effort| *effort != ReasoningEffort::None)
                     .collect::<Vec<_>>();
                 if levels.is_empty() {
                     return Vec::new();
                 }
-                let default_index = if levels.contains(&ReasoningEffort::Max) {
-                    [
-                        ReasoningEffort::High,
-                        ReasoningEffort::Medium,
-                        ReasoningEffort::Low,
-                        ReasoningEffort::Minimal,
-                    ]
-                    .into_iter()
-                    .find_map(|effort| levels.iter().position(|level| *level == effort))
-                    .unwrap_or(levels.len() - 1)
-                } else {
-                    levels.len() - 1
-                };
+                let default_index = levels.len() - 1;
                 levels
                     .into_iter()
                     .enumerate()
@@ -845,7 +608,7 @@ impl LanguageModel for OpenCodeLanguageModel {
             LanguageModelToolChoice::Auto | LanguageModelToolChoice::Any => true,
             LanguageModelToolChoice::None => {
                 // Google models don't support None tool choice
-                self.model.protocol() != ApiProtocol::Google
+                self.model.protocol(self.subscription) != ApiProtocol::Google
             }
         }
     }
@@ -859,11 +622,11 @@ impl LanguageModel for OpenCodeLanguageModel {
     }
 
     fn max_token_count(&self) -> u64 {
-        self.model.max_token_count()
+        self.model.max_token_count(self.subscription)
     }
 
     fn max_output_tokens(&self) -> Option<u64> {
-        self.model.max_output_tokens()
+        self.model.max_output_tokens(self.subscription)
     }
 
     fn stream_completion(
@@ -887,7 +650,7 @@ impl LanguageModel for OpenCodeLanguageModel {
         });
         let extra_headers = self.custom_headers(cx);
 
-        match self.model.protocol() {
+        match self.model.protocol(self.subscription) {
             ApiProtocol::Anthropic => {
                 let mode = if self.supports_thinking() && request.thinking_allowed {
                     anthropic::AnthropicModelMode::AdaptiveThinking
@@ -898,7 +661,9 @@ impl LanguageModel for OpenCodeLanguageModel {
                     request,
                     self.model.id().to_string(),
                     1.0,
-                    self.model.max_output_tokens().unwrap_or(8192),
+                    self.model
+                        .max_output_tokens(self.subscription)
+                        .unwrap_or(8192),
                     mode,
                     anthropic::completion::AnthropicPromptCacheMode::Automatic,
                     &PROVIDER_ID,
@@ -932,7 +697,7 @@ impl LanguageModel for OpenCodeLanguageModel {
                     self.model.id(),
                     true,
                     false,
-                    self.model.max_output_tokens(),
+                    self.model.max_output_tokens(self.subscription),
                     ChatCompletionMaxTokensParameter::MaxCompletionTokens,
                     reasoning_effort,
                     self.model.interleaved_reasoning(),
@@ -962,7 +727,7 @@ impl LanguageModel for OpenCodeLanguageModel {
                     self.model.id(),
                     true,
                     false,
-                    self.model.max_output_tokens(),
+                    self.model.max_output_tokens(self.subscription),
                     None,
                     supports_none_reasoning_effort,
                     &PROVIDER_ID,
@@ -1010,198 +775,6 @@ impl LanguageModel for OpenCodeLanguageModel {
     }
 }
 
-#[derive(Deserialize)]
-struct RichCatalogProvider {
-    npm: Option<String>,
-    models: HashMap<String, RichCatalogModel>,
-}
-
-#[derive(Deserialize)]
-struct RichCatalogModel {
-    id: String,
-    name: String,
-    #[serde(default)]
-    reasoning: bool,
-    #[serde(default)]
-    reasoning_options: Option<Vec<ReasoningOption>>,
-    #[serde(default)]
-    tool_call: bool,
-    #[serde(default)]
-    interleaved: serde_json::Value,
-    #[serde(default)]
-    modalities: ModelModalities,
-    limit: ModelLimits,
-    provider: Option<ModelTransport>,
-    cost: Option<ModelCost>,
-    status: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct ModelCost {
-    input: Option<f64>,
-    output: Option<f64>,
-}
-
-#[derive(Default, Deserialize)]
-struct ModelModalities {
-    #[serde(default)]
-    input: Vec<String>,
-    #[serde(default)]
-    output: Vec<String>,
-}
-
-#[derive(Deserialize)]
-struct ModelLimits {
-    context: u64,
-    output: Option<u64>,
-}
-
-#[derive(Deserialize)]
-struct ModelTransport {
-    npm: String,
-}
-
-#[derive(Deserialize)]
-struct ReasoningOption {
-    #[serde(rename = "type")]
-    kind: String,
-    #[serde(default)]
-    values: Vec<String>,
-}
-
-fn parse_discovered_models(
-    rich_catalog: &str,
-    subscription: OpenCodeSubscription,
-) -> Result<Vec<DiscoveredModel>> {
-    let provider_key = match subscription {
-        OpenCodeSubscription::Zen => "opencode",
-        OpenCodeSubscription::Go => "opencode-go",
-    };
-    let rich_catalog = serde_json::from_str::<serde_json::Value>(rich_catalog)?;
-    let provider = rich_catalog
-        .get(provider_key)
-        .cloned()
-        .ok_or_else(|| anyhow!("OpenCode catalog is missing {provider_key}"))?;
-    let provider = serde_json::from_value::<RichCatalogProvider>(provider)?;
-    let mut compatible_candidate_count = provider.models.len();
-    let models = provider
-        .models
-        .into_iter()
-        .filter_map(|(catalog_id, metadata)| {
-            if metadata.status.as_deref() == Some("deprecated")
-                || (subscription == OpenCodeSubscription::Zen
-                    && metadata
-                        .cost
-                        .as_ref()
-                        .is_some_and(|cost| cost.input == Some(0.0) && cost.output == Some(0.0)))
-            {
-                compatible_candidate_count -= 1;
-                return None;
-            }
-            if metadata.id != catalog_id
-                || !metadata.tool_call
-                || !metadata
-                    .modalities
-                    .output
-                    .iter()
-                    .any(|value| value == "text")
-                || metadata.limit.context == 0
-            {
-                return None;
-            }
-            let transport = metadata
-                .provider
-                .as_ref()
-                .map(|provider| provider.npm.as_str())
-                .or(provider.npm.as_deref());
-            let protocol = transport.and_then(protocol_for_transport)?;
-            let reasoning_effort_levels = metadata
-                .reasoning
-                .then(|| {
-                    metadata
-                        .reasoning_options
-                        .as_deref()
-                        .unwrap_or_default()
-                        .iter()
-                        .find(|option| option.kind == "effort")
-                        .into_iter()
-                        .flat_map(|option| &option.values)
-                        .filter_map(|effort| normalize_reasoning_effort(effort))
-                        .collect::<Vec<_>>()
-                })
-                .filter(|levels| !levels.is_empty());
-            Some(DiscoveredModel {
-                model: opencode::Model::new(
-                    metadata.id.clone(),
-                    Some(metadata.name.clone()),
-                    metadata.limit.context,
-                    metadata.limit.output,
-                    protocol,
-                    reasoning_effort_levels,
-                    None,
-                    metadata.interleaved == serde_json::Value::Bool(true)
-                        || metadata.interleaved.is_object(),
-                ),
-                supports_images: metadata
-                    .modalities
-                    .input
-                    .iter()
-                    .any(|value| value == "image"),
-                supports_thinking: metadata.reasoning,
-            })
-        })
-        .collect::<Vec<_>>();
-    if compatible_candidate_count > 0 && models.is_empty() {
-        bail!("OpenCode model metadata did not contain any compatible models");
-    }
-    Ok(models)
-}
-
-fn protocol_for_transport(transport: &str) -> Option<ApiProtocol> {
-    match transport {
-        "@ai-sdk/anthropic" => Some(ApiProtocol::Anthropic),
-        "@ai-sdk/openai" => Some(ApiProtocol::OpenAiResponses),
-        "@ai-sdk/openai-compatible" => Some(ApiProtocol::OpenAiChat),
-        "@ai-sdk/google" => Some(ApiProtocol::Google),
-        _ => None,
-    }
-}
-
-async fn fetch_model_catalog(
-    client: Arc<dyn HttpClient>,
-    executor: BackgroundExecutor,
-) -> Result<String> {
-    let fetch = fetch_catalog_resource(client.as_ref(), RICH_MODEL_CATALOG_URL).fuse();
-    let timeout = executor.timer(MODEL_CATALOG_FETCH_TIMEOUT).fuse();
-    futures::pin_mut!(fetch, timeout);
-    futures::select_biased! {
-        result = fetch => result,
-        _ = timeout => bail!("OpenCode model catalog request timed out"),
-    }
-}
-
-async fn fetch_catalog_resource(client: &dyn HttpClient, url: &str) -> Result<String> {
-    // Catalogs are public; completion credentials and custom headers must not be sent here.
-    let request = Request::builder().method(Method::GET).uri(url);
-    let mut response = client
-        .send(request.body(AsyncBody::empty())?)
-        .await
-        .with_context(|| format!("requesting OpenCode catalog at {url}"))?;
-    if !response.status().is_success() {
-        bail!(
-            "OpenCode catalog request to {url} returned {}",
-            response.status()
-        );
-    }
-    let mut body = String::new();
-    response
-        .body_mut()
-        .take(MODEL_CATALOG_RESPONSE_LIMIT_BYTES)
-        .read_to_string(&mut body)
-        .await?;
-    Ok(body)
-}
-
 struct ConfigurationView {
     api_key_editor: Entity<InputField>,
     state: Entity<State>,
@@ -1211,7 +784,8 @@ struct ConfigurationView {
 impl ConfigurationView {
     fn new(state: Entity<State>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let api_key_editor = cx.new(|cx| {
-            InputField::new(window, cx, "sk-00000000000000000000000000000000").label("API key")
+            InputField::new(window, cx, "sk-00000000000000000000000000000000")
+                .label(i18n::t!("5f600b307b4eb0fb"))
         });
 
         cx.observe(&state, |_, _, cx| {
@@ -1303,13 +877,16 @@ impl Render for ConfigurationView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let env_var_set = self.state.read(cx).api_key_state.is_from_env_var();
         let configured_card_label = if env_var_set {
-            format!("API key set in {API_KEY_ENV_VAR_NAME} environment variable")
+            i18n::t!(
+                "76458a040bb8fcb7",
+                API_KEY_ENV_VAR_NAME = API_KEY_ENV_VAR_NAME
+            )
         } else {
             let api_url = OpenCodeLanguageModelProvider::api_url(cx);
             if api_url == OPENCODE_API_URL {
-                "API key configured".to_string()
+                i18n::t!("d95b24a24825e6c7").to_string()
             } else {
-                format!("API key configured for {}", api_url)
+                i18n::t_args!("3113f909247641a1", api_url)
             }
         };
 
@@ -1321,8 +898,9 @@ impl Render for ConfigurationView {
             ConfiguredApiCard::new("opencode-reset-key", configured_card_label)
                 .disabled(env_var_set)
                 .when(env_var_set, |this| {
-                    this.tooltip_label(format!(
-                        "To reset your API key, unset the {API_KEY_ENV_VAR_NAME} environment variable."
+                    this.tooltip_label(i18n::t!(
+                        "d402e5e520ed1b1e",
+                        API_KEY_ENV_VAR_NAME = API_KEY_ENV_VAR_NAME
                     ))
                 })
                 .on_click(cx.listener(|this, _, window, cx| this.reset_api_key(window, cx)))
@@ -1331,37 +909,38 @@ impl Render for ConfigurationView {
 
         let api_key_section = v_flex()
             .on_action(cx.listener(Self::save_api_key))
-            .child(Label::new(
-                "To use OpenCode models in Zed, you need an API key:",
-            ).color(Color::Muted))
+            .child(Label::new(i18n::t!("b52cd45f2b152232")).color(Color::Muted))
             .child(
                 List::new()
                     .child(
                         ListBulletItem::new("")
-                            .child(Label::new("Sign in and get your key at").color(Color::Muted))
+                            .child(Label::new(i18n::t!("6c233ad9df453549")).color(Color::Muted))
                             .child(ButtonLink::new(
-                                "OpenCode Console",
+                                i18n::t!("f291b49e8011485f"),
                                 "https://opencode.ai/auth",
                             )),
                     )
                     .when(is_editing, |this| {
-                        this.child(ListBulletItem::new(
-                            "Paste your API key below and hit enter to start using OpenCode",
-                        ).label_color(Color::Muted))
+                        this.child(
+                            ListBulletItem::new(i18n::t!("2d5da040703dcc48"))
+                                .label_color(Color::Muted),
+                        )
                     }),
             )
             .child(api_key_control)
             .child(
-                Label::new(format!(
-                    "You can also set the {API_KEY_ENV_VAR_NAME} environment variable and restart Zed."
+                Label::new(i18n::t!(
+                    "db72caa0fa37b7f9",
+                    API_KEY_ENV_VAR_NAME = API_KEY_ENV_VAR_NAME
                 ))
                 .size(LabelSize::Small)
-                .color(Color::Muted).mt_1p5(),
+                .color(Color::Muted)
+                .mt_1p5(),
             )
             .into_any_element();
 
         if self.load_credentials_task.is_some() {
-            Label::new("Loading Credentials…").into_any_element()
+            Label::new(i18n::t!("301bd57882aa3f94")).into_any_element()
         } else {
             let settings = OpenCodeLanguageModelProvider::settings(cx);
             let show_zen = settings.show_zen_models;
@@ -1369,11 +948,11 @@ impl Render for ConfigurationView {
 
             let subscription_toggles = v_flex()
                 .gap_2()
-                .child(Label::new("Subscriptions"))
+                .child(Label::new(i18n::t!("cf8efc450f718fbf")))
                 .child(
                     Switch::new("opencode-show-zen-models", show_zen.into())
                         .full_width(true)
-                        .label("Show Zen models")
+                        .label(i18n::t!("eb94cf0c7a03b1d1"))
                         .label_position(SwitchLabelPosition::Start)
                         .on_click(cx.listener(|this, state, window, cx| {
                             this.set_subscription_enabled(
@@ -1388,7 +967,7 @@ impl Render for ConfigurationView {
                 .child(
                     Switch::new("opencode-show-go-models", show_go.into())
                         .full_width(true)
-                        .label("Show Go models")
+                        .label(i18n::t!("a38092f134abd260"))
                         .label_position(SwitchLabelPosition::Start)
                         .on_click(cx.listener(|this, state, window, cx| {
                             this.set_subscription_enabled(
@@ -1401,25 +980,14 @@ impl Render for ConfigurationView {
                 );
 
             let no_subscriptions_warning = if !show_zen && !show_go {
-                Some(Banner::new().severity(Severity::Warning).child(Label::new(
-                    "No subscriptions enabled. Enable at least one subscription to use OpenCode.",
-                )))
+                Some(
+                    Banner::new()
+                        .severity(Severity::Warning)
+                        .child(Label::new(i18n::t!("9d4c0a5a0933e137"))),
+                )
             } else {
                 None
             };
-            let fetch_models_warnings =
-                self.state
-                    .read(cx)
-                    .fetch_models_errors
-                    .iter()
-                    .map(|(subscription, error)| {
-                        Banner::new()
-                            .severity(Severity::Error)
-                            .child(Label::new(format!(
-                                "Failed to load OpenCode {} models: {error}",
-                                subscription.display_name()
-                            )))
-                    });
 
             v_flex()
                 .size_full()
@@ -1429,7 +997,6 @@ impl Render for ConfigurationView {
                 .child(Divider::horizontal())
                 .child(subscription_toggles)
                 .children(no_subscriptions_warning)
-                .children(fetch_models_warnings)
                 .into_any()
         }
     }
@@ -1438,465 +1005,9 @@ impl Render for ConfigurationView {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fs::FakeFs;
     use http_client::{FakeHttpClient, Response};
     use language_model::{LanguageModelRequestMessage, MessageContent, Role};
     use parking_lot::Mutex;
-
-    fn test_catalog() -> &'static str {
-        r#"{
-            "opencode": {
-                "npm": "@ai-sdk/anthropic",
-                "models": {
-                    "zen-model": {
-                        "id": "zen-model",
-                        "name": "Zen Model",
-                        "tool_call": true,
-                        "modalities": {"input":["text"],"output":["text"]},
-                        "limit": {"context": 12345}
-                    }
-                }
-            },
-            "opencode-go": {
-                "npm": "@ai-sdk/openai-compatible",
-                "models": {
-                    "go-model": {
-                        "id": "go-model",
-                        "name": "Go Model",
-                        "tool_call": true,
-                        "modalities": {"input":["text"],"output":["text"]},
-                        "limit": {"context": 12345}
-                    }
-                }
-            }
-        }"#
-    }
-
-    #[gpui::test]
-    async fn test_disk_cache_and_hourly_refresh(cx: &mut gpui::TestAppContext) {
-        for (cached, stale, fail, initial_requests) in [
-            (Some(test_catalog()), false, false, 0),
-            (Some("not json"), false, false, 1),
-            (Some(test_catalog()), true, true, 1),
-            (None, false, false, 1),
-        ] {
-            let fs = FakeFs::new(cx.background_executor.clone());
-            let cache_path = PathBuf::from("/cache/opencode/models.json");
-            if let Some(cached) = cached {
-                fs.create_dir(Path::new("/cache/opencode")).await.unwrap();
-                fs.set_next_mtime(if stale {
-                    SystemTime::now() - MODEL_CATALOG_REFRESH_INTERVAL
-                } else {
-                    SystemTime::now() - Duration::from_secs(1)
-                });
-                fs.atomic_write(cache_path.clone(), cached.to_string())
-                    .await
-                    .unwrap();
-            }
-            let requests = Arc::new(Mutex::new(0));
-            let fail_request = Arc::new(Mutex::new(fail));
-            let client = FakeHttpClient::create({
-                let requests = requests.clone();
-                let fail_request = fail_request.clone();
-                move |_| {
-                    *requests.lock() += 1;
-                    let status = if *fail_request.lock() { 503 } else { 200 };
-                    async move {
-                        Ok(Response::builder().status(status).body(AsyncBody::from(
-                            test_catalog().replace("zen-model", "updated-model"),
-                        ))?)
-                    }
-                }
-            });
-            let provider = cx.update(|cx| {
-                let settings_store = SettingsStore::test(cx);
-                cx.set_global(settings_store);
-                OpenCodeLanguageModelProvider::new_with_cache(
-                    client,
-                    Arc::new(TestCredentialsProvider),
-                    fs.clone(),
-                    cache_path.clone(),
-                    cx,
-                )
-            });
-            provider
-                .state
-                .update(cx, |state, cx| {
-                    state.set_api_key(Some("secret".to_string()), cx)
-                })
-                .await
-                .unwrap();
-            cx.run_until_parked();
-            assert_eq!(*requests.lock(), initial_requests);
-            let expected = if initial_requests == 0 || fail {
-                "zen-model"
-            } else {
-                "updated-model"
-            };
-            provider.state.read_with(cx, |state, _cx| {
-                assert_eq!(
-                    state.discovered_models[&OpenCodeSubscription::Zen][0]
-                        .model
-                        .id(),
-                    expected,
-                );
-            });
-            if fail {
-                assert_eq!(fs.load(&cache_path).await.unwrap(), test_catalog());
-            }
-
-            *fail_request.lock() = false;
-            cx.background_executor
-                .advance_clock(MODEL_CATALOG_REFRESH_INTERVAL);
-            cx.run_until_parked();
-            assert_eq!(*requests.lock(), initial_requests + 1);
-            provider.state.read_with(cx, |state, _cx| {
-                assert_eq!(
-                    state.discovered_models[&OpenCodeSubscription::Zen][0]
-                        .model
-                        .id(),
-                    "updated-model",
-                );
-                assert!(state.fetch_models_errors.is_empty());
-            });
-            assert_eq!(
-                serde_json::from_str::<serde_json::Value>(&fs.load(&cache_path).await.unwrap())
-                    .unwrap(),
-                serde_json::from_str::<serde_json::Value>(
-                    &test_catalog().replace("zen-model", "updated-model")
-                )
-                .unwrap(),
-            );
-            drop(provider);
-            cx.run_until_parked();
-        }
-    }
-
-    #[gpui::test]
-    async fn test_fresh_disk_catalog_is_usable(cx: &mut gpui::TestAppContext) {
-        let fs = FakeFs::new(cx.background_executor.clone());
-        let cache_path = PathBuf::from("/cache/models.json");
-        fs.set_next_mtime(SystemTime::now());
-        fs.atomic_write(cache_path.clone(), test_catalog().to_string())
-            .await
-            .unwrap();
-
-        let (catalog, is_fresh) = load_cached_catalog(fs.as_ref(), &cache_path)
-            .await
-            .unwrap()
-            .unwrap();
-
-        assert!(is_fresh);
-        assert_eq!(catalog, test_catalog());
-    }
-
-    #[gpui::test]
-    async fn test_invalid_disk_catalog_falls_back_to_network(cx: &mut gpui::TestAppContext) {
-        let fs = FakeFs::new(cx.background_executor.clone());
-        let cache_path = PathBuf::from("/cache/models.json");
-        fs.atomic_write(cache_path.clone(), "not json".to_string())
-            .await
-            .unwrap();
-
-        assert!(load_cached_catalog(fs.as_ref(), &cache_path).await.is_err());
-        assert_eq!(fs.load(&cache_path).await.unwrap(), "not json");
-    }
-
-    #[gpui::test]
-    async fn test_credential_change_invalidates_discovery_before_storing_key(
-        cx: &mut gpui::TestAppContext,
-    ) {
-        let provider = cx.update(|cx| {
-            let settings_store = SettingsStore::test(cx);
-            cx.set_global(settings_store);
-            OpenCodeLanguageModelProvider::new_with_cache(
-                FakeHttpClient::with_404_response(),
-                Arc::new(TestCredentialsProvider),
-                FakeFs::new(cx.background_executor().clone()),
-                PathBuf::from("/cache/models.json"),
-                cx,
-            )
-        });
-        provider
-            .state
-            .update(cx, |state, cx| {
-                state.set_api_key(Some("old-key".to_string()), cx)
-            })
-            .await
-            .unwrap();
-        provider.state.update(cx, |state, _cx| {
-            state.discovered_models.insert(
-                OpenCodeSubscription::Zen,
-                vec![DiscoveredModel {
-                    model: test_model("old-model", ApiProtocol::Anthropic),
-                    supports_images: true,
-                    supports_thinking: false,
-                }],
-            );
-        });
-
-        let store_task = provider.state.update(cx, |state, cx| {
-            let task = state.set_api_key(Some("new-key".to_string()), cx);
-            assert!(state.fetch_models_task.is_none());
-            assert!(state.discovered_models.is_empty());
-            task
-        });
-
-        store_task.await.unwrap();
-    }
-
-    #[test]
-    fn test_refresh_failure_preserves_last_success_per_subscription() {
-        let mut discovered_models = HashMap::default();
-        discovered_models.insert(
-            OpenCodeSubscription::Zen,
-            vec![DiscoveredModel {
-                model: test_model("old-zen", ApiProtocol::Anthropic),
-                supports_images: true,
-                supports_thinking: false,
-            }],
-        );
-        discovered_models.insert(
-            OpenCodeSubscription::Go,
-            vec![DiscoveredModel {
-                model: test_model("old-go", ApiProtocol::OpenAiChat),
-                supports_images: false,
-                supports_thinking: false,
-            }],
-        );
-        let mut errors = HashMap::default();
-        let new_go_model = DiscoveredModel {
-            model: test_model("new-go", ApiProtocol::OpenAiChat),
-            supports_images: true,
-            supports_thinking: true,
-        };
-
-        apply_discovery_results(
-            &mut discovered_models,
-            &mut errors,
-            [
-                (OpenCodeSubscription::Zen, Err(anyhow!("refresh failed"))),
-                (OpenCodeSubscription::Go, Ok(vec![new_go_model])),
-            ],
-        );
-
-        assert_eq!(
-            discovered_models[&OpenCodeSubscription::Zen][0].model.id(),
-            "old-zen"
-        );
-        assert_eq!(
-            discovered_models[&OpenCodeSubscription::Go][0].model.id(),
-            "new-go"
-        );
-        assert!(errors.contains_key(&OpenCodeSubscription::Zen));
-        assert!(!errors.contains_key(&OpenCodeSubscription::Go));
-    }
-
-    #[gpui::test]
-    fn test_default_reasoning_effort(cx: &mut gpui::TestAppContext) {
-        use ReasoningEffort::{High, Low, Max, Medium, Minimal, XHigh};
-
-        cx.update(|cx| {
-            let settings_store = SettingsStore::test(cx);
-            cx.set_global(settings_store);
-            let provider = OpenCodeLanguageModelProvider::new_with_cache(
-                FakeHttpClient::with_404_response(),
-                Arc::new(TestCredentialsProvider),
-                FakeFs::new(cx.background_executor().clone()),
-                PathBuf::from("/cache/models.json"),
-                cx,
-            );
-            for (levels, expected) in [
-                (vec![Low, Medium, High, XHigh, Max], Some("high")),
-                (vec![Max, High, Medium], Some("high")),
-                (vec![Low, Medium, Max], Some("medium")),
-                (vec![Minimal, Low, Max], Some("low")),
-                (vec![Minimal, Max], Some("minimal")),
-                (vec![Low, High, XHigh], Some("xhigh")),
-                (vec![High, Low], Some("low")),
-                (vec![Max], Some("max")),
-                (vec![ReasoningEffort::None], None),
-                (vec![], None),
-            ] {
-                let model = provider.create_language_model_with_capabilities(
-                    opencode::Model::new(
-                        "test-model".to_string(),
-                        None,
-                        1000,
-                        None,
-                        ApiProtocol::OpenAiChat,
-                        Some(levels),
-                        None,
-                        false,
-                    ),
-                    OpenCodeSubscription::Zen,
-                    false,
-                    true,
-                );
-                assert_eq!(
-                    model
-                        .default_effort_level()
-                        .map(|effort| effort.value.to_string())
-                        .as_deref(),
-                    expected,
-                );
-            }
-        });
-    }
-
-    #[test]
-    fn test_none_only_reasoning_does_not_enable_thinking() {
-        let model = opencode::Model::new(
-            "none-only".to_string(),
-            None,
-            1000,
-            None,
-            ApiProtocol::OpenAiChat,
-            Some(vec![ReasoningEffort::None]),
-            None,
-            false,
-        );
-
-        assert!(!model_supports_thinking(&model));
-    }
-
-    #[test]
-    fn test_discovery_excludes_only_explicitly_free_zen_models() -> Result<()> {
-        for (cost, zen_model_count) in [
-            (serde_json::json!({"input": 0, "output": 0}), 0),
-            (serde_json::json!({"input": 0, "output": 1}), 1),
-            (serde_json::json!({"input": 1, "output": 0}), 1),
-            (serde_json::json!({"input": 1, "output": 1}), 1),
-            (serde_json::json!({"input": 0}), 1),
-            (serde_json::json!({"output": 0}), 1),
-            (serde_json::json!({}), 1),
-            (serde_json::Value::Null, 1),
-        ] {
-            let provider = serde_json::json!({
-                "npm": "@ai-sdk/openai-compatible",
-                "models": {
-                    "model": {
-                        "id": "model",
-                        "name": "Model",
-                        "tool_call": true,
-                        "modalities": {"output": ["text"]},
-                        "limit": {"context": 1000},
-                        "cost": cost,
-                    },
-                },
-            });
-            let catalog = serde_json::json!({
-                "opencode": provider,
-                "opencode-go": provider,
-            })
-            .to_string();
-            for (subscription, expected_count) in [
-                (OpenCodeSubscription::Zen, zen_model_count),
-                (OpenCodeSubscription::Go, 1),
-            ] {
-                let models = parse_discovered_models(&catalog, subscription)?;
-                assert_eq!(models.len(), expected_count, "{subscription:?}: {cost}");
-            }
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn test_discovery_filters_deprecated_status_per_subscription() -> Result<()> {
-        for (zen_status, go_status, zen_count, go_count) in [
-            (Some("deprecated"), None, 0, 1),
-            (None, Some("deprecated"), 1, 0),
-            (Some("active"), Some("preview"), 1, 1),
-            (Some("deprecated"), Some("deprecated"), 0, 0),
-        ] {
-            let mut catalog = serde_json::json!({});
-            for (provider_key, status) in [("opencode", zen_status), ("opencode-go", go_status)] {
-                let mut model = serde_json::json!({
-                    "id": "model",
-                    "name": "Model",
-                    "tool_call": true,
-                    "modalities": {"output": ["text"]},
-                    "limit": {"context": 1000},
-                });
-                if let Some(status) = status {
-                    model["status"] = status.into();
-                }
-                catalog[provider_key] = serde_json::json!({
-                    "npm": "@ai-sdk/openai-compatible",
-                    "models": {"model": model},
-                });
-            }
-            for (subscription, expected_count) in [
-                (OpenCodeSubscription::Zen, zen_count),
-                (OpenCodeSubscription::Go, go_count),
-            ] {
-                let models = parse_discovered_models(&catalog.to_string(), subscription)?;
-                assert_eq!(models.len(), expected_count, "{subscription:?}: {catalog}",);
-            }
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn test_parse_discovered_models_uses_catalog_entries_directly() {
-        let models = parse_discovered_models(
-            r#"{
-                "opencode-go": {
-                    "npm": "@ai-sdk/openai-compatible",
-                    "models": {
-                        "new-model": {
-                            "id": "new-model",
-                            "name": "New Model",
-                            "reasoning": true,
-                            "reasoning_options": [{"type":"effort","values":["low","high"]}],
-                            "tool_call": true,
-                            "interleaved": true,
-                            "modalities": {"input":["text","image"],"output":["text"]},
-                            "limit": {"context": 12345,"output": 678}
-                        }
-                    }
-                }
-            }"#,
-            OpenCodeSubscription::Go,
-        )
-        .unwrap();
-
-        assert_eq!(models.len(), 1);
-        assert_eq!(models[0].model.id(), "new-model");
-        assert_eq!(models[0].model.display_name(), "New Model");
-        assert!(models[0].supports_images);
-        assert!(models[0].supports_thinking);
-        assert_eq!(
-            models[0].model.supported_reasoning_effort_levels(),
-            Some([ReasoningEffort::Low, ReasoningEffort::High].as_slice())
-        );
-        assert_eq!(models[0].model.max_token_count(), 12345);
-        assert_eq!(models[0].model.max_output_tokens(), Some(678));
-        assert_eq!(models[0].model.protocol(), ApiProtocol::OpenAiChat);
-    }
-
-    #[test]
-    fn test_parse_discovered_models_rejects_catalog_without_compatible_models() {
-        let result = parse_discovered_models(
-            r#"{
-                "opencode": {
-                    "npm": "@ai-sdk/anthropic",
-                    "models": {
-                        "text-only": {
-                            "id": "text-only",
-                            "name": "Text Only",
-                            "tool_call": false,
-                            "modalities": {"input":["text"],"output":["text"]},
-                            "limit": {"context": 1000}
-                        }
-                    }
-                }
-            }"#,
-            OpenCodeSubscription::Zen,
-        );
-
-        assert!(result.is_err());
-    }
 
     #[test]
     fn test_opencode_session_header_uses_thread_id() {
@@ -1947,24 +1058,14 @@ mod tests {
         let provider = cx.update(|cx| {
             let settings_store = SettingsStore::test(cx);
             cx.set_global(settings_store);
-            OpenCodeLanguageModelProvider::new_with_cache(
-                http_client,
-                Arc::new(TestCredentialsProvider),
-                FakeFs::new(cx.background_executor().clone()),
-                PathBuf::from("/cache/models.json"),
-                cx,
-            )
+            OpenCodeLanguageModelProvider::new(http_client, Arc::new(TestCredentialsProvider), cx)
         });
         let store_key = provider.state.update(cx, |state, cx| {
             state.set_api_key(Some("test-key".to_string()), cx)
         });
         store_key.await.unwrap();
-        let model = provider.create_language_model_with_capabilities(
-            test_model("test-model", ApiProtocol::Anthropic),
-            OpenCodeSubscription::Go,
-            true,
-            false,
-        );
+        let model =
+            provider.create_language_model(opencode::Model::default(), OpenCodeSubscription::Go);
         let request = LanguageModelRequest {
             thread_id: None,
             messages: vec![LanguageModelRequestMessage {
@@ -1996,19 +1097,6 @@ mod tests {
             .unwrap()
             .parse::<u64>()
             .expect("generated session id should be a u64");
-    }
-
-    fn test_model(name: &str, protocol: ApiProtocol) -> opencode::Model {
-        opencode::Model::new(
-            name.to_string(),
-            None,
-            1000,
-            Some(100),
-            protocol,
-            None,
-            None,
-            false,
-        )
     }
 
     struct TestCredentialsProvider;

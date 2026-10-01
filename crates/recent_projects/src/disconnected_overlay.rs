@@ -155,19 +155,15 @@ impl Render for DisconnectedOverlay {
                     .session
                     .restore_unsaved_buffers
                 {
-                    "\nUnsaved changes are stored locally."
+                    i18n::t!("6713004a0a7508fb")
                 } else {
                     ""
                 };
-                let reason = if *server_not_running {
-                    "process exiting unexpectedly"
+                if *server_not_running {
+                    i18n::t_mix!("98eef38ee3b2b415"; options.display_name(); autosave = autosave)
                 } else {
-                    "not responding"
-                };
-                format!(
-                    "Your connection to {} has been lost due to the server {reason}.{autosave}",
-                    options.display_name(),
-                )
+                    i18n::t_mix!("13b16c2c7a11c848"; options.display_name(); autosave = autosave)
+                }
             }
         };
 
@@ -180,18 +176,16 @@ impl Render for DisconnectedOverlay {
             .max_h(rems(40.))
             .child(
                 Modal::new("disconnected", None)
-                    .header(
-                        ModalHeader::new()
-                            .show_dismiss_button(true)
-                            .child(Headline::new("Disconnected").size(HeadlineSize::Small)),
-                    )
+                    .header(ModalHeader::new().show_dismiss_button(true).child(
+                        Headline::new(i18n::t!("7727668c83e96ea6")).size(HeadlineSize::Small),
+                    ))
                     .section(Section::new().child(Label::new(message)))
                     .footer(
                         ModalFooter::new().end_slot(
                             h_flex()
                                 .gap_2()
                                 .child(
-                                    Button::new("close-window", "Close Window")
+                                    Button::new("close-window", i18n::t!("1ae6b0a0f8266382"))
                                         .style(ButtonStyle::Filled)
                                         .layer(ElevationIndex::ModalSurface)
                                         .on_click(cx.listener(move |_, _, window, _| {
@@ -200,7 +194,7 @@ impl Render for DisconnectedOverlay {
                                 )
                                 .when(can_reconnect, |el| {
                                     el.child(
-                                        Button::new("reconnect", "Reconnect")
+                                        Button::new("reconnect", i18n::t!("68891ab35cab9663"))
                                             .style(ButtonStyle::Filled)
                                             .layer(ElevationIndex::ModalSurface)
                                             .start_icon(Icon::new(IconName::ArrowCircle))

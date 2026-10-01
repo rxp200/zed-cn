@@ -227,11 +227,8 @@ impl LanguageModelProvider for OpenAiLanguageModelProvider {
 
     fn fast_mode_confirmation(&self, _cx: &App) -> Option<FastModeConfirmation> {
         Some(FastModeConfirmation {
-            title: "Enable Fast Mode for OpenAI?".into(),
-            message: "Fast mode sends requests using OpenAI's Priority processing tier, which \
-                targets significantly lower latency than the standard tier and is billed at a \
-                premium per-token rate."
-                .into(),
+            title: i18n::t!("7ab3b5ad73d12ece").into(),
+            message: i18n::t!("d7d17066f55da912").into(),
         })
     }
 }
@@ -511,9 +508,6 @@ impl LanguageModel for OpenAiLanguageModel {
             | Model::FivePointSixTerra
             | Model::FivePointSixLuna
             | Model::SixAstra
-            | Model::SixSol
-            | Model::SixLuna
-            | Model::SixPointOneSol
             | Model::O3 => true,
             Model::Four => false,
             Model::Custom {

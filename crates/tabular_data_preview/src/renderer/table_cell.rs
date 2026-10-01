@@ -65,6 +65,6 @@ fn create_table_cell(
             VerticalAlignment::Center => div.items_center(),
         })
         .font_buffer(cx);
-    with_copy_on_right_click(cell, cell_content.clone(), "Right click to copy content")
+    with_copy_on_right_click(cell, cell_content.clone(), i18n::t!("0129ff93ed2d15ef"))
         .child(div().child(cell_content))
 }

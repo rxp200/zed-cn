@@ -356,7 +356,7 @@ pub fn init(cx: &mut App) {
                         Please note that Zed currently does not support opening network share folders inside wsl.
                     "#};
 
-                    let _ = cx.prompt(gpui::PromptLevel::Critical, "Invalid path", Some(&message), &["OK"]).await;
+                    let _ = cx.prompt(gpui::PromptLevel::Critical, i18n::t!("419e02ffd81c0efb"), Some(&message), &[i18n::t!("fac2a67ad87807c4")]).await;
                     return;
                 }
 
@@ -511,7 +511,7 @@ pub fn init(cx: &mut App) {
                         gpui::PromptLevel::Critical,
                         "Cannot open Dev Container from remote project",
                         None,
-                        &["OK"],
+                        &[i18n::t!("fac2a67ad87807c4")],
                     )
                     .await
                     .ok();
@@ -978,7 +978,7 @@ impl PickerDelegate for RecentProjectsDelegate {
                 .open_folders
                 .iter()
                 .enumerate()
-                .map(|(id, folder)| StringMatchCandidate::new(id, folder.name.as_ref()))
+                .map(|(id, folder)| StringMatchCandidate::new_with_pinyin(id, folder.name.as_ref()))
                 .collect();
 
             match_strings(
@@ -1174,31 +1174,46 @@ impl PickerDelegate for RecentProjectsDelegate {
                         } else {
                             let path_list = key.path_list().clone();
                             let host = key.host();
-                            if let Some(task) = handle
+                            if let Some((task, modal_workspace)) = handle
                                 .update(cx, |multi_workspace, window, cx| {
                                     let modal_workspace = multi_workspace.workspace().clone();
-                                    multi_workspace.find_or_create_workspace(
+                                    let task = multi_workspace.find_or_create_workspace(
                                         path_list,
                                         host,
                                         Some(key.clone()),
-                                        move |options, window, cx| {
-                                            connect_with_modal(
-                                                &modal_workspace,
-                                                options,
-                                                window,
-                                                cx,
-                                            )
+                                        {
+                                            let modal_workspace = modal_workspace.clone();
+                                            move |options, window, cx| {
+                                                connect_with_modal(
+                                                    &modal_workspace,
+                                                    options,
+                                                    window,
+                                                    cx,
+                                                )
+                                            }
                                         },
                                         None,
                                         OpenMode::Activate,
                                         None,
                                         window,
                                         cx,
-                                    )
+                                    );
+                                    (task, modal_workspace)
                                 })
                                 .log_err()
                             {
-                                task.detach_and_log_err(cx);
+                                cx.spawn(async move |cx| {
+                                    let result = task.await;
+                                    modal_workspace.update(cx, |workspace, cx| {
+                                        if let Some(modal) =
+                                            workspace.active_modal::<RemoteConnectionModal>(cx)
+                                        {
+                                            modal.update(cx, |modal, cx| modal.finished(cx));
+                                        }
+                                    });
+                                    result
+                                })
+                                .detach_and_log_err(cx);
                             }
                         }
                     });
@@ -1217,9 +1232,9 @@ impl PickerDelegate for RecentProjectsDelegate {
 
     fn no_matches_text(&self, _window: &mut Window, _cx: &mut App) -> Option<SharedString> {
         let text = if self.workspaces.is_empty() && self.open_folders.is_empty() {
-            "Recently opened projects will show up here".into()
+            i18n::t!("ac988c0bd18bef78").into()
         } else {
-            "No matches".into()
+            i18n::t!("336cba9a92414d13").into()
         };
         Some(text)
     }
@@ -1375,7 +1390,7 @@ impl PickerDelegate for RecentProjectsDelegate {
                     .unzip();
 
                 let highlighted_match = HighlightedMatchWithPaths {
-                    prefix: None,
+                    prefix: key.host().map(|options| options.display_name().into()),
                     match_label: HighlightedMatch::join(match_labels.into_iter().flatten(), ", "),
                     paths: path_highlights,
                     active: is_active,
@@ -1700,7 +1715,7 @@ impl PickerDelegate for RecentProjectsDelegate {
                                     .w_full()
                                     .gap_1()
                                     .justify_between()
-                                    .child(Label::new("Open Local Folders"))
+                                    .child(Label::new(i18n::t!("51541381cd3e6c3c")))
                                     .child(KeyBinding::for_action_in(
                                         &workspace::Open {
                                             create_new_window: Some(self.create_new_window),
@@ -1729,7 +1744,7 @@ impl PickerDelegate for RecentProjectsDelegate {
                                     .w_full()
                                     .gap_1()
                                     .justify_between()
-                                    .child(Label::new("Open Remote Folder"))
+                                    .child(Label::new(i18n::t!("8231c3d317598e09")))
                                     .child(KeyBinding::for_action(
                                         &OpenRemote {
                                             from_existing_connection: false,
@@ -1769,7 +1784,7 @@ impl PickerDelegate for RecentProjectsDelegate {
 
         let secondary_footer_actions: Option<AnyElement> = match selected_entry {
             Some(ProjectPickerEntry::OpenFolder { .. }) => Some(
-                Button::new("remove_selected", "Remove Folder")
+                Button::new("remove_selected", i18n::t!("25807d9f76f32c58"))
                     .key_binding(KeyBinding::for_action_in(
                         &RemoveSelected,
                         &focus_handle,
@@ -1781,7 +1796,7 @@ impl PickerDelegate for RecentProjectsDelegate {
                     .into_any_element(),
             ),
             Some(ProjectPickerEntry::ProjectGroup(_)) if !is_current_workspace_entry => Some(
-                Button::new("remove_selected", "Remove from Window")
+                Button::new("remove_selected", i18n::t!("a014bdadd034274c"))
                     .key_binding(KeyBinding::for_action_in(
                         &RemoveSelected,
                         &focus_handle,
@@ -1793,7 +1808,7 @@ impl PickerDelegate for RecentProjectsDelegate {
                     .into_any_element(),
             ),
             Some(ProjectPickerEntry::RecentProject(_)) => Some(
-                Button::new("delete_recent", "Remove")
+                Button::new("delete_recent", i18n::t!("2f9daa828907b93f"))
                     .key_binding(KeyBinding::for_action_in(
                         &RemoveSelected,
                         &focus_handle,
@@ -1825,7 +1840,7 @@ impl PickerDelegate for RecentProjectsDelegate {
                                 let window_project_groups = self.window_project_groups.clone();
                                 let selected_index = self.selected_index;
                                 let filtered_entries = self.filtered_entries.clone();
-                                Button::new("move_to_new_window", "New Window")
+                                Button::new("move_to_new_window", i18n::t!("1a1281a5e5c48811"))
                                     .key_binding(KeyBinding::for_action_in(
                                         &menu::SecondaryConfirm,
                                         &focus_handle,
@@ -1845,7 +1860,7 @@ impl PickerDelegate for RecentProjectsDelegate {
                             })
                         })
                         .child(
-                            Button::new("activate", "Activate")
+                            Button::new("activate", i18n::t!("dd1286c29e9b158b"))
                                 .key_binding(KeyBinding::for_action_in(
                                     &menu::Confirm,
                                     &focus_handle,
@@ -1857,7 +1872,7 @@ impl PickerDelegate for RecentProjectsDelegate {
                         )
                     } else if self.create_new_window {
                         this.child(
-                            Button::new("open_here", "This Window")
+                            Button::new("open_here", i18n::t!("484709685ed0508f"))
                                 .key_binding(KeyBinding::for_action_in(
                                     &menu::SecondaryConfirm,
                                     &focus_handle,
@@ -1868,7 +1883,7 @@ impl PickerDelegate for RecentProjectsDelegate {
                                 }),
                         )
                         .child(
-                            Button::new("open_new_window", "Open")
+                            Button::new("open_new_window", i18n::t!("c771248e511fbf93"))
                                 .key_binding(KeyBinding::for_action_in(
                                     &menu::Confirm,
                                     &focus_handle,
@@ -1880,7 +1895,7 @@ impl PickerDelegate for RecentProjectsDelegate {
                         )
                     } else {
                         this.child(
-                            Button::new("open_new_window", "New Window")
+                            Button::new("open_new_window", i18n::t!("1a1281a5e5c48811"))
                                 .key_binding(KeyBinding::for_action_in(
                                     &menu::SecondaryConfirm,
                                     &focus_handle,
@@ -1891,7 +1906,7 @@ impl PickerDelegate for RecentProjectsDelegate {
                                 }),
                         )
                         .child(
-                            Button::new("open_here", "Open")
+                            Button::new("open_here", i18n::t!("c771248e511fbf93"))
                                 .key_binding(KeyBinding::for_action_in(
                                     &menu::Confirm,
                                     &focus_handle,
@@ -1913,7 +1928,7 @@ impl PickerDelegate for RecentProjectsDelegate {
                             y: px(-2.0),
                         })
                         .trigger(
-                            Button::new("actions-trigger", "Actions")
+                            Button::new("actions-trigger", i18n::t!("ed31fbb483ee1b0a"))
                                 .selected_style(ButtonStyle::Tinted(TintColor::Accent))
                                 .key_binding(KeyBinding::for_action_in(
                                     &ToggleActionsMenu,
@@ -1957,7 +1972,7 @@ impl PickerDelegate for RecentProjectsDelegate {
                                                 .separator()
                                             })
                                             .entry(
-                                                "Open Local Folders",
+                                                i18n::t!("51541381cd3e6c3c"),
                                                 Some(open_action.boxed_clone()),
                                                 {
                                                     let workspace_handle = workspace_handle.clone();
@@ -1972,7 +1987,7 @@ impl PickerDelegate for RecentProjectsDelegate {
                                                 },
                                             )
                                             .action(
-                                                "Open Remote Folder",
+                                                i18n::t!("8231c3d317598e09"),
                                                 OpenRemote {
                                                     from_existing_connection: false,
                                                     create_new_window: Some(create_new_window),
@@ -3202,6 +3217,12 @@ mod tests {
         assert!(
             !has_local,
             "remote project group confirm should not create a local workspace"
+        );
+        assert!(
+            workspace.read_with(cx, |workspace, cx| workspace
+                .active_modal::<RemoteConnectionModal>(cx)
+                .is_none()),
+            "remote connection modal should be dismissed after the open attempt"
         );
     }
 

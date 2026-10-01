@@ -416,11 +416,8 @@ impl LanguageModelProvider for CloudLanguageModelProvider {
 
     fn fast_mode_confirmation(&self, _cx: &App) -> Option<FastModeConfirmation> {
         Some(FastModeConfirmation {
-            title: "Enable Fast Mode for Zed?".into(),
-            message: "Fast mode routes requests through the upstream provider's fast mode or priority tier. The \
-                upstream provider's premium per-token pricing applies and is passed through to \
-                your Zed billing."
-                .into(),
+            title: i18n::t!("f7f281dc5e982fc5").into(),
+            message: i18n::t!("86fe33827577eb01").into(),
         })
     }
 }
@@ -509,7 +506,7 @@ impl RenderOnce for ZedAiConfiguration {
         );
 
         let manage_subscription_buttons = if has_paid_plan {
-            Button::new("manage_settings", "Manage Subscription")
+            Button::new("manage_settings", i18n::t!("fb87f3e65dd5b0d5"))
                 .when(!self.compact, |this| {
                     this.full_width().label_size(LabelSize::Small)
                 })
@@ -518,7 +515,7 @@ impl RenderOnce for ZedAiConfiguration {
                 .on_click(|_, _, cx| cx.open_url(&zed_urls::account_url(cx)))
                 .into_any_element()
         } else if self.plan.is_none() || self.eligible_for_trial {
-            Button::new("start_trial", "Start Free Trial")
+            Button::new("start_trial", i18n::t!("7a948008f0e06c53"))
                 .when(!self.compact, |this| {
                     this.full_width().label_size(LabelSize::Small)
                 })
@@ -527,7 +524,7 @@ impl RenderOnce for ZedAiConfiguration {
                 .on_click(|_, _, cx| cx.open_url(&zed_urls::start_trial_url(cx)))
                 .into_any_element()
         } else {
-            Button::new("upgrade", "Upgrade to Pro")
+            Button::new("upgrade", i18n::t!("b83e23cc1cb9f4c5"))
                 .when(!self.compact, |this| {
                     this.full_width().label_size(LabelSize::Small)
                 })
@@ -542,7 +539,7 @@ impl RenderOnce for ZedAiConfiguration {
                 .gap_2()
                 .when(!self.compact, |this| this.child(Label::new(description)))
                 .child(
-                    Button::new("sign_in", "Sign In to use Zed AI")
+                    Button::new("sign_in", i18n::t!("c8c3a596b817a381"))
                         .start_icon(
                             Icon::new(IconName::Github)
                                 .size(IconSize::Small)
@@ -565,7 +562,7 @@ impl RenderOnce for ZedAiConfiguration {
             .map(|this| {
                 if self.account_too_young {
                     this.child(YoungAccountBanner).child(
-                        Button::new("upgrade", "Upgrade to Pro")
+                        Button::new("upgrade", i18n::t!("b83e23cc1cb9f4c5"))
                             .style(ui::ButtonStyle::Tinted(ui::TintColor::Accent))
                             .when(!self.compact, |this| this.full_width())
                             .on_click(|_, _, cx| {

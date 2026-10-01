@@ -500,7 +500,7 @@ impl PickerDelegate for ColumnFilterDelegate {
                         .id("table-filter-clear-all")
                         .cursor_pointer()
                         .child(
-                            Label::new("Clear all")
+                            Label::new(i18n::t!("55f1033fab699842"))
                                 .size(LabelSize::Small)
                                 .color(Color::Accent),
                         )
@@ -679,7 +679,7 @@ impl TabularDataPreviewPane {
             })
             .toggle_state(has_active_filters),
             Tooltip::text(if has_active_filters {
-                "Column has active filters. Click to manage"
+                i18n::t!("fb3c49d3cda03b92")
             } else {
                 "No filters applied. Click to add filters"
             }),

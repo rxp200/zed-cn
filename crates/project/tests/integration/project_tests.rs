@@ -17915,6 +17915,67 @@ async fn test_project_group_keys_remain_distinct_for_sibling_repo_subdirectories
     );
 }
 
+#[test]
+fn test_project_group_key_equality_ignores_runtime_connection_fields() {
+    let paths = util::path_list::PathList::new(&[PathBuf::from("/remote/repo")]);
+    let options = remote::SshConnectionOptions {
+        host: "example.com".into(),
+        username: Some("dev".to_string()),
+        port: Some(2222),
+        ..Default::default()
+    };
+
+    let mut drifted = options.clone();
+    drifted.nickname = Some("example-host".to_string());
+    drifted.upload_binary_over_ssh = true;
+    drifted.remote_server_source = settings::RemoteServerSource::ZedCn;
+    drifted.args = Some(vec!["-o".to_string(), "IdentitiesOnly=yes".to_string()]);
+    drifted.password = Some("exported-password".to_string());
+
+    let key = ProjectGroupKey::new(Some(options.clone().into()), paths.clone());
+    let drifted_key = ProjectGroupKey::new(Some(drifted.into()), paths.clone());
+
+    assert_eq!(
+        key, drifted_key,
+        "runtime-only connection fields must not split a project group"
+    );
+    assert!(key.matches(&drifted_key));
+    assert_eq!(
+        hash_project_group_key(&key),
+        hash_project_group_key(&drifted_key),
+        "equal project group keys must hash equally"
+    );
+
+    let main_worktree_twice = util::path_list::PathList::new(&[
+        PathBuf::from("/remote/repo"),
+        PathBuf::from("/remote/repo"),
+    ]);
+    assert_eq!(
+        key,
+        ProjectGroupKey::new(Some(options.clone().into()), main_worktree_twice),
+        "a repository plus its linked worktree still describes one project"
+    );
+
+    let other_host = ProjectGroupKey::new(
+        Some(
+            remote::SshConnectionOptions {
+                host: "other.example.com".into(),
+                ..options
+            }
+            .into(),
+        ),
+        paths,
+    );
+    assert_ne!(key, other_host, "different hosts are different projects");
+    assert!(!key.matches(&other_host));
+}
+
+fn hash_project_group_key(key: &ProjectGroupKey) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    std::hash::Hash::hash(key, &mut hasher);
+    std::hash::Hasher::finish(&hasher)
+}
+
 fn project_group_key_paths(project: &Entity<Project>, cx: &TestAppContext) -> Vec<PathBuf> {
     project.read_with(cx, |project, cx| {
         ProjectGroupKey::from_project(project, cx)

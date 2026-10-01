@@ -12,8 +12,8 @@ use crate::{
     row_chunk::{RowChunkId, RowChunks},
     runnable::{self, RunnableRange},
     syntax_map::{
-        MAX_BYTES_TO_QUERY, SyntaxLayer, SyntaxMap, SyntaxMapCapture, SyntaxMapCaptures,
-        SyntaxMapMatch, SyntaxMapMatches, SyntaxSnapshot, ToTreeSitterPoint,
+        FOREGROUND_QUERY_TIMEOUT, MAX_BYTES_TO_QUERY, SyntaxLayer, SyntaxMap, SyntaxMapCapture,
+        SyntaxMapCaptures, SyntaxMapMatch, SyntaxMapMatches, SyntaxSnapshot, ToTreeSitterPoint,
         flattened_highlight_regions,
     },
     text_diff::text_diff,
@@ -156,6 +156,7 @@ pub struct TreeSitterData {
 }
 
 pub(crate) const MAX_ROWS_IN_A_CHUNK: u32 = 50;
+pub const MAX_HIGHLIGHTED_LINE_LEN: usize = 20_000;
 pub(crate) const MAX_BYTES_TO_HIGHLIGHT_IN_A_CHUNK: usize = 4 * MAX_BYTES_TO_QUERY;
 
 impl TreeSitterData {
@@ -526,6 +527,20 @@ struct BufferChunkHighlights<'a> {
 }
 
 type HighlightRun = (Range<usize>, HighlightId);
+
+fn subtract_range(range: Range<usize>, excluded: &Range<usize>) -> Vec<Range<usize>> {
+    if excluded.end <= range.start || excluded.start >= range.end {
+        return vec![range];
+    }
+    let mut remaining = Vec::with_capacity(2);
+    if range.start < excluded.start {
+        remaining.push(range.start..excluded.start.min(range.end));
+    }
+    if excluded.end < range.end {
+        remaining.push(excluded.end.max(range.start)..range.end);
+    }
+    remaining
+}
 
 struct CachedChunkHighlightsIter {
     runs: Vec<HighlightRun>,
@@ -4109,12 +4124,17 @@ impl BufferSnapshot {
 
     #[ztracing::instrument(skip_all)]
     fn get_highlights(&self, range: Range<usize>) -> (SyntaxMapCaptures<'_>, Vec<HighlightMap>) {
-        let captures = self.syntax.captures(range, &self.text, |grammar| {
-            grammar
-                .highlights_config
-                .as_ref()
-                .map(|config| &config.query)
-        });
+        let captures = self.syntax.captures_with_timeout(
+            range,
+            &self.text,
+            |grammar| {
+                grammar
+                    .highlights_config
+                    .as_ref()
+                    .map(|config| &config.query)
+            },
+            FOREGROUND_QUERY_TIMEOUT,
+        );
         let highlight_maps = captures
             .grammars()
             .iter()
@@ -4174,6 +4194,7 @@ impl BufferSnapshot {
         if range.is_empty() {
             return Some(Vec::new());
         }
+        let skipped_ranges = self.long_line_highlight_skips(range.clone());
         let mut runs = Vec::<HighlightRun>::new();
         for chunk in self
             .tree_sitter_data
@@ -4204,27 +4225,51 @@ impl BufferSnapshot {
                 if run_range.start >= range.end {
                     break;
                 }
-                match runs.last_mut() {
-                    Some((last_range, last_highlight_id))
-                        if last_highlight_id == highlight_id
-                            && last_range.end == run_range.start =>
-                    {
-                        last_range.end = run_range.end;
+                let mut fragments = vec![run_range.clone()];
+                for skipped in &skipped_ranges {
+                    fragments = fragments
+                        .into_iter()
+                        .flat_map(|fragment| subtract_range(fragment, skipped))
+                        .collect();
+                    if fragments.is_empty() {
+                        break;
                     }
-                    _ => runs.push((run_range.clone(), *highlight_id)),
+                }
+                for fragment in fragments {
+                    match runs.last_mut() {
+                        Some((last_range, last_highlight_id))
+                            if last_highlight_id == highlight_id
+                                && last_range.end == fragment.start =>
+                        {
+                            last_range.end = fragment.end;
+                        }
+                        _ => runs.push((fragment, *highlight_id)),
+                    }
                 }
             }
         }
         Some(runs)
     }
 
+    fn long_line_highlight_skips(&self, range: Range<usize>) -> Vec<Range<usize>> {
+        if range.is_empty() {
+            return Vec::new();
+        }
+        let start_point = self.text.offset_to_point(range.start);
+        let end_point = self.text.offset_to_point(range.end);
+        let mut skips = Vec::new();
+        for row in start_point.row..=end_point.row {
+            let line_len = self.text.line_len(row) as usize;
+            if line_len >= MAX_HIGHLIGHTED_LINE_LEN {
+                let start = self.text.point_to_offset(Point::new(row, 0));
+                skips.push(start..start + line_len);
+            }
+        }
+        skips
+    }
+
     fn compute_chunk_highlights(&self, range: Range<usize>) -> ResolvedHighlights {
-        let captures = self.syntax.captures(range.clone(), &self.text, |grammar| {
-            grammar
-                .highlights_config
-                .as_ref()
-                .map(|config| &config.query)
-        });
+        let (captures, _) = self.get_highlights(range.clone());
         let sources = captures
             .grammars()
             .iter()

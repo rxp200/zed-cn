@@ -63,8 +63,10 @@ impl SkillLoadWarning {
             Self::DescriptionTooLong {
                 actual_len,
                 max_len,
-            } => format!(
-                "Skill description is {actual_len} characters, exceeding the {max_len}-character limit. The skill was loaded, but long descriptions may consume more model-context tokens."
+            } => i18n::t!(
+                "3cb7649888dd1b42",
+                actual_len = actual_len,
+                max_len = max_len
             ),
         }
     }
@@ -530,9 +532,7 @@ pub fn validate_description(description: &str) -> Result<(), &'static str> {
         return Err("Skill description cannot be empty");
     }
     if description.chars().count() > MAX_SKILL_DESCRIPTION_LEN {
-        return Err(formatcp!(
-            "Skill description must be at most {MAX_SKILL_DESCRIPTION_LEN} characters"
-        ));
+        return Err(i18n::t!("7edef11059c784b5"));
     }
     Ok(())
 }
@@ -1440,7 +1440,10 @@ Content.
 
         let result = parse_skill_file_content(&content);
         assert!(result.is_err());
-        let expected = format!("at most {MAX_SKILL_DESCRIPTION_LEN} characters");
+        let expected = i18n::t!(
+            "6fa5446b52e47f05",
+            MAX_SKILL_DESCRIPTION_LEN = MAX_SKILL_DESCRIPTION_LEN
+        );
         assert!(result.unwrap_err().to_string().contains(&expected));
     }
 

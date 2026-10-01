@@ -83,13 +83,12 @@ use language::LanguageRegistry;
 use language_model::LanguageModelRegistry;
 use notifications::status_toast::StatusToast;
 use project::{Project, ProjectPath, Worktree};
+use settings::TerminalDockPosition;
 use settings::{NotifyWhenAgentWaiting, Settings, update_settings_file};
 
 use search::{BufferSearchBar, buffer_search::Deploy as DeployBufferSearch};
-use terminal::Event as TerminalEvent;
-#[cfg(any(test, feature = "test-support"))]
-use terminal::terminal_settings::TerminalSettings;
-use terminal_view::TerminalView;
+use terminal::{Event as TerminalEvent, terminal_settings::TerminalSettings};
+use terminal_view::{TerminalView, terminal_panel::TerminalPanel};
 use text::OffsetRangeExt;
 use theme_settings::ThemeSettings;
 use ui::{
@@ -374,6 +373,29 @@ pub fn init(cx: &mut App) {
     cx.observe_new(
         |workspace: &mut Workspace, _window, _cx: &mut Context<Workspace>| {
             workspace
+                .register_action(
+                    |workspace,
+                     action: &zed_actions::assistant::FollowUpCodeExplanation,
+                     window,
+                     cx| {
+                        if project::DisableAiSettings::get_global(cx).disable_ai {
+                            return;
+                        }
+                        let Some(prompt) = ExternalSourcePrompt::new(&action.text) else {
+                            return;
+                        };
+                        if let Some(panel) = workspace.panel::<AgentPanel>(cx) {
+                            panel.update(cx, |panel, cx| {
+                                panel.new_agent_thread_with_external_source_prompt(
+                                    Some(prompt),
+                                    window,
+                                    cx,
+                                )
+                            });
+                            workspace.focus_panel::<AgentPanel>(window, cx);
+                        }
+                    },
+                )
                 .register_action(|workspace, _: &NewThread, window, cx| {
                     if let Some(panel) = workspace.panel::<AgentPanel>(cx) {
                         panel.update(cx, |panel, cx| {
@@ -643,6 +665,48 @@ pub fn init(cx: &mut App) {
                 )
                 .register_action(
                     |workspace: &mut Workspace, _: &AddSelectionToThread, window, cx| {
+                        let active_editor = workspace
+                            .active_item(cx)
+                            .and_then(|item| item.act_as::<Editor>(cx));
+                        let has_editor_selection = active_editor.is_some_and(|editor| {
+                            editor.update(cx, |editor, cx| {
+                                editor.has_non_empty_selection(&editor.display_snapshot(cx))
+                            })
+                        });
+
+                        let has_terminal_selection = workspace
+                            .active_item(cx)
+                            .and_then(|item| item.act_as::<TerminalView>(cx))
+                            .is_some_and(|terminal_view| {
+                                terminal_view
+                                    .read(cx)
+                                    .terminal()
+                                    .read(cx)
+                                    .last_content
+                                    .selection_text
+                                    .as_ref()
+                                    .is_some_and(|text| !text.is_empty())
+                            });
+
+                        let has_terminal_panel_selection =
+                            workspace.panel::<TerminalPanel>(cx).is_some_and(|panel| {
+                                let position = match TerminalSettings::get_global(cx).dock {
+                                    TerminalDockPosition::Left => DockPosition::Left,
+                                    TerminalDockPosition::Bottom => DockPosition::Bottom,
+                                    TerminalDockPosition::Right => DockPosition::Right,
+                                };
+                                let dock_is_open =
+                                    workspace.dock_at_position(position).read(cx).is_open();
+                                dock_is_open && !panel.read(cx).terminal_selections(cx).is_empty()
+                            });
+
+                        if !has_editor_selection
+                            && !has_terminal_selection
+                            && !has_terminal_panel_selection
+                        {
+                            return;
+                        }
+
                         let Some(agent_panel) = workspace.panel::<AgentPanel>(cx) else {
                             return;
                         };
@@ -799,9 +863,9 @@ fn build_conflict_resolution_prompt(conflicts: &[ConflictContent]) -> Vec<acp::C
     if conflicts.len() == 1 {
         let conflict = &conflicts[0];
 
-        blocks.push(acp::ContentBlock::Text(acp::TextContent::new(
-            "Please resolve the following merge conflict in ",
-        )));
+        blocks.push(acp::ContentBlock::Text(acp::TextContent::new(i18n::t!(
+            "27c9a7308cb0d806"
+        ))));
         let mention = MentionUri::File {
             abs_path: PathBuf::from(conflict.file_path.clone()),
         };
@@ -3905,7 +3969,7 @@ impl AgentPanel {
         };
 
         let Some(store) = ThreadMetadataStore::try_global(cx) else {
-            Self::show_deferred_toast(&self.workspace, "Thread metadata store not available", cx);
+            Self::show_deferred_toast(&self.workspace, "线程元数据存储不可用", cx);
             return;
         };
 
@@ -3928,7 +3992,7 @@ impl AgentPanel {
         cx: &mut Context<Self>,
     ) {
         let Some(store) = ThreadMetadataStore::try_global(cx) else {
-            Self::show_deferred_toast(&self.workspace, "Thread metadata store not available", cx);
+            Self::show_deferred_toast(&self.workspace, "线程元数据存储不可用", cx);
             return;
         };
 
@@ -4906,7 +4970,40 @@ impl agent::SiblingThreadHost for AgentPanelSiblingHost {
             .upgrade()
             .ok_or_else(|| anyhow!("Agent panel is no longer available"))?;
 
-        let mut agents = vec![agent::available_native_agent(cx)];
+        let mut agents = Vec::new();
+
+        // Native Zed agent — always available, and we can enumerate models
+        // directly from the language model registry.
+        let native_models = {
+            let registry = LanguageModelRegistry::read_global(cx);
+            let default = registry.default_model();
+            let mut models = Vec::new();
+            for provider in registry.providers() {
+                if !provider.is_authenticated(cx) {
+                    continue;
+                }
+                let provider_id = provider.id();
+                for model in provider.provided_models(cx) {
+                    let id = format!("{}/{}", provider_id.0, model.id().0);
+                    let is_default = default
+                        .as_ref()
+                        .map(|cm| cm.provider.id() == provider_id && cm.model.id() == model.id())
+                        .unwrap_or(false);
+                    models.push(agent::AvailableModel {
+                        id,
+                        name: model.name().0,
+                        is_default,
+                    });
+                }
+            }
+            models
+        };
+        agents.push(agent::AvailableAgent {
+            id: agent::ZED_AGENT_ID.to_string(),
+            name: Agent::NativeAgent.label(),
+            is_native: true,
+            models: native_models,
+        });
 
         let project = panel.read(cx).project.clone();
         let agent_server_store = project.read(cx).agent_server_store().clone();
@@ -5467,7 +5564,7 @@ impl AgentPanel {
                             .into_any_element()
                     }
                 } else {
-                    Label::new("Terminal").into_any_element()
+                    Label::new("终端").into_any_element()
                 }
             }
 
@@ -5505,7 +5602,7 @@ impl AgentPanel {
                             .child(
                                 IconButton::new("edit_tile", IconName::Pencil)
                                     .icon_size(IconSize::Small)
-                                    .tooltip(Tooltip::text("Edit Thread Title")),
+                                    .tooltip(Tooltip::text("编辑线程标题")),
                             ),
                     )
             })
@@ -5606,12 +5703,7 @@ impl AgentPanel {
                 IconButton::new("agent-options-menu", IconName::Ellipsis)
                     .icon_size(IconSize::Small),
                 move |_window, cx| {
-                    Tooltip::for_action_in(
-                        "Toggle Agent Menu",
-                        &ToggleOptionsMenu,
-                        &focus_handle,
-                        cx,
-                    )
+                    Tooltip::for_action_in("切换 Agent 菜单", &ToggleOptionsMenu, &focus_handle, cx)
                 },
             )
             .anchor(Anchor::TopRight)
@@ -5622,11 +5714,11 @@ impl AgentPanel {
                         menu = menu.context(menu_action_context.clone());
 
                         if has_thread_messages {
-                            menu = menu.header("Current Thread");
+                            menu = menu.header("当前线程");
 
                             if let Some(conversation_view) = conversation_view.as_ref() {
                                 if can_regenerate_thread_title {
-                                    menu = menu.entry("Regenerate Thread Title", None, {
+                                    menu = menu.entry("重新生成线程标题", None, {
                                         let conversation_view = conversation_view.clone();
                                         let workspace = workspace.clone();
                                         move |_, cx| {
@@ -5643,7 +5735,7 @@ impl AgentPanel {
                                     conversation_view.read(cx).root_thread_view();
                                 if let Some(thread_view) = root_thread_view {
                                     let workspace = workspace.clone();
-                                    menu = menu.entry("Open Thread as Markdown", None, {
+                                    menu = menu.entry("以 Markdown 打开线程", None, {
                                         move |window, cx| {
                                             if let Some(workspace) = workspace.upgrade() {
                                                 thread_view.update(cx, |thread_view, cx| {
@@ -5664,16 +5756,16 @@ impl AgentPanel {
 
                         if !showing_terminal {
                             menu = menu
-                                .header("MCP Servers")
+                                .header("MCP 服务器")
                                 .action(
-                                    "Add Server…",
+                                    "添加服务器…",
                                     Box::new(zed_actions::OpenSettingsAt {
                                         path: "context_servers".to_string(),
                                         target: None,
                                     }),
                                 )
                                 .action(
-                                    "Install New Servers…",
+                                    "安装新服务器…",
                                     Box::new(zed_actions::Extensions {
                                         category_filter: Some(
                                             zed_actions::ExtensionCategoryFilter::ContextServers,
@@ -5682,8 +5774,8 @@ impl AgentPanel {
                                     }),
                                 )
                                 .separator()
-                                .header("Context")
-                                .action("Skills", Box::new(ManageSkills));
+                                .header("上下文")
+                                .action("技能", Box::new(ManageSkills));
 
                             if project_agents_md_path.is_some() || global_agents_md_loaded {
                                 if global_agents_md_loaded {
@@ -5694,7 +5786,7 @@ impl AgentPanel {
                                             h_flex()
                                                 .w_full()
                                                 .gap_1()
-                                                .child(Label::new("Open Global Rules"))
+                                                .child(Label::new("打开全局规则"))
                                                 .child(
                                                     Label::new("(AGENTS.md)")
                                                         .color(Color::Muted)
@@ -5719,7 +5811,7 @@ impl AgentPanel {
                                             h_flex()
                                                 .w_full()
                                                 .gap_1()
-                                                .child(Label::new("Open Project Rules"))
+                                                .child(Label::new("打开项目规则"))
                                                 .child(
                                                     Label::new("(AGENTS.md)")
                                                         .color(Color::Muted)
@@ -5740,26 +5832,26 @@ impl AgentPanel {
 
                             menu = menu
                                 .separator()
-                                .action("Profiles", Box::new(ManageProfiles::default()));
+                                .action("配置文件", Box::new(ManageProfiles::default()));
                         }
 
                         menu = menu
-                            .action("Settings", Box::new(OpenSettings))
+                            .action("设置", Box::new(OpenSettings))
                             .separator()
-                            .action("Toggle Threads Sidebar", Box::new(ToggleWorkspaceSidebar));
+                            .action("切换线程侧边栏", Box::new(ToggleWorkspaceSidebar));
 
                         if has_auth_methods || supports_logout {
                             menu = menu.separator()
                         }
                         if has_auth_methods {
-                            menu = menu.action("Reauthenticate", Box::new(ReauthenticateAgent))
+                            menu = menu.action("重新认证", Box::new(ReauthenticateAgent))
                         }
                         if supports_logout {
-                            menu = menu.action("Log Out", Box::new(LogoutAgent))
+                            menu = menu.action("登出", Box::new(LogoutAgent))
                         }
 
                         if let Some(conversation_view) = conversation_view.as_ref() {
-                            menu = menu.entry("Reload Agent", None, {
+                            menu = menu.entry("重新加载 Agent", None, {
                                 let conversation_view = conversation_view.clone();
                                 move |window, cx| {
                                     conversation_view.update(cx, |conversation_view, cx| {
@@ -5779,7 +5871,7 @@ impl AgentPanel {
         let focus_handle = self.focus_handle(cx);
 
         ProjectEmptyState::new(
-            "Agent Panel",
+            "Agent 面板",
             focus_handle.clone(),
             KeyBinding::for_action_in(&workspace::Open::default(), &focus_handle, cx),
         )
@@ -5929,7 +6021,7 @@ impl AgentPanel {
                                 .collect::<Vec<_>>();
 
                             if !agent_items.is_empty() {
-                                menu = menu.separator().header("External Agents");
+                                menu = menu.separator().header("外部Agent");
                             }
                             for item in &agent_items {
                                 let mut entry = ContextMenuEntry::new(item.display_name.clone());
@@ -6035,7 +6127,7 @@ impl AgentPanel {
                 Tooltip::with_meta(
                     selected_agent_label_for_tooltip.clone(),
                     None,
-                    "Selected Agent",
+                    "已选择的 Agent",
                     cx,
                 )
             });
@@ -6070,9 +6162,9 @@ impl AgentPanel {
 
         let is_full_screen = self.is_zoomed(window, cx);
         let (icon_name, tooltip_text) = if is_full_screen {
-            (IconName::Minimize, "Disable Full Screen")
+            (IconName::Minimize, "退出全屏")
         } else {
-            (IconName::Maximize, "Enable Full Screen")
+            (IconName::Maximize, "进入全屏")
         };
         let full_screen_button = IconButton::new("toggle-full-screen", icon_name)
             .icon_size(IconSize::Small)
@@ -9351,16 +9443,18 @@ mod tests {
             terminal.take_input_log();
         });
 
+        // With only a cursor and nothing highlighted, the action is a no-op and
+        // must not paste anything into the terminal.
         workspace.update_in(&mut cx, |_, window, cx| {
             window.dispatch_action(AddSelectionToThread.boxed_clone(), cx);
         });
         cx.run_until_parked();
-        let pasted_current_line: String = terminal
-            .update(&mut cx, |terminal, _| terminal.take_input_log())
-            .into_iter()
-            .map(|bytes| String::from_utf8(bytes).expect("pasted bytes should be valid UTF-8"))
-            .collect();
-        assert_eq!(pasted_current_line, "file.rs:1 ");
+        let pasted_without_selection =
+            terminal.update(&mut cx, |terminal, _| terminal.take_input_log());
+        assert!(
+            pasted_without_selection.is_empty(),
+            "no selection should paste nothing, got {pasted_without_selection:?}"
+        );
 
         // Now highlight a portion of the file: from the start of line 2 into line 3.
         editor.update_in(&mut cx, |editor, window, cx| {
@@ -9714,7 +9808,7 @@ mod tests {
         cx.run_until_parked();
 
         assert!(
-            cx.debug_bounds("MENU_ITEM-Skills").is_some(),
+            cx.debug_bounds("MENU_ITEM-技能").is_some(),
             "Skills menu item should be visible"
         );
         assert!(

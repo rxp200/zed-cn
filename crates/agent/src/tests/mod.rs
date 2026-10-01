@@ -1,7 +1,7 @@
 use super::*;
 use acp_thread::{
-    AgentConnection, AgentModelGroupName, AgentModelId, AgentModelList, ClientUserMessageId,
-    PermissionOptions, ThreadStatus,
+    AgentConnection, AgentModelGroupName, AgentModelList, ClientUserMessageId, PermissionOptions,
+    ThreadStatus,
 };
 use agent_client_protocol::schema::v1 as acp;
 use agent_settings::{AgentProfileId, AgentSettings, AutoCompactThreshold, COMPACTION_PROMPT};
@@ -177,7 +177,7 @@ impl SubagentHandle for FakeSubagentHandle {
     }
 
     fn num_entries(&self, _cx: &App) -> usize {
-        0
+        unimplemented!()
     }
 
     fn send(&self, _message: String, cx: &AsyncApp) -> Task<Result<String>> {
@@ -192,7 +192,6 @@ pub(crate) struct FakeThreadEnvironment {
     subagent_handle: Option<Rc<FakeSubagentHandle>>,
     terminal_creations: Arc<AtomicUsize>,
     terminal_output_limits: std::cell::RefCell<Vec<Option<u64>>>,
-    subagent_models: std::cell::RefCell<Vec<Option<AgentModelId>>>,
 }
 
 impl FakeThreadEnvironment {
@@ -203,23 +202,12 @@ impl FakeThreadEnvironment {
         }
     }
 
-    fn with_subagent(self, subagent_handle: FakeSubagentHandle) -> Self {
-        Self {
-            subagent_handle: Some(subagent_handle.into()),
-            ..self
-        }
-    }
-
     pub(crate) fn terminal_creation_count(&self) -> usize {
         self.terminal_creations.load(Ordering::SeqCst)
     }
 
     pub(crate) fn terminal_output_limits(&self) -> Vec<Option<u64>> {
         self.terminal_output_limits.borrow().clone()
-    }
-
-    fn subagent_models(&self) -> Vec<Option<AgentModelId>> {
-        self.subagent_models.borrow().clone()
     }
 }
 
@@ -244,13 +232,7 @@ impl crate::ThreadEnvironment for FakeThreadEnvironment {
         Task::ready(Ok(handle as Rc<dyn crate::TerminalHandle>))
     }
 
-    fn create_subagent(
-        &self,
-        _label: String,
-        model: Option<AgentModelId>,
-        _cx: &mut App,
-    ) -> Result<Rc<dyn SubagentHandle>> {
-        self.subagent_models.borrow_mut().push(model);
+    fn create_subagent(&self, _label: String, _cx: &mut App) -> Result<Rc<dyn SubagentHandle>> {
         Ok(self
             .subagent_handle
             .clone()
@@ -291,12 +273,7 @@ impl crate::ThreadEnvironment for MultiTerminalEnvironment {
         Task::ready(Ok(handle as Rc<dyn crate::TerminalHandle>))
     }
 
-    fn create_subagent(
-        &self,
-        _label: String,
-        _model: Option<AgentModelId>,
-        _cx: &mut App,
-    ) -> Result<Rc<dyn SubagentHandle>> {
+    fn create_subagent(&self, _label: String, _cx: &mut App) -> Result<Rc<dyn SubagentHandle>> {
         unimplemented!()
     }
 }
@@ -4197,11 +4174,9 @@ async fn test_building_request_with_pending_tools(cx: &mut TestAppContext) {
 async fn test_agent_connection(cx: &mut TestAppContext) {
     cx.update(settings::init);
     let templates = Templates::new();
-    let fake_fs = fs::FakeFs::new(cx.background_executor.clone());
 
     // Initialize language model system with test provider
     cx.update(|cx| {
-        <dyn fs::Fs>::set_global(fake_fs.clone(), cx);
         gpui_tokio::init(cx);
 
         let http_client = FakeHttpClient::with_404_response();
@@ -4216,6 +4191,7 @@ async fn test_agent_connection(cx: &mut TestAppContext) {
     cx.executor().forbid_parking();
 
     // Create a project for new_thread
+    let fake_fs = cx.update(|cx| fs::FakeFs::new(cx.background_executor().clone()));
     fake_fs.insert_tree(path!("/test"), json!({})).await;
     let project = Project::test(fake_fs.clone(), [Path::new("/test")], cx).await;
     let cwd = PathList::new(&[Path::new("/test")]);
@@ -4951,7 +4927,6 @@ async fn setup(cx: &mut TestAppContext, model: TestModel) -> ThreadTest {
         match model {
             TestModel::Fake => {}
             TestModel::Sonnet4 => {
-                <dyn fs::Fs>::set_global(fs.clone(), cx);
                 gpui_tokio::init(cx);
                 let http_client = ReqwestClient::user_agent("agent tests").unwrap();
                 cx.set_http_client(Arc::new(http_client));
@@ -5540,77 +5515,6 @@ async fn test_terminal_tool_permission_rules(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-async fn test_spawn_agent_tool_forwards_explicit_model(cx: &mut TestAppContext) {
-    init_test(cx);
-
-    let environment = Rc::new(
-        FakeThreadEnvironment::default().with_subagent(FakeSubagentHandle {
-            session_id: acp::SessionId::new("subagent-id"),
-            send_task: Task::ready("done".to_string()).shared(),
-        }),
-    );
-    #[allow(clippy::arc_with_non_send_sync)]
-    let tool = Arc::new(SpawnAgentTool::new(environment.clone()));
-    let (event_stream, _rx) = ToolCallEventStream::test();
-
-    let result = cx
-        .update(|cx| {
-            tool.run(
-                ToolInput::resolved(SpawnAgentToolInput {
-                    label: "task".to_string(),
-                    message: "prompt".to_string(),
-                    session_id: None,
-                    model: Some("fake-corp/cheap-model".to_string()),
-                }),
-                event_stream,
-                cx,
-            )
-        })
-        .await;
-
-    assert!(matches!(result, Ok(SpawnAgentToolOutput::Success { .. })));
-    assert_eq!(
-        environment.subagent_models(),
-        vec![Some(AgentModelId::from(
-            "fake-corp/cheap-model".to_string()
-        ))]
-    );
-}
-
-#[gpui::test]
-async fn test_spawn_agent_tool_rejects_model_when_resuming(cx: &mut TestAppContext) {
-    init_test(cx);
-
-    let environment = Rc::new(FakeThreadEnvironment::default());
-    #[allow(clippy::arc_with_non_send_sync)]
-    let tool = Arc::new(SpawnAgentTool::new(environment));
-    let (event_stream, _rx) = ToolCallEventStream::test();
-
-    let result = cx
-        .update(|cx| {
-            tool.run(
-                ToolInput::resolved(SpawnAgentToolInput {
-                    label: "task".to_string(),
-                    message: "prompt".to_string(),
-                    session_id: Some(acp::SessionId::new("subagent-id")),
-                    model: Some("fake-corp/other-model".to_string()),
-                }),
-                event_stream,
-                cx,
-            )
-        })
-        .await;
-
-    let Err(SpawnAgentToolOutput::Error { error, .. }) = result else {
-        panic!("expected model override on resumed session to fail");
-    };
-    assert_eq!(
-        error,
-        "model cannot be changed when resuming a subagent session"
-    );
-}
-
-#[gpui::test]
 async fn test_subagent_tool_call_end_to_end(cx: &mut TestAppContext) {
     init_test(cx);
     cx.update(|cx| {
@@ -5663,7 +5567,6 @@ async fn test_subagent_tool_call_end_to_end(cx: &mut TestAppContext) {
         label: "label".to_string(),
         message: "subagent task prompt".to_string(),
         session_id: None,
-        model: None,
     };
     let subagent_tool_use = LanguageModelToolUse {
         id: "subagent_1".into(),
@@ -5801,7 +5704,6 @@ async fn test_subagent_tool_output_does_not_include_thinking(cx: &mut TestAppCon
         label: "label".to_string(),
         message: "subagent task prompt".to_string(),
         session_id: None,
-        model: None,
     };
     let subagent_tool_use = LanguageModelToolUse {
         id: "subagent_1".into(),
@@ -5952,7 +5854,6 @@ async fn test_subagent_tool_call_cancellation_during_task_prompt(cx: &mut TestAp
         label: "label".to_string(),
         message: "subagent task prompt".to_string(),
         session_id: None,
-        model: None,
     };
     let subagent_tool_use = LanguageModelToolUse {
         id: "subagent_1".into(),
@@ -6085,7 +5986,6 @@ async fn test_subagent_tool_resume_session(cx: &mut TestAppContext) {
         label: "initial task".to_string(),
         message: "do the first task".to_string(),
         session_id: None,
-        model: None,
     };
     let subagent_tool_use = LanguageModelToolUse {
         id: "subagent_1".into(),
@@ -6150,7 +6050,6 @@ async fn test_subagent_tool_resume_session(cx: &mut TestAppContext) {
         label: "follow-up task".to_string(),
         message: "do the follow-up task".to_string(),
         session_id: Some(subagent_session_id.clone()),
-        model: None,
     };
     let resume_tool_use = LanguageModelToolUse {
         id: "subagent_2".into(),
@@ -6246,7 +6145,7 @@ async fn test_subagent_thread_inherits_parent_thread_properties(cx: &mut TestApp
         )
     });
 
-    let subagent_thread = cx.new(|cx| Thread::new_subagent(&parent_thread, None, cx));
+    let subagent_thread = cx.new(|cx| Thread::new_subagent(&parent_thread, cx));
     subagent_thread.read_with(cx, |subagent_thread, cx| {
         assert!(subagent_thread.is_subagent());
         assert_eq!(subagent_thread.depth(), 1);
@@ -6267,7 +6166,7 @@ async fn test_subagent_thread_inherits_parent_thread_properties(cx: &mut TestApp
 }
 
 #[gpui::test]
-async fn test_subagent_thread_model_selection(cx: &mut TestAppContext) {
+async fn test_subagent_thread_uses_configured_subagent_model(cx: &mut TestAppContext) {
     init_test(cx);
 
     let fs = FakeFs::new(cx.executor());
@@ -6284,12 +6183,6 @@ async fn test_subagent_thread_model_selection(cx: &mut TestAppContext) {
         "Subagent Model",
         true,
     ));
-    let explicit_model = Arc::new(FakeLanguageModel::with_id_and_thinking(
-        "fake-corp",
-        "explicit-model",
-        "Explicit Model",
-        false,
-    ));
 
     cx.update(|cx| {
         LanguageModelRegistry::test(cx);
@@ -6299,7 +6192,7 @@ async fn test_subagent_thread_model_selection(cx: &mut TestAppContext) {
                 LanguageModelProviderId::from("fake-corp".to_string()),
                 LanguageModelProviderName::from("Fake Corp".to_string()),
             )
-            .with_models(vec![subagent_model.clone(), explicit_model.clone()]),
+            .with_models(vec![subagent_model.clone()]),
         );
         LanguageModelRegistry::global(cx).update(cx, |registry, cx| {
             registry.register_provider(provider, cx);
@@ -6327,17 +6220,7 @@ async fn test_subagent_thread_model_selection(cx: &mut TestAppContext) {
         )
     });
 
-    let subagent_thread = cx.new(|cx| Thread::new_subagent(&parent_thread, None, cx));
-    let explicit_selection = LanguageModelSelection {
-        provider: LanguageModelProviderSetting("fake-corp".to_string()),
-        model: "explicit-model".to_string(),
-        enable_thinking: false,
-        effort: None,
-        speed: None,
-    };
-    let explicit_subagent_thread =
-        cx.new(|cx| Thread::new_subagent(&parent_thread, Some(&explicit_selection), cx));
-
+    let subagent_thread = cx.new(|cx| Thread::new_subagent(&parent_thread, cx));
     subagent_thread.read_with(cx, |subagent_thread, _cx| {
         assert_eq!(
             subagent_thread.model().map(|model| model.id()),
@@ -6347,18 +6230,8 @@ async fn test_subagent_thread_model_selection(cx: &mut TestAppContext) {
         assert_eq!(subagent_thread.thinking_effort(), Some(&"high".to_string()));
     });
 
-    explicit_subagent_thread.read_with(cx, |subagent_thread, _cx| {
-        assert_eq!(
-            subagent_thread.model().map(|model| model.id()),
-            Some(explicit_model.id())
-        );
-        assert!(!subagent_thread.thinking_enabled());
-        assert_eq!(subagent_thread.thinking_effort(), None);
-    });
-
     parent_thread.update(cx, |parent_thread, _cx| {
         parent_thread.register_running_subagent(subagent_thread.downgrade());
-        parent_thread.register_running_subagent(explicit_subagent_thread.downgrade());
     });
     parent_thread.update(cx, |parent_thread, cx| {
         parent_thread.set_model(parent_model.clone(), cx);
@@ -6373,14 +6246,6 @@ async fn test_subagent_thread_model_selection(cx: &mut TestAppContext) {
         );
         assert!(subagent_thread.thinking_enabled());
         assert_eq!(subagent_thread.thinking_effort(), Some(&"high".to_string()));
-    });
-    explicit_subagent_thread.read_with(cx, |subagent_thread, _cx| {
-        assert_eq!(
-            subagent_thread.model().map(|model| model.id()),
-            Some(explicit_model.id())
-        );
-        assert!(!subagent_thread.thinking_enabled());
-        assert_eq!(subagent_thread.thinking_effort(), None);
     });
 }
 
@@ -6420,7 +6285,7 @@ async fn test_max_subagent_depth_prevents_tool_registration(cx: &mut TestAppCont
         thread
     });
     let deep_subagent_thread = cx.new(|cx| {
-        let mut thread = Thread::new_subagent(&deep_parent_thread, None, cx);
+        let mut thread = Thread::new_subagent(&deep_parent_thread, cx);
         thread.add_default_tools(environment, cx);
         thread
     });
@@ -6549,7 +6414,7 @@ async fn test_lsp_tools_gated_by_feature_flag(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-async fn test_thread_tools_feature_gating(cx: &mut TestAppContext) {
+async fn test_sibling_thread_tools_gated_by_feature_flag(cx: &mut TestAppContext) {
     init_test(cx);
 
     // `CreateThreadToolFeatureFlag::enabled_for_staff()` returns true, which
@@ -6603,14 +6468,21 @@ async fn test_thread_tools_feature_gating(cx: &mut TestAppContext) {
         thread
     });
 
-    // Both tools are registered regardless of feature state. Only creating a
-    // sibling thread is gated; model discovery is also used by subagents.
+    let sibling_tool_names = [CreateThreadTool::NAME, ListAgentsAndModelsTool::NAME];
+
+    // Like the LSP/rename tools, sibling-thread tools are registered
+    // unconditionally and gated only at exposure time. The registration must
+    // be visible regardless of the flag's current value.
     thread.read_with(cx, |thread, _| {
-        assert!(thread.has_registered_tool(CreateThreadTool::NAME));
-        assert!(thread.has_registered_tool(ListAgentsAndModelsTool::NAME));
+        for name in &sibling_tool_names {
+            assert!(
+                thread.has_registered_tool(name),
+                "expected sibling-thread tool {name} to be registered"
+            );
+        }
     });
 
-    // Flag explicitly off: model discovery remains available.
+    // Flag explicitly off: a completion request must omit the tools.
     set_flag_override("off", cx);
     thread
         .update(cx, |thread, cx| {
@@ -6621,12 +6493,13 @@ async fn test_thread_tools_feature_gating(cx: &mut TestAppContext) {
 
     let completion = model.pending_completions().pop().unwrap();
     let tool_names = tool_names_for_completion(&completion);
-    assert!(!tool_names.iter().any(|tool| tool == CreateThreadTool::NAME));
-    assert!(
-        tool_names
-            .iter()
-            .any(|tool| tool == ListAgentsAndModelsTool::NAME)
-    );
+    for name in &sibling_tool_names {
+        assert!(
+            !tool_names.iter().any(|t| t == name),
+            "expected {name} to be hidden when create-thread-tool flag is off, \
+             but completion tools were: {tool_names:?}"
+        );
+    }
     // Sanity check: an unrelated default tool should still be exposed.
     assert!(
         tool_names.iter().any(|t| t == ReadFileTool::NAME),
@@ -6635,7 +6508,7 @@ async fn test_thread_tools_feature_gating(cx: &mut TestAppContext) {
     model.end_last_completion_stream();
     cx.run_until_parked();
 
-    // Flag explicitly on: the next completion request includes both tools.
+    // Flag explicitly on: the next completion request must include both tools.
     set_flag_override("on", cx);
     thread
         .update(cx, |thread, cx| {
@@ -6646,12 +6519,13 @@ async fn test_thread_tools_feature_gating(cx: &mut TestAppContext) {
 
     let completion = model.pending_completions().pop().unwrap();
     let tool_names = tool_names_for_completion(&completion);
-    assert!(tool_names.iter().any(|tool| tool == CreateThreadTool::NAME));
-    assert!(
-        tool_names
-            .iter()
-            .any(|tool| tool == ListAgentsAndModelsTool::NAME)
-    );
+    for name in &sibling_tool_names {
+        assert!(
+            tool_names.iter().any(|t| t == name),
+            "expected {name} to be exposed when create-thread-tool flag is on, \
+             but completion tools were: {tool_names:?}"
+        );
+    }
 }
 
 #[gpui::test]
@@ -6682,7 +6556,7 @@ async fn test_parent_cancel_stops_subagent(cx: &mut TestAppContext) {
         )
     });
 
-    let subagent = cx.new(|cx| Thread::new_subagent(&parent, None, cx));
+    let subagent = cx.new(|cx| Thread::new_subagent(&parent, cx));
 
     parent.update(cx, |thread, _cx| {
         thread.register_running_subagent(subagent.downgrade());
@@ -7125,7 +6999,6 @@ async fn test_subagent_error_propagation(cx: &mut TestAppContext) {
         label: "label".to_string(),
         message: "subagent task prompt".to_string(),
         session_id: None,
-        model: None,
     };
     let subagent_tool_use = LanguageModelToolUse {
         id: "subagent_1".into(),
@@ -9000,7 +8873,7 @@ impl SubagentCompactionTest {
             acp_thread: acp_thread.downgrade(),
         };
         let handle = cx
-            .update(|cx| environment.create_subagent_thread("subagent".to_string(), None, cx))
+            .update(|cx| environment.create_subagent_thread("subagent".to_string(), cx))
             .unwrap();
         let thread = agent.read_with(cx, |agent, _| {
             agent.sessions.get(&handle.id()).unwrap().thread.clone()

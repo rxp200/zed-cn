@@ -196,13 +196,15 @@ impl Output {
                 .pl_1()
                 .when(v.has_clipboard_content(window, cx), |el| {
                     let v = v.clone();
-
                     el.child(
-                        CopyButton::new(("copy-output", v.entity_id()), "")
-                            .tooltip_label("Copy Output")
-                            .custom_on_click(move |window, cx| {
-                                if let Some(clipboard_item) = v.clipboard_content(window, cx) {
-                                    cx.write_to_clipboard(clipboard_item);
+                        IconButton::new(ElementId::Name("copy-output".into()), IconName::Copy)
+                            .style(ButtonStyle::Transparent)
+                            .tooltip(Tooltip::text(i18n::t!("10ef549f29ab49a2")))
+                            .on_click(move |_, window, cx| {
+                                let clipboard_content = v.clipboard_content(window, cx);
+
+                                if let Some(clipboard_content) = clipboard_content.as_ref() {
+                                    cx.write_to_clipboard(clipboard_content.clone());
                                 }
                             }),
                     )
@@ -215,7 +217,7 @@ impl Output {
                             IconName::FileTextOutlined,
                         )
                         .style(ButtonStyle::Transparent)
-                        .tooltip(Tooltip::text("Open in Buffer"))
+                        .tooltip(Tooltip::text(i18n::t!("d78ade0e8894169a")))
                         .on_click({
                             let workspace = workspace.clone();
                             move |_, window, cx| {
@@ -321,7 +323,7 @@ impl Output {
                             let full_error = format!("{}: {}\n{}", ename, evalue, traceback_text);
 
                             CopyButton::new("copy-full-error", full_error)
-                                .tooltip_label("Copy Full Error")
+                                .tooltip_label(i18n::t!("81faf28b52ada60b"))
                         })
                         .child(
                             IconButton::new(
@@ -329,7 +331,7 @@ impl Output {
                                 IconName::FileTextOutlined,
                             )
                             .style(ButtonStyle::Transparent)
-                            .tooltip(Tooltip::text("Open Full Error in Buffer"))
+                            .tooltip(Tooltip::text(i18n::t!("39460b3d1df5cdfe")))
                             .on_click({
                                 let ename = err.ename.clone();
                                 let evalue = err.evalue.clone();
@@ -534,7 +536,7 @@ impl ExecutionView {
 
             let editor = cx.new(|cx| {
                 let mut editor = Editor::single_line(window, cx);
-                editor.set_placeholder_text("Type here and press Enter", window, cx);
+                editor.set_placeholder_text(i18n::t!("03bdfdc02daf3ba5"), window, cx);
                 if password {
                     editor.set_masked(true, cx);
                 }
@@ -751,7 +753,7 @@ impl ExecutionView {
 impl Render for ExecutionView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let status = match &self.status {
-            ExecutionStatus::ConnectingToKernel => Label::new("Connecting to kernel...")
+            ExecutionStatus::ConnectingToKernel => Label::new("正在连接内核…")
                 .color(Color::Muted)
                 .into_any_element(),
             ExecutionStatus::Executing => h_flex()
@@ -762,26 +764,24 @@ impl Render for ExecutionView {
                         .color(Color::Muted)
                         .with_rotate_animation(3),
                 )
-                .child(Label::new("Executing...").color(Color::Muted))
+                .child(Label::new("正在执行…").color(Color::Muted))
                 .into_any_element(),
             ExecutionStatus::Finished => Icon::new(IconName::Check)
                 .size(IconSize::Small)
                 .into_any_element(),
-            ExecutionStatus::Unknown => Label::new("Unknown status")
+            ExecutionStatus::Unknown => Label::new("未知状态")
                 .color(Color::Muted)
                 .into_any_element(),
-            ExecutionStatus::ShuttingDown => Label::new("Kernel shutting down...")
+            ExecutionStatus::ShuttingDown => Label::new("内核正在关闭…")
                 .color(Color::Muted)
                 .into_any_element(),
-            ExecutionStatus::Restarting => Label::new("Kernel restarting...")
+            ExecutionStatus::Restarting => Label::new("内核正在重启…")
                 .color(Color::Muted)
                 .into_any_element(),
-            ExecutionStatus::Shutdown => Label::new("Kernel shutdown")
+            ExecutionStatus::Shutdown => Label::new("内核已关闭")
                 .color(Color::Muted)
                 .into_any_element(),
-            ExecutionStatus::Queued => Label::new("Queued...")
-                .color(Color::Muted)
-                .into_any_element(),
+            ExecutionStatus::Queued => Label::new("排队中…").color(Color::Muted).into_any_element(),
             ExecutionStatus::KernelErrored(error) => Label::new(format!("Kernel error: {}", error))
                 .color(Color::Error)
                 .into_any_element(),

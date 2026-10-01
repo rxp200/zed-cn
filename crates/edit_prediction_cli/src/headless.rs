@@ -67,7 +67,6 @@ pub fn init(cx: &mut App) -> EpAppState {
 
     let git_binary_path = None;
     let fs = RealFs::new(git_binary_path, cx.background_executor().clone());
-    <dyn fs::Fs>::set_global(fs.clone(), cx);
 
     let mut languages = LanguageRegistry::new(cx.background_executor().clone());
     languages.set_language_server_download_dir(paths::languages_dir().clone());

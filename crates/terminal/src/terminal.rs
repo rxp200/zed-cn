@@ -26,6 +26,7 @@ use async_channel::{Receiver, Sender};
 use collections::{HashMap, VecDeque};
 use futures::StreamExt;
 use pty_info::{ProcessIdGetter, PtyProcessInfo};
+use rpc::{AnyProtoClient, proto};
 use serde::{Deserialize, Serialize};
 use settings::Settings;
 use task::{HideStrategy, Shell, ShellKind, SpawnInTerminal};
@@ -64,14 +65,14 @@ use crate::alacritty::current_child_signal_mask;
 use crate::alacritty::{
     AlacrittyCell, AlacrittyGridIterator, AlacrittyHyperlink, AlacrittySearch, AlacrittyTerm,
     AlacrittyTermConfig, AlacrittyTermLock, HyperlinkMatch, PtySender, RegexSearches,
-    append_text_to_term, apply_config, clear_saved_screen, content_text, display_offset,
-    display_only_term_config, find_from_terminal_point, full_content_range, last_non_empty_lines,
-    make_content, new_term, open_pty, pty_options, pty_term_config, resize, screen_lines,
-    scroll_display, scroll_to_point, search_matches, selection_text, set_default_cursor_style,
-    set_selection as set_term_selection, shrink_to_used, spawn_event_loop,
-    toggle_vi_mode as toggle_term_vi_mode, total_lines, update_selection as update_term_selection,
-    update_selection_to_vi_cursor, update_vi_cursor_for_scroll, used_lines, vi_goto_point,
-    vi_motion,
+    append_text_to_term, apply_config, clear_saved_screen, clone_active_grid, content_text,
+    display_offset, display_only_term_config, find_from_terminal_point, full_content_range,
+    last_non_empty_lines, make_content, new_term, open_pty, pty_options, pty_term_config, resize,
+    screen_lines, scroll_display, scroll_to_point, search_matches, selection_text,
+    set_default_cursor_style, set_selection as set_term_selection, shrink_to_used,
+    spawn_event_loop, toggle_vi_mode as toggle_term_vi_mode, total_lines,
+    update_selection as update_term_selection, update_selection_to_vi_cursor,
+    update_vi_cursor_for_scroll, used_lines, vi_goto_point, vi_motion,
 };
 use crate::mappings::colors::to_vte_rgb;
 use crate::mappings::keys::to_esc_str;
@@ -652,7 +653,8 @@ const DEBUG_CELL_WIDTH: Pixels = px(5.);
 const DEBUG_LINE_HEIGHT: Pixels = px(5.);
 
 /// Inserts Zed-specific environment variables for terminal sessions.
-/// Used by both local terminals and remote terminals (via SSH).
+/// Used by local terminals, remote terminals (via SSH) and Remote Server-hosted
+/// terminals, whose PTY is spawned without a terminal type from the server process.
 pub fn insert_zed_terminal_env(
     env: &mut HashMap<String, String>,
     version: &impl std::fmt::Display,
@@ -977,6 +979,7 @@ impl TerminalMode {
 pub struct TerminalBuilder {
     terminal: Terminal,
     events_rx: UnboundedReceiver<PtyEvent>,
+    remote_input_rx: Option<Receiver<Vec<u8>>>,
 }
 
 impl TerminalBuilder {
@@ -1069,6 +1072,7 @@ impl TerminalBuilder {
             path_style,
             cwd_history: Vec::new(),
             pending_cwd_boundary: None,
+            last_output_at: None,
             #[cfg(any(test, feature = "test-support"))]
             input_log: Vec::new(),
             #[cfg(test)]
@@ -1080,7 +1084,67 @@ impl TerminalBuilder {
         TerminalBuilder {
             terminal,
             events_rx,
+            remote_input_rx: None,
         }
+    }
+
+    pub fn new_remote(
+        mode: TerminalMode,
+        shell: Shell,
+        cursor_shape: SettingsCursorShape,
+        alternate_scroll: AlternateScroll,
+        max_scroll_history_lines: Option<usize>,
+        path_hyperlink_regexes: Vec<String>,
+        path_hyperlink_timeout: Duration,
+        window_id: u64,
+        path_style: PathStyle,
+        client: AnyProtoClient,
+        server_instance_id: String,
+        terminal_id: String,
+        background_executor: &BackgroundExecutor,
+    ) -> TerminalBuilder {
+        let mut builder = Self::new_display_only(
+            cursor_shape,
+            alternate_scroll,
+            max_scroll_history_lines,
+            window_id,
+            background_executor,
+            path_style,
+        );
+        let (task, completion_tx) = match mode.0 {
+            TerminalModeKind::Interactive => (None, None),
+            TerminalModeKind::InteractiveWithCompletion(completion_tx) => {
+                (None, Some(completion_tx))
+            }
+            TerminalModeKind::Task {
+                state,
+                completion_tx,
+            } => (Some(state), Some(completion_tx)),
+        };
+        builder.terminal.task = task;
+        builder.terminal.completion_tx = completion_tx;
+        builder.terminal.is_remote_terminal = true;
+        builder.terminal.hyperlink_regex_searches =
+            RegexSearches::new(&path_hyperlink_regexes, path_hyperlink_timeout);
+        builder.terminal.template = CopyTemplate {
+            shell,
+            env: HashMap::default(),
+            cursor_shape,
+            alternate_scroll,
+            max_scroll_history_lines,
+            path_hyperlink_regexes,
+            path_hyperlink_timeout,
+            window_id,
+        };
+        let (input_tx, input_rx) = async_channel::bounded(256);
+        builder.terminal.terminal_type = TerminalType::Remote(RemoteTerminal {
+            client,
+            server_instance_id,
+            terminal_id,
+            input_tx,
+        });
+        builder.remote_input_rx = Some(input_rx);
+        builder
     }
 
     pub fn new(
@@ -1368,6 +1432,7 @@ impl TerminalBuilder {
                         .unwrap_or_default()
                 },
                 pending_cwd_boundary: None,
+                last_output_at: None,
                 #[cfg(any(test, feature = "test-support"))]
                 input_log: Vec::new(),
                 #[cfg(test)]
@@ -1400,12 +1465,88 @@ impl TerminalBuilder {
             Ok(TerminalBuilder {
                 terminal,
                 events_rx,
+                remote_input_rx: None,
             })
         };
         cx.background_spawn(fut)
     }
 
     pub fn subscribe(mut self, cx: &Context<Terminal>) -> Terminal {
+        if let TerminalType::Remote(remote) = &self.terminal.terminal_type {
+            let client = remote.client.clone();
+            let server_instance_id = remote.server_instance_id.clone();
+            let terminal_id = remote.terminal_id.clone();
+            let input_rx = self
+                .remote_input_rx
+                .take()
+                .expect("remote terminals have an input receiver");
+            cx.background_spawn({
+                let client = client.clone();
+                let server_instance_id = server_instance_id.clone();
+                let terminal_id = terminal_id.clone();
+                async move {
+                    let mut sequence = 1;
+                    while let Ok(data) = input_rx.recv().await {
+                        client
+                            .request(proto::PersistentTerminalInput {
+                                server_instance_id: server_instance_id.clone(),
+                                terminal_id: terminal_id.clone(),
+                                sequence,
+                                data,
+                            })
+                            .await?;
+                        sequence += 1;
+                    }
+                    anyhow::Ok(())
+                }
+            })
+            .detach();
+            cx.spawn(async move |terminal, cx| {
+                let mut offset = 0;
+                loop {
+                    let response = client
+                        .request(proto::ReadPersistentTerminal {
+                            server_instance_id: server_instance_id.clone(),
+                            terminal_id: terminal_id.clone(),
+                            offset,
+                            max_bytes: 256 * 1024,
+                        })
+                        .await;
+                    match response {
+                        Ok(response) => {
+                            offset = response.next_offset;
+                            let exited = response.exited;
+                            terminal.update(cx, |terminal, cx| {
+                                if response.history_truncated {
+                                    terminal.clear_for_init_command(cx);
+                                }
+                                if !response.data.is_empty() {
+                                    terminal.write_raw_output(&response.data, cx);
+                                }
+                                if exited && terminal.child_exited.is_none() {
+                                    terminal.register_task_finished(
+                                        response.exit_code.map(exit_status_from_code),
+                                        cx,
+                                    );
+                                }
+                            })?;
+                            if exited {
+                                break;
+                            }
+                        }
+                        Err(error) => {
+                            log::debug!("persistent terminal poll paused: {error:#}");
+                        }
+                    }
+                    cx.background_executor()
+                        .timer(Duration::from_millis(50))
+                        .await;
+                }
+                anyhow::Ok(())
+            })
+            .detach();
+        }
+
         //Event loop
         self.terminal.event_loop_task = cx.spawn(async move |terminal, cx| {
             while let Some(event) = self.events_rx.next().await {
@@ -1501,7 +1642,15 @@ enum TerminalType {
         resources: PtyResources,
         info: Arc<PtyProcessInfo>,
     },
+    Remote(RemoteTerminal),
     DisplayOnly,
+}
+
+struct RemoteTerminal {
+    client: AnyProtoClient,
+    server_instance_id: String,
+    terminal_id: String,
+    input_tx: Sender<Vec<u8>>,
 }
 
 pub struct Terminal {
@@ -1548,6 +1697,7 @@ pub struct Terminal {
     path_style: PathStyle,
     cwd_history: Vec<CwdHistoryEntry>,
     pending_cwd_boundary: Option<i32>,
+    last_output_at: Option<Instant>,
     #[cfg(any(test, feature = "test-support"))]
     input_log: Vec<Vec<u8>>,
     #[cfg(test)]
@@ -1619,6 +1769,8 @@ const FIND_HYPERLINK_THROTTLE: Duration = Duration::from_millis(100);
 /// clipboard. Mirrors the drag threshold used by gpui's `div` element.
 const SELECTION_DRAG_THRESHOLD: f64 = 2.0;
 
+const TITLE_MAX_CHARS: usize = 25;
+
 impl Terminal {
     fn process_pty_event(&mut self, event: PtyEvent, cx: &mut Context<Self>) {
         match event {
@@ -1678,6 +1830,7 @@ impl Terminal {
                 //NOOP, Handled in render
             }
             TerminalBackendEvent::Wakeup => {
+                self.note_program_output();
                 self.detect_init_command_startup_marker();
                 cx.emit(Event::Wakeup);
 
@@ -1725,12 +1878,24 @@ impl Terminal {
                     self.last_content.terminal_bounds.num_columns() != new_bounds.num_columns();
                 self.last_content.terminal_bounds = new_bounds;
 
-                if let TerminalType::Pty {
-                    resources: PtyResources::Active(pty_tx),
-                    ..
-                } = &self.terminal_type
-                {
-                    pty_tx.resize(new_bounds);
+                match &self.terminal_type {
+                    TerminalType::Pty {
+                        resources: PtyResources::Active(pty_tx),
+                        ..
+                    } => pty_tx.resize(new_bounds),
+                    TerminalType::Remote(remote) => {
+                        self.background_executor
+                            .spawn(remote.client.request(proto::ResizePersistentTerminal {
+                                server_instance_id: remote.server_instance_id.clone(),
+                                terminal_id: remote.terminal_id.clone(),
+                                rows: new_bounds.num_lines().try_into().unwrap_or(u32::MAX),
+                                columns: new_bounds.num_columns().try_into().unwrap_or(u32::MAX),
+                                pixel_width: new_bounds.cell_width.as_f32().max(0.0) as u32,
+                                pixel_height: new_bounds.line_height.as_f32().max(0.0) as u32,
+                            }))
+                            .detach();
+                    }
+                    TerminalType::Pty { .. } | TerminalType::DisplayOnly => {}
                 }
 
                 resize(term, new_bounds);
@@ -1964,26 +2129,37 @@ impl Terminal {
         apply_config(&self.term, &self.term_config);
     }
 
-    /// Normalizes line endings so text captured outside a PTY starts each line at column zero.
     pub fn write_output(&mut self, bytes: &[u8], cx: &mut Context<Self>) {
+        // Inject bytes directly into the terminal emulator and refresh the UI.
+        // This bypasses the PTY/event loop for display-only terminals.
         let mut previous_byte_was_cr = false;
         let converted = convert_lf_to_crlf(bytes, &mut previous_byte_was_cr);
         self.write_raw_output(&converted, cx);
     }
 
-    /// Terminal byte streams already contain their control sequences and must not be normalized.
     fn write_raw_output(&mut self, bytes: &[u8], cx: &mut Context<Self>) {
         let mut term = self.term.lock();
         self.output_processor
             .get_or_insert_with(Processor::<StdSyncHandler>::new)
             .advance(&mut *term, bytes);
         drop(term);
+        self.note_program_output();
         self.detect_init_command_startup_marker();
         cx.emit(Event::Wakeup);
     }
 
     pub fn total_lines(&self) -> usize {
         total_lines(&self.term.lock_unfair())
+    }
+
+    /// Timestamp of the most recent output produced by the program running in the
+    /// terminal, on the testable executor clock. `None` before any output arrived.
+    pub fn last_output_activity(&self) -> Option<Instant> {
+        self.last_output_at
+    }
+
+    fn note_program_output(&mut self) {
+        self.last_output_at = Some(self.background_executor.now());
     }
 
     pub fn viewport_lines(&self) -> usize {
@@ -2122,19 +2298,26 @@ impl Terminal {
         let input = input.into();
         #[cfg(any(test, feature = "test-support"))]
         self.pty_write_log.borrow_mut().push(input.to_vec());
-        if let TerminalType::Pty {
-            resources: PtyResources::Active(pty_tx),
-            ..
-        } = &self.terminal_type
-        {
-            if log::log_enabled!(log::Level::Debug) {
-                if let Ok(str) = str::from_utf8(&input) {
-                    log::debug!("Writing to PTY: {:?}", str);
-                } else {
-                    log::debug!("Writing to PTY: {:?}", input);
+        match &self.terminal_type {
+            TerminalType::Pty {
+                resources: PtyResources::Active(pty_tx),
+                ..
+            } => {
+                if log::log_enabled!(log::Level::Debug) {
+                    if let Ok(str) = str::from_utf8(&input) {
+                        log::debug!("Writing to PTY: {:?}", str);
+                    } else {
+                        log::debug!("Writing to PTY: {:?}", input);
+                    }
+                }
+                pty_tx.notify(input);
+            }
+            TerminalType::Remote(remote) => {
+                if remote.input_tx.try_send(input.into_owned()).is_err() {
+                    log::warn!("persistent terminal input queue is unavailable");
                 }
             }
-            pty_tx.notify(input);
+            TerminalType::Pty { .. } | TerminalType::DisplayOnly => {}
         }
     }
 
@@ -2214,7 +2397,10 @@ impl Terminal {
     }
 
     pub fn is_pty(&self) -> bool {
-        matches!(self.terminal_type, TerminalType::Pty { .. })
+        matches!(
+            self.terminal_type,
+            TerminalType::Pty { .. } | TerminalType::Remote(_)
+        )
     }
 
     pub fn write_init_command_after_startup(
@@ -2449,6 +2635,16 @@ impl Terminal {
     pub fn get_content(&self) -> String {
         let term = self.term.lock_unfair();
         content_text(&term)
+    }
+
+    pub fn is_remote_terminal(&self) -> bool {
+        self.is_remote_terminal
+    }
+
+    /// Whether this terminal's shell runs inside a Remote Server process rather
+    /// than as a client-side local or `ssh` child process.
+    pub fn is_server_hosted(&self) -> bool {
+        matches!(self.terminal_type, TerminalType::Remote(_))
     }
 
     pub fn last_n_non_empty_lines(&self, n: usize) -> Vec<String> {
@@ -2916,7 +3112,7 @@ impl Terminal {
                 .read()
                 .as_ref()
                 .and_then(|process| foreground_process_command_from_argv(&process.argv)),
-            TerminalType::DisplayOnly => None,
+            TerminalType::Remote(_) | TerminalType::DisplayOnly => None,
         }
     }
 
@@ -2933,7 +3129,7 @@ impl Terminal {
                 .read()
                 .as_ref()
                 .map(|process| process.cwd.clone()),
-            TerminalType::DisplayOnly => None,
+            TerminalType::Remote(_) | TerminalType::DisplayOnly => None,
         }
     }
 
@@ -2988,12 +3184,31 @@ impl Terminal {
         history_size.saturating_add(line)
     }
 
+    /// Title shown for this terminal outside the terminal itself, such as a tab.
+    ///
+    /// Prefers the title reported by the program running in the terminal, which is
+    /// the same text as the terminal breadcrumb, so it follows program-driven title
+    /// changes. Task terminals and terminals whose program reports no title keep the
+    /// task/shell/process label from [`Self::title`].
+    pub fn display_title(&self, truncate: bool) -> String {
+        if self.task.is_none() {
+            let program_title = self.breadcrumb_text.trim();
+            if !program_title.is_empty() {
+                return if truncate {
+                    truncate_and_trailoff(program_title, TITLE_MAX_CHARS)
+                } else {
+                    program_title.to_string()
+                };
+            }
+        }
+        self.title(truncate)
+    }
+
     pub fn title(&self, truncate: bool) -> String {
-        const MAX_CHARS: usize = 25;
         match &self.task {
             Some(task_state) => {
                 if truncate {
-                    truncate_and_trailoff(&task_state.spawned_task.label, MAX_CHARS)
+                    truncate_and_trailoff(&task_state.spawned_task.label, TITLE_MAX_CHARS)
                 } else {
                     task_state.spawned_task.full_label.clone()
                 }
@@ -3026,8 +3241,8 @@ impl Terminal {
                             );
                             let (process_file, process_name) = if truncate {
                                 (
-                                    truncate_and_trailoff(&process_file, MAX_CHARS),
-                                    truncate_and_trailoff(&process_name, MAX_CHARS),
+                                    truncate_and_trailoff(&process_file, TITLE_MAX_CHARS),
+                                    truncate_and_trailoff(&process_name, TITLE_MAX_CHARS),
                                 )
                             } else {
                                 (process_file, process_name)
@@ -3035,7 +3250,7 @@ impl Terminal {
                             format!("{process_file} — {process_name}")
                         })
                         .unwrap_or_else(|| "Terminal".to_string()),
-                    TerminalType::DisplayOnly => "Terminal".to_string(),
+                    TerminalType::Remote(_) | TerminalType::DisplayOnly => "Terminal".to_string(),
                 }),
         }
     }
@@ -3051,6 +3266,14 @@ impl Terminal {
                     // Then kill the shell itself so that the terminal exits properly
                     // and wait_for_completed_task can complete
                     info.kill_child_process();
+                }
+                TerminalType::Remote(remote) => {
+                    self.background_executor
+                        .spawn(remote.client.request(proto::ClosePersistentTerminal {
+                            server_instance_id: remote.server_instance_id.clone(),
+                            terminal_id: remote.terminal_id.clone(),
+                        }))
+                        .detach();
                 }
                 TerminalType::DisplayOnly => {
                     // Non-PTY task terminals own their subprocess directly.
@@ -3107,14 +3330,14 @@ impl Terminal {
     pub fn pid(&self) -> Option<sysinfo::Pid> {
         match &self.terminal_type {
             TerminalType::Pty { info, .. } => info.pid(),
-            TerminalType::DisplayOnly => None,
+            TerminalType::Remote(_) | TerminalType::DisplayOnly => None,
         }
     }
 
     pub fn pid_getter(&self) -> Option<&ProcessIdGetter> {
         match &self.terminal_type {
             TerminalType::Pty { info, .. } => Some(info.pid_getter()),
-            TerminalType::DisplayOnly => None,
+            TerminalType::Remote(_) | TerminalType::DisplayOnly => None,
         }
     }
 
@@ -3210,6 +3433,28 @@ impl Terminal {
 
     pub fn vi_mode_enabled(&self) -> bool {
         self.vi_mode_enabled
+    }
+
+    pub fn frozen_snapshot_builder(&self, cx: &App) -> TerminalBuilder {
+        let bounds = self.last_content.terminal_bounds;
+        let history_lines = self.total_lines().saturating_sub(self.viewport_lines());
+        let mut builder = TerminalBuilder::new_display_only_with_bounds(
+            self.template.cursor_shape,
+            self.template.alternate_scroll,
+            Some(history_lines),
+            self.template.window_id,
+            cx.background_executor(),
+            self.path_style,
+            bounds,
+        );
+        clone_active_grid(&self.term, &builder.terminal.term);
+        builder.terminal.last_content = make_content(
+            &builder.terminal.term.lock_unfair(),
+            &builder.terminal.last_content,
+        );
+        builder.terminal.title_override =
+            Some(i18n::t_args!("e5b6b8bc67e69536", self.display_title(false)));
+        builder
     }
 
     pub fn clone_builder(&self, cx: &App, cwd: Option<PathBuf>) -> Task<Result<TerminalBuilder>> {
@@ -3414,7 +3659,27 @@ impl Drop for Terminal {
         if let Some(subprocess) = self.subprocess.take() {
             subprocess.kill();
         }
+        if let TerminalType::Remote(remote) = &self.terminal_type {
+            self.background_executor
+                .spawn(remote.client.request(proto::ClosePersistentTerminal {
+                    server_instance_id: remote.server_instance_id.clone(),
+                    terminal_id: remote.terminal_id.clone(),
+                }))
+                .detach();
+        }
         self.release_pty_resources();
+    }
+}
+
+fn exit_status_from_code(code: i32) -> ExitStatus {
+    #[cfg(unix)]
+    {
+        ExitStatus::from_raw(code << 8)
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::ExitStatusExt as _;
+        ExitStatus::from_raw(code as u32)
     }
 }
 
@@ -3605,7 +3870,44 @@ mod tests {
     };
     use parking_lot::Mutex;
     use rand::{Rng, distr, rngs::StdRng};
+    use rpc::{ProtoClient, ProtoMessageHandlerSet};
     use task::{Shell, ShellBuilder};
+
+    #[gpui::test]
+    fn frozen_snapshot_copies_scrollback_and_stops_following_source(cx: &mut TestAppContext) {
+        let source = cx.new(|cx| {
+            let mut terminal = TerminalBuilder::new_display_only_with_bounds(
+                SettingsCursorShape::Block,
+                AlternateScroll::On,
+                Some(100),
+                0,
+                cx.background_executor(),
+                PathStyle::local(),
+                TerminalBounds::new(
+                    px(16.),
+                    px(8.),
+                    bounds(point(px(0.), px(0.)), size(px(640.), px(48.))),
+                ),
+            )
+            .subscribe(cx);
+            terminal.write_output(b"one\ntwo\nthree\nfour\nfive\n", cx);
+            terminal
+        });
+
+        let frozen = cx.new(|cx| source.read(cx).frozen_snapshot_builder(cx).subscribe(cx));
+        cx.read(|cx| {
+            assert_eq!(frozen.read(cx).get_content(), source.read(cx).get_content());
+            assert!(frozen.read(cx).total_lines() > frozen.read(cx).viewport_lines());
+        });
+
+        source.update(cx, |terminal, cx| {
+            terminal.write_output(b"six\n", cx);
+        });
+        cx.read(|cx| {
+            assert!(!frozen.read(cx).get_content().contains("six"));
+            assert!(frozen.read(cx).title(false).starts_with("[冻结]"));
+        });
+    }
 
     #[test]
     fn test_init_command_startup_marker_commands_do_not_contain_marker() {
@@ -4878,133 +5180,6 @@ mod tests {
         );
     }
 
-    fn display_only_terminal(cx: &mut TestAppContext) -> Entity<Terminal> {
-        cx.new(|cx| {
-            TerminalBuilder::new_display_only(
-                SettingsCursorShape::default(),
-                AlternateScroll::On,
-                None,
-                0,
-                cx.background_executor(),
-                PathStyle::local(),
-            )
-            .subscribe(cx)
-        })
-    }
-
-    fn raw_content(chunks: &[&[u8]], cx: &mut TestAppContext) -> Content {
-        let terminal = display_only_terminal(cx);
-        for chunk in chunks {
-            terminal.update(cx, |terminal, cx| terminal.write_raw_output(chunk, cx));
-        }
-        terminal.read_with(cx, |terminal, _| {
-            let term = terminal.term.lock_unfair();
-            make_content(&term, &terminal.last_content)
-        })
-    }
-
-    #[gpui::test]
-    async fn test_write_raw_output_preserves_line_control_semantics(cx: &mut TestAppContext) {
-        let bytes = b"a\nb\rc\r\nd";
-        let raw = raw_content(&[bytes], cx);
-
-        let normalized_terminal = display_only_terminal(cx);
-        normalized_terminal.update(cx, |terminal, cx| terminal.write_output(bytes, cx));
-        let normalized = normalized_terminal.read_with(cx, |terminal, _| {
-            let term = terminal.term.lock_unfair();
-            make_content(&term, &terminal.last_content)
-        });
-
-        let raw_cells = raw
-            .cells
-            .iter()
-            .map(|cell| (cell.point.line, cell.point.column, cell.character()))
-            .collect::<Vec<_>>();
-        let normalized_cells = normalized
-            .cells
-            .iter()
-            .map(|cell| (cell.point.line, cell.point.column, cell.character()))
-            .collect::<Vec<_>>();
-
-        assert!(raw_cells.contains(&(0, 0, 'a')));
-        assert!(raw_cells.contains(&(1, 0, 'c')));
-        assert!(raw_cells.contains(&(1, 1, 'b')));
-        assert!(raw_cells.contains(&(2, 0, 'd')));
-        assert!(!normalized_cells.contains(&(1, 1, 'b')));
-        assert!(normalized_cells.contains(&(1, 0, 'c')));
-        assert!(normalized_cells.contains(&(2, 0, 'd')));
-        assert_eq!(raw.cursor.point, Point::new(2, 1));
-        assert_eq!(normalized.cursor.point, Point::new(2, 1));
-    }
-
-    #[gpui::test]
-    async fn test_write_raw_output_is_independent_of_chunk_boundaries(cx: &mut TestAppContext) {
-        let bytes = b"A\nB\rC\r\n\x1b[31mR\xc3\xa9\x1b[0m\x1b[2;6HX";
-        let whole = raw_content(&[bytes], cx);
-        let cells = |content: &Content| {
-            content
-                .cells
-                .iter()
-                .map(|cell| (cell.point, cell.cell.clone()))
-                .collect::<Vec<_>>()
-        };
-        let whole_cells = cells(&whole);
-        let whole_cursor = whole.cursor.point;
-
-        let red_r = whole
-            .cells
-            .iter()
-            .find(|cell| cell.character() == 'R')
-            .expect("raw output should contain the styled R");
-        assert_eq!(red_r.point, Point::new(2, 0));
-        assert_eq!(red_r.foreground(), Color::Named(NamedColor::Red));
-        let accented = whole
-            .cells
-            .iter()
-            .find(|cell| cell.character() == 'é')
-            .expect("raw output should contain the complete UTF-8 character");
-        assert_eq!(accented.point, Point::new(2, 1));
-        assert_eq!(accented.foreground(), Color::Named(NamedColor::Red));
-        let positioned = whole
-            .cells
-            .iter()
-            .find(|cell| cell.point == Point::new(1, 5))
-            .expect("cursor movement should position X");
-        assert_eq!(positioned.character(), 'X');
-        assert_eq!(
-            positioned.foreground(),
-            Color::Named(NamedColor::Foreground)
-        );
-        assert_eq!(
-            positioned.background(),
-            Color::Named(NamedColor::Background)
-        );
-        assert_eq!(whole_cursor, Point::new(1, 6));
-
-        for split in 0..=bytes.len() {
-            let (first, second) = bytes.split_at(split);
-            let split_content = raw_content(&[b"", first, b"", second, b""], cx);
-            assert_eq!(
-                cells(&split_content),
-                whole_cells,
-                "two-part split at byte {split}"
-            );
-            assert_eq!(
-                split_content.cursor.point, whole_cursor,
-                "two-part cursor at byte {split}"
-            );
-        }
-
-        let byte_chunks = bytes
-            .iter()
-            .map(std::slice::from_ref)
-            .chain(std::iter::once(&[][..]))
-            .collect::<Vec<_>>();
-        let bytewise = raw_content(&byte_chunks, cx);
-        assert_eq!(cells(&bytewise), whole_cells);
-        assert_eq!(bytewise.cursor.point, whole_cursor);
-    }
-
     #[gpui::test]
     async fn test_display_only_write_output_ignores_osc52(cx: &mut TestAppContext) {
         cx.update(|cx| {
@@ -5025,16 +5200,13 @@ mod tests {
             .subscribe(cx)
         });
 
-        for write_output in [Terminal::write_output, Terminal::write_raw_output] {
-            terminal.update(cx, |terminal, cx| {
-                write_output(terminal, b"\x1b]52;c;b3ZlcndyaXR0ZW4=\x07", cx);
-            });
-            cx.run_until_parked();
+        terminal.update(cx, |terminal, cx| {
+            terminal.write_output(b"\x1b]52;c;b3ZlcndyaXR0ZW4=\x07", cx);
+        });
+        cx.run_until_parked();
 
-            let clipboard_text =
-                cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text()));
-            assert_eq!(clipboard_text.as_deref(), Some("original"));
-        }
+        let clipboard_text = cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text()));
+        assert_eq!(clipboard_text.as_deref(), Some("original"));
     }
 
     mod hyperlinks {
@@ -5893,6 +6065,7 @@ mod tests {
                 info.pid_getter().fallback_pid(),
                 info.current.read().is_some()
             ),
+            TerminalType::Remote(_) => "remote".to_string(),
             TerminalType::DisplayOnly => "display-only".to_string(),
         });
         panic!(
@@ -5985,7 +6158,6 @@ mod tests {
 
         terminal.update(cx, |terminal, cx| {
             terminal.write_output(b"injected_before_release\n", cx);
-            terminal.write_raw_output(b"\x1b[", cx);
         });
         assert!(
             terminal.read_with(cx, |terminal, _| terminal.output_processor.is_some()),
@@ -6263,5 +6435,73 @@ mod tests {
 
         assert!(terminal.cwd_history.is_empty());
         assert_eq!(terminal.pending_cwd_boundary, None);
+    }
+
+    struct TestProtoClient {
+        handler_set: Mutex<ProtoMessageHandlerSet>,
+    }
+
+    impl ProtoClient for TestProtoClient {
+        fn request(
+            &self,
+            _: proto::Envelope,
+            request_type: &'static str,
+        ) -> futures::future::BoxFuture<'static, Result<proto::Envelope>> {
+            async move { anyhow::bail!("unexpected {request_type} request in test") }.boxed()
+        }
+
+        fn send(&self, _: proto::Envelope, _: &'static str) -> Result<()> {
+            Ok(())
+        }
+
+        fn send_response(&self, _: proto::Envelope, _: &'static str) -> Result<()> {
+            Ok(())
+        }
+
+        fn message_handler_set(&self) -> &Mutex<ProtoMessageHandlerSet> {
+            &self.handler_set
+        }
+
+        fn is_via_collab(&self) -> bool {
+            false
+        }
+
+        fn has_wsl_interop(&self) -> bool {
+            false
+        }
+    }
+
+    #[gpui::test]
+    fn server_hosted_terminal_is_distinguished_from_client_side_terminals(cx: &mut TestAppContext) {
+        let hosted = TerminalBuilder::new_remote(
+            TerminalMode::interactive(),
+            Shell::Program("bash".to_string()),
+            SettingsCursorShape::default(),
+            AlternateScroll::On,
+            None,
+            Vec::new(),
+            Duration::from_millis(0),
+            0,
+            PathStyle::local(),
+            AnyProtoClient::new(Arc::new(TestProtoClient {
+                handler_set: Mutex::new(ProtoMessageHandlerSet::default()),
+            })),
+            "server".to_string(),
+            "terminal".to_string(),
+            &cx.background_executor,
+        );
+        assert!(hosted.terminal.is_server_hosted());
+        assert!(hosted.terminal.is_remote_terminal());
+
+        let display_only = TerminalBuilder::new_display_only(
+            SettingsCursorShape::default(),
+            AlternateScroll::On,
+            None,
+            0,
+            &cx.background_executor,
+            PathStyle::local(),
+        );
+        assert!(!display_only.terminal.is_server_hosted());
+        assert!(!display_only.terminal.is_remote_terminal());
     }
 }

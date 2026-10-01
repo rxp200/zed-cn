@@ -106,8 +106,7 @@ impl KeyBinding {
         cx.set_global(VimStyle(enabled));
     }
 
-    /// Returns whether keybindings use Vim-style notation.
-    pub fn is_vim_mode(cx: &App) -> bool {
+    fn is_vim_mode(cx: &App) -> bool {
         cx.try_global::<VimStyle>().is_some_and(|g| g.0)
     }
 

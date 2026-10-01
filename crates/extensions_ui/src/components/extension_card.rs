@@ -487,7 +487,7 @@ impl Component for ExtensionCard {
         fn dev_extension() -> Arc<ExtensionManifest> {
             Arc::new(ExtensionManifest {
                 id: "preview-dev-theme".into(),
-                name: "Local Theme".to_owned(),
+                name: i18n::t!("85ed785fbea0967a").to_owned(),
                 version: "0.1.0".into(),
                 schema_version: SchemaVersion::ZERO,
                 description: Some("A locally installed extension under development.".to_owned()),
@@ -772,7 +772,7 @@ impl RenderOnce for ExtensionCard {
                             .size_full()
                             .justify_center()
                             .bg(cx.theme().colors().elevated_surface_background.alpha(0.8))
-                            .child(Label::new("Overridden by dev extension.")),
+                            .child(Label::new(i18n::t!("e919decd182d8e8c"))),
                     )
                 }),
         )

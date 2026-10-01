@@ -531,18 +531,12 @@ impl Render for SyntaxTreeView {
                         .max_w_3_5()
                         .map(|this| {
                             if editor_state.is_some_and(|state| !state.has_language()) {
-                                this.child(Label::new("Current editor has no associated language"))
-                                    .child(
-                                        Label::new(concat!(
-                                            "Try assigning a language or",
-                                            "switching to a different buffer"
-                                        ))
-                                        .size(LabelSize::Small),
-                                    )
+                                this.child(Label::new(i18n::t!("9d094a26e8c27d71"))).child(
+                                    Label::new(i18n::t!("827ef684c523ba55")).size(LabelSize::Small),
+                                )
                             } else {
-                                this.child(Label::new("Not attached to an editor")).child(
-                                    Label::new("Focus an editor to show a new tree view")
-                                        .size(LabelSize::Small),
+                                this.child(Label::new(i18n::t!("892992fa53fb155a"))).child(
+                                    Label::new(i18n::t!("97392ca0adb09f73")).size(LabelSize::Small),
                                 )
                             }
                         });
@@ -696,7 +690,10 @@ impl SyntaxTreeToolbarItemView {
                                 editor.tab_content_text(Default::default(), cx)
                             });
 
-                            Tooltip::text(format!("Update view to '{active_tab_name}'"))
+                            Tooltip::text(i18n::t!(
+                                "872657668031acad",
+                                active_tab_name = active_tab_name
+                            ))
                         })
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.update_active_editor(&Default::default(), window, cx);

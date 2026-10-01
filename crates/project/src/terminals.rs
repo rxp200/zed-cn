@@ -5,7 +5,8 @@ use gpui::{App, AppContext as _, Context, Entity, Task, WeakEntity};
 use futures::{FutureExt, future::Shared};
 use itertools::Itertools as _;
 use language::LanguageName;
-use remote::{Interactive, RemoteClient};
+use remote::{Interactive, RemoteClient, RemoteConnectionOptions};
+use rpc::proto;
 use settings::{Settings, SettingsLocation};
 use std::{
     borrow::Cow,
@@ -21,6 +22,7 @@ use terminal::{
 use util::{
     command::new_std_command, get_default_system_shell, get_system_shell, maybe, rel_path::RelPath,
 };
+use uuid::Uuid;
 
 use crate::{Project, ProjectPath};
 
@@ -396,34 +398,93 @@ impl Project {
             .await
             .unwrap_or_default();
 
-            let builder = project
-                .update(cx, move |_, cx| {
-                    let (shell, env) = {
-                        match remote_client {
+            let persistent_remote = remote_client.as_ref().filter(|remote_client| {
+                remote_client.read_with(cx, |remote_client, _| {
+                    remote_client.supports_persistent_terminals()
+                        && matches!(
+                            remote_client.connection_options(),
+                            RemoteConnectionOptions::Ssh(options)
+                                if options.remote_server_source == settings::RemoteServerSource::ZedCn
+                        )
+                })
+            });
+            let builder = if let Some(remote_client) = persistent_remote {
+                // The Remote Server is launched over a non-PTY SSH session, so its own
+                // environment carries no terminal type; without these variables the
+                // hosted shell loses color and terminfo-based full-screen programs.
+                let persistent_env = persistent_terminal_env(
+                    env.clone(),
+                    &cx.update(|cx| release_channel::AppVersion::global(cx)),
+                );
+                let persistent_shell = if activation_script.is_empty() {
+                    (shell.clone(), Vec::new())
+                } else {
+                    let separator = shell_kind.sequential_commands_separator();
+                    let command = format!(
+                        "{}{separator} exec {shell} -l",
+                        activation_script.join(&format!("{separator} "))
+                    );
+                    (shell.clone(), shell_kind.args_for_shell(true, command))
+                };
+                let response = remote_client
+                    .read_with(cx, |remote_client, _| {
+                        remote_client.proto_client().request(proto::CreatePersistentTerminal {
+                            creation_id: Uuid::new_v4().to_string(),
+                            program: persistent_shell.0.clone(),
+                            args: persistent_shell.1.clone(),
+                            env: persistent_env.into_iter().collect(),
+                            working_directory: path.as_ref().map(|path| path.display().to_string()),
+                            rows: 24,
+                            columns: 80,
+                            pixel_width: 0,
+                            pixel_height: 0,
+                        })
+                    })
+                    .await?;
+                let client = remote_client.read_with(cx, |remote_client, _| remote_client.proto_client());
+                TerminalBuilder::new_remote(
+                    TerminalMode::interactive(),
+                    Shell::Program(shell),
+                    settings.cursor_shape,
+                    settings.alternate_scroll,
+                    settings.max_scroll_history_lines,
+                    settings.path_hyperlink_regexes,
+                    Duration::from_millis(settings.path_hyperlink_timeout_ms),
+                    project.entity_id().as_u64(),
+                    path_style,
+                    client,
+                    response.server_instance_id,
+                    response.terminal_id,
+                    cx.background_executor(),
+                )
+            } else {
+                project
+                    .update(cx, move |_, cx| {
+                        let (shell, env) = match remote_client {
                             Some(remote_client) => {
                                 create_remote_shell(None, env, path, remote_client, cx)?
                             }
                             None => (settings.shell, env),
-                        }
-                    };
-                    anyhow::Ok(TerminalBuilder::new(
-                        local_path.map(|path| path.to_path_buf()),
-                        TerminalMode::interactive(),
-                        shell,
-                        env,
-                        settings.cursor_shape,
-                        settings.alternate_scroll,
-                        settings.max_scroll_history_lines,
-                        settings.path_hyperlink_regexes,
-                        Duration::from_millis(settings.path_hyperlink_timeout_ms),
-                        is_via_remote,
-                        cx.entity_id().as_u64(),
-                        cx,
-                        activation_script,
-                        path_style,
-                    ))
-                })??
-                .await?;
+                        };
+                        anyhow::Ok(TerminalBuilder::new(
+                            local_path.map(|path| path.to_path_buf()),
+                            TerminalMode::interactive(),
+                            shell,
+                            env,
+                            settings.cursor_shape,
+                            settings.alternate_scroll,
+                            settings.max_scroll_history_lines,
+                            settings.path_hyperlink_regexes,
+                            Duration::from_millis(settings.path_hyperlink_timeout_ms),
+                            is_via_remote,
+                            cx.entity_id().as_u64(),
+                            cx,
+                            activation_script,
+                            path_style,
+                        ))
+                    })??
+                    .await?
+            };
             project.update(cx, move |this, cx| {
                 let terminal_handle = cx.new(|cx| builder.subscribe(cx));
 
@@ -458,7 +519,11 @@ impl Project {
     ) -> Task<Result<Entity<Terminal>>> {
         // We cannot clone the task's terminal, as it will effectively re-spawn the task, which might not be desirable.
         // For now, create a new shell instead.
-        if terminal.read(cx).task().is_some() {
+        // A Remote Server-hosted terminal's PTY lives on the server, and its clone
+        // template holds the remote shell path rather than a client-side command, so
+        // cloning it would run that shell on the client. Request a new hosted
+        // terminal instead; legacy `ssh` terminals keep their client-side template.
+        if terminal.read(cx).task().is_some() || terminal.read(cx).is_server_hosted() {
             return self.create_terminal_shell(cwd, cx);
         }
         let local_path = if self.is_via_remote_server() {
@@ -641,6 +706,14 @@ fn create_remote_shell(
     ))
 }
 
+fn persistent_terminal_env(
+    mut env: HashMap<String, String>,
+    version: &impl std::fmt::Display,
+) -> HashMap<String, String> {
+    insert_zed_terminal_env(&mut env, version);
+    env
+}
+
 fn format_task_for_activation(
     spawn_task: &SpawnInTerminal,
     shell_kind: ShellKind,
@@ -774,6 +847,25 @@ mod tests {
             format_task_for_activation(&task, ShellKind::PowerShell, "powershell.exe", true),
             "&cmd.exe /S /C '\"echo It''s fine\"'"
         );
+    }
+
+    #[test]
+    fn persistent_remote_terminal_env_sets_terminal_type_and_keeps_project_env() {
+        let mut env = HashMap::default();
+        env.insert("TERM".to_string(), "dumb".to_string());
+        env.insert("PATH".to_string(), "/usr/bin".to_string());
+
+        let env = persistent_terminal_env(env, &"1.2.3");
+
+        assert_eq!(env.get("TERM").map(String::as_str), Some("xterm-256color"));
+        assert_eq!(env.get("COLORTERM").map(String::as_str), Some("truecolor"));
+        assert_eq!(env.get("TERM_PROGRAM").map(String::as_str), Some("zed"));
+        assert_eq!(env.get("ZED_TERM").map(String::as_str), Some("true"));
+        assert_eq!(
+            env.get("TERM_PROGRAM_VERSION").map(String::as_str),
+            Some("1.2.3")
+        );
+        assert_eq!(env.get("PATH").map(String::as_str), Some("/usr/bin"));
     }
 
     #[test]

@@ -1,3 +1,5 @@
+// Modified by the Zed CN project, 2026. See MODIFICATIONS.md.
+
 use scheduler::Instant;
 use std::{
     any::{TypeId, type_name},
@@ -839,6 +841,15 @@ pub struct App {
 }
 
 impl App {
+    /// 当前应用是否运行在测试模式（由 `TestAppContext` 创建）。
+    pub fn is_test(&self) -> bool {
+        match self.mode {
+            #[cfg(any(test, feature = "test-support"))]
+            GpuiMode::Test { .. } => true,
+            GpuiMode::Production => false,
+        }
+    }
+
     #[allow(clippy::new_ret_no_self)]
     pub(crate) fn new_app(
         platform: Rc<dyn Platform>,
@@ -2289,10 +2300,9 @@ impl App {
         })
     }
 
-    /// Register a callback to be invoked after a keystroke is resolved in any window,
-    /// including the action that handled it, if any. Keystrokes consumed by an
-    /// interceptor or raw keyboard event handler are not observed.
-    /// Standalone modifiers are observed on release.
+    /// Register a callback to be invoked when a keystroke is received by the application
+    /// in any window. Note that this fires after all other action and event mechanisms have resolved
+    /// and that this API will not be invoked if the event's propagation is stopped.
     pub fn observe_keystrokes(
         &mut self,
         mut f: impl FnMut(&KeystrokeEvent, &mut Window, &mut App) + 'static,
@@ -3174,12 +3184,18 @@ pub struct AnyDrag {
     /// Resolves the payload to offer the platform if the drag leaves the window.
     /// Invoked at most once per drag gesture, at promotion time.
     pub external_payload_source: Option<ExternalDragPayloadSource>,
+
+    /// Handles a release outside the source window when the drag remains app-owned.
+    pub release_outside_source: Option<DragReleaseOutsideSource>,
 }
 
 /// Lazily resolves the payload handed to the platform when an internal drag is
 /// promoted to a native drag session.
 pub type ExternalDragPayloadSource =
     Box<dyn FnOnce(&mut Window, &mut App) -> Option<ExternalDragPayload> + 'static>;
+
+/// Handles an app-owned drag released outside its source window.
+pub type DragReleaseOutsideSource = Box<dyn Fn(&dyn Any, &mut Window, &mut App) + 'static>;
 
 /// Contains state associated with a tooltip. You'll only need this struct if you're implementing
 /// tooltip behavior on a custom element. Otherwise, use [Div::tooltip](crate::Interactivity::tooltip).

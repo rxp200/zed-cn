@@ -17,7 +17,7 @@ use crate::{
     SelectionDragState, SizingBehavior, SoftWrap, ToPoint,
     code_context_menus::{CodeActionsMenu, MENU_ASIDE_MAX_WIDTH, MENU_ASIDE_MIN_WIDTH, MENU_GAP},
     column_pixels,
-    cursor_animation::{CursorViewport, LogicalCursorPosition, animated_corners_overlap_target},
+    cursor_animation::{CursorViewport, LogicalCursorPosition},
     display_map::{
         Block, BlockContext, BlockStyle, ChunkRendererId, DisplaySnapshot, EditorMargins,
         HighlightKey, HighlightedChunk, ToDisplayPoint,
@@ -409,6 +409,16 @@ impl EditorElement {
         register_action(editor, window, Editor::select_page_up);
         register_action(editor, window, Editor::cancel);
         register_action(editor, window, Editor::blame_hover);
+        register_action(
+            editor,
+            window,
+            crate::hover_translation::translate_selection,
+        );
+        register_action(
+            editor,
+            window,
+            crate::code_explanations::deep_explain_selection,
+        );
         register_action(editor, window, Editor::next_snippet_tabstop);
         register_action(editor, window, Editor::previous_snippet_tabstop);
         register_action(editor, window, Editor::copy);
@@ -2913,7 +2923,7 @@ impl EditorElement {
                         });
                     })
                     .tooltip(Tooltip::for_action_title(
-                        "Expand Excerpt",
+                        "展开摘要",
                         &crate::actions::ExpandExcerpts::default(),
                     ))
                     .into_any_element();
@@ -5519,32 +5529,20 @@ impl EditorElement {
         });
     }
 
-    const DEFAULT_STRIP_WIDTH_RATIO: f32 = 0.275;
-    const DELETED_MARKER_WIDTH_RATIO: f32 = 0.35 / Self::DEFAULT_STRIP_WIDTH_RATIO;
-    const MIN_DELETED_MARKER_WIDTH_RATIO: f32 = 0.2;
+    const DELETED_MARKER_WIDTH_RATIO: f32 = 0.35 / 0.275;
 
     fn gutter_strip_width(line_height: Pixels, cx: &App) -> Pixels {
         match EditorSettings::get_global(cx).gutter.git_gutter_width {
             GitGutterWidth::Custom(width) => px(*width),
-            GitGutterWidth::Default => (Self::DEFAULT_STRIP_WIDTH_RATIO * line_height).floor(),
+            GitGutterWidth::Default => (0.275 * line_height).floor(),
         }
     }
 
     fn deleted_marker_base_width(setting: GitGutterWidth, line_height: Pixels) -> Pixels {
         match setting {
-            GitGutterWidth::Custom(width) => {
-                let scaled_width = px(*width * Self::DELETED_MARKER_WIDTH_RATIO);
-                if scaled_width > Pixels::ZERO {
-                    let default_strip_width = Self::DEFAULT_STRIP_WIDTH_RATIO * line_height;
-                    let boost_factor = (1.0 - *width / f32::from(default_strip_width)).max(0.0);
-                    scaled_width + line_height * Self::MIN_DELETED_MARKER_WIDTH_RATIO * boost_factor
-                } else {
-                    Pixels::ZERO
-                }
-            }
+            GitGutterWidth::Custom(width) => px(*width * Self::DELETED_MARKER_WIDTH_RATIO),
             GitGutterWidth::Default => {
-                (Self::DEFAULT_STRIP_WIDTH_RATIO * line_height * Self::DELETED_MARKER_WIDTH_RATIO)
-                    .floor()
+                (0.275 * line_height * Self::DELETED_MARKER_WIDTH_RATIO).floor()
             }
         }
     }
@@ -7245,7 +7243,7 @@ pub fn render_breadcrumb_text(
                                     h_flex()
                                         .gap_1()
                                         .justify_between()
-                                        .child(Label::new("Show Symbol Outline"))
+                                        .child(Label::new("显示符号大纲"))
                                         .child(ui::KeyBinding::for_action_in(
                                             &zed_actions::outline::ToggleOutline,
                                             &focus_handle,
@@ -7260,7 +7258,7 @@ pub fn render_breadcrumb_text(
                                             .pt_1()
                                             .border_t_1()
                                             .border_color(cx.theme().colors().border_variant)
-                                            .child(Label::new("Right-Click to Copy Path")),
+                                            .child(Label::new("右键复制路径")),
                                     )
                                 })
                                 .into_any_element()
@@ -7655,6 +7653,16 @@ impl LineWithInvisibles {
                         if row == max_line_count {
                             return layouts;
                         }
+                    }
+
+                    // The current display line has already exceeded the maximum
+                    // display length. Skip the rest of its chunks without
+                    // processing them (the visible prefix has been laid out
+                    // already, and any further text is not displayed). This
+                    // keeps rendering cost bounded for very long lines (e.g.
+                    // minified JSON), regardless of the line's length.
+                    if line_exceeded_max_len {
+                        continue;
                     }
 
                     if !line_chunk.is_empty() && !line_exceeded_max_len {
@@ -11104,8 +11112,6 @@ impl CursorLayout {
     }
 
     pub fn paint(&mut self, origin: gpui::Point<Pixels>, window: &mut Window, cx: &mut App) {
-        let bounds = window.pixel_snap_bounds(self.bounds(origin));
-
         if let Some(corners) = self.animated_corners {
             let mut builder = gpui::PathBuilder::fill();
             builder.add_polygon(&corners, true);
@@ -11114,25 +11120,24 @@ impl CursorLayout {
                     name.paint(window, cx);
                 }
                 window.paint_path(path, self.color);
-
-                if !animated_corners_overlap_target(bounds, &corners) {
-                    return;
-                }
+                return;
             }
-        } else {
-            //Draw background or border quad
-            let cursor = if matches!(self.shape, CursorShape::Hollow) {
-                outline(bounds, self.color, BorderStyle::Solid)
-            } else {
-                fill(bounds, self.color)
-            };
-
-            if let Some(name) = &mut self.cursor_name {
-                name.paint(window, cx);
-            }
-
-            window.paint_quad(cursor);
         }
+
+        let bounds = window.pixel_snap_bounds(self.bounds(origin));
+
+        //Draw background or border quad
+        let cursor = if matches!(self.shape, CursorShape::Hollow) {
+            outline(bounds, self.color, BorderStyle::Solid)
+        } else {
+            fill(bounds, self.color)
+        };
+
+        if let Some(name) = &mut self.cursor_name {
+            name.paint(window, cx);
+        }
+
+        window.paint_quad(cursor);
 
         if let Some(block_text) = &self.block_text {
             block_text
@@ -13697,31 +13702,6 @@ mod tests {
         assert!(
             boosted > px(6.0),
             "boosted={boosted:?} must exceed the raw custom width so the deleted pill stays visible"
-        );
-
-        for line_height in [22.0, 40.0] {
-            let widths = [1.0, 2.0, 3.0, 6.0].map(|width| {
-                EditorElement::deleted_marker_base_width(
-                    GitGutterWidth::Custom(PixelSetting(width)),
-                    px(line_height),
-                )
-            });
-            assert!(
-                widths.windows(2).all(|pair| pair[0] < pair[1]),
-                "widths={widths:?} must grow with the custom setting"
-            );
-            assert!(
-                widths[0] > px(line_height / 8.0),
-                "widths={widths:?} must stay above the vanishing width for line_height={line_height}"
-            );
-        }
-
-        assert_eq!(
-            EditorElement::deleted_marker_base_width(
-                GitGutterWidth::Custom(PixelSetting(0.275 * 40.0)),
-                px(40.0),
-            ),
-            px(14.0),
         );
 
         assert_eq!(

@@ -342,6 +342,13 @@ async fn test_remote_telemetry_event_forwarding(
         })
         .detach();
 
+    // Forwarding is opt-in; do not rely on the application's privacy defaults.
+    cx.update_global(|settings_store: &mut SettingsStore, cx| {
+        settings_store.set_user_settings(r#"{"telemetry":{"metrics":true}}"#, cx)
+    })
+    .expect("enable metrics for forwarding test");
+    cx.run_until_parked();
+
     // The remote server forwards a bare `FlexibleEvent` as JSON; mirror that
     // here by sending the proto message the forwarding task would send.
     let event_json = json!({
@@ -3051,6 +3058,20 @@ async fn test_reconnect(cx: &mut TestAppContext, server_cx: &mut TestAppContext)
     });
 
     let client = cx.read(|cx| project.read(cx).remote_client().unwrap());
+    let reconnect_status_seen = Arc::new(AtomicBool::new(false));
+    let _status_subscription = cx.update(|cx| {
+        let reconnect_status_seen = reconnect_status_seen.clone();
+        cx.observe(&client, move |client, cx| {
+            let client = client.read(cx);
+            if client.connection_state() == remote::ConnectionState::Reconnecting
+                && client
+                    .reconnect_status()
+                    .is_some_and(|status| !status.is_empty())
+            {
+                reconnect_status_seen.store(true, Ordering::SeqCst);
+            }
+        })
+    });
     let reconnected = Arc::new(AtomicBool::new(false));
     let _subscription = cx.update(|cx| {
         let reconnected = reconnected.clone();
@@ -3081,6 +3102,8 @@ async fn test_reconnect(cx: &mut TestAppContext, server_cx: &mut TestAppContext)
         reconnected.load(Ordering::SeqCst),
         "a successful reconnect should emit RemoteClientEvent::Reconnected"
     );
+    assert!(reconnect_status_seen.load(Ordering::SeqCst));
+    client.read_with(cx, |client, _| assert!(!client.was_manual_reconnect()));
 }
 
 #[gpui::test]
@@ -3221,15 +3244,22 @@ async fn test_copy_file_into_remote_project(
         )
         .await;
 
+    let transferred_entries = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let observer = transferred_entries.clone();
     worktree
         .update(cx, |worktree, cx| {
-            worktree.copy_external_entries(
+            worktree.copy_external_entries_with_progress(
                 rel_path("src").into(),
                 vec![
                     Path::new(path!("/local-code/dir1/file1")).into(),
                     Path::new(path!("/local-code/dir1/dir2")).into(),
                 ],
                 local_fs.clone(),
+                Some(Arc::new(move |event| {
+                    if matches!(event, worktree::FileTransferProgress::Finished) {
+                        observer.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    }
+                })),
                 cx,
             )
         })
@@ -3253,6 +3283,10 @@ async fn test_copy_file_into_remote_project(
             PathBuf::from(path!("/code/project1/src/dir2/file2")),
             PathBuf::from(path!("/code/project1/src/dir2/dir3/file3")),
         ]
+    );
+    assert_eq!(
+        transferred_entries.load(std::sync::atomic::Ordering::SeqCst),
+        6
     );
     assert_eq!(
         remote_fs

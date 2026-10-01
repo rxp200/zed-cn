@@ -155,6 +155,9 @@
   "hover_popover_hiding_delay": 300,
   // Whether to confirm before quitting Zed.
   "confirm_quit": false,
+  // Interface language (BCP-47 tag). Available languages live in the
+  // repository's `locales/` directory; unknown values fall back to zh-Hans.
+  "language": "zh-Hans",
   // Whether to restore last closed project when fresh Zed instance is opened
   // May take 3 values:
   //  1. All workspaces open during last session
@@ -629,6 +632,42 @@
     // The layout of window control buttons in the title bar (Linux only).
     "button_layout": "platform_default",
   },
+  "code_explanations": {
+    "enabled": false,
+    "provider": null,
+    "model": null,
+    "target_language": "中文",
+    "max_function_lines": 500,
+    "max_concurrent_requests": 5,
+    "preload_lines": 100,
+    "detailed": false,
+    "prefer_existing_comments": true,
+    "cache_persist": true,
+    "cache_max_bytes": 52428800
+  },
+  "hover_translation": {
+    // Whether to automatically translate non-Chinese hover documentation
+    // into the target language (shown underlined below the original text).
+    "enabled": false,
+    // The language model provider used for translation, matching one of the
+    // providers configured under `language_models`. `null` means the default
+    // fast model is used.
+    "provider": null,
+    // The model used for translation. `null` means the provider's default.
+    "model": null,
+    // The target language to translate into.
+    "target_language": "中文",
+    // Maximum number of documentation characters sent for translation.
+    "max_chars": 4000,
+    // Whether translations are persisted to an on-disk cache reused across
+    // sessions, so repeatedly translating the same documentation does not
+    // call the model again.
+    "cache_persist": true,
+    // Maximum size of the on-disk translation cache, in bytes. When the cache
+    // grows beyond this limit, the least useful entries (least
+    // recently/frequently viewed and largest) are evicted.
+    "cache_max_bytes": 5242880,
+  },
   "audio": {
     // Select specific output audio device.
     // `null` means use system default.
@@ -875,7 +914,7 @@
     // Default width of the project panel.
     "default_width": 240,
     // Where to dock the project panel. Can be 'left' or 'right'.
-    "dock": "right",
+    "dock": "left",
     // Spacing between worktree entries in the project panel. Can be 'comfortable' or 'standard'.
     "entry_spacing": "comfortable",
     // Whether to show file icons in the project panel.
@@ -1674,9 +1713,9 @@
   // Control what info is collected by Zed.
   "telemetry": {
     // Send debug info like crash reports.
-    "diagnostics": true,
+    "diagnostics": false,
     // Send anonymized usage data like what languages you're using Zed with.
-    "metrics": true,
+    "metrics": false,
     // Allow sending requests to Anthropic models that cannot be offered with
     // Zero Data Retention
     "anthropic_retention": false,
@@ -1909,11 +1948,11 @@
       "/**/zed/settings.json", // zed user settings
       "/**/zed/keymap.json",
     ],
-    // When to show edit predictions previews in buffer.
+    // When to request and show edit prediction previews in buffer.
     // This setting takes two possible values:
-    // 1. Display predictions inline when there are no language server completions available.
+    // 1. Request predictions automatically and display them inline when there are no language server completions available.
     //     "mode": "eager"
-    // 2. Display predictions inline only when holding a modifier key (alt by default).
+    // 2. Request and display predictions only when holding a modifier key (alt by default).
     //     "mode": "subtle"
     "mode": "eager",
     // Copilot-specific settings
@@ -1951,6 +1990,12 @@
       "model": "",
       "prompt_format": "infer",
       "max_output_tokens": 64,
+      // The API type used for edit predictions:
+      // - "completions": text completion API (e.g. /v1/completions), for native FIM models;
+      // - "chat_completions": chat completion API (e.g. /v1/chat/completions), for chat
+      //   models. Zed builds an instruction-based fill-in-the-middle prompt, so chat
+      //   models without native FIM support can be used for edit predictions.
+      "api_type": "completions",
       "prediction_debounce": 0,
     },
     "zed": {
@@ -2924,6 +2969,9 @@
   "ssh_connections": [],
   // Whether to read ~/.ssh/config for ssh connection sources.
   "read_ssh_config": true,
+  // 中国服务器适配。启用后，SSH 远程开发服务将直接由本机通过已配置的代理下载，
+  // 再经 SSH 上传到远程主机，不会先尝试由远程主机直接下载。
+  "china_server_adaptation": true,
   // Default timeout in seconds for all context server tool calls.
   // Individual servers can override this in their configuration.
   // Examples:

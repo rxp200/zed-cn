@@ -7,7 +7,7 @@ use crate::{
     SystemPromptTemplate, Template, Templates, TerminalTool, ToolPermissionDecision, WebSearchTool,
     WriteFileTool, decide_permission_from_settings,
 };
-use acp_thread::{AgentModelId, ClientUserMessageId, MentionUri};
+use acp_thread::{ClientUserMessageId, MentionUri};
 use action_log::ActionLog;
 use agent_settings::UserAgentsMd;
 
@@ -787,12 +787,7 @@ pub trait ThreadEnvironment {
         cx: &mut AsyncApp,
     ) -> Task<Result<Rc<dyn TerminalHandle>>>;
 
-    fn create_subagent(
-        &self,
-        label: String,
-        model: Option<AgentModelId>,
-        cx: &mut App,
-    ) -> Result<Rc<dyn SubagentHandle>>;
+    fn create_subagent(&self, label: String, cx: &mut App) -> Result<Rc<dyn SubagentHandle>>;
 
     fn resume_subagent(
         &self,
@@ -889,7 +884,6 @@ pub struct AvailableAgent {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AvailableModel {
     /// Identifier to pass as the `model` field when creating a thread.
-    /// For `spawn_agent`, use a model from the native Zed agent entry.
     pub id: String,
     /// Human-readable name.
     pub name: SharedString,
@@ -995,12 +989,12 @@ impl ToolPermissionContext {
             return acp_thread::PermissionOptions::Flat(vec![
                 acp::PermissionOption::new(
                     acp::PermissionOptionId::new("allow"),
-                    "Yes",
+                    i18n::t!("b5141d3d19e9a048"),
                     acp::PermissionOptionKind::AllowOnce,
                 ),
                 acp::PermissionOption::new(
                     acp::PermissionOptionId::new("deny"),
-                    "No",
+                    i18n::t!("0c70665b6eb65f1a"),
                     acp::PermissionOptionKind::RejectOnce,
                 ),
             ]);
@@ -1011,12 +1005,12 @@ impl ToolPermissionContext {
             return acp_thread::PermissionOptions::Flat(vec![
                 acp::PermissionOption::new(
                     acp::PermissionOptionId::new("allow"),
-                    "Allow",
+                    i18n::t!("ce7ef28b670ade58"),
                     acp::PermissionOptionKind::AllowOnce,
                 ),
                 acp::PermissionOption::new(
                     acp::PermissionOptionId::new("deny"),
-                    "Deny",
+                    i18n::t!("136de7a8c46fc803"),
                     acp::PermissionOptionKind::RejectOnce,
                 ),
             ]);
@@ -1053,12 +1047,12 @@ impl ToolPermissionContext {
                     choices.push(acp_thread::PermissionOptionChoice {
                         allow: acp::PermissionOption::new(
                             acp::PermissionOptionId::new("allow"),
-                            "Only this time",
+                            i18n::t!("3168027e4e2367d4"),
                             acp::PermissionOptionKind::AllowOnce,
                         ),
                         deny: acp::PermissionOption::new(
                             acp::PermissionOptionId::new("deny"),
-                            "Only this time",
+                            i18n::t!("3168027e4e2367d4"),
                             acp::PermissionOptionKind::RejectOnce,
                         ),
                         sub_patterns: vec![],
@@ -1339,16 +1333,12 @@ impl Thread {
             .embedded_context(true)
     }
 
-    pub fn new_subagent(
-        parent_thread: &Entity<Thread>,
-        model_selection: Option<&LanguageModelSelection>,
-        cx: &mut Context<Self>,
-    ) -> Self {
+    pub fn new_subagent(parent_thread: &Entity<Thread>, cx: &mut Context<Self>) -> Self {
         let project = parent_thread.read(cx).project.clone();
         let project_context = parent_thread.read(cx).project_context.clone();
         let context_server_registry = parent_thread.read(cx).context_server_registry.clone();
         let templates = parent_thread.read(cx).templates.clone();
-        let parent_model = parent_thread.read(cx).model().cloned();
+        let model = parent_thread.read(cx).model().cloned();
         let parent_action_log = parent_thread.read(cx).action_log().clone();
         let action_log =
             cx.new(|_cx| ActionLog::new(project.clone()).with_linked_action_log(parent_action_log));
@@ -1357,7 +1347,7 @@ impl Thread {
             project_context,
             context_server_registry,
             templates,
-            parent_model,
+            model,
             action_log,
             cx,
         );
@@ -1366,12 +1356,9 @@ impl Thread {
             depth: parent_thread.read(cx).depth() + 1,
         });
         thread.inherit_parent_settings(parent_thread, cx);
-        let model_selection = model_selection
-            .cloned()
-            .or_else(|| AgentSettings::get_global(cx).subagent_model.clone());
-        if let Some(model_selection) = model_selection {
+        if let Some(subagent_model) = AgentSettings::get_global(cx).subagent_model.clone() {
             thread.inherits_parent_model_settings = false;
-            thread.apply_model_selection(&model_selection, cx);
+            thread.apply_model_selection(&subagent_model, cx);
         }
         thread
     }
@@ -5925,14 +5912,14 @@ impl ToolCallEventStream {
             reason,
         };
         let allow_thread_label = if self.is_subagent(cx) {
-            "Allow for this subagent"
+            "允许此子 Agent"
         } else {
-            "Allow for this thread"
+            "允许此线程"
         };
         let options = acp_thread::PermissionOptions::Flat(vec![
             acp::PermissionOption::new(
                 acp::PermissionOptionId::new(acp_thread::SandboxPermission::AllowOnce.as_id()),
-                "Allow once",
+                "允许一次",
                 acp::PermissionOptionKind::AllowOnce,
             ),
             acp::PermissionOption::new(
@@ -5942,12 +5929,12 @@ impl ToolCallEventStream {
             ),
             acp::PermissionOption::new(
                 acp::PermissionOptionId::new(acp_thread::SandboxPermission::AllowAlways.as_id()),
-                "Allow always",
+                "始终允许",
                 acp::PermissionOptionKind::AllowAlways,
             ),
             acp::PermissionOption::new(
                 acp::PermissionOptionId::new(acp_thread::SandboxPermission::Deny.as_id()),
-                "Deny",
+                "拒绝",
                 acp::PermissionOptionKind::RejectOnce,
             ),
         ]);
@@ -6329,7 +6316,7 @@ impl ToolCallEventStream {
             ),
             acp::PermissionOption::new(
                 acp::PermissionOptionId::new(acp_thread::SandboxPermission::AllowOnce.as_id()),
-                "Run without sandbox once",
+                "在沙箱外运行一次",
                 acp::PermissionOptionKind::AllowOnce,
             ),
             acp::PermissionOption::new(
@@ -6339,12 +6326,12 @@ impl ToolCallEventStream {
             ),
             acp::PermissionOption::new(
                 acp::PermissionOptionId::new(acp_thread::SandboxPermission::AllowAlways.as_id()),
-                "Always run without sandbox",
+                "始终在沙箱外运行",
                 acp::PermissionOptionKind::AllowAlways,
             ),
             acp::PermissionOption::new(
                 acp::PermissionOptionId::new(acp_thread::SandboxPermission::Deny.as_id()),
-                "Deny",
+                "拒绝",
                 acp::PermissionOptionKind::RejectOnce,
             ),
         ]);
@@ -8364,7 +8351,7 @@ mod tests {
         cx.update(|cx| {
             let mut subagents = Vec::new();
             for _ in 0..count {
-                let subagent = cx.new(|cx| Thread::new_subagent(parent, None, cx));
+                let subagent = cx.new(|cx| Thread::new_subagent(parent, cx));
                 parent.update(cx, |thread, _cx| {
                     thread.register_running_subagent(subagent.downgrade());
                 });

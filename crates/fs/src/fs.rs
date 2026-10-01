@@ -1271,7 +1271,7 @@ impl Fs for RealFs {
         let job_info = JobInfo {
             id: job_id,
             start: Instant::now(),
-            message: SharedString::from(format!("Cloning {}", repo_url)),
+            message: SharedString::from(i18n::t_args!("f265225fe8834687", repo_url)),
         };
 
         let job_tracker = JobTracker::new(job_info, self.job_event_subscribers.clone());
@@ -1282,21 +1282,18 @@ impl Fs for RealFs {
             .stderr(Stdio::piped())
             .kill_on_drop(true)
             .spawn()?;
-        let stderr = child
-            .stderr
-            .take()
-            .context("failed to read git clone progress")?;
+        let stderr = child.stderr.take().context(i18n::t!("54a591b2e310492c"))?;
         let stderr_output = git_clone_progress::read(stderr, |message| {
-            job_tracker.update(message.into());
+            job_tracker.update(git_clone_progress::localized_progress(&message).into());
         })
         .await?;
         let status = child.status().await?;
 
         if !status.success() {
-            anyhow::bail!(
-                "git clone failed: {}",
+            anyhow::bail!(i18n::t_args!(
+                "a6573278f1f2fc47",
                 git_clone_progress::failure_message(&stderr_output)
-            );
+            ));
         }
 
         Ok(())
@@ -2845,13 +2842,8 @@ impl FakeFs {
 
                 None
             }
-            btree_map::Entry::Occupied(entry) => {
-                // Like `unlink`, removing a symlink removes the link itself.
-                if let entry = entry.get()
-                    && !entry.is_symlink()
-                {
-                    entry.file_content(&path)?;
-                }
+            btree_map::Entry::Occupied(mut entry) => {
+                entry.get_mut().file_content(&path)?;
                 Some(entry.remove())
             }
         };
@@ -3133,42 +3125,33 @@ impl Fs for FakeFs {
         let target = normalize_path(target);
         let mut state = self.state.lock();
         let mtime = state.get_and_increment_mtime();
-        let new_inode = state.get_and_increment_inode();
+        let inode = state.get_and_increment_inode();
         let source_entry = state.entry(&source)?;
         let content = source_entry.file_content(&source)?.clone();
-        let new_entry = move |inode| FakeFsEntry::File {
-            inode,
-            mtime,
-            len: content.len() as u64,
-            content,
-            git_dir_path: None,
-        };
-
-        let kind = state.write_path(&target, |e| match e {
-            btree_map::Entry::Occupied(mut e) => {
-                if !options.overwrite {
-                    if options.ignore_if_exists {
-                        return Ok(None);
-                    }
+        let mut kind = Some(PathEventKind::Created);
+        state.write_path(&target, |e| match e {
+            btree_map::Entry::Occupied(e) => {
+                if options.overwrite {
+                    kind = Some(PathEventKind::Changed);
+                    Ok(Some(e.get().clone()))
+                } else if !options.ignore_if_exists {
                     anyhow::bail!("{target:?} already exists");
+                } else {
+                    Ok(None)
                 }
-                let inode = match e.get() {
-                    FakeFsEntry::File { inode, .. } => *inode,
-                    FakeFsEntry::Dir { .. } => anyhow::bail!("{target:?} is a directory"),
-                    FakeFsEntry::Symlink { .. } => new_inode,
-                };
-                e.insert(new_entry(inode));
-                Ok(Some(PathEventKind::Changed))
             }
-            btree_map::Entry::Vacant(e) => {
-                e.insert(new_entry(new_inode));
-                Ok(Some(PathEventKind::Created))
-            }
+            btree_map::Entry::Vacant(e) => Ok(Some(
+                e.insert(FakeFsEntry::File {
+                    inode,
+                    mtime,
+                    len: content.len() as u64,
+                    content,
+                    git_dir_path: None,
+                })
+                .clone(),
+            )),
         })?;
-
-        if let Some(kind) = kind {
-            state.emit_event([(target, Some(kind))]);
-        }
+        state.emit_event([(target, kind)]);
         Ok(())
     }
 

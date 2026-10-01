@@ -340,9 +340,9 @@ pub fn register(editor: &mut Editor, cx: &mut Context<Vim>) {
     Vim::action(editor, cx, |_, _: &ArgumentRequired, window, cx| {
         let _ = window.prompt(
             gpui::PromptLevel::Critical,
-            "Argument required",
+            i18n::t!("76eb72d6b89771e9"),
             None,
-            &["Cancel"],
+            &[i18n::t!("2cd0f3be8738a86c")],
             cx,
         );
     });
@@ -377,9 +377,9 @@ pub fn register(editor: &mut Editor, cx: &mut Context<Vim>) {
                     else {
                         let _ = window.prompt(
                             gpui::PromptLevel::Warning,
-                            "No file name",
-                            Some("Partial buffer write requires file name."),
-                            &["Cancel"],
+                            i18n::t!("df09f17844415c96"),
+                            Some(i18n::t!("52766b74838d4c4f")),
+                            &[i18n::t!("2cd0f3be8738a86c")],
                             cx,
                         );
                         return;
@@ -407,9 +407,9 @@ pub fn register(editor: &mut Editor, cx: &mut Context<Vim>) {
                     if Some(SaveIntent::Overwrite) != action.save_intent {
                         let _ = window.prompt(
                             gpui::PromptLevel::Warning,
-                            "Use ! to write partial buffer",
-                            Some("Overwriting the current file with selected buffer content requires '!'."),
-                            &["Cancel"],
+                            i18n::t!("6287496e07dc2864"),
+                            Some(i18n::t!("476279ab32c0615e")),
+                            &[i18n::t!("2cd0f3be8738a86c")],
                             cx,
                         );
                         return;
@@ -437,7 +437,7 @@ pub fn register(editor: &mut Editor, cx: &mut Context<Vim>) {
                                 Some(
                                     "A file or folder with the same name already exists. Replacing it will overwrite its current contents.",
                                 ),
-                                &["Replace", "Cancel"],
+                                &[i18n::t!("131b13aa265996df"), i18n::t!("2cd0f3be8738a86c")],
                                 cx
                             )
                         });
@@ -518,7 +518,7 @@ pub fn register(editor: &mut Editor, cx: &mut Context<Vim>) {
                         "A file or folder with the same name already exists. \
                         Replacing it will overwrite its current contents.",
                     ),
-                    &["Replace", "Cancel"],
+                    &[i18n::t!("131b13aa265996df"), i18n::t!("2cd0f3be8738a86c")],
                     cx,
                 );
                 cx.spawn_in(window, async move |editor, cx| {
@@ -2752,7 +2752,7 @@ mod test {
         // conflict!
         cx.simulate_keystrokes("i @ escape");
         cx.simulate_keystrokes(": w enter");
-        cx.simulate_prompt_answer("Cancel");
+        cx.simulate_prompt_answer("取消");
 
         assert_eq!(fs.load(path).await.unwrap().replace("\r\n", "\n"), "oops\n");
         assert!(!cx.has_pending_prompt());
@@ -3002,7 +3002,7 @@ mod test {
         cx.simulate_keystrokes(": w space dir/file.rs");
         cx.simulate_keystrokes("enter");
 
-        cx.simulate_prompt_answer("Replace");
+        cx.simulate_prompt_answer("替换");
         cx.run_until_parked();
 
         cx.workspace(|workspace, _, cx| {

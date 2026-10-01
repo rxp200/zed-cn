@@ -241,7 +241,7 @@ impl TitleBar {
                                 .occlude()
                                 .tooltip({
                                     let login = collaborator.user.username.clone();
-                                    Tooltip::text(format!("Follow {login}"))
+                                    Tooltip::text(i18n::t!("1095bd5ec81dbac8", login = login))
                                 }),
                         )
                     }))
@@ -396,7 +396,7 @@ impl TitleBar {
                     .gap_1()
                     .child(
                         IconButton::new("leave-call", IconName::Exit)
-                            .tooltip(Tooltip::text("Leave Call"))
+                            .tooltip(Tooltip::text(i18n::t!("3446876b684782f8")))
                             .icon_size(IconSize::Small)
                             .on_click(move |_, _window, cx| {
                                 ActiveCall::global(cx)
@@ -437,7 +437,10 @@ impl TitleBar {
                                 h_flex()
                                     .gap_4()
                                     .justify_between()
-                                    .child(Label::new(format!("Connection: {quality_label}")))
+                                    .child(Label::new(i18n::t!(
+                                        "0143dd4387560631",
+                                        quality_label = quality_label
+                                    )))
                                     .when(has_key_binding, |this| this.child(key_binding)),
                             )
                             .child(
@@ -445,8 +448,8 @@ impl TitleBar {
                                     .gap_0p5()
                                     .child(stat_row("Latency", latency))
                                     .child(stat_row("Jitter", jitter))
-                                    .child(stat_row("Packet loss", packet_loss))
-                                    .child(stat_row("Input lag", input_lag)),
+                                    .child(stat_row(i18n::t!("37772187ab854191"), packet_loss))
+                                    .child(stat_row(i18n::t!("71431fb005dfb3d2"), input_lag)),
                             )
                             .into_any_element()
                     }))
@@ -474,10 +477,10 @@ impl TitleBar {
                                     cx,
                                 )
                             } else {
-                                Tooltip::simple("Unmute Microphone", cx)
+                                Tooltip::simple(i18n::t!("1764712907a21517"), cx)
                             }
                         } else {
-                            Tooltip::simple("Mute Microphone", cx)
+                            Tooltip::simple(i18n::t!("5bc000c230bf355f"), cx)
                         }
                     })
                     .icon_size(IconSize::Small)
@@ -503,7 +506,7 @@ impl TitleBar {
                         let label = "Unmute Audio";
 
                         if !muted_by_user {
-                            Tooltip::with_meta(label, None, "Microphone will be unmuted", cx)
+                            Tooltip::with_meta(label, None, i18n::t!("ca7645940904bdc9"), cx)
                         } else {
                             Tooltip::simple(label, cx)
                         }
@@ -511,7 +514,7 @@ impl TitleBar {
                         let label = "Mute Audio";
 
                         if !muted_by_user {
-                            Tooltip::with_meta(label, None, "Microphone will be muted", cx)
+                            Tooltip::with_meta(label, None, i18n::t!("cab1c7059bd77e3a"), cx)
                         } else {
                             Tooltip::simple(label, cx)
                         }

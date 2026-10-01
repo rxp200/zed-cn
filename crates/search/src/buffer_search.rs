@@ -119,9 +119,9 @@ impl Render for BufferSearchBar {
                 .map(|editor: Entity<Editor>| editor.read(cx).has_any_buffer_folded(cx))
                 .unwrap_or_default();
             let (icon, tooltip_label) = if is_collapsed {
-                (IconName::ChevronUpDown, "Expand All Files")
+                (IconName::ChevronUpDown, i18n::t!("8dd2c7b5da9461a3"))
             } else {
-                (IconName::ChevronDownUp, "Collapse All Files")
+                (IconName::ChevronDownUp, i18n::t!("bcad288b055cabef"))
             };
 
             let collapse_expand_icon_button = |id| {
@@ -177,12 +177,12 @@ impl Render for BufferSearchBar {
 
         self.query_editor.update(cx, |query_editor, cx| {
             if query_editor.placeholder_text(cx).is_none() {
-                query_editor.set_placeholder_text("Search…", window, cx);
+                query_editor.set_placeholder_text(i18n::t!("a249f60ce7e86b52"), window, cx);
             }
         });
 
         self.replacement_editor.update(cx, |editor, cx| {
-            editor.set_placeholder_text("Replace with…", window, cx);
+            editor.set_placeholder_text(i18n::t!("9ee7de64d14e245f"), window, cx);
         });
 
         let mut color_override = None;
@@ -270,7 +270,7 @@ impl Render for BufferSearchBar {
                     "buffer-search-bar-toggle",
                     IconName::Replace,
                     self.replace_enabled.then_some(ActionButtonState::Toggled),
-                    "Toggle Replace",
+                    i18n::t!("45e24ac712fe739c"),
                     &ToggleReplace,
                     focus_handle.clone(),
                 ))
@@ -294,7 +294,7 @@ impl Render for BufferSearchBar {
                         let focus_handle = focus_handle.clone();
                         move |_window, cx| {
                             Tooltip::for_action_in(
-                                "Toggle Search Selection",
+                                i18n::t!("b719c0b4426a8d47"),
                                 &ToggleSelection,
                                 &focus_handle,
                                 cx,
@@ -316,7 +316,7 @@ impl Render for BufferSearchBar {
                         self.active_match_index
                             .is_none()
                             .then_some(ActionButtonState::Disabled),
-                        "Select Previous Match",
+                        i18n::t!("b8dbe233ed592f28"),
                         &SelectPreviousMatch,
                         query_focus.clone(),
                     ))
@@ -326,7 +326,7 @@ impl Render for BufferSearchBar {
                         self.active_match_index
                             .is_none()
                             .then_some(ActionButtonState::Disabled),
-                        "Select Next Match",
+                        i18n::t!("c0b43be5e905671b"),
                         &SelectNextMatch,
                         query_focus.clone(),
                     ))
@@ -347,7 +347,7 @@ impl Render for BufferSearchBar {
                         "buffer-search-nav-button",
                         IconName::SelectAll,
                         Default::default(),
-                        "Select All Matches",
+                        i18n::t!("14b80f16b44c05c8"),
                         &SelectAllMatches,
                         query_focus.clone(),
                     ))
@@ -359,7 +359,7 @@ impl Render for BufferSearchBar {
                     "buffer-search",
                     IconName::Close,
                     Default::default(),
-                    "Close Search Bar",
+                    i18n::t!("ac3d1f61c3df2636"),
                     &Dismiss,
                     focus_handle.clone(),
                 ))
@@ -393,7 +393,7 @@ impl Render for BufferSearchBar {
                     "buffer-search-replace-button",
                     IconName::ReplaceNext,
                     Default::default(),
-                    "Replace Next Match",
+                    i18n::t!("8ab95fd7a0acae71"),
                     &ReplaceNext,
                     focus_handle.clone(),
                 ))
@@ -401,7 +401,7 @@ impl Render for BufferSearchBar {
                     "buffer-search-replace-button",
                     IconName::ReplaceAll,
                     Default::default(),
-                    "Replace All Matches",
+                    i18n::t!("65d1a9c7efbea63c"),
                     &ReplaceAll,
                     focus_handle,
                 ));
@@ -446,7 +446,7 @@ impl Render for BufferSearchBar {
                                 "buffer-search",
                                 IconName::Close,
                                 Default::default(),
-                                "Close Search Bar",
+                                i18n::t!("ac3d1f61c3df2636"),
                                 &Dismiss,
                                 focus_handle.clone(),
                             )),
@@ -3044,7 +3044,7 @@ mod tests {
         });
 
         // Focus on the editor instead of the search bar, as we want to ensure
-        // that pressing the "Replace Next Match" button will work, even if the
+        // that pressing the "替换下一个匹配项" button will work, even if the
         // search bar is not focused.
         cx.focus(&editor);
 

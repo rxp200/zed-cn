@@ -619,26 +619,26 @@ impl Component for Button {
                     vec![
                         single_example(
                             "Start Icon",
-                            Button::new("icon_start", "Start Icon")
+                            Button::new("icon_start", i18n::t!("e8540537b5bb559c"))
                                 .start_icon(Icon::new(IconName::Check))
                                 .into_any_element(),
                         ),
                         single_example(
                             "End Icon",
-                            Button::new("icon_end", "End Icon")
+                            Button::new("icon_end", i18n::t!("ec16e3252a70e640"))
                                 .end_icon(Icon::new(IconName::Check))
                                 .into_any_element(),
                         ),
                         single_example(
                             "Both Icons",
-                            Button::new("both_icons", "Both Icons")
+                            Button::new("both_icons", i18n::t!("e703d01170734116"))
                                 .start_icon(Icon::new(IconName::Check))
                                 .end_icon(Icon::new(IconName::ChevronDown))
                                 .into_any_element(),
                         ),
                         single_example(
                             "Icon Color",
-                            Button::new("icon_color", "Icon Color")
+                            Button::new("icon_color", i18n::t!("5933bc456a055d56"))
                                 .start_icon(Icon::new(IconName::Check).color(Color::Accent))
                                 .into_any_element(),
                         ),

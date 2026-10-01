@@ -46,6 +46,7 @@ stacker = ["dep:stacksafe"]
 path = "src/gpui.rs"
 
 [dependencies]
+i18n.workspace = true
 accesskit.workspace = true
 anyhow.workspace = true
 async-task.workspace = true
