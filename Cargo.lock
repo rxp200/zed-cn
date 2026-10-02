@@ -6033,6 +6033,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "gpui",
+ "i18n",
  "net",
  "serde",
  "serde_json",
