@@ -6297,7 +6297,11 @@ impl ProjectPanel {
                 },
             )
             .cursor_pointer()
-            .rounded_none()
+            // Inset the row background so its rounded corners read as a card instead
+            // of filling the panel edge to edge; the indent guides, drag targets and
+            // hit areas all stay on this same row element.
+            .mx(ui::LIST_ITEM_HIGHLIGHT_INSET)
+            .rounded_md()
             .bg(bg_color)
             .border_1()
             .border_r_2()
@@ -7806,8 +7810,10 @@ impl Render for ProjectPanel {
                                     .with_render_fn(
                                         cx.entity(),
                                         move |this, params, _, cx| {
-                                            const LEFT_OFFSET: Pixels =
-                                                ui::LIST_ITEM_INDENT_GUIDE_LEFT_OFFSET;
+                                            // Rows are inset by `LIST_ITEM_HIGHLIGHT_INSET`, so
+                                            // their indent guides move with them.
+                                            let left_offset = ui::LIST_ITEM_INDENT_GUIDE_LEFT_OFFSET
+                                                + ui::LIST_ITEM_HIGHLIGHT_INSET;
                                             const PADDING_Y: Pixels = px(4.);
                                             const HITBOX_OVERDRAW: Pixels = px(3.);
 
@@ -7833,7 +7839,7 @@ impl Render for ProjectPanel {
                                                     let bounds = Bounds::new(
                                                         point(
                                                             layout.offset.x * indent_size
-                                                                + LEFT_OFFSET,
+                                                                + left_offset,
                                                             layout.offset.y * item_height + offset,
                                                         ),
                                                         size(
@@ -7903,8 +7909,11 @@ impl Render for ProjectPanel {
                                         .with_render_fn(
                                             cx.entity(),
                                             move |_, params, _, _| {
-                                                const LEFT_OFFSET: Pixels =
-                                                    ui::LIST_ITEM_INDENT_GUIDE_LEFT_OFFSET;
+                                                // Rows are inset by `LIST_ITEM_HIGHLIGHT_INSET`,
+                                                // so their indent guides move with them.
+                                                let left_offset =
+                                                    ui::LIST_ITEM_INDENT_GUIDE_LEFT_OFFSET
+                                                        + ui::LIST_ITEM_HIGHLIGHT_INSET;
 
                                                 let indent_size = params.indent_size;
                                                 let item_height = params.item_height;
@@ -7916,7 +7925,7 @@ impl Render for ProjectPanel {
                                                         let bounds = Bounds::new(
                                                             point(
                                                                 layout.offset.x * indent_size
-                                                                    + LEFT_OFFSET,
+                                                                    + left_offset,
                                                                 layout.offset.y * item_height,
                                                             ),
                                                             size(

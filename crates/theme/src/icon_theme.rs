@@ -112,8 +112,8 @@ const FILE_SUFFIXES_BY_ICON_KEY: &[(&str, &[&str])] = &[
     (
         "document",
         &[
-            "doc", "docx", "mdx", "odp", "ods", "odt", "pdf", "ppt", "pptx", "rtf", "txt", "xls",
-            "xlsx",
+            "doc", "docx", "epub", "mdx", "odp", "ods", "odt", "pdf", "ppt", "pptx", "rtf", "txt",
+            "xls", "xlsm", "xlsb", "xlsx",
         ],
     ),
     ("editorconfig", &["editorconfig"]),

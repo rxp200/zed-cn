@@ -410,7 +410,7 @@ impl Project {
             } else {
                 None
             };
-            let shell_program = remote_shell.as_ref().map(Shell::program).unwrap_or(shell);
+            let shell_program = resolve_remote_shell_program(remote_shell.as_ref(), shell);
             let shell_kind = ShellKind::new(&shell_program, path_style.is_windows());
             let mut env = env_task.await.unwrap_or_default();
             env.extend(settings.env);
@@ -754,6 +754,16 @@ fn create_remote_shell(
     ))
 }
 
+fn resolve_remote_shell_program(remote_shell: Option<&Shell>, connection_shell: String) -> String {
+    match remote_shell {
+        // System refers to the remote host, not the client running Shell::program().
+        Some(Shell::System) | None => connection_shell,
+        Some(Shell::Program(program)) | Some(Shell::WithArguments { program, .. }) => {
+            program.clone()
+        }
+    }
+}
+
 fn persistent_terminal_env(
     mut env: HashMap<String, String>,
     version: &impl std::fmt::Display,
@@ -894,6 +904,44 @@ mod tests {
         assert_eq!(
             format_task_for_activation(&task, ShellKind::PowerShell, "powershell.exe", true),
             "&cmd.exe /S /C '\"echo It''s fine\"'"
+        );
+    }
+
+    #[test]
+    fn remote_shell_program_uses_connection_shell_for_system_and_older_servers() {
+        for connection_shell in ["/bin/bash", "cmd.exe"] {
+            for remote_shell in [Some(&Shell::System), None] {
+                assert_eq!(
+                    resolve_remote_shell_program(remote_shell, connection_shell.to_string()),
+                    connection_shell
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn remote_shell_program_preserves_explicit_remote_programs() {
+        for remote_shell in [
+            Shell::Program("/bin/fish".to_string()),
+            Shell::WithArguments {
+                program: "/bin/zsh".to_string(),
+                args: vec!["-l".to_string()],
+                title_override: None,
+            },
+        ] {
+            assert_eq!(
+                resolve_remote_shell_program(Some(&remote_shell), "cmd.exe".to_string()),
+                remote_shell.program()
+            );
+        }
+    }
+
+    #[test]
+    fn remote_shell_program_preserves_local_shell_without_remote_settings() {
+        let local_shell = Shell::Program("pwsh.exe".to_string()).program();
+        assert_eq!(
+            resolve_remote_shell_program(None, local_shell.clone()),
+            local_shell
         );
     }
 

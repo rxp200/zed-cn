@@ -282,15 +282,29 @@ impl RenderOnce for IconWithIndicator {
             .relative()
             .child(self.icon)
             .when_some(self.indicator, |this, indicator| {
+                let content_sized = indicator.is_custom();
                 this.child(
                     div()
                         .absolute()
-                        .size_2p5()
-                        .border_2()
-                        .border_color(indicator_border_color)
                         .rounded_full()
-                        .bottom_neg_0p5()
-                        .right_neg_0p5()
+                        .border_color(indicator_border_color)
+                        // A custom indicator supplies its own content, so it
+                        // gets a content-sized pill; anchored inside the icon so
+                        // the status-bar overflow clip cannot cut its border.
+                        .when(content_sized, |badge| {
+                            badge
+                                .bottom_0()
+                                .right_0()
+                                .h_3p5()
+                                .min_w_3p5()
+                                .p_px()
+                                .border_1()
+                                .items_center()
+                                .justify_center()
+                        })
+                        .when(!content_sized, |badge| {
+                            badge.bottom_neg_0p5().right_neg_0p5().size_2p5().border_2()
+                        })
                         .child(indicator),
                 )
             })

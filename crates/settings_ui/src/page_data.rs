@@ -1657,6 +1657,152 @@ fn appearance_page() -> SettingsPage {
         ]
     }
 
+    fn indent_guides_section() -> [SettingsPageItem; 6] {
+        [
+            SettingsPageItem::SectionHeader(i18n::t!("6ad938c8c789f951")),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: i18n::t!("dfb802238b38fbd4"),
+                description: i18n::t!("88f25dc7f2c7dcb8"),
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("indent_guides.enabled"),
+                    pick: |settings_content| {
+                        settings_content
+                            .project
+                            .all_languages
+                            .defaults
+                            .indent_guides
+                            .as_ref()
+                            .and_then(|indent_guides| indent_guides.enabled.as_ref())
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content
+                            .project
+                            .all_languages
+                            .defaults
+                            .indent_guides
+                            .get_or_insert_default()
+                            .enabled = value;
+                    },
+                }),
+                metadata: None,
+                files: USER | PROJECT,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: i18n::t!("5eb9f4e84a63fb27"),
+                description: i18n::t!("efab44b0a6db76aa"),
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("indent_guides.line_width"),
+                    pick: |settings_content| {
+                        settings_content
+                            .project
+                            .all_languages
+                            .defaults
+                            .indent_guides
+                            .as_ref()
+                            .and_then(|indent_guides| indent_guides.line_width.as_ref())
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content
+                            .project
+                            .all_languages
+                            .defaults
+                            .indent_guides
+                            .get_or_insert_default()
+                            .line_width = value;
+                    },
+                }),
+                metadata: None,
+                files: USER | PROJECT,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: i18n::t!("62e66562fc72c865"),
+                description: i18n::t!("d987bf8d5c56aa27"),
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("indent_guides.active_line_width"),
+                    pick: |settings_content| {
+                        settings_content
+                            .project
+                            .all_languages
+                            .defaults
+                            .indent_guides
+                            .as_ref()
+                            .and_then(|indent_guides| indent_guides.active_line_width.as_ref())
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content
+                            .project
+                            .all_languages
+                            .defaults
+                            .indent_guides
+                            .get_or_insert_default()
+                            .active_line_width = value;
+                    },
+                }),
+                metadata: None,
+                files: USER | PROJECT,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: i18n::t!("7b6fd1f9a75ed3df"),
+                description: i18n::t!("179418cb9bffada7"),
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("indent_guides.coloring"),
+                    pick: |settings_content| {
+                        settings_content
+                            .project
+                            .all_languages
+                            .defaults
+                            .indent_guides
+                            .as_ref()
+                            .and_then(|indent_guides| indent_guides.coloring.as_ref())
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content
+                            .project
+                            .all_languages
+                            .defaults
+                            .indent_guides
+                            .get_or_insert_default()
+                            .coloring = value;
+                    },
+                }),
+                metadata: None,
+                files: USER | PROJECT,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: i18n::t!("98d41705630f0df5"),
+                description: i18n::t!("7a2d3d2de3ddfd35"),
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("indent_guides.background_coloring"),
+                    pick: |settings_content| {
+                        settings_content
+                            .project
+                            .all_languages
+                            .defaults
+                            .indent_guides
+                            .as_ref()
+                            .and_then(|indent_guides| indent_guides.background_coloring.as_ref())
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content
+                            .project
+                            .all_languages
+                            .defaults
+                            .indent_guides
+                            .get_or_insert_default()
+                            .background_coloring = value;
+                    },
+                }),
+                metadata: None,
+                files: USER | PROJECT,
+            }),
+        ]
+    }
+
     let items: Box<[SettingsPageItem]> = concat_sections!(
         theme_section(),
         buffer_font_section(),
@@ -1667,6 +1813,7 @@ fn appearance_page() -> SettingsPage {
         cursor_section(),
         highlighting_section(),
         guides_section(),
+        indent_guides_section(),
     );
 
     SettingsPage {
@@ -11930,6 +12077,57 @@ mod tests {
             assert_eq!(
                 (field.pick)(&content).map(|language| language.as_str()),
                 Some("en")
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn test_appearance_indent_guide_background_coloring_round_trips(cx: &mut gpui::TestAppContext) {
+        cx.update(|_cx| {
+            let page = appearance_page();
+            let item = page
+                .items
+                .iter()
+                .find_map(|item| match item {
+                    SettingsPageItem::SettingItem(item)
+                        if item.field.json_path() == Some("indent_guides.background_coloring") =>
+                    {
+                        Some(item)
+                    }
+                    _ => None,
+                })
+                .expect("appearance page should expose indent guide background coloring");
+
+            let field = item
+                .field
+                .as_any()
+                .downcast_ref::<SettingField<settings::IndentGuideBackgroundColoring>>()
+                .expect(
+                    "indent guide background coloring should use the \
+                     IndentGuideBackgroundColoring field type",
+                );
+
+            let mut content = SettingsContent::default();
+            assert!((field.pick)(&content).is_none());
+
+            (field.write)(
+                &mut content,
+                Some(settings::IndentGuideBackgroundColoring::IndentAware),
+                _cx,
+            );
+            assert_eq!(
+                content
+                    .project
+                    .all_languages
+                    .defaults
+                    .indent_guides
+                    .as_ref()
+                    .and_then(|indent_guides| indent_guides.background_coloring),
+                Some(settings::IndentGuideBackgroundColoring::IndentAware)
+            );
+            assert_eq!(
+                (field.pick)(&content),
+                Some(&settings::IndentGuideBackgroundColoring::IndentAware)
             );
         });
     }

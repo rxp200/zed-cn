@@ -1680,6 +1680,55 @@
     },
   },
   {
+    "context": "PdfReader",
+    "bindings": {
+      "cmd-=": "pdf_reader::ZoomIn",
+      "cmd-+": "pdf_reader::ZoomIn",
+      "cmd--": "pdf_reader::ZoomOut",
+      "cmd-0": "pdf_reader::FitToWidth",
+      "cmd-1": "pdf_reader::ZoomToActualSize",
+      "cmd-k r": "editor::RevealInFileManager",
+      "pageup": "pdf_reader::ScrollPageUp",
+      "pagedown": "pdf_reader::ScrollPageDown",
+      "shift-pageup": "pdf_reader::PreviousPage",
+      "shift-pagedown": "pdf_reader::NextPage",
+      "up": "pdf_reader::ScrollUp",
+      "down": "pdf_reader::ScrollDown",
+      "left": "pdf_reader::PreviousPage",
+      "right": "pdf_reader::NextPage",
+      "cmd-home": "pdf_reader::ScrollToStart",
+      "cmd-end": "pdf_reader::ScrollToEnd"
+  },
+    "use_key_equivalents": true
+  },
+  {
+    "context": "ExcelReader",
+    "use_key_equivalents": true,
+    "bindings": {
+      "cmd-k r": "editor::RevealInFileManager",
+    },
+  },
+  {
+    "context": "EpubReader",
+    "bindings": {
+      "cmd-=": "epub_reader::IncreaseFontSize",
+      "cmd-+": "epub_reader::IncreaseFontSize",
+      "cmd--": "epub_reader::DecreaseFontSize",
+      "cmd-0": "epub_reader::ResetFontSize",
+      "cmd-t": "epub_reader::ToggleTableOfContents",
+      "cmd-k r": "editor::RevealInFileManager",
+      "cmd-left": "epub_reader::PreviousChapter",
+      "cmd-right": "epub_reader::NextChapter",
+      "pageup": "epub_reader::ScrollPageUp",
+      "pagedown": "epub_reader::ScrollPageDown",
+      "up": "epub_reader::ScrollUp",
+      "down": "epub_reader::ScrollDown",
+      "cmd-home": "epub_reader::ScrollToStart",
+      "cmd-end": "epub_reader::ScrollToEnd"
+  },
+    "use_key_equivalents": true
+  },
+  {
     "context": "RunModal",
     "bindings": {
       "cmd-1": "new_process_modal::ActivateTaskTab",

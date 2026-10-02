@@ -7475,6 +7475,10 @@ impl GitPanel {
                                         .py_1()
                                         .px_2()
                                         .gap_0p5()
+                                        // Inset and round the history row highlight like the other
+                                        // list rows.
+                                        .mx(ui::LIST_ITEM_HIGHLIGHT_INSET)
+                                        .rounded_md()
                                         .border_1()
                                         .border_color(gpui::transparent_black())
                                         .when(
@@ -8507,6 +8511,10 @@ impl GitPanel {
             .pl_2p5()
             .pr_1()
             .gap_1p5()
+            // Inset the row background so its rounded corners read as a card, matching
+            // the project panel and the activity bar highlights.
+            .mx(ui::LIST_ITEM_HIGHLIGHT_INSET)
+            .rounded_md()
             .border_1()
             .border_r_2()
             .when(selected && self.focus_handle.is_focused(window), |el| {
@@ -8732,6 +8740,10 @@ impl GitPanel {
             .pr_1()
             .gap_1p5()
             .justify_between()
+            // Inset the row background so its rounded corners read as a card, matching
+            // the project panel and the activity bar highlights.
+            .mx(ui::LIST_ITEM_HIGHLIGHT_INSET)
+            .rounded_md()
             .border_1()
             .border_r_2()
             .when(selected && self.focus_handle.is_focused(window), |el| {

@@ -52,6 +52,15 @@ impl Indicator {
         }
     }
 
+    /// Whether this indicator carries caller-provided content.
+    ///
+    /// A custom indicator is laid out at its content's intrinsic size (a count
+    /// badge, for instance), while dot, bar and icon indicators keep the fixed
+    /// badge square.
+    pub(crate) fn is_custom(&self) -> bool {
+        matches!(self.kind, IndicatorKind::Custom(_))
+    }
+
     pub fn color(mut self, color: Color) -> Self {
         self.color = color;
         self
