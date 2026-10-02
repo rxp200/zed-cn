@@ -3620,6 +3620,7 @@ impl gpui::Render for CodeExplanationIndicator {
                             .when(active_requests > 0, |button| {
                                 button.indicator(ui::Indicator::custom(
                                     h_flex()
+                                        .items_center()
                                         .gap_px()
                                         .child(
                                             SpinnerLabel::dots_variant()
@@ -3627,7 +3628,7 @@ impl gpui::Render for CodeExplanationIndicator {
                                         )
                                         .child(
                                             Label::new(active_requests.to_string())
-                                                .size(LabelSize::Custom(rems_from_px(8_f32)))
+                                                .size(LabelSize::Custom(rems_from_px(9_f32)))
                                                 .color(Color::Accent),
                                         ),
                                 ))

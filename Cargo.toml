@@ -57,6 +57,7 @@ members = [
     "crates/dev_container",
     "crates/diagnostics",
     "crates/docs_preprocessor",
+    "crates/document_viewer",
     "crates/edit_prediction",
     "crates/edit_prediction_cli",
     "crates/edit_prediction_context",
@@ -368,6 +369,7 @@ git_ui_core = { path = "crates/git_ui_core" }
 go_to_line = { path = "crates/go_to_line" }
 google_ai = { path = "crates/google_ai" }
 gpui = { path = "crates/gpui", default-features = false }
+hayro = "0.7"
 gpui_apple = { path = "crates/gpui_apple" }
 gpui_linux = { path = "crates/gpui_linux", default-features = false }
 gpui_macos = { path = "crates/gpui_macos", default-features = false }
@@ -586,6 +588,7 @@ bitflags = "2.6.0"
 block2 = "0.6"
 brush-parser = "0.3"
 bytes = "1.0"
+calamine = { version = "0.36", features = ["dates"] }
 cargo_metadata = "0.19"
 cargo_toml = "0.21"
 cbindgen = { version = "0.28.0", default-features = false }
@@ -630,6 +633,7 @@ dialoguer = { version = "0.12", default-features = false }
 diffy = "0.4.2"
 dirs = "6.0"
 dispatch2 = "0.3.1"
+document_viewer = { path = "crates/document_viewer" }
 documented = "0.10"
 dotenvy = "0.15.0"
 dunce = "1.0"
@@ -953,6 +957,7 @@ windows-registry = "0.6.0"
 yaml-rust2 = "0.8"
 yawc = "0.4.2"
 zeroize = "1.8"
+zip = { version = "0.6", default-features = false, features = ["deflate"] }
 zstd = "0.11"
 
 [workspace.dependencies.windows]

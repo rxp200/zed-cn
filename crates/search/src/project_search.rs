@@ -25,7 +25,7 @@ use gpui::{
     Action, AnyElement, App, AsyncApp, Context, Entity, EntityId, EventEmitter, FocusHandle,
     Focusable, Global, Hsla, InteractiveElement, IntoElement, KeyContext, ParentElement, Pixels,
     Point, Render, SharedString, Styled, Subscription, Task, TaskExt, UpdateGlobal, WeakEntity,
-    Window, actions, div, px,
+    Window, actions, canvas, div, px, uniform_list,
 };
 use itertools::Itertools;
 use language::{Buffer, Language};
@@ -49,10 +49,10 @@ use std::{
     },
     time::Duration,
 };
-use text::OffsetRangeExt;
+use text::{OffsetRangeExt, ToPoint};
 use ui::{
-    CommonAnimationExt, IconButtonShape, KeyBinding, Toggleable, Tooltip, prelude::*,
-    utils::SearchInputWidth,
+    CommonAnimationExt, HighlightedLabel, IconButtonShape, KeyBinding, Toggleable, Tooltip,
+    prelude::*, utils::SearchInputWidth,
 };
 use util::{ResultExt as _, paths::PathMatcher};
 use workspace::{
@@ -414,6 +414,7 @@ pub struct ProjectSearchPanel {
     view: Option<Entity<ProjectSearchView>>,
     focus_handle: FocusHandle,
     position: DockPosition,
+    width: Pixels,
     _view_subscription: Option<Subscription>,
 }
 
@@ -429,6 +430,7 @@ impl ProjectSearchPanel {
             view: None,
             focus_handle: cx.focus_handle(),
             position: DockPosition::Left,
+            width: px(0.),
             _view_subscription: None,
         }
     }
@@ -592,8 +594,12 @@ impl Panel for ProjectSearchPanel {
         cx.notify();
     }
 
-    fn default_size(&self, _: &Window, _: &App) -> Pixels {
-        px(320.)
+    fn default_size(&self, window: &Window, _: &App) -> Pixels {
+        window.viewport_size().width / 2.
+    }
+
+    fn has_independent_size(&self) -> bool {
+        true
     }
 
     fn icon(&self, _: &Window, _: &App) -> Option<IconName> {
@@ -638,6 +644,9 @@ impl Render for ProjectSearchPanel {
                 .track_focus(&self.focus_handle)
                 .into_any_element();
         };
+        let compact = self.width > px(0.) && self.width < px(600.);
+        let compact_results = (compact && view.read(cx).has_matches())
+            .then(|| view.update(cx, |view, cx| view.render_compact_results(cx)));
         let search = view.read(cx);
         let view_focus_handle = search.focus_handle(cx);
         let project_search = search.entity.read(cx);
@@ -1021,6 +1030,23 @@ impl Render for ProjectSearchPanel {
                     view.cycle_fields(Direction::Prev, window, cx)
                 });
             }))
+            .child(
+                canvas(|_, _, _| (), {
+                    let panel = cx.entity().downgrade();
+                    move |bounds, _, _, cx| {
+                        panel
+                            .update(cx, |this, cx| {
+                                if this.width != bounds.size.width {
+                                    this.width = bounds.size.width;
+                                    cx.notify();
+                                }
+                            })
+                            .log_err();
+                    }
+                })
+                .absolute()
+                .size_full(),
+            )
             .child(header)
             .child(
                 v_flex()
@@ -1042,7 +1068,7 @@ impl Render for ProjectSearchPanel {
                     .w_full()
                     .border_t_1()
                     .border_color(cx.theme().colors().border)
-                    .child(view),
+                    .child(compact_results.unwrap_or_else(|| view.into_any_element())),
             )
             .into_any_element()
     }
@@ -1687,6 +1713,109 @@ pub enum ViewEvent {
 }
 
 impl EventEmitter<ViewEvent> for ProjectSearchView {}
+
+impl ProjectSearchView {
+    fn render_compact_results(&self, cx: &mut Context<Self>) -> AnyElement {
+        let count = self.entity.read(cx).match_ranges.len();
+        uniform_list(
+            "compact-search-results",
+            count,
+            cx.processor(|this, indices: Range<usize>, _, cx| {
+                let model = this.entity.read(cx);
+                let snapshot = model.excerpts.read(cx).snapshot(cx);
+                indices
+                    .filter_map(|index| {
+                        let range = model.match_ranges.get(index)?;
+                        let buffer_id = range.start.buffer_id()?;
+                        let buffer = snapshot.buffer_for_id(buffer_id)?;
+                        let point = range.start.text_anchor_in(buffer).to_point(buffer);
+                        let path = buffer.file()?.path().to_string();
+                        let start = buffer.clip_point(
+                            text::Point::new(point.row, point.column.saturating_sub(40)),
+                            text::Bias::Left,
+                        );
+                        let line = buffer
+                            .chars_at(start)
+                            .take_while(|character| *character != '\n' && *character != '\r')
+                            .take(256)
+                            .collect::<String>();
+                        let end = range.end.text_anchor_in(buffer).to_point(buffer);
+                        let highlight_start = point.column.saturating_sub(start.column) as usize;
+                        let highlight_end = if end.row == point.row {
+                            end.column.saturating_sub(start.column) as usize
+                        } else {
+                            line.len()
+                        }
+                        .min(line.len());
+                        let highlights = (highlight_start < highlight_end)
+                            .then_some(highlight_start..highlight_end)
+                            .into_iter()
+                            .collect();
+                        let starts_file = index == 0
+                            || model.match_ranges.get(index - 1).is_none_or(|previous| {
+                                previous.start.buffer_id() != Some(buffer_id)
+                            });
+                        Some(
+                            v_flex()
+                                .id(("search-match", index))
+                                .w_full()
+                                .px_2()
+                                .py_1()
+                                .overflow_hidden()
+                                .cursor_pointer()
+                                .hover(|style| style.bg(cx.theme().colors().ghost_element_hover))
+                                .when(this.active_match_index == Some(index), |element| {
+                                    element.bg(cx.theme().colors().ghost_element_selected)
+                                })
+                                .child(
+                                    Label::new(if starts_file { path } else { String::new() })
+                                        .size(LabelSize::Small)
+                                        .truncate(),
+                                )
+                                .child(
+                                    h_flex()
+                                        .gap_2()
+                                        .min_w_0()
+                                        .child(
+                                            Label::new((point.row + 1).to_string())
+                                                .size(LabelSize::Small)
+                                                .color(Color::Muted),
+                                        )
+                                        .child(
+                                            HighlightedLabel::from_ranges(line, highlights)
+                                                .size(LabelSize::Small)
+                                                .truncate(),
+                                        ),
+                                )
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    let range =
+                                        this.entity.read(cx).match_ranges.get(index).cloned();
+                                    if let Some(range) = range {
+                                        this.results_editor.update(cx, |editor, cx| {
+                                            let range = editor.range_for_match(&range);
+                                            editor.change_selections(
+                                                SelectionEffects::scroll(Autoscroll::fit()),
+                                                window,
+                                                cx,
+                                                |selections| selections.select_ranges([range]),
+                                            );
+                                            editor.open_excerpts(
+                                                &editor::actions::OpenExcerpts,
+                                                window,
+                                                cx,
+                                            );
+                                        });
+                                    }
+                                })),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            }),
+        )
+        .size_full()
+        .into_any_element()
+    }
+}
 
 impl Render for ProjectSearchView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {

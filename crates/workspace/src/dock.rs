@@ -57,6 +57,9 @@ pub trait Panel: Focusable + EventEmitter<PanelEvent> + Render + Sized {
     fn position_is_valid(&self, position: DockPosition) -> bool;
     fn set_position(&mut self, position: DockPosition, window: &mut Window, cx: &mut Context<Self>);
     fn default_size(&self, window: &Window, cx: &App) -> Pixels;
+    fn has_independent_size(&self) -> bool {
+        false
+    }
     fn min_size(&self, _window: &Window, _cx: &App) -> Option<Pixels> {
         None
     }
@@ -125,6 +128,7 @@ pub trait PanelHandle: Send + Sync {
     fn remote_id(&self) -> Option<proto::PanelId>;
     fn pane(&self, cx: &App) -> Option<Entity<Pane>>;
     fn default_size(&self, window: &Window, cx: &App) -> Pixels;
+    fn has_independent_size(&self, cx: &App) -> bool;
     fn min_size(&self, window: &Window, cx: &App) -> Option<Pixels>;
     fn initial_size_state(&self, window: &Window, cx: &App) -> PanelSizeState;
     fn size_state_changed(&self, window: &mut Window, cx: &mut App);
@@ -210,6 +214,10 @@ where
 
     fn default_size(&self, window: &Window, cx: &App) -> Pixels {
         self.read(cx).default_size(window, cx)
+    }
+
+    fn has_independent_size(&self, cx: &App) -> bool {
+        self.read(cx).has_independent_size()
     }
 
     fn min_size(&self, window: &Window, cx: &App) -> Option<Pixels> {
@@ -1181,9 +1189,12 @@ impl Dock {
     }
 
     fn should_resize_all_panels(&self, cx: &App) -> bool {
-        WorkspaceSettings::get_global(cx)
-            .resize_all_panels_in_dock
-            .contains(&self.position)
+        !self
+            .active_panel_entry()
+            .is_some_and(|entry| entry.panel.has_independent_size(cx))
+            && WorkspaceSettings::get_global(cx)
+                .resize_all_panels_in_dock
+                .contains(&self.position)
     }
 
     fn resize_all_panels(
@@ -1205,8 +1216,9 @@ impl Dock {
         };
         let mut size_states_to_persist = Vec::new();
         for entry in &mut self.panel_entries {
-            if panel_uses_flexible_width(self.position, entry.panel.as_ref(), window, cx)
-                == active_panel_uses_flexible_width
+            if !entry.panel.has_independent_size(cx)
+                && panel_uses_flexible_width(self.position, entry.panel.as_ref(), window, cx)
+                    == active_panel_uses_flexible_width
             {
                 size_states_to_persist.push(resize_panel_entry(
                     self.position,
@@ -1787,6 +1799,7 @@ pub mod test {
         pub activation_focus_handle: Option<FocusHandle>,
         pub default_size: Pixels,
         pub flexible: bool,
+        pub independent_size: bool,
         pub activation_priority: u32,
     }
     actions!(test_only, [ToggleTestPanel]);
@@ -1824,6 +1837,48 @@ pub mod test {
         }
     }
 
+    #[gpui::test]
+    async fn test_independent_panel_resize_does_not_share_width(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            let settings_store = settings::SettingsStore::test(cx);
+            cx.set_global(settings_store);
+            cx.set_global(db::AppDatabase::test_new());
+            theme_settings::init(theme::LoadThemes::JustBase, cx);
+        });
+        let fs = fs::FakeFs::new(cx.executor());
+        let project = project::Project::test(fs, [], cx).await;
+        let (workspace, cx) =
+            cx.add_window_view(|window, cx| Workspace::test_new(project, window, cx));
+        let shared = cx.new(|cx| TestPanel::new(DockPosition::Left, 0, cx));
+        let independent = cx.new(|cx| {
+            let mut panel = TestPanel::new(DockPosition::Left, 1, cx);
+            panel.independent_size = true;
+            panel
+        });
+        let dock = workspace.read_with(cx, |workspace, _| {
+            workspace.dock_at_position(DockPosition::Left).clone()
+        });
+        dock.update_in(cx, |dock, window, cx| {
+            dock.add_panel(shared.clone(), workspace.downgrade(), window, cx);
+            dock.add_panel(independent.clone(), workspace.downgrade(), window, cx);
+            dock.active_panel_index = Some(0);
+            dock.resize_all_panels(Some(px(240.)), None, window, cx);
+            assert_eq!(dock.stored_panel_size(&shared, window, cx), Some(px(240.)));
+            assert_eq!(
+                dock.stored_panel_size(&independent, window, cx),
+                Some(px(300.))
+            );
+            dock.active_panel_index = Some(1);
+            assert!(!dock.should_resize_all_panels(cx));
+            dock.resize_panel_sizes(Some(px(520.)), None, window, cx);
+            assert_eq!(dock.stored_panel_size(&shared, window, cx), Some(px(240.)));
+            assert_eq!(
+                dock.stored_panel_size(&independent, window, cx),
+                Some(px(520.))
+            );
+        });
+    }
+
     impl EventEmitter<PanelEvent> for TestPanel {}
 
     impl TestPanel {
@@ -1836,6 +1891,7 @@ pub mod test {
                 activation_focus_handle: None,
                 default_size: px(300.),
                 flexible: false,
+                independent_size: false,
                 activation_priority,
             }
         }
@@ -1904,6 +1960,10 @@ pub mod test {
 
         fn default_size(&self, _window: &Window, _: &App) -> Pixels {
             self.default_size
+        }
+
+        fn has_independent_size(&self) -> bool {
+            self.independent_size
         }
 
         fn initial_size_state(&self, _window: &Window, _: &App) -> PanelSizeState {

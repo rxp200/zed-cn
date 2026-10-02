@@ -3054,10 +3054,14 @@ impl OutlinePanel {
                 })
             })
             .cursor_pointer()
+            // Inset the row so its rounded highlight reads as a card, matching the
+            // project panel and the activity bar.
+            .mx(ui::LIST_ITEM_HIGHLIGHT_INSET)
             .child(
                 ListItem::new(item_id)
                     .indent_level(depth)
                     .indent_step_size(px(settings.indent_size))
+                    .rounded()
                     .toggle_state(is_active)
                     .child(
                         h_flex()
@@ -5396,7 +5400,10 @@ impl OutlinePanel {
                                 }
                             })
                             .with_render_fn(cx.entity(), move |outline_panel, params, _, _| {
-                                const LEFT_OFFSET: Pixels = ui::LIST_ITEM_INDENT_GUIDE_LEFT_OFFSET;
+                                // Rows are inset by `LIST_ITEM_HIGHLIGHT_INSET`, so their
+                                // indent guides move with them.
+                                let left_offset = ui::LIST_ITEM_INDENT_GUIDE_LEFT_OFFSET
+                                    + ui::LIST_ITEM_HIGHLIGHT_INSET;
 
                                 let indent_size = params.indent_size;
                                 let item_height = params.item_height;
@@ -5412,7 +5419,7 @@ impl OutlinePanel {
                                     .map(|(ix, layout)| {
                                         let bounds = Bounds::new(
                                             point(
-                                                layout.offset.x * indent_size + LEFT_OFFSET,
+                                                layout.offset.x * indent_size + left_offset,
                                                 layout.offset.y * item_height,
                                             ),
                                             size(px(1.), layout.length * item_height),
