@@ -176,6 +176,8 @@ use crate::{
 
 pub const SERIALIZATION_THROTTLE_TIME: Duration = Duration::from_millis(200);
 pub const MAX_RECENT_SELECTIONS: usize = 20;
+pub(crate) const WORKBENCH_MODULE_INSET: Pixels = px(3.);
+pub(crate) const WORKBENCH_MODULE_RADIUS: Pixels = px(6.);
 
 /// Which optional window-title variables are actually referenced by the active
 /// template. Used to skip expensive lookups when the template doesn't need them.
@@ -8816,6 +8818,8 @@ impl Workspace {
 
         let mut container = div()
             .id(dock_element_id)
+            .debug_selector(move || dock_element_id.into())
+            .when(dock_is_open, |this| this.p(WORKBENCH_MODULE_INSET))
             .when(dock_is_open, |this| {
                 this.role(gpui::Role::Complementary)
                     .aria_label(dock_label)
@@ -9842,7 +9846,7 @@ impl Render for Workspace {
                     .child(
                         div()
                             .id("workspace")
-                            .bg(colors.background)
+                            .bg(colors.title_bar_background)
                             .relative()
                             .flex_1()
                             .w_full()
@@ -9902,8 +9906,6 @@ impl Render for Workspace {
                                             .w(px(48.))
                                             .flex_none()
                                             .bg(colors.title_bar_background)
-                                            .border_r_1()
-                                            .border_color(colors.border)
                                             .pt_2()
                                             .pb_1()
                                             .gap_1()
@@ -15860,6 +15862,94 @@ mod tests {
             window,
             cx,
         )
+    }
+
+    #[gpui::test]
+    async fn test_modular_workbench_cards_preserve_dock_layouts(cx: &mut TestAppContext) {
+        init_test(cx);
+        let fs = FakeFs::new(cx.executor());
+        let project = Project::test(fs, None, cx).await;
+        let (multi_workspace, cx) =
+            cx.add_window_view(|window, cx| MultiWorkspace::test_new(project, window, cx));
+        let workspace = multi_workspace.read_with(cx, |workspace, _| workspace.workspace().clone());
+        add_an_item_to_active_pane(cx, &workspace, 1);
+        let second_pane = split_pane(cx, &workspace);
+        add_an_item_to_active_pane(cx, &workspace, 2);
+
+        workspace.update_in(cx, |workspace, window, cx| {
+            for position in [
+                DockPosition::Left,
+                DockPosition::Right,
+                DockPosition::Bottom,
+            ] {
+                let panel = cx.new(|cx| TestPanel::new(position, 100, cx));
+                workspace.add_panel(panel, window, cx);
+                workspace.toggle_dock(position, window, cx);
+            }
+        });
+
+        for layout in [
+            BottomDockLayout::Contained,
+            BottomDockLayout::Full,
+            BottomDockLayout::LeftAligned,
+            BottomDockLayout::RightAligned,
+        ] {
+            cx.update_global(|store: &mut SettingsStore, cx| {
+                store.update_user_settings(cx, |settings| {
+                    settings.workspace.bottom_dock_layout = Some(layout);
+                });
+            });
+            cx.run_until_parked();
+
+            workspace.update_in(cx, |workspace, window, cx| {
+                for position in [
+                    DockPosition::Left,
+                    DockPosition::Right,
+                    DockPosition::Bottom,
+                ] {
+                    workspace.dock_at_position(position).update(cx, |dock, cx| {
+                        dock.set_open(true, window, cx);
+                    });
+                    let mut wrapper = workspace
+                        .render_dock(position, workspace.dock_at_position(position), window, cx)
+                        .expect("open dock wrapper");
+                    let padding = &wrapper.style().padding;
+                    assert_eq!(padding.left, Some(WORKBENCH_MODULE_INSET.into()));
+                    assert_eq!(padding.right, Some(WORKBENCH_MODULE_INSET.into()));
+                    assert_eq!(padding.top, Some(WORKBENCH_MODULE_INSET.into()));
+                    assert_eq!(padding.bottom, Some(WORKBENCH_MODULE_INSET.into()));
+                }
+            });
+            workspace.read_with(cx, |workspace, _| {
+                assert_eq!(workspace.center.panes().len(), 2);
+                assert_eq!(workspace.active_pane(), &second_pane);
+            });
+        }
+
+        workspace.update_in(cx, |workspace, window, cx| {
+            workspace.toggle_dock(DockPosition::Left, window, cx);
+        });
+        cx.run_until_parked();
+        workspace.update_in(cx, |workspace, window, cx| {
+            let mut closed = workspace
+                .render_dock(DockPosition::Left, &workspace.left_dock, window, cx)
+                .expect("closed dock stays mounted");
+            assert_eq!(closed.style().padding.left, None);
+        });
+        workspace.update_in(cx, |workspace, window, cx| {
+            workspace.toggle_panel_focus::<TestPanel>(window, cx);
+        });
+        cx.run_until_parked();
+        workspace.update_in(cx, |workspace, window, cx| {
+            assert!(workspace.left_dock.read(cx).is_open());
+            assert!(
+                workspace
+                    .left_dock
+                    .read(cx)
+                    .focus_handle(cx)
+                    .contains_focused(window, cx)
+            );
+        });
     }
 
     #[gpui::test]

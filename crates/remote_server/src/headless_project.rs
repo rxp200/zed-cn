@@ -487,6 +487,7 @@ impl HeadlessProject {
         session.add_request_handler(cx.weak_entity(), Self::handle_get_remote_profiling_data);
         session.add_request_handler(cx.weak_entity(), Self::handle_create_temporary_file);
         session.add_request_handler(cx.weak_entity(), Self::handle_get_system_stats);
+        session.add_request_handler(cx.weak_entity(), Self::handle_read_document_chunk);
         session.add_request_handler(cx.weak_entity(), Self::handle_create_persistent_terminal);
         session.add_request_handler(cx.weak_entity(), Self::handle_persistent_terminal_input);
         session.add_request_handler(cx.weak_entity(), Self::handle_resize_persistent_terminal);
@@ -980,6 +981,82 @@ impl HeadlessProject {
             trusted_worktrees.restrict(worktree_store, restricted_paths, cx);
         });
         Ok(proto::Ack {})
+    }
+
+    async fn handle_read_document_chunk(
+        this: Entity<Self>,
+        message: TypedEnvelope<proto::ReadDocumentChunk>,
+        cx: AsyncApp,
+    ) -> Result<proto::ReadDocumentChunkResponse> {
+        use std::io::{Read as _, Seek as _};
+        let request = message.payload;
+        let path = RelPath::from_unix_str(&request.path)?;
+        let limit = path
+            .extension()
+            .and_then(project::document_file_size_limit)
+            .context("unsupported document format")?;
+        let (worktree, fs) = this.read_with(&cx, |this, cx| {
+            let worktree = this
+                .worktree_store
+                .read(cx)
+                .worktree_for_id(WorktreeId::from_proto(request.worktree_id), cx);
+            (worktree, this.fs.clone())
+        });
+        let worktree = worktree.context("worktree not found")?;
+        let abs_path = worktree.read_with(&cx, |worktree, _| worktree.absolutize(&path));
+        let metadata = fs
+            .metadata(&abs_path)
+            .await?
+            .context("document not found")?;
+        anyhow::ensure!(
+            !metadata.is_dir && !metadata.is_fifo,
+            "not a regular document file"
+        );
+        anyhow::ensure!(
+            metadata.len <= limit && request.offset <= metadata.len,
+            "document is too large or offset is invalid"
+        );
+        let mtime: proto::Timestamp = metadata.mtime.into();
+        if request.offset > 0 {
+            anyhow::ensure!(
+                request.expected_size == metadata.len && request.expected_mtime == Some(mtime),
+                "document changed while loading"
+            );
+        }
+        let mut handle = fs.open_sync(&abs_path).await?;
+        let length =
+            (metadata.len - request.offset).min(project::DOCUMENT_CHUNK_SIZE as u64) as usize;
+        let content = cx
+            .background_spawn(async move {
+                handle.seek(std::io::SeekFrom::Start(request.offset))?;
+                let mut content = vec![0; length];
+                handle.read_exact(&mut content)?;
+                anyhow::Ok(content)
+            })
+            .await?;
+        let after = fs
+            .metadata(&abs_path)
+            .await?
+            .context("document removed while loading")?;
+        anyhow::ensure!(
+            after.len == metadata.len && after.mtime == metadata.mtime,
+            "document changed while loading"
+        );
+        let file = worktree.read_with(&cx, |worktree, _| proto::File {
+            worktree_id: request.worktree_id,
+            entry_id: worktree
+                .entry_for_path(&path)
+                .map(|entry| entry.id.to_proto()),
+            path: request.path.clone(),
+            mtime: Some(mtime),
+            is_deleted: false,
+            is_historic: false,
+        });
+        Ok(proto::ReadDocumentChunkResponse {
+            file: Some(file),
+            content,
+            total_size: metadata.len,
+        })
     }
 
     pub async fn handle_download_file_by_path(

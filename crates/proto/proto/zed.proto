@@ -538,7 +538,9 @@ message Envelope {
     GetTerminalShellResponse get_terminal_shell_response = 506;
     SubscribePersistentTerminal subscribe_persistent_terminal = 507;
     PersistentTerminalOutput persistent_terminal_output = 508;
-    PersistentTerminalOutputCredit persistent_terminal_output_credit = 509; // current max
+    PersistentTerminalOutputCredit persistent_terminal_output_credit = 509;
+    ReadDocumentChunk read_document_chunk = 510;
+    ReadDocumentChunkResponse read_document_chunk_response = 511; // current max
   }
 
   reserved 87 to 88;

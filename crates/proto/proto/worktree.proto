@@ -110,6 +110,20 @@ message CreateTemporaryFileResponse {
   string path = 1;
 }
 
+message ReadDocumentChunk {
+  uint64 worktree_id = 1;
+  string path = 2;
+  uint64 offset = 3;
+  uint64 expected_size = 4;
+  optional Timestamp expected_mtime = 5;
+}
+
+message ReadDocumentChunkResponse {
+  File file = 1;
+  bytes content = 2;
+  uint64 total_size = 3;
+}
+
 message GetSystemStats {}
 
 message GetSystemStatsResponse {

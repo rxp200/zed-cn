@@ -216,6 +216,86 @@ pub enum OpenedBufferEvent {
     Err(BufferId, Arc<anyhow::Error>),
 }
 
+pub const DOCUMENT_CHUNK_SIZE: usize = 1024 * 1024;
+
+pub fn document_file_size_limit(extension: &str) -> Option<u64> {
+    match extension.to_ascii_lowercase().as_str() {
+        "pdf" | "epub" => Some(512 * 1024 * 1024),
+        "xlsx" | "xlsm" | "xlsb" => Some(256 * 1024 * 1024),
+        "xls" | "ods" => Some(64 * 1024 * 1024),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod document_loading_tests {
+    use super::*;
+
+    #[test]
+    fn document_chunk_bounds() {
+        let size = DOCUMENT_CHUNK_SIZE as u64 + 3;
+        assert!(validate_document_chunk(0, 0, size, DOCUMENT_CHUNK_SIZE, size).is_ok());
+        assert!(validate_document_chunk(DOCUMENT_CHUNK_SIZE as u64, size, size, 3, size).is_ok());
+        assert!(validate_document_chunk(0, 0, 0, 0, size).is_ok());
+        assert!(validate_document_chunk(0, 0, size, 0, size).is_err());
+        assert!(validate_document_chunk(0, 0, size, DOCUMENT_CHUNK_SIZE + 1, size).is_err());
+        assert!(validate_document_chunk(size + 1, size, size, 0, size).is_err());
+        assert!(validate_document_chunk(1, size + 1, size, DOCUMENT_CHUNK_SIZE, size).is_err());
+        assert!(validate_document_chunk(0, 0, size, DOCUMENT_CHUNK_SIZE, size - 1).is_err());
+    }
+
+    #[test]
+    fn document_formats_and_server_source() {
+        for extension in ["pdf", "EPUB", "xlsx", "xlsm", "xlsb", "xls", "ods"] {
+            assert!(document_file_size_limit(extension).is_some());
+        }
+        assert!(document_file_size_limit("txt").is_none());
+        let options = remote::SshConnectionOptions::default();
+        assert!(!document_server_source_allowed(
+            &remote::RemoteConnectionOptions::Ssh(options.clone())
+        ));
+        let mut options = options;
+        options.remote_server_source = settings::RemoteServerSource::ZedCn;
+        assert!(document_server_source_allowed(
+            &remote::RemoteConnectionOptions::Ssh(options)
+        ));
+    }
+}
+
+fn document_server_source_allowed(options: &remote::RemoteConnectionOptions) -> bool {
+    match options {
+        remote::RemoteConnectionOptions::Ssh(options) => {
+            options.remote_server_source == settings::RemoteServerSource::ZedCn
+        }
+        #[cfg(any(test, feature = "test-support"))]
+        remote::RemoteConnectionOptions::Mock(_) => true,
+        _ => false,
+    }
+}
+
+fn validate_document_chunk(
+    offset: u64,
+    expected_size: u64,
+    total_size: u64,
+    chunk_size: usize,
+    limit: u64,
+) -> Result<()> {
+    anyhow::ensure!(total_size <= limit, "document is too large to preview");
+    anyhow::ensure!(
+        offset == 0 || expected_size == total_size,
+        "document changed while loading"
+    );
+    anyhow::ensure!(
+        offset <= total_size && chunk_size <= DOCUMENT_CHUNK_SIZE,
+        "invalid document chunk"
+    );
+    anyhow::ensure!(
+        chunk_size as u64 == (total_size - offset).min(DOCUMENT_CHUNK_SIZE as u64),
+        "incomplete document chunk"
+    );
+    Ok(())
+}
+
 /// Semantics-aware entity that is relevant to one or more [`Worktree`] with the files.
 /// `Project` is responsible for tasks, LSP and collab queries, synchronizing worktree states accordingly.
 /// Maps [`Worktree`] entries with its own logic using [`ProjectEntryId`] and [`ProjectPath`] structs.
@@ -3284,6 +3364,96 @@ impl Project {
         } else {
             Task::ready(Err(anyhow!("no such path")))
         }
+    }
+
+    pub fn load_document_file(
+        &self,
+        path: ProjectPath,
+        cx: &mut Context<Self>,
+    ) -> Task<Result<worktree::LoadedBinaryFile>> {
+        let Some(limit) = path.path.extension().and_then(document_file_size_limit) else {
+            return Task::ready(Err(anyhow!("unsupported document format")));
+        };
+        let Some(worktree) = self.worktree_for_id(path.worktree_id, cx) else {
+            return Task::ready(Err(anyhow!("worktree not found")));
+        };
+        if worktree.read(cx).is_local() {
+            let load =
+                worktree.update(cx, |worktree, cx| worktree.load_binary_file(&path.path, cx));
+            return cx.spawn(async move |_, _| {
+                let loaded = load.await?;
+                anyhow::ensure!(
+                    loaded.content.len() as u64 <= limit,
+                    "document is too large to preview"
+                );
+                Ok(loaded)
+            });
+        }
+        let Some(client) = self.remote_client.as_ref().filter(|client| {
+            let client = client.read(cx);
+            client.supports_document_chunks()
+                && document_server_source_allowed(&client.connection_options())
+        }) else {
+            return Task::ready(Err(anyhow!(i18n::t!("05720b24baa5d61e"))));
+        };
+        let client = client.read(cx).proto_client();
+        cx.spawn(async move |_, cx| {
+            let mut content = Vec::new();
+            let mut file = None;
+            let mut expected_size = 0;
+            let mut expected_mtime = None;
+            loop {
+                let response = client
+                    .request(proto::ReadDocumentChunk {
+                        worktree_id: path.worktree_id.to_proto(),
+                        path: path.path.as_unix_str().to_owned(),
+                        offset: content.len() as u64,
+                        expected_size,
+                        expected_mtime,
+                    })
+                    .await?;
+                validate_document_chunk(
+                    content.len() as u64,
+                    expected_size,
+                    response.total_size,
+                    response.content.len(),
+                    limit,
+                )?;
+                let proto_file = response.file.context("missing document file metadata")?;
+                anyhow::ensure!(
+                    proto_file.worktree_id == path.worktree_id.to_proto(),
+                    "document worktree does not match request"
+                );
+                anyhow::ensure!(
+                    proto_file.path == path.path.as_unix_str(),
+                    "document path does not match request"
+                );
+                if file.is_none() {
+                    expected_size = response.total_size;
+                    expected_mtime = proto_file.mtime;
+                    content.try_reserve_exact(usize::try_from(expected_size)?)?;
+                    file = Some(cx.update(|cx| {
+                        worktree::File::from_proto(proto_file, worktree.clone(), cx)
+                    })?);
+                } else {
+                    anyhow::ensure!(
+                        proto_file.mtime == expected_mtime,
+                        "document changed while loading"
+                    );
+                }
+                content.extend_from_slice(&response.content);
+                if content.len() as u64 == expected_size {
+                    let mut file = file.context("missing document file")?;
+                    if let language::DiskState::Present { size, .. } = &mut file.disk_state {
+                        *size = expected_size;
+                    }
+                    return Ok(worktree::LoadedBinaryFile {
+                        file: Arc::new(file),
+                        content,
+                    });
+                }
+            }
+        })
     }
 
     pub fn download_file(

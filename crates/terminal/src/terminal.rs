@@ -1163,6 +1163,9 @@ impl TerminalBuilder {
             terminal_id,
             streaming,
             input_tx,
+            input_task: None,
+            output_task: None,
+            failed: false,
         });
         builder.remote_input_rx = Some(input_rx);
         builder
@@ -1505,40 +1508,37 @@ impl TerminalBuilder {
                 .remote_input_rx
                 .take()
                 .expect("remote terminals have an input receiver");
-            cx.background_spawn({
+            let input_task = cx.spawn({
                 let client = client.clone();
                 let server_instance_id = server_instance_id.clone();
                 let terminal_id = terminal_id.clone();
-                async move {
-                    // Inputs are fire-and-forget: the transport is ordered and the
-                    // server rejects sequence gaps, so awaiting an Ack per keystroke
-                    // would multiply fast typing latency by the network round trip.
-                    let mut sequence = 1;
-                    while let Ok(first) = input_rx.recv().await {
-                        let mut data = first;
-                        while data.len() < MAX_COALESCED_INPUT_BYTES {
-                            match input_rx.try_recv() {
-                                Ok(more) => data.extend_from_slice(&more),
-                                Err(_) => break,
-                            }
-                        }
-                        client.send(proto::PersistentTerminalInput {
-                            server_instance_id: server_instance_id.clone(),
-                            terminal_id: terminal_id.clone(),
-                            sequence,
-                            data,
-                        })?;
-                        sequence += 1;
+                async move |terminal, cx| {
+                    if let Err(error) = send_persistent_terminal_input(
+                        client,
+                        server_instance_id,
+                        terminal_id,
+                        input_rx,
+                    )
+                    .await
+                    {
+                        terminal
+                            .update(cx, |terminal, cx| {
+                                terminal.fail_remote_terminal(&error, cx);
+                            })
+                            .log_err();
                     }
-                    anyhow::Ok(())
                 }
-            })
-            .detach();
-            cx.spawn(async move |terminal, cx| {
+            });
+            let output_task = cx.spawn(async move |terminal, cx| {
                 let mut offset = 0;
                 let mut use_streaming = streaming;
                 let mut consecutive_stream_failures = 0;
                 loop {
+                    if terminal.read_with(cx, |terminal, _| {
+                        matches!(&terminal.terminal_type, TerminalType::Remote(remote) if remote.failed)
+                    })? {
+                        return Ok(());
+                    }
                     if use_streaming {
                         let frames = client
                             .request_stream(proto::SubscribePersistentTerminal {
@@ -1549,6 +1549,12 @@ impl TerminalBuilder {
                             .await;
                         match frames {
                             Err(error) => {
+                                if persistent_terminal_is_unavailable(&error) {
+                                    terminal.update(cx, |terminal, cx| {
+                                        terminal.fail_remote_terminal(&error, cx);
+                                    })?;
+                                    return Ok(());
+                                }
                                 log::debug!(
                                     "persistent terminal output stream unavailable, falling back to polling: {error:#}"
                                 );
@@ -1565,6 +1571,12 @@ impl TerminalBuilder {
                                     let frame = match frame {
                                         Ok(frame) => frame,
                                         Err(error) => {
+                                            if persistent_terminal_is_unavailable(&error) {
+                                                terminal.update(cx, |terminal, cx| {
+                                                    terminal.fail_remote_terminal(&error, cx);
+                                                })?;
+                                                return Ok(());
+                                            }
                                             log::debug!(
                                                 "persistent terminal output stream interrupted: {error:#}"
                                             );
@@ -1660,6 +1672,12 @@ impl TerminalBuilder {
                                 }
                             }
                             Err(error) => {
+                                if persistent_terminal_is_unavailable(&error) {
+                                    terminal.update(cx, |terminal, cx| {
+                                        terminal.fail_remote_terminal(&error, cx);
+                                    })?;
+                                    break;
+                                }
                                 log::debug!("persistent terminal poll paused: {error:#}");
                             }
                         }
@@ -1669,8 +1687,11 @@ impl TerminalBuilder {
                     }
                 }
                 anyhow::Ok(())
-            })
-            .detach();
+            });
+            if let TerminalType::Remote(remote) = &mut self.terminal.terminal_type {
+                remote.input_task = Some(input_task);
+                remote.output_task = Some(output_task);
+            }
         }
 
         //Event loop
@@ -1775,12 +1796,59 @@ enum TerminalType {
     DisplayOnly,
 }
 
+async fn send_persistent_terminal_input(
+    client: AnyProtoClient,
+    server_instance_id: String,
+    terminal_id: String,
+    input_rx: Receiver<Vec<u8>>,
+) -> Result<()> {
+    let mut sequence = 1;
+    while let Ok(first) = input_rx.recv().await {
+        let mut data = first;
+        while data.len() < MAX_COALESCED_INPUT_BYTES {
+            match input_rx.try_recv() {
+                Ok(more) => data.extend_from_slice(&more),
+                Err(_) => break,
+            }
+        }
+        // Ordered transport does not order the server's background PTY writes.
+        // Keep one batch in flight; replay of an unacknowledged batch is deduplicated
+        // by the server, while typing during the round trip is coalesced here.
+        client
+            .request(proto::PersistentTerminalInput {
+                server_instance_id: server_instance_id.clone(),
+                terminal_id: terminal_id.clone(),
+                sequence,
+                data,
+            })
+            .await?;
+        sequence += 1;
+    }
+    Ok(())
+}
+
+fn persistent_terminal_is_unavailable(error: &anyhow::Error) -> bool {
+    error
+        .downcast_ref::<proto::RpcError>()
+        .is_some_and(|error| {
+            matches!(
+                error.raw_message(),
+                "persistent terminal not found"
+                    | "persistent terminal belongs to another server instance"
+                    | "persistent terminal has exited"
+            )
+        })
+}
+
 struct RemoteTerminal {
     client: AnyProtoClient,
     server_instance_id: String,
     terminal_id: String,
     streaming: bool,
     input_tx: Sender<Vec<u8>>,
+    input_task: Option<Task<()>>,
+    output_task: Option<Task<Result<()>>>,
+    failed: bool,
 }
 
 pub struct Terminal {
@@ -3548,6 +3616,20 @@ impl Terminal {
         Task::ready(None)
     }
 
+    fn fail_remote_terminal(&mut self, error: &anyhow::Error, cx: &mut Context<Self>) {
+        log::error!("persistent terminal unavailable: {error:#}");
+        if let TerminalType::Remote(remote) = &mut self.terminal_type {
+            if remote.failed {
+                return;
+            }
+            remote.failed = true;
+            remote.input_tx.close();
+        }
+        let message = i18n::t!("e9068449f2994cdc", error = format!("{error:#}"));
+        self.write_raw_output(format!("\r\n{message}\r\n").as_bytes(), cx);
+        cx.notify();
+    }
+
     fn register_task_finished(
         &mut self,
         exit_status: Option<ExitStatus>,
@@ -4064,6 +4146,7 @@ mod tests {
     };
     use parking_lot::Mutex;
     use rand::{Rng, distr, rngs::StdRng};
+    use rpc::proto::EnvelopedMessage;
     use rpc::{ProtoClient, ProtoMessageHandlerSet};
     use task::{Shell, ShellBuilder};
 
@@ -6886,6 +6969,257 @@ mod tests {
 
         assert!(terminal.cwd_history.is_empty());
         assert_eq!(terminal.pending_cwd_boundary, None);
+    }
+
+    struct InputTestClient {
+        handler_set: Mutex<ProtoMessageHandlerSet>,
+        requests: Sender<(
+            proto::PersistentTerminalInput,
+            futures::channel::oneshot::Sender<()>,
+        )>,
+    }
+
+    impl ProtoClient for InputTestClient {
+        fn request(
+            &self,
+            envelope: proto::Envelope,
+            request_type: &'static str,
+        ) -> futures::future::BoxFuture<'static, Result<proto::Envelope>> {
+            let Some(proto::envelope::Payload::PersistentTerminalInput(input)) = envelope.payload
+            else {
+                return async move { anyhow::bail!("unexpected {request_type}") }.boxed();
+            };
+            let (ack_tx, ack_rx) = futures::channel::oneshot::channel();
+            let result = self.requests.try_send((input, ack_tx));
+            async move {
+                result.map_err(|error| anyhow::anyhow!("{error}"))?;
+                ack_rx.await?;
+                Ok(proto::Ack {}.into_envelope(0, None, None))
+            }
+            .boxed()
+        }
+        fn send(&self, _: proto::Envelope, _: &'static str) -> Result<()> {
+            anyhow::bail!("input must wait for acknowledgment")
+        }
+        fn send_response(&self, _: proto::Envelope, _: &'static str) -> Result<()> {
+            Ok(())
+        }
+        fn message_handler_set(&self) -> &Mutex<ProtoMessageHandlerSet> {
+            &self.handler_set
+        }
+        fn is_via_collab(&self) -> bool {
+            false
+        }
+        fn has_wsl_interop(&self) -> bool {
+            false
+        }
+    }
+
+    #[gpui::test(iterations = 20)]
+    async fn persistent_terminal_input_waits_for_ack_and_coalesces(cx: &mut TestAppContext) {
+        let (requests_tx, requests_rx) = async_channel::bounded(10);
+        let client = AnyProtoClient::new(Arc::new(InputTestClient {
+            handler_set: Mutex::new(ProtoMessageHandlerSet::default()),
+            requests: requests_tx,
+        }));
+        let (input_tx, input_rx) = async_channel::bounded(256);
+        let task = cx.background_executor.spawn(send_persistent_terminal_input(
+            client,
+            "server".into(),
+            "terminal".into(),
+            input_rx,
+        ));
+        input_tx.send(b"a".to_vec()).await.expect("input");
+        let (first, ack) = requests_rx.recv().await.expect("first batch");
+        assert_eq!(first.sequence, 1);
+        assert_eq!(first.data, b"a");
+        input_tx.send(b"b".to_vec()).await.expect("input");
+        input_tx.send(b"c".to_vec()).await.expect("input");
+        cx.run_until_parked();
+        assert!(requests_rx.try_recv().is_err());
+        ack.send(()).expect("ack");
+        let (second, ack) = requests_rx.recv().await.expect("second batch");
+        assert_eq!(second.sequence, 2);
+        assert_eq!(second.data, b"bc");
+        input_tx.close();
+        ack.send(()).expect("ack");
+        task.await.expect("input completes");
+    }
+
+    #[gpui::test(iterations = 20)]
+    async fn persistent_terminal_input_failure_does_not_send_later_batches(
+        cx: &mut TestAppContext,
+    ) {
+        let (requests_tx, requests_rx) = async_channel::bounded(10);
+        let client = AnyProtoClient::new(Arc::new(InputTestClient {
+            handler_set: Mutex::new(ProtoMessageHandlerSet::default()),
+            requests: requests_tx,
+        }));
+        let (input_tx, input_rx) = async_channel::bounded(256);
+        let task = cx.background_executor.spawn(send_persistent_terminal_input(
+            client,
+            "server".into(),
+            "terminal".into(),
+            input_rx,
+        ));
+        input_tx.send(b"a".to_vec()).await.expect("input");
+        let (_, ack) = requests_rx.recv().await.expect("first batch");
+        input_tx.send(b"b".to_vec()).await.expect("input");
+        drop(ack);
+        assert!(task.await.is_err());
+        assert!(requests_rx.try_recv().is_err());
+        assert!(input_tx.is_closed());
+    }
+
+    struct PollTestClient {
+        handler_set: Mutex<ProtoMessageHandlerSet>,
+        reads: std::sync::atomic::AtomicUsize,
+        missing: bool,
+    }
+
+    impl ProtoClient for PollTestClient {
+        fn request(
+            &self,
+            envelope: proto::Envelope,
+            _: &'static str,
+        ) -> futures::future::BoxFuture<'static, Result<proto::Envelope>> {
+            if matches!(
+                envelope.payload,
+                Some(proto::envelope::Payload::ReadPersistentTerminal(_))
+            ) {
+                self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let message = if self.missing {
+                    "persistent terminal not found"
+                } else {
+                    "temporary error"
+                };
+                async move {
+                    Err(proto::RpcError::from_proto(
+                        &proto::Error {
+                            message: message.into(),
+                            ..Default::default()
+                        },
+                        "ReadPersistentTerminal",
+                    ))
+                }
+                .boxed()
+            } else {
+                async { Ok(proto::Ack {}.into_envelope(0, None, None)) }.boxed()
+            }
+        }
+        fn send(&self, _: proto::Envelope, _: &'static str) -> Result<()> {
+            Ok(())
+        }
+        fn send_response(&self, _: proto::Envelope, _: &'static str) -> Result<()> {
+            Ok(())
+        }
+        fn message_handler_set(&self) -> &Mutex<ProtoMessageHandlerSet> {
+            &self.handler_set
+        }
+        fn is_via_collab(&self) -> bool {
+            false
+        }
+        fn has_wsl_interop(&self) -> bool {
+            false
+        }
+    }
+
+    fn polling_terminal(client: Arc<PollTestClient>, cx: &mut TestAppContext) -> Entity<Terminal> {
+        cx.new(|cx| {
+            TerminalBuilder::new_remote(
+                TerminalMode::interactive(),
+                Shell::Program("bash".into()),
+                SettingsCursorShape::default(),
+                AlternateScroll::On,
+                None,
+                Vec::new(),
+                Duration::ZERO,
+                0,
+                PathStyle::local(),
+                AnyProtoClient::new(client),
+                "server".into(),
+                "terminal".into(),
+                false,
+                cx.background_executor(),
+            )
+            .subscribe(cx)
+        })
+    }
+
+    #[gpui::test(iterations = 20)]
+    fn persistent_terminal_missing_stops_polling_and_disables_input(cx: &mut TestAppContext) {
+        let client = Arc::new(PollTestClient {
+            handler_set: Mutex::new(ProtoMessageHandlerSet::default()),
+            reads: Default::default(),
+            missing: true,
+        });
+        let terminal = polling_terminal(client.clone(), cx);
+        cx.run_until_parked();
+        cx.background_executor.advance_clock(Duration::from_secs(1));
+        cx.run_until_parked();
+        assert_eq!(client.reads.load(std::sync::atomic::Ordering::SeqCst), 1);
+        terminal.read_with(cx, |terminal, _| {
+            let TerminalType::Remote(remote) = &terminal.terminal_type else {
+                panic!("remote terminal")
+            };
+            assert!(remote.failed);
+            assert!(remote.input_tx.is_closed());
+        });
+    }
+
+    #[gpui::test(iterations = 20)]
+    fn persistent_terminal_drop_cancels_polling_but_transient_errors_retry(
+        cx: &mut TestAppContext,
+    ) {
+        let client = Arc::new(PollTestClient {
+            handler_set: Mutex::new(ProtoMessageHandlerSet::default()),
+            reads: Default::default(),
+            missing: false,
+        });
+        let terminal = polling_terminal(client.clone(), cx);
+        cx.run_until_parked();
+        cx.background_executor
+            .advance_clock(Duration::from_millis(50));
+        cx.run_until_parked();
+        assert!(client.reads.load(std::sync::atomic::Ordering::SeqCst) >= 2);
+        drop(terminal);
+        cx.run_until_parked();
+        let reads = client.reads.load(std::sync::atomic::Ordering::SeqCst);
+        cx.background_executor.advance_clock(Duration::from_secs(1));
+        cx.run_until_parked();
+        assert_eq!(
+            client.reads.load(std::sync::atomic::Ordering::SeqCst),
+            reads
+        );
+    }
+
+    #[test]
+    fn persistent_terminal_unavailability_excludes_transient_errors() {
+        for message in [
+            "persistent terminal not found",
+            "persistent terminal belongs to another server instance",
+            "persistent terminal has exited",
+        ] {
+            let error = proto::RpcError::from_proto(
+                &proto::Error {
+                    message: message.into(),
+                    ..Default::default()
+                },
+                "ReadPersistentTerminal",
+            );
+            assert!(persistent_terminal_is_unavailable(&error));
+        }
+        assert!(!persistent_terminal_is_unavailable(&anyhow::anyhow!(
+            "connection lost"
+        )));
+        let error = proto::RpcError::from_proto(
+            &proto::Error {
+                message: "permission denied".into(),
+                ..Default::default()
+            },
+            "ReadPersistentTerminal",
+        );
+        assert!(!persistent_terminal_is_unavailable(&error));
     }
 
     struct TestProtoClient {

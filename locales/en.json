@@ -5100,5 +5100,7 @@
   "ff876592329dfa4e": "{}{}\nDiagnostics may still contain connection information.",
   "ff89189c8f28dcd8": "recent projects: toggle actions menu",
   "ffd77b0e96decc41": "As mentioned - with a tooltip",
-  "ffee2d8db613269e": "agents sidebar: new thread in group"
+  "ffee2d8db613269e": "agents sidebar: new thread in group",
+  "e9068449f2994cdc": "Remote terminal is unavailable. Open a new terminal to continue. Error: {error}",
+  "05720b24baa5d61e": "Remote document preview requires a Zed CN SSH server with document reading support. Select Zed CN as the server source and reconnect after updating the server."
 }

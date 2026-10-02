@@ -1425,18 +1425,23 @@ impl Render for Dock {
                 .focus_follows_mouse(self.focus_follows_mouse, cx)
                 .flex()
                 .bg(cx.theme().colors().panel_background)
-                .border_color(cx.theme().colors().border)
+                .rounded(crate::WORKBENCH_MODULE_RADIUS)
+                .border_1()
+                .border_color(cx.theme().colors().border_variant)
+                .debug_selector({
+                    let position = self.position();
+                    move || match position {
+                        DockPosition::Left => "left-dock-card".into(),
+                        DockPosition::Right => "right-dock-card".into(),
+                        DockPosition::Bottom => "bottom-dock-card".into(),
+                    }
+                })
                 .overflow_hidden()
                 .map(|this| match self.position().axis() {
                     // Width and height are always set on the workspace wrapper in
                     // render_dock, so fill whatever space the wrapper provides.
                     Axis::Horizontal => this.w_full().h_full().flex_row(),
                     Axis::Vertical => this.h_full().w_full().flex_col(),
-                })
-                .map(|this| match self.position() {
-                    DockPosition::Left => this.border_r_1(),
-                    DockPosition::Right => this.border_l_1(),
-                    DockPosition::Bottom => this.border_t_1(),
                 })
                 .child(
                     div()

@@ -173,6 +173,7 @@ pub trait RemoteClientDelegate: Send + Sync {
 
 pub const TEMPORARY_FILES_CAPABILITY: &str = "temporary_files_v1";
 pub const SYSTEM_STATS_CAPABILITY: &str = "system_stats_v1";
+pub const DOCUMENT_CHUNKS_CAPABILITY: &str = "document_chunks_v1";
 pub const PERSISTENT_TERMINALS_CAPABILITY: &str = "persistent_terminals_v1";
 pub const PERSISTENT_TERMINAL_STREAMING_CAPABILITY: &str = "persistent_terminal_streaming_v1";
 
@@ -1428,6 +1429,10 @@ impl RemoteClient {
         self.client.supports_system_stats.load(SeqCst)
     }
 
+    pub fn supports_document_chunks(&self) -> bool {
+        self.client.supports_document_chunks.load(SeqCst)
+    }
+
     pub fn supports_persistent_terminals(&self) -> bool {
         self.client.supports_persistent_terminals.load(SeqCst)
     }
@@ -2626,6 +2631,26 @@ mod tests {
         assert!(client.buffer.lock().is_empty());
     }
 
+    #[gpui::test]
+    async fn document_capability_requires_server_advertisement(cx: &mut TestAppContext) {
+        let (incoming_tx, incoming_rx) = mpsc::unbounded::<Envelope>();
+        let (outgoing_tx, _outgoing_rx) = mpsc::unbounded::<Envelope>();
+        let client = cx
+            .update(|cx| ChannelClient::new(incoming_rx, outgoing_tx, cx, "document-test", false));
+        assert!(!client.supports_document_chunks.load(SeqCst));
+        for (capabilities, expected) in [
+            (Vec::new(), false),
+            (vec![DOCUMENT_CHUNKS_CAPABILITY.to_owned()], true),
+            (Vec::new(), false),
+        ] {
+            incoming_tx
+                .unbounded_send(proto::RemoteStarted { capabilities }.into_envelope(0, None, None))
+                .expect("deliver capabilities");
+            cx.run_until_parked();
+            assert_eq!(client.supports_document_chunks.load(SeqCst), expected);
+        }
+    }
+
     #[test]
     fn missing_worktree_errors_are_scoped_to_project_requests() {
         assert!(is_missing_remote_worktree(
@@ -2962,6 +2987,7 @@ pub(crate) struct ChannelClient {
     remote_started: Signal<()>,
     supports_temporary_files: AtomicBool,
     supports_system_stats: AtomicBool,
+    supports_document_chunks: AtomicBool,
     supports_persistent_terminals: AtomicBool,
     supports_persistent_terminal_streaming: AtomicBool,
     session_invalidated: Arc<Signal<String>>,
@@ -2997,6 +3023,7 @@ impl ChannelClient {
             remote_started: Signal::new(cx),
             supports_temporary_files: AtomicBool::new(false),
             supports_system_stats: AtomicBool::new(false),
+            supports_document_chunks: AtomicBool::new(false),
             supports_persistent_terminals: AtomicBool::new(false),
             supports_persistent_terminal_streaming: AtomicBool::new(false),
             session_invalidated: Arc::new(Signal::new(cx)),
@@ -3020,6 +3047,7 @@ impl ChannelClient {
                     capabilities: vec![
                         TEMPORARY_FILES_CAPABILITY.to_string(),
                         SYSTEM_STATS_CAPABILITY.to_string(),
+                        DOCUMENT_CHUNKS_CAPABILITY.to_string(),
                         PERSISTENT_TERMINALS_CAPABILITY.to_string(),
                         PERSISTENT_TERMINAL_STREAMING_CAPABILITY.to_string(),
                     ],
@@ -3075,6 +3103,13 @@ impl ChannelClient {
                             .any(|capability| capability == SYSTEM_STATS_CAPABILITY),
                         SeqCst,
                     );
+                    this.supports_document_chunks.store(
+                        started
+                            .capabilities
+                            .iter()
+                            .any(|capability| capability == DOCUMENT_CHUNKS_CAPABILITY),
+                        SeqCst,
+                    );
                     this.supports_persistent_terminals.store(
                         started
                             .capabilities
@@ -3083,12 +3118,9 @@ impl ChannelClient {
                         SeqCst,
                     );
                     this.supports_persistent_terminal_streaming.store(
-                        started
-                            .capabilities
-                            .iter()
-                            .any(|capability| {
-                                capability == PERSISTENT_TERMINAL_STREAMING_CAPABILITY
-                            }),
+                        started.capabilities.iter().any(|capability| {
+                            capability == PERSISTENT_TERMINAL_STREAMING_CAPABILITY
+                        }),
                         SeqCst,
                     );
                     this.remote_started.set(());
