@@ -755,7 +755,7 @@ impl ConfigureContextServerModal {
                                     .size(IconSize::Small)
                                     .color(Color::Muted),
                             )
-                            .action("Dismiss", |_, _| {})
+                            .action("关闭", |_, _| {})
                         },
                     );
 
@@ -878,7 +878,7 @@ impl ConfigureContextServerModal {
                 } = &self.source
                 {
                     Some(
-                        Button::new("open-repository", "Open Repository")
+                        Button::new("open-repository", i18n::t!("809f2cef23cc41ac"))
                             .end_icon(
                                 Icon::new(IconName::ArrowUpRight)
                                     .size(IconSize::Small)
@@ -888,7 +888,7 @@ impl ConfigureContextServerModal {
                                 let repository_url = repository_url.clone();
                                 move |_window, cx| {
                                     Tooltip::with_meta(
-                                        "Open Repository",
+                                        i18n::t!("809f2cef23cc41ac"),
                                         None,
                                         repository_url.clone(),
                                         cx,
@@ -911,9 +911,9 @@ impl ConfigureContextServerModal {
                         Button::new(
                             "cancel",
                             if self.source.has_configuration_options() {
-                                "Cancel"
+                                i18n::t!("2cd0f3be8738a86c")
                             } else {
-                                "Dismiss"
+                                i18n::t!("3fd47edce45b3603")
                             },
                         )
                         .key_binding(
@@ -925,7 +925,7 @@ impl ConfigureContextServerModal {
                         ),
                     )
                     .children(self.source.has_configuration_options().then(|| {
-                        Button::new("configure-server", "Configure Server")
+                        Button::new("configure-server", i18n::t!("6121d0c5352ea54c"))
                             .disabled(is_busy)
                             .key_binding(
                                 KeyBinding::for_action_in(&menu::Confirm, &focus_handle, cx)
@@ -968,13 +968,13 @@ impl ConfigureContextServerModal {
                             .color(Color::Muted),
                     )
                     .child(
-                        Label::new("Authenticate to connect this server")
+                        Label::new(i18n::t!("f4fed30d4bb5887f"))
                             .size(LabelSize::Small)
                             .color(Color::Muted),
                     ),
             )
             .child(
-                Button::new("authenticate-server", "Authenticate")
+                Button::new("authenticate-server", i18n::t!("d2d648bd1c94b7f9"))
                     .style(ButtonStyle::Outlined)
                     .label_size(LabelSize::Small)
                     .on_click({
@@ -1046,7 +1046,7 @@ impl ConfigureContextServerModal {
                         },
                     )))
                     .child(
-                        Button::new("submit-client-secret", "Submit")
+                        Button::new("submit-client-secret", i18n::t!("08a85f4ab4bab9ca"))
                             .style(ButtonStyle::Outlined)
                             .label_size(LabelSize::Small)
                             .on_click({
@@ -1074,13 +1074,13 @@ impl ConfigureContextServerModal {
                             .with_rotate_animation(3),
                     )
                     .child(
-                        Label::new("Authenticating…")
+                        Label::new(i18n::t!("fac3a5ae559d5e86"))
                             .size(LabelSize::Small)
                             .color(Color::Muted),
                     ),
             )
             .child(
-                Button::new("cancel-authentication", "Cancel")
+                Button::new("cancel-authentication", i18n::t!("2cd0f3be8738a86c"))
                     .style(ButtonStyle::Outlined)
                     .label_size(LabelSize::Small)
                     .on_click({

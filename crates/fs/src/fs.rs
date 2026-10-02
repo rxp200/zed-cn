@@ -76,6 +76,10 @@ pub trait Watcher: Send + Sync {
     fn remove(&self, path: &Path) -> Result<()>;
 }
 
+pub trait ReadSeek: io::Read + io::Seek {}
+
+impl<T: io::Read + io::Seek + ?Sized> ReadSeek for T {}
+
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum PathEventKind {
     Removed,
@@ -130,7 +134,7 @@ pub trait Fs: Send + Sync {
     async fn remove_file(&self, path: &Path, options: RemoveOptions) -> Result<()>;
 
     async fn open_handle(&self, path: &Path) -> Result<Arc<dyn FileHandle>>;
-    async fn open_sync(&self, path: &Path) -> Result<Box<dyn io::Read + Send + Sync>>;
+    async fn open_sync(&self, path: &Path) -> Result<Box<dyn ReadSeek + Send + Sync>>;
     async fn load(&self, path: &Path) -> Result<String> {
         Ok(String::from_utf8(self.load_bytes(path).await?)?)
     }
@@ -936,7 +940,7 @@ impl Fs for RealFs {
         Ok(self.trash.lock().insert(entry))
     }
 
-    async fn open_sync(&self, path: &Path) -> Result<Box<dyn io::Read + Send + Sync>> {
+    async fn open_sync(&self, path: &Path) -> Result<Box<dyn ReadSeek + Send + Sync>> {
         Ok(Box::new(std::fs::File::open(path)?))
     }
 
@@ -1271,7 +1275,7 @@ impl Fs for RealFs {
         let job_info = JobInfo {
             id: job_id,
             start: Instant::now(),
-            message: SharedString::from(format!("Cloning {}", repo_url)),
+            message: SharedString::from(i18n::t_args!("f265225fe8834687", repo_url)),
         };
 
         let job_tracker = JobTracker::new(job_info, self.job_event_subscribers.clone());
@@ -1282,21 +1286,18 @@ impl Fs for RealFs {
             .stderr(Stdio::piped())
             .kill_on_drop(true)
             .spawn()?;
-        let stderr = child
-            .stderr
-            .take()
-            .context("failed to read git clone progress")?;
+        let stderr = child.stderr.take().context(i18n::t!("54a591b2e310492c"))?;
         let stderr_output = git_clone_progress::read(stderr, |message| {
-            job_tracker.update(message.into());
+            job_tracker.update(git_clone_progress::localized_progress(&message).into());
         })
         .await?;
         let status = child.status().await?;
 
         if !status.success() {
-            anyhow::bail!(
-                "git clone failed: {}",
+            anyhow::bail!(i18n::t_args!(
+                "a6573278f1f2fc47",
                 git_clone_progress::failure_message(&stderr_output)
-            );
+            ));
         }
 
         Ok(())
@@ -3211,7 +3212,7 @@ impl Fs for FakeFs {
         self.remove_file_inner(path, options).await.map(|_| ())
     }
 
-    async fn open_sync(&self, path: &Path) -> Result<Box<dyn io::Read + Send + Sync>> {
+    async fn open_sync(&self, path: &Path) -> Result<Box<dyn ReadSeek + Send + Sync>> {
         let bytes = self.load_internal(path).await?;
         Ok(Box::new(io::Cursor::new(bytes)))
     }

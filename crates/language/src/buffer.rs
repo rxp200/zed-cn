@@ -3,25 +3,25 @@ pub mod row_chunk;
 
 pub use bracket_ranges::BracketMatch;
 
+pub use crate::{
+    CaptureId, Grammar, HighlightId, HighlightMap, Language, LanguageRegistry,
+    diagnostic_set::DiagnosticSet, proto,
+};
 use crate::{
-    ByteContent, DebuggerTextObject, LanguageScope, ModelineSettings, Outline, OutlineConfig,
-    PLAIN_TEXT, RunnableTag, TextObject, TreeSitterOptions, analyze_byte_content,
+    DebuggerTextObject, LanguageScope, ModelineSettings, Outline, OutlineConfig, PLAIN_TEXT,
+    RunnableTag, TextObject, TreeSitterOptions,
     diagnostic_set::{DiagnosticEntry, DiagnosticEntryRef, DiagnosticGroup},
     language_settings::{AutoIndentMode, LanguageSettings},
     outline::OutlineItem,
     row_chunk::{RowChunkId, RowChunks},
     runnable::{self, RunnableRange},
     syntax_map::{
-        MAX_BYTES_TO_QUERY, SyntaxLayer, SyntaxMap, SyntaxMapCapture, SyntaxMapCaptures,
-        SyntaxMapMatch, SyntaxMapMatches, SyntaxSnapshot, ToTreeSitterPoint,
+        FOREGROUND_QUERY_TIMEOUT, MAX_BYTES_TO_QUERY, SyntaxLayer, SyntaxMap, SyntaxMapCapture,
+        SyntaxMapCaptures, SyntaxMapMatch, SyntaxMapMatches, SyntaxSnapshot, ToTreeSitterPoint,
         flattened_highlight_regions,
     },
     text_diff::text_diff,
     unified_diff_with_offsets,
-};
-pub use crate::{
-    CaptureId, Grammar, HighlightId, HighlightMap, Language, LanguageRegistry,
-    diagnostic_set::DiagnosticSet, proto,
 };
 
 use anyhow::{Context as _, Result};
@@ -29,6 +29,7 @@ use clock::Lamport;
 pub use clock::ReplicaId;
 use collections::HashMap;
 use encoding_rs::Encoding;
+use file_content::{ByteContent, decode_byte_header};
 use fs::MTime;
 use futures::channel::oneshot;
 use futures_lite::future::yield_now;
@@ -156,6 +157,7 @@ pub struct TreeSitterData {
 }
 
 pub(crate) const MAX_ROWS_IN_A_CHUNK: u32 = 50;
+pub const MAX_HIGHLIGHTED_LINE_LEN: usize = 20_000;
 pub(crate) const MAX_BYTES_TO_HIGHLIGHT_IN_A_CHUNK: usize = 4 * MAX_BYTES_TO_QUERY;
 
 impl TreeSitterData {
@@ -475,6 +477,8 @@ pub trait LocalFile: File {
 pub enum AutoindentMode {
     /// Indent each line of inserted text.
     EachLine,
+    /// Autoindent multiline edits, but only apply syntax-triggered outdents to single-line edits.
+    PreserveSingleLine,
     /// Apply the same indentation adjustment to all of the lines
     /// in a given insertion.
     Block {
@@ -509,6 +513,7 @@ struct AutoindentRequestEntry {
     old_row: Option<u32>,
     indent_size: IndentSize,
     original_indent_column: Option<u32>,
+    only_explicit_outdents: bool,
 }
 
 #[derive(Debug)]
@@ -516,6 +521,7 @@ struct IndentSuggestion {
     basis_row: u32,
     delta: Ordering,
     within_error: bool,
+    explicit_outdent: bool,
 }
 
 struct BufferChunkHighlights<'a> {
@@ -526,6 +532,20 @@ struct BufferChunkHighlights<'a> {
 }
 
 type HighlightRun = (Range<usize>, HighlightId);
+
+fn subtract_range(range: Range<usize>, excluded: &Range<usize>) -> Vec<Range<usize>> {
+    if excluded.end <= range.start || excluded.start >= range.end {
+        return vec![range];
+    }
+    let mut remaining = Vec::with_capacity(2);
+    if range.start < excluded.start {
+        remaining.push(range.start..excluded.start.min(range.end));
+    }
+    if excluded.end < range.end {
+        remaining.push(excluded.end.max(range.start)..range.end);
+    }
+    remaining
+}
 
 struct CachedChunkHighlightsIter {
     runs: Vec<HighlightRun>,
@@ -1692,7 +1712,7 @@ impl Buffer {
             let bytes = load_bytes_task.await?;
 
             anyhow::ensure!(
-                analyze_byte_content(&bytes) != ByteContent::Binary,
+                decode_byte_header(&bytes).1 != ByteContent::Binary,
                 "Binary files are not supported"
             );
 
@@ -2138,7 +2158,11 @@ impl Buffer {
                     if let Some(old_row) = entry.old_row {
                         old_to_new_rows.insert(old_row, new_row);
                     }
-                    row_ranges.push((new_row..new_end_row, entry.original_indent_column));
+                    row_ranges.push((
+                        new_row..new_end_row,
+                        entry.original_indent_column,
+                        entry.only_explicit_outdents,
+                    ));
                 }
 
                 // Build a map containing the suggested indentation for each of the edited lines
@@ -2190,7 +2214,7 @@ impl Buffer {
                 // if they differ from the old suggestion for that line.
                 let mut language_indent_sizes = language_indent_sizes_by_new_row.iter().peekable();
                 let mut language_indent_size = IndentSize::default();
-                for (row_range, original_indent_column) in row_ranges {
+                for (row_range, original_indent_column, only_explicit_outdents) in row_ranges {
                     let new_edited_row_range = if request.is_block_mode {
                         row_range.start..row_range.start + 1
                     } else {
@@ -2226,7 +2250,8 @@ impl Buffer {
                                     suggested_indent != *old_indentation
                                         && (!suggestion.within_error || *was_within_error)
                                 },
-                            ) {
+                            ) && (!only_explicit_outdents || suggestion.explicit_outdent)
+                            {
                                 indent_sizes.insert(
                                     new_row,
                                     (suggested_indent, request.ignore_empty_lines),
@@ -3043,6 +3068,9 @@ impl Buffer {
                     }
 
                     AutoindentRequestEntry {
+                        only_explicit_outdents: matches!(mode, AutoindentMode::PreserveSingleLine)
+                            && old_start.row == old_end.row
+                            && !new_text.contains('\n'),
                         original_indent_column,
                         old_row: if first_line_is_new {
                             None
@@ -3115,6 +3143,7 @@ impl Buffer {
                 old_row: None,
                 indent_size: before_edit.language_indent_size_at(range.start, cx),
                 original_indent_column: None,
+                only_explicit_outdents: false,
             })
             .collect();
         self.autoindent_requests.push(Arc::new(AutoindentRequest {
@@ -4053,24 +4082,28 @@ impl BufferSnapshot {
                     basis_row: prev_row,
                     delta: Ordering::Equal,
                     within_error: within_error && !from_regex,
+                    explicit_outdent: true,
                 })
             } else if indent_from_prev_row {
                 Some(IndentSuggestion {
                     basis_row: prev_row,
                     delta: Ordering::Greater,
                     within_error: within_error && !from_regex,
+                    explicit_outdent: false,
                 })
             } else if outdent_to_row < prev_row {
                 Some(IndentSuggestion {
                     basis_row: outdent_to_row,
                     delta: Ordering::Equal,
                     within_error: within_error && !from_regex,
+                    explicit_outdent: true,
                 })
             } else if outdent_from_prev_row {
                 Some(IndentSuggestion {
                     basis_row: prev_row,
                     delta: Ordering::Less,
                     within_error: within_error && !from_regex,
+                    explicit_outdent: true,
                 })
             } else if config.auto_indent_using_last_non_empty_line || !self.is_line_blank(prev_row)
             {
@@ -4078,6 +4111,7 @@ impl BufferSnapshot {
                     basis_row: prev_row,
                     delta: Ordering::Equal,
                     within_error: within_error && !from_regex,
+                    explicit_outdent: false,
                 })
             } else {
                 None
@@ -4109,12 +4143,17 @@ impl BufferSnapshot {
 
     #[ztracing::instrument(skip_all)]
     fn get_highlights(&self, range: Range<usize>) -> (SyntaxMapCaptures<'_>, Vec<HighlightMap>) {
-        let captures = self.syntax.captures(range, &self.text, |grammar| {
-            grammar
-                .highlights_config
-                .as_ref()
-                .map(|config| &config.query)
-        });
+        let captures = self.syntax.captures_with_timeout(
+            range,
+            &self.text,
+            |grammar| {
+                grammar
+                    .highlights_config
+                    .as_ref()
+                    .map(|config| &config.query)
+            },
+            FOREGROUND_QUERY_TIMEOUT,
+        );
         let highlight_maps = captures
             .grammars()
             .iter()
@@ -4174,6 +4213,7 @@ impl BufferSnapshot {
         if range.is_empty() {
             return Some(Vec::new());
         }
+        let skipped_ranges = self.long_line_highlight_skips(range.clone());
         let mut runs = Vec::<HighlightRun>::new();
         for chunk in self
             .tree_sitter_data
@@ -4204,27 +4244,51 @@ impl BufferSnapshot {
                 if run_range.start >= range.end {
                     break;
                 }
-                match runs.last_mut() {
-                    Some((last_range, last_highlight_id))
-                        if last_highlight_id == highlight_id
-                            && last_range.end == run_range.start =>
-                    {
-                        last_range.end = run_range.end;
+                let mut fragments = vec![run_range.clone()];
+                for skipped in &skipped_ranges {
+                    fragments = fragments
+                        .into_iter()
+                        .flat_map(|fragment| subtract_range(fragment, skipped))
+                        .collect();
+                    if fragments.is_empty() {
+                        break;
                     }
-                    _ => runs.push((run_range.clone(), *highlight_id)),
+                }
+                for fragment in fragments {
+                    match runs.last_mut() {
+                        Some((last_range, last_highlight_id))
+                            if last_highlight_id == highlight_id
+                                && last_range.end == fragment.start =>
+                        {
+                            last_range.end = fragment.end;
+                        }
+                        _ => runs.push((fragment, *highlight_id)),
+                    }
                 }
             }
         }
         Some(runs)
     }
 
+    fn long_line_highlight_skips(&self, range: Range<usize>) -> Vec<Range<usize>> {
+        if range.is_empty() {
+            return Vec::new();
+        }
+        let start_point = self.text.offset_to_point(range.start);
+        let end_point = self.text.offset_to_point(range.end);
+        let mut skips = Vec::new();
+        for row in start_point.row..=end_point.row {
+            let line_len = self.text.line_len(row) as usize;
+            if line_len >= MAX_HIGHLIGHTED_LINE_LEN {
+                let start = self.text.point_to_offset(Point::new(row, 0));
+                skips.push(start..start + line_len);
+            }
+        }
+        skips
+    }
+
     fn compute_chunk_highlights(&self, range: Range<usize>) -> ResolvedHighlights {
-        let captures = self.syntax.captures(range.clone(), &self.text, |grammar| {
-            grammar
-                .highlights_config
-                .as_ref()
-                .map(|config| &config.query)
-        });
+        let (captures, _) = self.get_highlights(range.clone());
         let sources = captures
             .grammars()
             .iter()
@@ -4403,7 +4467,12 @@ impl BufferSnapshot {
             let mut range = None;
             loop {
                 let child_range = cursor.node().byte_range();
-                if !child_range.contains(&offset) {
+                let contains_offset = child_range.contains(&offset)
+                // `Range::contains` is end-exclusive, which rejects every node at EOF
+                // (including the root). Accept the end boundary only at the buffer's end,
+                // so mid-buffer behavior is unchanged.
+                    || (child_range.end == offset && offset == text.len());
+                if !contains_offset {
                     break;
                 }
 

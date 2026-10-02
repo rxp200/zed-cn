@@ -1,5 +1,5 @@
 use crate::{
-    TabularDataPreviewPane,
+    TableView,
     settings::RowIdentifiers,
     types::{DataRow, DisplayRow, LineNumber},
 };
@@ -46,7 +46,7 @@ impl LineNumber {
     }
 }
 
-impl TabularDataPreviewPane {
+impl TableView {
     /// Calculate the optimal width for the row identifier column (line numbers or row numbers).
     ///
     /// This ensures the column is wide enough to display the largest identifier comfortably,
@@ -105,7 +105,7 @@ impl TabularDataPreviewPane {
 
     pub(crate) fn create_row_identifier_header(
         &self,
-        cx: &mut Context<'_, TabularDataPreviewPane>,
+        cx: &mut Context<'_, TableView>,
     ) -> AnyElement {
         let has_line_numbers = !self.engine.contents.line_numbers.is_empty();
 
@@ -119,14 +119,8 @@ impl TabularDataPreviewPane {
                 // toggling shows its effect on the row identifier column immediately, instead of
                 // being hidden behind the open popover until it's dismissed.
                 let (icon, tooltip_text) = match self.settings.numbering_type {
-                    RowIdentifiers::SrcLines => (
-                        IconName::Code,
-                        "Showing file line numbers.\nClick to show sequential row numbers.",
-                    ),
-                    RowIdentifiers::RowNum => (
-                        IconName::Hash,
-                        "Showing sequential row numbers.\nClick to show file line numbers.",
-                    ),
+                    RowIdentifiers::SrcLines => (IconName::Code, i18n::t!("071604499a700acb")),
+                    RowIdentifiers::RowNum => (IconName::Hash, i18n::t!("43987186c4fd390d")),
                 };
 
                 let view = cx.entity();
@@ -156,20 +150,21 @@ impl TabularDataPreviewPane {
         &self,
         display_row: DisplayRow,
         data_row: DataRow,
-        cx: &Context<'_, TabularDataPreviewPane>,
+        cx: &Context<'_, TableView>,
     ) -> Option<AnyElement> {
         let row_identifier: SharedString = match self.settings.numbering_type {
-            RowIdentifiers::SrcLines => self
-                .engine
-                .contents
-                .line_numbers
-                .get(*data_row)?
-                .display_string(if self.settings.multiline_cells_effectively_enabled() {
-                    RowIdentDisplayMode::Vertical
-                } else {
-                    RowIdentDisplayMode::Horizontal
-                })
-                .into(),
+            // Fall back to a sequential row number when there is no source line for this row (e.g.
+            // content that did not originate from a text buffer, such as a database result set).
+            RowIdentifiers::SrcLines => match self.engine.contents.line_numbers.get(*data_row) {
+                Some(line) => line
+                    .display_string(if self.settings.multiline_cells_effectively_enabled() {
+                        RowIdentDisplayMode::Vertical
+                    } else {
+                        RowIdentDisplayMode::Horizontal
+                    })
+                    .into(),
+                None => (*display_row + 1).to_string().into(),
+            },
             RowIdentifiers::RowNum => (*display_row + 1).to_string().into(),
         };
 

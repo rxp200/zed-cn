@@ -873,7 +873,7 @@ impl Render for ProjectDiffToolbar {
                 h_group_sm()
                     .when(button_states.selection, |this| {
                         this.child(
-                            Button::new("stage", "Toggle Staged")
+                            Button::new("stage", i18n::t!("2a4fc0c3770a3b8f"))
                                 .tooltip(Tooltip::for_action_title_in(
                                     "Toggle Staged",
                                     &ToggleStaged,
@@ -887,7 +887,7 @@ impl Render for ProjectDiffToolbar {
                     })
                     .when(!button_states.selection, |this| {
                         this.child(
-                            Button::new("stage", "Stage")
+                            Button::new("stage", i18n::t!("e57b6dbedea3273f"))
                                 .disabled(!button_states.stage)
                                 .tooltip(Tooltip::for_action_title_in(
                                     "Stage and Go to Next Hunk",
@@ -899,7 +899,7 @@ impl Render for ProjectDiffToolbar {
                                 })),
                         )
                         .child(
-                            Button::new("unstage", "Unstage")
+                            Button::new("unstage", i18n::t!("1140195090eddcff"))
                                 .disabled(!button_states.unstage)
                                 .tooltip(Tooltip::for_action_title_in(
                                     "Unstage and Go to Next Hunk",
@@ -917,7 +917,7 @@ impl Render for ProjectDiffToolbar {
                 button_states.unstage_all && !button_states.stage_all,
                 |this| {
                     this.child(
-                        Button::new("unstage-all", "Unstage All")
+                        Button::new("unstage-all", i18n::t!("4365aaf150f10ef8"))
                             .width(stage_all_button_width)
                             .tooltip(Tooltip::for_action_title_in(
                                 "Unstage All Changes",
@@ -934,7 +934,7 @@ impl Render for ProjectDiffToolbar {
                 !button_states.unstage_all || button_states.stage_all,
                 |this| {
                     this.child(
-                        Button::new("stage-all", "Stage All")
+                        Button::new("stage-all", i18n::t!("75d12700d952ad04"))
                             .width(stage_all_button_width)
                             .disabled(!button_states.stage_all)
                             .tooltip(Tooltip::for_action_title_in(
@@ -950,9 +950,9 @@ impl Render for ProjectDiffToolbar {
             )
             .child(Divider::vertical())
             .child(
-                Button::new("commit", "Commit")
+                Button::new("commit", i18n::t!("08a85f4ab4bab9ca"))
                     .tooltip(Tooltip::for_action_title_in(
-                        "Commit",
+                        i18n::t!("08a85f4ab4bab9ca"),
                         &Commit,
                         &focus_handle,
                     ))
@@ -999,7 +999,7 @@ mod tests {
     use editor::test::editor_test_context::{EditorTestContext, assert_state_with_diff};
     use gpui::{TestAppContext, VisualTestContext};
     use multi_buffer::PathKey;
-    use project::{FakeFs, git_store::MAX_CONCURRENT_BLOB_READS};
+    use project::{FakeFs, git_store::MAX_CONCURRENT_OBJECT_READS};
     use serde_json::json;
     use settings::{DiffViewStyle, GitPanelGroupBy, GitPanelSortBy, SettingsStore};
     use std::path::Path;
@@ -1616,7 +1616,7 @@ mod tests {
     async fn test_merge_base_loading_is_incremental(cx: &mut TestAppContext) {
         init_test(cx);
 
-        const FILE_COUNT: usize = MAX_CONCURRENT_BLOB_READS + 4;
+        const FILE_COUNT: usize = MAX_CONCURRENT_OBJECT_READS + 4;
 
         let names = (0..FILE_COUNT)
             .map(|index| format!("f{index:02}.txt"))

@@ -17,6 +17,7 @@ default = []
 schemars = ["dep:schemars"]
 
 [dependencies]
+i18n.workspace = true
 anyhow.workspace = true
 futures.workspace = true
 http_client.workspace = true

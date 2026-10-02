@@ -22,6 +22,7 @@ test-support = [
 ]
 
 [dependencies]
+i18n.workspace = true
 anyhow.workspace = true
 channel.workspace = true
 client.workspace = true

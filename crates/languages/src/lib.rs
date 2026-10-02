@@ -40,7 +40,7 @@ pub static LANGUAGE_GIT_COMMIT: std::sync::LazyLock<Arc<Language>> =
     std::sync::LazyLock::new(|| {
         Arc::new(Language::new(
             LanguageConfig {
-                name: "Git Commit".into(),
+                name: i18n::t!("2bf4f35f054e86ff").into(),
                 soft_wrap: Some(language::SoftWrap::EditorWidth),
                 matcher: (LanguageMatcher {
                     path_suffixes: vec!["COMMIT_EDITMSG".to_owned()],

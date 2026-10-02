@@ -62,9 +62,9 @@ pub fn init(cx: &mut App) {
 
                     cx.prompt(
                         PromptLevel::Info,
-                        "Copied into clipboard",
+                        i18n::t!("cce28dd1fcdf0c1e"),
                         Some(&specs),
-                        &["OK"],
+                        &[i18n::t!("fac2a67ad87807c4")],
                     )
                     .await
                 })
@@ -75,9 +75,9 @@ pub fn init(cx: &mut App) {
                 cx.write_to_clipboard(ClipboardItem::new_string(clipboard_text.clone()));
                 drop(window.prompt(
                     PromptLevel::Info,
-                    "Copied into clipboard",
+                    i18n::t!("cce28dd1fcdf0c1e"),
                     Some(&clipboard_text),
-                    &["OK"],
+                    &[i18n::t!("fac2a67ad87807c4")],
                     cx,
                 ));
             })

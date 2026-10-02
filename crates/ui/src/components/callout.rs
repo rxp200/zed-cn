@@ -240,12 +240,19 @@ impl Component for Callout {
     }
 
     fn preview(_window: &mut Window, _cx: &mut App) -> AnyElement {
-        let single_action = || Button::new("got-it", "Got it").label_size(LabelSize::Small);
+        let single_action =
+            || Button::new("got-it", i18n::t!("de32e20193ad1042")).label_size(LabelSize::Small);
         let multiple_actions = || {
             h_flex()
                 .gap_0p5()
-                .child(Button::new("update", "Backup & Update").label_size(LabelSize::Small))
-                .child(Button::new("dismiss", "Dismiss").label_size(LabelSize::Small))
+                .child(
+                    Button::new("update", i18n::t!("2364c44f1cbcf130"))
+                        .label_size(LabelSize::Small),
+                )
+                .child(
+                    Button::new("dismiss", i18n::t!("3fd47edce45b3603"))
+                        .label_size(LabelSize::Small),
+                )
         };
 
         let basic_examples = vec![
@@ -253,7 +260,7 @@ impl Component for Callout {
                 "Simple with Title Only",
                 Callout::new()
                     .icon(IconName::Info)
-                    .title("System maintenance scheduled for tonight")
+                    .title(i18n::t!("3ef0efa1174fa1ba"))
                     .actions_slot(single_action())
                     .into_any_element(),
             )
@@ -262,7 +269,7 @@ impl Component for Callout {
                 "With Title and Description",
                 Callout::new()
                     .icon(IconName::Warning)
-                    .title("Your settings contain deprecated values")
+                    .title(i18n::t!("66fb0b42a9856e72"))
                     .description(
                         "We'll backup your current settings and update them to the new format.",
                     )
@@ -274,8 +281,8 @@ impl Component for Callout {
                 "Error with Multiple Actions",
                 Callout::new()
                     .icon(IconName::Close)
-                    .title("Thread reached the token limit")
-                    .description("Start a new thread from a summary to continue the conversation.")
+                    .title(i18n::t!("dafc239e4f60785c"))
+                    .description(i18n::t!("b3b900b13a11f583"))
                     .actions_slot(multiple_actions())
                     .into_any_element(),
             )
@@ -284,7 +291,7 @@ impl Component for Callout {
                 "Multi-line Description",
                 Callout::new()
                     .icon(IconName::Sparkle)
-                    .title("Upgrade to Pro")
+                    .title(i18n::t!("acb320d7f3e39b16"))
                     .description("• Unlimited threads\n• Priority support\n• Advanced analytics")
                     .actions_slot(multiple_actions())
                     .into_any_element(),
@@ -295,7 +302,7 @@ impl Component for Callout {
                 Callout::new()
                     .severity(Severity::Error)
                     .icon(IconName::XCircle)
-                    .title("Very Long API Error Description")
+                    .title(i18n::t!("854dbc70bfe8c84b"))
                     .description_slot(
                         v_flex().gap_1().children(
                             [
@@ -330,7 +337,7 @@ impl Component for Callout {
                 "Info",
                 Callout::new()
                     .icon(IconName::Info)
-                    .title("System maintenance scheduled for tonight")
+                    .title(i18n::t!("3ef0efa1174fa1ba"))
                     .actions_slot(single_action())
                     .into_any_element(),
             ),
@@ -339,7 +346,7 @@ impl Component for Callout {
                 Callout::new()
                     .severity(Severity::Warning)
                     .icon(IconName::Triangle)
-                    .title("System maintenance scheduled for tonight")
+                    .title(i18n::t!("3ef0efa1174fa1ba"))
                     .actions_slot(single_action())
                     .into_any_element(),
             ),
@@ -348,7 +355,7 @@ impl Component for Callout {
                 Callout::new()
                     .severity(Severity::Error)
                     .icon(IconName::XCircle)
-                    .title("System maintenance scheduled for tonight")
+                    .title(i18n::t!("3ef0efa1174fa1ba"))
                     .actions_slot(single_action())
                     .into_any_element(),
             ),
@@ -357,7 +364,7 @@ impl Component for Callout {
                 Callout::new()
                     .severity(Severity::Success)
                     .icon(IconName::Check)
-                    .title("System maintenance scheduled for tonight")
+                    .title(i18n::t!("3ef0efa1174fa1ba"))
                     .actions_slot(single_action())
                     .into_any_element(),
             ),

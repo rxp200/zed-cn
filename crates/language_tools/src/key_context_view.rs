@@ -138,7 +138,7 @@ impl Item for KeyContextView {
     fn to_item_events(_: &Self::Event, _: &mut dyn FnMut(workspace::item::ItemEvent)) {}
 
     fn tab_content_text(&self, _detail: usize, _cx: &App) -> SharedString {
-        "Keyboard Context".into()
+        i18n::t!("fa1d3f18f741c034").into()
     }
 
     fn telemetry_event_text(&self) -> Option<&'static str> {
@@ -192,39 +192,46 @@ impl Render for KeyContextView {
                     });
                 }),
             )
-            .child(Label::new("Keyboard Context").size(LabelSize::Large))
-            .child(Label::new("This view lets you determine the current context stack for creating custom key bindings in Zed. When a keyboard shortcut is triggered, it also shows all the possible contexts it could have triggered in, and which one matched."))
+            .child(Label::new(i18n::t!("fa1d3f18f741c034")).size(LabelSize::Large))
+            .child(Label::new(i18n::t!("88eef2fbfca52141")))
             .child(
                 h_flex()
                     .mt_4()
                     .gap_4()
                     .child(
-                        Button::new("open_documentation", "Open Documentation")
+                        Button::new("open_documentation", i18n::t!("d1961d380a4d68c2"))
                             .style(ButtonStyle::Filled)
                             .on_click(|_, _, cx| cx.open_url("https://zed.dev/docs/key-bindings")),
                     )
                     .child(
-                        Button::new("view_default_keymap", "View Default Keymap")
+                        Button::new("view_default_keymap", i18n::t!("176a83879bc17f01"))
                             .style(ButtonStyle::Filled)
                             .key_binding(ui::KeyBinding::for_action(
                                 &zed_actions::OpenDefaultKeymap,
-                                cx
+                                cx,
                             ))
                             .on_click(|_, window, cx| {
-                                window.dispatch_action(zed_actions::OpenDefaultKeymap.boxed_clone(), cx);
+                                window.dispatch_action(
+                                    zed_actions::OpenDefaultKeymap.boxed_clone(),
+                                    cx,
+                                );
                             }),
                     )
                     .child(
-                        Button::new("edit_your_keymap", "Edit Keymap File")
+                        Button::new("edit_your_keymap", i18n::t!("647fb20c5ebe0115"))
                             .style(ButtonStyle::Filled)
-                            .key_binding(ui::KeyBinding::for_action(&zed_actions::OpenKeymapFile, cx))
+                            .key_binding(ui::KeyBinding::for_action(
+                                &zed_actions::OpenKeymapFile,
+                                cx,
+                            ))
                             .on_click(|_, window, cx| {
-                                window.dispatch_action(zed_actions::OpenKeymapFile.boxed_clone(), cx);
+                                window
+                                    .dispatch_action(zed_actions::OpenKeymapFile.boxed_clone(), cx);
                             }),
                     ),
             )
             .child(
-                Label::new("Current Context Stack")
+                Label::new(i18n::t!("76d83ef6ae9922b4"))
                     .size(LabelSize::Large)
                     .mt_8(),
             )
@@ -244,7 +251,11 @@ impl Render for KeyContextView {
                     Label::new(format!("{} {}", primary, secondary)).ml(px(12. * (i + 1) as f32))
                 })
             })
-            .child(Label::new("Last Keystroke").mt_4().size(LabelSize::Large))
+            .child(
+                Label::new(i18n::t!("27c9cef09cd50920"))
+                    .mt_4()
+                    .size(LabelSize::Large),
+            )
             .when_some(self.pending_keystrokes.as_ref(), |el, keystrokes| {
                 el.child(
                     Label::new(format!(
@@ -275,16 +286,15 @@ impl Render for KeyContextView {
                     )
             })
             .when_some(key_equivalents, |el, key_equivalents| {
-                el.child(Label::new("Key Equivalents").mt_4().size(LabelSize::Large))
-                    .child(Label::new("Shortcuts defined using some characters have been remapped so that shortcuts can be typed without holding option."))
-                    .children(
-                        key_equivalents
-                            .iter()
-                            .sorted()
-                            .map(|(key, equivalent)| {
-                                Label::new(format!("cmd-{} => cmd-{}", key, equivalent)).ml_8()
-                            }),
-                    )
+                el.child(
+                    Label::new(i18n::t!("41432a37b34ee790"))
+                        .mt_4()
+                        .size(LabelSize::Large),
+                )
+                .child(Label::new(i18n::t!("01e880c0e9b72d86")))
+                .children(key_equivalents.iter().sorted().map(|(key, equivalent)| {
+                    Label::new(format!("cmd-{} => cmd-{}", key, equivalent)).ml_8()
+                }))
             })
     }
 }

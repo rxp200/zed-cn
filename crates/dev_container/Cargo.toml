@@ -8,6 +8,7 @@ edition.workspace = true
 doctest = false
 
 [dependencies]
+i18n.workspace = true
 anyhow.workspace = true
 async-tar.workspace = true
 async-trait.workspace = true

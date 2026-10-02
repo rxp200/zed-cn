@@ -3,20 +3,22 @@ use anyhow::{Result, anyhow};
 use client::{
     Client, RefreshLlmTokenListener, TelemetrySettings, UserStore, global_llm_token, zed_urls,
 };
-use cloud_api_client::LlmApiToken;
+use cloud_api_client::{ClientApiError, LlmApiToken};
 use cloud_api_types::OrganizationId;
 use cloud_api_types::Plan;
 use futures::FutureExt;
 use futures::StreamExt;
 use futures::future::BoxFuture;
-use gpui::{AnyElement, App, AppContext, Context, Entity, Subscription, Task, TaskExt};
+
+use gpui::{AnyElement, App, AppContext, AsyncApp, Context, Entity, Subscription, Task, TaskExt};
 use language_model::{
-    AuthenticateError, FastModeConfirmation, IconOrSvg, InlineDescription, LanguageModel,
-    LanguageModelProvider, LanguageModelProviderId, LanguageModelProviderName,
-    LanguageModelProviderState, ProviderSettingsView, ZED_CLOUD_PROVIDER_ID,
-    ZED_CLOUD_PROVIDER_NAME,
+    AuthenticateError, CompactionResult, FastModeConfirmation, IconOrSvg, InlineDescription,
+    LanguageModel, LanguageModelClient, LanguageModelCompletionError,
+    LanguageModelCompletionStream, LanguageModelProvider, LanguageModelProviderId,
+    LanguageModelProviderName, LanguageModelProviderState, LanguageModelRequest,
+    ProviderSettingsView, ZED_CLOUD_PROVIDER_ID, ZED_CLOUD_PROVIDER_NAME,
 };
-use language_models_cloud::{CloudLlmTokenProvider, CloudModelProvider};
+use language_models_cloud::{CloudLlmTokenProvider, CloudModelProvider, language_model};
 use rand::{Rng as _, SeedableRng as _, rngs::StdRng};
 use release_channel::AppVersion;
 
@@ -51,12 +53,11 @@ impl CloudLlmTokenProvider for ClientTokenProvider {
     fn cached_token(
         &self,
         organization_id: Self::AuthContext,
-    ) -> BoxFuture<'static, Result<String>> {
+    ) -> BoxFuture<'static, Result<String, ClientApiError>> {
         let client = self.client.clone();
         let llm_api_token = self.llm_api_token.clone();
         Box::pin(async move {
-            let organization_id =
-                organization_id.ok_or_else(|| anyhow!("No organization selected."))?;
+            let organization_id = organization_id.ok_or(ClientApiError::NotSignedIn)?;
             client
                 .cached_llm_token(&llm_api_token, organization_id)
                 .await
@@ -66,12 +67,11 @@ impl CloudLlmTokenProvider for ClientTokenProvider {
     fn refresh_token(
         &self,
         organization_id: Self::AuthContext,
-    ) -> BoxFuture<'static, Result<String>> {
+    ) -> BoxFuture<'static, Result<String, ClientApiError>> {
         let client = self.client.clone();
         let llm_api_token = self.llm_api_token.clone();
         Box::pin(async move {
-            let organization_id =
-                organization_id.ok_or_else(|| anyhow!("No organization selected."))?;
+            let organization_id = organization_id.ok_or(ClientApiError::NotSignedIn)?;
             client
                 .refresh_llm_token(&llm_api_token, organization_id)
                 .await
@@ -287,37 +287,35 @@ impl LanguageModelProvider for CloudLanguageModelProvider {
         IconOrSvg::Icon(IconName::AiZed)
     }
 
-    fn default_model(&self, cx: &App) -> Option<Arc<dyn LanguageModel>> {
+    fn default_model(&self, cx: &App) -> Option<LanguageModel> {
         let state = self.state.read(cx);
         let provider = state.provider.read(cx);
-        let model = provider.default_model()?;
-        Some(provider.create_model(model))
+        Some(language_model(provider.default_model()?))
     }
 
-    fn default_fast_model(&self, cx: &App) -> Option<Arc<dyn LanguageModel>> {
+    fn default_fast_model(&self, cx: &App) -> Option<LanguageModel> {
         let state = self.state.read(cx);
         let provider = state.provider.read(cx);
-        let model = provider.default_fast_model()?;
-        Some(provider.create_model(model))
+        Some(language_model(provider.default_fast_model()?))
     }
 
-    fn recommended_models(&self, cx: &App) -> Vec<Arc<dyn LanguageModel>> {
+    fn recommended_models(&self, cx: &App) -> Vec<LanguageModel> {
         let state = self.state.read(cx);
         let provider = state.provider.read(cx);
         provider
             .recommended_models()
             .iter()
-            .map(|model| provider.create_model(model))
+            .map(|model| language_model(model))
             .collect()
     }
 
-    fn provided_models(&self, cx: &App) -> Vec<Arc<dyn LanguageModel>> {
+    fn provided_models(&self, cx: &App) -> Vec<LanguageModel> {
         let state = self.state.read(cx);
         let provider = state.provider.read(cx);
         provider
             .models()
             .iter()
-            .map(|model| provider.create_model(model))
+            .map(|model| language_model(model))
             .collect()
     }
 
@@ -416,11 +414,56 @@ impl LanguageModelProvider for CloudLanguageModelProvider {
 
     fn fast_mode_confirmation(&self, _cx: &App) -> Option<FastModeConfirmation> {
         Some(FastModeConfirmation {
-            title: "Enable Fast Mode for Zed?".into(),
-            message: "Fast mode routes requests through the upstream provider's fast mode or priority tier. The \
-                upstream provider's premium per-token pricing applies and is passed through to \
-                your Zed billing."
-                .into(),
+            title: i18n::t!("f7f281dc5e982fc5").into(),
+            message: i18n::t!("86fe33827577eb01").into(),
+        })
+    }
+}
+
+impl LanguageModelClient for CloudLanguageModelProvider {
+    fn stream_completion(
+        &self,
+        model: &LanguageModel,
+        request: LanguageModelRequest,
+        cx: &AsyncApp,
+    ) -> BoxFuture<'static, Result<LanguageModelCompletionStream, LanguageModelCompletionError>>
+    {
+        cx.update(|cx| {
+            self.state
+                .read(cx)
+                .provider
+                .read(cx)
+                .stream_completion(model, request, cx)
+        })
+    }
+
+    fn count_input_tokens(
+        &self,
+        model: &LanguageModel,
+        request: LanguageModelRequest,
+        cx: &AsyncApp,
+    ) -> BoxFuture<'static, Result<Option<u64>, LanguageModelCompletionError>> {
+        cx.update(|cx| {
+            self.state
+                .read(cx)
+                .provider
+                .read(cx)
+                .count_input_tokens(model, request, cx)
+        })
+    }
+
+    fn compact(
+        &self,
+        model: &LanguageModel,
+        request: LanguageModelRequest,
+        cx: &AsyncApp,
+    ) -> BoxFuture<'static, Result<CompactionResult, LanguageModelCompletionError>> {
+        cx.update(|cx| {
+            self.state
+                .read(cx)
+                .provider
+                .read(cx)
+                .compact(model, request, cx)
         })
     }
 }
@@ -509,7 +552,7 @@ impl RenderOnce for ZedAiConfiguration {
         );
 
         let manage_subscription_buttons = if has_paid_plan {
-            Button::new("manage_settings", "Manage Subscription")
+            Button::new("manage_settings", i18n::t!("fb87f3e65dd5b0d5"))
                 .when(!self.compact, |this| {
                     this.full_width().label_size(LabelSize::Small)
                 })
@@ -518,7 +561,7 @@ impl RenderOnce for ZedAiConfiguration {
                 .on_click(|_, _, cx| cx.open_url(&zed_urls::account_url(cx)))
                 .into_any_element()
         } else if self.plan.is_none() || self.eligible_for_trial {
-            Button::new("start_trial", "Start Free Trial")
+            Button::new("start_trial", i18n::t!("7a948008f0e06c53"))
                 .when(!self.compact, |this| {
                     this.full_width().label_size(LabelSize::Small)
                 })
@@ -527,7 +570,7 @@ impl RenderOnce for ZedAiConfiguration {
                 .on_click(|_, _, cx| cx.open_url(&zed_urls::start_trial_url(cx)))
                 .into_any_element()
         } else {
-            Button::new("upgrade", "Upgrade to Pro")
+            Button::new("upgrade", i18n::t!("b83e23cc1cb9f4c5"))
                 .when(!self.compact, |this| {
                     this.full_width().label_size(LabelSize::Small)
                 })
@@ -542,7 +585,7 @@ impl RenderOnce for ZedAiConfiguration {
                 .gap_2()
                 .when(!self.compact, |this| this.child(Label::new(description)))
                 .child(
-                    Button::new("sign_in", "Sign In to use Zed AI")
+                    Button::new("sign_in", i18n::t!("c8c3a596b817a381"))
                         .start_icon(
                             Icon::new(IconName::Github)
                                 .size(IconSize::Small)
@@ -565,7 +608,7 @@ impl RenderOnce for ZedAiConfiguration {
             .map(|this| {
                 if self.account_too_young {
                     this.child(YoungAccountBanner).child(
-                        Button::new("upgrade", "Upgrade to Pro")
+                        Button::new("upgrade", i18n::t!("b83e23cc1cb9f4c5"))
                             .style(ui::ButtonStyle::Tinted(ui::TintColor::Accent))
                             .when(!self.compact, |this| this.full_width())
                             .on_click(|_, _, cx| {

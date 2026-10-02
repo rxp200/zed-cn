@@ -2,6 +2,7 @@ use std::{
     ffi::{OsStr, OsString},
     os::windows::ffi::OsStrExt,
     path::Path,
+    process::Stdio,
     sync::LazyLock,
     time::{Duration, Instant},
 };
@@ -366,7 +367,11 @@ fn release_file_handles(app_dir: &Path) -> Result<()> {
 #[allow(clippy::disallowed_methods, reason = "doesn't run in the main binary")]
 fn zed_launch_command(app_dir: &Path, launch_arguments: &[OsString]) -> std::process::Command {
     let mut command = std::process::Command::new(app_dir.join("Zed.exe"));
-    command.args(launch_arguments);
+    command
+        .args(launch_arguments)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
     command
 }
 

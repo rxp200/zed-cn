@@ -1,3 +1,6 @@
+> [!IMPORTANT]
+> Zed CN is an unofficial community fork and is not operated, sponsored, or endorsed by Zed Industries. Explain whether this change is specific to Zed CN or should also be proposed to the official Zed upstream project.
+
 # Objective
 
 - Describe the objective or issue this PR addresses.

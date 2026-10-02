@@ -1066,7 +1066,7 @@ impl Request {
             self.messages.push(Message {
                 role: Role::User,
                 content: vec![RequestContent::Text {
-                    text: "Compact the conversation so far.".to_string(),
+                    text: i18n::t!("b4bbd1fcaeb8c05e").to_string(),
                     cache_control: None,
                 }],
             });

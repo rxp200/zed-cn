@@ -944,7 +944,9 @@ impl Render for ImageViewToolbarControls {
             .child(
                 IconButton::new("zoom-out", IconName::Dash)
                     .icon_size(IconSize::Small)
-                    .tooltip(|_window, cx| Tooltip::for_action("Zoom Out", &ZoomOut, cx))
+                    .tooltip(|_window, cx| {
+                        Tooltip::for_action(i18n::t!("290f68030501cd9c"), &ZoomOut, cx)
+                    })
                     .on_click({
                         let image_view = image_view.downgrade();
                         move |_, window, cx| {
@@ -1001,7 +1003,12 @@ impl Render for ImageViewToolbarControls {
                     .child(Label::new(zoom_percentage).size(LabelSize::Small))
                     .id("zoom-label")
                     .tooltip(|_window, cx| {
-                        Tooltip::with_meta("Edit Zoom", None, "Right-click to reset to 100%.", cx)
+                        Tooltip::with_meta(
+                            i18n::t!("711425fdd0390295"),
+                            None,
+                            i18n::t!("3e4b90245dcc6ae1"),
+                            cx,
+                        )
                     })
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.start_editing_zoom(window, cx);
@@ -1021,7 +1028,7 @@ impl Render for ImageViewToolbarControls {
             .child(
                 IconButton::new("zoom-in", IconName::Plus)
                     .icon_size(IconSize::Small)
-                    .tooltip(|_, cx| Tooltip::for_action("Zoom In", &ZoomIn, cx))
+                    .tooltip(|_, cx| Tooltip::for_action(i18n::t!("80f8fbcfa0117633"), &ZoomIn, cx))
                     .on_click({
                         let image_view = image_view.downgrade();
                         move |_, window, cx| {
@@ -1036,7 +1043,9 @@ impl Render for ImageViewToolbarControls {
             .child(
                 IconButton::new("fit-to-view", IconName::Maximize)
                     .icon_size(IconSize::Small)
-                    .tooltip(|_window, cx| Tooltip::for_action("Fit to View", &FitToView, cx))
+                    .tooltip(|_window, cx| {
+                        Tooltip::for_action(i18n::t!("b8994236879b7d3c"), &FitToView, cx)
+                    })
                     .on_click({
                         let image_view = image_view.downgrade();
                         move |_, window, cx| {

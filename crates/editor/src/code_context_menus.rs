@@ -1070,9 +1070,13 @@ impl CompletionsMenu {
                             .with_default_highlights(&style.text, main_highlights);
 
                         let suffix_label = if !suffix_text.is_empty() {
+                            let suffix_text_style = gpui::TextStyle {
+                                color: cx.theme().colors().text_muted,
+                                ..style.text.clone()
+                            };
                             Some(
                                 StyledText::new(suffix_text.to_string())
-                                    .with_default_highlights(&style.text, suffix_highlights),
+                                    .with_default_highlights(&suffix_text_style, suffix_highlights),
                             )
                         } else {
                             None
@@ -1691,32 +1695,32 @@ fn render_completion_kind_letter(
 
 fn completion_kind_name(kind: CompletionItemKind) -> &'static str {
     match kind {
-        CompletionItemKind::TEXT => "Text",
-        CompletionItemKind::METHOD => "Method",
-        CompletionItemKind::FUNCTION => "Function",
-        CompletionItemKind::CONSTRUCTOR => "Constructor",
-        CompletionItemKind::FIELD => "Field",
-        CompletionItemKind::VARIABLE => "Variable",
-        CompletionItemKind::CLASS => "Class",
-        CompletionItemKind::INTERFACE => "Interface",
-        CompletionItemKind::MODULE => "Module",
-        CompletionItemKind::PROPERTY => "Property",
-        CompletionItemKind::UNIT => "Unit",
-        CompletionItemKind::VALUE => "Value",
-        CompletionItemKind::ENUM => "Enum",
-        CompletionItemKind::KEYWORD => "Keyword",
-        CompletionItemKind::SNIPPET => "Snippet",
-        CompletionItemKind::COLOR => "Color",
-        CompletionItemKind::FILE => "File",
-        CompletionItemKind::REFERENCE => "Reference",
-        CompletionItemKind::FOLDER => "Folder",
-        CompletionItemKind::ENUM_MEMBER => "Enum Member",
-        CompletionItemKind::CONSTANT => "Constant",
-        CompletionItemKind::STRUCT => "Struct",
-        CompletionItemKind::EVENT => "Event",
-        CompletionItemKind::OPERATOR => "Operator",
-        CompletionItemKind::TYPE_PARAMETER => "Type Parameter",
-        _ => "Unknown",
+        CompletionItemKind::TEXT => i18n::t!("dd81861811e57bf7"),
+        CompletionItemKind::METHOD => i18n::t!("22b9f0b66212809c"),
+        CompletionItemKind::FUNCTION => i18n::t!("1832990660bb60c2"),
+        CompletionItemKind::CONSTRUCTOR => i18n::t!("e29f162af29a8ecf"),
+        CompletionItemKind::FIELD => i18n::t!("49ecd0e342d6d23b"),
+        CompletionItemKind::VARIABLE => i18n::t!("a772fa4ebe36b63d"),
+        CompletionItemKind::CLASS => i18n::t!("4fb249b9d7ac3469"),
+        CompletionItemKind::INTERFACE => i18n::t!("c80d519245a7e843"),
+        CompletionItemKind::MODULE => i18n::t!("b07e5088eafa92c2"),
+        CompletionItemKind::PROPERTY => i18n::t!("86de52d178203799"),
+        CompletionItemKind::UNIT => i18n::t!("056a19211c99a4ec"),
+        CompletionItemKind::VALUE => i18n::t!("cda1d55c5231b853"),
+        CompletionItemKind::ENUM => i18n::t!("74bb506bbf618d7b"),
+        CompletionItemKind::KEYWORD => i18n::t!("884e461647a3a9af"),
+        CompletionItemKind::SNIPPET => i18n::t!("cdc931b12a561a6d"),
+        CompletionItemKind::COLOR => i18n::t!("070a8016fcc3dffb"),
+        CompletionItemKind::FILE => i18n::t!("39932f24fe11a6ba"),
+        CompletionItemKind::REFERENCE => i18n::t!("e0ec651f0dae7cf3"),
+        CompletionItemKind::FOLDER => i18n::t!("7c7802d8adaed72e"),
+        CompletionItemKind::ENUM_MEMBER => i18n::t!("eb257be37911e33d"),
+        CompletionItemKind::CONSTANT => i18n::t!("7dc406c92803b0f9"),
+        CompletionItemKind::STRUCT => i18n::t!("eaace0a971df8aec"),
+        CompletionItemKind::EVENT => i18n::t!("c560201b331c5443"),
+        CompletionItemKind::OPERATOR => i18n::t!("6a4b1a3683a34bf9"),
+        CompletionItemKind::TYPE_PARAMETER => i18n::t!("52561ba4a9370153"),
+        _ => i18n::t!("4d8c1c5b42830791"),
     }
 }
 
@@ -1801,7 +1805,11 @@ fn split_completion_label<'a>(
             }
             let shifted_start = range.start.saturating_sub(filter_range.end);
             let shifted_end = range.end - filter_range.end;
-            Some((shifted_start..shifted_end, *highlight))
+            let mut highlight = *highlight;
+            if highlight.color.is_none() {
+                highlight.fade_out = None;
+            }
+            Some((shifted_start..shifted_end, highlight))
         })
         .collect();
     (
@@ -2168,6 +2176,7 @@ mod tests {
 
     fn colored() -> HighlightStyle {
         HighlightStyle {
+            color: Some(gpui::red()),
             fade_out: Some(0.5),
             ..Default::default()
         }
@@ -2182,6 +2191,18 @@ mod tests {
         assert_eq!(suffix_text, ": String");
         assert_eq!(main_highlights, vec![]);
         assert_eq!(suffix_highlights, vec![(2..8, colored())]);
+    }
+
+    #[test]
+    fn test_split_completion_label_unfades_uncolored_suffix() {
+        let faded = HighlightStyle {
+            fade_out: Some(0.35),
+            ..Default::default()
+        };
+        let (_, (_, suffix_highlights)) =
+            split_completion_label("item detail", &(0..4), &[(4..11, faded)]);
+
+        assert_eq!(suffix_highlights, vec![(0..7, HighlightStyle::default())]);
     }
 
     #[test]

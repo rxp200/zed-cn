@@ -1,3 +1,5 @@
+// Modified by the Zed CN project, 2026. See MODIFICATIONS.md.
+
 use scheduler::Instant;
 use std::{
     any::{TypeId, type_name},
@@ -21,7 +23,10 @@ use slotmap::SlotMap;
 
 pub use async_context::*;
 #[cfg(feature = "bench-support")]
-pub use bench_context::{BenchAppContext, BenchReport, BenchWindowContext, bench_platform};
+pub use bench_context::{
+    BenchAppContext, BenchMeasurement, BenchReport, BenchWindowContext, CountingAllocator,
+    MetricReport, bench_platform,
+};
 use collections::{FxHashMap, FxHashSet, HashMap, TypeIdHashMap, TypeIdHashSet, VecDeque};
 pub use context::*;
 pub use entity_map::*;
@@ -753,6 +758,8 @@ pub struct App {
     pub(crate) foreground_executor: ForegroundExecutor,
     #[cfg(feature = "profiler")]
     foreground_journal: crate::profiler::journal::ForegroundJournal,
+    #[cfg(all(feature = "profiler", not(target_family = "wasm")))]
+    hang_monitor: Option<crate::profiler::hang::HangMonitor>,
     pub(crate) entities: EntityMap,
     pub(crate) new_entity_observers: SubscriberSet<TypeId, NewEntityListener>,
     pub(crate) windows: SlotMap<WindowId, Option<Box<Window>>>,
@@ -839,6 +846,15 @@ pub struct App {
 }
 
 impl App {
+    /// 当前应用是否运行在测试模式（由 `TestAppContext` 创建）。
+    pub fn is_test(&self) -> bool {
+        match self.mode {
+            #[cfg(any(test, feature = "test-support"))]
+            GpuiMode::Test { .. } => true,
+            GpuiMode::Production => false,
+        }
+    }
+
     #[allow(clippy::new_ret_no_self)]
     pub(crate) fn new_app(
         platform: Rc<dyn Platform>,
@@ -879,6 +895,8 @@ impl App {
                 foreground_executor,
                 #[cfg(feature = "profiler")]
                 foreground_journal,
+                #[cfg(all(feature = "profiler", not(target_family = "wasm")))]
+                hang_monitor: None,
                 svg_renderer: SvgRenderer::new(asset_source.clone()),
                 loading_assets: Default::default(),
                 asset_source,
@@ -1055,10 +1073,30 @@ impl App {
     /// [`SHUTDOWN_TIMEOUT`] to complete. WebAssembly runs them asynchronously as best-effort cleanup
     /// because its event-loop thread cannot block.
     pub fn shutdown(&mut self) {
-        let mut futures = Vec::new();
+        // Requested first so the final hang poll overlaps with the quit
+        // handlers. It's awaited alongside them, within `SHUTDOWN_TIMEOUT`.
+        #[cfg(all(feature = "profiler", not(target_family = "wasm")))]
+        let hang_monitor_flush = self
+            .hang_monitor
+            .as_ref()
+            .and_then(|hang_monitor| hang_monitor.request_flush());
+
+        let mut futures: Vec<LocalBoxFuture<'static, ()>> = Vec::new();
 
         for observer in self.quit_observers.remove(&()) {
             futures.push(observer(self));
+        }
+
+        #[cfg(all(feature = "profiler", not(target_family = "wasm")))]
+        if let Some(flushed) = hang_monitor_flush {
+            futures.push(
+                async move {
+                    if flushed.await.is_err() {
+                        log::warn!("hang monitor exited before flushing");
+                    }
+                }
+                .boxed_local(),
+            );
         }
 
         self.windows.clear();
@@ -2027,6 +2065,45 @@ impl App {
     #[cfg(feature = "profiler")]
     pub fn foreground_journal(&self) -> crate::profiler::journal::ForegroundJournal {
         self.foreground_journal.clone()
+    }
+
+    /// Starts detecting foreground hangs on a dedicated thread.
+    ///
+    /// Nothing is spawned unless the app calls this. The thread polls a
+    /// detector over this app's foreground journal every `config.interval`
+    /// and passes each poll's incidents, including empty polls, to `on_poll`
+    /// on that thread. When the app quits, a final poll with
+    /// [`HangMonitorPollReason::Flush`] runs during shutdown, concurrently
+    /// with quit handlers and within [`SHUTDOWN_TIMEOUT`], so `on_poll` can
+    /// deliver batched results.
+    ///
+    /// # Errors
+    ///
+    /// Fails if the monitor was already started or its thread can't be
+    /// spawned.
+    ///
+    /// [`HangMonitorPollReason::Flush`]: crate::profiler::hang::HangMonitorPollReason::Flush
+    #[cfg(all(feature = "profiler", not(target_family = "wasm")))]
+    pub fn start_hang_monitor(
+        &mut self,
+        config: crate::profiler::hang::HangMonitorConfig,
+        on_poll: impl FnMut(crate::profiler::hang::HangMonitorPoll) + Send + 'static,
+    ) -> Result<(), crate::profiler::hang::HangMonitorError> {
+        use crate::profiler::hang::{HangDetector, HangMonitor, HangMonitorError};
+
+        if self.hang_monitor.is_some() {
+            debug_assert!(false, "the hang monitor was started twice");
+            return Err(HangMonitorError::AlreadyStarted);
+        }
+        let detector = HangDetector::new(
+            self.foreground_journal(),
+            config.threshold,
+            config.frame_budget,
+        );
+        let monitor = HangMonitor::spawn(detector, config.interval, on_poll)
+            .map_err(HangMonitorError::Spawn)?;
+        self.hang_monitor = Some(monitor);
+        Ok(())
     }
 
     /// Spawns the future returned by the given function on the main thread. The closure will be invoked
@@ -3174,12 +3251,18 @@ pub struct AnyDrag {
     /// Resolves the payload to offer the platform if the drag leaves the window.
     /// Invoked at most once per drag gesture, at promotion time.
     pub external_payload_source: Option<ExternalDragPayloadSource>,
+
+    /// Handles a release outside the source window when the drag remains app-owned.
+    pub release_outside_source: Option<DragReleaseOutsideSource>,
 }
 
 /// Lazily resolves the payload handed to the platform when an internal drag is
 /// promoted to a native drag session.
 pub type ExternalDragPayloadSource =
     Box<dyn FnOnce(&mut Window, &mut App) -> Option<ExternalDragPayload> + 'static>;
+
+/// Handles an app-owned drag released outside its source window.
+pub type DragReleaseOutsideSource = Box<dyn Fn(&dyn Any, &mut Window, &mut App) + 'static>;
 
 /// Contains state associated with a tooltip. You'll only need this struct if you're implementing
 /// tooltip behavior on a custom element. Otherwise, use [Div::tooltip](crate::Interactivity::tooltip).
@@ -3197,11 +3280,29 @@ pub struct AnyTooltip {
     pub check_visible_and_update: Rc<dyn Fn(Bounds<Pixels>, &mut Window, &mut App) -> bool>,
 }
 
+/// Whether a keystroke should prefer character input or key bindings.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InputPreference {
+    /// Prefer typing text over triggering key bindings.
+    CharacterInput,
+    /// Dispatch key bindings normally, if any match.
+    KeyBindings,
+}
+
 /// A keystroke event, and potentially the associated action
 #[derive(Debug)]
 pub struct KeystrokeEvent {
     /// The keystroke that occurred
     pub keystroke: Keystroke,
+
+    /// Whether this keystroke should prefer character input or key bindings.
+    /// This is [`InputPreference::CharacterInput`] when the platform prefers text for the key
+    /// (e.g. AltGr on Windows) and the focused input accepts text. Interceptors still receive
+    /// these keystrokes and can consume them.
+    ///
+    /// If the keystroke is part of a multi-stroke binding, it still waits as pending input
+    /// even when this is [`InputPreference::CharacterInput`].
+    pub input_preference: InputPreference,
 
     /// The action that was resolved for the keystroke, if any
     pub action: Option<Box<dyn Action>>,

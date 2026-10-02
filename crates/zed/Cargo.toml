@@ -128,9 +128,8 @@ gpui_platform = { workspace = true, features = [
     "x11",
 ] }
 gpui_tokio.workspace = true
-hdrhistogram.workspace = true
+hang_telemetry.workspace = true
 image = { workspace = true, optional = true }
-spin = "0.10.0"
 itertools.workspace = true
 rayon.workspace = true
 semver.workspace = true
@@ -193,6 +192,7 @@ serde.workspace = true
 serde_json.workspace = true
 session.workspace = true
 settings.workspace = true
+i18n.workspace = true
 settings_profile_selector.workspace = true
 settings_ui.workspace = true
 shellexpand.workspace = true
@@ -225,6 +225,7 @@ uuid.workspace = true
 vim.workspace = true
 vim_mode_setting.workspace = true
 watch.workspace = true
+web_preview.workspace = true
 web_search.workspace = true
 web_search_providers.workspace = true
 which_key.workspace = true

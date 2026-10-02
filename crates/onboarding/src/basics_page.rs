@@ -57,40 +57,43 @@ fn render_theme_section(tab_index: &mut isize, cx: &mut App) -> impl IntoElement
     return v_flex()
         .gap_2()
         .child(
-            h_flex().justify_between().child(Label::new("Theme")).child(
-                ToggleButtonGroup::single_row(
-                    "theme-selector-onboarding-dark-light",
-                    [
-                        ThemeAppearanceMode::Light,
-                        ThemeAppearanceMode::Dark,
-                        ThemeAppearanceMode::System,
-                    ]
-                    .map(|mode| {
-                        const MODE_NAMES: [SharedString; 3] = [
-                            SharedString::new_static("Light"),
-                            SharedString::new_static("Dark"),
-                            SharedString::new_static("System"),
-                        ];
-                        ToggleButtonSimple::new(
-                            MODE_NAMES[mode as usize].clone(),
-                            move |_, _, cx| {
-                                write_mode_change(mode, cx);
+            h_flex()
+                .justify_between()
+                .child(Label::new(i18n::t!("788db1cfec2a3db5")))
+                .child(
+                    ToggleButtonGroup::single_row(
+                        "theme-selector-onboarding-dark-light",
+                        [
+                            ThemeAppearanceMode::Light,
+                            ThemeAppearanceMode::Dark,
+                            ThemeAppearanceMode::System,
+                        ]
+                        .map(|mode| {
+                            const MODE_NAMES: [SharedString; 3] = [
+                                SharedString::new_static("Light"),
+                                SharedString::new_static("Dark"),
+                                SharedString::new_static("System"),
+                            ];
+                            ToggleButtonSimple::new(
+                                MODE_NAMES[mode as usize].clone(),
+                                move |_, _, cx| {
+                                    write_mode_change(mode, cx);
 
-                                telemetry::event!(
-                                    "Welcome Theme mode Changed",
-                                    from = theme_mode,
-                                    to = mode
-                                );
-                            },
-                        )
-                    }),
-                )
-                .size(ToggleButtonGroupSize::Medium)
-                .tab_index(tab_index)
-                .selected_index(theme_mode as usize)
-                .style(ui::ToggleButtonGroupStyle::Outlined)
-                .width(rems_from_px(3.0_f32 * 64.0_f32)),
-            ),
+                                    telemetry::event!(
+                                        "Welcome Theme mode Changed",
+                                        from = theme_mode,
+                                        to = mode
+                                    );
+                                },
+                            )
+                        }),
+                    )
+                    .size(ToggleButtonGroupSize::Medium)
+                    .tab_index(tab_index)
+                    .selected_index(theme_mode as usize)
+                    .style(ui::ToggleButtonGroupStyle::Outlined)
+                    .width(rems_from_px(3.0_f32 * 64.0_f32)),
+                ),
         )
         .child(
             h_flex()
@@ -342,46 +345,57 @@ fn render_base_keymap_section(tab_index: &mut isize, cx: &mut App) -> impl IntoE
         BaseKeymap::None => None,
     };
 
-    return v_flex().gap_2().child(Label::new("Base Keymap")).child(
-        ToggleButtonGroup::two_rows(
-            "base_keymap_selection",
-            [
-                ToggleButtonWithIcon::new("Zed", IconName::AiZed, |_, _, cx| {
-                    write_keymap_base(BaseKeymap::Zed, cx);
-                }),
-                ToggleButtonWithIcon::new("VS Code", IconName::EditorVsCode, |_, _, cx| {
-                    write_keymap_base(BaseKeymap::VSCode, cx);
-                }),
-                ToggleButtonWithIcon::new("JetBrains", IconName::EditorJetBrains, |_, _, cx| {
-                    write_keymap_base(BaseKeymap::JetBrains, cx);
-                }),
-                ToggleButtonWithIcon::new("Sublime Text", IconName::EditorSublime, |_, _, cx| {
-                    write_keymap_base(BaseKeymap::SublimeText, cx);
-                }),
-            ],
-            [
-                ToggleButtonWithIcon::new("Atom", IconName::EditorAtom, |_, _, cx| {
-                    write_keymap_base(BaseKeymap::Atom, cx);
-                }),
-                ToggleButtonWithIcon::new("Emacs", IconName::EditorEmacs, |_, _, cx| {
-                    write_keymap_base(BaseKeymap::Emacs, cx);
-                }),
-                ToggleButtonWithIcon::new("Cursor", IconName::EditorCursor, |_, _, cx| {
-                    write_keymap_base(BaseKeymap::Cursor, cx);
-                }),
-                ToggleButtonWithIcon::new("TextMate", IconName::Keyboard, |_, _, cx| {
-                    write_keymap_base(BaseKeymap::TextMate, cx);
-                }),
-            ],
-        )
-        .when_some(base_keymap, |this, base_keymap| {
-            this.selected_index(base_keymap)
-        })
-        .full_width()
-        .tab_index(tab_index)
-        .size(ui::ToggleButtonGroupSize::Medium)
-        .style(ui::ToggleButtonGroupStyle::Outlined),
-    );
+    return v_flex()
+        .gap_2()
+        .child(Label::new(i18n::t!("17d78c45f510a960")))
+        .child(
+            ToggleButtonGroup::two_rows(
+                "base_keymap_selection",
+                [
+                    ToggleButtonWithIcon::new("Zed", IconName::AiZed, |_, _, cx| {
+                        write_keymap_base(BaseKeymap::Zed, cx);
+                    }),
+                    ToggleButtonWithIcon::new("VS Code", IconName::EditorVsCode, |_, _, cx| {
+                        write_keymap_base(BaseKeymap::VSCode, cx);
+                    }),
+                    ToggleButtonWithIcon::new(
+                        "JetBrains",
+                        IconName::EditorJetBrains,
+                        |_, _, cx| {
+                            write_keymap_base(BaseKeymap::JetBrains, cx);
+                        },
+                    ),
+                    ToggleButtonWithIcon::new(
+                        "Sublime Text",
+                        IconName::EditorSublime,
+                        |_, _, cx| {
+                            write_keymap_base(BaseKeymap::SublimeText, cx);
+                        },
+                    ),
+                ],
+                [
+                    ToggleButtonWithIcon::new("Atom", IconName::EditorAtom, |_, _, cx| {
+                        write_keymap_base(BaseKeymap::Atom, cx);
+                    }),
+                    ToggleButtonWithIcon::new("Emacs", IconName::EditorEmacs, |_, _, cx| {
+                        write_keymap_base(BaseKeymap::Emacs, cx);
+                    }),
+                    ToggleButtonWithIcon::new("Cursor", IconName::EditorCursor, |_, _, cx| {
+                        write_keymap_base(BaseKeymap::Cursor, cx);
+                    }),
+                    ToggleButtonWithIcon::new("TextMate", IconName::Keyboard, |_, _, cx| {
+                        write_keymap_base(BaseKeymap::TextMate, cx);
+                    }),
+                ],
+            )
+            .when_some(base_keymap, |this, base_keymap| {
+                this.selected_index(base_keymap)
+            })
+            .full_width()
+            .tab_index(tab_index)
+            .size(ui::ToggleButtonGroupSize::Medium)
+            .style(ui::ToggleButtonGroupStyle::Outlined),
+        );
 
     fn write_keymap_base(keymap_base: BaseKeymap, cx: &App) {
         let fs = <dyn Fs>::global(cx);
@@ -527,11 +541,8 @@ fn render_import_settings_section(tab_index: &mut isize, cx: &mut App) -> impl I
             v_flex()
                 .gap_0p5()
                 .max_w_5_6()
-                .child(Label::new("Import Settings"))
-                .child(
-                    Label::new("Automatically pull your settings from other editors")
-                        .color(Color::Muted),
-                ),
+                .child(Label::new(i18n::t!("1a80d4a192698b02")))
+                .child(Label::new(i18n::t!("e7107291f364d8d4")).color(Color::Muted)),
         )
         .child(h_flex().gap_1().child(vscode).child(cursor))
 }
@@ -562,7 +573,7 @@ fn render_registry_agent_button(
             .color(Color::Success)
             .into_any_element()
     } else {
-        Label::new("Install")
+        Label::new(i18n::t!("e8f88f51ccb085ea"))
             .size(LabelSize::XSmall)
             .color(Color::Muted)
             .into_any_element()
@@ -616,12 +627,12 @@ fn render_zed_agent_button(user_store: &Entity<UserStore>, cx: &mut App) -> impl
     let is_signed_in = !is_signed_out;
 
     let state_element = if is_signed_out {
-        Label::new("Sign In")
+        Label::new(i18n::t!("1e2df9c3075ae9e4"))
             .size(LabelSize::XSmall)
             .color(Color::Muted)
             .into_any_element()
     } else if is_signing_in {
-        Label::new("Signing In…")
+        Label::new(i18n::t!("d8712b0d82e63a46"))
             .size(LabelSize::XSmall)
             .color(Color::Muted)
             .with_animation(
@@ -633,7 +644,7 @@ fn render_zed_agent_button(user_store: &Entity<UserStore>, cx: &mut App) -> impl
             )
             .into_any_element()
     } else if is_signed_in && is_free {
-        Label::new("Start Free Trial")
+        Label::new(i18n::t!("7a948008f0e06c53"))
             .size(LabelSize::XSmall)
             .color(Color::Muted)
             .into_any_element()
@@ -650,7 +661,7 @@ fn render_zed_agent_button(user_store: &Entity<UserStore>, cx: &mut App) -> impl
                 .size(IconSize::XSmall)
                 .color(Color::Muted),
         )
-        .name("Zed Agent")
+        .name(i18n::t!("dd80bcc0e9bef38b"))
         .state(state_element)
         .disabled(is_trial || is_pro)
         .map(|this| {
@@ -704,11 +715,8 @@ fn render_ai_section(user_store: &Entity<UserStore>, cx: &mut App) -> impl IntoE
 
     v_flex()
         .gap_0p5()
-        .child(Label::new("Agent Setup"))
-        .child(
-            Label::new("Install your favorite agents and start your first thread.")
-                .color(Color::Muted),
-        )
+        .child(Label::new(i18n::t!("8532a0fa68dbcd90")))
+        .child(Label::new(i18n::t!("f0b4fb9b92851070")).color(Color::Muted))
         .child(grid)
 }
 

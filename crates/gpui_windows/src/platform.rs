@@ -1,3 +1,5 @@
+// Modified by the Zed CN project, 2026. See MODIFICATIONS.md.
+
 use std::{
     cell::{Cell, RefCell},
     ffi::{OsStr, OsString},
@@ -964,19 +966,13 @@ impl Platform for WindowsPlatform {
             }
 
             if credentials.is_null() {
-                Ok(None)
-            } else {
-                let username: String = unsafe { (*credentials).UserName.to_string()? };
-                let credential_blob = unsafe {
-                    std::slice::from_raw_parts(
-                        (*credentials).CredentialBlob,
-                        (*credentials).CredentialBlobSize as usize,
-                    )
-                };
-                let password = credential_blob.to_vec();
-                unsafe { CredFree(credentials as *const _ as _) };
-                Ok(Some((username, password)))
+                return Ok(None);
             }
+
+            // SAFETY: `CredReadW` succeeded, so this points to a valid `CREDENTIALW` until `CredFree` below.
+            let result = unsafe { username_and_password(&*credentials) };
+            unsafe { CredFree(credentials as *const _ as _) };
+            result.map(Some)
         })
     }
 
@@ -1056,6 +1052,7 @@ impl WindowsPlatformInner {
 
     fn handle_msg(
         self: &Rc<Self>,
+        wnd_proc_guard: &WndProcGuard,
         handle: HWND,
         msg: u32,
         wparam: WPARAM,
@@ -1067,7 +1064,7 @@ impl WindowsPlatformInner {
             | WM_GPUI_DOCK_MENU_ACTION
             | WM_GPUI_KEYBOARD_LAYOUT_CHANGED
             | WM_GPUI_GPU_DEVICE_LOST
-            | WM_GPUI_END_SESSION => self.handle_gpui_events(msg, wparam, lparam),
+            | WM_GPUI_END_SESSION => self.handle_gpui_events(wnd_proc_guard, msg, wparam, lparam),
             WM_POWERBROADCAST => self.handle_power_broadcast(wparam),
             _ => None,
         };
@@ -1078,7 +1075,13 @@ impl WindowsPlatformInner {
         }
     }
 
-    fn handle_gpui_events(&self, message: u32, wparam: WPARAM, lparam: LPARAM) -> Option<isize> {
+    fn handle_gpui_events(
+        self: &Rc<Self>,
+        wnd_proc_guard: &WndProcGuard,
+        message: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> Option<isize> {
         if wparam.0 != self.validation_number {
             log::error!("Wrong validation number while processing message: {message}");
             return None;
@@ -1088,7 +1091,7 @@ impl WindowsPlatformInner {
                 self.close_one_window(HWND(lparam.0 as _));
                 Some(0)
             }
-            WM_GPUI_TASK_DISPATCHED_ON_MAIN_THREAD => self.run_foreground_task(),
+            WM_GPUI_TASK_DISPATCHED_ON_MAIN_THREAD => self.handle_foreground_task(wnd_proc_guard),
             WM_GPUI_DOCK_MENU_ACTION => self.handle_dock_action_event(lparam.0 as _),
             WM_GPUI_KEYBOARD_LAYOUT_CHANGED => self.handle_keyboard_layout_change(),
             WM_GPUI_GPU_DEVICE_LOST => self.handle_device_lost(lparam),
@@ -1128,6 +1131,16 @@ impl WindowsPlatformInner {
         lock.remove(index);
 
         lock.is_empty()
+    }
+
+    fn handle_foreground_task(self: &Rc<Self>, wnd_proc_guard: &WndProcGuard) -> Option<isize> {
+        wnd_proc_guard.run_at_outermost({
+            let this = self.clone();
+            move || {
+                this.run_foreground_task();
+            }
+        });
+        Some(0)
     }
 
     #[inline]
@@ -1578,6 +1591,8 @@ unsafe extern "system" fn window_procedure(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
+    let wnd_proc_guard = WndProcGuard::enter();
+
     if msg == WM_NCCREATE {
         let params = unsafe { &*(lparam.0 as *const CREATESTRUCTW) };
         let creation_context = params.lpCreateParams as *mut PlatformWindowCreateContext;
@@ -1615,12 +1630,14 @@ unsafe extern "system" fn window_procedure(
     let result = if let Some(inner) = inner.upgrade() {
         if cfg!(debug_assertions) {
             let inner = std::panic::AssertUnwindSafe(inner);
-            match std::panic::catch_unwind(|| { inner }.handle_msg(hwnd, msg, wparam, lparam)) {
+            match std::panic::catch_unwind(|| {
+                inner.handle_msg(&wnd_proc_guard, hwnd, msg, wparam, lparam)
+            }) {
                 Ok(result) => result,
                 Err(_) => std::process::abort(),
             }
         } else {
-            inner.handle_msg(hwnd, msg, wparam, lparam)
+            inner.handle_msg(&wnd_proc_guard, hwnd, msg, wparam, lparam)
         }
     } else {
         unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
@@ -1634,14 +1651,172 @@ unsafe extern "system" fn window_procedure(
     result
 }
 
+thread_local! {
+    static WND_PROC_DEPTH: Cell<usize> = const { Cell::new(0) };
+    static WND_PROC_DEFERRED_CALLBACKS: RefCell<Vec<Box<dyn FnOnce()>>> = const { RefCell::new(Vec::new()) };
+}
+
+pub(crate) struct WndProcGuard {
+    depth: usize,
+}
+
+impl WndProcGuard {
+    pub(crate) fn enter() -> Self {
+        let depth = WND_PROC_DEPTH.get() + 1;
+        WND_PROC_DEPTH.set(depth);
+        Self { depth }
+    }
+
+    pub(crate) fn run_at_outermost(&self, callback: impl FnOnce() + 'static) {
+        if self.depth == 1 {
+            callback();
+        } else {
+            WND_PROC_DEFERRED_CALLBACKS.with_borrow_mut(|callbacks| {
+                callbacks.push(Box::new(callback));
+            });
+        }
+    }
+
+    #[cfg(test)]
+    fn depth() -> usize {
+        WND_PROC_DEPTH.get()
+    }
+
+    #[cfg(test)]
+    fn deferred_callback_count() -> usize {
+        WND_PROC_DEFERRED_CALLBACKS.with_borrow(Vec::len)
+    }
+}
+
+impl Drop for WndProcGuard {
+    fn drop(&mut self) {
+        if self.depth == 1 {
+            loop {
+                let callbacks = WND_PROC_DEFERRED_CALLBACKS
+                    .with_borrow_mut(|callbacks| std::mem::take(callbacks));
+                if callbacks.is_empty() {
+                    break;
+                }
+                for callback in callbacks {
+                    if cfg!(debug_assertions) {
+                        if std::panic::catch_unwind(std::panic::AssertUnwindSafe(callback)).is_err()
+                        {
+                            std::process::abort();
+                        }
+                    } else {
+                        callback();
+                    }
+                }
+            }
+        }
+
+        debug_assert_eq!(WND_PROC_DEPTH.get(), self.depth);
+        WND_PROC_DEPTH.set(self.depth - 1);
+    }
+}
+
+/// Copies the username and secret out of a credential returned by `CredReadW`.
+///
+/// Both `UserName` and `CredentialBlob` are optional in Credential Manager and
+/// come back as null pointers when absent, so they are treated as empty here.
+///
+/// # Safety
+///
+/// A non-null `UserName` must point to a NUL-terminated wide string and a
+/// non-null `CredentialBlob` must be readable for `CredentialBlobSize` bytes,
+/// as is the case for credentials returned by `CredReadW`.
+unsafe fn username_and_password(credential: &CREDENTIALW) -> Result<(String, Vec<u8>)> {
+    let username = if credential.UserName.is_null() {
+        String::new()
+    } else {
+        // SAFETY: guaranteed by the caller.
+        unsafe { credential.UserName.to_string()? }
+    };
+    let password = if credential.CredentialBlob.is_null() {
+        Vec::new()
+    } else {
+        // SAFETY: guaranteed by the caller.
+        unsafe {
+            std::slice::from_raw_parts(
+                credential.CredentialBlob,
+                credential.CredentialBlobSize as usize,
+            )
+        }
+        .to_vec()
+    };
+    Ok((username, password))
+}
+
 #[cfg(test)]
 mod tests {
-    use std::ffi::{OsStr, OsString};
+    use std::{
+        cell::RefCell,
+        ffi::{OsStr, OsString},
+        rc::Rc,
+    };
 
-    use crate::{read_from_clipboard, write_to_clipboard};
+    use crate::{WndProcGuard, read_from_clipboard, write_to_clipboard};
     use gpui::ClipboardItem;
+    use windows::Win32::Security::Credentials::{
+        CRED_PERSIST_SESSION, CRED_TYPE_GENERIC, CREDENTIALW, CredDeleteW, CredFree, CredReadW,
+        CredWriteW,
+    };
+    use windows::core::{PCWSTR, PWSTR};
 
-    use super::encode_restart_arguments;
+    use super::{encode_restart_arguments, username_and_password};
+
+    #[test]
+    fn test_read_credential_with_username() {
+        assert_eq!(
+            round_trip_credential(Some("alice"), b"secret"),
+            ("alice".to_string(), b"secret".to_vec())
+        );
+    }
+
+    #[test]
+    fn test_read_credential_without_username() {
+        assert_eq!(
+            round_trip_credential(None, b"secret"),
+            (String::new(), b"secret".to_vec())
+        );
+    }
+
+    fn round_trip_credential(username: Option<&str>, secret: &[u8]) -> (String, Vec<u8>) {
+        let mut target_name: Vec<u16> = format!(
+            "zed-test-{}-{}",
+            std::process::id(),
+            username.unwrap_or_default()
+        )
+        .encode_utf16()
+        .chain(Some(0))
+        .collect();
+        let mut username: Vec<u16> = username
+            .map(|username| username.encode_utf16().chain(Some(0)).collect())
+            .unwrap_or_default();
+        let mut secret = secret.to_vec();
+        let credential = CREDENTIALW {
+            Type: CRED_TYPE_GENERIC,
+            TargetName: PWSTR::from_raw(target_name.as_mut_ptr()),
+            CredentialBlobSize: secret.len() as u32,
+            CredentialBlob: secret.as_mut_ptr(),
+            Persist: CRED_PERSIST_SESSION,
+            UserName: if username.is_empty() {
+                PWSTR::null()
+            } else {
+                PWSTR::from_raw(username.as_mut_ptr())
+            },
+            ..CREDENTIALW::default()
+        };
+        let target_name = PCWSTR::from_raw(target_name.as_ptr());
+        unsafe { CredWriteW(&credential, 0) }.unwrap();
+
+        let mut credentials: *mut CREDENTIALW = std::ptr::null_mut();
+        unsafe { CredReadW(target_name, CRED_TYPE_GENERIC, None, &mut credentials) }.unwrap();
+        let result = unsafe { username_and_password(&*credentials) };
+        unsafe { CredFree(credentials as *const _ as _) };
+        unsafe { CredDeleteW(target_name, CRED_TYPE_GENERIC, None) }.unwrap();
+        result.unwrap()
+    }
 
     #[test]
     fn test_encode_restart_arguments() {
@@ -1660,6 +1835,41 @@ mod tests {
     }
 
     #[test]
+    fn defers_nested_window_procedure_callbacks() {
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        {
+            let _outer_guard = WndProcGuard::enter();
+            {
+                let nested_guard = WndProcGuard::enter();
+                nested_guard.run_at_outermost({
+                    let calls = calls.clone();
+                    move || {
+                        calls.borrow_mut().push("first");
+                        let nested_guard = WndProcGuard::enter();
+                        nested_guard.run_at_outermost({
+                            let calls = calls.clone();
+                            move || calls.borrow_mut().push("third")
+                        });
+                    }
+                });
+                nested_guard.run_at_outermost({
+                    let calls = calls.clone();
+                    move || calls.borrow_mut().push("second")
+                });
+
+                assert!(calls.borrow().is_empty());
+                assert_eq!(WndProcGuard::depth(), 2);
+                assert_eq!(WndProcGuard::deferred_callback_count(), 2);
+            }
+            assert!(calls.borrow().is_empty());
+        }
+
+        assert_eq!(calls.borrow().as_slice(), &["first", "second", "third"]);
+        assert_eq!(WndProcGuard::depth(), 0);
+        assert_eq!(WndProcGuard::deferred_callback_count(), 0);
+    }
+
+    #[test]
     fn test_clipboard() {
         let item = ClipboardItem::new_string("你好，我是张小白".to_string());
         write_to_clipboard(item.clone());
@@ -1672,5 +1882,16 @@ mod tests {
         let item = ClipboardItem::new_string_with_json_metadata("abcdef".to_string(), vec![3, 4]);
         write_to_clipboard(item.clone());
         assert_eq!(read_from_clipboard(), Some(item));
+
+        let item =
+            ClipboardItem::new_string_with_json_metadata("before\0after".to_string(), vec![12]);
+        write_to_clipboard(item);
+        assert_eq!(
+            read_from_clipboard(),
+            Some(ClipboardItem::new_string_with_json_metadata(
+                "before after".to_string(),
+                vec![12],
+            )),
+        );
     }
 }

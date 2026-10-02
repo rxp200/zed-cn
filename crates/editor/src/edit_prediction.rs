@@ -256,8 +256,11 @@ impl Editor {
 
         self.update_visible_edit_prediction(window, cx);
 
+        let subtle_preview_is_inactive =
+            self.edit_prediction_requires_modifier() && !self.edit_prediction_preview_is_active();
         if !user_requested
-            && (!self.should_show_edit_predictions()
+            && (subtle_preview_is_inactive
+                || !self.should_show_edit_predictions()
                 || !self.is_focused(window)
                 || buffer.read(cx).is_empty())
         {
@@ -783,6 +786,15 @@ impl Editor {
                 };
 
                 self.update_visible_edit_prediction(window, cx);
+                if self.edit_prediction_requires_modifier() && !self.has_active_edit_prediction() {
+                    self.refresh_edit_prediction(
+                        false,
+                        false,
+                        EditPredictionRequestTrigger::Explicit,
+                        window,
+                        cx,
+                    );
+                }
                 cx.notify();
             }
         } else if let EditPredictionPreview::Active {
@@ -1159,7 +1171,7 @@ impl Editor {
                 let target_display_point = range.end.to_display_point(editor_snapshot);
 
                 self.render_edit_prediction_end_of_line_popover(
-                    "Accept",
+                    i18n::t!("329fcec61856d4e5"),
                     editor_snapshot,
                     visible_row_range,
                     target_display_point,
@@ -1283,7 +1295,7 @@ impl Editor {
                                     .bg(Self::edit_prediction_line_popover_bg_color(cx))
                                     .when(keybind_display.show_hold_label, |el| {
                                         el.child(
-                                            Label::new("Hold")
+                                            Label::new(i18n::t!("5e221613dfbdcb3f"))
                                                 .size(LabelSize::Small)
                                                 .when(
                                                     keybind_display.missing_accept_keystroke,
@@ -1403,7 +1415,7 @@ impl Editor {
                                     .child(self.render_edit_prediction_popover_keystroke(
                                         keystroke, key_color, cx,
                                     ))
-                                    .child(Label::new("Preview").into_any_element())
+                                    .child(Label::new(i18n::t!("13d61fea9f174905")).into_any_element())
                                     .opacity(if has_completion { 1.0 } else { 0.4 }),
                             )
                         } else {
@@ -1651,8 +1663,8 @@ impl Editor {
         });
 
         let event_type = match accepted {
-            true => "Edit Prediction Accepted",
-            false => "Edit Prediction Discarded",
+            true => i18n::t!("30822d291c16ac36"),
+            false => i18n::t!("b53c203e75b57eaa"),
         };
         telemetry::event!(
             event_type,
@@ -1761,13 +1773,13 @@ impl Editor {
             .items_end()
             .when(flag_on_right, |el| el.items_start())
             .child(if flag_on_right {
-                self.render_edit_prediction_line_popover("Jump", None, window, cx)
+                self.render_edit_prediction_line_popover(i18n::t!("afd0b9482dfa57f0"), None, window, cx)
                     .rounded_bl(px(0.))
                     .rounded_tl(px(0.))
                     .border_l_2()
                     .border_color(border_color)
             } else {
-                self.render_edit_prediction_line_popover("Jump", None, window, cx)
+                self.render_edit_prediction_line_popover(i18n::t!("afd0b9482dfa57f0"), None, window, cx)
                     .rounded_br(px(0.))
                     .rounded_tr(px(0.))
                     .border_r_2()
@@ -1807,7 +1819,7 @@ impl Editor {
         cx: &mut App,
     ) -> Option<(AnyElement, gpui::Point<Pixels>)> {
         let mut element = self
-            .render_edit_prediction_line_popover("Scroll", Some(scroll_icon), window, cx)
+            .render_edit_prediction_line_popover(i18n::t!("34dedaffd3cc55f0"), Some(scroll_icon), window, cx)
             .into_any();
 
         let size = element.layout_as_root(AvailableSpace::min_size(), window, cx);
@@ -1843,7 +1855,7 @@ impl Editor {
         if target_display_point.row().as_f64() < scroll_top {
             let mut element = self
                 .render_edit_prediction_line_popover(
-                    "Jump to Edit",
+                    i18n::t!("ea18496d8fb63486"),
                     Some(IconName::ArrowUp),
                     window,
                     cx,
@@ -1862,7 +1874,7 @@ impl Editor {
         } else if (target_display_point.row().as_f64() + 1.) > scroll_bottom {
             let mut element = self
                 .render_edit_prediction_line_popover(
-                    "Jump to Edit",
+                    i18n::t!("ea18496d8fb63486"),
                     Some(IconName::ArrowDown),
                     window,
                     cx,
@@ -1880,7 +1892,7 @@ impl Editor {
             Some((element, origin))
         } else {
             self.render_edit_prediction_end_of_line_popover(
-                "Jump to Edit",
+                i18n::t!("ea18496d8fb63486"),
                 editor_snapshot,
                 visible_row_range,
                 target_display_point,
@@ -2437,7 +2449,7 @@ impl Editor {
                         } else {
                             Icon::new(icons.up)
                         })
-                        .child(Label::new("Jump to Edit")),
+                        .child(Label::new(i18n::t!("ea18496d8fb63486"))),
                 )
             }
             EditPrediction::MoveOutside { snapshot, .. } => {
@@ -2451,7 +2463,7 @@ impl Editor {
                         .gap_2()
                         .flex_1()
                         .child(Icon::new(icons.base))
-                        .child(Label::new(format!("Jump to {file_name}"))),
+                        .child(Label::new(i18n::t!("93a81da4e2ece1e1", file_name = file_name))),
                 )
             }
             EditPrediction::Edit {
@@ -2539,8 +2551,8 @@ impl Render for MissingEditPredictionKeybindingTooltip {
                     v_flex()
                         .flex_1()
                         .text_ui_sm(cx)
-                        .child(Label::new("Conflict with Accept Keybinding"))
-                        .child("Your keymap currently overrides the default accept keybinding. To continue, assign one keybinding for the `editor::AcceptEditPrediction` action.")
+                        .child(Label::new(i18n::t!("5ccb92434d69c180")))
+                        .child(i18n::t!("082e6272198405bb"))
                 )
                 .child(
                     h_flex()
@@ -2548,10 +2560,10 @@ impl Render for MissingEditPredictionKeybindingTooltip {
                         .gap_1()
                         .items_end()
                         .w_full()
-                        .child(Button::new("open-keymap", "Assign Keybinding").size(ButtonSize::Compact).on_click(|_ev, window, cx| {
+                        .child(Button::new("open-keymap", i18n::t!("3e4ff91dfaec07f9")).size(ButtonSize::Compact).on_click(|_ev, window, cx| {
                             window.dispatch_action(zed_actions::OpenKeymapFile.boxed_clone(), cx)
                         }))
-                        .child(Button::new("see-docs", "See Docs").size(ButtonSize::Compact).on_click(|_ev, _window, cx| {
+                        .child(Button::new("see-docs", i18n::t!("d006830a9eb8b475")).size(ButtonSize::Compact).on_click(|_ev, _window, cx| {
                             cx.open_url("https://zed.dev/docs/completions#edit-predictions-missing-keybinding");
                         })),
                 )
