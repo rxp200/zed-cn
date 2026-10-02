@@ -566,9 +566,16 @@ impl Member {
                 let decoration = render_cx.decorate(pane, cx);
                 let is_active = pane == render_cx.active_pane();
 
+                let pane_entity_id = pane.entity_id();
                 let pane = div()
                     .relative()
                     .size_full()
+                    .rounded(crate::WORKBENCH_MODULE_RADIUS)
+                    .border_1()
+                    .border_color(cx.theme().colors().border_variant)
+                    .bg(cx.theme().colors().editor_background)
+                    .overflow_hidden()
+                    .debug_selector(move || format!("pane-card-{pane_entity_id}"))
                     .when(is_maximized, |this| {
                         this.bg(cx.theme().colors().background)
                             .border_1()
@@ -598,6 +605,7 @@ impl Member {
                         .relative()
                         .flex_1()
                         .size_full()
+                        .p(crate::WORKBENCH_MODULE_INSET)
                         .when(is_maximized, |this| this.p_2())
                         .child(pane)
                         .into_any(),

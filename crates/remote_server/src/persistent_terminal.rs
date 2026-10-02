@@ -204,7 +204,10 @@ impl PersistentTerminalManager {
             }
             anyhow::ensure!(
                 request.sequence == state.last_input_sequence + 1,
-                "terminal input sequence gap"
+                "terminal input sequence gap: expected {}, received {} (terminal {})",
+                state.last_input_sequence + 1,
+                request.sequence,
+                request.terminal_id
             );
             anyhow::ensure!(!state.exited, "persistent terminal has exited");
         }
@@ -348,21 +351,14 @@ impl PersistentTerminalManager {
             subscription.next_offset = *output_start;
             subscription.history_truncated = true;
         }
-        let window_remaining = (subscription.credit + STREAM_WINDOW_BYTES)
-            .saturating_sub(subscription.next_offset);
+        let window_remaining =
+            (subscription.credit + STREAM_WINDOW_BYTES).saturating_sub(subscription.next_offset);
         let available = (*output_end).saturating_sub(subscription.next_offset);
-        let count = available
-            .min(window_remaining)
-            .min(STREAM_CHUNK_BYTES) as usize;
+        let count = available.min(window_remaining).min(STREAM_CHUNK_BYTES) as usize;
         let drained = subscription.next_offset + count as u64 == *output_end;
         if count > 0 {
             let start = (subscription.next_offset - *output_start) as usize;
-            let data = output
-                .iter()
-                .skip(start)
-                .take(count)
-                .copied()
-                .collect();
+            let data = output.iter().skip(start).take(count).copied().collect();
             let frame_exited = *exited && drained;
             let frame = proto::PersistentTerminalOutput {
                 server_instance_id: server_instance_id.to_string(),
@@ -504,11 +500,7 @@ mod tests {
         (manager, terminal_id)
     }
 
-    fn subscribe(
-        manager: &PersistentTerminalManager,
-        terminal_id: &str,
-        offset: u64,
-    ) -> u64 {
+    fn subscribe(manager: &PersistentTerminalManager, terminal_id: &str, offset: u64) -> u64 {
         manager
             .subscribe(proto::SubscribePersistentTerminal {
                 server_instance_id: manager.instance_id.clone(),
@@ -519,11 +511,7 @@ mod tests {
             .0
     }
 
-    fn pull(
-        manager: &PersistentTerminalManager,
-        terminal_id: &str,
-        generation: u64,
-    ) -> OutputPull {
+    fn pull(manager: &PersistentTerminalManager, terminal_id: &str, generation: u64) -> OutputPull {
         manager
             .pull_output(&manager.instance_id.clone(), terminal_id, generation)
             .expect("pull output")
@@ -697,6 +685,56 @@ mod tests {
         assert!(response.history_truncated);
         assert_eq!(response.data, vec![b'a'; 32]);
         assert_eq!(response.next_offset, 48);
+    }
+
+    #[test]
+    fn input_replay_is_deduplicated_and_gaps_do_not_advance_sequence() {
+        let (manager, terminal_id) = manager_with_terminal(b"output");
+        let input = |sequence| proto::PersistentTerminalInput {
+            server_instance_id: manager.instance_id.clone(),
+            terminal_id: terminal_id.clone(),
+            sequence,
+            data: b"input".to_vec(),
+        };
+        manager.input(input(1)).expect("first input");
+        manager.input(input(1)).expect("replayed input");
+        let error = manager.input(input(3)).expect_err("reject gap");
+        assert!(error.to_string().contains("expected 2, received 3"));
+        manager.input(input(2)).expect("missing input");
+        manager.input(input(3)).expect("next input");
+        let terminal = manager
+            .terminal(&manager.instance_id, &terminal_id)
+            .expect("terminal");
+        assert_eq!(terminal.state.lock().expect("state").last_input_sequence, 3);
+        let output = manager
+            .read(proto::ReadPersistentTerminal {
+                server_instance_id: manager.instance_id.clone(),
+                terminal_id,
+                offset: 0,
+                max_bytes: 100,
+            })
+            .expect("output unaffected by input gap");
+        assert_eq!(output.data, b"output");
+    }
+
+    #[test]
+    fn close_invalidates_terminal_without_recreating_it() {
+        let (manager, terminal_id) = manager_with_terminal(b"output");
+        manager
+            .close(&manager.instance_id, &terminal_id)
+            .expect("close");
+        assert!(
+            manager
+                .read(proto::ReadPersistentTerminal {
+                    server_instance_id: manager.instance_id.clone(),
+                    terminal_id,
+                    offset: 0,
+                    max_bytes: 100,
+                })
+                .expect_err("closed")
+                .to_string()
+                .contains("persistent terminal not found")
+        );
     }
 
     #[test]

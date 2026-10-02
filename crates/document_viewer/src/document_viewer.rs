@@ -52,14 +52,7 @@ impl DocumentFormat {
     /// `xlsx`/`xlsb` are parsed lazily per sheet, while `xls`/`ods` are parsed
     /// eagerly in full by calamine, so eager formats get a lower cap.
     fn max_file_size(extension: &str) -> u64 {
-        const LAZY_SPREADSHEET_MAX: u64 = 256 * 1024 * 1024;
-        const EAGER_SPREADSHEET_MAX: u64 = 64 * 1024 * 1024;
-        const PDF_EPUB_MAX: u64 = 512 * 1024 * 1024;
-        match extension.to_ascii_lowercase().as_str() {
-            "xlsx" | "xlsm" | "xlsb" => LAZY_SPREADSHEET_MAX,
-            "xls" | "ods" => EAGER_SPREADSHEET_MAX,
-            _ => PDF_EPUB_MAX,
-        }
+        project::document_file_size_limit(extension).unwrap_or(0)
     }
 }
 
@@ -95,14 +88,8 @@ impl DocumentItem {
             }
         }
 
-        let Some(worktree) = project
-            .read(cx)
-            .worktree_for_id(project_path.worktree_id, cx)
-        else {
-            return Task::ready(Err(anyhow!("worktree not found")));
-        };
-        let load = worktree.update(cx, |worktree, cx| {
-            worktree.load_binary_file(project_path.path.as_ref(), cx)
+        let load = project.update(cx, |project, cx| {
+            project.load_document_file(project_path, cx)
         });
         cx.spawn(async move |cx| {
             let LoadedBinaryFile { file, content } = load.await?;
@@ -123,6 +110,10 @@ impl DocumentItem {
 
     pub fn abs_path(&self, cx: &App) -> Option<std::path::PathBuf> {
         Some(self.file.as_local()?.abs_path(cx))
+    }
+
+    pub fn host_path(&self, cx: &App) -> std::path::PathBuf {
+        self.file.worktree.read(cx).absolutize(self.file.path())
     }
 }
 
@@ -228,7 +219,7 @@ impl Item for DocumentView {
     }
 
     fn tab_tooltip_text(&self, cx: &App) -> Option<SharedString> {
-        let abs_path = self.item.read(cx).abs_path(cx)?;
+        let abs_path = self.item.read(cx).host_path(cx);
         let file_path = abs_path.compact().to_string_lossy().into_owned();
         Some(file_path.into())
     }
@@ -269,7 +260,7 @@ impl Item for DocumentView {
     }
 
     fn tab_icon(&self, _: &Window, cx: &App) -> Option<Icon> {
-        let path = self.item.read(cx).abs_path(cx)?;
+        let path = self.item.read(cx).host_path(cx);
         ItemSettings::get_global(cx)
             .file_icons
             .then(|| FileIcons::get_icon(&path, cx))
@@ -444,7 +435,7 @@ impl SerializableItem for DocumentView {
         cx: &mut Context<Self>,
     ) -> Option<Task<Result<()>>> {
         let workspace_id = workspace.database_id()?;
-        let document_path = self.item.read(cx).abs_path(cx)?;
+        let document_path = self.item.read(cx).host_path(cx);
 
         let db = DocumentViewerDb::global(cx);
         Some(cx.background_spawn(async move {
@@ -865,6 +856,43 @@ mod tests {
             .expect("test document should open");
 
         (project, item)
+    }
+
+    #[gpui::test]
+    async fn test_remote_document_path_is_not_a_local_file(cx: &mut TestAppContext) {
+        init_test(cx);
+        let (project, item) = open_test_document(
+            cx,
+            "book.epub",
+            crate::epub_reader::tests::epub_fixture(true),
+        )
+        .await;
+        item.update(cx, |item, _| {
+            let file = &item.file;
+            item.file = Arc::new(worktree::File {
+                worktree: file.worktree.clone(),
+                path: file.path.clone(),
+                disk_state: file.disk_state,
+                entry_id: file.entry_id,
+                is_local: false,
+                is_private: file.is_private,
+            });
+        });
+        item.read_with(cx, |item, cx| {
+            assert!(
+                item.abs_path(cx).is_none(),
+                "remote paths must not become local file operations"
+            );
+            assert_eq!(item.host_path(cx), Path::new("/root/book.epub"));
+        });
+        let (view, cx) =
+            cx.add_window_view(|window, cx| DocumentView::new(item, project, window, cx));
+        view.read_with(cx, |view, cx| {
+            assert_eq!(
+                view.tab_tooltip_text(cx).as_deref(),
+                Some("/root/book.epub")
+            );
+        });
     }
 
     #[gpui::test]

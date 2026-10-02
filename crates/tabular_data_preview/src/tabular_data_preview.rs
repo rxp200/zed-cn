@@ -211,11 +211,7 @@ impl Item for TabularDataPreviewPane {
             .as_singleton()
             .and_then(|b| {
                 let file = b.read(cx).file()?;
-                let local_file = file.as_local()?;
-                local_file
-                    .abs_path(cx)
-                    .file_name()
-                    .map(|name| format!("Preview {}", name.to_string_lossy()).into())
+                Some(format!("Preview {}", file.file_name(cx)).into())
             })
             .unwrap_or_else(|| SharedString::from("Tabular Data Preview"))
     }

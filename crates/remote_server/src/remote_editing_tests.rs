@@ -465,6 +465,126 @@ impl gpui::Render for RemoteImageTestView {
 }
 
 #[gpui::test]
+async fn test_remote_document_loading(cx: &mut TestAppContext, server_cx: &mut TestAppContext) {
+    let fs = FakeFs::new(server_cx.executor());
+    fs.insert_tree(path!("/code"), json!({"project": {}})).await;
+    let bytes = vec![37; project::DOCUMENT_CHUNK_SIZE + 17];
+    for name in ["book.epub", "document.pdf", "sheet.xlsx", "empty.ods"] {
+        fs.insert_file(
+            &format!("/code/project/{name}"),
+            if name == "empty.ods" {
+                Vec::new()
+            } else {
+                bytes.clone()
+            },
+        )
+        .await;
+    }
+    let (project, _headless) = init_test(&fs, cx, server_cx).await;
+    let (worktree, _) = project
+        .update(cx, |project, cx| {
+            project.find_or_create_worktree(path!("/code/project"), true, cx)
+        })
+        .await
+        .expect("open remote worktree");
+    let worktree_id = worktree.read_with(cx, |worktree, _| worktree.id());
+    assert!(
+        worktree
+            .update(cx, |worktree, cx| worktree
+                .load_binary_file(rel_path("book.epub"), cx))
+            .await
+            .is_err(),
+        "the old document loading path cannot read remote files"
+    );
+    let client = project.read_with(cx, |project, cx| {
+        project
+            .remote_client()
+            .expect("remote client")
+            .read(cx)
+            .proto_client()
+    });
+    let first = client
+        .request(proto::ReadDocumentChunk {
+            worktree_id: worktree_id.to_proto(),
+            path: "book.epub".into(),
+            offset: 0,
+            expected_size: 0,
+            expected_mtime: None,
+        })
+        .await
+        .expect("first chunk");
+    let old_mtime = first.file.expect("file metadata").mtime;
+    fs.insert_file("/code/project/book.epub", vec![38; 5]).await;
+    assert!(
+        client
+            .request(proto::ReadDocumentChunk {
+                worktree_id: worktree_id.to_proto(),
+                path: "book.epub".into(),
+                offset: project::DOCUMENT_CHUNK_SIZE as u64,
+                expected_size: first.total_size,
+                expected_mtime: old_mtime,
+            })
+            .await
+            .is_err(),
+        "changed files must not produce mixed snapshots"
+    );
+    fs.insert_file("/code/project/book.epub", bytes.clone())
+        .await;
+    for invalid_path in ["../book.epub", "/code/project/book.epub", "unsupported.txt"] {
+        assert!(
+            client
+                .request(proto::ReadDocumentChunk {
+                    worktree_id: worktree_id.to_proto(),
+                    path: invalid_path.into(),
+                    offset: 0,
+                    expected_size: 0,
+                    expected_mtime: None,
+                })
+                .await
+                .is_err()
+        );
+    }
+    for name in ["book.epub", "document.pdf", "sheet.xlsx", "empty.ods"] {
+        let loaded = project
+            .update(cx, |project, cx| {
+                project.load_document_file(
+                    ProjectPath {
+                        worktree_id,
+                        path: rel_path(name).into(),
+                    },
+                    cx,
+                )
+            })
+            .await
+            .expect("load remote document");
+        assert!(!loaded.file.is_local);
+        assert_eq!(
+            loaded.content,
+            if name == "empty.ods" {
+                Vec::new()
+            } else {
+                bytes.clone()
+            }
+        );
+        assert_eq!(loaded.file.path.as_unix_str(), name);
+    }
+    for name in ["missing.epub", "unsupported.txt"] {
+        assert!(
+            project
+                .update(cx, |project, cx| project.load_document_file(
+                    ProjectPath {
+                        worktree_id,
+                        path: rel_path(name).into()
+                    },
+                    cx
+                ))
+                .await
+                .is_err()
+        );
+    }
+}
+
+#[gpui::test]
 async fn test_remote_project_image_source(cx: &mut TestAppContext, server_cx: &mut TestAppContext) {
     let fs = FakeFs::new(server_cx.executor());
     fs.insert_tree(
