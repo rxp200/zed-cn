@@ -11,9 +11,9 @@ use anyhow::Result;
 use client::{Client, proto};
 use futures::channel::mpsc;
 use gpui::{
-    Action, AnyElement, AnyEntity, AnyView, App, AppContext, Context, Entity, EntityId,
-    EventEmitter, FocusHandle, Focusable, Font, Pixels, Point, Render, SharedString, Task, TaskExt,
-    WeakEntity, Window,
+    Action, AnyElement, AnyEntity, AnyView, AnyWindowHandle, App, AppContext, Context, Entity,
+    EntityId, EventEmitter, FocusHandle, Focusable, Font, Pixels, Point, Render, SharedString,
+    Task, TaskExt, WeakEntity, Window,
 };
 use language::Capability;
 pub use language::HighlightedText;
@@ -264,8 +264,20 @@ pub trait Item: Focusable + EventEmitter<Self::Event> + Render + Sized {
     fn can_split(&self) -> bool {
         false
     }
+    fn can_detach_to_new_window(&self) -> bool {
+        false
+    }
     fn detach_to_new_window(
         &mut self,
+        _source_pane: Entity<Pane>,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> bool {
+        false
+    }
+    fn detach_to_window(
+        &mut self,
+        _target_window: AnyWindowHandle,
         _source_pane: Entity<Pane>,
         _window: &mut Window,
         _cx: &mut Context<Self>,
@@ -517,8 +529,16 @@ pub trait ItemHandle: 'static + Send {
     fn buffer_kind(&self, cx: &App) -> ItemBufferKind;
     fn boxed_clone(&self) -> Box<dyn ItemHandle>;
     fn can_split(&self, cx: &App) -> bool;
+    fn can_detach_to_new_window(&self, cx: &App) -> bool;
     fn detach_to_new_window(
         &self,
+        source_pane: Entity<Pane>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> bool;
+    fn detach_to_window(
+        &self,
+        target_window: AnyWindowHandle,
         source_pane: Entity<Pane>,
         window: &mut Window,
         cx: &mut App,
@@ -749,6 +769,10 @@ impl<T: Item> ItemHandle for Entity<T> {
         self.read(cx).can_split()
     }
 
+    fn can_detach_to_new_window(&self, cx: &App) -> bool {
+        self.read(cx).can_detach_to_new_window()
+    }
+
     fn detach_to_new_window(
         &self,
         source_pane: Entity<Pane>,
@@ -757,6 +781,18 @@ impl<T: Item> ItemHandle for Entity<T> {
     ) -> bool {
         self.update(cx, |item, cx| {
             item.detach_to_new_window(source_pane, window, cx)
+        })
+    }
+
+    fn detach_to_window(
+        &self,
+        target_window: AnyWindowHandle,
+        source_pane: Entity<Pane>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> bool {
+        self.update(cx, |item, cx| {
+            item.detach_to_window(target_window, source_pane, window, cx)
         })
     }
 

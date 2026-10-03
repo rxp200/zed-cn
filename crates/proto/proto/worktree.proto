@@ -124,6 +124,22 @@ message ReadDocumentChunkResponse {
   uint64 total_size = 3;
 }
 
+message ReadEpubEntry {
+  uint64 worktree_id = 1;
+  string path = 2;
+  string entry_path = 3;
+  uint64 offset = 4;
+  uint64 expected_size = 5;
+  optional Timestamp expected_mtime = 6;
+}
+
+message ReadEpubEntryResponse {
+  File file = 1;
+  bytes content = 2;
+  uint64 total_size = 3;
+  uint64 entry_size = 4;
+}
+
 message GetSystemStats {}
 
 message GetSystemStatsResponse {

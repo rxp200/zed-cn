@@ -88,6 +88,26 @@ impl DocumentItem {
             }
         }
 
+        if format == DocumentFormat::Epub {
+            let Some(worktree) = project.read(cx).worktree_for_id(project_path.worktree_id, cx) else {
+                return Task::ready(Err(anyhow!("worktree not found")));
+            };
+            let entry = project.read(cx).entry_for_path(&project_path, cx);
+            let file = Arc::new(worktree::File {
+                is_local: worktree.read(cx).is_local(),
+                is_private: entry.is_some_and(|entry| entry.is_private),
+                disk_state: entry.and_then(|entry| entry.mtime.map(|mtime| language::DiskState::Present { mtime, size: entry.size }))
+                    .unwrap_or(language::DiskState::New),
+                entry_id: entry.map(|entry| entry.id),
+                path: project_path.path,
+                worktree,
+            });
+            return Task::ready(Ok(cx.new(|_| Self {
+                file,
+                contents: Arc::from([]),
+                format,
+            })));
+        }
         let load = project.update(cx, |project, cx| {
             project.load_document_file(project_path, cx)
         });
@@ -951,6 +971,7 @@ mod tests {
         )
         .await;
         assert_eq!(cx.read(|cx| item.read(cx).format), DocumentFormat::Epub);
+        assert!(cx.read(|cx| item.read(cx).contents.is_empty()), "opening a tab must not load the book");
 
         let (view, cx) =
             cx.add_window_view(|window, cx| DocumentView::new(item, project, window, cx));
@@ -964,6 +985,40 @@ mod tests {
             }
             _ => panic!("expected epub reader"),
         });
+    }
+
+    #[gpui::test(iterations = 20)]
+    async fn test_invalid_epub_still_opens_a_tab(cx: &mut TestAppContext) {
+        init_test(cx);
+        let (project, item) = open_test_document(cx, "broken.epub", b"not a ZIP".to_vec()).await;
+        assert!(cx.read(|cx| item.read(cx).contents.is_empty()));
+        let (view, window_cx) = cx.add_window_view(|window, cx| DocumentView::new(item, project, window, cx));
+        view.read_with(window_cx, |view, cx| {
+            assert_eq!(view.tab_content_text(0, cx).as_ref(), "broken.epub");
+        });
+        window_cx.run_until_parked();
+        view.read_with(window_cx, |view, cx| match &view.child {
+            DocumentChild::Epub(reader) => assert!(reader.read(cx).archive.is_none()),
+            _ => panic!("expected EPUB"),
+        });
+    }
+
+    #[gpui::test(iterations = 20)]
+    async fn test_epub_reader_drop_cancels_pending_load(cx: &mut TestAppContext) {
+        init_test(cx);
+        let (project, item) = open_test_document(cx, "book.epub", crate::epub_reader::tests::epub_fixture(true)).await;
+        let (view, window_cx) = cx.add_window_view(|window, cx| DocumentView::new(item.clone(), project.clone(), window, cx));
+        let reader = view.read_with(window_cx, |view, _| match &view.child {
+            DocumentChild::Epub(reader) => reader.clone(),
+            _ => panic!("expected EPUB"),
+        });
+        let weak = reader.downgrade();
+        view.update_in(window_cx, |view, window, cx| {
+            view.child = DocumentChild::Epub(cx.new(|cx| EpubReader::new(item, project, window, cx)));
+        });
+        drop(reader);
+        assert!(weak.upgrade().is_none());
+        window_cx.run_until_parked();
     }
 
     #[gpui::test]

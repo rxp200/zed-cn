@@ -585,6 +585,29 @@ async fn test_remote_document_loading(cx: &mut TestAppContext, server_cx: &mut T
 }
 
 #[gpui::test]
+async fn test_remote_epub_entries(cx: &mut TestAppContext, server_cx: &mut TestAppContext) {
+    use std::io::{Cursor, Write as _};
+    let fs = FakeFs::new(server_cx.executor());
+    fs.insert_tree(path!("/code"), json!({"project": {}})).await;
+    let mut archive = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    archive.start_file("chapter.xhtml", zip::write::FileOptions::default()).expect("entry");
+    archive.write_all(&vec![b'x'; project::epub::EPUB_CHUNK_SIZE + 7]).expect("write");
+    fs.insert_file("/code/project/book.epub", archive.finish().expect("ZIP").into_inner()).await;
+    let (project, _headless) = init_test(&fs, cx, server_cx).await;
+    let (worktree, _) = project.update(cx, |project, cx| {
+        project.find_or_create_worktree(path!("/code/project"), true, cx)
+    }).await.expect("worktree");
+    let path = ProjectPath { worktree_id: worktree.read_with(cx, |worktree, _| worktree.id()), path: rel_path("book.epub").into() };
+    let first = project.update(cx, |project, cx| project.read_epub_entry(path.clone(), "chapter.xhtml".into(), 0, None, cx)).await.expect("first chunk");
+    assert_eq!(first.content.len(), project::epub::EPUB_CHUNK_SIZE);
+    let snapshot = (first.total_size, first.file.expect("metadata").mtime.expect("mtime"));
+    let last = project.update(cx, |project, cx| project.read_epub_entry(path.clone(), "chapter.xhtml".into(), project::epub::EPUB_CHUNK_SIZE as u64, Some(snapshot), cx)).await.expect("last chunk");
+    assert_eq!(last.content, vec![b'x'; 7]);
+    fs.insert_file("/code/project/book.epub", b"changed".to_vec()).await;
+    assert!(project.update(cx, |project, cx| project.read_epub_entry(path.clone(), "chapter.xhtml".into(), 0, Some(snapshot), cx)).await.is_err());
+}
+
+#[gpui::test]
 async fn test_remote_project_image_source(cx: &mut TestAppContext, server_cx: &mut TestAppContext) {
     let fs = FakeFs::new(server_cx.executor());
     fs.insert_tree(

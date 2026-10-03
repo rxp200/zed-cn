@@ -1815,3 +1815,154 @@ async fn test_nearest_retained_workspace_skips_disconnected_workspace(cx: &mut T
         );
     });
 }
+
+#[gpui::test]
+async fn test_workspace_window_containing_point(cx: &mut TestAppContext) {
+    init_test(cx);
+    let fs = FakeFs::new(cx.executor());
+    let project_a = Project::test(fs.clone(), [], cx).await;
+    let project_b = Project::test(fs.clone(), [], cx).await;
+
+    let window_size = size(px(800.), px(600.));
+    let source_window = cx.update(|cx| {
+        cx.open_window(
+            WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                    point(px(0.), px(0.)),
+                    window_size,
+                ))),
+                ..Default::default()
+            },
+            |window, cx| cx.new(|cx| MultiWorkspace::test_new(project_a.clone(), window, cx)),
+        )
+        .unwrap()
+    });
+    // Sharing the app state keeps a single WorkspaceStore, mirroring how
+    // auxiliary windows are created in production.
+    let app_state = source_window
+        .read_with(cx, |multi_workspace, cx| {
+            multi_workspace.workspace().read(cx).app_state().clone()
+        })
+        .unwrap();
+    let open_auxiliary_window = |project: &Entity<Project>, x: f32, cx: &mut TestAppContext| {
+        let app_state = app_state.clone();
+        cx.update(|cx| {
+            cx.open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                        point(px(x), px(0.)),
+                        window_size,
+                    ))),
+                    ..Default::default()
+                },
+                |window, cx| {
+                    let workspace = cx.new(|cx| {
+                        Workspace::new_auxiliary(project.clone(), app_state.clone(), window, cx)
+                    });
+                    cx.new(|cx| MultiWorkspace::new(workspace, window, cx))
+                },
+            )
+            .unwrap()
+        })
+    };
+    // Same project, directly to the right of the source window.
+    let same_project_window = open_auxiliary_window(&project_a, 800., cx);
+    // A different project further right.
+    let other_project_window = open_auxiliary_window(&project_b, 1600., cx);
+
+    // A release over another window targets it regardless of its project; the
+    // same-project requirement is enforced by the caller before moving.
+    let hit = source_window
+        .update(cx, |_, window, cx| {
+            Workspace::workspace_window_containing_point(point(px(900.), px(300.)), window, cx)
+        })
+        .unwrap();
+    assert_eq!(
+        hit.map(|(handle, _)| handle.window_id()),
+        Some(same_project_window.window_id())
+    );
+    let hit = source_window
+        .update(cx, |_, window, cx| {
+            Workspace::workspace_window_containing_point(point(px(1700.), px(300.)), window, cx)
+        })
+        .unwrap();
+    assert_eq!(
+        hit.map(|(handle, _)| handle.window_id()),
+        Some(other_project_window.window_id())
+    );
+
+    // A release outside every window (and over the source window itself) does
+    // not hit any candidate.
+    for x in [3900., 300.] {
+        let hit = source_window
+            .update(cx, |_, window, cx| {
+                Workspace::workspace_window_containing_point(point(px(x), px(300.)), window, cx)
+            })
+            .unwrap();
+        assert!(hit.is_none());
+    }
+}
+
+#[gpui::test]
+async fn test_detach_item_to_workspace_window(cx: &mut TestAppContext) {
+    init_test(cx);
+    let fs = FakeFs::new(cx.executor());
+    let project = Project::test(fs, [], cx).await;
+
+    let source_window =
+        cx.add_window(|window, cx| MultiWorkspace::test_new(project.clone(), window, cx));
+    let app_state = source_window
+        .read_with(cx, |multi_workspace, cx| {
+            multi_workspace.workspace().read(cx).app_state().clone()
+        })
+        .unwrap();
+    let target_window = cx
+        .update(|cx| {
+            cx.open_window(WindowOptions::default(), |window, cx| {
+                let workspace = cx.new(|cx| {
+                    Workspace::new_auxiliary(project.clone(), app_state.clone(), window, cx)
+                });
+                cx.new(|cx| MultiWorkspace::new(workspace, window, cx))
+            })
+        })
+        .unwrap();
+
+    let (source_pane, item) = source_window
+        .update(cx, |multi_workspace, window, cx| {
+            let workspace = multi_workspace.workspace().clone();
+            let pane = workspace.read(cx).active_pane().clone();
+            let item = cx.new(|cx| item::test::TestItem::new(cx));
+            pane.update(cx, |pane, cx| {
+                pane.add_item(Box::new(item.clone()), true, true, None, window, cx);
+            });
+            (pane, item)
+        })
+        .unwrap();
+    let item_id = item.entity_id();
+
+    let moved = source_window
+        .update(cx, |_, window, cx| {
+            Workspace::detach_item_to_workspace_window(
+                item.clone(),
+                source_pane.clone(),
+                target_window.into(),
+                window,
+                cx,
+            )
+        })
+        .unwrap();
+    assert!(moved);
+    assert_eq!(source_pane.read_with(cx, |pane, _| pane.items_len()), 0);
+
+    target_window
+        .update(cx, |multi_workspace, _, cx| {
+            let workspace = multi_workspace.workspace().clone();
+            let workspace = workspace.read(cx);
+            let target_pane = workspace.active_pane().read(cx);
+            assert!(
+                target_pane.items().any(|item| item.item_id() == item_id),
+                "the item should be moved to the target window's active pane"
+            );
+        })
+        .unwrap();
+}

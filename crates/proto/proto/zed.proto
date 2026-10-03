@@ -540,7 +540,9 @@ message Envelope {
     PersistentTerminalOutput persistent_terminal_output = 508;
     PersistentTerminalOutputCredit persistent_terminal_output_credit = 509;
     ReadDocumentChunk read_document_chunk = 510;
-    ReadDocumentChunkResponse read_document_chunk_response = 511; // current max
+    ReadDocumentChunkResponse read_document_chunk_response = 511;
+    ReadEpubEntry read_epub_entry = 512;
+    ReadEpubEntryResponse read_epub_entry_response = 513; // current max
   }
 
   reserved 87 to 88;

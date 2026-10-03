@@ -8,6 +8,7 @@ pub mod context_server_store;
 pub mod debounced_delay;
 pub mod debugger;
 pub mod file_transfer;
+pub mod epub;
 pub mod git_store;
 pub mod image_store;
 pub mod lsp_command;
@@ -3364,6 +3365,44 @@ impl Project {
         } else {
             Task::ready(Err(anyhow!("no such path")))
         }
+    }
+
+    pub fn read_epub_entry(
+        &self,
+        path: ProjectPath,
+        entry_path: String,
+        offset: u64,
+        snapshot: Option<(u64, proto::Timestamp)>,
+        cx: &mut Context<Self>,
+    ) -> Task<Result<proto::ReadEpubEntryResponse>> {
+        let Some(worktree) = self.worktree_for_id(path.worktree_id, cx) else {
+            return Task::ready(Err(anyhow!("worktree not found")));
+        };
+        let request = proto::ReadEpubEntry {
+            worktree_id: path.worktree_id.to_proto(),
+            path: path.path.as_unix_str().to_owned(),
+            entry_path,
+            offset,
+            expected_size: snapshot.map_or(0, |snapshot| snapshot.0),
+            expected_mtime: snapshot.map(|snapshot| snapshot.1),
+        };
+        if let Some(local) = worktree.read(cx).as_local() {
+            let abs_path = local.absolutize(&path.path);
+            let fs = self.fs.clone();
+            let executor = cx.background_executor().clone();
+            return cx.spawn(async move |_, _| {
+                epub::read_entry_chunk(fs, abs_path, request, executor).await
+            });
+        }
+        let Some(client) = self.remote_client.as_ref().filter(|client| {
+            let client = client.read(cx);
+            client.supports_epub_entries()
+                && document_server_source_allowed(&client.connection_options())
+        }) else {
+            return Task::ready(Err(anyhow!(i18n::t!("05720b24baa5d61e"))));
+        };
+        let client = client.read(cx).proto_client();
+        cx.spawn(async move |_, _| client.request(request).await)
     }
 
     pub fn load_document_file(

@@ -61,13 +61,13 @@ use futures::{
     future::{Shared, try_join_all},
 };
 use gpui::{
-    Action, AnyEntity, AnyView, AnyWeakView, App, AppContext, AsyncApp, AsyncWindowContext, Axis,
-    Bounds, ClipboardItem, Context, CursorStyle, Decorations, DragMoveEvent, Entity, EntityId,
-    EventEmitter, FocusHandle, Focusable, Global, HitboxBehavior, Hsla, KeyContext, Keystroke,
-    ManagedView, MouseButton, PathPromptOptions, Point, PromptLevel, Render, ResizeEdge, Size,
-    Stateful, Subscription, SystemWindowTabController, Task, TaskExt, Tiling, WeakEntity,
-    WindowBounds, WindowHandle, WindowId, WindowOptions, actions, canvas, point, px, relative,
-    size, transparent_black,
+    Action, AnyEntity, AnyView, AnyWeakView, AnyWindowHandle, App, AppContext, AsyncApp,
+    AsyncWindowContext, Axis, Bounds, ClipboardItem, Context, CursorStyle, Decorations,
+    DragMoveEvent, Entity, EntityId, EventEmitter, FocusHandle, Focusable, Global, HitboxBehavior,
+    Hsla, KeyContext, Keystroke, ManagedView, MouseButton, PathPromptOptions, Point, PromptLevel,
+    Render, ResizeEdge, Size, Stateful, Subscription, SystemWindowTabController, Task, TaskExt,
+    Tiling, WeakEntity, WindowBounds, WindowHandle, WindowId, WindowOptions, actions, canvas,
+    point, px, relative, size, transparent_black,
 };
 pub use history_manager::*;
 pub use item::{
@@ -176,7 +176,9 @@ use crate::{
 
 pub const SERIALIZATION_THROTTLE_TIME: Duration = Duration::from_millis(200);
 pub const MAX_RECENT_SELECTIONS: usize = 20;
-pub(crate) const WORKBENCH_MODULE_INSET: Pixels = px(3.);
+/// Gap between a workbench module (dock or pane) and the window edge, and half
+/// of the seam between two neighbouring modules.
+pub(crate) const WORKBENCH_MODULE_INSET: Pixels = px(1.5);
 pub(crate) const WORKBENCH_MODULE_RADIUS: Pixels = px(6.);
 
 /// Which optional window-title variables are actually referenced by the active
@@ -2978,6 +2980,94 @@ impl Workspace {
 
     pub fn project(&self) -> &Entity<Project> {
         &self.project
+    }
+
+    /// Best-effort on-screen bounds of a window. On some platforms
+    /// [`WindowBounds::Maximized`] and [`WindowBounds::Fullscreen`] carry the
+    /// *restore* bounds instead of the current on-screen bounds, so fall back
+    /// to the bounds of the window's display in that case.
+    fn window_screen_bounds(window: &Window, cx: &App) -> Option<Bounds<Pixels>> {
+        match window.window_bounds() {
+            WindowBounds::Windowed(bounds) => Some(bounds),
+            WindowBounds::Maximized(_) | WindowBounds::Fullscreen(_) => {
+                window.display(cx).map(|display| display.bounds())
+            }
+        }
+    }
+
+    /// Finds the topmost workspace window other than the one `point` (in
+    /// window-local coordinates of `window`) was released over. Used to
+    /// retarget a tab drag released outside its source window onto an
+    /// existing window.
+    pub fn workspace_window_containing_point(
+        point: Point<Pixels>,
+        window: &Window,
+        cx: &mut App,
+    ) -> Option<(AnyWindowHandle, Entity<Workspace>)> {
+        let source_window_id = window.window_handle().window_id();
+        let screen_point = Self::window_screen_bounds(window, cx)?.origin + point;
+        let candidates = cx.window_stack().unwrap_or_else(|| cx.windows());
+        for candidate in candidates {
+            if candidate.window_id() == source_window_id {
+                continue;
+            }
+            let hit = candidate
+                .update(cx, |_, candidate_window, cx| {
+                    let bounds = Self::window_screen_bounds(candidate_window, cx)?;
+                    if !bounds.contains(&screen_point) {
+                        return None;
+                    }
+                    let multi_workspace = candidate_window.root::<MultiWorkspace>()??;
+                    Some(multi_workspace.read(cx).workspace().clone())
+                })
+                .ok()
+                .flatten();
+            if let Some(workspace) = hit {
+                return Some((candidate, workspace));
+            }
+        }
+        None
+    }
+
+    /// Moves an item from its pane in this window into the active pane of the
+    /// workspace rooted in another, already-open window.
+    pub fn detach_item_to_workspace_window<T: Item>(
+        source_item: Entity<T>,
+        source_pane: Entity<Pane>,
+        target_window: AnyWindowHandle,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> bool {
+        let item_id = source_item.entity_id();
+        source_pane.update(cx, |pane, cx| {
+            pane.remove_item(item_id, false, false, window, cx);
+        });
+        let move_result = target_window.update(cx, |root, destination, cx| {
+            let Ok(multi_workspace) = root.downcast::<MultiWorkspace>() else {
+                return false;
+            };
+            let destination_workspace = multi_workspace.read(cx).workspace().clone();
+            destination_workspace.update(cx, |workspace, cx| {
+                workspace.add_item_to_active_pane(
+                    Box::new(source_item.clone()),
+                    None,
+                    true,
+                    destination,
+                    cx,
+                );
+            });
+            destination.activate_window();
+            true
+        });
+
+        if !matches!(move_result, Ok(true)) {
+            source_pane.update(cx, |pane, cx| {
+                pane.add_item(Box::new(source_item), true, true, None, window, cx);
+            });
+            return false;
+        }
+
+        true
     }
 
     pub fn detach_item_to_auxiliary_window<T: Item>(
@@ -9767,6 +9857,11 @@ impl Render for Workspace {
                 .flex_col()
                 .font(ui_font)
                 .text_color(colors.text)
+                // Paint the frame behind the pane card: the card floats with a
+                // WORKBENCH_MODULE_INSET gap, and an unpainted gap shows the
+                // platform clear color (pure white in the Windows DirectX
+                // opaque path) as a bright border around the window.
+                .bg(colors.title_bar_background)
                 .overflow_hidden()
                 .when_some(self.titlebar_item.clone(), |this, item| this.child(item))
                 .child(
@@ -15950,6 +16045,44 @@ mod tests {
                     .contains_focused(window, cx)
             );
         });
+    }
+
+    #[gpui::test]
+    async fn test_dock_resize_handle_lights_up_the_middle_of_the_module_seam(
+        cx: &mut TestAppContext,
+    ) {
+        init_test(cx);
+        let fs = FakeFs::new(cx.executor());
+        let project = Project::test(fs, None, cx).await;
+        let (multi_workspace, cx) =
+            cx.add_window_view(|window, cx| MultiWorkspace::test_new(project, window, cx));
+        let workspace = multi_workspace.read_with(cx, |workspace, _| workspace.workspace().clone());
+        add_an_item_to_active_pane(cx, &workspace, 1);
+        let pane = workspace.read_with(cx, |workspace, _| workspace.active_pane().clone());
+
+        workspace.update_in(cx, |workspace, window, cx| {
+            let panel = cx.new(|cx| TestPanel::new(DockPosition::Left, 100, cx));
+            workspace.add_panel(panel, window, cx);
+            workspace.toggle_dock(DockPosition::Left, window, cx);
+        });
+        cx.run_until_parked();
+
+        let dock_card = cx
+            .debug_bounds("left-dock-card")
+            .expect("left dock card is rendered");
+        let pane_selector: &'static str = format!("pane-card-{}", pane.entity_id()).leak();
+        let pane_card = cx
+            .debug_bounds(pane_selector)
+            .expect("pane card is rendered");
+        let handle = cx
+            .debug_bounds("left-dock-resize-handle")
+            .expect("left dock resize handle is rendered");
+
+        assert_eq!(
+            pane_card.left() - dock_card.right(),
+            WORKBENCH_MODULE_INSET * 2.
+        );
+        assert_eq!(handle.center().x, (dock_card.right() + pane_card.left()) / 2.);
     }
 
     #[gpui::test]

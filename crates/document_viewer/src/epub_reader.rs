@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
-    io::{Cursor, Read as _},
+    io::Cursor,
+    rc::Rc,
     sync::{Arc, Mutex},
 };
 
@@ -14,6 +15,8 @@ use markdown::{Markdown, MarkdownElement, MarkdownFont, MarkdownOptions, Markdow
 use quick_xml::Reader;
 use quick_xml::XmlVersion;
 use quick_xml::events::Event;
+#[cfg(test)]
+use std::io::Read as _;
 use ui::prelude::*;
 use ui::utils::WithRemSize;
 use util::ResultExt as _;
@@ -50,8 +53,6 @@ actions!(
     ]
 );
 
-/// Number of chapters whose parsed content stays in memory.
-const CHAPTER_CACHE_SIZE: usize = 3;
 const DEFAULT_FONT_SIZE: f32 = 16.0;
 const MIN_FONT_SIZE: f32 = 10.0;
 const MAX_FONT_SIZE: f32 = 32.0;
@@ -85,6 +86,7 @@ pub struct EpubArchive {
     pub toc: Vec<EpubTocEntry>,
 }
 
+#[cfg(test)]
 type SharedArchive = Arc<Mutex<zip::ZipArchive<Cursor<Arc<[u8]>>>>>;
 
 pub struct EpubReader {
@@ -93,16 +95,18 @@ pub struct EpubReader {
     focus_handle: FocusHandle,
     languages: Option<Arc<language::LanguageRegistry>>,
     pub(crate) archive: Option<Arc<EpubArchive>>,
-    zip: Option<SharedArchive>,
     error: Option<SharedString>,
     chapter_index: usize,
     pub(crate) markdown: Option<Entity<Markdown>>,
-    chapter_cache: HashMap<usize, Entity<Markdown>>,
+    source: Option<Arc<EpubSource>>,
+    images: Rc<HashMap<String, ImageSource>>,
+    progress: Option<(u64, u64)>,
+    loading_resource: Option<String>,
     scroll_handle: ScrollHandle,
     font_size: f32,
     show_toc: bool,
     image_cache: Entity<gpui::RetainAllImageCache>,
-    _load_task: Task<Result<()>>,
+    _load_task: Option<Task<Result<()>>>,
 }
 
 impl EpubReader {
@@ -112,26 +116,35 @@ impl EpubReader {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let bytes = item.read(cx).contents.clone();
-        let parse_task = cx.spawn(async move |this, cx| {
-            let parsed = cx
-                .background_spawn({
-                    let bytes = bytes.clone();
-                    async move { parse_epub(&bytes).map_err(|e| e.to_string()) }
+        cx.on_release(|reader, cx| {
+            reader._load_task = None;
+            for image in reader.images.values() {
+                image.remove_asset(cx);
+            }
+        })
+        .detach();
+        let source = Arc::new(EpubSource {
+            project: project.downgrade(),
+            path: item.read(cx).project_path(cx),
+            snapshot: Mutex::new(None),
+            limiter: Arc::new(async_lock::Semaphore::new(1)),
+        });
+        let parse_task = cx.spawn({
+            let source = source.clone();
+            async move |this, cx| {
+                let parsed = load_structure(&source, cx).await;
+                this.update(cx, |reader, cx| match parsed {
+                    Ok(archive) => {
+                        reader.archive = Some(Arc::new(archive));
+                        reader.load_chapter(0, cx);
+                        cx.notify();
+                    }
+                    Err(error) => {
+                        reader.error = Some(i18n::t!("5e36c31539810b81", error = error).into());
+                        cx.notify();
+                    }
                 })
-                .await;
-            this.update(cx, |reader, cx| match parsed {
-                Ok(archive) => {
-                    reader.zip = open_zip(bytes).ok().map(|zip| Arc::new(Mutex::new(zip)));
-                    reader.archive = Some(Arc::new(archive));
-                    reader.load_chapter(0, cx);
-                    cx.notify();
-                }
-                Err(error) => {
-                    reader.error = Some(error.into());
-                    cx.notify();
-                }
-            })
+            }
         });
 
         Self {
@@ -140,16 +153,18 @@ impl EpubReader {
             focus_handle: cx.focus_handle(),
             languages: None,
             archive: None,
-            zip: None,
             error: None,
             chapter_index: 0,
             markdown: None,
-            chapter_cache: HashMap::new(),
+            source: Some(source),
+            images: Rc::new(HashMap::new()),
+            progress: None,
+            loading_resource: None,
             scroll_handle: ScrollHandle::new(),
             font_size: DEFAULT_FONT_SIZE,
             show_toc: false,
             image_cache: gpui::RetainAllImageCache::new(cx),
-            _load_task: parse_task,
+            _load_task: Some(parse_task),
         }
     }
 
@@ -220,61 +235,46 @@ impl EpubReader {
         self.chapter_index = index;
         self.scroll_handle.set_offset(gpui::point(px(0.), px(0.)));
 
-        if let Some(markdown) = self.chapter_cache.get(&index) {
-            self.markdown = Some(markdown.clone());
-            cx.notify();
-            return;
-        }
-
-        let Some(zip) = self.zip.clone() else {
+        let Some(source) = self.source.clone() else {
             return;
         };
+        self._load_task = None;
+        self.markdown = None;
+        for image in self.images.values() {
+            image.remove_asset(cx);
+        }
+        self.images = Rc::new(HashMap::new());
+        self.image_cache = gpui::RetainAllImageCache::new(cx);
+        self.error = None;
+        self.progress = None;
+        self.loading_resource = Some(chapter_path_label(&archive.chapters[index].path));
         let chapter_path = archive.chapters[index].path.clone();
         let languages = self.languages.clone();
-        let load = cx.background_spawn(async move {
-            let body = {
-                let mut zip = zip.lock().ok()?;
-                read_zip_string(&mut zip, &chapter_path).ok()
-            }?;
-            Some(extract_body(&body))
-        });
-        cx.spawn(async move |this, cx| {
-            let body = load.await;
+        self._load_task = Some(cx.spawn(async move |this, cx| {
+            let loaded = load_chapter_content(&source, &chapter_path, &this, cx).await;
             this.update(cx, |reader, cx| {
-                let Some(body) = body else {
-                    reader.error = Some(SharedString::from(i18n::t!("d3ea7151ac24f909")));
-                    cx.notify();
-                    return;
-                };
-                let markdown = cx.new(|cx| {
-                    Markdown::new_with_options(
-                        body.into(),
-                        languages,
-                        None,
-                        MarkdownOptions {
-                            parse_html: true,
-                            ..Default::default()
-                        },
-                        cx,
-                    )
-                });
-                reader.chapter_cache.insert(index, markdown.clone());
-                while reader.chapter_cache.len() > CHAPTER_CACHE_SIZE {
-                    let victim = reader
-                        .chapter_cache
-                        .keys()
-                        .filter(|key| **key != index)
-                        .max_by_key(|key| key.abs_diff(index))
-                        .copied();
-                    let Some(victim) = victim else { break };
-                    reader.chapter_cache.remove(&victim);
+                reader.loading_resource = None;
+                match loaded {
+                    Ok((body, images)) => {
+                        reader.images = Rc::new(images);
+                        reader.markdown = Some(cx.new(|cx| {
+                            Markdown::new_with_options(
+                                body.into(),
+                                languages,
+                                None,
+                                MarkdownOptions {
+                                    parse_html: true,
+                                    ..Default::default()
+                                },
+                                cx,
+                            )
+                        }));
+                    }
+                    Err(error) => reader.error = Some(i18n::t!("5e36c31539810b81", error = error).into()),
                 }
-                reader.markdown = Some(markdown);
                 cx.notify();
             })
-            .ok();
-        })
-        .detach();
+        }));
         cx.notify();
     }
 
@@ -386,9 +386,20 @@ impl Render for EpubReader {
             div()
                 .size_full()
                 .flex()
+                .flex_col()
+                .gap_3()
                 .items_center()
                 .justify_center()
                 .child(Label::new(error).color(Color::Error))
+                .when(self.archive.is_some(), |element| {
+                    element.child(
+                        ui::Button::new("epub-retry", i18n::t!("b8784c8dd5636ff2")).on_click(
+                            cx.listener(|reader, _, _, cx| {
+                                reader.load_chapter(reader.chapter_index, cx)
+                            }),
+                        ),
+                    )
+                })
                 .into_any_element()
         } else if let Some(markdown) = self.markdown.clone() {
             let chapter_dir = self
@@ -397,12 +408,19 @@ impl Render for EpubReader {
                 .and_then(|archive| archive.chapters.get(self.chapter_index))
                 .map(|chapter| zip_dir(&chapter.path))
                 .unwrap_or_default();
-            let zip = self.zip.clone();
+            let images = self.images.clone();
             let reader = cx.entity().downgrade();
             let mut style = MarkdownStyle::themed(MarkdownFont::Preview, window, cx);
             style.base_text_style.font_size = px(self.font_size).into();
             let markdown_element = MarkdownElement::new(markdown, style)
-                .image_resolver(move |url, _cx| resolve_epub_image(zip.as_ref(), &chapter_dir, url))
+                .image_resolver(move |url, _cx| {
+                    images
+                        .get(&resolve_zip_path(
+                            &chapter_dir,
+                            url.split('#').next().unwrap_or(url),
+                        ))
+                        .cloned()
+                })
                 .on_url_click(move |url, _window, cx| {
                     reader
                         .update(cx, |reader, cx| reader.handle_url_click(url, cx))
@@ -426,9 +444,32 @@ impl Render for EpubReader {
             div()
                 .size_full()
                 .flex()
+                .flex_col()
+                .gap_3()
                 .items_center()
                 .justify_center()
+                .child(ui::SpinnerLabel::new())
                 .child(Label::new(i18n::t!("b6c983f80bc7ee9e")).color(Color::Muted))
+                .when_some(self.loading_resource.clone(), |element, resource| {
+                    element.child(
+                        Label::new(resource)
+                            .color(Color::Muted)
+                            .size(LabelSize::Small),
+                    )
+                })
+                .when_some(self.progress, |element, (loaded, total)| {
+                    element
+                        .child(div().w(px(240.)).child(ui::ProgressBar::new(
+                            "epub-load-progress",
+                            loaded as f32,
+                            total.max(1) as f32,
+                            cx,
+                        )))
+                        .child(Label::new(format!(
+                            "{:.0}%",
+                            loaded as f64 / total.max(1) as f64 * 100.0
+                        )))
+                })
                 .into_any_element()
         };
 
@@ -507,22 +548,243 @@ impl Render for EpubReader {
     }
 }
 
-/// Opens the archive for random access to its entries.
+fn chapter_path_label(path: &str) -> String {
+    path.rsplit('/').next().unwrap_or(path).to_owned()
+}
+
+struct EpubSource {
+    project: gpui::WeakEntity<project::Project>,
+    path: project::ProjectPath,
+    snapshot: Mutex<Option<(u64, rpc::proto::Timestamp)>>,
+    limiter: Arc<async_lock::Semaphore>,
+}
+
+impl EpubSource {
+    async fn read(
+        &self,
+        entry: &str,
+        reader: Option<&gpui::WeakEntity<EpubReader>>,
+        cx: &mut gpui::AsyncApp,
+    ) -> Result<Vec<u8>> {
+        use anyhow::Context as _;
+        let _permit = self.limiter.acquire_arc().await;
+        let mut bytes = Vec::new();
+        let mut total = None;
+        loop {
+            let snapshot = *self
+                .snapshot
+                .lock()
+                .map_err(|_| anyhow::anyhow!("EPUB snapshot lock poisoned"))?;
+            let response = self
+                .project
+                .update(cx, |project, cx| {
+                    project.read_epub_entry(
+                        self.path.clone(),
+                        entry.to_owned(),
+                        bytes.len() as u64,
+                        snapshot,
+                        cx,
+                    )
+                })?
+                .await?;
+            let file = response.file.context("missing EPUB metadata")?;
+            anyhow::ensure!(
+                file.worktree_id == self.path.worktree_id.to_proto()
+                    && file.path == self.path.path.as_unix_str()
+                    && response.total_size <= 512 * 1024 * 1024,
+                "invalid EPUB metadata"
+            );
+            let mtime = file.mtime.context("missing EPUB modification time")?;
+            if let Some((size, expected_mtime)) = snapshot {
+                anyhow::ensure!(
+                    size == response.total_size && expected_mtime == mtime,
+                    i18n::t!("289cab9d66de19ce")
+                );
+            } else {
+                *self
+                    .snapshot
+                    .lock()
+                    .map_err(|_| anyhow::anyhow!("EPUB snapshot lock poisoned"))? =
+                    Some((response.total_size, mtime));
+            }
+            anyhow::ensure!(
+                response.entry_size <= project::epub::EPUB_ENTRY_LIMIT
+                    && response.content.len() <= project::epub::EPUB_CHUNK_SIZE
+                    && bytes.len() as u64 + response.content.len() as u64 <= response.entry_size
+                    && total.is_none_or(|total| total == response.entry_size),
+                "invalid EPUB entry chunk"
+            );
+            if total.is_none() {
+                bytes.try_reserve_exact(response.entry_size as usize)?;
+                total = Some(response.entry_size);
+            }
+            anyhow::ensure!(
+                !response.content.is_empty() || bytes.len() as u64 == response.entry_size,
+                "empty EPUB entry chunk"
+            );
+            bytes.extend_from_slice(&response.content);
+            if let Some(reader) = reader {
+                reader.update(cx, |reader, cx| {
+                    reader.loading_resource = Some(chapter_path_label(entry));
+                    reader.progress = Some((bytes.len() as u64, response.entry_size));
+                    cx.notify();
+                })?;
+            }
+            if bytes.len() as u64 == response.entry_size {
+                return Ok(bytes);
+            }
+        }
+    }
+
+    async fn text(&self, entry: &str, cx: &mut gpui::AsyncApp) -> Result<String> {
+        Ok(String::from_utf8(self.read(entry, None, cx).await?)?)
+    }
+}
+
+async fn load_structure(source: &EpubSource, cx: &mut gpui::AsyncApp) -> Result<EpubArchive> {
+    use anyhow::Context as _;
+    source.read("", None, cx).await?;
+    let container = source.text("META-INF/container.xml", cx).await?;
+    let opf_path = parse_container(&container).context("invalid EPUB container")?;
+    let opf = source.text(&opf_path, cx).await?;
+    let parsed = parse_opf(&opf);
+    let opf_dir = zip_dir(&opf_path);
+    let chapters = parsed
+        .spine
+        .iter()
+        .filter_map(|id| parsed.manifest.get(id))
+        .filter(|item| item.media_type.contains("html"))
+        .map(|item| EpubChapter {
+            path: resolve_zip_path(&opf_dir, &item.href),
+        })
+        .collect::<Vec<_>>();
+    anyhow::ensure!(!chapters.is_empty(), i18n::t!("66947e52b572e014"));
+    let mut toc = Vec::new();
+    let mut toc_dir = opf_dir.clone();
+    if let Some(nav) = parsed
+        .manifest
+        .values()
+        .find(|item| item.properties.iter().any(|property| property == "nav"))
+    {
+        let path = resolve_zip_path(&opf_dir, &nav.href);
+        toc = parse_nav(&source.text(&path, cx).await?);
+        toc_dir = zip_dir(&path);
+    }
+    if toc.is_empty() {
+        let ncx = parsed
+            .ncx_id
+            .as_ref()
+            .and_then(|id| parsed.manifest.get(id))
+            .or_else(|| {
+                parsed
+                    .manifest
+                    .values()
+                    .find(|item| item.media_type == "application/x-dtbncx+xml")
+            });
+        if let Some(ncx) = ncx {
+            let path = resolve_zip_path(&opf_dir, &ncx.href);
+            toc = parse_ncx(&source.text(&path, cx).await?);
+            toc_dir = zip_dir(&path);
+        }
+    }
+    for entry in &mut toc {
+        if let Some(href) = &entry.href {
+            let path = resolve_zip_path(&toc_dir, href.split('#').next().unwrap_or(href));
+            entry.chapter_index = chapters.iter().position(|chapter| chapter.path == path);
+        }
+    }
+    Ok(EpubArchive {
+        title: parsed.title,
+        author: parsed.author,
+        chapters,
+        toc,
+    })
+}
+
+fn chapter_image_paths(body: &str, directory: &str) -> Vec<String> {
+    let mut reader = Reader::from_str(body);
+    let mut paths = Vec::new();
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(element) | Event::Empty(element))
+                if element.local_name().as_ref() == b"img" =>
+            {
+                for attribute in element.attributes().flatten() {
+                    if attribute.key.as_ref() == b"src" {
+                        if let Ok(value) = attribute
+                            .decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())
+                        {
+                            if !value.contains(':') {
+                                let path = resolve_zip_path(
+                                    directory,
+                                    value.split('#').next().unwrap_or(&value),
+                                );
+                                if image_format_for_path(&path).is_some()
+                                    && !paths.contains(&path)
+                                    && paths.len() < 128
+                                {
+                                    paths.push(path);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(Event::Eof) | Err(_) => break,
+            _ => {}
+        }
+    }
+    paths
+}
+
+async fn load_chapter_content(
+    source: &EpubSource,
+    chapter_path: &str,
+    reader: &gpui::WeakEntity<EpubReader>,
+    cx: &mut gpui::AsyncApp,
+) -> Result<(String, HashMap<String, ImageSource>)> {
+    let bytes = source.read(chapter_path, Some(reader), cx).await?;
+    let body = extract_body(&String::from_utf8(bytes)?);
+    let paths = chapter_image_paths(&body, &zip_dir(chapter_path));
+    let mut images = HashMap::new();
+    let mut compressed_bytes = 0usize;
+    let mut decoded_bytes = 0u64;
+    for path in paths {
+        let bytes = source.read(&path, Some(reader), cx).await?;
+        compressed_bytes += bytes.len();
+        anyhow::ensure!(
+            compressed_bytes <= 16 * 1024 * 1024,
+            i18n::t!("2514e8f9aac8cc7c")
+        );
+        let dimensions = if path.to_ascii_lowercase().ends_with(".svg") {
+            let tree = usvg::Tree::from_data(&bytes, &usvg::Options::default())?;
+            (tree.size().width().ceil() as u32, tree.size().height().ceil() as u32)
+        } else {
+            image::ImageReader::new(Cursor::new(&bytes)).with_guessed_format()?.into_dimensions()?
+        };
+        decoded_bytes =
+            decoded_bytes.saturating_add(u64::from(dimensions.0) * u64::from(dimensions.1) * 4);
+        anyhow::ensure!(
+            decoded_bytes <= 64 * 1024 * 1024,
+            i18n::t!("c528a431deef8f33")
+        );
+        if let Some(format) = image_format_for_path(&path) {
+            images.insert(
+                path,
+                ImageSource::Image(Arc::new(gpui::Image::from_bytes(format, bytes))),
+            );
+        }
+    }
+    Ok((body, images))
+}
+
+#[cfg(test)]
 fn open_zip(bytes: Arc<[u8]>) -> Result<zip::ZipArchive<Cursor<Arc<[u8]>>>, SharedString> {
     zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| SharedString::from(e.to_string()))
 }
 
-fn read_zip_string(
-    archive: &mut zip::ZipArchive<Cursor<Arc<[u8]>>>,
-    path: &str,
-) -> std::io::Result<String> {
-    let mut entry = archive.by_name(path)?;
-    let mut contents = Vec::with_capacity(entry.size() as usize);
-    entry.read_to_end(&mut contents)?;
-    Ok(String::from_utf8_lossy(&contents).into_owned())
-}
-
 /// Resolves an image URL inside a chapter to a GPUI image source.
+#[cfg(test)]
 fn resolve_epub_image(
     zip: Option<&SharedArchive>,
     chapter_dir: &str,
@@ -603,6 +865,7 @@ fn extract_body(document: &str) -> String {
 }
 
 /// Parses the structural data (metadata, spine, table of contents) of an EPUB archive.
+#[cfg(test)]
 pub(crate) fn parse_epub(bytes: &[u8]) -> anyhow::Result<EpubArchive> {
     use anyhow::Context as _;
     let cursor = Cursor::new(bytes);
@@ -681,6 +944,7 @@ pub(crate) fn parse_epub(bytes: &[u8]) -> anyhow::Result<EpubArchive> {
     })
 }
 
+#[cfg(test)]
 fn read_zip_entry(
     archive: &mut zip::ZipArchive<Cursor<&[u8]>>,
     path: &str,
@@ -1169,6 +1433,22 @@ pub(crate) mod tests {
         assert!(resolve_epub_image(Some(&zip), "OEBPS", "missing.png").is_none());
         assert!(resolve_epub_image(Some(&zip), "OEBPS", "images/pixel.txt").is_none());
         assert!(resolve_epub_image(Some(&zip), "OEBPS", "https://example.com/a.png").is_none());
+    }
+
+    #[test]
+    fn chapter_images_are_local_deduplicated_and_bounded() {
+        let body = r#"<body><img src="images/a.png"/><img src="images/a.png"/><img src="https://example.com/a.png"/><img src="data:image/png;base64,x"/></body>"#;
+        assert_eq!(
+            chapter_image_paths(body, "OEBPS"),
+            vec!["OEBPS/images/a.png"]
+        );
+        let body = (0..200)
+            .map(|index| format!("<img src=\"{index}.png\"/>"))
+            .collect::<String>();
+        assert_eq!(
+            chapter_image_paths(&format!("<body>{body}</body>"), "").len(),
+            128
+        );
     }
 
     #[test]

@@ -24,6 +24,10 @@ use util::ResultExt as _;
 
 pub(crate) const RESIZE_HANDLE_SIZE: Pixels = px(6.);
 
+/// Width of the border drawn around a dock card. Absolute children are placed
+/// relative to the card's padding box, which is inset by this border.
+const DOCK_CARD_BORDER_WIDTH: Pixels = px(1.);
+
 /// Size of the highlight and click target of one activity bar item.
 ///
 /// The activity bar is 48px wide and stacks its items with a 4px gap, so a
@@ -1337,9 +1341,21 @@ impl Render for Dock {
                 };
                 let glow = glow.rounded_full();
                 let bar = bar.rounded_full();
+                // The card is inset inside the dock wrapper, so the seam between
+                // the card and its neighbour is centred on the wrapper's edge.
+                // Offsetting the handle by that inset lights the accent bar up in
+                // the middle of the seam instead of on the card's edge.
+                let handle_offset = RESIZE_HANDLE_SIZE / 2.
+                    + crate::WORKBENCH_MODULE_INSET
+                    + DOCK_CARD_BORDER_WIDTH;
                 let handle = div()
                     .id("resize-handle")
                     .group("dock-resize-handle")
+                    .debug_selector(move || match position {
+                        DockPosition::Left => "left-dock-resize-handle".into(),
+                        DockPosition::Right => "right-dock-resize-handle".into(),
+                        DockPosition::Bottom => "bottom-dock-resize-handle".into(),
+                    })
                     .child(if resize_drag_active {
                         glow.bg(accent.opacity(0.25))
                     } else {
@@ -1391,7 +1407,7 @@ impl Render for Dock {
                     DockPosition::Left => deferred(
                         handle
                             .absolute()
-                            .right(-RESIZE_HANDLE_SIZE / 2.)
+                            .right(-handle_offset)
                             .top(px(0.))
                             .h_full()
                             .w(RESIZE_HANDLE_SIZE)
@@ -1400,7 +1416,7 @@ impl Render for Dock {
                     DockPosition::Bottom => deferred(
                         handle
                             .absolute()
-                            .top(-RESIZE_HANDLE_SIZE / 2.)
+                            .top(-handle_offset)
                             .left(px(0.))
                             .w_full()
                             .h(RESIZE_HANDLE_SIZE)
@@ -1410,7 +1426,7 @@ impl Render for Dock {
                         handle
                             .absolute()
                             .top(px(0.))
-                            .left(-RESIZE_HANDLE_SIZE / 2.)
+                            .left(-handle_offset)
                             .h_full()
                             .w(RESIZE_HANDLE_SIZE)
                             .cursor_col_resize(),
