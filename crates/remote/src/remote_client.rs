@@ -174,6 +174,7 @@ pub trait RemoteClientDelegate: Send + Sync {
 pub const TEMPORARY_FILES_CAPABILITY: &str = "temporary_files_v1";
 pub const SYSTEM_STATS_CAPABILITY: &str = "system_stats_v1";
 pub const DOCUMENT_CHUNKS_CAPABILITY: &str = "document_chunks_v1";
+pub const EPUB_ENTRIES_CAPABILITY: &str = "epub_entries_v1";
 pub const PERSISTENT_TERMINALS_CAPABILITY: &str = "persistent_terminals_v1";
 pub const PERSISTENT_TERMINAL_STREAMING_CAPABILITY: &str = "persistent_terminal_streaming_v1";
 
@@ -1429,6 +1430,10 @@ impl RemoteClient {
         self.client.supports_system_stats.load(SeqCst)
     }
 
+    pub fn supports_epub_entries(&self) -> bool {
+        self.client.supports_epub_entries.load(SeqCst)
+    }
+
     pub fn supports_document_chunks(&self) -> bool {
         self.client.supports_document_chunks.load(SeqCst)
     }
@@ -2638,6 +2643,7 @@ mod tests {
         let client = cx
             .update(|cx| ChannelClient::new(incoming_rx, outgoing_tx, cx, "document-test", false));
         assert!(!client.supports_document_chunks.load(SeqCst));
+        assert!(!client.supports_epub_entries.load(SeqCst));
         for (capabilities, expected) in [
             (Vec::new(), false),
             (vec![DOCUMENT_CHUNKS_CAPABILITY.to_owned()], true),
@@ -2648,6 +2654,15 @@ mod tests {
                 .expect("deliver capabilities");
             cx.run_until_parked();
             assert_eq!(client.supports_document_chunks.load(SeqCst), expected);
+            assert!(!client.supports_epub_entries.load(SeqCst));
+        }
+        for (capabilities, expected) in [
+            (vec![EPUB_ENTRIES_CAPABILITY.to_owned()], true),
+            (Vec::new(), false),
+        ] {
+            incoming_tx.unbounded_send(proto::RemoteStarted { capabilities }.into_envelope(0, None, None)).expect("deliver EPUB capabilities");
+            cx.run_until_parked();
+            assert_eq!(client.supports_epub_entries.load(SeqCst), expected);
         }
     }
 
@@ -2988,6 +3003,7 @@ pub(crate) struct ChannelClient {
     supports_temporary_files: AtomicBool,
     supports_system_stats: AtomicBool,
     supports_document_chunks: AtomicBool,
+    supports_epub_entries: AtomicBool,
     supports_persistent_terminals: AtomicBool,
     supports_persistent_terminal_streaming: AtomicBool,
     session_invalidated: Arc<Signal<String>>,
@@ -3024,6 +3040,7 @@ impl ChannelClient {
             supports_temporary_files: AtomicBool::new(false),
             supports_system_stats: AtomicBool::new(false),
             supports_document_chunks: AtomicBool::new(false),
+            supports_epub_entries: AtomicBool::new(false),
             supports_persistent_terminals: AtomicBool::new(false),
             supports_persistent_terminal_streaming: AtomicBool::new(false),
             session_invalidated: Arc::new(Signal::new(cx)),
@@ -3048,6 +3065,7 @@ impl ChannelClient {
                         TEMPORARY_FILES_CAPABILITY.to_string(),
                         SYSTEM_STATS_CAPABILITY.to_string(),
                         DOCUMENT_CHUNKS_CAPABILITY.to_string(),
+                        EPUB_ENTRIES_CAPABILITY.to_string(),
                         PERSISTENT_TERMINALS_CAPABILITY.to_string(),
                         PERSISTENT_TERMINAL_STREAMING_CAPABILITY.to_string(),
                     ],
@@ -3101,6 +3119,10 @@ impl ChannelClient {
                             .capabilities
                             .iter()
                             .any(|capability| capability == SYSTEM_STATS_CAPABILITY),
+                        SeqCst,
+                    );
+                    this.supports_epub_entries.store(
+                        started.capabilities.iter().any(|capability| capability == EPUB_ENTRIES_CAPABILITY),
                         SeqCst,
                     );
                     this.supports_document_chunks.store(

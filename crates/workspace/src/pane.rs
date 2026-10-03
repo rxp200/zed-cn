@@ -533,6 +533,31 @@ pub struct DraggedTab {
 
 impl DraggedTab {
     fn release_outside_source(&self, window: &mut Window, cx: &mut App) {
+        // A tab released over another window moves there when that window
+        // shares the project; a tab is only detached into a new window when
+        // it is released outside every window.
+        let point = window.mouse_position();
+        if let Some((target_window, target_workspace)) =
+            Workspace::workspace_window_containing_point(point, window, cx)
+        {
+            // Moving an item into a different project would strand it from
+            // its buffers (and, for remote projects, from its host), so such
+            // releases simply cancel the drag.
+            let same_project = self
+                .pane
+                .read(cx)
+                .project
+                .upgrade()
+                .is_some_and(|project| target_workspace.read(cx).project() == &project);
+            if same_project
+                && self
+                    .item
+                    .detach_to_window(target_window, self.pane.clone(), window, cx)
+            {
+                cx.stop_active_drag(window);
+            }
+            return;
+        }
         if self
             .item
             .detach_to_new_window(self.pane.clone(), window, cx)
@@ -3146,6 +3171,7 @@ impl Pane {
         let has_items_to_left = ix > 0;
         let has_items_to_right = ix < total_items - 1;
         let has_clean_items = self.items.iter().any(|item| !item.is_dirty(cx));
+        let can_detach_to_new_window = self.items[ix].can_detach_to_new_window(cx);
         let is_pinned = self.is_tab_pinned(ix);
 
         let pane = cx.entity().downgrade();
@@ -3501,6 +3527,19 @@ impl Pane {
                             menu = menu.map(pin_tab_entries);
                         }
                     };
+
+                    if let Some(pane) = pane.upgrade() {
+                        menu = menu.separator().item(ContextMenuItem::Entry(
+                            ContextMenuEntry::new(i18n::t!("2adf5c1e367d4b6f"))
+                                .disabled(!can_detach_to_new_window)
+                                .handler(window.handler_for(&pane, move |pane, window, cx| {
+                                    if let Some(item) = pane.item_for_index(ix) {
+                                        let source_pane = cx.entity();
+                                        item.detach_to_new_window(source_pane, window, cx);
+                                    }
+                                })),
+                        ));
+                    }
 
                     // Add custom item-specific actions
                     if !extra_actions.is_empty() {

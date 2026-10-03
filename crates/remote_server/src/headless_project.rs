@@ -233,6 +233,7 @@ pub struct HeadlessProject {
     pub _toolchain_store: Entity<ToolchainStore>,
     pub kernels: HashMap<String, Child>,
     persistent_terminals: Arc<PersistentTerminalManager>,
+    epub_read_limiter: Arc<async_lock::Semaphore>,
 }
 
 pub struct HeadlessAppState {
@@ -488,6 +489,7 @@ impl HeadlessProject {
         session.add_request_handler(cx.weak_entity(), Self::handle_create_temporary_file);
         session.add_request_handler(cx.weak_entity(), Self::handle_get_system_stats);
         session.add_request_handler(cx.weak_entity(), Self::handle_read_document_chunk);
+        session.add_request_handler(cx.weak_entity(), Self::handle_read_epub_entry);
         session.add_request_handler(cx.weak_entity(), Self::handle_create_persistent_terminal);
         session.add_request_handler(cx.weak_entity(), Self::handle_persistent_terminal_input);
         session.add_request_handler(cx.weak_entity(), Self::handle_resize_persistent_terminal);
@@ -567,6 +569,7 @@ impl HeadlessProject {
             _toolchain_store: toolchain_store,
             kernels: Default::default(),
             persistent_terminals: Arc::new(PersistentTerminalManager::new()),
+            epub_read_limiter: Arc::new(async_lock::Semaphore::new(2)),
         }
     }
 
@@ -981,6 +984,24 @@ impl HeadlessProject {
             trusted_worktrees.restrict(worktree_store, restricted_paths, cx);
         });
         Ok(proto::Ack {})
+    }
+
+    async fn handle_read_epub_entry(
+        this: Entity<Self>,
+        message: TypedEnvelope<proto::ReadEpubEntry>,
+        cx: AsyncApp,
+    ) -> Result<proto::ReadEpubEntryResponse> {
+        let request = message.payload;
+        let path = RelPath::from_unix_str(&request.path)?;
+        let limiter = this.read_with(&cx, |this, _| this.epub_read_limiter.clone());
+        let _permit = limiter.acquire_arc().await;
+        let (abs_path, fs) = this.read_with(&cx, |this, cx| {
+            let worktree = this.worktree_store.read(cx)
+                .worktree_for_id(WorktreeId::from_proto(request.worktree_id), cx)
+                .context("worktree not found")?;
+            anyhow::Ok((worktree.read(cx).absolutize(&path), this.fs.clone()))
+        })?;
+        project::epub::read_entry_chunk(fs, abs_path, request, cx.background_executor().clone()).await
     }
 
     async fn handle_read_document_chunk(

@@ -18,6 +18,8 @@ test-support = ["gpui/test-support"]
 [dependencies]
 i18n.workspace = true
 anyhow.workspace = true
+async-lock.workspace = true
+rpc.workspace = true
 calamine.workspace = true
 chrono.workspace = true
 db.workspace = true
@@ -36,6 +38,7 @@ smallvec.workspace = true
 tabular_data_preview.workspace = true
 theme_settings.workspace = true
 ui.workspace = true
+usvg.workspace = true
 util.workspace = true
 worktree.workspace = true
 workspace.workspace = true

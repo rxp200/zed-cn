@@ -411,6 +411,67 @@ impl TerminalView {
         });
     }
 
+    fn schedule_detach_to_window(
+        source_item: Entity<Self>,
+        target_window: gpui::AnyWindowHandle,
+        source_pane: Entity<Pane>,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let source_window = window.window_handle();
+        cx.defer(move |cx| {
+            source_window
+                .update(cx, |_, window, cx| {
+                    Self::detach_to_window(source_item, target_window, source_pane, window, cx);
+                })
+                .ok();
+        });
+    }
+
+    fn detach_to_window(
+        source_item: Entity<Self>,
+        target_window: gpui::AnyWindowHandle,
+        source_pane: Entity<Pane>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> bool {
+        let item_id = source_item.entity_id();
+        source_pane.update(cx, |pane, cx| {
+            pane.remove_item(item_id, false, false, window, cx);
+        });
+        let move_result = target_window.update(cx, |root, destination, cx| {
+            let Ok(multi_workspace) = root.downcast::<MultiWorkspace>() else {
+                return false;
+            };
+            let destination_workspace = multi_workspace.read(cx).workspace().clone();
+            let destination_pane = destination_workspace.read(cx).active_pane().clone();
+            destination_pane.update(cx, |pane, cx| {
+                pane.add_item(
+                    Box::new(source_item.clone()),
+                    true,
+                    true,
+                    None,
+                    destination,
+                    cx,
+                );
+            });
+            source_item.update(cx, |terminal_view, cx| {
+                terminal_view.rebind_workspace(destination_workspace.downgrade(), destination, cx);
+            });
+            destination.activate_window();
+            true
+        });
+
+        if !matches!(move_result, Ok(true)) {
+            source_pane.update(cx, |pane, cx| {
+                pane.add_item(Box::new(source_item), true, true, None, window, cx);
+            });
+            return false;
+        }
+
+        true
+    }
+
     fn detach_to_new_window(
         source_item: Entity<Self>,
         source_pane: Entity<Pane>,
@@ -2354,6 +2415,10 @@ impl Item for TerminalView {
         actions
     }
 
+    fn can_detach_to_new_window(&self) -> bool {
+        true
+    }
+
     fn detach_to_new_window(
         &mut self,
         source_pane: Entity<Pane>,
@@ -2361,6 +2426,17 @@ impl Item for TerminalView {
         cx: &mut Context<Self>,
     ) -> bool {
         Self::schedule_detach_to_new_window(cx.entity(), source_pane, window, cx);
+        true
+    }
+
+    fn detach_to_window(
+        &mut self,
+        target_window: gpui::AnyWindowHandle,
+        source_pane: Entity<Pane>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        Self::schedule_detach_to_window(cx.entity(), target_window, source_pane, window, cx);
         true
     }
 
@@ -3623,6 +3699,74 @@ mod tests {
             }),
             destination_workspace.entity_id()
         );
+    }
+
+    #[gpui::test]
+    async fn moving_terminal_to_existing_window_preserves_view_and_terminal(
+        cx: &mut TestAppContext,
+    ) {
+        let (project, source_workspace, source_window) = init_test_with_window(cx).await;
+        let (source_pane, terminal, terminal_view) =
+            add_display_only_terminal(&project, source_window, false, false, cx);
+        let original_item_id = terminal_view.entity_id();
+        let original_terminal_id = terminal.entity_id();
+        let app_state =
+            source_workspace.read_with(cx, |workspace, _| workspace.app_state().clone());
+        let project_for_window = project.clone();
+        let destination_window = cx
+            .update(|cx| {
+                cx.open_window(gpui::WindowOptions::default(), |window, cx| {
+                    let workspace = cx.new(|cx| {
+                        Workspace::new_auxiliary(
+                            project_for_window.clone(),
+                            app_state.clone(),
+                            window,
+                            cx,
+                        )
+                    });
+                    cx.new(|cx| MultiWorkspace::new(workspace, window, cx))
+                })
+            })
+            .unwrap();
+
+        let moved = source_window
+            .update(cx, |_, window, cx| {
+                TerminalView::detach_to_window(
+                    terminal_view.clone(),
+                    destination_window.into(),
+                    source_pane.clone(),
+                    window,
+                    cx,
+                )
+            })
+            .unwrap();
+        assert!(moved);
+        assert!(source_workspace.read_with(cx, |workspace, cx| {
+            workspace.pane_for_entity_id(original_item_id).is_none()
+                && workspace.active_item(cx).is_none()
+        }));
+
+        destination_window
+            .update(cx, |multi_workspace, _, cx| {
+                let destination_workspace = multi_workspace.workspace().clone();
+                assert!(destination_workspace.read_with(cx, |workspace, cx| {
+                    workspace.is_auxiliary()
+                        && workspace.project() == &project
+                        && workspace.active_item(cx).is_some_and(|item| {
+                            item.item_id() == original_item_id
+                                && item.downcast::<TerminalView>().is_some_and(|view| {
+                                    view.read(cx).terminal.entity_id() == original_terminal_id
+                                })
+                        })
+                }));
+                assert_eq!(
+                    terminal_view.read_with(cx, |terminal_view, _| {
+                        terminal_view.workspace.entity_id()
+                    }),
+                    destination_workspace.entity_id()
+                );
+            })
+            .unwrap();
     }
 
     /// Creates a worktree with 1 file /root.txt and returns the project, workspace, and window handle.
