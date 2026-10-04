@@ -417,6 +417,54 @@
   //
   // Default: 100
   "minimum_split_diff_width": 100,
+  // Settings for rainbow brackets (bracket colorization).
+  // Requires `colorize_brackets` to be enabled for the buffer's language.
+  "rainbow_brackets": {
+    // Palette used to colorize brackets, in cycle order. Any CSS color
+    // accepted by the theme, such as "#ff0000" or "hsl(0, 100%, 50%)".
+    // When empty, the theme's `accents` are used.
+    //
+    // Default: []
+    "colors": [],
+    // How the color cycle is mapped onto brackets.
+    //
+    // 1. Count nesting depth across all bracket types, so brackets at the
+    //    same depth share a color:
+    //    "consecutive" (default)
+    // 2. Keep an independent nesting depth per bracket type, so `()`,
+    //    `[]` and `{}` cycle through the palette independently:
+    //    "independent"
+    "color_mode": "consecutive",
+    // Whether colors advance with every opening bracket instead of following
+    // the nesting depth.
+    //
+    // Default: false
+    "force_iteration_color_cycle": false,
+    // Whether an opening bracket is forced to use a different color than the
+    // opening bracket that precedes it.
+    //
+    // Default: false
+    "force_unique_opening_color": false,
+    // Color used for brackets that do not form a matched pair. Unmatched
+    // brackets are left uncolored when this is null.
+    //
+    // Default: null
+    "unmatched_bracket_color": null,
+    // Whether the highlighted bracket pair at the cursor uses the pair's
+    // rainbow color instead of the theme's bracket highlight background.
+    //
+    // Default: false
+    "highlight_active_scope": false,
+    // When to draw vertical guides that connect matched bracket pairs.
+    //
+    // 1. Never draw bracket pair guides:
+    //    "off" (default)
+    // 2. Only draw the guide of the bracket pair containing the cursor:
+    //    "active"
+    // 3. Draw guides for every visible bracket pair:
+    //    "always"
+    "bracket_pair_guides": "off"
+  },
   // Show method signatures in the editor, when inside parentheses.
   "auto_signature_help": false,
   // Whether to automatically detect the language of an untitled buffer from its contents.

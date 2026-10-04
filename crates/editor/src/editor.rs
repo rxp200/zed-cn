@@ -997,6 +997,7 @@ pub struct Editor {
     autoclose_regions: Vec<AutocloseRegion>,
     snippet_stack: InvalidationStack<SnippetState>,
     select_syntax_node_history: SelectSyntaxNodeHistory,
+    bracket_selection_history: Vec<Vec<Selection<MultiBufferOffset>>>,
     ime_transaction: Option<TransactionId>,
     pub diagnostics_max_severity: DiagnosticSeverity,
     active_diagnostics: ActiveDiagnostic,
@@ -1216,6 +1217,7 @@ pub struct Editor {
     applicable_language_settings: HashMap<Option<LanguageName>, Arc<LanguageSettings>>,
     accent_data: Option<AccentData>,
     bracket_fetched_tree_sitter_chunks: HashMap<Range<text::Anchor>, HashSet<Range<BufferRow>>>,
+    bracket_guides: Vec<bracket_colorization::BracketGuide>,
     semantic_token_state: SemanticTokenState,
     pub(crate) refresh_matching_bracket_highlights_task: Task<()>,
     refresh_document_symbols_task: Shared<Task<()>>,
@@ -2374,6 +2376,7 @@ impl Editor {
             autoclose_regions: Vec::new(),
             snippet_stack: InvalidationStack::default(),
             select_syntax_node_history: SelectSyntaxNodeHistory::default(),
+            bracket_selection_history: Vec::new(),
             ime_transaction: None,
             active_diagnostics: ActiveDiagnostic::None,
             show_inline_diagnostics: ProjectSettings::get_global(cx).diagnostics.inline.enabled,
@@ -2588,6 +2591,7 @@ impl Editor {
             semantic_token_state: SemanticTokenState::new(cx, full_mode),
             accent_data: None,
             bracket_fetched_tree_sitter_chunks: HashMap::default(),
+            bracket_guides: Vec::new(),
             number_deleted_lines: false,
             refresh_matching_bracket_highlights_task: Task::ready(()),
             refresh_document_symbols_task: Task::ready(()).shared(),
@@ -4511,12 +4515,14 @@ impl Editor {
 
         let toggle_state_entry: Option<(&str, Box<dyn Action>)> =
             breakpoint.as_ref().map(|bp| match bp.1.state {
-                BreakpointState::Enabled => {
-                    (i18n::t!("7df5c456c765e4c3"), crate::actions::DisableBreakpoint.boxed_clone())
-                }
-                BreakpointState::Disabled => {
-                    (i18n::t!("f4f0ead1116b5b62"), crate::actions::EnableBreakpoint.boxed_clone())
-                }
+                BreakpointState::Enabled => (
+                    i18n::t!("7df5c456c765e4c3"),
+                    crate::actions::DisableBreakpoint.boxed_clone(),
+                ),
+                BreakpointState::Disabled => (
+                    i18n::t!("f4f0ead1116b5b62"),
+                    crate::actions::EnableBreakpoint.boxed_clone(),
+                ),
             });
 
         let (anchor, breakpoint) =
@@ -13187,7 +13193,12 @@ impl PromptEditor {
             .icon_color(Color::Muted)
             .shape(IconButtonShape::Square)
             .tooltip(move |_window, cx| {
-                Tooltip::for_action_in(i18n::t!("2cd0f3be8738a86c"), &menu::Cancel, &focus_handle, cx)
+                Tooltip::for_action_in(
+                    i18n::t!("2cd0f3be8738a86c"),
+                    &menu::Cancel,
+                    &focus_handle,
+                    cx,
+                )
             })
             .on_click(cx.listener(|this, _, window, cx| {
                 this.cancel(&menu::Cancel, window, cx);
@@ -13200,7 +13211,12 @@ impl PromptEditor {
             .icon_color(Color::Muted)
             .shape(IconButtonShape::Square)
             .tooltip(move |_window, cx| {
-                Tooltip::for_action_in(i18n::t!("36f33adaf0942634"), &menu::Confirm, &focus_handle, cx)
+                Tooltip::for_action_in(
+                    i18n::t!("36f33adaf0942634"),
+                    &menu::Confirm,
+                    &focus_handle,
+                    cx,
+                )
             })
             .on_click(cx.listener(|this, _, window, cx| {
                 this.confirm(&menu::Confirm, window, cx);

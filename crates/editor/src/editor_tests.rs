@@ -50255,3 +50255,79 @@ async fn test_soft_wrap_indent_updated_on_file_move_between_directories(
         .unwrap();
     assert_eq!(snapshot.soft_wrap_indent(DisplayRow(0)), Some(0));
 }
+
+#[gpui::test]
+async fn test_expand_and_undo_bracket_selection(cx: &mut TestAppContext) {
+    init_test(cx, |_| {});
+
+    let language = Arc::new(
+        Language::new(
+            LanguageConfig::default(),
+            Some(tree_sitter_rust::LANGUAGE.into()),
+        )
+        .with_brackets_query(indoc! {r#"
+            ("(" @open ")" @close)
+            ("{" @open "}" @close)
+        "#})
+        .unwrap(),
+    );
+
+    let text = "fn main() {\n    let a = (1, 2);\n}\n";
+    let buffer = cx.new(|cx| Buffer::local(text, cx).with_language(language, cx));
+    let buffer = cx.new(|cx| MultiBuffer::singleton(buffer, cx));
+    let (editor, cx) = cx.add_window_view(|window, cx| build_editor(buffer, window, cx));
+
+    editor
+        .condition::<crate::EditorEvent>(cx, |editor, cx| !editor.buffer.read(cx).is_parsing(cx))
+        .await;
+
+    editor.update_in(cx, |editor, window, cx| {
+        editor.change_selections(SelectionEffects::no_scroll(), window, cx, |s| {
+            s.select_display_ranges([
+                DisplayPoint::new(DisplayRow(1), 14)..DisplayPoint::new(DisplayRow(1), 14)
+            ]);
+        });
+        editor.expand_bracket_selection(&ExpandBracketSelection, window, cx);
+    });
+    editor.update(cx, |editor, cx| {
+        assert_text_with_selections(
+            editor,
+            indoc! {r#"
+                fn main() {
+                    let a = («1, 2ˇ»);
+                }
+            "#},
+            cx,
+        );
+    });
+
+    editor.update_in(cx, |editor, window, cx| {
+        editor.expand_bracket_selection(&ExpandBracketSelection, window, cx);
+    });
+    editor.update(cx, |editor, cx| {
+        assert_text_with_selections(
+            editor,
+            indoc! {r#"
+                fn main() {«
+                    let a = (1, 2);
+                ˇ»}
+            "#},
+            cx,
+        );
+    });
+
+    editor.update_in(cx, |editor, window, cx| {
+        editor.undo_bracket_selection(&UndoBracketSelection, window, cx);
+    });
+    editor.update(cx, |editor, cx| {
+        assert_text_with_selections(
+            editor,
+            indoc! {r#"
+                fn main() {
+                    let a = («1, 2ˇ»);
+                }
+            "#},
+            cx,
+        );
+    });
+}

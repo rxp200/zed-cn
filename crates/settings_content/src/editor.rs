@@ -2,6 +2,7 @@ use std::fmt::Display;
 use std::num;
 
 use collections::HashMap;
+use gpui::Hsla;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use settings_macros::{MergeFrom, with_fallible_options};
@@ -287,6 +288,113 @@ pub struct EditorSettingsContent {
     ///
     /// Default: 100
     pub minimum_split_diff_width: Option<f32>,
+
+    /// Settings for rainbow brackets (bracket colorization).
+    ///
+    /// Requires `colorize_brackets` to be enabled for the buffer's language.
+    pub rainbow_brackets: Option<RainbowBracketsSettingsContent>,
+}
+
+/// Settings that control how brackets are colorized and decorated in the editor.
+#[with_fallible_options]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, MergeFrom)]
+#[serde(rename_all = "snake_case")]
+pub struct RainbowBracketsSettingsContent {
+    /// Palette used to colorize brackets, in cycle order.
+    ///
+    /// Any CSS color accepted by the theme, such as `#ff0000` or `hsl(0, 100%, 50%)`.
+    /// When empty, the theme's `accents` are used.
+    ///
+    /// Default: []
+    pub colors: Option<Vec<Hsla>>,
+    /// How the color cycle is mapped onto brackets.
+    ///
+    /// - "consecutive": nesting depth is counted across all bracket types, so
+    ///   brackets at the same depth share a color.
+    /// - "independent": each bracket type keeps its own depth counter, so
+    ///   `()`, `[]` and `{}` cycle through the palette independently.
+    ///
+    /// Default: "consecutive"
+    pub color_mode: Option<BracketColorMode>,
+    /// Whether colors advance with every opening bracket instead of following
+    /// the nesting depth. Useful for avoiding repeats in deeply nested code.
+    ///
+    /// Default: false
+    pub force_iteration_color_cycle: Option<bool>,
+    /// Whether an opening bracket is forced to use a different color than the
+    /// opening bracket that precedes it.
+    ///
+    /// Default: false
+    pub force_unique_opening_color: Option<bool>,
+    /// Color used for brackets that do not form a matched pair.
+    ///
+    /// Unmatched brackets are left uncolored when this is unset.
+    ///
+    /// Default: null
+    pub unmatched_bracket_color: Option<Hsla>,
+    /// Whether the highlighted bracket pair at the cursor uses the pair's
+    /// rainbow color instead of the theme's bracket highlight background.
+    ///
+    /// Default: false
+    pub highlight_active_scope: Option<bool>,
+    /// When to draw vertical guides that connect matched bracket pairs.
+    ///
+    /// - "off": never draw bracket pair guides.
+    /// - "active": only draw the guide of the bracket pair containing the cursor.
+    /// - "always": draw guides for every visible bracket pair.
+    ///
+    /// Default: "off"
+    pub bracket_pair_guides: Option<BracketPairGuides>,
+}
+
+/// Determines how nesting depth maps onto the bracket color palette.
+#[derive(
+    Debug,
+    Default,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+    MergeFrom,
+    strum::VariantArray,
+    strum::VariantNames,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum BracketColorMode {
+    /// Count nesting depth across all bracket types.
+    #[default]
+    Consecutive,
+    /// Keep an independent nesting depth per bracket type.
+    Independent,
+}
+
+/// Determines when bracket pair guides are drawn.
+#[derive(
+    Debug,
+    Default,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+    MergeFrom,
+    strum::VariantArray,
+    strum::VariantNames,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum BracketPairGuides {
+    /// Never draw bracket pair guides.
+    #[default]
+    Off,
+    /// Draw the guide of the bracket pair containing the cursor.
+    Active,
+    /// Draw guides for every visible bracket pair.
+    Always,
 }
 
 #[derive(

@@ -345,6 +345,18 @@ impl VsCodeSettings {
             completion_menu_item_kind: None,
             diff_view_style: None,
             minimum_split_diff_width: None,
+            rainbow_brackets: skip_default(RainbowBracketsSettingsContent {
+                color_mode: self
+                    .read_bool("editor.bracketPairColorization.independentColorPoolPerBracketType")
+                    .map(|independent| {
+                        if independent {
+                            BracketColorMode::Independent
+                        } else {
+                            BracketColorMode::Consecutive
+                        }
+                    }),
+                ..Default::default()
+            }),
         }
     }
 

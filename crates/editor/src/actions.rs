@@ -810,6 +810,10 @@ actions!(
         SelectToEndOfLargerSyntaxNode,
         /// Selects the next larger syntax node.
         SelectLargerSyntaxNode,
+        /// Selects the contents of the innermost bracket pair containing the cursor.
+        ExpandBracketSelection,
+        /// Restores the selection replaced by the last bracket selection expansion.
+        UndoBracketSelection,
         /// Selects the next syntax node sibling.
         SelectNextSyntaxNode,
         /// Selects the previous syntax node sibling.

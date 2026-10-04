@@ -68,7 +68,11 @@ impl SystemStatsSampler {
         let mut system = System::new();
         system.refresh_cpu_all();
         system.refresh_memory();
-        system.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
+        system.refresh_processes_specifics(
+            sysinfo::ProcessesToUpdate::All,
+            true,
+            ProcessRefreshKind::nothing(),
+        );
         Self {
             system,
             disks: Disks::new_with_refreshed_list(),
@@ -81,8 +85,11 @@ impl SystemStatsSampler {
         let elapsed = self.last_sample.elapsed().as_secs_f64().max(0.001);
         self.system.refresh_cpu_usage();
         self.system.refresh_memory();
-        self.system
-            .refresh_processes(sysinfo::ProcessesToUpdate::All, true);
+        self.system.refresh_processes_specifics(
+            sysinfo::ProcessesToUpdate::All,
+            true,
+            ProcessRefreshKind::nothing(),
+        );
         self.disks.refresh(true);
         self.networks.refresh(true);
         self.last_sample = Instant::now();
@@ -1937,4 +1944,21 @@ fn find_venv_python(working_directory: &str) -> Option<std::path::PathBuf> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 系统监控采样只需要进程数量，因此用最小刷新种类；这条用例确认换成
+    /// `ProcessRefreshKind::nothing()` 后整机指标与进程计数仍然有效。
+    #[test]
+    fn stats_sampler_reports_machine_metrics_without_process_details() {
+        let mut sampler = SystemStatsSampler::new();
+        let stats = sampler.sample();
+        assert!(stats.process_count > 0, "进程数量应大于 0");
+        assert!(stats.memory_total_bytes > 0, "总内存应大于 0");
+        assert!(stats.memory_used_bytes <= stats.memory_total_bytes);
+        assert!(!stats.hostname.is_empty(), "主机名不应为空");
+    }
 }

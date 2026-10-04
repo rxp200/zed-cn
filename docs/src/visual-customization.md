@@ -421,6 +421,37 @@ TBD: Centered layout related settings
   "colorize_brackets": true,
 ```
 
+### Rainbow Brackets {#rainbow-brackets}
+
+When `colorize_brackets` is enabled, brackets are painted with the theme's
+`accents`. The `rainbow_brackets` object tunes the color cycle and the
+bracket decorations around it:
+
+```json [settings]
+{
+  "colorize_brackets": true,
+  "rainbow_brackets": {
+    // Custom palette, in cycle order. Empty falls back to the theme's `accents`.
+    "colors": ["#e06c75", "#98c379", "#61afef", "#c678dd"],
+    // "consecutive": one depth counter across all bracket types (default).
+    // "independent": one depth counter per bracket type, so `()`, `[]` and `{}`
+    //                cycle through the palette on their own.
+    "color_mode": "consecutive",
+    // Advance the color with every opening bracket instead of by nesting depth.
+    "force_iteration_color_cycle": false,
+    // Never let an opening bracket reuse the color of the preceding one.
+    "force_unique_opening_color": false,
+    // Color for brackets that do not form a matched pair (null disables it).
+    "unmatched_bracket_color": "#ff0000",
+    // Highlight the bracket pair containing the cursor with its rainbow color.
+    "highlight_active_scope": false,
+    // "off": no guides, "active": only the pair at the cursor,
+    // "always": every visible bracket pair.
+    "bracket_pair_guides": "off",
+  },
+}
+```
+
 ### Edit Predictions {#editor-ai}
 
 ```json [settings]

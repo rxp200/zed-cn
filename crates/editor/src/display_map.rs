@@ -165,6 +165,7 @@ pub enum HighlightKey {
     // to allow language server highlights to work over brackets.
     ColorizeBracket(usize),
     SemanticToken(u32),
+    UnmatchedBracket,
     // below is sorted lexicographically, as there is no relevant ordering for these aside from coming after the above
     BufferSearchHighlights,
     ConsoleAnsiHighlight(usize),

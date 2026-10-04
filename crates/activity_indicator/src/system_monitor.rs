@@ -4,8 +4,9 @@ use gpui::{
     Task, WeakEntity, Window, actions, canvas, point, px,
 };
 use proto::GetSystemStatsResponse;
+use remote::RemoteClient;
 use std::{collections::VecDeque, time::Duration};
-use sysinfo::{Disks, Networks, ProcessesToUpdate, System};
+use sysinfo::{Disks, Networks, ProcessRefreshKind, ProcessesToUpdate, System};
 use terminal_view::port_forwarding::{
     ForwardDirection, ForwardSnapshot, ForwardSource, ForwardStatus, PortForwardManager,
 };
@@ -17,6 +18,8 @@ use workspace::{
 };
 
 const REFRESH_INTERVAL: Duration = Duration::from_secs(2);
+/// 面板没打开、状态栏图标也没被悬停时没有人在看数值，慢速心跳即可。
+const IDLE_REFRESH_INTERVAL: Duration = Duration::from_secs(10);
 const HISTORY_LENGTH: usize = 30;
 
 pub const SYSTEM_MONITOR_PANEL_KEY: &str = "SystemMonitorPanel";
@@ -87,12 +90,43 @@ struct LocalSampler {
     last_sample: std::time::Instant,
 }
 
+/// 只刷新当前进程的内存占用。整机数字在 [`SystemStats`] 里，而用户需要
+/// 知道“ Zed 自己用了多少”，这需要单独读一次自己的 pid。
+struct SelfMemorySampler {
+    system: System,
+    pid: Option<sysinfo::Pid>,
+}
+
+impl SelfMemorySampler {
+    fn new() -> Self {
+        Self {
+            system: System::new(),
+            pid: sysinfo::get_current_pid().ok(),
+        }
+    }
+
+    /// 只刷新本进程一项，是一次系统调用级别的开销，不需要占用后台线程。
+    fn sample(&mut self) -> Option<u64> {
+        let pid = self.pid?;
+        self.system.refresh_processes_specifics(
+            ProcessesToUpdate::Some(&[pid]),
+            false,
+            ProcessRefreshKind::nothing().with_memory(),
+        );
+        self.system.process(pid).map(|process| process.memory())
+    }
+}
+
 impl LocalSampler {
     fn new() -> Self {
         let mut system = System::new();
         system.refresh_cpu_all();
         system.refresh_memory();
-        system.refresh_processes(ProcessesToUpdate::All, true);
+        system.refresh_processes_specifics(
+            ProcessesToUpdate::All,
+            true,
+            ProcessRefreshKind::nothing(),
+        );
         Self {
             system,
             disks: Disks::new_with_refreshed_list(),
@@ -105,7 +139,13 @@ impl LocalSampler {
         let elapsed = self.last_sample.elapsed().as_secs_f64().max(0.001);
         self.system.refresh_cpu_usage();
         self.system.refresh_memory();
-        self.system.refresh_processes(ProcessesToUpdate::All, true);
+        // 界面只用进程数量，不需要每个进程的命令行、可执行路径和环境变量；
+        // 保留它们会让整张进程表常驻内存。
+        self.system.refresh_processes_specifics(
+            ProcessesToUpdate::All,
+            true,
+            ProcessRefreshKind::nothing(),
+        );
         self.disks.refresh(true);
         self.networks.refresh(true);
         self.last_sample = std::time::Instant::now();
@@ -229,11 +269,17 @@ fn ranked_local_ip_addresses<'a>(
 
 pub struct SystemMonitorData {
     stats: Option<SystemStats>,
+    zed_memory_bytes: Option<u64>,
     cpu_history: VecDeque<f32>,
+    zed_memory_history: VecDeque<u64>,
     download_history: VecDeque<u64>,
     upload_history: VecDeque<u64>,
     remote_name: Option<String>,
+    remote_client: Option<Entity<RemoteClient>>,
     error: Option<String>,
+    hovered: bool,
+    panel_open: bool,
+    active: bool,
     _refresh_task: Task<()>,
 }
 
@@ -244,57 +290,116 @@ impl SystemMonitorData {
             .as_ref()
             .map(|client| client.read(cx).connection_options().host());
         cx.new(|cx| {
-            let refresh_task = cx.spawn({
-                let remote_client = remote_client.clone();
-                async move |this: WeakEntity<SystemMonitorData>, cx| {
-                    let mut local_sampler = remote_client.is_none().then(LocalSampler::new);
-                    loop {
-                        let result = if let Some(remote_client) = remote_client.as_ref() {
-                            if remote_client
-                                .read_with(cx, |client, _| client.supports_system_stats())
-                            {
-                                let request =
-                                    remote_client.read_with(cx, |client, _| client.system_stats());
-                                request.await.map(SystemStats::from)
-                            } else {
-                                Err(anyhow::anyhow!(i18n::t!("83f186da8e216477")))
-                            }
-                        } else if let Some(sampler) = local_sampler.take() {
-                            let (sampler, stats) = cx
-                                .background_spawn(async move {
-                                    let mut sampler = sampler;
-                                    let stats = sampler.sample();
-                                    (sampler, stats)
-                                })
-                                .await;
-                            local_sampler = Some(sampler);
-                            Ok(stats)
-                        } else {
-                            Err(anyhow::anyhow!(i18n::t!("2eb3f4971a546cad")))
-                        };
-                        if this
-                            .update(cx, |this, cx| this.apply_sample(result, cx))
-                            .is_err()
-                        {
-                            break;
-                        }
-                        cx.background_executor().timer(REFRESH_INTERVAL).await;
-                    }
-                }
-            });
-            Self {
+            let mut this = Self {
                 stats: None,
+                zed_memory_bytes: None,
                 cpu_history: VecDeque::with_capacity(HISTORY_LENGTH),
+                zed_memory_history: VecDeque::with_capacity(HISTORY_LENGTH),
                 download_history: VecDeque::with_capacity(HISTORY_LENGTH),
                 upload_history: VecDeque::with_capacity(HISTORY_LENGTH),
                 remote_name,
+                remote_client,
                 error: None,
-                _refresh_task: refresh_task,
-            }
+                hovered: false,
+                panel_open: false,
+                active: false,
+                _refresh_task: Task::ready(()),
+            };
+            this.restart_sampling(cx);
+            this
         })
     }
 
-    fn apply_sample(&mut self, result: anyhow::Result<SystemStats>, cx: &mut Context<Self>) {
+    fn restart_sampling(&mut self, cx: &mut Context<Self>) {
+        let remote_client = self.remote_client.clone();
+        self._refresh_task = cx.spawn(async move |this: WeakEntity<SystemMonitorData>, cx| {
+            let mut local_sampler: Option<LocalSampler> = None;
+            if remote_client.is_none() {
+                local_sampler = Some(cx.background_spawn(async { LocalSampler::new() }).await);
+            }
+            let mut self_sampler = SelfMemorySampler::new();
+            loop {
+                let (result, zed_memory) = if let Some(remote_client) = remote_client.as_ref() {
+                    let result = if remote_client
+                        .read_with(cx, |client, _| client.supports_system_stats())
+                    {
+                        let request =
+                            remote_client.read_with(cx, |client, _| client.system_stats());
+                        request.await.map(SystemStats::from)
+                    } else {
+                        Err(anyhow::anyhow!(i18n::t!("83f186da8e216477")))
+                    };
+                    (result, self_sampler.sample())
+                } else if let Some(sampler) = local_sampler.take() {
+                    let (sampler, stats) = cx
+                        .background_spawn(async move {
+                            let mut sampler = sampler;
+                            let stats = sampler.sample();
+                            (sampler, stats)
+                        })
+                        .await;
+                    local_sampler = Some(sampler);
+                    (Ok(stats), self_sampler.sample())
+                } else {
+                    (
+                        Err(anyhow::anyhow!(i18n::t!("2eb3f4971a546cad"))),
+                        self_sampler.sample(),
+                    )
+                };
+                let active = match this.update(cx, |this, cx| {
+                    this.apply_sample(result, zed_memory, cx);
+                    this.active
+                }) {
+                    Ok(active) => active,
+                    Err(_) => break,
+                };
+                let interval = if active {
+                    REFRESH_INTERVAL
+                } else {
+                    IDLE_REFRESH_INTERVAL
+                };
+                cx.background_executor().timer(interval).await;
+            }
+        });
+    }
+
+    /// 采样频率跟随可见性：面板打开或状态栏图标被悬停时按
+    /// [`REFRESH_INTERVAL`] 刷新，其余时间只做慢速心跳。正在显示的数值
+    /// 必须是新鲜的，所以重新激活时立即采样一次，而不是等下一个周期。
+    fn set_hovered(&mut self, hovered: bool, cx: &mut Context<Self>) {
+        if self.hovered == hovered {
+            return;
+        }
+        self.hovered = hovered;
+        self.refresh_active(cx);
+    }
+
+    fn set_panel_open(&mut self, open: bool, cx: &mut Context<Self>) {
+        if self.panel_open == open {
+            return;
+        }
+        self.panel_open = open;
+        self.refresh_active(cx);
+    }
+
+    fn refresh_active(&mut self, cx: &mut Context<Self>) {
+        let active = is_monitoring_active(self.hovered, self.panel_open);
+        if active == self.active {
+            return;
+        }
+        self.active = active;
+        if active {
+            self.restart_sampling(cx);
+        }
+        cx.notify();
+    }
+
+    fn apply_sample(
+        &mut self,
+        result: anyhow::Result<SystemStats>,
+        zed_memory_bytes: Option<u64>,
+        cx: &mut Context<Self>,
+    ) {
         match result {
             Ok(stats) => {
                 push_history(&mut self.cpu_history, stats.cpu_usage_percent);
@@ -311,6 +416,10 @@ impl SystemMonitorData {
             }
             Err(error) => self.error = Some(format!("{error:#}")),
         }
+        if let Some(bytes) = zed_memory_bytes {
+            push_history(&mut self.zed_memory_history, bytes);
+        }
+        self.zed_memory_bytes = zed_memory_bytes;
         cx.notify();
     }
 
@@ -436,7 +545,14 @@ impl SystemMonitor {
         cx: &mut Context<Self>,
     ) -> Self {
         let data_subscription = cx.observe(&data, |_, _, cx| cx.notify());
-        let dock_subscription = cx.observe(&right_dock, |_, _, cx| cx.notify());
+        let dock_subscription = cx.observe(&right_dock, move |this: &mut Self, dock, cx| {
+            let open = panel_is_open(dock.read(cx));
+            this.data
+                .update(cx, |data, cx| data.set_panel_open(open, cx));
+            cx.notify();
+        });
+        let open = panel_is_open(right_dock.read(cx));
+        data.update(cx, |data, cx| data.set_panel_open(open, cx));
         Self {
             data,
             right_dock,
@@ -448,24 +564,32 @@ impl SystemMonitor {
 
 impl Render for SystemMonitor {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let open = panel_is_open(self.right_dock.read(cx));
         let data = self.data.clone();
-        let dock = self.right_dock.read(cx);
-        let open = dock
-            .visible_panel()
-            .is_some_and(|panel| panel.panel_key() == SYSTEM_MONITOR_PANEL_KEY);
-        IconButton::new("system-monitor-status", IconName::Gauge)
-            .icon_size(IconSize::Small)
-            .icon_color(Color::Muted)
-            .selected_icon_color(Color::Accent)
-            .toggle_state(open)
-            .aria_label(i18n::t!("1c88f096249aeca7"))
-            .aria_expanded(open)
-            .tooltip(ui::Tooltip::element(move |_, cx| {
-                data.read(cx).tooltip_element()
+        // 采样频率跟随可见性：贴着图标时立刻恢复快速刷新，让 tooltip 里的
+        // 数值保持新鲜，离开后回到慢速心跳。
+        div()
+            .id("system-monitor-status-hover")
+            .on_hover(cx.listener(|this, hovered: &bool, _window, cx| {
+                let hovered = *hovered;
+                this.data
+                    .update(cx, |data, cx| data.set_hovered(hovered, cx));
             }))
-            .on_click(|_, window, cx| {
-                window.dispatch_action(ToggleFocus.boxed_clone(), cx);
-            })
+            .child(
+                IconButton::new("system-monitor-status", IconName::Gauge)
+                    .icon_size(IconSize::Small)
+                    .icon_color(Color::Muted)
+                    .selected_icon_color(Color::Accent)
+                    .toggle_state(open)
+                    .aria_label(i18n::t!("1c88f096249aeca7"))
+                    .aria_expanded(open)
+                    .tooltip(ui::Tooltip::element(move |_, cx| {
+                        data.read(cx).tooltip_element()
+                    }))
+                    .on_click(|_, window, cx| {
+                        window.dispatch_action(ToggleFocus.boxed_clone(), cx);
+                    }),
+            )
     }
 }
 
@@ -651,6 +775,14 @@ impl Render for SystemMonitorPanel {
                         None,
                         cx,
                     ))
+                    .when_some(monitor.zed_memory_bytes, |element, bytes| {
+                        element.child(zed_memory_card(
+                            bytes,
+                            &monitor.zed_memory_history,
+                            monitor.remote_name.is_some(),
+                            cx,
+                        ))
+                    })
                     .child(network_card(stats, monitor, cx))
                     .child(resource_card(
                         i18n::t!("de7b72a3f8525fba"),
@@ -763,6 +895,54 @@ fn system_card(stats: &SystemStats, cx: &App) -> impl IntoElement {
                 stats.load_average[0], stats.load_average[1], stats.load_average[2]
             ),
         ))
+}
+
+/// Zed 自身进程的常驻内存。它不属于 `SystemStats`：那些字段描述的是当前
+/// 项目所在主机，而这里展示的是客户端进程自己占用了多少。
+fn zed_memory_card(
+    bytes: u64,
+    history: &VecDeque<u64>,
+    remote_target: bool,
+    cx: &App,
+) -> impl IntoElement {
+    let maximum = history.iter().copied().max().unwrap_or(1).max(1) as f32;
+    let values: VecDeque<f32> = history.iter().map(|value| *value as f32).collect();
+    card(cx)
+        .gap_1()
+        .child(
+            h_flex()
+                .w_full()
+                .min_w_0()
+                .justify_between()
+                .gap_2()
+                .child(
+                    h_flex()
+                        .min_w_0()
+                        .gap_1p5()
+                        .child(
+                            Icon::new(IconName::DatabaseZap)
+                                .size(IconSize::Small)
+                                .color(Color::Accent),
+                        )
+                        .child(Label::new(i18n::t!("e77d5087390a6f21")).truncate()),
+                )
+                .child(
+                    Label::new(format_bytes(bytes))
+                        .size(LabelSize::Small)
+                        .color(Color::Muted)
+                        .flex_none(),
+                ),
+        )
+        .when(remote_target, |element| {
+            element.child(
+                Label::new(i18n::t!("8cd1f2ff519d01b1"))
+                    .size(LabelSize::XSmall)
+                    .color(Color::Muted),
+            )
+        })
+        .when(values.len() >= 2, |element| {
+            element.child(sparkline(&values, maximum, 16., cx.theme().status().info))
+        })
 }
 
 fn resource_card(
@@ -981,6 +1161,15 @@ fn metric_line(label: &'static str, value: String) -> impl IntoElement {
         .child(Label::new(value).size(LabelSize::Small).flex_none())
 }
 
+fn panel_is_open(dock: &workspace::dock::Dock) -> bool {
+    dock.visible_panel()
+        .is_some_and(|panel| panel.panel_key() == SYSTEM_MONITOR_PANEL_KEY)
+}
+
+fn is_monitoring_active(hovered: bool, panel_open: bool) -> bool {
+    hovered || panel_open
+}
+
 fn push_history<T>(history: &mut VecDeque<T>, value: T) {
     if history.len() == HISTORY_LENGTH {
         history.pop_front();
@@ -1047,6 +1236,22 @@ mod tests {
         assert_eq!(history.len(), HISTORY_LENGTH);
         assert_eq!(history.front(), Some(&5));
         assert_eq!(history.back(), Some(&(HISTORY_LENGTH + 4)));
+    }
+
+    #[test]
+    fn monitoring_is_active_only_while_someone_is_looking() {
+        assert!(!is_monitoring_active(false, false));
+        assert!(is_monitoring_active(true, false));
+        assert!(is_monitoring_active(false, true));
+        assert!(is_monitoring_active(true, true));
+        assert!(IDLE_REFRESH_INTERVAL > REFRESH_INTERVAL);
+    }
+
+    #[test]
+    fn reads_the_current_process_memory() {
+        let mut sampler = SelfMemorySampler::new();
+        let bytes = sampler.sample().expect("当前进程的内存占用应该可读");
+        assert!(bytes > 0, "期望非零常驻内存，实际为 {bytes}");
     }
 
     #[test]

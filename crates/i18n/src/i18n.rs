@@ -225,6 +225,17 @@ mod tests {
         assert_eq!(Locale::from_index(200), Locale::DEFAULT);
     }
 
+    /// `locales/meta.json` 是工具生成的条目上下文，不是语言；它一旦被
+    /// 编成 `Locale`，界面语言下拉框就会多出一个内容为空的选项。
+    #[test]
+    fn context_files_are_not_selectable_locales() {
+        assert_eq!(Locale::from_id("meta"), None);
+        assert!(
+            !language_names().iter().any(|(id, _)| *id == "meta"),
+            "meta.json 不应出现在可选语言中"
+        );
+    }
+
     #[test]
     fn missing_key_falls_back_to_key_itself() {
         assert_eq!(
