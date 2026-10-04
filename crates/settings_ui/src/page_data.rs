@@ -1803,6 +1803,151 @@ fn appearance_page() -> SettingsPage {
         ]
     }
 
+    fn rainbow_brackets_section() -> [SettingsPageItem; 7] {
+        [
+            SettingsPageItem::SectionHeader(i18n::t!("a767ac03fd5f7d21")),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: i18n::t!("23b02c2557996c35"),
+                description: i18n::t!("26757e6ec1960e32"),
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("colorize_brackets"),
+                    pick: |settings_content| {
+                        settings_content
+                            .project
+                            .all_languages
+                            .defaults
+                            .colorize_brackets
+                            .as_ref()
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content
+                            .project
+                            .all_languages
+                            .defaults
+                            .colorize_brackets = value;
+                    },
+                }),
+                metadata: None,
+                files: USER | PROJECT,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: i18n::t!("ba85cb887aff5a95"),
+                description: i18n::t!("14f5a6bfd226184f"),
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("rainbow_brackets.color_mode"),
+                    pick: |settings_content| {
+                        settings_content
+                            .editor
+                            .rainbow_brackets
+                            .as_ref()
+                            .and_then(|rainbow_brackets| rainbow_brackets.color_mode.as_ref())
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content
+                            .editor
+                            .rainbow_brackets
+                            .get_or_insert_default()
+                            .color_mode = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: i18n::t!("b5a791c90846d6b1"),
+                description: i18n::t!("e3370ecae97c4fd2"),
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("rainbow_brackets.force_iteration_color_cycle"),
+                    pick: |settings_content| {
+                        settings_content.editor.rainbow_brackets.as_ref().and_then(
+                            |rainbow_brackets| {
+                                rainbow_brackets.force_iteration_color_cycle.as_ref()
+                            },
+                        )
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content
+                            .editor
+                            .rainbow_brackets
+                            .get_or_insert_default()
+                            .force_iteration_color_cycle = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: i18n::t!("f92036c6ab3cf538"),
+                description: i18n::t!("767aff34b0e3b815"),
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("rainbow_brackets.force_unique_opening_color"),
+                    pick: |settings_content| {
+                        settings_content.editor.rainbow_brackets.as_ref().and_then(
+                            |rainbow_brackets| rainbow_brackets.force_unique_opening_color.as_ref(),
+                        )
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content
+                            .editor
+                            .rainbow_brackets
+                            .get_or_insert_default()
+                            .force_unique_opening_color = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: i18n::t!("7a87dcd61de312cb"),
+                description: i18n::t!("b274150d131c1f93"),
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("rainbow_brackets.highlight_active_scope"),
+                    pick: |settings_content| {
+                        settings_content.editor.rainbow_brackets.as_ref().and_then(
+                            |rainbow_brackets| rainbow_brackets.highlight_active_scope.as_ref(),
+                        )
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content
+                            .editor
+                            .rainbow_brackets
+                            .get_or_insert_default()
+                            .highlight_active_scope = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: i18n::t!("9c1426d7a60f2f14"),
+                description: i18n::t!("c3a32e2b7039a6a3"),
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("rainbow_brackets.bracket_pair_guides"),
+                    pick: |settings_content| {
+                        settings_content.editor.rainbow_brackets.as_ref().and_then(
+                            |rainbow_brackets| rainbow_brackets.bracket_pair_guides.as_ref(),
+                        )
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content
+                            .editor
+                            .rainbow_brackets
+                            .get_or_insert_default()
+                            .bracket_pair_guides = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+        ]
+    }
+
     let items: Box<[SettingsPageItem]> = concat_sections!(
         theme_section(),
         buffer_font_section(),
@@ -1814,6 +1959,7 @@ fn appearance_page() -> SettingsPage {
         highlighting_section(),
         guides_section(),
         indent_guides_section(),
+        rainbow_brackets_section(),
     );
 
     SettingsPage {
@@ -4990,7 +5136,11 @@ fn window_and_layout_page() -> SettingsPage {
                     organization_override: None,
                     json_path: Some("title_bar.open_menus_on_hover"),
                     pick: |settings_content| {
-                        settings_content.title_bar.as_ref()?.open_menus_on_hover.as_ref()
+                        settings_content
+                            .title_bar
+                            .as_ref()?
+                            .open_menus_on_hover
+                            .as_ref()
                     },
                     write: |settings_content, value, _| {
                         settings_content

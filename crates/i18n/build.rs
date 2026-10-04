@@ -7,6 +7,11 @@ use std::env;
 use std::fs;
 use std::path::Path;
 
+/// `locales/` 里由工具生成的上下文文件，不是可编译语言。若不排除，
+/// `meta.json` 会变成 `Locale::Meta`、出现在界面语言下拉框里，并让
+/// 上万条键值对多生成一份查找表。
+const NON_LOCALE_FILES: &[&str] = &["meta.json"];
+
 fn main() {
     println!("cargo:rerun-if-changed=locales");
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
@@ -21,10 +26,18 @@ fn main() {
     if let Ok(entries) = fs::read_dir(&locales_dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.extension().map(|e| e == "json").unwrap_or(false) {
-                if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                    locale_ids.push(stem.to_string());
-                }
+            if !path.extension().map(|e| e == "json").unwrap_or(false) {
+                continue;
+            }
+            if path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| NON_LOCALE_FILES.contains(&name))
+            {
+                continue;
+            }
+            if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                locale_ids.push(stem.to_string());
             }
         }
     }

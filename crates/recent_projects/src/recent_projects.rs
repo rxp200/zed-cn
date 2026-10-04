@@ -596,12 +596,10 @@ pub fn add_wsl_distro(
             .iter()
             .any(|conn| conn.distro_name == distro_name && conn.user == user)
         {
-            use std::collections::BTreeSet;
-
             connections.push(settings::WslConnection {
                 distro_name,
                 user,
-                projects: BTreeSet::new(),
+                projects: Vec::new(),
             })
         }
     });

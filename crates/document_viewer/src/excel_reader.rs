@@ -23,7 +23,18 @@ const MAX_COLS: usize = 256;
 /// Upper bound on rendered cells per sheet, whichever limit is hit first.
 const MAX_CELLS: usize = 1_000_000;
 
-type Spreadsheet = calamine::Sheets<Cursor<Arc<[u8]>>>;
+type Spreadsheet = calamine::Sheets<Cursor<SharedBytes>>;
+
+/// `Cursor` 需要内部类型实现 `AsRef<[u8]>` 与 `Clone`，而 `Arc<Vec<u8>>` 没有这两个
+/// 实现；包一层就能零拷贝地把工作簿交给 calamine。
+#[derive(Clone)]
+struct SharedBytes(Arc<Vec<u8>>);
+
+impl AsRef<[u8]> for SharedBytes {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_slice()
+    }
+}
 
 /// Parses and renders a spreadsheet workbook (`xlsx`, `xlsm`, `xls`, `xlsb`, `ods`)
 /// natively, reusing the tabular data preview grid.
@@ -64,7 +75,7 @@ impl ExcelReader {
         let open_task = cx.spawn(async move |this, cx| {
             let opened = cx
                 .background_spawn(async move {
-                    calamine::open_workbook_auto_from_rs(Cursor::new(bytes))
+                    calamine::open_workbook_auto_from_rs(Cursor::new(SharedBytes(bytes)))
                         .map_err(|error| error.to_string())
                 })
                 .await;

@@ -16,6 +16,7 @@ use futures::{
 };
 
 use alacritty_terminal::grid::Dimensions as _;
+use alacritty_terminal::term::Osc52;
 use itertools::Itertools as _;
 use mappings::mouse::{
     alt_scroll, grid_point, grid_point_and_side, mouse_button_report, mouse_moved_report,
@@ -1144,6 +1145,12 @@ impl TerminalBuilder {
         builder.terminal.task = task;
         builder.terminal.completion_tx = completion_tx;
         builder.terminal.is_remote_terminal = true;
+        // A remote terminal renders a real interactive PTY stream, so programs on the
+        // remote host (e.g. agents or editors copying via OSC 52) must be able to
+        // reach the client clipboard. Pure display-only terminals keep OSC 52 disabled.
+        builder.terminal.term_config.osc52 = Osc52::OnlyCopy;
+        let config = builder.terminal.term_config.clone();
+        apply_config(&builder.terminal.term, &config);
         builder.terminal.hyperlink_regex_searches =
             RegexSearches::new(&path_hyperlink_regexes, path_hyperlink_timeout);
         builder.terminal.template = CopyTemplate {
@@ -5740,6 +5747,48 @@ mod tests {
                 cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text()));
             assert_eq!(clipboard_text.as_deref(), Some("original"));
         }
+    }
+
+    /// A remote terminal renders a real interactive PTY stream, so OSC 52 copy
+    /// sequences from programs on the remote host must reach the client clipboard.
+    #[gpui::test]
+    async fn test_remote_terminal_applies_osc52_to_client_clipboard(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            let settings_store = settings::SettingsStore::test(cx);
+            cx.set_global(settings_store);
+            cx.write_to_clipboard(ClipboardItem::new_string("original".to_string()));
+        });
+
+        let terminal = cx.new(|cx| {
+            TerminalBuilder::new_remote(
+                TerminalMode::interactive(),
+                Shell::Program("bash".into()),
+                SettingsCursorShape::default(),
+                AlternateScroll::On,
+                None,
+                Vec::new(),
+                Duration::ZERO,
+                0,
+                PathStyle::local(),
+                AnyProtoClient::new(Arc::new(TestProtoClient {
+                    handler_set: Mutex::new(ProtoMessageHandlerSet::default()),
+                })),
+                "server".into(),
+                "terminal".into(),
+                false,
+                cx.background_executor(),
+            )
+            .subscribe(cx)
+        });
+
+        terminal.update(cx, |terminal, cx| {
+            terminal.write_raw_output(b"\x1b]52;c;b3ZlcndyaXR0ZW4=\x07", cx);
+        });
+        cx.run_until_parked();
+
+        let clipboard_text =
+            cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text()));
+        assert_eq!(clipboard_text.as_deref(), Some("overwritten"));
     }
 
     mod hyperlinks {

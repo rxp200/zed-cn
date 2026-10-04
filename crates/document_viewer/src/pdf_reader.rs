@@ -57,9 +57,9 @@ const SCROLL_LINE: f32 = 48.0;
 /// Pages adjacent to the visible range that are rendered in advance.
 const PREFETCH_PAGES: usize = 1;
 /// Soft cap on the total pixel data kept in the page cache.
-const CACHE_MAX_BYTES: usize = 128 * 1024 * 1024;
+const CACHE_MAX_BYTES: usize = 64 * 1024 * 1024;
 /// Soft cap on the number of pages kept in the page cache.
-const CACHE_MAX_PAGES: usize = 24;
+const CACHE_MAX_PAGES: usize = 12;
 /// Pages are re-rendered when the scale changed by more than this factor.
 const RENDER_SCALE_TOLERANCE: f32 = 1.1;
 /// Maximum pixels a single rendered page may occupy (limits peak memory).
@@ -854,7 +854,7 @@ fn pixmap_to_render_image(mut pixmap: hayro::vello_cpu::Pixmap) -> Option<Arc<Re
 }
 
 fn spawn_render_worker(
-    data: Arc<[u8]>,
+    data: Arc<Vec<u8>>,
 ) -> (
     mpsc::Sender<PdfRequest>,
     futures::channel::mpsc::UnboundedReceiver<PdfResponse>,
@@ -871,11 +871,14 @@ fn spawn_render_worker(
 }
 
 fn run_render_worker(
-    data: Arc<[u8]>,
+    data: Arc<Vec<u8>>,
     request_rx: &mpsc::Receiver<PdfRequest>,
     response_tx: &futures::channel::mpsc::UnboundedSender<PdfResponse>,
 ) {
-    let pdf = match Pdf::new(data.as_ref().to_vec()) {
+    // `PdfData` 能直接接受 `Arc<Vec<u8>>`，而这里的 `data` 与
+    // `DocumentItem.contents` 是同一个分配，因此不要复制成新的 `Vec<u8>`，
+    // 否则整个文件会多驻留一份。
+    let pdf = match Pdf::new(data) {
         Ok(pdf) => pdf,
         Err(error) => {
             let message = match error {
@@ -1049,5 +1052,29 @@ pub(crate) mod tests {
         assert!(pixels <= MAX_PAGE_PIXELS * 1.001);
         // Small pages are left alone.
         assert_eq!(limit_render_scale(2.0, 600.0, 800.0), 2.0);
+    }
+
+    /// 源文件字节必须与 `DocumentItem.contents` 共享同一块分配；一旦退回
+    /// `to_vec()` 或 `Arc<[u8]>`，整个 PDF 会多驻留一份，这里用引用计数把
+    /// 这件事钉住。
+    #[test]
+    fn parses_from_a_shared_buffer_without_copying_it() {
+        let bytes: Arc<Vec<u8>> = Arc::new(minimal_pdf());
+        let shared = bytes.clone();
+        assert_eq!(Arc::strong_count(&shared), 2);
+        let pdf = Pdf::new(bytes).expect("minimal pdf should parse");
+        assert!(
+            Arc::strong_count(&shared) >= 2,
+            "Pdf 应该持有调用方的 Arc，而不是复制成 Vec<u8>"
+        );
+        assert_eq!(pdf.pages().len(), 1);
+    }
+
+    /// 页位图缓存的内存预算；调高它必须是有意识的决定，而不是顺手改数字。
+    #[test]
+    fn page_cache_budget_stays_bounded() {
+        const MIB: usize = 1024 * 1024;
+        assert!(CACHE_MAX_BYTES <= 64 * MIB);
+        assert!(CACHE_MAX_PAGES <= 12);
     }
 }

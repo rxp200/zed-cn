@@ -98,7 +98,7 @@ macro_rules! settings_overrides {
         }
     }
 }
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::hash::Hash;
 use std::sync::Arc;
 pub use util::serde::default_true;
@@ -1434,8 +1434,11 @@ pub struct SshConnection {
     pub port: Option<u16>,
     #[serde(default)]
     pub args: Vec<String>,
+    /// Recently used project locations on this host, most recently used
+    /// first. Kept to a bounded length; the least recently used entries are
+    /// dropped once the limit is exceeded.
     #[serde(default)]
-    pub projects: collections::BTreeSet<RemoteProject>,
+    pub projects: Vec<RemoteProject>,
     /// Name to use for this server in UI.
     pub nickname: Option<String>,
     // By default Zed will download the binary to the host directly.
@@ -1471,8 +1474,11 @@ pub enum RemoteServerSource {
 pub struct WslConnection {
     pub distro_name: String,
     pub user: Option<String>,
+    /// Recently used project locations in this distribution, most recently
+    /// used first. Kept to a bounded length; the least recently used entries
+    /// are dropped once the limit is exceeded.
     #[serde(default)]
-    pub projects: BTreeSet<RemoteProject>,
+    pub projects: Vec<RemoteProject>,
 }
 
 #[with_fallible_options]

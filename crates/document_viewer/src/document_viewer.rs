@@ -57,9 +57,12 @@ impl DocumentFormat {
 }
 
 /// A project item holding the raw bytes of a previewable binary document.
+///
+/// `Arc<Vec<u8>>`（而不是 `Arc<[u8]>`）是为了让打开文件时的 `Vec<u8>` 能直接
+/// 包进 `Arc`，不需要再复制一份；PDF 渲染器也能共享同一块缓冲区。
 pub struct DocumentItem {
     pub file: Arc<worktree::File>,
-    pub contents: Arc<[u8]>,
+    pub contents: Arc<Vec<u8>>,
     pub format: DocumentFormat,
 }
 
@@ -104,7 +107,7 @@ impl DocumentItem {
             });
             return Task::ready(Ok(cx.new(|_| Self {
                 file,
-                contents: Arc::from([]),
+                contents: Arc::new(Vec::new()),
                 format,
             })));
         }
@@ -115,7 +118,7 @@ impl DocumentItem {
             let LoadedBinaryFile { file, content } = load.await?;
             Ok(cx.new(|_| DocumentItem {
                 file,
-                contents: content.into(),
+                contents: Arc::new(content),
                 format,
             }))
         })
