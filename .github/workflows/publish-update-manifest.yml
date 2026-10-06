@@ -36,7 +36,12 @@ jobs:
       - name: Generate feed from completed public releases
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 script/generate-update-manifest.py --output update-site/updates.json
+        run: |
+          python3 script/generate-update-manifest.py --output update-site/updates.json
+          gh api --paginate --slurp 'repos/rxp200/zed-cn/releases?per_page=100' > listed-releases.json
+          if python3 -c 'import json,sys; sys.exit(not any(r["tag_name"].startswith("zed-cn-dev-v") and not r["draft"] for page in json.load(open("listed-releases.json")) for r in page))'; then
+            python3 script/generate-update-manifest.py --channel dev --output update-site/updates-dev.json
+          fi
       - name: Configure Pages
         uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b
       - name: Upload only the update feed
@@ -50,11 +55,17 @@ jobs:
         env:
           PAGE_URL: ${{ steps.deployment.outputs.page_url }}
         run: |
-          for attempt in {1..12}; do
-            if curl --fail --silent --show-error --location --max-time 30 "${PAGE_URL%/}/updates.json" -o deployed-updates.json && cmp update-site/updates.json deployed-updates.json; then
-              exit 0
+          for feed in update-site/*.json; do
+            verified=false
+            for attempt in {1..12}; do
+              if curl --fail --silent --show-error --location --max-time 30 "${PAGE_URL%/}/$(basename "$feed")" -o deployed-updates.json && cmp "$feed" deployed-updates.json; then
+                verified=true
+                break
+              fi
+              sleep 10
+            done
+            if [[ "$verified" != true ]]; then
+              echo "The deployed update feed $feed could not be verified." >&2
+              exit 1
             fi
-            sleep 10
           done
-          echo "The deployed update feed could not be verified." >&2
-          exit 1

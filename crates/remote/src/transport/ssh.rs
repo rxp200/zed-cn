@@ -1010,7 +1010,7 @@ impl SshRemoteConnection {
         {
             Some(
                 cx.update(|cx| release_channel::CustomReleaseTag::current(cx))
-                    .context("当前客户端没有有效的 Zed CN 正式发布标识，无法选择对应远程服务")?,
+                    .context(i18n::t!("00332ab969a75afe"))?,
             )
         } else {
             None
@@ -1159,7 +1159,7 @@ impl SshRemoteConnection {
                                 cx,
                             )
                             .await
-                            .context("解压远程开发服务失败")?;
+                            .context(i18n::t!("ddfb785e49d94d49"))?;
                             return Ok(dst_path.into());
                         }
                         Err(error) => {
@@ -1184,10 +1184,7 @@ impl SshRemoteConnection {
                 }
             }
         } else {
-            delegate.set_status(
-                Some(i18n::t!("065419df547c2992")),
-                cx,
-            );
+            delegate.set_status(Some(i18n::t!("065419df547c2992")), cx);
         }
 
         let local_download = if let Some(tag) = &custom_tag {
@@ -1207,24 +1204,23 @@ impl SshRemoteConnection {
         let src_path = match (local_download, remote_download_error) {
             (Ok(path), _) => path,
             (Err(local_error), Some(remote_error)) => {
-                return Err(local_error).context(format!(
-                    "无法安装远程开发服务；远程主机下载失败：{remote_error:#}；本地下载也失败"
-                ));
+                return Err(local_error)
+                    .context(i18n::t!("2a98da3f39828695", remote_error = remote_error));
             }
             (Err(local_error), None) => {
-                return Err(local_error).context("本地下载远程开发服务失败");
+                return Err(local_error).context(i18n::t!("3b317243723f3b51"));
             }
         };
         self.upload_local_server_binary(&src_path, &tmp_path_compressed, delegate, cx)
             .await
-            .context("上传远程开发服务失败")?;
+            .context(i18n::t!("644a8c1d42e010f5"))?;
         if let Some(tag) = &custom_tag {
             let staged_path = remote_server_dir_relative().join(RelPath::from_unix_str(&format!(
                 "{binary_name}-{install_id}-staged"
             ))?);
             self.extract_server_binary(&staged_path, &tmp_path_compressed, delegate, cx)
                 .await
-                .context("解压远程开发服务失败")?;
+                .context(i18n::t!("ddfb785e49d94d49"))?;
             let promotion = self
                 .promote_custom_server_binary(&staged_path, &dst_path, cx)
                 .await;
@@ -1238,7 +1234,7 @@ impl SshRemoteConnection {
         } else {
             self.extract_server_binary(&dst_path, &tmp_path_compressed, delegate, cx)
                 .await
-                .context("解压远程开发服务失败")?;
+                .context(i18n::t!("ddfb785e49d94d49"))?;
         }
         Ok(dst_path.into())
     }
@@ -1418,7 +1414,7 @@ impl SshRemoteConnection {
                     cx,
                 )
                 .await
-                .context("安全安装 Zed CN 远程服务需要远端 python3，且目标文件系统须支持硬链接")?;
+                .context(i18n::t!("091b7335d7d851a9"))?;
         }
         Ok(())
     }
@@ -1503,7 +1499,7 @@ impl SshRemoteConnection {
                 cx,
             )
             .await
-            .context("无法校验已有 Zed CN 远程服务，已停止连接")?;
+            .context(i18n::t!("6fec2300524c2bb6"))?;
         verify_custom_server_digest(&output, &expected)
     }
 
@@ -1992,11 +1988,11 @@ impl SshSocket {
             cx,
         )
         .await
-        .context("将 Zed SSH 公钥部署到远程 authorized_keys 失败")?;
+        .context(i18n::t!("66331a08c1adc3aa"))?;
 
         self.verify_managed_key(&generated.private_key_path, cx)
             .await
-            .context("公钥已写入远程主机，但使用新密钥进行独立验证失败")?;
+            .context(i18n::t!("6012b6a8a7294213"))?;
         crate::managed_ssh_keys::mark_managed_ssh_key_verified(&generated.record.key_id, cx)
             .await?;
         self.delegate
@@ -2023,7 +2019,7 @@ impl SshSocket {
             .output()
             .with_timeout(REMOTE_COMMAND_TIMEOUT, cx.background_executor())
             .await
-            .context("验证 Zed SSH 密钥超时")??;
+            .context(i18n::t!("1fa6facdb6c8587b"))??;
         if !output.status.success() {
             anyhow::bail!("{}", String::from_utf8_lossy(&output.stderr).trim());
         }

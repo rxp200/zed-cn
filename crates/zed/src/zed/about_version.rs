@@ -1,5 +1,8 @@
 pub fn custom_version<'a>(version: &str, release_tag: Option<&'a str>) -> Option<&'a str> {
-    let custom_version = release_tag?.strip_prefix("zed-cn-v")?;
+    let release_tag = release_tag?;
+    let custom_version = release_tag
+        .strip_prefix("zed-cn-v")
+        .or_else(|| release_tag.strip_prefix("zed-cn-dev-v"))?;
     let (base_version, revision) = custom_version.rsplit_once("-r")?;
     if base_version != version
         || revision.is_empty()
@@ -29,6 +32,10 @@ mod tests {
 
     #[test]
     fn does_not_invent_a_revision_for_unmarked_builds() {
+        assert_eq!(
+            custom_version("1.24.0", Some("zed-cn-dev-v1.24.0-r1")),
+            Some("1.24.0-r1")
+        );
         assert_eq!(custom_version("1.18.1", None), None);
         assert_eq!(custom_version("1.18.1", Some("")), None);
     }

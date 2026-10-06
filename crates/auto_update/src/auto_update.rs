@@ -10,7 +10,7 @@ use http_client::{HttpClient, HttpClientWithUrl};
 use release_channel::{AppCommitSha, ReleaseChannel};
 use semver::Version;
 use serde::{Deserialize, Serialize};
-use settings::{RegisterSetting, Settings, SettingsStore};
+use settings::{RegisterSetting, Settings, SettingsStore, UpdateChannel};
 use sha2::{Digest, Sha256};
 use smol::fs::File;
 use smol::{
@@ -236,7 +236,8 @@ fn custom_release_notes_from_manifest(
         .into_iter()
         .filter_map(|release| {
             let identity = parse_zed_cn_release_tag(&release.tag_name)?;
-            (identity <= installed_release
+            (custom_update_channel(&release.tag_name) == custom_update_channel(installed_tag)
+                && identity <= installed_release
                 && !release.title.trim().is_empty()
                 && !release.release_notes.trim().is_empty())
             .then_some((identity, release))
@@ -353,6 +354,15 @@ impl Settings for AutoUpdateSetting {
     }
 }
 
+#[derive(Clone, Copy, Debug, RegisterSetting)]
+struct UpdateChannelSetting(UpdateChannel);
+
+impl Settings for UpdateChannelSetting {
+    fn from_settings(content: &settings::SettingsContent) -> Self {
+        Self(content.update_channel.unwrap_or_default())
+    }
+}
+
 #[derive(Default)]
 struct GlobalAutoUpdate(Option<Entity<AutoUpdater>>);
 
@@ -384,7 +394,21 @@ pub fn init(client: Arc<Client>, cx: &mut App) {
                 .0
                 .then(|| updater.start_polling(cx));
 
+            let mut update_channel = UpdateChannelSetting::get_global(cx).0;
             cx.observe_global::<SettingsStore>(move |updater: &mut AutoUpdater, cx| {
+                let selected_channel = UpdateChannelSetting::get_global(cx).0;
+                if selected_channel != update_channel {
+                    update_channel = selected_channel;
+                    if !matches!(
+                        updater.status,
+                        AutoUpdateStatus::Installing { .. } | AutoUpdateStatus::Updated { .. }
+                    ) {
+                        updater.pending_poll.take();
+                        updater.status = AutoUpdateStatus::Idle;
+                        updater.update_manifest = None;
+                        updater.poll(UpdateCheckType::Manual, cx);
+                    }
+                }
                 if AutoUpdateSetting::get_global(cx).0 {
                     if update_subscription.is_none() {
                         update_subscription = Some(updater.start_polling(cx))
@@ -474,8 +498,13 @@ pub async fn custom_release_notes(
     tag: &str,
     executor: &BackgroundExecutor,
 ) -> Option<CustomReleaseNotes> {
+    let feed_url = if custom_update_channel(tag) == UpdateChannel::Dev {
+        "https://rxp200.github.io/zed-cn/updates-dev.json"
+    } else {
+        ZED_CN_RELEASES_URL
+    };
     let mut response = client
-        .get(ZED_CN_RELEASES_URL, Default::default(), true)
+        .get(feed_url, Default::default(), true)
         .with_timeout(Duration::from_secs(30), executor)
         .await
         .log_err()?
@@ -740,6 +769,16 @@ impl AutoUpdater {
                 .clone()
                 .context("auto-update not initialized")
         })?;
+
+        if let Some(version) = version.as_ref().filter(|_| {
+            matches!(release_channel, ReleaseChannel::Stable | ReleaseChannel::Preview)
+        }) {
+            let path = remote_server_cache_path(release_channel, version, None, os, arch);
+            if let Some(path) = cached_custom_remote_server(path).await? {
+                set_status(i18n::t!("c217f9edb3307e01"), cx);
+                return Ok(path);
+            }
+        }
 
         let uses_proxy = this.read_with(cx, |this, _| this.client.http_client().proxy().is_some());
         set_status(
@@ -1162,12 +1201,16 @@ impl AutoUpdater {
         } else {
             let client = this.read_with(cx, |this, _| this.client.http_client());
             let executor = cx.background_executor().clone();
+            let feed_url = cx.update(|cx| match UpdateChannelSetting::get_global(cx).0 {
+                UpdateChannel::Stable => ZED_CN_RELEASES_URL,
+                UpdateChannel::Dev => "https://rxp200.github.io/zed-cn/updates-dev.json",
+            });
             let mut response = client
-                .get(ZED_CN_RELEASES_URL, Default::default(), true)
+                .get(feed_url, Default::default(), true)
                 .with_timeout(Duration::from_secs(30), &executor)
                 .await
-                .context("连接 Zed CN 更新清单超时，请稍后重试")?
-                .context("无法连接 Zed CN 更新清单，请检查网络或稍后重试；也可从 https://github.com/rxp200/zed-cn/releases 手动下载")?;
+                .context(i18n::t!("f7450698e7d270a0"))?
+                .context(i18n::t!("7712eb8faaef9af2"))?;
             anyhow::ensure!(
                 response.status().is_success(),
                 i18n::t_args!("d66555e3287c54de", response.status()),
@@ -1179,18 +1222,26 @@ impl AutoUpdater {
                 .read_to_end(&mut body)
                 .with_timeout(Duration::from_secs(30), &executor)
                 .await
-                .context("读取 Zed CN 更新清单超时，请稍后重试")?
-                .context("读取 Zed CN 更新清单失败")?;
+                .context(i18n::t!("333de64f9ceaeaeb"))?
+                .context(i18n::t!("2960876391053a24"))?;
             let manifest = parse_update_manifest(&body)?;
             this.update(cx, |this, cx| {
                 this.update_manifest = Some((cx.background_executor().now(), manifest.clone()));
             });
             manifest
         };
-        let releases = manifest.releases;
+        let selected_channel = cx.update(|cx| UpdateChannelSetting::get_global(cx).0);
+        let installed_channel = cx.update(|cx| {
+            release_channel::CustomReleaseTag::try_current(cx)
+                .map(|tag| custom_update_channel(&tag))
+                .unwrap_or(UpdateChannel::Stable)
+        });
+        let switching_channel = selected_channel != installed_channel;
         let expected_asset_name = custom_app_asset_name(os, arch)?;
-        let Some((release, release_version, revision, asset)) = select_custom_app_release(
-            releases,
+        let Some((release, release_version, revision, asset)) = select_channel_app_release(
+            manifest.releases,
+            selected_channel,
+            switching_channel,
             &installed_version,
             &expected_asset_name,
             app_commit_sha.as_deref(),
@@ -1204,7 +1255,11 @@ impl AutoUpdater {
         };
 
         let mut status_version = release_version;
-        status_version.build = semver::BuildMetadata::new(&format!("zed-cn.r{revision}"))?;
+        let build_identity = match selected_channel {
+            UpdateChannel::Stable => format!("zed-cn.r{revision}"),
+            UpdateChannel::Dev => format!("zed-cn.dev.r{revision}"),
+        };
+        status_version.build = semver::BuildMetadata::new(&build_identity)?;
         Ok(Some(CustomAppRelease {
             asset: ReleaseAsset {
                 version: status_version.to_string(),
@@ -1263,10 +1318,7 @@ impl AutoUpdater {
         }
 
         #[cfg(target_os = "macos")]
-        anyhow::ensure!(
-            which::which("rsync").is_ok(),
-            i18n::t!("3a7bfa39ddf3279c")
-        );
+        anyhow::ensure!(which::which("rsync").is_ok(), i18n::t!("3a7bfa39ddf3279c"));
 
         Ok(())
     }
@@ -1356,7 +1408,7 @@ async fn download_remote_server_binary(
 ) -> Result<()> {
     let executor = cx.background_executor().clone();
     let temp = tempfile::Builder::new()
-        .tempfile_in(target_path.parent().context("远程服务缓存路径缺少父目录")?)?
+        .tempfile_in(target_path.parent().context(i18n::t!("860c54bf66977f06"))?)?
         .into_temp_path();
     let mut temp_file = File::create(&temp).await?;
 
@@ -1364,7 +1416,7 @@ async fn download_remote_server_binary(
         .get(&release.url, Default::default(), true)
         .with_timeout(REMOTE_SERVER_DOWNLOAD_IDLE_TIMEOUT, &executor)
         .await
-        .context("获取远程开发服务下载响应超时")??;
+        .context(i18n::t!("845f27aae7b56fdb"))??;
     anyhow::ensure!(
         response.status().is_success(),
         "failed to download remote server release: {:?}",
@@ -1408,6 +1460,27 @@ async fn download_remote_server_binary(
     Ok(())
 }
 
+pub fn remote_server_cache_path(
+    channel: ReleaseChannel,
+    version: &Version,
+    custom_tag: Option<&str>,
+    os: &str,
+    arch: &str,
+) -> PathBuf {
+    let platform = format!("{os}-{arch}");
+    if let Some(tag) = custom_tag {
+        let extension = if os == "windows" { "zip" } else { "gz" };
+        paths::remote_servers_dir().join("zed-cn").join(platform).join(format!("{tag}.{extension}"))
+    } else {
+        let mut version = version.clone();
+        if matches!(channel, ReleaseChannel::Stable | ReleaseChannel::Preview) {
+            version.pre = semver::Prerelease::EMPTY;
+            version.build = semver::BuildMetadata::EMPTY;
+        }
+        paths::remote_servers_dir().join(channel.dev_name()).join(platform).join(format!("{version}.gz"))
+    }
+}
+
 async fn cached_custom_remote_server(path: PathBuf) -> Result<Option<PathBuf>> {
     match smol::fs::metadata(&path).await {
         Ok(metadata) => {
@@ -1418,7 +1491,7 @@ async fn cached_custom_remote_server(path: PathBuf) -> Result<Option<PathBuf>> {
             Ok(Some(path))
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(error).context("无法检查 Zed CN 远程服务本地缓存"),
+        Err(error) => Err(error).context(i18n::t!("4b2870f04f5808c8")),
     }
 }
 
@@ -1430,7 +1503,7 @@ fn validate_custom_remote_server_metadata(body: &[u8], tag: &str, source_sha: &s
             && source_sha.len() == 40
             && source_sha.bytes().all(|byte| byte.is_ascii_hexdigit())
             && !metadata.draft
-            && !metadata.prerelease,
+            && metadata.prerelease == (custom_update_channel(tag) == UpdateChannel::Dev),
         i18n::t!("39bd895d267799f0")
     );
     Ok(())
@@ -1481,7 +1554,7 @@ async fn read_remote_release_metadata(
     };
     read.with_timeout(REMOTE_SERVER_DOWNLOAD_IDLE_TIMEOUT, executor)
         .await
-        .context("获取 Zed CN 发布校验信息超时")?
+        .context(i18n::t!("1a5d54fa836cab6a"))?
 }
 
 #[test]
@@ -1506,9 +1579,7 @@ fn remote_server_checksum(checksums: &str, name: &str) -> Result<String> {
         let filename = fields.next()?.trim_start_matches('*');
         (filename == name && fields.next().is_none()).then_some(checksum)
     });
-    let checksum = matching
-        .next()
-        .context("当前 Zed CN 发布缺少此平台的远程服务；不会回退到官方或其他版本")?;
+    let checksum = matching.next().context(i18n::t!("9dd41a1d473b7040"))?;
     anyhow::ensure!(
         matching.next().is_none()
             && checksum.len() == 64
@@ -1616,10 +1687,7 @@ fn parse_update_manifest(body: &[u8]) -> Result<UpdateManifest> {
     );
     let manifest: UpdateManifest =
         serde_json::from_slice(body).context("Zed CN 更新清单格式无效，请稍后重试")?;
-    anyhow::ensure!(
-        manifest.schema_version == 1,
-        i18n::t!("d723285c6411116c")
-    );
+    anyhow::ensure!(manifest.schema_version == 1, i18n::t!("d723285c6411116c"));
     for release in &manifest.releases {
         anyhow::ensure!(
             release.target_commitish.len() == 40
@@ -1655,7 +1723,9 @@ fn parse_update_manifest(body: &[u8]) -> Result<UpdateManifest> {
 }
 
 async fn verify_update_checksum(path: &Path, expected: &str) -> Result<()> {
-    let mut file = File::open(path).await.context("无法读取下载的更新文件")?;
+    let mut file = File::open(path)
+        .await
+        .context(i18n::t!("457dc856eb21dc7e"))?;
     let mut hasher = Sha256::new();
     let mut buffer = [0; 64 * 1024];
     loop {
@@ -1672,9 +1742,18 @@ async fn verify_update_checksum(path: &Path, expected: &str) -> Result<()> {
     Ok(())
 }
 
+fn custom_update_channel(tag_name: &str) -> UpdateChannel {
+    if tag_name.starts_with("zed-cn-dev-v") {
+        UpdateChannel::Dev
+    } else {
+        UpdateChannel::Stable
+    }
+}
+
 fn parse_zed_cn_release_tag(tag_name: &str) -> Option<(Version, u64)> {
     let (version, revision) = tag_name
-        .strip_prefix(ZED_CN_RELEASE_TAG_PREFIX)?
+        .strip_prefix(ZED_CN_RELEASE_TAG_PREFIX)
+        .or_else(|| tag_name.strip_prefix("zed-cn-dev-v"))?
         .rsplit_once("-r")?;
     let version: Version = version.parse().ok()?;
     let revision: u64 = revision.parse().ok()?;
@@ -1682,6 +1761,34 @@ fn parse_zed_cn_release_tag(tag_name: &str) -> Option<(Version, u64)> {
         return None;
     }
     Some((version, revision))
+}
+
+fn select_channel_app_release(
+    releases: Vec<GitHubRelease>,
+    channel: UpdateChannel,
+    switching: bool,
+    installed_version: &Version,
+    expected_asset_name: &str,
+    installed_commit_sha: Option<&str>,
+) -> Option<(GitHubRelease, Version, u64, GitHubReleaseAsset)> {
+    let minimum_version = Version::new(0, 0, 0);
+    select_custom_app_release(
+        releases
+            .into_iter()
+            .filter(|release| custom_update_channel(&release.tag_name) == channel)
+            .collect(),
+        if switching {
+            &minimum_version
+        } else {
+            installed_version
+        },
+        expected_asset_name,
+        if switching {
+            None
+        } else {
+            installed_commit_sha
+        },
+    )
 }
 
 fn select_custom_app_release(
@@ -1695,7 +1802,10 @@ fn select_custom_app_release(
 
     let mut candidate = None;
     for mut release in releases {
-        if release.draft || release.prerelease {
+        if release.draft
+            || (release.prerelease
+                && custom_update_channel(&release.tag_name) != UpdateChannel::Dev)
+        {
             continue;
         }
         let Some((release_version, revision)) = parse_zed_cn_release_tag(&release.tag_name) else {
@@ -2217,6 +2327,20 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_predownload_cache_identity_matches_connection_and_isolates_artifacts() {
+        let version: Version = "1.22.0+stable.source".parse().expect("version");
+        let official = remote_server_cache_path(ReleaseChannel::Stable, &version, None, "linux", "x86_64");
+        assert!(official.ends_with("stable/linux-x86_64/1.22.0.gz"));
+        assert_ne!(official, remote_server_cache_path(ReleaseChannel::Preview, &version, None, "linux", "x86_64"));
+        assert_ne!(official, remote_server_cache_path(ReleaseChannel::Stable, &version, None, "linux", "aarch64"));
+        assert_ne!(official, remote_server_cache_path(ReleaseChannel::Stable, &Version::new(1, 23, 0), None, "linux", "x86_64"));
+        let custom = remote_server_cache_path(ReleaseChannel::Stable, &version, Some("zed-cn-v1.22.0-r1"), "windows", "x86_64");
+        assert!(custom.ends_with("zed-cn/windows-x86_64/zed-cn-v1.22.0-r1.zip"));
+        assert_ne!(official, custom);
+        assert_ne!(custom, remote_server_cache_path(ReleaseChannel::Stable, &version, Some("zed-cn-v1.22.0-r2"), "windows", "x86_64"));
+    }
+
     #[gpui::test]
     async fn test_custom_remote_server_cache_short_circuits_lookup(cx: &mut TestAppContext) {
         cx.background_executor.allow_parking();
@@ -2576,7 +2700,80 @@ mod tests {
     }
 
     #[test]
+    fn test_channel_selection_isolated_and_explicit_switch_allows_downgrade() {
+        let release = |tag: &str| GitHubRelease {
+            tag_name: tag.into(),
+            target_commitish: "a".repeat(40),
+            draft: false,
+            prerelease: tag.starts_with("zed-cn-dev-v"),
+            title: String::new(),
+            release_notes: String::new(),
+            assets: vec![GitHubReleaseAsset {
+                name: "Zed-x86_64.exe".into(),
+                state: "uploaded".into(),
+                size: 1,
+                browser_download_url: String::new(),
+                sha256: "b".repeat(64),
+            }],
+        };
+        let releases = vec![
+            release("zed-cn-v1.22.0-r7"),
+            release("zed-cn-dev-v1.24.0-r2"),
+        ];
+        let select = |channel, switching, version| {
+            select_channel_app_release(
+                releases.clone(),
+                channel,
+                switching,
+                &version,
+                "Zed-x86_64.exe",
+                None,
+            )
+            .map(|entry| entry.0.tag_name)
+        };
+        assert_eq!(
+            select(UpdateChannel::Stable, false, Version::new(1, 22, 0)).as_deref(),
+            Some("zed-cn-v1.22.0-r7")
+        );
+        assert_eq!(
+            select(UpdateChannel::Dev, true, Version::new(1, 22, 0)).as_deref(),
+            Some("zed-cn-dev-v1.24.0-r2")
+        );
+        assert_eq!(
+            select(UpdateChannel::Stable, false, Version::new(1, 24, 0)),
+            None
+        );
+        assert_eq!(
+            select(UpdateChannel::Stable, true, Version::new(1, 24, 0)).as_deref(),
+            Some("zed-cn-v1.22.0-r7")
+        );
+        assert!(
+            select_channel_app_release(
+                releases,
+                UpdateChannel::Dev,
+                true,
+                &Version::new(1, 22, 0),
+                "Zed-aarch64.exe",
+                None
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
     fn test_parse_zed_cn_release_tag() {
+        assert_eq!(
+            parse_zed_cn_release_tag("zed-cn-dev-v1.24.0-r2"),
+            Some((Version::new(1, 24, 0), 2))
+        );
+        assert_eq!(
+            custom_update_channel("zed-cn-dev-v1.24.0-r2"),
+            UpdateChannel::Dev
+        );
+        assert_eq!(
+            custom_update_channel("zed-cn-v1.22.0-r7"),
+            UpdateChannel::Stable
+        );
         assert_eq!(
             parse_zed_cn_release_tag("zed-cn-v1.18.0-r5"),
             Some((Version::new(1, 18, 0), 5))

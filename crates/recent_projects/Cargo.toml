@@ -19,6 +19,8 @@ test-support = ["remote/test-support", "remote_connection/test-support", "projec
 [dependencies]
 i18n.workspace = true
 anyhow.workspace = true
+auto_update.workspace = true
+smol.workspace = true
 chrono.workspace = true
 askpass.workspace = true
 db.workspace = true

@@ -561,7 +561,7 @@ impl ComponentPreview {
                                 .size(IconSize::Small)
                                 .color(Color::Muted),
                         )
-                        .action("打开拉取请求", |_, cx| {
+                        .action(i18n::t!("0e9678da8dca4506"), |_, cx| {
                             cx.open_url("https://github.com/")
                         })
                     });

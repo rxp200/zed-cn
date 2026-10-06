@@ -1107,7 +1107,7 @@ impl KeymapEditor {
             let context_menu = ContextMenu::build(window, cx, |menu, _window, _cx| {
                 menu.context(self.focus_handle.clone())
                     .when(selected_binding_is_unmapped, |this| {
-                        this.action("创建", Box::new(CreateBinding))
+                        this.action(i18n::t!("cde2cd071d25bbab"), Box::new(CreateBinding))
                     })
                     .action_disabled_when(
                         selected_binding_is_non_interactable,
@@ -1120,7 +1120,7 @@ impl KeymapEditor {
                         Box::new(DeleteBinding),
                     )
                     .separator()
-                    .action("复制操作", Box::new(CopyAction))
+                    .action(i18n::t!("8c764faa2d69d029"), Box::new(CopyAction))
                     .action_disabled_when(
                         selected_binding_has_no_context,
                         i18n::t!("00b1116df5bd8756"),

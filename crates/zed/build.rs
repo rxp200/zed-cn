@@ -12,7 +12,7 @@ fn main() {
         && about_version::custom_version(env!("CARGO_PKG_VERSION"), Some(&release_tag)).is_none()
     {
         panic!(
-            "ZED_CUSTOM_RELEASE_TAG must match zed-cn-v<CARGO_PKG_VERSION>-r<positive revision>"
+            "ZED_CUSTOM_RELEASE_TAG must match zed-cn-v<CARGO_PKG_VERSION>-r<positive revision> or zed-cn-dev-v<CARGO_PKG_VERSION>-r<positive revision>"
         );
     }
     println!("cargo:rustc-env=ZED_CUSTOM_RELEASE_TAG={release_tag}");

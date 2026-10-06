@@ -119,7 +119,13 @@ impl CustomReleaseTag {
             "zed-cn-v{}.{}.{}-r",
             version.major, version.minor, version.patch
         );
-        let revision = tag.strip_prefix(&prefix)?;
+        let dev_prefix = format!(
+            "zed-cn-dev-v{}.{}.{}-r",
+            version.major, version.minor, version.patch
+        );
+        let revision = tag
+            .strip_prefix(&prefix)
+            .or_else(|| tag.strip_prefix(&dev_prefix))?;
         if revision.starts_with('0') || !revision.bytes().all(|byte| byte.is_ascii_digit()) {
             return None;
         }
@@ -135,7 +141,11 @@ impl CustomReleaseTag {
 fn custom_remote_server_tag_requires_matching_stable_release(cx: &mut App) {
     cx.set_global(GlobalAppVersion(Version::new(1, 19, 2)));
     cx.set_global(GlobalReleaseChannel(ReleaseChannel::Stable));
-    for tag in ["zed-cn-v1.19.2-r1", "zed-cn-v1.19.2-r12"] {
+    for tag in [
+        "zed-cn-v1.19.2-r1",
+        "zed-cn-v1.19.2-r12",
+        "zed-cn-dev-v1.19.2-r1",
+    ] {
         cx.set_global(CustomReleaseTag(tag.to_owned()));
         assert_eq!(CustomReleaseTag::current(cx).as_deref(), Some(tag));
     }

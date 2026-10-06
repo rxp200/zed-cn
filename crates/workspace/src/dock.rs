@@ -1584,7 +1584,7 @@ impl Render for PanelButtons {
                                         let is_current = position == dock_position;
                                         let panel = panel.clone();
                                         menu = menu.toggleable_entry(
-                                            format!("Dock {}", position.label()),
+                                            i18n::t_args!("f1fa6f94cee02c4a", position.label()),
                                             is_current,
                                             IconPosition::Start,
                                             None,

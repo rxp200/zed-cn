@@ -659,7 +659,7 @@ impl EditPredictionButton {
 
     fn add_configure_providers_item(&self, menu: ContextMenu) -> ContextMenu {
         menu.separator().item(
-            ContextMenuEntry::new("Configure Providers")
+            ContextMenuEntry::new(i18n::t!("efdddd439f891712"))
                 .icon(IconName::Settings)
                 .icon_position(IconPosition::Start)
                 .icon_color(Color::Muted)
@@ -873,7 +873,7 @@ impl EditPredictionButton {
                     };
 
                     menu = menu.item(
-                        ContextMenuEntry::new("Training Data Collection")
+                        ContextMenuEntry::new(i18n::t!("33b1729f54180b34"))
                             .toggleable(IconPosition::Start, data_collection.is_enabled())
                             .icon(icon_name)
                             .icon_color(icon_color)
@@ -947,7 +947,7 @@ impl EditPredictionButton {
 
                     if is_collecting && !is_open_source {
                         menu = menu.item(
-                            ContextMenuEntry::new("No data captured.")
+                            ContextMenuEntry::new(i18n::t!("fd911c797cccdbd2"))
                                 .disabled(true)
                                 .icon(IconName::Close)
                                 .icon_color(Color::Error)
@@ -958,43 +958,38 @@ impl EditPredictionButton {
             }
         }
 
-        menu = menu.item(
-            ContextMenuEntry::new("Configure Excluded Files")
-                .icon(IconName::Lock)
-                .icon_color(Color::Muted)
-                .documentation_aside(DocumentationSide::Left, |_| {
-                    Label::new(indoc!{"
-                        Open your settings to add sensitive paths for which Zed will never predict edits."}).into_any_element()
-                })
-                .handler(move |window, cx| {
-                    telemetry::event!(
-                        "Edit Prediction Menu Action",
-                        action = "configure_excluded_files",
-                    );
-                    if let Some(workspace) = Workspace::for_window(window, cx) {
-                        let workspace = workspace.downgrade();
-                        window
-                            .spawn(cx, async |cx| {
-                                open_disabled_globs_setting_in_editor(
-                                    workspace,
-                                    cx,
-                                ).await
-                            })
-                            .detach_and_log_err(cx);
-                    }
-                }),
-        ).item(
-            ContextMenuEntry::new("View Docs")
-                .icon(IconName::FileGeneric)
-                .icon_color(Color::Muted)
-                .handler(move |_, cx| {
-                    telemetry::event!(
-                        "Edit Prediction Menu Action",
-                        action = "view_docs",
-                    );
-                    cx.open_url(PRIVACY_DOCS);
-                })
-        );
+        menu = menu
+            .item(
+                ContextMenuEntry::new(i18n::t!("4ad7de7203cdcf21"))
+                    .icon(IconName::Lock)
+                    .icon_color(Color::Muted)
+                    .documentation_aside(DocumentationSide::Left, |_| {
+                        Label::new(i18n::t!("30697453802ac187")).into_any_element()
+                    })
+                    .handler(move |window, cx| {
+                        telemetry::event!(
+                            "Edit Prediction Menu Action",
+                            action = "configure_excluded_files",
+                        );
+                        if let Some(workspace) = Workspace::for_window(window, cx) {
+                            let workspace = workspace.downgrade();
+                            window
+                                .spawn(cx, async |cx| {
+                                    open_disabled_globs_setting_in_editor(workspace, cx).await
+                                })
+                                .detach_and_log_err(cx);
+                        }
+                    }),
+            )
+            .item(
+                ContextMenuEntry::new(i18n::t!("02fe3dd75a326fe2"))
+                    .icon(IconName::FileGeneric)
+                    .icon_color(Color::Muted)
+                    .handler(move |_, cx| {
+                        telemetry::event!("Edit Prediction Menu Action", action = "view_docs",);
+                        cx.open_url(PRIVACY_DOCS);
+                    }),
+            );
 
         if !self.editor_enabled.unwrap_or(true) {
             let icons = self
@@ -1005,7 +1000,7 @@ impl EditPredictionButton {
                     edit_prediction_types::EditPredictionIconSet::new(IconName::ZedPredict)
                 });
             menu = menu.item(
-                ContextMenuEntry::new("This file is excluded.")
+                ContextMenuEntry::new(i18n::t!("04325d02fbea4dc6"))
                     .disabled(true)
                     .icon(icons.disabled)
                     .icon_size(IconSize::Small),
@@ -1033,7 +1028,7 @@ impl EditPredictionButton {
                 .context(editor_focus_handle)
                 .when(
                     cx.has_flag::<PredictEditsRatePredictionsFeatureFlag>(),
-                    |this| this.action("评价预测", RatePredictions.boxed_clone()),
+                    |this| this.action(i18n::t!("214882b74c5abc89"), RatePredictions.boxed_clone()),
                 );
         }
 
@@ -1069,7 +1064,7 @@ impl EditPredictionButton {
             let menu = menu
                 .separator()
                 .item(
-                    ContextMenuEntry::new("Copilot: Next Edit Suggestions")
+                    ContextMenuEntry::new(i18n::t!("42bf1606aa3b5952"))
                         .toggleable(IconPosition::Start, next_edit_suggestions)
                         .handler({
                             let fs = self.fs.clone();
@@ -1193,7 +1188,7 @@ impl EditPredictionButton {
                 if mercury_payment_required {
                     menu = menu
                         .header("Mercury")
-                        .item(ContextMenuEntry::new("Free tier limit reached").disabled(true))
+                        .item(ContextMenuEntry::new(i18n::t!("fc230f1b79d5cdf9")).disabled(true))
                         .item(
                             ContextMenuEntry::new(
                                 "Upgrade to a paid plan to continue using the service",

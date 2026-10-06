@@ -943,35 +943,44 @@ impl TerminalView {
         let context_menu = ContextMenu::build(window, cx, |menu, _, _| {
             menu.context(self.focus_handle.clone())
                 .when(self.shows_workspace_actions(), |menu| {
-                    menu.action("新建终端", Box::new(NewTerminal::default()))
-                        .action(
-                            "New Center Terminal",
-                            Box::new(NewCenterTerminal::default()),
-                        )
-                        .separator()
+                    menu.action(
+                        i18n::t!("14ee5380fc86ff57"),
+                        Box::new(NewTerminal::default()),
+                    )
+                    .action(
+                        "New Center Terminal",
+                        Box::new(NewCenterTerminal::default()),
+                    )
+                    .separator()
                 })
-                .action("复制", Box::new(Copy))
+                .action(i18n::t!("63d90d977348ab1f"), Box::new(Copy))
                 .when(
                     !self.read_only && !matches!(self.mode, TerminalMode::Embedded { .. }),
                     |menu| {
-                        menu.action("粘贴", Box::new(Paste))
-                            .action("粘贴文本", Box::new(PasteText))
+                        menu.action(i18n::t!("33517926747180e6"), Box::new(Paste))
+                            .action(i18n::t!("8fae9fbef2834a42"), Box::new(PasteText))
                     },
                 )
-                .action("全选", Box::new(SelectAll))
+                .action(i18n::t!("3a5040b68abf75f9"), Box::new(SelectAll))
                 .when(
                     !self.read_only && !matches!(self.mode, TerminalMode::Embedded { .. }),
-                    |menu| menu.action("清除", Box::new(Clear)),
+                    |menu| menu.action(i18n::t!("bce2377283c2455a"), Box::new(Clear)),
                 )
                 .when(
                     assistant_enabled && !matches!(self.mode, TerminalMode::Embedded { .. }),
                     |menu| {
                         menu.separator()
                             .when(!self.read_only, |menu| {
-                                menu.action("内联辅助", Box::new(InlineAssist::default()))
+                                menu.action(
+                                    i18n::t!("3c0a5576ae323683"),
+                                    Box::new(InlineAssist::default()),
+                                )
                             })
                             .when(has_selection && self.shows_workspace_actions(), |menu| {
-                                menu.action("添加到Agent线程", Box::new(AddSelectionToThread))
+                                menu.action(
+                                    i18n::t!("967125d0b2614641"),
+                                    Box::new(AddSelectionToThread),
+                                )
                             })
                     },
                 )

@@ -1812,15 +1812,18 @@ impl OutlinePanel {
                     ui::utils::reveal_in_file_manager_label(false),
                     Box::new(RevealInFileManager),
                 )
-                .action("在终端中打开", Box::new(OpenInTerminal))
+                .action(i18n::t!("a04c3bc562c5f568"), Box::new(OpenInTerminal))
                 .when(is_unfoldable, |menu| {
-                    menu.action("展开目录", Box::new(UnfoldDirectory))
+                    menu.action(i18n::t!("a49f5287fc9ef2d0"), Box::new(UnfoldDirectory))
                 })
                 .when(is_foldable, |menu| {
-                    menu.action("折叠目录", Box::new(FoldDirectory))
+                    menu.action(i18n::t!("7b4c4c37a5658899"), Box::new(FoldDirectory))
                 })
                 .separator()
-                .action("复制路径", Box::new(zed_actions::workspace::CopyPath))
+                .action(
+                    i18n::t!("b97c49acb93028ec"),
+                    Box::new(zed_actions::workspace::CopyPath),
+                )
                 .action(
                     "Copy Relative Path",
                     Box::new(zed_actions::workspace::CopyRelativePath),

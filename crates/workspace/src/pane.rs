@@ -4426,14 +4426,29 @@ fn default_render_tab_bar_buttons(
                 .with_handle(pane.new_item_context_menu_handle.clone())
                 .menu(move |window, cx| {
                     Some(ContextMenu::build(window, cx, |menu, _, _| {
-                        menu.action("新建文件", NewFile.boxed_clone())
-                            .action("打开文件", ToggleFileFinder::default().boxed_clone())
+                        menu.action(i18n::t!("6ddd1eaccab127de"), NewFile.boxed_clone())
+                            .action(
+                                i18n::t!("4c8a4e3da39e5c2a"),
+                                ToggleFileFinder::default().boxed_clone(),
+                            )
                             .separator()
-                            .action("搜索项目", DeploySearch::default().boxed_clone())
-                            .action("搜索符号", ToggleProjectSymbols.boxed_clone())
+                            .action(
+                                i18n::t!("dfb59ea2b7a20c66"),
+                                DeploySearch::default().boxed_clone(),
+                            )
+                            .action(
+                                i18n::t!("ca2ed75c1ab15589"),
+                                ToggleProjectSymbols.boxed_clone(),
+                            )
                             .separator()
-                            .action("新建终端", NewTerminal::default().boxed_clone())
-                            .action("新建居中终端", NewCenterTerminal::default().boxed_clone())
+                            .action(
+                                i18n::t!("14ee5380fc86ff57"),
+                                NewTerminal::default().boxed_clone(),
+                            )
+                            .action(
+                                i18n::t!("6a83039fdbb9891d"),
+                                NewCenterTerminal::default().boxed_clone(),
+                            )
                     }))
                 }),
         )
@@ -4451,15 +4466,36 @@ fn default_render_tab_bar_buttons(
                     ContextMenu::build(window, cx, |menu, _, _| {
                         let mode = SplitMode::MovePane;
                         if can_split_move {
-                            menu.action("向右分割", SplitRight { mode }.boxed_clone())
-                                .action("向左分割", SplitLeft { mode }.boxed_clone())
-                                .action("向上分割", SplitUp { mode }.boxed_clone())
-                                .action("向下分割", SplitDown { mode }.boxed_clone())
+                            menu.action(
+                                i18n::t!("7c9ed6c199718d94"),
+                                SplitRight { mode }.boxed_clone(),
+                            )
+                            .action(
+                                i18n::t!("4fcfde0c0fafef93"),
+                                SplitLeft { mode }.boxed_clone(),
+                            )
+                            .action(i18n::t!("8719c337f07261f3"), SplitUp { mode }.boxed_clone())
+                            .action(
+                                i18n::t!("d7e72a7908f9ae8e"),
+                                SplitDown { mode }.boxed_clone(),
+                            )
                         } else {
-                            menu.action("向右分割", SplitRight::default().boxed_clone())
-                                .action("向左分割", SplitLeft::default().boxed_clone())
-                                .action("向上分割", SplitUp::default().boxed_clone())
-                                .action("向下分割", SplitDown::default().boxed_clone())
+                            menu.action(
+                                i18n::t!("7c9ed6c199718d94"),
+                                SplitRight::default().boxed_clone(),
+                            )
+                            .action(
+                                i18n::t!("4fcfde0c0fafef93"),
+                                SplitLeft::default().boxed_clone(),
+                            )
+                            .action(
+                                i18n::t!("8719c337f07261f3"),
+                                SplitUp::default().boxed_clone(),
+                            )
+                            .action(
+                                i18n::t!("d7e72a7908f9ae8e"),
+                                SplitDown::default().boxed_clone(),
+                            )
                         }
                     })
                     .into()

@@ -600,7 +600,7 @@ fn render_verification_section(
                             this.child(render_hardcoded_rules(true, cx))
                         } else if let Some(reason) = &denial_reason {
                             this.child(
-                                Label::new(format!("Denied: {}", reason))
+                                Label::new(i18n::t_args!("2f0c3ceb461b5c56", reason))
                                     .size(LabelSize::XSmall)
                                     .color(Color::Warning),
                             )
@@ -622,7 +622,7 @@ fn render_verification_section(
                         denial_reason.filter(|_| patterns_agree && !is_hardcoded_denial),
                         |this, reason| {
                             this.child(
-                                Label::new(format!("Reason: {}", reason))
+                                Label::new(i18n::t_args!("55e81ba8db0e3d6b", reason))
                                     .size(LabelSize::XSmall)
                                     .color(Color::Error),
                             )
@@ -924,7 +924,7 @@ fn render_invalid_patterns_section(
                                 ),
                         )
                         .child(
-                            Label::new(format!("Error: {}", invalid.error))
+                            Label::new(i18n::t_args!("b890e9f0ddeb26cd", invalid.error))
                                 .size(LabelSize::XSmall)
                                 .color(Color::Muted),
                         )

@@ -172,7 +172,7 @@ pub(crate) fn commit_context_menu(
 
                 if git_tasks.is_empty() {
                     return menu.item(
-                        ContextMenuEntry::new("Learn More")
+                        ContextMenuEntry::new(i18n::t!("ca66c2da6f5bf825"))
                             .icon(IconName::ArrowUpRight)
                             .icon_color(Color::Muted)
                             .icon_position(IconPosition::End)

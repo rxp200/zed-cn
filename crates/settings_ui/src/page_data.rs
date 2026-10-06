@@ -85,7 +85,18 @@ pub(crate) fn settings_data(cx: &App) -> Vec<SettingsPage> {
 fn developer_page(cx: &App) -> SettingsPage {
     use feature_flags::FeatureFlagAppExt as _;
 
-    let mut items: Vec<SettingsPageItem> = Vec::new();
+    let mut items: Vec<SettingsPageItem> = vec![SettingsPageItem::SettingItem(SettingItem {
+        title: i18n::t!("230da4c2d42f1598"),
+        description: i18n::t!("e5ffeaa025105eea"),
+        field: Box::new(SettingField {
+            organization_override: None,
+            json_path: Some("update_channel"),
+            pick: |content| content.update_channel.as_ref(),
+            write: |content, value, _| content.update_channel = value,
+        }),
+        metadata: None,
+        files: USER,
+    })];
 
     // Feature flag overrides are a staff-only affordance, so only surface the section when the overrides are enabled.
     if cx.feature_flag_overrides_enabled() {
@@ -12146,6 +12157,37 @@ fn write_helix_mode_inner(settings: &mut SettingsContent, value: Option<bool>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[gpui::test]
+    fn test_developer_update_channel_round_trips(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            let page = developer_page(cx);
+            let field = page
+                .items
+                .iter()
+                .find_map(|item| match item {
+                    SettingsPageItem::SettingItem(item) => item
+                        .field
+                        .as_any()
+                        .downcast_ref::<SettingField<settings::UpdateChannel>>(),
+                    _ => None,
+                })
+                .expect("developer page exposes update channel");
+            assert_eq!(field.json_path, Some("update_channel"));
+            let mut content = SettingsContent::default();
+            assert_eq!(
+                settings::UpdateChannel::default(),
+                settings::UpdateChannel::Stable
+            );
+            (field.write)(&mut content, Some(settings::UpdateChannel::Dev), cx);
+            assert_eq!((field.pick)(&content), Some(&settings::UpdateChannel::Dev));
+            (field.write)(&mut content, Some(settings::UpdateChannel::Stable), cx);
+            assert_eq!(
+                (field.pick)(&content),
+                Some(&settings::UpdateChannel::Stable)
+            );
+        });
+    }
 
     #[test]
     fn test_write_vim_helix_mode() {

@@ -498,7 +498,7 @@ impl AgentRegistryPage {
                         h_flex()
                             .gap_1()
                             .child(
-                                Label::new(format!("ID: {}", agent.id()))
+                                Label::new(i18n::t_args!("d43962f48c2ca7e4", agent.id()))
                                     .size(LabelSize::Small)
                                     .color(Color::Muted)
                                     .truncate(),

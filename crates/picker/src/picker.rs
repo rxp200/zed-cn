@@ -1537,16 +1537,28 @@ impl<D: PickerDelegate> Picker<D> {
             .py_1()
             .track_scroll(&scroll_handle)
             .into_any_element(),
-            ElementContainer::List(state) => list(
-                state.clone(),
-                cx.processor(|this, ix, window, cx| {
-                    this.render_element(window, cx, ix).into_any_element()
-                }),
-            )
-            .with_sizing_behavior(sizing_behavior)
-            .flex_grow_1()
-            .py(DynamicSpacing::Base04.rems(cx))
-            .into_any_element(),
+            ElementContainer::List(state) => {
+                // `matches_updated` is the usual place that keeps the list's item
+                // count in sync with the delegate, but a delegate can also rebuild
+                // its matches without going through the picker (for example an
+                // asynchronous settings or ssh-config watcher that only calls
+                // `cx.notify()`). Reconcile here so those rows render immediately
+                // instead of waiting for the next keystroke to reset the count.
+                let match_count = self.delegate.match_count();
+                if state.item_count() != match_count {
+                    state.reset(match_count);
+                }
+                list(
+                    state.clone(),
+                    cx.processor(|this, ix, window, cx| {
+                        this.render_element(window, cx, ix).into_any_element()
+                    }),
+                )
+                .with_sizing_behavior(sizing_behavior)
+                .flex_grow_1()
+                .py(DynamicSpacing::Base04.rems(cx))
+                .into_any_element()
+            }
         }
     }
 
@@ -2055,6 +2067,36 @@ mod tests {
                 0,
                 "leaving the mode should clear the selection"
             );
+        });
+    }
+
+    #[gpui::test]
+    async fn test_list_picker_renders_matches_changed_outside_update_matches(
+        cx: &mut TestAppContext,
+    ) {
+        init_test(cx);
+
+        let (picker, cx) = cx.add_window_view(|window, cx| {
+            Picker::list(TestDelegate::new(vec![true]), window, cx)
+        });
+        cx.run_until_parked();
+
+        // A delegate can grow its matches without going through the picker's
+        // `update_matches` (for example an async settings or ssh-config watcher
+        // that only calls `cx.notify()`). The list must still render the rows
+        // that were added that way.
+        picker.update(cx, |picker, cx| {
+            picker.delegate.items.extend([true, true]);
+            cx.notify();
+        });
+        cx.update(|_, cx| cx.refresh_windows());
+        cx.run_until_parked();
+
+        picker.read_with(cx, |picker, _| {
+            let ElementContainer::List(state) = &picker.element_container else {
+                panic!("expected the picker to render a list container");
+            };
+            assert_eq!(state.item_count(), 3);
         });
     }
 }

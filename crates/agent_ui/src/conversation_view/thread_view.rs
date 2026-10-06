@@ -1643,7 +1643,9 @@ impl ThreadView {
                                         .child(
                                             Button::new(("restore-submission", row_id), "Restore")
                                                 .label_size(LabelSize::Small)
-                                                .tooltip(Tooltip::text("Copy into an empty composer. The saved submission is kept until discarded."))
+                                                .tooltip(Tooltip::text(i18n::t!(
+                                                    "3923cfbebd9f2724"
+                                                )))
                                                 .on_click(cx.listener(
                                                     move |this, _, window, cx| {
                                                         this.restore_submission(
@@ -2213,7 +2215,11 @@ impl ThreadView {
                     None,
                     i18n::t!("4b6a1451cd4fe01d").into(),
                 ),
-                ThreadError::NoModelSelected => ("no_model_selected", None, i18n::t!("a34ef529d98bef3e").into()),
+                ThreadError::NoModelSelected => (
+                    "no_model_selected",
+                    None,
+                    i18n::t!("a34ef529d98bef3e").into(),
+                ),
                 ThreadError::ApiError { provider } => (
                     "api_error",
                     None,
@@ -3908,20 +3914,23 @@ impl ThreadView {
                     .child(Label::new(label).size(LabelSize::Small).color(Color::Muted)),
             )
             .child(
-                Button::new("main-agent-permission-scroll-to", i18n::t!("34dedaffd3cc55f0"))
-                    .label_size(LabelSize::Small)
-                    .end_icon(
-                        Icon::new(scroll_icon)
-                            .size(IconSize::XSmall)
-                            .color(Color::Default),
-                    )
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.list_state.scroll_to(ListOffset {
-                            item_ix: entry_ix,
-                            offset_in_item: px(0.0),
-                        });
-                        cx.notify();
-                    })),
+                Button::new(
+                    "main-agent-permission-scroll-to",
+                    i18n::t!("34dedaffd3cc55f0"),
+                )
+                .label_size(LabelSize::Small)
+                .end_icon(
+                    Icon::new(scroll_icon)
+                        .size(IconSize::XSmall)
+                        .color(Color::Default),
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.list_state.scroll_to(ListOffset {
+                        item_ix: entry_ix,
+                        offset_in_item: px(0.0),
+                    });
+                    cx.notify();
+                })),
             );
 
         Some(v_flex().child(header).child(card).into_any())
@@ -4811,20 +4820,25 @@ impl ThreadView {
                                 ))
                             })
                             .child(
-                                Button::new(("send_now_focused", index), i18n::t!("5683dc19bd5572f6"))
-                                    .label_size(LabelSize::Small)
-                                    .style(ButtonStyle::Outlined)
-                                    .key_binding(
-                                        KeyBinding::for_action_in(
-                                            &SendImmediately,
-                                            &editor.focus_handle(cx),
-                                            cx,
-                                        )
-                                        .map(|kb| kb.size(keybinding_size)),
+                                Button::new(
+                                    ("send_now_focused", index),
+                                    i18n::t!("5683dc19bd5572f6"),
+                                )
+                                .label_size(LabelSize::Small)
+                                .style(ButtonStyle::Outlined)
+                                .key_binding(
+                                    KeyBinding::for_action_in(
+                                        &SendImmediately,
+                                        &editor.focus_handle(cx),
+                                        cx,
                                     )
-                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                    .map(|kb| kb.size(keybinding_size)),
+                                )
+                                .on_click(cx.listener(
+                                    move |this, _, window, cx| {
                                         this.send_queued_message_now(entry_id, window, cx);
-                                    })),
+                                    },
+                                )),
                             )
                     } else {
                         h_flex()
@@ -5296,16 +5310,18 @@ impl ThreadView {
                                     .into_any_element()
                             })
                             .separator()
-                            .item(ContextMenuEntry::new(i18n::t!("e45a3f15b735592b")).handler({
-                                let weak_self = weak_self.clone();
-                                move |_window, cx| {
-                                    weak_self
-                                        .update(cx, |this, cx| {
-                                            this.apply_fast_mode_speed(Speed::Fast, cx);
-                                        })
-                                        .log_err();
-                                }
-                            }))
+                            .item(
+                                ContextMenuEntry::new(i18n::t!("e45a3f15b735592b")).handler({
+                                    let weak_self = weak_self.clone();
+                                    move |_window, cx| {
+                                        weak_self
+                                            .update(cx, |this, cx| {
+                                                this.apply_fast_mode_speed(Speed::Fast, cx);
+                                            })
+                                            .log_err();
+                                    }
+                                }),
+                            )
                             .item(
                                 ContextMenuEntry::new(i18n::t!("729c58c9bf0ddd3e")).handler({
                                     let weak_self = weak_self.clone();
@@ -5401,7 +5417,11 @@ impl ThreadView {
         let thinking = thread.thinking_enabled();
 
         let (tooltip_label, icon, color) = if thinking {
-            (i18n::t!("ac4f87983e286125"), IconName::ThinkingMode, Color::Accent)
+            (
+                i18n::t!("ac4f87983e286125"),
+                IconName::ThinkingMode,
+                Color::Accent,
+            )
         } else {
             (
                 i18n::t!("5a5307718a60d9cf"),
@@ -5727,7 +5747,12 @@ impl ThreadView {
                     .icon_color(Color::Muted),
                 {
                     move |_window, cx| {
-                        Tooltip::for_action_in(i18n::t!("949c38196f10a3e3"), &OpenAddContextMenu, &focus_handle, cx)
+                        Tooltip::for_action_in(
+                            i18n::t!("949c38196f10a3e3"),
+                            &OpenAddContextMenu,
+                            &focus_handle,
+                            cx,
+                        )
                     }
                 },
             )
@@ -5795,7 +5820,7 @@ impl ThreadView {
                         }),
                 )
                 .item(
-                    ContextMenuEntry::new("Symbols")
+                    ContextMenuEntry::new(i18n::t!("9491fc41c3912686"))
                         .icon(IconName::Code)
                         .icon_color(Color::Muted)
                         .icon_size(IconSize::XSmall)
@@ -5810,7 +5835,7 @@ impl ThreadView {
                         }),
                 )
                 .item(
-                    ContextMenuEntry::new("Threads")
+                    ContextMenuEntry::new(i18n::t!("3e42e385075b9b56"))
                         .icon(IconName::Thread)
                         .icon_color(Color::Muted)
                         .icon_size(IconSize::XSmall)
@@ -5825,20 +5850,27 @@ impl ThreadView {
                         }),
                 )
                 .when(!available_skills.is_empty(), |this| {
-                    this.submenu_with_colored_icon(i18n::t!("99aea2f9131ad6da"), IconName::Sparkle, Color::Muted, {
-                        let message_editor = message_editor.clone();
-                        let available_skills = available_skills.clone();
-                        move |mut menu, _window, _cx| {
-                            for skill in &available_skills {
-                                menu = menu
-                                    .item(Self::skill_menu_entry(skill, message_editor.clone()));
+                    this.submenu_with_colored_icon(
+                        i18n::t!("99aea2f9131ad6da"),
+                        IconName::Sparkle,
+                        Color::Muted,
+                        {
+                            let message_editor = message_editor.clone();
+                            let available_skills = available_skills.clone();
+                            move |mut menu, _window, _cx| {
+                                for skill in &available_skills {
+                                    menu = menu.item(Self::skill_menu_entry(
+                                        skill,
+                                        message_editor.clone(),
+                                    ));
+                                }
+                                menu
                             }
-                            menu
-                        }
-                    })
+                        },
+                    )
                 })
                 .item(
-                    ContextMenuEntry::new("Image")
+                    ContextMenuEntry::new(i18n::t!("1aa4cb0bcca76e92"))
                         .icon(IconName::Image)
                         .icon_color(Color::Muted)
                         .icon_size(IconSize::XSmall)
@@ -5854,7 +5886,7 @@ impl ThreadView {
                         }),
                 )
                 .item(
-                    ContextMenuEntry::new("Selection")
+                    ContextMenuEntry::new(i18n::t!("ca4067071fcf6185"))
                         .icon(IconName::CursorIBeam)
                         .icon_color(Color::Muted)
                         .icon_size(IconSize::XSmall)
@@ -6004,7 +6036,11 @@ impl Render for TokenUsageTooltip {
                             .child(
                                 h_flex()
                                     .gap_0p5()
-                                    .child(Label::new(i18n::t!("a8e2bfa8bba576cb")).color(Color::Muted).mr_0p5())
+                                    .child(
+                                        Label::new(i18n::t!("a8e2bfa8bba576cb"))
+                                            .color(Color::Muted)
+                                            .mr_0p5(),
+                                    )
                                     .child(Label::new(input_tokens))
                                     .child(Label::new("/").color(separator_color))
                                     .child(Label::new(input_max).color(Color::Muted)),
@@ -6012,7 +6048,11 @@ impl Render for TokenUsageTooltip {
                             .child(
                                 h_flex()
                                     .gap_0p5()
-                                    .child(Label::new(i18n::t!("bd8be41cf6b4cd91")).color(Color::Muted).mr_0p5())
+                                    .child(
+                                        Label::new(i18n::t!("bd8be41cf6b4cd91"))
+                                            .color(Color::Muted)
+                                            .mr_0p5(),
+                                    )
                                     .child(Label::new(output_tokens))
                                     .child(Label::new("/").color(separator_color))
                                     .child(Label::new(output_max).color(Color::Muted)),
@@ -6249,12 +6289,16 @@ fn sandbox_section(title: &str, policy: &SandboxPolicyDisplay, show_empty: bool)
     let mut section = SandboxSection::new(title.to_string());
 
     if show_empty || !write_empty {
-        section = section.group(SandboxGroup::new(i18n::t!("d7ddc7cd709d321b")).rows(sandbox_fs_rows(&policy.fs)));
+        section = section.group(
+            SandboxGroup::new(i18n::t!("d7ddc7cd709d321b")).rows(sandbox_fs_rows(&policy.fs)),
+        );
     }
 
     if show_empty || !network_empty {
-        section = section
-            .group(SandboxGroup::new(i18n::t!("84a5571a1cc78c74")).rows(sandbox_network_rows(&policy.network)));
+        section = section.group(
+            SandboxGroup::new(i18n::t!("84a5571a1cc78c74"))
+                .rows(sandbox_network_rows(&policy.network)),
+        );
     }
 
     section
@@ -6741,9 +6785,7 @@ impl ThreadView {
                                 ),
                         )
                         .child(Divider::horizontal())
-                        .tooltip(Tooltip::text(
-                            i18n::t!("7fdfd4273a0b0ec1"),
-                        )),
+                        .tooltip(Tooltip::text(i18n::t!("7fdfd4273a0b0ec1"))),
                 )
                 .child(primary)
                 .into_any_element()
@@ -7125,7 +7167,12 @@ impl ThreadView {
                                     Some(ThreadFeedback::Positive) => {
                                         Tooltip::text(i18n::t!("dc48521ccdce90f0"))(window, cx)
                                     }
-                                    _ => Tooltip::with_meta(i18n::t!("56c7bee29fdce32b"), None, tooltip_meta, cx),
+                                    _ => Tooltip::with_meta(
+                                        i18n::t!("56c7bee29fdce32b"),
+                                        None,
+                                        tooltip_meta,
+                                        cx,
+                                    ),
                                 })
                                 .on_click(cx.listener(move |this, _, window, cx| {
                                     this.handle_feedback_click(
@@ -7144,11 +7191,14 @@ impl ThreadView {
                                 })
                                 .tooltip(move |window, cx| match feedback {
                                     Some(ThreadFeedback::Negative) => {
-                                        Tooltip::text(
-                                            i18n::t!("6ee3638c53bce4d2"),
-                                        )(window, cx)
+                                        Tooltip::text(i18n::t!("6ee3638c53bce4d2"))(window, cx)
                                     }
-                                    _ => Tooltip::with_meta(i18n::t!("0b4be70c02615f76"), None, tooltip_meta, cx),
+                                    _ => Tooltip::with_meta(
+                                        i18n::t!("0b4be70c02615f76"),
+                                        None,
+                                        tooltip_meta,
+                                        cx,
+                                    ),
                                 })
                                 .on_click(cx.listener(move |this, _, window, cx| {
                                     this.handle_feedback_click(
@@ -7861,8 +7911,8 @@ impl ThreadView {
                     let selected_markdown = markdown
                         .and_then(|markdown| markdown.context_menu_selected_markdown().cloned());
 
-                    let copy_this_agent_response = ContextMenuEntry::new(i18n::t!("929e957807d628cd"))
-                        .handler({
+                    let copy_this_agent_response =
+                        ContextMenuEntry::new(i18n::t!("929e957807d628cd")).handler({
                             let entity = entity.clone();
                             move |_, cx| {
                                 entity.update(cx, |this, cx| {
@@ -7896,8 +7946,8 @@ impl ThreadView {
                         })
                     };
 
-                    let open_thread_as_markdown = ContextMenuEntry::new(i18n::t!("d24922df16ee992f"))
-                        .handler({
+                    let open_thread_as_markdown =
+                        ContextMenuEntry::new(i18n::t!("d24922df16ee992f")).handler({
                             let entity = entity.clone();
                             let workspace = workspace.clone();
                             move |window, cx| {
@@ -7919,11 +7969,15 @@ impl ThreadView {
                             .separator()
                         })
                         .when_some(selected_text, |menu, selected_text| {
-                            menu.entry(i18n::t!("63d90d977348ab1f"), Some(Box::new(markdown::Copy)), move |_, cx| {
-                                cx.write_to_clipboard(ClipboardItem::new_string(
-                                    selected_text.to_string(),
-                                ));
-                            })
+                            menu.entry(
+                                i18n::t!("63d90d977348ab1f"),
+                                Some(Box::new(markdown::Copy)),
+                                move |_, cx| {
+                                    cx.write_to_clipboard(ClipboardItem::new_string(
+                                        selected_text.to_string(),
+                                    ));
+                                },
+                            )
                         })
                         .when_some(selected_markdown, |menu, selected_markdown| {
                             menu.entry(
@@ -9623,17 +9677,29 @@ impl ThreadView {
             .bg(cx.theme().colors().editor_background)
             .map(|this| {
                 if is_redirected {
-                    this.child(captioned_path(i18n::t!("a488e93d69cc1296").into(), requested_display, cx))
-                        .child(
-                            Icon::new(IconName::ArrowDown)
-                                .color(Color::Muted)
-                                .size(IconSize::Small),
-                        )
-                        .child(captioned_path(i18n::t!("57060c88a36bf3d0").into(), granted_display, cx))
+                    this.child(captioned_path(
+                        i18n::t!("a488e93d69cc1296").into(),
+                        requested_display,
+                        cx,
+                    ))
+                    .child(
+                        Icon::new(IconName::ArrowDown)
+                            .color(Color::Muted)
+                            .size(IconSize::Small),
+                    )
+                    .child(captioned_path(
+                        i18n::t!("57060c88a36bf3d0").into(),
+                        granted_display,
+                        cx,
+                    ))
                 } else {
                     // Not a genuine redirect: show what the user asked for (e.g.
                     // the `C:\...` path), not the internal Linux canonical.
-                    this.child(captioned_path(i18n::t!("a4d0a6c7c19747bf").into(), requested_display, cx))
+                    this.child(captioned_path(
+                        i18n::t!("a4d0a6c7c19747bf").into(),
+                        requested_display,
+                        cx,
+                    ))
                 }
             })
             .child(Divider::horizontal())
@@ -10537,7 +10603,7 @@ impl ThreadView {
                             )
                             .when(file.hunks.is_empty(), |this| {
                                 this.child(
-                                    Label::new("No text preview available")
+                                    Label::new(i18n::t!("a4aa39c212978920"))
                                         .size(LabelSize::XSmall)
                                         .color(Color::Muted),
                                 )
@@ -10564,7 +10630,7 @@ impl ThreadView {
                         render.files.is_empty() && render.fallback.is_none(),
                         |this| {
                             this.p_2().child(
-                                Label::new("No text preview available")
+                                Label::new(i18n::t!("a4aa39c212978920"))
                                     .size(LabelSize::XSmall)
                                     .color(Color::Muted),
                             )
@@ -11517,9 +11583,13 @@ impl ThreadView {
 
                 self.render_error_callout(i18n::t!("1d41c65648de39c9"), message, false, false, cx)
             }
-            ThreadError::ProviderRejection { message } => {
-                self.render_error_callout(i18n::t!("126fbf59cf043830"), message.clone(), true, false, cx)
-            }
+            ThreadError::ProviderRejection { message } => self.render_error_callout(
+                i18n::t!("126fbf59cf043830"),
+                message.clone(),
+                true,
+                false,
+                cx,
+            ),
             ThreadError::MaxOutputTokens => self.render_error_callout(
                 i18n::t!("b513b52278a1a04e"),
                 "The model stopped because it reached its maximum output length. \
@@ -11678,7 +11748,10 @@ impl ThreadView {
                             i18n::t!("5959b8d156b7ced1").into(),
                         )
                     } else {
-                        (i18n::t!("9bb63745df8f62cb").into(), i18n::t!("a171cfb5faf05d7c").into())
+                        (
+                            i18n::t!("9bb63745df8f62cb").into(),
+                            i18n::t!("a171cfb5faf05d7c").into(),
+                        )
                     }
                 }
             };
@@ -11949,16 +12022,18 @@ impl ThreadView {
             .title(i18n::t!("2fff5bff4d0bfae7"))
             .description(i18n::t!("37c0e1b09e4e97b2"))
             .actions_slot(
-                Button::new("open-wsl-modal", i18n::t!("fcee8b7672871a06")).on_click(cx.listener({
-                    move |_, _, _window, cx| {
-                        #[cfg(windows)]
-                        _window.dispatch_action(
-                            zed_actions::wsl_actions::OpenWsl::default().boxed_clone(),
-                            cx,
-                        );
-                        cx.notify();
-                    }
-                })),
+                Button::new("open-wsl-modal", i18n::t!("fcee8b7672871a06")).on_click(cx.listener(
+                    {
+                        move |_, _, _window, cx| {
+                            #[cfg(windows)]
+                            _window.dispatch_action(
+                                zed_actions::wsl_actions::OpenWsl::default().boxed_clone(),
+                                cx,
+                            );
+                            cx.notify();
+                        }
+                    },
+                )),
             )
             .dismiss_action(
                 IconButton::new("dismiss", IconName::Close)
@@ -12118,7 +12193,12 @@ impl ThreadView {
                             .child(Label::new(file_label).size(LabelSize::Small)),
                     )
                     .tooltip(move |_, cx| {
-                        Tooltip::with_meta(i18n::t!("1cc540388ae904b9"), None, full_path.clone(), cx)
+                        Tooltip::with_meta(
+                            i18n::t!("1cc540388ae904b9"),
+                            None,
+                            full_path.clone(),
+                            cx,
+                        )
                     })
                     .on_click(cx.listener(move |_, _, window, cx| {
                         let abs_path = abs_path.clone();
@@ -12314,12 +12394,16 @@ impl ThreadView {
 
         let (severity, icon, title) = match ratio {
             acp_thread::TokenUsageRatio::Normal => return None,
-            acp_thread::TokenUsageRatio::Warning => {
-                (Severity::Warning, IconName::Warning, i18n::t!("eb428ecb7cb0b325"))
-            }
-            acp_thread::TokenUsageRatio::Exceeded => {
-                (Severity::Error, IconName::XCircle, i18n::t!("158b8159467fba83"))
-            }
+            acp_thread::TokenUsageRatio::Warning => (
+                Severity::Warning,
+                IconName::Warning,
+                i18n::t!("eb428ecb7cb0b325"),
+            ),
+            acp_thread::TokenUsageRatio::Exceeded => (
+                Severity::Error,
+                IconName::XCircle,
+                i18n::t!("158b8159467fba83"),
+            ),
         };
 
         let description = i18n::t!("47639f10a1471b61");

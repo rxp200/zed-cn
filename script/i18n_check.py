@@ -217,6 +217,7 @@ def scan_code():
         text = path.read_text(errors="ignore")
         lines = text.splitlines()
         rel = str(path.relative_to(ROOT))
+        in_block_comment = False
         for index, line in enumerate(lines):
             if line.lstrip().startswith(("//", "/*", "*", "///")):
                 continue  # 注释与文档示例不算引用

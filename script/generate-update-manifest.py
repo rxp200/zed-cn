@@ -10,7 +10,11 @@ import time
 from pathlib import Path
 
 REPOSITORY = "rxp200/zed-cn"
-TAG = re.compile(r"zed-cn-v(\d+)\.(\d+)\.(\d+)-r(\d+)")
+TAG = re.compile(r"zed-cn-(?:dev-)?v(\d+)\.(\d+)\.(\d+)-r([1-9]\d*)")
+
+
+def release_channel(tag):
+    return "dev" if tag.startswith("zed-cn-dev-v") else "stable"
 ASSETS = {
     f"{prefix}{arch}{suffix}"
     for arch in ("x86_64", "aarch64")
@@ -102,7 +106,7 @@ def release_metadata(directory, tag, commit, title="", release_notes=""):
             })
     return validate_release({
         "tag_name": tag, "target_commitish": commit,
-        "draft": False, "prerelease": False,
+        "draft": False, "prerelease": release_channel(tag) == "dev",
         "title": title, "release_notes": release_notes,
         "assets": assets,
     })
@@ -131,10 +135,12 @@ def uploaded_assets(release):
     return assets
 
 
-def build_manifest(releases, load_metadata, load_uploaded_assets):
+def build_manifest(releases, load_metadata, load_uploaded_assets, channel="stable"):
     result = []
     for release in releases:
-        if release["draft"] or release["prerelease"] or not TAG.fullmatch(release["tag_name"]):
+        if (release["draft"] or not TAG.fullmatch(release["tag_name"])
+                or release_channel(release["tag_name"]) != channel
+                or release["prerelease"] != (channel == "dev")):
             continue
         uploaded = load_uploaded_assets(release)
         # This marker is uploaded last, after all binaries and checksums succeed.
@@ -153,7 +159,7 @@ def build_manifest(releases, load_metadata, load_uploaded_assets):
             metadata = validate_release(metadata)
             if metadata["tag_name"] != release["tag_name"]:
                 raise ValueError("Metadata tag mismatch")
-            if metadata["draft"] or metadata["prerelease"]:
+            if metadata["draft"] or metadata["prerelease"] != (channel == "dev"):
                 raise ValueError("Unexpected unpublished metadata")
             if resolve_tag_commit(release["tag_name"]) != metadata["target_commitish"]:
                 raise ValueError("Metadata source commit differs from release tag")
@@ -179,6 +185,7 @@ def build_manifest(releases, load_metadata, load_uploaded_assets):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--channel", choices=("stable", "dev"), default="stable")
     parser.add_argument("--release-directory", type=Path)
     parser.add_argument("--tag")
     parser.add_argument("--commit")
@@ -197,7 +204,7 @@ def main():
         result = build_manifest(releases, lambda tag: json.loads(command(
             "gh", "release", "download", tag, "--repo", REPOSITORY,
             "--pattern", MARKER_ASSET, "--output", "-",
-        )), uploaded_assets)
+        )), uploaded_assets, arguments.channel)
     content = json.dumps(result, ensure_ascii=False, indent=2) + "\n"
     if len(content.encode("utf-8")) > 8 * 1024 * 1024:
         raise ValueError("Update manifest exceeds the client size limit")

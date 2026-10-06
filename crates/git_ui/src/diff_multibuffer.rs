@@ -812,6 +812,20 @@ impl DiffMultibuffer {
                 editor,
                 project,
                 files,
+                Arc::new({
+                    let view = cx.entity().downgrade();
+                    move |cx| {
+                        view.update(cx, |view, cx| {
+                            if view
+                                .explanation_controller
+                                .update(cx, |controller, _| controller.prepare_refresh())
+                            {
+                                view.schedule_explanations(cx);
+                            }
+                        })
+                        .log_err();
+                    }
+                }),
                 cx,
             );
         }

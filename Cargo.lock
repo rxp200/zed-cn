@@ -15454,6 +15454,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "askpass",
+ "auto_update",
  "chrono",
  "db",
  "dev_container",
@@ -15483,6 +15484,7 @@ dependencies = [
  "semver",
  "serde_json",
  "settings",
+ "smol",
  "telemetry",
  "ui",
  "util",

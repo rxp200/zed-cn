@@ -1235,7 +1235,7 @@ impl ProjectPanel {
                 menu.context(self.focus_handle.clone()).map(|menu| {
                     if is_read_only {
                         menu.when(is_markdown, |menu| {
-                            menu.action("打开Markdown预览", Box::new(OpenMarkdownPreview))
+                            menu.action(i18n::t!("ca5c3eff9a1731b6"), Box::new(OpenMarkdownPreview))
                         })
                         .when(can_scan_selection, |menu| {
                             menu.separator().action(
@@ -1244,11 +1244,14 @@ impl ProjectPanel {
                             )
                         })
                         .when(is_dir, |menu| {
-                            menu.action("搜索内部", Box::new(NewSearchInDirectory))
+                            menu.action(
+                                i18n::t!("6c1cd766e05148bf"),
+                                Box::new(NewSearchInDirectory),
+                            )
                         })
                     } else {
-                        menu.action("新建文件", Box::new(NewFile))
-                            .action("新建文件夹", Box::new(NewDirectory))
+                        menu.action(i18n::t!("6ddd1eaccab127de"), Box::new(NewFile))
+                            .action(i18n::t!("84244abc71de03ac"), Box::new(NewDirectory))
                             .separator()
                             .when(is_local, |menu| {
                                 menu.action(
@@ -1257,11 +1260,14 @@ impl ProjectPanel {
                                 )
                             })
                             .when(is_local, |menu| {
-                                menu.action("在默认应用中打开", Box::new(OpenWithSystem))
+                                menu.action(i18n::t!("c4e5cbeefa2f8f77"), Box::new(OpenWithSystem))
                             })
-                            .action("在终端中打开", Box::new(OpenInTerminal))
+                            .action(i18n::t!("a04c3bc562c5f568"), Box::new(OpenInTerminal))
                             .when(is_markdown, |menu| {
-                                menu.action("打开Markdown预览", Box::new(OpenMarkdownPreview))
+                                menu.action(
+                                    i18n::t!("ca5c3eff9a1731b6"),
+                                    Box::new(OpenMarkdownPreview),
+                                )
                             })
                             .when(can_scan_selection, |menu| {
                                 menu.separator().action(
@@ -1270,23 +1276,27 @@ impl ProjectPanel {
                                 )
                             })
                             .when(is_dir, |menu| {
-                                menu.separator()
-                                    .action("在文件夹中查找…", Box::new(NewSearchInDirectory))
+                                menu.separator().action(
+                                    i18n::t!("8d159f2c11b70f14"),
+                                    Box::new(NewSearchInDirectory),
+                                )
                             })
                             .when(is_unfoldable, |menu| {
-                                menu.action("展开目录", Box::new(UnfoldDirectory))
+                                menu.action(i18n::t!("a49f5287fc9ef2d0"), Box::new(UnfoldDirectory))
                             })
                             .when(is_foldable, |menu| {
-                                menu.action("折叠目录", Box::new(FoldDirectory))
+                                menu.action(i18n::t!("7b4c4c37a5658899"), Box::new(FoldDirectory))
                             })
                             .when(should_show_compare, |menu| {
-                                menu.separator()
-                                    .action("比较标记的文件", Box::new(CompareMarkedFiles))
+                                menu.separator().action(
+                                    i18n::t!("209d5c710c5fcaec"),
+                                    Box::new(CompareMarkedFiles),
+                                )
                             })
                             .separator()
-                            .action("剪切", Box::new(Cut))
-                            .action("复制", Box::new(Copy))
-                            .action("生成副本", Box::new(Duplicate))
+                            .action(i18n::t!("410a8e8a6bf253ac"), Box::new(Cut))
+                            .action(i18n::t!("63d90d977348ab1f"), Box::new(Copy))
+                            .action(i18n::t!("f2221ba3259d6d15"), Box::new(Duplicate))
                             .action_disabled_when(
                                 !has_pasteable_content,
                                 i18n::t!("33517926747180e6"),
@@ -1308,11 +1318,16 @@ impl ProjectPanel {
                                 )
                             })
                             .when(is_remote, |menu| {
-                                menu.separator()
-                                    .action("下载...", Box::new(DownloadFromRemote))
+                                menu.separator().action(
+                                    i18n::t!("e4eb55f7972c2b6f"),
+                                    Box::new(DownloadFromRemote),
+                                )
                             })
                             .separator()
-                            .action("复制路径", Box::new(zed_actions::workspace::CopyPath))
+                            .action(
+                                i18n::t!("b97c49acb93028ec"),
+                                Box::new(zed_actions::workspace::CopyPath),
+                            )
                             .action(
                                 i18n::t!("02bcdbc5a1453cb0"),
                                 Box::new(zed_actions::workspace::CopyRelativePath),
@@ -1325,13 +1340,19 @@ impl ProjectPanel {
                                             Box::new(git::RestoreFile { skip_prompt: false }),
                                         )
                                     })
-                                    .action("添加到.gitignore", Box::new(git::AddToGitignore))
+                                    .action(
+                                        i18n::t!("7f8d24cbc09baee0"),
+                                        Box::new(git::AddToGitignore),
+                                    )
                                     .action(
                                         i18n::t!("8d687cc65a2e45f0"),
                                         Box::new(git::AddToGitInfoExclude),
                                     )
                                     .when(has_history, |menu| {
-                                        menu.action("查看历史", Box::new(git::FileHistory))
+                                        menu.action(
+                                            i18n::t!("a5783b941d7dfa1a"),
+                                            Box::new(git::FileHistory),
+                                        )
                                     })
                                     .when(!is_dir, |menu| {
                                         menu.action(
@@ -1345,13 +1366,20 @@ impl ProjectPanel {
                                     })
                             })
                             .when(!should_hide_rename, |menu| {
-                                menu.separator().action("重命名", Box::new(Rename))
+                                menu.separator()
+                                    .action(i18n::t!("0d0cbac2eee54113"), Box::new(Rename))
                             })
                             .when(!is_root && !is_collab, |menu| {
-                                menu.action("移至废纸篓", Box::new(Trash { skip_prompt: false }))
+                                menu.action(
+                                    i18n::t!("50ba897c88fabc59"),
+                                    Box::new(Trash { skip_prompt: false }),
+                                )
                             })
                             .when(!is_root, |menu| {
-                                menu.action("删除", Box::new(Delete { skip_prompt: false }))
+                                menu.action(
+                                    i18n::t!("2f9daa828907b93f"),
+                                    Box::new(Delete { skip_prompt: false }),
+                                )
                             })
                             .when(!is_collab && is_root, |menu| {
                                 menu.separator()
@@ -1359,17 +1387,32 @@ impl ProjectPanel {
                                         i18n::t!("0fde73d53968b148"),
                                         Box::new(workspace::AddFolderToProject),
                                     )
-                                    .action("从项目中移除", Box::new(RemoveFromProject))
+                                    .action(
+                                        i18n::t!("ca2e662968ab7203"),
+                                        Box::new(RemoveFromProject),
+                                    )
                             })
                             .when(is_dir && !is_root, |menu| {
                                 menu.separator()
-                                    .action("全部展开", Box::new(ExpandSelectedEntryAndChildren))
-                                    .action("全部折叠", Box::new(CollapseSelectedEntryAndChildren))
+                                    .action(
+                                        i18n::t!("19673b331b64107a"),
+                                        Box::new(ExpandSelectedEntryAndChildren),
+                                    )
+                                    .action(
+                                        i18n::t!("79f3c095aef4bf7b"),
+                                        Box::new(CollapseSelectedEntryAndChildren),
+                                    )
                             })
                             .when(is_dir && is_root, |menu| {
                                 menu.separator()
-                                    .action("全部展开", Box::new(ExpandAllEntries))
-                                    .action("全部折叠", Box::new(CollapseAllEntries))
+                                    .action(
+                                        i18n::t!("19673b331b64107a"),
+                                        Box::new(ExpandAllEntries),
+                                    )
+                                    .action(
+                                        i18n::t!("79f3c095aef4bf7b"),
+                                        Box::new(CollapseAllEntries),
+                                    )
                             })
                     }
                 })

@@ -99,7 +99,7 @@ impl HistoryManager {
     }
 
     fn update_jump_list(&mut self, cx: &mut Context<'_, HistoryManager>) {
-        let menus = vec![MenuItem::action("新建窗口", NewWindow)];
+        let menus = vec![MenuItem::action(i18n::t!("8b78022ec20aa7b7"), NewWindow)];
         let entries = self
             .history
             .iter()

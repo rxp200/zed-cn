@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 from urllib.request import Request, urlopen
 
-TAG_PATTERN = re.compile(r"zed-cn-v(\d+)\.(\d+)\.(\d+)-r([1-9]\d*)")
+TAG_PATTERN = re.compile(r"zed-cn-(?:dev-)?v(\d+)\.(\d+)\.(\d+)-r([1-9]\d*)")
 HEADINGS = ["本次更新", "功能", "改进", "错误修复", "重大变更与通知"]
 
 
@@ -48,8 +48,15 @@ def changed_paths(base, target):
 
 def select_previous(releases, release_tag, previous=None):
     current = tag_key(release_tag)
+    if previous and release_tag.startswith("zed-cn-dev-v") and previous.startswith("zed-cn-v"):
+        baseline = [release for release in releases if release.get("tag_name") == previous
+                    and release.get("published_at") and not release.get("draft") and not release.get("prerelease")]
+        if len(baseline) != 1:
+            raise ValueError("Explicit initial Dev baseline must be one published Stable Release")
+        return baseline[0]
     eligible = [release for release in releases if not release.get("draft")
-                and not release.get("prerelease")
+                and bool(release.get("prerelease")) == release_tag.startswith("zed-cn-dev-v")
+                and release.get("tag_name", "").startswith("zed-cn-dev-v") == release_tag.startswith("zed-cn-dev-v")
                 and release.get("published_at")
                 and TAG_PATTERN.fullmatch(release.get("tag_name", ""))
                 and tag_key(release["tag_name"]) < current]
