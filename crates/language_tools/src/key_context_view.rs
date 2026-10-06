@@ -266,7 +266,7 @@ impl Render for KeyContextView {
                 )
             })
             .when_some(self.last_keystrokes.as_ref(), |el, keystrokes| {
-                el.child(Label::new(format!("Typed: {}", keystrokes)).ml_4())
+                el.child(Label::new(i18n::t_args!("693867c730176a54", keystrokes)).ml_4())
                     .children(
                         self.last_possibilities
                             .iter()

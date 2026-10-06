@@ -5698,7 +5698,12 @@ impl AgentPanel {
                 IconButton::new("agent-options-menu", IconName::Ellipsis)
                     .icon_size(IconSize::Small),
                 move |_window, cx| {
-                    Tooltip::for_action_in(i18n::t!("f4ba358ebbd6020e"), &ToggleOptionsMenu, &focus_handle, cx)
+                    Tooltip::for_action_in(
+                        i18n::t!("f4ba358ebbd6020e"),
+                        &ToggleOptionsMenu,
+                        &focus_handle,
+                        cx,
+                    )
                 },
             )
             .anchor(Anchor::TopRight)
@@ -5770,7 +5775,7 @@ impl AgentPanel {
                                 )
                                 .separator()
                                 .header(i18n::t!("6fc38ef3602fe789"))
-                                .action("技能", Box::new(ManageSkills));
+                                .action(i18n::t!("99aea2f9131ad6da"), Box::new(ManageSkills));
 
                             if project_agents_md_path.is_some() || global_agents_md_loaded {
                                 if global_agents_md_loaded {
@@ -5825,24 +5830,29 @@ impl AgentPanel {
                                 }
                             }
 
-                            menu = menu
-                                .separator()
-                                .action("配置文件", Box::new(ManageProfiles::default()));
+                            menu = menu.separator().action(
+                                i18n::t!("1d27f02ed278ebc9"),
+                                Box::new(ManageProfiles::default()),
+                            );
                         }
 
                         menu = menu
-                            .action("设置", Box::new(OpenSettings))
+                            .action(i18n::t!("df3d58c7d84b85f2"), Box::new(OpenSettings))
                             .separator()
-                            .action("切换线程侧边栏", Box::new(ToggleWorkspaceSidebar));
+                            .action(
+                                i18n::t!("4c011ccc6394bfa0"),
+                                Box::new(ToggleWorkspaceSidebar),
+                            );
 
                         if has_auth_methods || supports_logout {
                             menu = menu.separator()
                         }
                         if has_auth_methods {
-                            menu = menu.action("重新认证", Box::new(ReauthenticateAgent))
+                            menu = menu
+                                .action(i18n::t!("35a2ff292bb198af"), Box::new(ReauthenticateAgent))
                         }
                         if supports_logout {
-                            menu = menu.action("登出", Box::new(LogoutAgent))
+                            menu = menu.action(i18n::t!("057f31bc16c89da7"), Box::new(LogoutAgent))
                         }
 
                         if let Some(conversation_view) = conversation_view.as_ref() {
@@ -5923,7 +5933,7 @@ impl AgentPanel {
                 Some(ContextMenu::build(window, cx, |menu, _window, cx| {
                     menu.context(focus_handle.clone())
                         .item(
-                            ContextMenuEntry::new("Zed Agent")
+                            ContextMenuEntry::new(i18n::t!("dd80bcc0e9bef38b"))
                                 .when(
                                     !showing_terminal && is_agent_selected(Agent::NativeAgent),
                                     |this| this.action(Box::new(NewThread)),
@@ -5955,7 +5965,7 @@ impl AgentPanel {
                         )
                         .when(supports_terminal, |menu| {
                             menu.item(
-                                ContextMenuEntry::new("Terminal")
+                                ContextMenuEntry::new(i18n::t!("e0926fdac700b094"))
                                     .when(showing_terminal, |this| this.action(Box::new(NewThread)))
                                     .when(!showing_terminal, |this| {
                                         this.action(Box::new(NewTerminalThread))
@@ -6076,7 +6086,7 @@ impl AgentPanel {
                         })
                         .separator()
                         .item(
-                            ContextMenuEntry::new("Add More Agents")
+                            ContextMenuEntry::new(i18n::t!("3e4b088988b35901"))
                                 .icon(IconName::Plus)
                                 .icon_color(Color::Muted)
                                 .handler({

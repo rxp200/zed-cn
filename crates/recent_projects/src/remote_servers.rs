@@ -1035,6 +1035,7 @@ enum RemoteMatch {
     AddWsl,
     EditSshConfig,
     ManageSshKeys,
+    PredownloadRemoteServer,
     Separator,
     /// A selectable server row in the default (unfocused) view; confirming it
     /// opens that server's own view.
@@ -1238,6 +1239,7 @@ impl RemoteServerPickerDelegate {
                 }
                 matches.push(RemoteMatch::EditSshConfig);
                 matches.push(RemoteMatch::ManageSshKeys);
+                matches.push(RemoteMatch::PredownloadRemoteServer);
                 if !self.state.servers.is_empty() {
                     matches.push(RemoteMatch::Separator);
                     for server_index in 0..self.state.servers.len() {
@@ -1612,6 +1614,9 @@ impl PickerDelegate for RemoteServerPickerDelegate {
                     .update(cx, |this, cx| this.edit_local_ssh_config(window, cx))
                     .log_err();
             }
+            RemoteMatch::PredownloadRemoteServer => {
+                window.dispatch_action(crate::PredownloadRemoteServer.boxed_clone(), cx);
+            }
             RemoteMatch::ManageSshKeys => {
                 remote_server_projects
                     .update(cx, |this, cx| this.manage_ssh_keys(window, cx))
@@ -1775,6 +1780,12 @@ impl PickerDelegate for RemoteServerPickerDelegate {
                 ix,
                 IconName::Settings,
                 i18n::t!("f3d694312a38e70c"),
+                selected,
+            )),
+            RemoteMatch::PredownloadRemoteServer => Some(self.render_action_item(
+                ix,
+                IconName::Server,
+                i18n::t!("eeaf60325cae1c33"),
                 selected,
             )),
             RemoteMatch::ManageSshKeys => Some(self.render_action_item(

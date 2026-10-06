@@ -297,10 +297,22 @@ impl TerminalPanel {
                                             split_context.clone(),
                                             |menu, split_context| menu.context(split_context),
                                         )
-                                        .action("向右分割", SplitRight::default().boxed_clone())
-                                        .action("向左分割", SplitLeft::default().boxed_clone())
-                                        .action("向上分割", SplitUp::default().boxed_clone())
-                                        .action("向下分割", SplitDown::default().boxed_clone())
+                                        .action(
+                                            i18n::t!("7c9ed6c199718d94"),
+                                            SplitRight::default().boxed_clone(),
+                                        )
+                                        .action(
+                                            i18n::t!("4fcfde0c0fafef93"),
+                                            SplitLeft::default().boxed_clone(),
+                                        )
+                                        .action(
+                                            i18n::t!("8719c337f07261f3"),
+                                            SplitUp::default().boxed_clone(),
+                                        )
+                                        .action(
+                                            i18n::t!("d7e72a7908f9ae8e"),
+                                            SplitDown::default().boxed_clone(),
+                                        )
                                     })
                                     .into()
                                 }
@@ -1532,7 +1544,10 @@ impl Render for FailedToSpawnTerminal {
             .menu(move |window, cx| {
                 Some(ContextMenu::build(window, cx, |context_menu, _, _| {
                     context_menu
-                        .action("打开设置", zed_actions::OpenSettings.boxed_clone())
+                        .action(
+                            i18n::t!("37aa6ad6a36d46fa"),
+                            zed_actions::OpenSettings.boxed_clone(),
+                        )
                         .action(
                             "Edit settings.json",
                             zed_actions::OpenSettingsFile.boxed_clone(),

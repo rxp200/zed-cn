@@ -254,7 +254,11 @@ impl CopilotCodeVerification {
                     .p_1()
                     .justify_between()
                     .child(Label::new(data.user_code.clone()))
-                    .child(Label::new(if copied { "Copied!" } else { "Copy" })),
+                    .child(Label::new(if copied {
+                        i18n::t!("ea61bc15688d1e48")
+                    } else {
+                        i18n::t!("63d90d977348ab1f")
+                    })),
             )
             .on_click({
                 let user_code = data.user_code.clone();
@@ -568,7 +572,11 @@ impl CopilotChatCodeVerification {
                     .p_1()
                     .justify_between()
                     .child(Label::new(user_code.clone()))
-                    .child(Label::new(if copied { "Copied!" } else { "Copy" })),
+                    .child(Label::new(if copied {
+                        i18n::t!("ea61bc15688d1e48")
+                    } else {
+                        i18n::t!("63d90d977348ab1f")
+                    })),
             )
             .on_click(move |_, window, cx| {
                 cx.write_to_clipboard(ClipboardItem::new_string(user_code.clone()));

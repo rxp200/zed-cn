@@ -66,17 +66,17 @@ use workspace::{
     item::{Item, ItemEvent, TabTooltipContent},
 };
 
-const COMMIT_CIRCLE_RADIUS: Pixels = px(3.5);
-const COMMIT_CIRCLE_STROKE_WIDTH: Pixels = px(1.5);
-const LANE_WIDTH: Pixels = px(16.0);
-const LEFT_PADDING: Pixels = px(12.0);
-const LINE_WIDTH: Pixels = px(1.5);
+pub(crate) const COMMIT_CIRCLE_RADIUS: Pixels = px(3.5);
+pub(crate) const COMMIT_CIRCLE_STROKE_WIDTH: Pixels = px(1.5);
+pub(crate) const LANE_WIDTH: Pixels = px(16.0);
+pub(crate) const LEFT_PADDING: Pixels = px(12.0);
+pub(crate) const LINE_WIDTH: Pixels = px(1.5);
 const RESIZE_HANDLE_WIDTH: f32 = 8.0;
 const COPIED_STATE_DURATION: Duration = Duration::from_secs(2);
 const COMMIT_TAG_LIST_WIDTH_IN_REMS: Rems = rems(10.);
 const TREE_INDENT: f32 = 20.0;
 const TABLE_COLUMN_COUNT: usize = 4;
-const ROW_VERTICAL_PADDING: Pixels = px(4.0);
+pub(crate) const ROW_VERTICAL_PADDING: Pixels = px(4.0);
 
 struct CopiedState {
     copied_at: Option<Instant>,
@@ -652,15 +652,15 @@ fn format_timestamp(timestamp: i64) -> String {
         .unwrap_or_default()
 }
 
-fn accent_colors_count(accents: &AccentColors) -> usize {
+pub(crate) fn accent_colors_count(accents: &AccentColors) -> usize {
     accents.0.len()
 }
 
 #[derive(Copy, Clone, Debug)]
-struct BranchColor(u8);
+pub(crate) struct BranchColor(u8);
 
 #[derive(Debug)]
-enum LaneState {
+pub(crate) enum LaneState {
     Empty,
     Active {
         child: Oid,
@@ -821,13 +821,13 @@ impl LaneState {
     }
 }
 
-struct CommitEntry {
-    data: Arc<InitialGraphCommitData>,
-    lane: usize,
-    color_idx: usize,
+pub(crate) struct CommitEntry {
+    pub(crate) data: Arc<InitialGraphCommitData>,
+    pub(crate) lane: usize,
+    pub(crate) color_idx: usize,
 }
 
-type ActiveLaneIdx = usize;
+pub(crate) type ActiveLaneIdx = usize;
 
 enum AllCommitCount {
     NotLoaded,
@@ -836,13 +836,13 @@ enum AllCommitCount {
 }
 
 #[derive(Debug)]
-enum CurveKind {
+pub(crate) enum CurveKind {
     Merge,
     Checkout,
 }
 
 #[derive(Debug)]
-enum CommitLineSegment {
+pub(crate) enum CommitLineSegment {
     Straight {
         to_row: usize,
     },
@@ -854,19 +854,22 @@ enum CommitLineSegment {
 }
 
 #[derive(Debug)]
-struct CommitLine {
+pub(crate) struct CommitLine {
     #[cfg(test)]
     child: Oid,
     #[cfg(test)]
     parent: Oid,
-    child_column: usize,
-    full_interval: Range<usize>,
-    color_idx: usize,
-    segments: SmallVec<[CommitLineSegment; 1]>,
+    pub(crate) child_column: usize,
+    pub(crate) full_interval: Range<usize>,
+    pub(crate) color_idx: usize,
+    pub(crate) segments: SmallVec<[CommitLineSegment; 1]>,
 }
 
 impl CommitLine {
-    fn get_first_visible_segment_idx(&self, first_visible_row: usize) -> Option<(usize, usize)> {
+    pub(crate) fn get_first_visible_segment_idx(
+        &self,
+        first_visible_row: usize,
+    ) -> Option<(usize, usize)> {
         if first_visible_row > self.full_interval.end {
             return None;
         } else if first_visible_row <= self.full_interval.start {
@@ -903,22 +906,22 @@ struct CommitLineKey {
     parent: Oid,
 }
 
-struct GraphData {
+pub(crate) struct GraphData {
     lane_states: SmallVec<[LaneState; 8]>,
     lane_colors: HashMap<ActiveLaneIdx, BranchColor>,
     parent_to_lanes: HashMap<Oid, SmallVec<[usize; 1]>>,
     next_color: BranchColor,
     accent_colors_count: usize,
-    commits: Vec<Rc<CommitEntry>>,
+    pub(crate) commits: Vec<Rc<CommitEntry>>,
     max_commit_count: AllCommitCount,
-    max_lanes: usize,
-    lines: Vec<Rc<CommitLine>>,
+    pub(crate) max_lanes: usize,
+    pub(crate) lines: Vec<Rc<CommitLine>>,
     active_commit_lines: HashMap<CommitLineKey, usize>,
     active_commit_lines_by_parent: HashMap<Oid, SmallVec<[usize; 1]>>,
 }
 
 impl GraphData {
-    fn new(accent_colors_count: usize) -> Self {
+    pub(crate) fn new(accent_colors_count: usize) -> Self {
         GraphData {
             lane_states: SmallVec::default(),
             lane_colors: HashMap::default(),
@@ -966,7 +969,7 @@ impl GraphData {
         })
     }
 
-    fn add_commits(&mut self, commits: &[Arc<InitialGraphCommitData>]) {
+    pub(crate) fn add_commits(&mut self, commits: &[Arc<InitialGraphCommitData>]) {
         self.commits.reserve(commits.len());
         self.lines.reserve(commits.len() / 2);
 
@@ -1261,11 +1264,11 @@ pub fn open_or_reuse_graph(
     }
 }
 
-fn lane_center_x(bounds: Bounds<Pixels>, lane: f32) -> Pixels {
+pub(crate) fn lane_center_x(bounds: Bounds<Pixels>, lane: f32) -> Pixels {
     bounds.origin.x + LEFT_PADDING + lane * LANE_WIDTH + LANE_WIDTH / 2.0
 }
 
-fn to_row_center(
+pub(crate) fn to_row_center(
     to_row: usize,
     row_height: Pixels,
     scroll_offset: Pixels,
@@ -1274,7 +1277,12 @@ fn to_row_center(
     bounds.origin.y + to_row as f32 * row_height + row_height / 2.0 - scroll_offset
 }
 
-fn draw_commit_circle(center_x: Pixels, center_y: Pixels, color: Hsla, window: &mut Window) {
+pub(crate) fn draw_commit_circle(
+    center_x: Pixels,
+    center_y: Pixels,
+    color: Hsla,
+    window: &mut Window,
+) {
     let radius = COMMIT_CIRCLE_RADIUS;
 
     let mut builder = PathBuilder::fill();
@@ -1381,13 +1389,8 @@ impl GitGraph {
     /// required so that the canvas's float math and the `uniform_list` layout
     /// (which snaps to device pixels) agree on row positions; otherwise rows
     /// drift apart as the user scrolls when `ui_font_size` is fractional.
-    fn row_height(window: &Window, _cx: &App) -> Pixels {
-        let rem_size = window.rem_size();
-        let line_height = window.text_style().line_height_in_pixels(rem_size);
-        let raw = line_height + ROW_VERTICAL_PADDING;
-        let scale = window.scale_factor();
-
-        (raw * scale).round() / scale
+    fn row_height(window: &Window, cx: &App) -> Pixels {
+        graph_row_height(window, cx)
     }
 
     fn only_show_search_results(&self) -> bool {
@@ -2247,9 +2250,13 @@ impl GitGraph {
         self.search_state.author_filter = None;
         let query = self.search_state.editor.read(cx).text(cx);
         let query = query.trim();
-        let author_query = [i18n::t!("d40e1a908e0ec999"), i18n::t!("82c0db872c4a7ffc"), "author:"]
-            .into_iter()
-            .find_map(|prefix| query.strip_prefix(prefix));
+        let author_query = [
+            i18n::t!("d40e1a908e0ec999"),
+            i18n::t!("82c0db872c4a7ffc"),
+            "author:",
+        ]
+        .into_iter()
+        .find_map(|prefix| query.strip_prefix(prefix));
         let query = author_query
             .map(|author| {
                 SharedString::from(format!("{AUTHOR_SEARCH_QUERY_PREFIX}{}", author.trim()))
@@ -2762,9 +2769,20 @@ impl GitGraph {
     ) {
         let is_path_history = matches!(self.log_source, LogSource::Path(_));
         let columns: &[&str] = if is_path_history {
-            &[i18n::t!("dc2ba467fc7ac962"), i18n::t!("70d0c1b33626ba4b"), i18n::t!("7d4146ca082798f0"), i18n::t!("08a85f4ab4bab9ca")]
+            &[
+                i18n::t!("dc2ba467fc7ac962"),
+                i18n::t!("70d0c1b33626ba4b"),
+                i18n::t!("7d4146ca082798f0"),
+                i18n::t!("08a85f4ab4bab9ca"),
+            ]
         } else {
-            &[i18n::t!("8013578e5e8731a6"), i18n::t!("dc2ba467fc7ac962"), i18n::t!("70d0c1b33626ba4b"), i18n::t!("7d4146ca082798f0"), i18n::t!("08a85f4ab4bab9ca")]
+            &[
+                i18n::t!("8013578e5e8731a6"),
+                i18n::t!("dc2ba467fc7ac962"),
+                i18n::t!("70d0c1b33626ba4b"),
+                i18n::t!("7d4146ca082798f0"),
+                i18n::t!("08a85f4ab4bab9ca"),
+            ]
         };
 
         let filter = self.column_visibility.clone();
@@ -2777,7 +2795,9 @@ impl GitGraph {
         let focus_handle = self.focus_handle.clone();
         let git_graph = cx.entity();
         let context_menu = ContextMenu::build(window, cx, |mut context_menu, _window, _cx| {
-            context_menu = context_menu.context(focus_handle).header("列");
+            context_menu = context_menu
+                .context(focus_handle)
+                .header(i18n::t!("c06d21404eee51cb"));
             for (col_idx, label) in columns.iter().enumerate() {
                 let is_visible = !filter.get(col_idx).copied().unwrap_or(false);
                 // Disable hiding the last remaining visible column.
@@ -3496,8 +3516,6 @@ impl GitGraph {
             .cloned()
             .collect();
 
-        let mut lines: BTreeMap<usize, Vec<_>> = BTreeMap::new();
-
         let hovered_entry_idx = self.hovered_entry_idx;
         let selected_entry_idx = self.selected_entry_idx;
         let context_menu_target_index = self
@@ -3513,8 +3531,6 @@ impl GitGraph {
                 graph_canvas_bounds.set(Some(bounds));
 
                 window.paint_layer(bounds, |window| {
-                    let accent_colors = cx.theme().accents();
-
                     let hover_bg = cx.theme().colors().element_hover.opacity(0.6);
                     let selected_bg = if is_focused {
                         cx.theme().colors().element_selected
@@ -3550,180 +3566,16 @@ impl GitGraph {
                         }
                     }
 
-                    for (row_idx, row) in rows.into_iter().enumerate() {
-                        let row_color = accent_colors.color_for_index(row.color_idx as u32);
-                        let row_y_center =
-                            bounds.origin.y + row_idx as f32 * row_height + row_height / 2.0
-                                - vertical_scroll_offset;
-
-                        let commit_x = lane_center_x(bounds, row.lane as f32);
-
-                        draw_commit_circle(commit_x, row_y_center, row_color, window);
-                    }
-
-                    for line in commit_lines {
-                        let Some((start_segment_idx, start_column)) =
-                            line.get_first_visible_segment_idx(first_visible_row)
-                        else {
-                            continue;
-                        };
-
-                        let line_x = lane_center_x(bounds, start_column as f32);
-
-                        let start_row = line.full_interval.start as i32 - first_visible_row as i32;
-
-                        let from_y =
-                            bounds.origin.y + start_row as f32 * row_height + row_height / 2.0
-                                - vertical_scroll_offset
-                                + COMMIT_CIRCLE_RADIUS;
-
-                        let mut current_row = from_y;
-                        let mut current_column = line_x;
-
-                        let mut builder = PathBuilder::stroke(LINE_WIDTH);
-                        builder.move_to(point(line_x, from_y));
-
-                        let segments = &line.segments[start_segment_idx..];
-                        let desired_curve_height = row_height / 3.0;
-                        let desired_curve_width = LANE_WIDTH / 3.0;
-
-                        for (segment_idx, segment) in segments.iter().enumerate() {
-                            let is_last = segment_idx + 1 == segments.len();
-
-                            match segment {
-                                CommitLineSegment::Straight { to_row } => {
-                                    let mut dest_row = to_row_center(
-                                        to_row - first_visible_row,
-                                        row_height,
-                                        vertical_scroll_offset,
-                                        bounds,
-                                    );
-                                    if is_last {
-                                        dest_row -= COMMIT_CIRCLE_RADIUS;
-                                    }
-
-                                    let dest_point = point(current_column, dest_row);
-
-                                    current_row = dest_point.y;
-                                    builder.line_to(dest_point);
-                                    builder.move_to(dest_point);
-                                }
-                                CommitLineSegment::Curve {
-                                    to_column,
-                                    on_row,
-                                    curve_kind,
-                                } => {
-                                    let mut to_column = lane_center_x(bounds, *to_column as f32);
-
-                                    let mut to_row = to_row_center(
-                                        *on_row - first_visible_row,
-                                        row_height,
-                                        vertical_scroll_offset,
-                                        bounds,
-                                    );
-
-                                    // This means that this branch was a checkout
-                                    let going_right = to_column > current_column;
-                                    let column_shift = if going_right {
-                                        COMMIT_CIRCLE_RADIUS + COMMIT_CIRCLE_STROKE_WIDTH
-                                    } else {
-                                        -COMMIT_CIRCLE_RADIUS - COMMIT_CIRCLE_STROKE_WIDTH
-                                    };
-
-                                    match curve_kind {
-                                        CurveKind::Checkout => {
-                                            if is_last {
-                                                to_column -= column_shift;
-                                            }
-
-                                            let available_curve_width =
-                                                (to_column - current_column).abs();
-                                            let available_curve_height =
-                                                (to_row - current_row).abs();
-                                            let curve_width =
-                                                desired_curve_width.min(available_curve_width);
-                                            let curve_height =
-                                                desired_curve_height.min(available_curve_height);
-                                            let signed_curve_width = if going_right {
-                                                curve_width
-                                            } else {
-                                                -curve_width
-                                            };
-                                            let curve_start =
-                                                point(current_column, to_row - curve_height);
-                                            let curve_end =
-                                                point(current_column + signed_curve_width, to_row);
-                                            let curve_control = point(current_column, to_row);
-
-                                            builder.move_to(point(current_column, current_row));
-                                            builder.line_to(curve_start);
-                                            builder.move_to(curve_start);
-                                            builder.curve_to(curve_end, curve_control);
-                                            builder.move_to(curve_end);
-                                            builder.line_to(point(to_column, to_row));
-                                        }
-                                        CurveKind::Merge => {
-                                            if is_last {
-                                                to_row -= COMMIT_CIRCLE_RADIUS;
-                                            }
-
-                                            let merge_start = point(
-                                                current_column + column_shift,
-                                                current_row - COMMIT_CIRCLE_RADIUS,
-                                            );
-                                            let available_curve_width =
-                                                (to_column - merge_start.x).abs();
-                                            let available_curve_height =
-                                                (to_row - merge_start.y).abs();
-                                            let curve_width =
-                                                desired_curve_width.min(available_curve_width);
-                                            let curve_height =
-                                                desired_curve_height.min(available_curve_height);
-                                            let signed_curve_width = if going_right {
-                                                curve_width
-                                            } else {
-                                                -curve_width
-                                            };
-                                            let curve_start = point(
-                                                to_column - signed_curve_width,
-                                                merge_start.y,
-                                            );
-                                            let curve_end =
-                                                point(to_column, merge_start.y + curve_height);
-                                            let curve_control = point(to_column, merge_start.y);
-
-                                            builder.move_to(merge_start);
-                                            builder.line_to(curve_start);
-                                            builder.move_to(curve_start);
-                                            builder.curve_to(curve_end, curve_control);
-                                            builder.move_to(curve_end);
-                                            builder.line_to(point(to_column, to_row));
-                                        }
-                                    }
-                                    current_row = to_row;
-                                    current_column = to_column;
-                                    builder.move_to(point(current_column, current_row));
-                                }
-                            }
-                        }
-
-                        builder.close();
-                        lines.entry(line.color_idx).or_default().push(builder);
-                    }
-
-                    for (color_idx, builders) in lines {
-                        let line_color = accent_colors.color_for_index(color_idx as u32);
-
-                        for builder in builders {
-                            if let Ok(path) = builder.build() {
-                                // we paint each color on it's own layer to stop overlapping lines
-                                // of different colors changing the color of a line
-                                window.paint_layer(bounds, |window| {
-                                    window.paint_path(path, line_color);
-                                });
-                            }
-                        }
-                    }
+                    paint_commit_graph_lanes(
+                        bounds,
+                        &rows,
+                        &commit_lines,
+                        first_visible_row,
+                        row_height,
+                        vertical_scroll_offset,
+                        window,
+                        cx,
+                    );
                 })
             },
         )
@@ -3990,6 +3842,197 @@ impl GitGraph {
                     .vertical_scrollbar_for(scroll_handle, window, cx),
             )
             .into_any_element()
+    }
+}
+
+/// The uniform row height used by both the full Git Graph view and the Git
+/// panel's inline history section, so lane painting math stays in sync.
+pub(crate) fn graph_row_height(window: &Window, _cx: &App) -> Pixels {
+    let rem_size = window.rem_size();
+    let line_height = window.text_style().line_height_in_pixels(rem_size);
+    let raw = line_height + ROW_VERTICAL_PADDING;
+    let scale = window.scale_factor();
+
+    (raw * scale).round() / scale
+}
+
+/// Paints the commit circles and lane connection lines for a slice of graph rows.
+///
+/// Shared by the full Git Graph view and the Git panel's inline history section.
+/// `rows` are the visible commits (starting at `first_visible_row`), `commit_lines`
+/// the lane segments intersecting the visible range, and `vertical_scroll_offset`
+/// the sub-row pixel offset of the viewport.
+pub(crate) fn paint_commit_graph_lanes(
+    bounds: Bounds<Pixels>,
+    rows: &[Rc<CommitEntry>],
+    commit_lines: &[Rc<CommitLine>],
+    first_visible_row: usize,
+    row_height: Pixels,
+    vertical_scroll_offset: Pixels,
+    window: &mut Window,
+    cx: &App,
+) {
+    let accent_colors = cx.theme().accents();
+
+    let mut lines: BTreeMap<usize, Vec<_>> = BTreeMap::new();
+
+    for (row_idx, row) in rows.iter().enumerate() {
+        let row_color = accent_colors.color_for_index(row.color_idx as u32);
+        let row_y_center = bounds.origin.y + row_idx as f32 * row_height + row_height / 2.0
+            - vertical_scroll_offset;
+
+        let commit_x = lane_center_x(bounds, row.lane as f32);
+
+        draw_commit_circle(commit_x, row_y_center, row_color, window);
+    }
+
+    for line in commit_lines {
+        let Some((start_segment_idx, start_column)) =
+            line.get_first_visible_segment_idx(first_visible_row)
+        else {
+            continue;
+        };
+
+        let line_x = lane_center_x(bounds, start_column as f32);
+
+        let start_row = line.full_interval.start as i32 - first_visible_row as i32;
+
+        let from_y = bounds.origin.y + start_row as f32 * row_height + row_height / 2.0
+            - vertical_scroll_offset
+            + COMMIT_CIRCLE_RADIUS;
+
+        let mut current_row = from_y;
+        let mut current_column = line_x;
+
+        let mut builder = PathBuilder::stroke(LINE_WIDTH);
+        builder.move_to(point(line_x, from_y));
+
+        let segments = &line.segments[start_segment_idx..];
+        let desired_curve_height = row_height / 3.0;
+        let desired_curve_width = LANE_WIDTH / 3.0;
+
+        for (segment_idx, segment) in segments.iter().enumerate() {
+            let is_last = segment_idx + 1 == segments.len();
+
+            match segment {
+                CommitLineSegment::Straight { to_row } => {
+                    let mut dest_row = to_row_center(
+                        to_row - first_visible_row,
+                        row_height,
+                        vertical_scroll_offset,
+                        bounds,
+                    );
+                    if is_last {
+                        dest_row -= COMMIT_CIRCLE_RADIUS;
+                    }
+
+                    let dest_point = point(current_column, dest_row);
+
+                    current_row = dest_point.y;
+                    builder.line_to(dest_point);
+                    builder.move_to(dest_point);
+                }
+                CommitLineSegment::Curve {
+                    to_column,
+                    on_row,
+                    curve_kind,
+                } => {
+                    let mut to_column = lane_center_x(bounds, *to_column as f32);
+
+                    let mut to_row = to_row_center(
+                        *on_row - first_visible_row,
+                        row_height,
+                        vertical_scroll_offset,
+                        bounds,
+                    );
+
+                    // This means that this branch was a checkout
+                    let going_right = to_column > current_column;
+                    let column_shift = if going_right {
+                        COMMIT_CIRCLE_RADIUS + COMMIT_CIRCLE_STROKE_WIDTH
+                    } else {
+                        -COMMIT_CIRCLE_RADIUS - COMMIT_CIRCLE_STROKE_WIDTH
+                    };
+
+                    match curve_kind {
+                        CurveKind::Checkout => {
+                            if is_last {
+                                to_column -= column_shift;
+                            }
+
+                            let available_curve_width = (to_column - current_column).abs();
+                            let available_curve_height = (to_row - current_row).abs();
+                            let curve_width = desired_curve_width.min(available_curve_width);
+                            let curve_height = desired_curve_height.min(available_curve_height);
+                            let signed_curve_width = if going_right {
+                                curve_width
+                            } else {
+                                -curve_width
+                            };
+                            let curve_start = point(current_column, to_row - curve_height);
+                            let curve_end = point(current_column + signed_curve_width, to_row);
+                            let curve_control = point(current_column, to_row);
+
+                            builder.move_to(point(current_column, current_row));
+                            builder.line_to(curve_start);
+                            builder.move_to(curve_start);
+                            builder.curve_to(curve_end, curve_control);
+                            builder.move_to(curve_end);
+                            builder.line_to(point(to_column, to_row));
+                        }
+                        CurveKind::Merge => {
+                            if is_last {
+                                to_row -= COMMIT_CIRCLE_RADIUS;
+                            }
+
+                            let merge_start = point(
+                                current_column + column_shift,
+                                current_row - COMMIT_CIRCLE_RADIUS,
+                            );
+                            let available_curve_width = (to_column - merge_start.x).abs();
+                            let available_curve_height = (to_row - merge_start.y).abs();
+                            let curve_width = desired_curve_width.min(available_curve_width);
+                            let curve_height = desired_curve_height.min(available_curve_height);
+                            let signed_curve_width = if going_right {
+                                curve_width
+                            } else {
+                                -curve_width
+                            };
+                            let curve_start = point(to_column - signed_curve_width, merge_start.y);
+                            let curve_end = point(to_column, merge_start.y + curve_height);
+                            let curve_control = point(to_column, merge_start.y);
+
+                            builder.move_to(merge_start);
+                            builder.line_to(curve_start);
+                            builder.move_to(curve_start);
+                            builder.curve_to(curve_end, curve_control);
+                            builder.move_to(curve_end);
+                            builder.line_to(point(to_column, to_row));
+                        }
+                    }
+                    current_row = to_row;
+                    current_column = to_column;
+                    builder.move_to(point(current_column, current_row));
+                }
+            }
+        }
+
+        builder.close();
+        lines.entry(line.color_idx).or_default().push(builder);
+    }
+
+    for (color_idx, builders) in lines {
+        let line_color = accent_colors.color_for_index(color_idx as u32);
+
+        for builder in builders {
+            if let Ok(path) = builder.build() {
+                // we paint each color on it's own layer to stop overlapping lines
+                // of different colors changing the color of a line
+                window.paint_layer(bounds, |window| {
+                    window.paint_path(path, line_color);
+                });
+            }
+        }
     }
 }
 

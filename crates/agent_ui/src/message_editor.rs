@@ -492,14 +492,17 @@ impl MessageEditor {
                 let has_selection = editor.has_non_empty_selection(&editor.display_snapshot(cx));
 
                 Some(ContextMenu::build(window, cx, |menu, _, _| {
-                    menu.action("剪切", Box::new(editor::actions::Cut))
+                    menu.action(i18n::t!("410a8e8a6bf253ac"), Box::new(editor::actions::Cut))
                         .action_disabled_when(
                             !has_selection,
                             i18n::t!("63d90d977348ab1f"),
                             Box::new(editor::actions::Copy),
                         )
-                        .action("粘贴", Box::new(editor::actions::Paste))
-                        .action("粘贴为纯文本", Box::new(PasteRaw))
+                        .action(
+                            i18n::t!("33517926747180e6"),
+                            Box::new(editor::actions::Paste),
+                        )
+                        .action(i18n::t!("293151e2a232bc87"), Box::new(PasteRaw))
                 }))
             });
 

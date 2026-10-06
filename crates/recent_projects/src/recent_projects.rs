@@ -2,6 +2,7 @@ mod dev_container_suggest;
 pub mod disconnected_overlay;
 mod remote_connections;
 mod remote_servers;
+mod remote_server_downloads;
 pub mod sidebar_recent_projects;
 mod ssh_config;
 
@@ -53,7 +54,7 @@ use zed_actions::{OpenDevContainer, OpenRecent, OpenRemote};
 
 actions!(
     recent_projects,
-    [ToggleActionsMenu, RemoveSelected, AddToWorkspace,]
+    [ToggleActionsMenu, RemoveSelected, AddToWorkspace, PredownloadRemoteServer,]
 );
 
 #[derive(Clone, Debug)]
@@ -284,6 +285,11 @@ pub(crate) fn default_open_in_new_window(cx: &App) -> bool {
 }
 
 pub fn init(cx: &mut App) {
+    cx.on_action(|_: &PredownloadRemoteServer, cx| {
+        with_active_or_new_workspace(cx, |workspace, window, cx| {
+            remote_server_downloads::open(workspace, window, cx);
+        });
+    });
     #[cfg(target_os = "windows")]
     cx.on_action(|open_wsl: &zed_actions::wsl_actions::OpenFolderInWsl, cx| {
         let create_new_window = open_wsl

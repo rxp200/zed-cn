@@ -285,17 +285,19 @@ impl DiagnosticTail {
                     .iter()
                     .any(|word| key.contains(word))
             {
-                text = text.replace(value, "[已隐藏]");
+                text = text.replace(value, i18n::t!("3c019359a396649a"));
             }
         }
         static SECRETS: LazyLock<Regex> = LazyLock::new(|| {
             Regex::new(r"(?i)(password|passwd|token|secret|authorization)([=: ]+)[^\s&]+|[a-z][a-z0-9+.-]*://[^\s/@]+:[^\s/@]+@").expect("diagnostic secret pattern")
         });
-        text = SECRETS.replace_all(&text, "[已隐藏]").into_owned();
+        text = SECRETS
+            .replace_all(&text, i18n::t!("3c019359a396649a"))
+            .into_owned();
         i18n::t_args!(
             "ff876592329dfa4e",
             if self.truncated {
-                "[诊断已截断，仅保留末尾]\n"
+                i18n::t!("0a3af49198bcb1f0")
             } else {
                 ""
             },
@@ -827,7 +829,7 @@ async fn run_forward(
         let mut child = match controlled {
             Some(child) => child,
             None => {
-                ForwardChild::Process(Some(command.spawn().context("无法启动 SSH 端口转发进程")?))
+                ForwardChild::Process(Some(command.spawn().context(i18n::t!("8aac5b1a043ae283"))?))
             }
         };
 
@@ -880,7 +882,16 @@ async fn run_forward(
                         tail.push(&chunk[..count]);
                         yield_diagnostic_drain().await;
                     }
-                    Err(error) => return Err(anyhow!("读取 SSH 诊断失败（{direction:?}，请求端口 {port}，第 {} 次）：{error}\n{}", attempt + 1, tail.display(&command_template.env))),
+                    Err(error) => {
+                        return Err(anyhow!(i18n::t_mix!(
+                            "3c83d895fc4bafdd";
+                            attempt + 1,
+                            tail.display(&command_template.env);
+                            direction = format!("{direction:?}"),
+                            port = port,
+                            error = error
+                        )));
+                    }
                 },
             }
         };
@@ -898,7 +909,16 @@ async fn run_forward(
                 result = read => match result {
                     Ok(0) => eof = true,
                     Ok(count) => { tail.push(&chunk[..count]); yield_diagnostic_drain().await; }
-                    Err(error) => return Err(anyhow!("读取 SSH 诊断失败（{direction:?}，请求端口 {port}，第 {} 次）：{error}\n{}", attempt + 1, tail.display(&command_template.env))),
+                    Err(error) => {
+                        return Err(anyhow!(i18n::t_mix!(
+                            "3c83d895fc4bafdd";
+                            attempt + 1,
+                            tail.display(&command_template.env);
+                            direction = format!("{direction:?}"),
+                            port = port,
+                            error = error
+                        )));
+                    }
                 },
             }
         }
@@ -907,16 +927,20 @@ async fn run_forward(
             Ok(status) => i18n::t!("34922cb45f442133", status = status),
             Err(error) => i18n::t!("6872562fccf85da4", error = error),
         };
-        last_error = Some(anyhow!(
-            "{outcome}（{direction:?}，请求端口 {port}，本地端口 {local_port}，第 {} 次）{}\n{}",
+        last_error = Some(anyhow!(i18n::t_mix!(
+            "562dde06c4719e16";
             attempt + 1,
             if incomplete {
-                "；诊断尾部收集超时，可能不完整"
+                i18n::t!("984b154e11a98a30")
             } else {
                 ""
             },
-            tail.display(&command_template.env)
-        ));
+            tail.display(&command_template.env);
+            outcome = outcome,
+            direction = format!("{direction:?}"),
+            port = port,
+            local_port = local_port
+        )));
         if early && exited && attempt < 4 && direction == ForwardDirection::RemoteToLocal {
             manager.update(cx, |manager, cx| {
                 if let Some(entry) = manager.entries.get_mut(&(direction, port))
@@ -940,8 +964,8 @@ async fn run_forward(
 }
 
 fn available_local_port(preferred: Option<u16>) -> Result<u16> {
-    let listener =
-        TcpListener::bind(("127.0.0.1", preferred.unwrap_or(0))).context("无法分配本地端口")?;
+    let listener = TcpListener::bind(("127.0.0.1", preferred.unwrap_or(0)))
+        .context(i18n::t!("16f0a4150c7d5647"))?;
     let port = listener.local_addr()?.port();
     drop(listener);
     Ok(port)
@@ -1000,12 +1024,12 @@ impl PortForwardModal {
     fn confirm(&mut self, _: &Confirm, window: &mut Window, cx: &mut Context<Self>) {
         let text = self.editor.read(cx).text(cx).trim().to_string();
         let Ok(port) = text.parse::<u16>() else {
-            self.error = Some("请输入 1 到 65535 之间的端口号".to_string());
+            self.error = Some(i18n::t!("2d90356ae0befa45").to_string());
             cx.notify();
             return;
         };
         if port == 0 {
-            self.error = Some("端口号不能为 0".to_string());
+            self.error = Some(i18n::t!("6a0fd55718effcc1").to_string());
             cx.notify();
             return;
         }
@@ -1052,7 +1076,10 @@ impl Render for PortForwardModal {
                         h_flex()
                             .gap_2()
                             .child(Icon::new(IconName::Link).size(IconSize::Small))
-                            .child(Headline::new("SSH 端口转发").size(HeadlineSize::Small)),
+                            .child(
+                                Headline::new(i18n::t!("ff66c760b4eb4d6c"))
+                                    .size(HeadlineSize::Small),
+                            ),
                     )
                     .child(
                         IconButton::new("close-port-forward-modal", IconName::Close)
@@ -1064,7 +1091,7 @@ impl Render for PortForwardModal {
                     .flex_shrink_0()
                     .gap_1()
                     .child(
-                        Button::new("remote-to-local-direction", "远程 → 本地")
+                        Button::new("remote-to-local-direction", i18n::t!("4e156a6242d654b7"))
                             .style(if self.direction == ForwardDirection::RemoteToLocal {
                                 ButtonStyle::Filled
                             } else {
@@ -1076,7 +1103,7 @@ impl Render for PortForwardModal {
                             })),
                     )
                     .child(
-                        Button::new("local-to-remote-direction", "本地 → 远程")
+                        Button::new("local-to-remote-direction", i18n::t!("2fe4aee45e505d4a"))
                             .style(if self.direction == ForwardDirection::LocalToRemote {
                                 ButtonStyle::Filled
                             } else {
@@ -1094,148 +1121,198 @@ impl Render for PortForwardModal {
                     .gap_2()
                     .child(div().flex_1().child(self.editor.clone()))
                     .child(
-                        Button::new("add-port-forward", "添加")
+                        Button::new("add-port-forward", i18n::t!("7a8a11ead50742a2"))
                             .style(ButtonStyle::Filled)
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.confirm(&Confirm, window, cx)
                             })),
                     ),
             )
-            .child(Label::new("自动：仅本项目目录内的监听进程（Linux，需 python3）。无法校验时请手动添加。")
-                .size(LabelSize::XSmall).color(Color::Muted))
-            .when_some(self.manager.read(cx).detection_error.clone(), |this, error| {
-                this.child(Label::new(error).size(LabelSize::Small).color(Color::Warning))
-            })
+            .child(
+                Label::new(i18n::t!("df84f1f5154b8fdb"))
+                    .size(LabelSize::XSmall)
+                    .color(Color::Muted),
+            )
+            .when_some(
+                self.manager.read(cx).detection_error.clone(),
+                |this, error| {
+                    this.child(
+                        Label::new(error)
+                            .size(LabelSize::Small)
+                            .color(Color::Warning),
+                    )
+                },
+            )
             .when_some(self.error.clone(), |this, error| {
                 this.child(Label::new(error).size(LabelSize::Small).color(Color::Error))
             })
-            .child(div().id("port-forward-list").max_h(rems(24.)).min_h_0()
-                .overflow_y_scroll().track_scroll(&self.scroll_handle)
-                .children(entries.into_iter().map(|entry| {
-                let direction = entry.direction;
-                let remote_port = entry.remote_port;
-                let source = match entry.source {
-                    ForwardSource::Automatic => "自动",
-                    ForwardSource::Manual => "手动",
-                    ForwardSource::Preview => "网页预览",
-                };
-                let local_port = entry.local_port.map(|port| port.to_string()).unwrap_or_else(|| "待分配".to_string());
-                let (address, status_color) = match &entry.status {
-                    ForwardStatus::Starting => ("正在启动…".to_string(), Color::Muted),
-                    ForwardStatus::RunningUnconfirmed => (
-                        match direction {
-                            ForwardDirection::RemoteToLocal => {
-                                format!("http://127.0.0.1:{local_port}")
+            .child(
+                div()
+                    .id("port-forward-list")
+                    .max_h(rems(24.))
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .track_scroll(&self.scroll_handle)
+                    .children(entries.into_iter().map(|entry| {
+                        let direction = entry.direction;
+                        let remote_port = entry.remote_port;
+                        let source = match entry.source {
+                            ForwardSource::Automatic => i18n::t!("7eb336e42cb5076b"),
+                            ForwardSource::Manual => i18n::t!("962f41ef825b7266"),
+                            ForwardSource::Preview => i18n::t!("07a1166b502215b7"),
+                        };
+                        let local_port = entry
+                            .local_port
+                            .map(|port| port.to_string())
+                            .unwrap_or_else(|| i18n::t!("17bf181625e8da75").to_string());
+                        let (address, status_color) = match &entry.status {
+                            ForwardStatus::Starting => {
+                                (i18n::t!("43f3dc12a6077835").to_string(), Color::Muted)
                             }
-                            ForwardDirection::LocalToRemote => {
-                                i18n::t!("cc6b6c400b0b2b65", remote_port = remote_port, local_port = local_port)
-                            }
-                        },
-                        Color::Muted,
-                    ),
-                    ForwardStatus::Failed(error) => (i18n::t!("377e359e55ec05ab", error = error), Color::Error),
-                };
-                h_flex()
-                    .px_2()
-                    .py_1p5()
-                    .gap_3()
-                    .justify_between()
-                    .child(
-                        v_flex()
-                            .gap_0p5()
-                            .child(
-                                Label::new(match direction {
+                            ForwardStatus::RunningUnconfirmed => (
+                                match direction {
                                     ForwardDirection::RemoteToLocal => {
-                                        i18n::t!("22880116ce7d18fe", remote_port = remote_port)
+                                        format!("http://127.0.0.1:{local_port}")
                                     }
                                     ForwardDirection::LocalToRemote => {
-                                        i18n::t!("f2e88cffef1ff16e", local_port = local_port)
+                                        i18n::t!(
+                                            "cc6b6c400b0b2b65",
+                                            remote_port = remote_port,
+                                            local_port = local_port
+                                        )
                                     }
-                                })
-                                .size(LabelSize::Small),
-                            )
-                            .when(matches!(entry.status, ForwardStatus::RunningUnconfirmed), |this| this.child(Label::new("SSH 进程运行中，监听未确认").size(LabelSize::Small).color(Color::Muted)))
-                            .child(if direction == ForwardDirection::RemoteToLocal
-                                && entry.local_port.is_some()
-                                && matches!(entry.status, ForwardStatus::RunningUnconfirmed)
-                            {
-                                let address_for_click = address.clone();
-                                div()
-                                    .id((
-                                        match direction {
-                                            ForwardDirection::RemoteToLocal => {
-                                                "remote-forward-address"
-                                            }
-                                            ForwardDirection::LocalToRemote => {
-                                                "reverse-forward-address"
-                                            }
-                                        },
-                                        u64::from(remote_port),
-                                    ))
-                                    .cursor_pointer()
-                                    .tooltip(ui::Tooltip::text(
-                                        "此地址尚未验证。单击复制；Ctrl+单击尝试在默认浏览器打开",
-                                    ))
-                                    .child(
-                                        Label::new(address)
-                                            .size(LabelSize::Small)
-                                            .color(status_color),
-                                    )
-                                    .on_click(move |event, _, cx| {
-                                        if event.modifiers().control {
-                                            cx.open_url(&address_for_click);
-                                        } else {
-                                            cx.write_to_clipboard(ClipboardItem::new_string(
-                                                address_for_click.clone(),
-                                            ));
-                                        }
-                                    })
-                                    .into_any_element()
-                            } else {
-                                Label::new(address)
-                                    .size(LabelSize::Small)
-                                    .color(status_color)
-                                    .into_any_element()
-                            }),
-                    )
-                    .child(
-                        h_flex()
-                            .gap_2()
-                            .child(
-                                Label::new(source)
-                                    .size(LabelSize::XSmall)
-                                    .color(Color::Muted),
-                            )
-                            .child(
-                                IconButton::new(
-                                    (
-                                        match direction {
-                                            ForwardDirection::RemoteToLocal => {
-                                                "stop-remote-port-forward"
-                                            }
-                                            ForwardDirection::LocalToRemote => {
-                                                "stop-reverse-port-forward"
-                                            }
-                                        },
-                                        u64::from(remote_port),
-                                    ),
-                                    IconName::Stop,
-                                )
-                                .tooltip(ui::Tooltip::text("停止转发"))
-                                .on_click({
-                                    let manager = self.manager.clone();
-                                    move |_, _, cx| {
-                                        manager.update(cx, |manager, cx| {
-                                            manager.stop(direction, remote_port, cx)
-                                        })
-                                    }
-                                }),
+                                },
+                                Color::Muted,
                             ),
-                    )
-            })).vertical_scrollbar_for(&self.scroll_handle, window, cx))
+                            ForwardStatus::Failed(error) => {
+                                (i18n::t!("377e359e55ec05ab", error = error), Color::Error)
+                            }
+                        };
+                        h_flex()
+                            .px_2()
+                            .py_1p5()
+                            .gap_3()
+                            .justify_between()
+                            .child(
+                                v_flex()
+                                    .gap_0p5()
+                                    .child(
+                                        Label::new(match direction {
+                                            ForwardDirection::RemoteToLocal => {
+                                                i18n::t!(
+                                                    "22880116ce7d18fe",
+                                                    remote_port = remote_port
+                                                )
+                                            }
+                                            ForwardDirection::LocalToRemote => {
+                                                i18n::t!(
+                                                    "f2e88cffef1ff16e",
+                                                    local_port = local_port
+                                                )
+                                            }
+                                        })
+                                        .size(LabelSize::Small),
+                                    )
+                                    .when(
+                                        matches!(entry.status, ForwardStatus::RunningUnconfirmed),
+                                        |this| {
+                                            this.child(
+                                                Label::new(i18n::t!("c7f7510832ed11ff"))
+                                                    .size(LabelSize::Small)
+                                                    .color(Color::Muted),
+                                            )
+                                        },
+                                    )
+                                    .child(
+                                        if direction == ForwardDirection::RemoteToLocal
+                                            && entry.local_port.is_some()
+                                            && matches!(
+                                                entry.status,
+                                                ForwardStatus::RunningUnconfirmed
+                                            )
+                                        {
+                                            let address_for_click = address.clone();
+                                            div()
+                                                .id((
+                                                    match direction {
+                                                        ForwardDirection::RemoteToLocal => {
+                                                            "remote-forward-address"
+                                                        }
+                                                        ForwardDirection::LocalToRemote => {
+                                                            "reverse-forward-address"
+                                                        }
+                                                    },
+                                                    u64::from(remote_port),
+                                                ))
+                                                .cursor_pointer()
+                                                .tooltip(ui::Tooltip::text(i18n::t!(
+                                                    "f5b68300857567ee"
+                                                )))
+                                                .child(
+                                                    Label::new(address)
+                                                        .size(LabelSize::Small)
+                                                        .color(status_color),
+                                                )
+                                                .on_click(move |event, _, cx| {
+                                                    if event.modifiers().control {
+                                                        cx.open_url(&address_for_click);
+                                                    } else {
+                                                        cx.write_to_clipboard(
+                                                            ClipboardItem::new_string(
+                                                                address_for_click.clone(),
+                                                            ),
+                                                        );
+                                                    }
+                                                })
+                                                .into_any_element()
+                                        } else {
+                                            Label::new(address)
+                                                .size(LabelSize::Small)
+                                                .color(status_color)
+                                                .into_any_element()
+                                        },
+                                    ),
+                            )
+                            .child(
+                                h_flex()
+                                    .gap_2()
+                                    .child(
+                                        Label::new(source)
+                                            .size(LabelSize::XSmall)
+                                            .color(Color::Muted),
+                                    )
+                                    .child(
+                                        IconButton::new(
+                                            (
+                                                match direction {
+                                                    ForwardDirection::RemoteToLocal => {
+                                                        "stop-remote-port-forward"
+                                                    }
+                                                    ForwardDirection::LocalToRemote => {
+                                                        "stop-reverse-port-forward"
+                                                    }
+                                                },
+                                                u64::from(remote_port),
+                                            ),
+                                            IconName::Stop,
+                                        )
+                                        .tooltip(ui::Tooltip::text(i18n::t!("d961583cc6bfa37f")))
+                                        .on_click({
+                                            let manager = self.manager.clone();
+                                            move |_, _, cx| {
+                                                manager.update(cx, |manager, cx| {
+                                                    manager.stop(direction, remote_port, cx)
+                                                })
+                                            }
+                                        }),
+                                    ),
+                            )
+                    }))
+                    .vertical_scrollbar_for(&self.scroll_handle, window, cx),
+            )
             .when(self.manager.read(cx).snapshots().is_empty(), |this| {
                 this.child(
-                    Label::new("暂无转发。自动检测仅转发工作目录位于本项目内的 Linux 监听进程（需 python3）；其他端口请手动添加。")
+                    Label::new(i18n::t!("749a035193a5adef"))
                         .size(LabelSize::Small)
                         .color(Color::Muted),
                 )
@@ -1251,7 +1328,7 @@ pub fn show_modal(
 ) {
     let project = workspace.project().clone();
     if ssh_remote_client(&project, cx).is_none() {
-        workspace.show_error("SSH 端口转发仅适用于 SSH 远程项目", cx);
+        workspace.show_error(i18n::t!("a4a2b04c76e4a48d"), cx);
         return;
     }
     workspace.toggle_modal(window, cx, move |window, cx| {

@@ -19,6 +19,7 @@ on:
   push:
     tags:
       - zed-cn-v*-r*
+      - zed-cn-dev-v*-r*
 
 permissions:
   contents: write
@@ -41,6 +42,7 @@ jobs:
       release_tag: ${{ steps.inputs.outputs.release_tag }}
       release_version: ${{ steps.inputs.outputs.release_version }}
       release_revision: ${{ steps.inputs.outputs.release_revision }}
+      update_channel: ${{ steps.inputs.outputs.update_channel }}
       draft: ${{ steps.inputs.outputs.draft }}
       source_sha: ${{ steps.source.outputs.source_sha }}
       public_main_sha: ${{ steps.source.outputs.public_main_sha }}
@@ -64,7 +66,7 @@ jobs:
               $draft = "${{ inputs.draft }}".ToLowerInvariant()
           }
 
-          if ($releaseTag -notmatch '^zed-cn-v(?<version>\d+\.\d+\.\d+)-r(?<revision>\d+)$') {
+          if ($releaseTag -notmatch '^zed-cn-(?<dev>dev-)?v(?<version>\d+\.\d+\.\d+)-r(?<revision>[1-9]\d*)$') {
               throw "Release tag must use the format zed-cn-vX.Y.Z-rN, for example zed-cn-v1.17.2-r1"
           }
 
@@ -72,6 +74,8 @@ jobs:
           "release_tag=$releaseTag" >> $env:GITHUB_OUTPUT
           "release_version=$($Matches.version)" >> $env:GITHUB_OUTPUT
           "release_revision=$($Matches.revision)" >> $env:GITHUB_OUTPUT
+          $updateChannel = if ($Matches.dev) { "dev" } else { "stable" }
+          "update_channel=$updateChannel" >> $env:GITHUB_OUTPUT
           "draft=$draft" >> $env:GITHUB_OUTPUT
 
       - name: Check out public-safe source
@@ -664,6 +668,7 @@ jobs:
           RELEASE_TAG: ${{ needs.validate_source.outputs.release_tag }}
           RELEASE_VERSION: ${{ needs.validate_source.outputs.release_version }}
           RELEASE_REVISION: ${{ needs.validate_source.outputs.release_revision }}
+          UPDATE_CHANNEL: ${{ needs.validate_source.outputs.update_channel }}
           SOURCE_SHA: ${{ needs.validate_source.outputs.source_sha }}
           CREATE_DRAFT: ${{ needs.validate_source.outputs.draft }}
           RELEASE_EVENT: ${{ github.event_name }}
@@ -705,7 +710,7 @@ jobs:
           - Zed 版本：$RELEASE_VERSION
           - 定制修订：r$RELEASE_REVISION
           - 源码提交：\`$SOURCE_SHA\`
-          - 发布渠道：stable
+          - 发布渠道：$UPDATE_CHANNEL
           - 支持平台：Linux、Windows（x86_64 / aarch64），macOS（仅 Apple Silicon / aarch64）；不再提供 Intel Mac 安装包及对应的 Zed CN Remote Server
           - 代码签名：Windows 未签名，macOS 使用临时签名且未公证
 
@@ -734,7 +739,7 @@ jobs:
             gh release edit "$RELEASE_TAG" \
               --repo "${{ github.repository }}" \
               --title "Zed CN $RELEASE_VERSION r$RELEASE_REVISION" \
-              --notes-file "$notes_path"
+              --notes-file "$notes_path" --prerelease="$([[ "$UPDATE_CHANNEL" == dev ]] && echo true || echo false)"
           else
             arguments=(
               release create "$RELEASE_TAG"
@@ -743,6 +748,9 @@ jobs:
               --title "Zed CN $RELEASE_VERSION r$RELEASE_REVISION"
               --notes-file "$notes_path"
             )
+            if [[ "$UPDATE_CHANNEL" == "dev" ]]; then
+              arguments+=(--prerelease)
+            fi
             if [[ "$CREATE_DRAFT" == "true" ]]; then
               arguments+=(--draft)
             fi

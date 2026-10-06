@@ -363,7 +363,7 @@ impl Console {
                                 .when_some(keybinding_target.clone(), |el, keybinding_target| {
                                     el.context(keybinding_target)
                                 })
-                                .action("监视表达式", WatchExpression.boxed_clone())
+                                .action(i18n::t!("973e487ab8be6c4b"), WatchExpression.boxed_clone())
                         }))
                     })
                 },

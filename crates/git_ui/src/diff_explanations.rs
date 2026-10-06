@@ -1,5 +1,6 @@
 use anyhow::{Context as _, Result};
 use collections::HashSet;
+use editor::code_explanations::ConfiguredModel;
 use editor::{
     Editor,
     code_explanations::{
@@ -10,10 +11,7 @@ use editor::{
 };
 use futures::StreamExt as _;
 use gpui::{App, Entity, Task};
-use editor::code_explanations::ConfiguredModel;
-use language_model::{
-    LanguageModelRequest, LanguageModelRequestMessage, MessageContent, Role,
-};
+use language_model::{LanguageModelRequest, LanguageModelRequestMessage, MessageContent, Role};
 use project::Project;
 use serde::Deserialize;
 use settings::Settings as _;
@@ -57,6 +55,8 @@ pub(crate) struct DiffExplanationController {
     task: Option<Task<()>>,
     blocks: HashSet<CustomBlockId>,
     identity: String,
+    running: bool,
+    refresh: Option<Arc<dyn Fn(&mut App) + Send + Sync>>,
 }
 
 #[derive(Clone, Deserialize)]
@@ -84,6 +84,7 @@ impl DiffExplanationController {
         editor: Entity<Editor>,
         project: Entity<Project>,
         files: Vec<DiffFileInput>,
+        refresh: Arc<dyn Fn(&mut App) + Send + Sync>,
         cx: &mut App,
     ) {
         let settings = CodeExplanationSettings::get_global(cx).clone();
@@ -117,6 +118,7 @@ impl DiffExplanationController {
             return;
         }
 
+        controller.update(cx, |controller, _| controller.refresh = Some(refresh));
         let model = match resolve_model(&settings, cx) {
             Ok(model) => model,
             Err(error) => {
@@ -138,6 +140,7 @@ impl DiffExplanationController {
             controller.identity = identity.clone();
             controller.generation = controller.generation.wrapping_add(1);
             let generation = controller.generation;
+            controller.running = true;
             controller.insert_status(&editor, i18n::t!("68cb2681c6532a5f").into(), cx);
             controller.task = Some(cx.spawn({
                 let editor = editor.downgrade();
@@ -166,9 +169,16 @@ impl DiffExplanationController {
                         if controller.generation != generation || controller.identity != identity {
                             return;
                         }
+                        controller.running = false;
+                        controller.task = None;
                         controller.remove_blocks(&editor, cx);
                         match result {
                             Ok(explanations) => {
+                                controller.insert_status(
+                                    &editor,
+                                    i18n::t!("089c5937ddac41ed").into(),
+                                    cx,
+                                );
                                 controller.render_results(&editor, &eligible, explanations, cx)
                             }
                             Err(error) => controller.insert_status(
@@ -183,9 +193,18 @@ impl DiffExplanationController {
         });
     }
 
+    pub(crate) fn prepare_refresh(&mut self) -> bool {
+        if self.running {
+            return false;
+        }
+        self.identity.clear();
+        true
+    }
+
     fn clear(&mut self, editor: &Entity<Editor>, cx: &mut App) {
         self.generation = self.generation.wrapping_add(1);
         self.task = None;
+        self.running = false;
         self.identity.clear();
         self.remove_blocks(editor, cx);
     }
@@ -211,6 +230,10 @@ impl DiffExplanationController {
         cx: &mut App,
     ) {
         let expanded = Arc::new(AtomicBool::new(!collapsible));
+        let refresh = (prominent && !collapsible)
+            .then(|| self.refresh.clone())
+            .flatten();
+        let running = self.running;
         let ids =
             editor.update(cx, |editor, cx| {
                 editor.insert_blocks(
@@ -272,7 +295,32 @@ impl DiffExplanationController {
                                             ),
                                     )
                                 })
-                                .when(!collapsible, |element| element.child(text.clone()))
+                                .when(!collapsible, |element| {
+                                    element.child(
+                                        h_flex()
+                                            .w_full()
+                                            .justify_between()
+                                            .gap_2()
+                                            .child(div().flex_1().min_w_0().child(text.clone()))
+                                            .when_some(refresh.clone(), |element, refresh| {
+                                                element.child(
+                                                    Button::new(
+                                                        "regenerate-diff-explanations",
+                                                        i18n::t!("1651031bf58d8eea"),
+                                                    )
+                                                    .start_icon(Icon::new(IconName::RotateCw))
+                                                    .disabled(running)
+                                                    .tooltip(Tooltip::text(i18n::t!(
+                                                        "948305da3407f7e0"
+                                                    )))
+                                                    .on_click(move |_, _, cx| {
+                                                        cx.stop_propagation();
+                                                        refresh(cx);
+                                                    }),
+                                                )
+                                            }),
+                                    )
+                                })
                                 .into_any_element()
                         }),
                     }],
@@ -654,6 +702,27 @@ fn line_window(text: &str, center: u32, radius: u32) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn manual_refresh_invalidates_unchanged_and_failed_diff_identity() {
+        let mut controller = super::DiffExplanationController::default();
+        for identity in ["completed-diff", "failed-diff"] {
+            controller.identity = identity.into();
+            assert!(controller.prepare_refresh());
+            assert!(controller.identity.is_empty());
+            assert!(!controller.running);
+        }
+    }
+
+    #[test]
+    fn manual_refresh_does_not_duplicate_a_running_request() {
+        let mut controller = super::DiffExplanationController::default();
+        controller.identity = "running-diff".into();
+        controller.running = true;
+        assert!(!controller.prepare_refresh());
+        assert_eq!(controller.identity, "running-diff");
+        assert!(controller.running);
+    }
+
     use super::*;
 
     #[test]

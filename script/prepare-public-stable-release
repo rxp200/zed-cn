@@ -160,6 +160,7 @@ def main() -> int:
         )
     )
     parser.add_argument("--source-ref", default="github/main")
+    parser.add_argument("--channel", choices=("stable", "dev"), default="stable")
     parser.add_argument("--stable-tag", required=True)
     parser.add_argument("--release-tag", required=True)
     parser.add_argument("--previous-release", help="override the previous published Release")
@@ -180,9 +181,16 @@ def main() -> int:
     tag_match = re.fullmatch(r"v(\d+\.\d+\.\d+)", arguments.stable_tag)
     if tag_match is None:
         raise RuntimeError("--stable-tag must be a formal Stable tag such as v1.17.2")
-    version = tag_match.group(1)
+    stable_version = tag_match.group(1)
+    version = stable_version
+    if arguments.channel == "dev":
+        source_manifest = git("show", f"{git_object(arguments.source_ref)}:crates/zed/Cargo.toml")
+        version = re.search(r'(?m)^version\s*=\s*"([^"]+)"', source_manifest).group(1)
     if tag_key(arguments.release_tag)[:3] != tuple(map(int, version.split("."))):
-        raise RuntimeError("release tag version must match --stable-tag")
+        raise RuntimeError("release tag version must match the selected channel version")
+    expected_prefix = "zed-cn-dev-v" if arguments.channel == "dev" else "zed-cn-v"
+    if not arguments.release_tag.startswith(expected_prefix):
+        raise RuntimeError("release tag does not match --channel")
     source_commit = git_object(arguments.source_ref)
     stable_commit = git_object(arguments.stable_tag)
 
@@ -191,7 +199,7 @@ def main() -> int:
     stable_version_match = re.search(r'(?m)^version\s*=\s*"([^"]+)"', stable_manifest)
     if stable_channel != "stable" or stable_version_match is None:
         raise RuntimeError("the selected official tag is not a valid Stable source")
-    if stable_version_match.group(1) != version:
+    if stable_version_match.group(1) != stable_version:
         raise RuntimeError(
             f"tag version {version} does not match its Zed manifest version "
             f"{stable_version_match.group(1)}"

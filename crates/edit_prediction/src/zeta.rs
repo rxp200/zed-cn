@@ -672,7 +672,10 @@ fn handle_api_response<T>(
                             ErrorSeverity::Critical
                         }
                         fn primary_action(&self) -> ErrorAction {
-                            ErrorAction::link("Update Zed", "https://zed.dev/releases")
+                            ErrorAction::link(
+                                i18n::t!("30c3a0164c1ce38c"),
+                                "https://zed.dev/releases",
+                            )
                         }
                     }
 

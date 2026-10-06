@@ -601,6 +601,20 @@ impl CommitView {
             self.editor.read(cx).rhs_editor().clone(),
             self.project.clone(),
             files,
+            Arc::new({
+                let view = cx.entity().downgrade();
+                move |cx| {
+                    view.update(cx, |view, cx| {
+                        if view
+                            .explanation_controller
+                            .update(cx, |controller, _| controller.prepare_refresh())
+                        {
+                            view.schedule_explanations(cx);
+                        }
+                    })
+                    .log_err();
+                }
+            }),
             cx,
         );
     }
@@ -1571,7 +1585,10 @@ impl Render for CommitViewToolbar {
 
                     IconButton::new("view_on_provider", icon)
                         .icon_size(IconSize::Small)
-                        .tooltip(Tooltip::text(i18n::t_args!("f2245eadbe3b33f0", provider_name)))
+                        .tooltip(Tooltip::text(i18n::t_args!(
+                            "f2245eadbe3b33f0",
+                            provider_name
+                        )))
                         .on_click(move |_, _, cx| cx.open_url(&url))
                 }))
             })

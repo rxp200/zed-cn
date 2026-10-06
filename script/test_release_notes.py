@@ -42,6 +42,15 @@ class ReleaseReviewTests(unittest.TestCase):
     def resolve(self):
         self.review["items"][0].update(disposition="included", detail="- 修复文件显示问题。")
 
+    def test_channel_baselines_and_initial_dev_override(self):
+        stable = {"tag_name": self.previous, "draft": False, "prerelease": False, "published_at": "now"}
+        dev = {"tag_name": "zed-cn-dev-v1.24.0-r1", "draft": False, "prerelease": True, "published_at": "now"}
+        self.assertEqual(notes.select_previous([stable, dev], "zed-cn-dev-v1.24.0-r2"), dev)
+        self.assertEqual(notes.select_previous([stable, dev], self.current), stable)
+        self.assertEqual(notes.select_previous([stable], "zed-cn-dev-v1.24.0-r1", self.previous), stable)
+        with self.assertRaises(ValueError):
+            notes.select_previous([stable], "zed-cn-dev-v1.24.0-r1")
+
     def test_pending_blocks_release(self):
         with self.assertRaisesRegex(ValueError, "unresolved"):
             notes.validate(self.message(), ":index", self.current)

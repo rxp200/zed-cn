@@ -57,6 +57,21 @@ class ManifestTests(unittest.TestCase):
         self.command = patch.object(manifest, "command", side_effect=api).start()
         self.addCleanup(patch.stopall)
 
+    def test_dev_and_stable_feeds_are_isolated(self):
+        stable = metadata()
+        dev = metadata(2)
+        dev["tag_name"] = "zed-cn-dev-v1.24.0-r2"
+        dev["prerelease"] = True
+        dev["assets"][0]["browser_download_url"] = (
+            f"https://github.com/rxp200/zed-cn/releases/download/{dev['tag_name']}/Zed-x86_64.exe")
+        entries = [release(stable), release(dev)]
+        load = lambda tag: copy.deepcopy(dev if tag == dev["tag_name"] else stable)
+        self.assertEqual(manifest.build_manifest(entries, load, embedded_assets)["releases"], [stable])
+        self.assertEqual(manifest.build_manifest(entries, load, embedded_assets, "dev")["releases"], [dev])
+        entries[1]["draft"] = True
+        with self.assertRaises(ValueError):
+            manifest.build_manifest(entries, load, embedded_assets, "dev")
+
     def test_branch_target_commitish_is_not_source_identity(self):
         data = metadata()
         entry = release(data)

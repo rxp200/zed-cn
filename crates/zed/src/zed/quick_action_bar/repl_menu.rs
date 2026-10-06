@@ -205,7 +205,7 @@ impl QuickActionBar {
                         },
                     )
                     .separator()
-                    .action("查看会话", Box::new(repl::Sessions))
+                    .action(i18n::t!("f2b4237b35f0b3b2"), Box::new(repl::Sessions))
                     // TODO: Add shut down all kernels action
                     // .action("关闭所有内核", Box::new(gpui::NoAction))
                 })

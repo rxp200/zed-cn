@@ -2583,7 +2583,12 @@ impl Sidebar {
             let key = key.clone();
             return button
                 .tooltip(move |_, cx| {
-                    Tooltip::for_action_in(i18n::t!("104ac05f7033c7d3"), &NewThread, &focus_handle, cx)
+                    Tooltip::for_action_in(
+                        i18n::t!("104ac05f7033c7d3"),
+                        &NewThread,
+                        &focus_handle,
+                        cx,
+                    )
                 })
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.set_group_expanded(&key, true, cx);
@@ -3092,7 +3097,9 @@ impl Sidebar {
                                                     )
                                                     .icon_size(IconSize::Small)
                                                     .visible_on_hover(&row_group_name)
-                                                    .tooltip(Tooltip::text(i18n::t!("234e04132c6e1286")))
+                                                    .tooltip(Tooltip::text(i18n::t!(
+                                                        "234e04132c6e1286"
+                                                    )))
                                                     .on_click(move |_, window, cx| {
                                                         cx.stop_propagation();
                                                         window.prevent_default();
@@ -3149,7 +3156,7 @@ impl Sidebar {
 
                             this.separator()
                                 .item(
-                                    ContextMenuEntry::new("Move Up")
+                                    ContextMenuEntry::new(i18n::t!("1359626e7b696434"))
                                         .action(Box::new(MoveProjectUp))
                                         .disabled(!can_move_up)
                                         .handler(move |_window, cx| {
@@ -3164,7 +3171,7 @@ impl Sidebar {
                                         }),
                                 )
                                 .item(
-                                    ContextMenuEntry::new("Move Down")
+                                    ContextMenuEntry::new(i18n::t!("b58330ac25057a44"))
                                         .action(Box::new(MoveProjectDown))
                                         .disabled(!can_move_down)
                                         .handler(move |_window, cx| {
@@ -6763,7 +6770,9 @@ impl Sidebar {
                 IconButton::new("open-project", IconName::FolderAdd)
                     .icon_size(IconSize::Small)
                     .selected_style(ButtonStyle::Tinted(TintColor::Accent)),
-                |_window, cx| Tooltip::for_action(i18n::t!("44b7ce21b9f2b32c"), &OpenRecent::default(), cx),
+                |_window, cx| {
+                    Tooltip::for_action(i18n::t!("44b7ce21b9f2b32c"), &OpenRecent::default(), cx)
+                },
             )
             .offset(gpui::Point {
                 x: px(-2.0),

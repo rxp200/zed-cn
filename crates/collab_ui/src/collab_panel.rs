@@ -1294,7 +1294,10 @@ impl CollabPanel {
                     ),
             )
             .child(Label::new(project_name.clone()))
-            .tooltip(Tooltip::text(format!("Open {}", project_name)))
+            .tooltip(Tooltip::text(i18n::t_args!(
+                "202010cde3a4fd60",
+                project_name
+            )))
     }
 
     fn render_participant_screen(
@@ -2716,7 +2719,11 @@ impl CollabPanel {
         let (button_id, button_label, button_icon) = if is_authenticated {
             (
                 "connect",
-                if is_busy { "Connecting…" } else { "Connect" },
+                if is_busy {
+                    i18n::t!("72021eb70e91b4d5")
+                } else {
+                    i18n::t!("1a2303ede07493ac")
+                },
                 IconName::Public,
             )
         } else {

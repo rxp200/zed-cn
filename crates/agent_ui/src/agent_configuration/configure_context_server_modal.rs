@@ -755,7 +755,7 @@ impl ConfigureContextServerModal {
                                     .size(IconSize::Small)
                                     .color(Color::Muted),
                             )
-                            .action("关闭", |_, _| {})
+                            .action(i18n::t!("3fd47edce45b3603"), |_, _| {})
                         },
                     );
 

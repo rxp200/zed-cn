@@ -225,7 +225,7 @@ pub async fn load_code_explanation_file_index_for_worktree(
     let database = project.read_with(cx, |project, cx| {
         let worktree = project
             .worktree_for_id(worktree_id, cx)
-            .context("讲解缓存所属工作树不存在")?;
+            .context(i18n::t!("20bd7c2e0c2d946d"))?;
         let namespace = format!(
             "{:?}:{:?}",
             worktree.read(cx).abs_path(),
@@ -347,6 +347,8 @@ pub(crate) struct ExplanationState {
     pub last_error: Option<SharedString>,
     pub memory_order: std::collections::VecDeque<String>,
     pub blocks: HashSet<crate::CustomBlockId>,
+    pub block_anchors: HashMap<crate::CustomBlockId, (multi_buffer::Anchor, SharedString)>,
+    pub suspended_blocks: Vec<(multi_buffer::Anchor, SharedString)>,
     pub pending_blocks: Option<Vec<(multi_buffer::Anchor, SharedString)>>,
     pub pending_version: Option<clock::Global>,
     pub generation: u64,
@@ -503,6 +505,57 @@ pub(crate) fn code_edited(editor: &mut Editor, cx: &mut Context<Editor>) {
     if !creases.is_empty() {
         editor.remove_creases(creases, cx);
     }
+    sync_block_visibility(editor, cx);
+}
+
+/// Hides explanation blocks whose anchored text was deleted and restores the ones whose text
+/// became visible again, so deleting a line removes its explanation in the same frame and undoing
+/// the deletion brings it back without waiting for a full refresh.
+fn sync_block_visibility(editor: &mut Editor, cx: &mut Context<Editor>) {
+    if editor.explanations.block_anchors.is_empty()
+        && editor.explanations.suspended_blocks.is_empty()
+    {
+        return;
+    }
+    let snapshot = editor.buffer.read(cx).snapshot(cx);
+    let mut removed = HashSet::default();
+    for (id, (anchor, _)) in editor.explanations.block_anchors.iter() {
+        if !anchor.is_valid(&snapshot) {
+            removed.insert(*id);
+        }
+    }
+    let mut suspended = std::mem::take(&mut editor.explanations.suspended_blocks);
+    for id in &removed {
+        if let Some(block) = editor.explanations.block_anchors.remove(id) {
+            suspended.push(block);
+        }
+        editor.explanations.blocks.remove(id);
+    }
+    if !removed.is_empty() {
+        editor.remove_blocks(removed, None, cx);
+    }
+    let mut restored = Vec::new();
+    let mut still_suspended = Vec::new();
+    for (anchor, text) in suspended {
+        if anchor.is_valid(&snapshot) {
+            restored.push((anchor, text));
+        } else {
+            still_suspended.push((anchor, text));
+        }
+    }
+    editor.explanations.suspended_blocks = still_suspended;
+    for (anchor, text) in restored {
+        show(editor, anchor, text, true, cx);
+    }
+}
+
+fn remove_all_blocks(editor: &mut Editor, cx: &mut Context<Editor>) {
+    let blocks = std::mem::take(&mut editor.explanations.blocks);
+    editor.explanations.block_anchors.clear();
+    editor.explanations.suspended_blocks.clear();
+    if !blocks.is_empty() {
+        editor.remove_blocks(blocks, None, cx);
+    }
 }
 
 pub(crate) fn request_refresh(editor: &mut Editor) {
@@ -537,10 +590,7 @@ pub(crate) fn clear(editor: &mut Editor, cx: &mut Context<Editor>) {
     editor.explanations.prompted.clear();
     editor.explanations.pending_blocks = None;
     editor.explanations.pending_version = None;
-    let blocks = std::mem::take(&mut editor.explanations.blocks);
-    if !blocks.is_empty() {
-        editor.remove_blocks(blocks, None, cx);
-    }
+    remove_all_blocks(editor, cx);
     let creases = std::mem::take(&mut editor.explanations.deep_explanation_creases);
     if !creases.is_empty() {
         editor.remove_creases(creases, cx);
@@ -563,12 +613,9 @@ fn apply_pending(editor: &mut Editor, cx: &mut Context<Editor>) {
         return;
     };
     editor.explanations.pending_version = None;
-    let old_blocks = std::mem::take(&mut editor.explanations.blocks);
-    if !old_blocks.is_empty() {
-        editor.remove_blocks(old_blocks, None, cx);
-    }
+    remove_all_blocks(editor, cx);
     for (anchor, text) in pending {
-        show(editor, anchor, text, cx);
+        show(editor, anchor, text, true, cx);
     }
 }
 
@@ -576,8 +623,10 @@ fn show(
     editor: &mut Editor,
     anchor: multi_buffer::Anchor,
     text: SharedString,
+    track_anchor: bool,
     cx: &mut Context<Editor>,
 ) {
+    let tracked_text = text.clone();
     let ids = editor.insert_blocks(
         [BlockProperties {
             placement: BlockPlacement::Above(anchor),
@@ -598,7 +647,15 @@ fn show(
         None,
         cx,
     );
-    editor.explanations.blocks.extend(ids);
+    for id in ids {
+        if track_anchor {
+            editor
+                .explanations
+                .block_anchors
+                .insert(id, (anchor, tracked_text.clone()));
+        }
+        editor.explanations.blocks.insert(id);
+    }
 }
 
 pub(crate) fn schedule(editor: &mut Editor, window: &gpui::Window, cx: &mut Context<Editor>) {
@@ -704,7 +761,7 @@ pub(crate) fn schedule(editor: &mut Editor, window: &gpui::Window, cx: &mut Cont
                 let anchor = display
                     .buffer_snapshot()
                     .anchor_before(multi_buffer::MultiBufferOffset(0));
-                show(editor, anchor, format!("AI · {error}").into(), cx);
+                show(editor, anchor, format!("AI · {error}").into(), false, cx);
             }
             return;
         }
@@ -845,10 +902,7 @@ pub(crate) fn schedule(editor: &mut Editor, window: &gpui::Window, cx: &mut Cont
                                                 .on_click(move |_, _, cx| {
                                                     use util::ResultExt as _;
                                                     weak.update(cx, |editor, cx| {
-                                                        let blocks = std::mem::take(
-                                                            &mut editor.explanations.blocks,
-                                                        );
-                                                        editor.remove_blocks(blocks, None, cx);
+                                                        remove_all_blocks(editor, cx);
                                                         editor
                                                             .explanations
                                                             .approved
@@ -1093,7 +1147,7 @@ pub(crate) fn schedule(editor: &mut Editor, window: &gpui::Window, cx: &mut Cont
                         .unwrap_or(0);
                     let anchor = display
                         .buffer_snapshot()
-                        .anchor_before(language::Point::new(row as u32, column as u32));
+                        .anchor_after(language::Point::new(row as u32, column as u32));
                     pending_blocks.push((anchor, annotation.explanation.clone().into()));
                 }
             } else if let Err(error) = &annotations {
@@ -1121,7 +1175,7 @@ pub(crate) fn schedule(editor: &mut Editor, window: &gpui::Window, cx: &mut Cont
                         editor.explanations.progress.0 += 1;
                         if !refresh_requested {
                             for (anchor, text) in pending_blocks.drain(..) {
-                                show(editor, anchor, text, cx);
+                                show(editor, anchor, text, true, cx);
                             }
                         }
                         cx.notify();
@@ -1148,7 +1202,7 @@ pub(crate) fn schedule(editor: &mut Editor, window: &gpui::Window, cx: &mut Cont
                     editor.explanations.dirty = true;
                 } else {
                     for (anchor, text) in pending_blocks {
-                        show(editor, anchor, text, cx);
+                        show(editor, anchor, text, true, cx);
                     }
                 }
                 cx.notify();
@@ -1830,12 +1884,82 @@ mod tests {
             let before = editor.text(cx);
             let buffer = editor.buffer.read(cx).snapshot(cx);
             let anchor = buffer.anchor_before(multi_buffer::MultiBufferOffset(0));
-            show(editor, anchor, "AI · 临时讲解".into(), cx);
+            show(editor, anchor, "AI · 临时讲解".into(), true, cx);
             assert_eq!(editor.text(cx), before);
             assert!(!editor.explanations.blocks.is_empty());
             clear(editor, cx);
             assert!(editor.explanations.blocks.is_empty());
             assert_eq!(editor.text(cx), before);
+        });
+    }
+
+    #[gpui::test]
+    async fn deleting_an_annotated_line_hides_and_undo_restores_its_block(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        crate::editor_tests::init_test(cx, |_| {});
+        let mut context = crate::test::editor_test_context::EditorTestContext::new(cx).await;
+        context.cx.update(|_, cx| {
+            cx.update_global::<settings::SettingsStore, _>(|store, cx| {
+                store
+                    .set_user_settings(r#"{"code_explanations":{"enabled":true}}"#, cx)
+                    .unwrap();
+            });
+        });
+        context.set_state("fn example() {\n    let value = 1;\n}\nˇ");
+        context.update_editor(|editor, window, cx| {
+            let version = editor
+                .buffer
+                .read(cx)
+                .as_singleton()
+                .expect("讲解测试需要单文件编辑器")
+                .read(cx)
+                .snapshot()
+                .version()
+                .clone();
+            editor.explanations.version = Some(version);
+            let display = editor.snapshot(window, cx);
+            let anchor = display
+                .buffer_snapshot()
+                .anchor_after(language::Point::new(1, 4));
+            show(editor, anchor, "AI · 保存数值".into(), true, cx);
+            assert_eq!(editor.explanations.blocks.len(), 1);
+            assert_eq!(editor.explanations.block_anchors.len(), 1);
+        });
+
+        let snapshot = context.buffer_snapshot();
+        let line_start = snapshot.point_to_offset(language::Point::new(1, 0));
+        let line_end = snapshot.point_to_offset(language::Point::new(2, 0));
+        context.update_editor(|editor, _, cx| {
+            editor.buffer.update(cx, |buffer, cx| {
+                buffer.edit(
+                    [(
+                        multi_buffer::MultiBufferOffset(line_start)
+                            ..multi_buffer::MultiBufferOffset(line_end),
+                        "",
+                    )],
+                    None,
+                    cx,
+                );
+            });
+            code_edited(editor, cx);
+        });
+        context.run_until_parked();
+        context.editor(|editor, _, _| {
+            assert!(editor.explanations.blocks.is_empty());
+            assert!(editor.explanations.block_anchors.is_empty());
+            assert_eq!(editor.explanations.suspended_blocks.len(), 1);
+        });
+
+        context.update_editor(|editor, window, cx| {
+            editor.undo(&crate::Undo, window, cx);
+            code_edited(editor, cx);
+        });
+        context.run_until_parked();
+        context.editor(|editor, _, _| {
+            assert_eq!(editor.explanations.blocks.len(), 1);
+            assert_eq!(editor.explanations.block_anchors.len(), 1);
+            assert!(editor.explanations.suspended_blocks.is_empty());
         });
     }
 
@@ -1850,7 +1974,7 @@ mod tests {
         context.update_editor(|editor, window, cx| {
             let buffer = editor.buffer.read(cx).snapshot(cx);
             let anchor = buffer.anchor_before(multi_buffer::MultiBufferOffset(0));
-            show(editor, anchor, "讲解".repeat(800).into(), cx);
+            show(editor, anchor, "讲解".repeat(800).into(), true, cx);
             let snapshot = editor.snapshot(window, cx);
             for block_id in editor.explanations.blocks.iter().copied() {
                 let block = snapshot
@@ -1937,8 +2061,7 @@ pub fn deep_explain_selection(
         || project::DisableAiSettings::get_global(cx).disable_ai
         || !trust.update(cx, |trust, cx| trust.can_trust(&store, worktree_id, cx))
     {
-        editor.explanations.last_error =
-            Some(i18n::t!("894f5a34a8b14fe6").into());
+        editor.explanations.last_error = Some(i18n::t!("894f5a34a8b14fe6").into());
         cx.notify();
         return;
     }
@@ -2106,7 +2229,9 @@ pub fn deep_explain_selection(
             CodeExplanationRequestWaiter::new(project.entity_id(), request_key.clone(), 0)?;
         let permit = loop {
             if cancelled.load(Ordering::SeqCst) {
-                markdown.update(cx, |markdown, cx| markdown.replace(i18n::t!("a095d9d5e35ba72c"), cx));
+                markdown.update(cx, |markdown, cx| {
+                    markdown.replace(i18n::t!("a095d9d5e35ba72c"), cx)
+                });
                 return anyhow::Ok(());
             }
             if editor_handle
@@ -2314,7 +2439,7 @@ async fn request_deep(
         .stream_completion_text(&model.model, request, cx)
         .with_timeout(std::time::Duration::from_secs(60), &executor)
         .await
-        .context("深入讲解请求超时")?
+        .context(i18n::t!("2755022ee4043bea"))?
         .map_err(|error| anyhow::anyhow!(error.to_string()))?;
     let mut output = String::new();
     let started = std::time::Instant::now();
@@ -2324,7 +2449,7 @@ async fn request_deep(
         .next()
         .with_timeout(std::time::Duration::from_secs(30), &executor)
         .await
-        .context("深入讲解响应超时")?
+        .context(i18n::t!("9da4d28c3f09739c"))?
     {
         anyhow::ensure!(
             !cx.update(|cx| project::DisableAiSettings::get_global(cx).disable_ai),
@@ -2458,8 +2583,8 @@ impl gpui::Render for DeepExplanationModal {
             .when_some(self.source_editor.clone(), |this, source| {
                 let source_range = self.source_range.clone();
                 this.child(
-                    Button::new("return-to-explained-source", i18n::t!("8cd52c1af8febf66")).on_click(
-                        move |_, window, cx| {
+                    Button::new("return-to-explained-source", i18n::t!("8cd52c1af8febf66"))
+                        .on_click(move |_, window, cx| {
                             if let Some(editor) = source.upgrade() {
                                 editor.update(cx, |editor, cx| {
                                     if let Some(range) = source_range.clone() {
@@ -2474,8 +2599,7 @@ impl gpui::Render for DeepExplanationModal {
                                     editor.focus_handle(cx).focus(window, cx);
                                 });
                             }
-                        },
-                    ),
+                        }),
                 )
             })
             .when(self.workspace.is_some(), |this| {
@@ -2507,8 +2631,8 @@ impl gpui::Render for DeepExplanationModal {
             .when_some(self.workspace.clone(), |this, workspace| {
                 let pin_workspace = workspace.clone();
                 this.child(
-                    Button::new("pin-explanation", i18n::t!("5323bbacebd32ca3")).on_click(cx.listener(
-                        move |this, _, window, cx| {
+                    Button::new("pin-explanation", i18n::t!("5323bbacebd32ca3")).on_click(
+                        cx.listener(move |this, _, window, cx| {
                             let Some(workspace) = pin_workspace.upgrade() else {
                                 return;
                             };
@@ -2538,12 +2662,12 @@ impl gpui::Render for DeepExplanationModal {
                                 });
                             });
                             cx.emit(DismissEvent);
-                        },
-                    )),
+                        }),
+                    ),
                 )
                 .child(
-                    Button::new("keep-explanation", i18n::t!("e04b69643cbdb136")).on_click(cx.listener(
-                        move |this, _, window, cx| {
+                    Button::new("keep-explanation", i18n::t!("e04b69643cbdb136")).on_click(
+                        cx.listener(move |this, _, window, cx| {
                             let Some(workspace) = workspace.upgrade() else {
                                 return;
                             };
@@ -2564,24 +2688,26 @@ impl gpui::Render for DeepExplanationModal {
                                 );
                             });
                             cx.emit(DismissEvent);
-                        },
-                    )),
+                        }),
+                    ),
                 )
             })
             .when_some(self.cancelled.clone(), |this, cancelled| {
-                this.child(Button::new("stop-deep-explanation", i18n::t!("9ad0aac32ea304be")).on_click(
-                    move |_, _, _| {
-                        cancelled.store(true, Ordering::SeqCst);
-                    },
-                ))
+                this.child(
+                    Button::new("stop-deep-explanation", i18n::t!("9ad0aac32ea304be")).on_click(
+                        move |_, _, _| {
+                            cancelled.store(true, Ordering::SeqCst);
+                        },
+                    ),
+                )
             })
             .child(
-                Button::new("copy-deep-explanation", i18n::t!("6258a2c6f9c89143")).on_click(cx.listener(
-                    |this, _, _, cx| {
+                Button::new("copy-deep-explanation", i18n::t!("6258a2c6f9c89143")).on_click(
+                    cx.listener(|this, _, _, cx| {
                         let text = this.markdown.read(cx).source().to_string();
                         cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
-                    },
-                )),
+                    }),
+                ),
             )
             .child(
                 div()
@@ -2844,52 +2970,114 @@ impl gpui::Render for ProjectScanModal {
             .max_w(window.viewport_size().width * 0.9)
             .max_h(window.viewport_size().height * 0.85)
             .child(
-                Modal::new("project-code-explanation-scan", Some(self.scroll_handle.clone()))
-                    .header(ModalHeader::new().show_dismiss_button(true).headline(i18n::t!("201f47c673115f2e")))
-                    .section(Section::new().child(
-                        v_flex().gap_3()
-                            .child(Label::new(i18n::t_args!("fdb4bd7cbdf3e9db", self.candidates.len(), bytes as f64 / (1024. * 1024.))))
-                            .child(Label::new(i18n::t_args!("0659fa18b816c7da", self.model_label)))
+                Modal::new(
+                    "project-code-explanation-scan",
+                    Some(self.scroll_handle.clone()),
+                )
+                .header(
+                    ModalHeader::new()
+                        .show_dismiss_button(true)
+                        .headline(i18n::t!("201f47c673115f2e")),
+                )
+                .section(
+                    Section::new().child(
+                        v_flex()
+                            .gap_3()
+                            .child(Label::new(i18n::t_args!(
+                                "fdb4bd7cbdf3e9db",
+                                self.candidates.len(),
+                                bytes as f64 / (1024. * 1024.)
+                            )))
+                            .child(Label::new(i18n::t_args!(
+                                "0659fa18b816c7da",
+                                self.model_label
+                            )))
                             .child(Label::new(i18n::t!("7bd95da73b9541f2")).color(Color::Muted))
                             .child(Label::new(i18n::t!("5c21dbb661225e8e")).color(Color::Muted))
                             .child(Label::new(i18n::t!("43f74961c6aa09df")).color(Color::Muted))
                             .child(Label::new(i18n::t!("097e611f0046f3d2")).color(Color::Warning))
-                            .when(self.candidates.is_empty() && self.error.is_none(), |this| this.child(Label::new(i18n::t!("652ecdcbcee652e4")).color(Color::Warning)))
-                            .when_some(self.error.clone(), |this, error| this.child(Label::new(error).color(Color::Warning)))
+                            .when(self.candidates.is_empty() && self.error.is_none(), |this| {
+                                this.child(
+                                    Label::new(i18n::t!("652ecdcbcee652e4")).color(Color::Warning),
+                                )
+                            })
+                            .when_some(self.error.clone(), |this, error| {
+                                this.child(Label::new(error).color(Color::Warning))
+                            })
                             .child(Label::new(i18n::t!("4ebc15cb92de36ba")))
-                            .child(div().id("scan-candidate-files").max_h(rems(24.)).overflow_y_scroll().overflow_x_scroll().children(
-                                self.candidates.iter().enumerate().map(|(index, candidate)| div().whitespace_nowrap().child(Label::new(format!("{}.  {}  ·  {:.2} KiB", index + 1, candidate.display_path, candidate.size as f64 / 1024.))))
-                            ))
-                    ))
-                    .section(Section::new().child(
-                        h_flex().justify_end().gap_2()
-                            .child(Button::new("copy-scan-list", i18n::t!("5a91e1cf5fdbcc38"))
-                                .disabled(self.candidates.is_empty())
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    let list = this.candidates.iter().map(|candidate| format!("{}\t{} bytes", candidate.display_path, candidate.size)).collect::<Vec<_>>().join("\n");
-                                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(list));
-                                })))
-                            .child(Button::new("cancel-scan", i18n::t!("2cd0f3be8738a86c")).on_click(cx.listener(|_, _, _, cx| cx.emit(DismissEvent))))
-                            .child(Button::new("start-scan", i18n::t!("743497b67cd219dd"))
-                                .disabled(self.error.is_some() || self.candidates.is_empty())
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    if this.error.is_some() || this.candidates.is_empty() { return; }
-                                    let project = this.project.clone();
-                                    let workspace = this.workspace.clone();
-                                    let candidates = std::mem::take(&mut this.candidates);
-                                    cx.emit(DismissEvent);
-                                    cx.spawn(async move |_, cx| {
-                                        start_project_scan(
-                                            project,
-                                            workspace,
-                                            candidates,
-                                            ProjectScanMode::Incremental,
-                                            cx,
-                                        )
-                                    })
-                                    .detach_and_log_err(cx);
-                                })))
-                    )),
+                            .child(
+                                div()
+                                    .id("scan-candidate-files")
+                                    .max_h(rems(24.))
+                                    .overflow_y_scroll()
+                                    .overflow_x_scroll()
+                                    .children(self.candidates.iter().enumerate().map(
+                                        |(index, candidate)| {
+                                            div().whitespace_nowrap().child(Label::new(format!(
+                                                "{}.  {}  ·  {:.2} KiB",
+                                                index + 1,
+                                                candidate.display_path,
+                                                candidate.size as f64 / 1024.
+                                            )))
+                                        },
+                                    )),
+                            ),
+                    ),
+                )
+                .section(
+                    Section::new().child(
+                        h_flex()
+                            .justify_end()
+                            .gap_2()
+                            .child(
+                                Button::new("copy-scan-list", i18n::t!("5a91e1cf5fdbcc38"))
+                                    .disabled(self.candidates.is_empty())
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        let list = this
+                                            .candidates
+                                            .iter()
+                                            .map(|candidate| {
+                                                format!(
+                                                    "{}\t{} bytes",
+                                                    candidate.display_path, candidate.size
+                                                )
+                                            })
+                                            .collect::<Vec<_>>()
+                                            .join("\n");
+                                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                                            list,
+                                        ));
+                                    })),
+                            )
+                            .child(
+                                Button::new("cancel-scan", i18n::t!("2cd0f3be8738a86c"))
+                                    .on_click(cx.listener(|_, _, _, cx| cx.emit(DismissEvent))),
+                            )
+                            .child(
+                                Button::new("start-scan", i18n::t!("743497b67cd219dd"))
+                                    .disabled(self.error.is_some() || self.candidates.is_empty())
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        if this.error.is_some() || this.candidates.is_empty() {
+                                            return;
+                                        }
+                                        let project = this.project.clone();
+                                        let workspace = this.workspace.clone();
+                                        let candidates = std::mem::take(&mut this.candidates);
+                                        cx.emit(DismissEvent);
+                                        cx.spawn(async move |_, cx| {
+                                            start_project_scan(
+                                                project,
+                                                workspace,
+                                                candidates,
+                                                ProjectScanMode::Incremental,
+                                                cx,
+                                            )
+                                        })
+                                        .detach_and_log_err(cx);
+                                    })),
+                            ),
+                    ),
+                ),
             )
     }
 }
@@ -2904,15 +3092,19 @@ fn show_project_scan_confirmation(
     let settings = CodeExplanationSettings::get_global(cx).clone();
     let model_label = format!(
         "{} / {}",
-        settings.provider.as_deref().unwrap_or(i18n::t!("71da5563d66c1d94")),
-        settings.model.as_deref().unwrap_or(i18n::t!("9bb63745df8f62cb"))
+        settings
+            .provider
+            .as_deref()
+            .unwrap_or(i18n::t!("71da5563d66c1d94")),
+        settings
+            .model
+            .as_deref()
+            .unwrap_or(i18n::t!("9bb63745df8f62cb"))
     )
     .into();
     let scan_running = project_scan_state(&project, cx).read(cx).running;
     let error = if scan_running {
-        Some(SharedString::from(
-            i18n::t!("d83664afd2308653"),
-        ))
+        Some(SharedString::from(i18n::t!("d83664afd2308653")))
     } else {
         (resolve_model(&settings, cx).is_err() || !settings.cache_persist)
             .then(|| SharedString::from(i18n::t!("b30065caf5414bf4")))
@@ -2948,9 +3140,7 @@ pub fn start_selected_project_scan(
         return;
     }
     let error = if project_scan_state(&project, cx).read(cx).running {
-        Some(SharedString::from(
-            i18n::t!("d83664afd2308653"),
-        ))
+        Some(SharedString::from(i18n::t!("d83664afd2308653")))
     } else {
         let settings = CodeExplanationSettings::get_global(cx);
         (resolve_model(settings, cx).is_err() || !settings.cache_persist)
@@ -3124,7 +3314,7 @@ async fn run_project_scan(
                             .join(format!("{}.sqlite", content_hash(&namespace))),
                     )
                 })
-                .context("扫描文件所属工作树已关闭")?;
+                .context(i18n::t!("4a5efd4b3e9d11a9"))?;
             let file_path = candidate.path.path.as_unix_str().to_owned();
             cx.background_spawn(async move { cache_remove_file(&cache_path, &file_path) })
                 .await?;
@@ -3243,7 +3433,7 @@ async fn scan_project_file(
     let store = project.read_with(cx, |project, _| project.worktree_store());
     let trust = cx
         .update(|cx| project::trusted_worktrees::TrustedWorktrees::try_get_global(cx))
-        .context("项目信任状态不可用")?;
+        .context(i18n::t!("ad271451d8ddcb2f"))?;
     let model = cx.update(|cx| resolve_model(&settings, cx))?;
     let language = snapshot
         .language()
@@ -3267,7 +3457,7 @@ async fn scan_project_file(
                 project.remote_connection_options(cx)
             ))
         })
-        .context("扫描文件所属工作树已关闭")?;
+        .context(i18n::t!("4a5efd4b3e9d11a9"))?;
     let cache_path = paths::data_dir()
         .join("code-explanations")
         .join(format!("{}.sqlite", content_hash(&cache_namespace)));
@@ -3682,9 +3872,13 @@ impl gpui::Render for CodeExplanationIndicator {
                                 .when_some(
                                     scan_running.then_some(scan_cancelled.clone()).flatten(),
                                     |menu, cancelled| {
-                                        menu.entry(i18n::t!("464c32bac9406908"), None, move |_, _| {
-                                            cancelled.store(true, Ordering::SeqCst);
-                                        })
+                                        menu.entry(
+                                            i18n::t!("464c32bac9406908"),
+                                            None,
+                                            move |_, _| {
+                                                cancelled.store(true, Ordering::SeqCst);
+                                            },
+                                        )
                                     },
                                 )
                                 .when(!scan_running && active_project.is_some(), |menu| {
@@ -3705,15 +3899,11 @@ impl gpui::Render for CodeExplanationIndicator {
                                 .separator();
                             menu = menu.when(!scan_diagnostics.is_empty(), |menu| {
                                 let diagnostics = scan_diagnostics.clone();
-                                menu.entry(
-                                    i18n::t!("da72a4729161bc38"),
-                                    None,
-                                    move |_, cx| {
-                                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(
-                                            diagnostics.clone(),
-                                        ));
-                                    },
-                                )
+                                menu.entry(i18n::t!("da72a4729161bc38"), None, move |_, cx| {
+                                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                                        diagnostics.clone(),
+                                    ));
+                                })
                             });
                             let failed_editor = active.clone();
                             menu = menu.entry(i18n::t!("b21ed03849e84fbf"), None, move |_, cx| {
@@ -3884,10 +4074,7 @@ async fn request_if_authorized(
     cx: &mut gpui::AsyncApp,
 ) -> Result<SharedString> {
     for attempt in 0..3 {
-        anyhow::ensure!(
-            cx.update(&mut authorized),
-            i18n::t!("03d3044b30299a77")
-        );
+        anyhow::ensure!(cx.update(&mut authorized), i18n::t!("03d3044b30299a77"));
         match request(model.clone(), settings.clone(), code.clone(), cx).await {
             Ok(text) => return Ok(text),
             Err(error) => {
@@ -3935,10 +4122,7 @@ pub(crate) async fn request(
         !cx.update(|cx| project::DisableAiSettings::get_global(cx).disable_ai),
         i18n::t!("0f4b4b34fffd444a")
     );
-    anyhow::ensure!(
-        code.len() <= 64 * 1024,
-        i18n::t!("e862135be0181f08")
-    );
+    anyhow::ensure!(code.len() <= 64 * 1024, i18n::t!("e862135be0181f08"));
     let detail = if settings.detailed {
         i18n::t!("aeefb0767465904b")
     } else {
@@ -3974,7 +4158,7 @@ pub(crate) async fn request(
         .stream_completion_text(&model.model, request, cx)
         .with_timeout(std::time::Duration::from_secs(60), &executor)
         .await
-        .context("讲解请求超时；可从书本菜单重试失败单元")?
+        .context(i18n::t!("646651d4f81e90f4"))?
         .map_err(anyhow::Error::new)?;
     let mut output = String::new();
     let started = std::time::Instant::now();
@@ -3984,7 +4168,7 @@ pub(crate) async fn request(
         .next()
         .with_timeout(std::time::Duration::from_secs(30), &executor)
         .await
-        .context("讲解响应超时")?
+        .context(i18n::t!("ab5c1069e97e9b68"))?
     {
         anyhow::ensure!(
             !cx.update(|cx| project::DisableAiSettings::get_global(cx).disable_ai),

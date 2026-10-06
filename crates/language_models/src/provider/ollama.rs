@@ -666,10 +666,12 @@ struct ConfigurationView {
 
 impl ConfigurationView {
     pub fn new(state: Entity<State>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let api_key_editor = cx.new(|cx| InputField::new(window, cx, "63e02e...").label(i18n::t!("16f0ee47f993d627")));
+        let api_key_editor = cx
+            .new(|cx| InputField::new(window, cx, "63e02e...").label(i18n::t!("16f0ee47f993d627")));
 
         let api_url_editor = cx.new(|cx| {
-            let input = InputField::new(window, cx, OLLAMA_API_URL).label(i18n::t!("ed650c75c5c81f86"));
+            let input =
+                InputField::new(window, cx, OLLAMA_API_URL).label(i18n::t!("ed650c75c5c81f86"));
             input.set_text(&OllamaLanguageModelProvider::api_url(cx), window, cx);
             input
         });
@@ -843,17 +845,12 @@ impl ConfigurationView {
                 List::new()
                     .child(
                         ListBulletItem::new("")
-                            .child(
-                                Label::new(i18n::t!("378d94e66c6f11e3")).color(Color::Muted),
-                            )
+                            .child(Label::new(i18n::t!("378d94e66c6f11e3")).color(Color::Muted))
                             .child(ButtonLink::new("ollama.com", "https://ollama.com/download")),
                     )
                     .child(
                         ListBulletItem::new("")
-                            .child(
-                                Label::new(i18n::t!("50759f8a6dd01bbf"))
-                                    .color(Color::Muted),
-                            )
+                            .child(Label::new(i18n::t!("50759f8a6dd01bbf")).color(Color::Muted))
                             .child(Label::new("ollama run gpt-oss:20b").inline_code(cx)),
                     )
                     .child(
@@ -1031,18 +1028,19 @@ impl Render for ConfigurationView {
                                     )
                                 } else {
                                     this.child(
-                                        Button::new("download_ollama_button", i18n::t!("dfe07e3e334a3d47"))
-                                            .style(ButtonStyle::OutlinedGhost)
-                                            .size(ButtonSize::Medium)
-                                            .end_icon(
-                                                Icon::new(IconName::ArrowUpRight)
-                                                    .size(IconSize::XSmall)
-                                                    .color(Color::Muted),
-                                            )
-                                            .on_click(move |_, _, cx| {
-                                                cx.open_url(OLLAMA_DOWNLOAD_URL)
-                                            })
-                                            .into_any_element(),
+                                        Button::new(
+                                            "download_ollama_button",
+                                            i18n::t!("dfe07e3e334a3d47"),
+                                        )
+                                        .style(ButtonStyle::OutlinedGhost)
+                                        .size(ButtonSize::Medium)
+                                        .end_icon(
+                                            Icon::new(IconName::ArrowUpRight)
+                                                .size(IconSize::XSmall)
+                                                .color(Color::Muted),
+                                        )
+                                        .on_click(move |_, _, cx| cx.open_url(OLLAMA_DOWNLOAD_URL))
+                                        .into_any_element(),
                                     )
                                 }
                             })
@@ -1083,7 +1081,7 @@ impl Render for ConfigurationView {
                             )
                         } else {
                             this.child(
-                                Button::new("retry_ollama_models", "Connect")
+                                Button::new("retry_ollama_models", i18n::t!("1a2303ede07493ac"))
                                     .style(ButtonStyle::Outlined)
                                     .size(ButtonSize::Medium)
                                     .start_icon(

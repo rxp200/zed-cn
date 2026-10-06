@@ -251,25 +251,40 @@ pub fn deploy_context_menu(
             let builder = menu
                 .on_blur_subscription(Subscription::new(|| {}))
                 .when(run_to_cursor, |builder| {
-                    builder.action("运行到光标处", Box::new(RunToCursor))
+                    builder.action(i18n::t!("c063a8b1c7d9d98f"), Box::new(RunToCursor))
                 })
                 .when(evaluate_selection && has_selections, |builder| {
-                    builder.action("求值选择内容", Box::new(EvaluateSelectedText))
+                    builder.action(i18n::t!("fcf7f2c960d35bc4"), Box::new(EvaluateSelectedText))
                 })
                 .when(
                     run_to_cursor || (evaluate_selection && has_selections),
                     |builder| builder.separator(),
                 )
-                .action("运行代码", Box::new(crate::RunCode))
-                .action("运行当前文件", Box::new(crate::RunFile))
-                .action("运行选中代码", Box::new(crate::RunSelection))
-                .action("停止运行代码", Box::new(crate::StopCode))
+                .action(i18n::t!("d5126604310b6036"), Box::new(crate::RunCode))
+                .action(i18n::t!("e8af0181d228f519"), Box::new(crate::RunFile))
+                .action(i18n::t!("4b5f35508fe11c7e"), Box::new(crate::RunSelection))
+                .action(i18n::t!("c6455ca0810e1431"), Box::new(crate::StopCode))
                 .separator()
-                .action("转到定义", Box::new(GoToDefinition::default()))
-                .action("转到声明", Box::new(GoToDeclaration::default()))
-                .action("转到类型定义", Box::new(GoToTypeDefinition::default()))
-                .action("转到实现", Box::new(GoToImplementation::default()))
-                .action("查找所有引用", Box::new(FindAllReferences::default()))
+                .action(
+                    i18n::t!("8e5ccbf336d8d04e"),
+                    Box::new(GoToDefinition::default()),
+                )
+                .action(
+                    i18n::t!("6c9dbe92f1429674"),
+                    Box::new(GoToDeclaration::default()),
+                )
+                .action(
+                    i18n::t!("7bb5e29bec31f254"),
+                    Box::new(GoToTypeDefinition::default()),
+                )
+                .action(
+                    i18n::t!("5258ee00f2f2783f"),
+                    Box::new(GoToImplementation::default()),
+                )
+                .action(
+                    i18n::t!("48efab5e6cb10205"),
+                    Box::new(FindAllReferences::default()),
+                )
                 .action(
                     "Show Incoming Calls",
                     Box::new(zed_actions::ShowIncomingCalls),
@@ -279,10 +294,10 @@ pub fn deploy_context_menu(
                     Box::new(zed_actions::ShowOutgoingCalls),
                 )
                 .separator()
-                .action("重命名符号", Box::new(Rename))
-                .action("格式化缓冲区", Box::new(Format))
+                .action(i18n::t!("5ad7e7a94ef6ab49"), Box::new(Rename))
+                .action(i18n::t!("ee963bc4fb7931dc"), Box::new(Format))
                 .when(format_selections, |cx| {
-                    cx.action("格式化选中内容", Box::new(FormatSelections))
+                    cx.action(i18n::t!("c1f59c66e2a4f39f"), Box::new(FormatSelections))
                 })
                 .action(
                     i18n::t!("25525feb1c2e60c1"),
@@ -292,14 +307,17 @@ pub fn deploy_context_menu(
                     }),
                 )
                 .when(!disable_ai && has_selections, |this| {
-                    this.action("深入讲解选中代码", Box::new(crate::DeepExplainSelection))
-                        .action("添加到Agent线程", Box::new(AddSelectionToThread))
+                    this.action(
+                        i18n::t!("baaf32ae3ed7595e"),
+                        Box::new(crate::DeepExplainSelection),
+                    )
+                    .action(i18n::t!("967125d0b2614641"), Box::new(AddSelectionToThread))
                 })
                 .separator()
-                .action("剪切", Box::new(Cut))
-                .action("复制", Box::new(Copy))
-                .action("复制并修剪", Box::new(CopyAndTrim))
-                .action("粘贴", Box::new(Paste))
+                .action(i18n::t!("410a8e8a6bf253ac"), Box::new(Cut))
+                .action(i18n::t!("63d90d977348ab1f"), Box::new(Copy))
+                .action(i18n::t!("3dcafd5ecb9eab87"), Box::new(CopyAndTrim))
+                .action(i18n::t!("33517926747180e6"), Box::new(Paste))
                 .separator()
                 .action_disabled_when(
                     !has_reveal_target,
@@ -307,10 +325,10 @@ pub fn deploy_context_menu(
                     Box::new(RevealInFileManager),
                 )
                 .when(is_markdown, |builder| {
-                    builder.action("打开Markdown预览", Box::new(OpenMarkdownPreview))
+                    builder.action(i18n::t!("ca5c3eff9a1731b6"), Box::new(OpenMarkdownPreview))
                 })
                 .when(is_svg, |builder| {
-                    builder.action("打开SVG预览", Box::new(OpenSvgPreview))
+                    builder.action(i18n::t!("a84fbd8ff752f148"), Box::new(OpenSvgPreview))
                 })
                 .when(is_html, |builder| {
                     builder.action(

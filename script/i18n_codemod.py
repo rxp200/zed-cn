@@ -68,11 +68,15 @@ MATCH_KEY_RE = re.compile(r"^\s*=>")
 
 def rewrite_line(
     path: Path, lines: list[str], index_line: int, line: str, index: dict, in_tests: bool,
-    new_entries: dict | None = None,
+    new_entries: dict | None = None, literals: list[tuple[str, int]] | None = None,
 ) -> tuple[str, int, list[str]]:
     if new_entries is None:
         new_entries = {}
-    """返回 (新行, 改写数, 备注)。"""
+    """返回 (新行, 改写数, 备注)。
+
+    `literals` 可由调用方传入（已按跨行原始字符串/块注释状态过滤），
+    未传入时退回到单行扫描。
+    """
     notes: list[str] = []
     code = strip_line_comment(line)
     if CONST_RE.match(line):
@@ -80,7 +84,8 @@ def rewrite_line(
     if "const " in code.split("=")[0] or "static " in code.split("=")[0]:
         return line, 0, notes
 
-    literals, _ = scan_literals(line)
+    if literals is None:
+        literals, _ = scan_literals(line)
     if not literals:
         return line, 0, notes
 
@@ -556,9 +561,13 @@ def process_file(path: Path, index: dict, in_tests: bool, dry_run: bool, new_ent
     lines = text.splitlines(keepends=True)
     changed = []
     total = 0
+    scan_state = False
     for i, line in enumerate(lines):
         bare = line.rstrip("\n")
-        new_line, count, notes = rewrite_line(path, lines, i, bare, index, in_tests, new_entries)
+        literals, scan_state = scan_literals(bare, scan_state)
+        new_line, count, notes = rewrite_line(
+            path, lines, i, bare, index, in_tests, new_entries, literals
+        )
         if count:
             total += count
             changed.append((i + 1, bare, new_line, notes))

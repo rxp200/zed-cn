@@ -707,15 +707,21 @@ impl VariableList {
             cx.update(|window, cx| {
                 let context_menu = ContextMenu::build(window, cx, |menu, _, _| {
                     menu.when_some(entry.as_variable(), |menu, _| {
-                        menu.action("复制名称", CopyVariableName.boxed_clone())
-                            .action("复制值", CopyVariableValue.boxed_clone())
+                        menu.action(i18n::t!("a77a6cca3ce275e0"), CopyVariableName.boxed_clone())
+                            .action(
+                                i18n::t!("81e146176431cbe8"),
+                                CopyVariableValue.boxed_clone(),
+                            )
                             .when(supports_set_variable, |menu| {
-                                menu.action("编辑值", EditVariable.boxed_clone())
+                                menu.action(
+                                    i18n::t!("72e29c1114385098"),
+                                    EditVariable.boxed_clone(),
+                                )
                             })
                             .when(supports_go_to_memory, |menu| {
-                                menu.action("转到内存", GoToMemory.boxed_clone())
+                                menu.action(i18n::t!("761a5ffe0f5bec80"), GoToMemory.boxed_clone())
                             })
-                            .action("监视变量", AddWatch.boxed_clone())
+                            .action(i18n::t!("04298f7d3b0a99d7"), AddWatch.boxed_clone())
                             .when_some(can_toggle_data_breakpoint, |mut menu, data_info| {
                                 menu = menu.separator();
                                 if let Some(access_types) = data_info.access_types {
@@ -724,8 +730,10 @@ impl VariableList {
                                             format!(
                                                 "Toggle {} Data Breakpoint",
                                                 match access {
-                                                    dap::DataBreakpointAccessType::Read => i18n::t!("534cb3fa8fbf373f"),
-                                                    dap::DataBreakpointAccessType::Write => i18n::t!("5c783c4679655185"),
+                                                    dap::DataBreakpointAccessType::Read =>
+                                                        i18n::t!("534cb3fa8fbf373f"),
+                                                    dap::DataBreakpointAccessType::Write =>
+                                                        i18n::t!("5c783c4679655185"),
                                                     dap::DataBreakpointAccessType::ReadWrite =>
                                                         "Read/Write",
                                                 }
@@ -748,12 +756,18 @@ impl VariableList {
                             })
                     })
                     .when(entry.as_watcher().is_some(), |menu| {
-                        menu.action("复制名称", CopyVariableName.boxed_clone())
-                            .action("复制值", CopyVariableValue.boxed_clone())
+                        menu.action(i18n::t!("a77a6cca3ce275e0"), CopyVariableName.boxed_clone())
+                            .action(
+                                i18n::t!("81e146176431cbe8"),
+                                CopyVariableValue.boxed_clone(),
+                            )
                             .when(supports_set_variable, |menu| {
-                                menu.action("编辑值", EditVariable.boxed_clone())
+                                menu.action(
+                                    i18n::t!("72e29c1114385098"),
+                                    EditVariable.boxed_clone(),
+                                )
                             })
-                            .action("移除监视", RemoveWatch.boxed_clone())
+                            .action(i18n::t!("faf1689424b58cf8"), RemoveWatch.boxed_clone())
                     })
                     .context(focus_handle.clone())
                 });
@@ -1363,7 +1377,12 @@ impl VariableList {
                         }
                     })
                     .tooltip(move |_window, cx| {
-                        Tooltip::for_action_in(i18n::t!("faf1689424b58cf8"), &RemoveWatch, &focus_handle, cx)
+                        Tooltip::for_action_in(
+                            i18n::t!("faf1689424b58cf8"),
+                            &RemoveWatch,
+                            &focus_handle,
+                            cx,
+                        )
                     })
                     .icon_size(ui::IconSize::Indicator),
                 ),

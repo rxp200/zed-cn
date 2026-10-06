@@ -1054,6 +1054,7 @@ mod tests {
         let app_state = init_test(cx);
         let db = cx.update(|cx| persistence::CommandPaletteDB::global(cx));
         db.clear_all().await.unwrap();
+        let backspace = humanize_action_name("editor::Backspace");
         let project = Project::test(app_state.fs.clone(), [], cx).await;
         let (multi_workspace, cx) =
             cx.add_window_view(|window, cx| MultiWorkspace::test_new(project.clone(), window, cx));
@@ -1135,7 +1136,7 @@ mod tests {
             assert_eq!(editor.read(cx).text(cx), "ab");
         });
         assert_eq!(
-            db.get_command_usage("editor: backspace")
+            db.get_command_usage(&backspace)
                 .unwrap()
                 .unwrap()
                 .invocations,
@@ -1146,7 +1147,7 @@ mod tests {
         cx.simulate_click(history_button.center(), gpui::Modifiers::default());
         cx.run_until_parked();
 
-        assert_eq!(db.get_command_usage("editor: backspace").unwrap(), None);
+        assert_eq!(db.get_command_usage(&backspace).unwrap(), None);
         workspace.update_in(cx, |workspace, window, cx| {
             assert_eq!(editor.read(cx).text(cx), "ab");
             let palette = workspace.active_modal::<CommandPalette>(cx).unwrap();
@@ -1156,7 +1157,7 @@ mod tests {
                     .delegate
                     .matches
                     .iter()
-                    .filter(|matching_command| matching_command.string == "editor: backspace")
+                    .filter(|matching_command| matching_command.string == backspace)
                     .count(),
                 1,
             );
@@ -1191,20 +1192,20 @@ mod tests {
         let app_state = init_test(cx);
         cx.update(|cx| cx.set_global(db::AppDatabase::test_new()));
         let db = cx.update(|cx| persistence::CommandPaletteDB::global(cx));
+        let backspace = humanize_action_name("editor::Backspace");
+        let go_to_line_toggle = humanize_action_name("go_to_line::Toggle");
 
-        db.write_command_invocation("editor: backspace", "")
+        db.write_command_invocation(backspace.clone(), "")
             .await
             .unwrap();
-        db.write_command_invocation("editor: backspace", "")
+        db.write_command_invocation(backspace.clone(), "")
             .await
             .unwrap();
-        db.write_command_invocation("go to line: toggle", "")
+        db.write_command_invocation(go_to_line_toggle.clone(), "")
             .await
             .unwrap();
-        db.set_last_invoked(100, "editor: backspace".to_string())
-            .await
-            .unwrap();
-        db.set_last_invoked(200, "go to line: toggle".to_string())
+        db.set_last_invoked(100, backspace.clone()).await.unwrap();
+        db.set_last_invoked(200, go_to_line_toggle.clone())
             .await
             .unwrap();
 
@@ -1232,8 +1233,8 @@ mod tests {
                 .iter()
                 .map(|command| command.name.as_str())
                 .collect::<Vec<_>>();
-            assert_eq!(names[0], "go to line: toggle");
-            assert_eq!(names[1], "editor: backspace");
+            assert_eq!(names[0], go_to_line_toggle.as_str());
+            assert_eq!(names[1], backspace.as_str());
             assert!(
                 names[2..].windows(2).all(|pair| pair[0] <= pair[1]),
                 "unused commands should stay alphabetical"
@@ -1260,8 +1261,33 @@ mod tests {
         });
         let picker = palette.read_with(cx, |palette, _| palette.picker.clone());
 
+        // 命令名会随界面语言本地化，因此从当前命令列表里挑一个至少能匹配
+        // 三条命令的查询串，而不是假定某个英文子串。
+        let query = picker.read_with(cx, |picker, _| {
+            let names = picker
+                .delegate
+                .commands
+                .iter()
+                .map(|command| command.name.to_string())
+                .collect::<Vec<_>>();
+            for name in &names {
+                let characters = name.chars().collect::<Vec<_>>();
+                for start in 0..characters.len().saturating_sub(2) {
+                    let candidate: String = characters[start..start + 3].iter().collect();
+                    let matches = names
+                        .iter()
+                        .filter(|other| other.contains(&candidate))
+                        .count();
+                    if matches >= 3 {
+                        return candidate;
+                    }
+                }
+            }
+            panic!("expected a query matching at least three commands");
+        });
+
         palette.update_in(cx, |palette, window, cx| {
-            palette.set_query("toggle", window, cx)
+            palette.set_query(&query, window, cx)
         });
         cx.run_until_parked();
 
@@ -1297,7 +1323,7 @@ mod tests {
         palette.update_in(cx, |palette, window, cx| palette.set_query("", window, cx));
         cx.run_until_parked();
         palette.update_in(cx, |palette, window, cx| {
-            palette.set_query("toggle", window, cx)
+            palette.set_query(&query, window, cx)
         });
         cx.run_until_parked();
 

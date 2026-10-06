@@ -1256,7 +1256,9 @@ impl PickerDelegate for BranchListDelegate {
 
     fn no_matches_text(&self, _window: &mut Window, _cx: &mut App) -> Option<SharedString> {
         match self.state {
-            PickerState::CreateRemote(_) => Some(SharedString::new_static(i18n::t!("9e922759408e28fa"))),
+            PickerState::CreateRemote(_) => {
+                Some(SharedString::new_static(i18n::t!("9e922759408e28fa")))
+            }
             _ => None,
         }
     }
@@ -1575,7 +1577,12 @@ impl PickerDelegate for BranchListDelegate {
 
                     anyhow::Ok(())
                 })
-                .detach_and_prompt_err(i18n::t!("667e03d8367bfaca"), window, cx, |_, _, _| None);
+                .detach_and_prompt_err(
+                    i18n::t!("667e03d8367bfaca"),
+                    window,
+                    cx,
+                    |_, _, _| None,
+                );
             }
             Entry::NewUrl { url } => {
                 self.state = PickerState::CreateRemote(url.clone().into());
@@ -1693,10 +1700,12 @@ impl PickerDelegate for BranchListDelegate {
                 .single_line()
                 .truncate()
                 .into_any_element(),
-            Entry::NewRemoteName { name, .. } => Label::new(i18n::t!("64b2d8522ad9b04b", name = name))
-                .single_line()
-                .truncate()
-                .into_any_element(),
+            Entry::NewRemoteName { name, .. } => {
+                Label::new(i18n::t!("64b2d8522ad9b04b", name = name))
+                    .single_line()
+                    .truncate()
+                    .into_any_element()
+            }
             Entry::Branch { branch, positions } => {
                 HighlightedLabel::new(branch.name().to_string(), positions.clone())
                     .single_line()

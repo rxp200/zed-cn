@@ -1435,8 +1435,14 @@ impl TitleBar {
 
                         this.separator()
                     })
-                    .action("设置", zed_actions::OpenSettings.boxed_clone())
-                    .action("键位映射", Box::new(zed_actions::OpenKeymap))
+                    .action(
+                        i18n::t!("df3d58c7d84b85f2"),
+                        zed_actions::OpenSettings.boxed_clone(),
+                    )
+                    .action(
+                        i18n::t!("166f65a9ea0b7fa3"),
+                        Box::new(zed_actions::OpenKeymap),
+                    )
                     .action(
                         "Themes…",
                         zed_actions::theme_selector::Toggle::default().boxed_clone(),
@@ -1473,7 +1479,7 @@ impl TitleBar {
                                 )
                                 .when(is_custom, |menu| {
                                     menu.item(
-                                        ContextMenuEntry::new("Custom")
+                                        ContextMenuEntry::new(i18n::t!("4eafa9e925b30bcd"))
                                             .toggleable(IconPosition::Start, true)
                                             .disabled(true),
                                     )
@@ -1483,7 +1489,7 @@ impl TitleBar {
                     })
                     .when(is_signed_in, |this| {
                         this.separator()
-                            .action("登出", client::SignOut.boxed_clone())
+                            .action(i18n::t!("057f31bc16c89da7"), client::SignOut.boxed_clone())
                     })
                 })
                 .into()

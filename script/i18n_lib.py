@@ -69,21 +69,45 @@ def unescape(raw: str) -> str:
     return "".join(out)
 
 
-def scan_literals(line: str, in_block_comment: bool = False):
-    """抽取一行中的字符串字面量，返回 ([(raw, column)], 块注释状态, 字符串续行状态)。
+RAW_STRING_START_RE = re.compile(r'(?:b|c|br|rb|cr|rc)?r(#*)"')
+CHAR_LITERAL_START_RE = re.compile(r"'(?:\\.|[^\\'])'")
 
-    识别 // 与 /* */ 注释。行尾以孤立反斜杠续行的字符串返回
-    in_string=True，调用方必须跳过该行及其后续续行，避免把字符串内容
-    当作独立字面量处理。
+
+def _normalize_scan_state(state):
+    """扫描状态统一为 (是否在块注释内, 未闭合原始字符串的 # 个数或 None)。"""
+    if isinstance(state, tuple):
+        return state
+    return (bool(state), None)
+
+
+def scan_literals(line: str, state=False):
+    """抽取一行中的字符串字面量，返回 ([(raw, column)], 新扫描状态)。
+
+    状态是 (in_block_comment, open_raw_hashes)：同时识别 `//`、`/* */` 注释、
+    普通/字节/C 字符串、字符字面量与跨行原始字符串（`r#"…"#`）。
+    只有真正位于代码里的 `/*` 才开启块注释：原始字符串、普通字符串与
+    字符字面量内部的 `/*` 不再污染后续行与后续文件。
+
+    兼容旧的 `scan_literals(line, in_block_comment)` 调用：第二参数既可以是
+    bool，也可以是本函数返回的状态元组。
     """
+    in_block_comment, open_raw_hashes = _normalize_scan_state(state)
     literals = []
     i = 0
     n = len(line)
     while i < n:
+        if open_raw_hashes is not None:
+            end = line.find('"' + open_raw_hashes, i)
+            if end == -1:
+                return literals, (in_block_comment, open_raw_hashes)
+            closing_hashes = open_raw_hashes
+            open_raw_hashes = None
+            i = end + len(closing_hashes) + 1
+            continue
         if in_block_comment:
             end = line.find("*/", i)
             if end == -1:
-                return literals, True
+                return literals, (True, None)
             in_block_comment = False
             i = end + 2
             continue
@@ -93,6 +117,16 @@ def scan_literals(line: str, in_block_comment: bool = False):
         if ch == "/" and i + 1 < n and line[i + 1] == "*":
             in_block_comment = True
             i += 2
+            continue
+        raw_match = RAW_STRING_START_RE.match(line, i)
+        if raw_match is not None:
+            hashes = raw_match.group(1)
+            start = raw_match.end()
+            end = line.find('"' + hashes, start)
+            if end == -1:
+                return literals, (False, hashes)
+            literals.append((line[start:end], start - 1))
+            i = end + len(hashes) + 1
             continue
         if ch == '"':
             j = i + 1
@@ -109,8 +143,12 @@ def scan_literals(line: str, in_block_comment: bool = False):
             literals.append(("".join(buf), i))
             i = j + 1
             continue
+        char_match = CHAR_LITERAL_START_RE.match(line, i)
+        if char_match is not None:
+            i = char_match.end()
+            continue
         i += 1
-    return literals, in_block_comment
+    return literals, (in_block_comment, open_raw_hashes)
 
 
 def scan_logical_lines(text: str):
@@ -202,7 +240,7 @@ def skeleton(line: str) -> str:
 # 明确的非 UI 调用/宏：出现在这些上下文里的字面量一律不迁移
 NOISE_CALL_RE = re.compile(
     r"""(?:\b(?:log|tracing|telemetry|debug|info|warn|error|trace)::(?:event|info|warn|error|debug|trace)|
-        \#\[error\( | \#\[doc\s*= | \#\[serde\( | \.context\( | \.with_context\( |
+        \#\[error\( | \#\[doc\s*= | \#\[serde\( |
         \bassert(?:_eq|_ne)?!|\bdebug_assert!|\bpanic!|\bunreachable!|\btodo!|\bunimplemented!|
         \bexpect\(|\bunwrap_or_default\(|
         \bmatches!|\bwrite!|\bwriteln!|\beprintln!|\bprintln!|\bdbg!)""",
@@ -213,11 +251,13 @@ NOISE_CALL_RE = re.compile(
 UI_CALL_RE = re.compile(
     r"""(?:
         Label::new\( | Button::new\( | Toggle::new\( | MenuItem::action\( |
+        ContextMenuEntry::new\( |
         MenuItem::checkbox\( | MenuItem::separator\( | MenuItem::action_with_keystring\( |
         Tooltip:: | IconButton::new\( | ContextMenu::build\( | PopoverMenu::build\( |
         Notification::new\( | SelectableButton::new\( | CheckboxWithLabel::new\( |
         SettingItem:: | SettingField:: |
         \.tooltip\( | \.label\( | \.placeholder\( | \.name\( | \.title\( |
+        \.action\( | \.action_checked\( | \.os_action\( |
         \.message\( | \.primary_message\( | \.secondary_message\( |
         \.text\( | \.description\( | \.confirm\( | ErrorAction::link\( |
         one_line\( | two_lines\( | key_binding\( | validate\( | error_message\( |
@@ -228,7 +268,7 @@ UI_CALL_RE = re.compile(
 
 # 这些标识符/结构里的字面量不是展示文本
 KEYISH_RE = re.compile(
-    r"""(?:\baction\(|\bAction\(|\bkey_binding\(|\bparse\(|\bserde\(|
+    r"""(?:\bkey_binding\(|\bparse\(|\bserde\(|
         \bSettingsKey\(|\bjson!\(|\bserde_json::|\bfrom_str\(|\bto_string\(\)?\s*==|
         \bPath::new\(|\bfs::|\bCommand::new\(|\benv::var\()""",
     re.VERBOSE,
@@ -259,21 +299,34 @@ RAW_STRING_START_RE = re.compile(r'(?:b|c|br|rb|cr|rc)?r(#*)"')
 CHAR_LITERAL_RE = re.compile(r"'(?:\\.|[^\\'])'")
 
 
-def mask_rust_line(line: str, in_block_comment: bool = False) -> tuple[str, bool]:
+def mask_rust_line(line: str, state=False) -> tuple[str, tuple]:
     """把字符串/字符字面量与注释替换为等长空格，用于可靠地数花括号。
 
-    原始字符串（`r#"…"#`、`br"…"` 等）、转义与行注释、块注释都会被剔除，
-    这样花括号计数不会被字符串内容干扰。
+    状态是 (in_block_comment, open_raw_hashes)：原始字符串（`r#"…"#`、
+    `br"…"` 等）、转义、行注释与块注释都会被剔除，跨行原始字符串内部
+    的 `/*`、`{`、`}` 不会污染后续行的花括号计数与块注释状态。
+
+    兼容旧的 `mask_rust_line(line, in_block_comment)` 调用。
     """
+    in_block_comment, open_raw_hashes = _normalize_scan_state(state)
     out: list[str] = []
     index = 0
     length = len(line)
     while index < length:
+        if open_raw_hashes is not None:
+            end = line.find('"' + open_raw_hashes, index)
+            if end == -1:
+                out.append(" " * (length - index))
+                return "".join(out), (in_block_comment, open_raw_hashes)
+            out.append(" " * (end + len(open_raw_hashes) + 1 - index))
+            index = end + len(open_raw_hashes) + 1
+            open_raw_hashes = None
+            continue
         if in_block_comment:
             end = line.find("*/", index)
             if end == -1:
                 out.append(" " * (length - index))
-                return "".join(out), True
+                return "".join(out), (True, None)
             out.append(" " * (end + 2 - index))
             index = end + 2
             in_block_comment = False
@@ -286,17 +339,18 @@ def mask_rust_line(line: str, in_block_comment: bool = False) -> tuple[str, bool
             end = line.find("*/", index + 2)
             if end == -1:
                 out.append(" " * (length - index))
-                return "".join(out), True
+                return "".join(out), (True, None)
             out.append(" " * (end + 2 - index))
             index = end + 2
             continue
         raw_start = RAW_STRING_START_RE.match(line, index)
         if raw_start is not None:
-            closing = '"' + raw_start.group(1)
+            hashes = raw_start.group(1)
+            closing = '"' + hashes
             end = line.find(closing, raw_start.end())
             if end == -1:
                 out.append(" " * (length - index))
-                break
+                return "".join(out), (in_block_comment, hashes)
             out.append(" " * (end + len(closing) - index))
             index = end + len(closing)
             continue
@@ -320,7 +374,7 @@ def mask_rust_line(line: str, in_block_comment: bool = False) -> tuple[str, bool
             continue
         out.append(character)
         index += 1
-    return "".join(out), in_block_comment
+    return "".join(out), (in_block_comment, None)
 
 
 def compute_test_regions(lines: list[str]) -> list[bool]:
@@ -422,10 +476,15 @@ def classify_occurrence(path: str, lines: list[str], index: int, line: str, valu
     # 属性上下文（#[strum(serialize = ...)] 等）必须是字面量
     if re.search(r"#\[[^\]]*$", code[: _first_quote(code)]):
         return "noise"
-    # 原始/字节字符串前缀（r"..."、br"..."）通常是正则或协议字面量，不是文案
-    prefix_index = _first_quote(code) - 1
-    if prefix_index >= 0 and code[prefix_index] in "rbc":
-        if prefix_index == 0 or not (code[prefix_index - 1].isalnum() or code[prefix_index - 1] == "_"):
+    # 原始/字节字符串前缀（r"..."、r#"..."#、br"..."）通常是正则或协议字面量，不是文案
+    quote_index = _first_quote(code)
+    prefix_start = quote_index - 1
+    while prefix_start >= 0 and code[prefix_start] == "#":
+        prefix_start -= 1
+    if prefix_start >= 0 and code[prefix_start] in "rbc":
+        if prefix_start == 0 or not (
+            code[prefix_start - 1].isalnum() or code[prefix_start - 1] == "_"
+        ):
             return "noise"
     # 字面量后面跟 `=>` 说明它是 match 左值（键/模式），不是展示文本；
     # 前面跟 `=>` 则是 match 右值，通常是展示文本。

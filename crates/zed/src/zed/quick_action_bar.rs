@@ -303,15 +303,21 @@ impl Render for QuickActionBar {
                     let focus = focus.clone();
                     let menu = ContextMenu::build(window, cx, move |menu, _, _| {
                         menu.context(focus.clone())
-                            .action("全选", Box::new(SelectAll))
+                            .action(i18n::t!("3a5040b68abf75f9"), Box::new(SelectAll))
                             .action(
                                 "Select Next Occurrence",
                                 Box::new(SelectNext {
                                     replace_newest: false,
                                 }),
                             )
-                            .action("展开选区", Box::new(SelectLargerSyntaxNode))
-                            .action("收缩选区", Box::new(SelectSmallerSyntaxNode))
+                            .action(
+                                i18n::t!("4315f0e82e0897df"),
+                                Box::new(SelectLargerSyntaxNode),
+                            )
+                            .action(
+                                i18n::t!("365c4aa41a3bf3a3"),
+                                Box::new(SelectSmallerSyntaxNode),
+                            )
                             .action(
                                 "Add Cursor Above",
                                 Box::new(AddSelectionAbove {
@@ -332,10 +338,13 @@ impl Render for QuickActionBar {
                                 )
                             })
                             .separator()
-                            .action("转到符号", Box::new(ToggleOutline))
-                            .action("转到行/列", Box::new(ToggleGoToLine))
+                            .action(i18n::t!("3db75671d9d0d35b"), Box::new(ToggleOutline))
+                            .action(i18n::t!("e0f316da5c71ba07"), Box::new(ToggleGoToLine))
                             .separator()
-                            .action("下一个问题", Box::new(GoToDiagnostic::default()))
+                            .action(
+                                i18n::t!("ce4c5d8ca6ff4c9b"),
+                                Box::new(GoToDiagnostic::default()),
+                            )
                             .action(
                                 "Previous Problem",
                                 Box::new(GoToPreviousDiagnostic::default()),
@@ -348,9 +357,9 @@ impl Render for QuickActionBar {
                                 Box::new(GoToPreviousHunk),
                             )
                             .separator()
-                            .action("上移行", Box::new(MoveLineUp))
-                            .action("下移行", Box::new(MoveLineDown))
-                            .action("复制选区", Box::new(DuplicateLineDown))
+                            .action(i18n::t!("6f075975b6b0d5ff"), Box::new(MoveLineUp))
+                            .action(i18n::t!("6e4b5b259d25bb8e"), Box::new(MoveLineDown))
+                            .action(i18n::t!("706db341967b605a"), Box::new(DuplicateLineDown))
                     });
                     Some(menu)
                 })
