@@ -221,6 +221,7 @@ pub const DOCUMENT_CHUNK_SIZE: usize = 1024 * 1024;
 
 pub fn document_file_size_limit(extension: &str) -> Option<u64> {
     match extension.to_ascii_lowercase().as_str() {
+        "stl" | "obj" | "ply" => Some(128 * 1024 * 1024),
         "pdf" | "epub" => Some(512 * 1024 * 1024),
         "xlsx" | "xlsm" | "xlsb" => Some(256 * 1024 * 1024),
         "xls" | "ods" => Some(64 * 1024 * 1024),
@@ -3430,7 +3431,8 @@ impl Project {
         }
         let Some(client) = self.remote_client.as_ref().filter(|client| {
             let client = client.read(cx);
-            client.supports_document_chunks()
+            let is_model = path.path.extension().is_some_and(|extension| matches!(extension.to_ascii_lowercase().as_str(), "stl" | "obj" | "ply"));
+            (if is_model { client.supports_model_chunks() } else { client.supports_document_chunks() })
                 && document_server_source_allowed(&client.connection_options())
         }) else {
             return Task::ready(Err(anyhow!(i18n::t!("05720b24baa5d61e"))));

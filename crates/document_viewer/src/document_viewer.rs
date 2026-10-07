@@ -1,6 +1,8 @@
 mod epub_reader;
 mod excel_reader;
 mod pdf_reader;
+mod model_mesh;
+mod model_reader;
 
 use std::{path::Path, sync::Arc};
 
@@ -35,11 +37,13 @@ pub enum DocumentFormat {
     Pdf,
     Epub,
     Spreadsheet,
+    Model,
 }
 
 impl DocumentFormat {
     fn from_extension(extension: &str) -> Option<Self> {
         match extension.to_ascii_lowercase().as_str() {
+            "stl" | "obj" | "ply" => Some(Self::Model),
             "pdf" => Some(Self::Pdf),
             "epub" => Some(Self::Epub),
             "xlsx" | "xlsm" | "xls" | "xlsb" | "ods" => Some(Self::Spreadsheet),
@@ -64,6 +68,7 @@ pub struct DocumentItem {
     pub file: Arc<worktree::File>,
     pub contents: Arc<Vec<u8>>,
     pub format: DocumentFormat,
+    pub model: Option<Arc<model_mesh::ModelMesh>>,
 }
 
 impl DocumentItem {
@@ -109,6 +114,7 @@ impl DocumentItem {
                 file,
                 contents: Arc::new(Vec::new()),
                 format,
+                model: None,
             })));
         }
         let load = project.update(cx, |project, cx| {
@@ -116,10 +122,17 @@ impl DocumentItem {
         });
         cx.spawn(async move |cx| {
             let LoadedBinaryFile { file, content } = load.await?;
+            let (content, model) = if format == DocumentFormat::Model {
+                cx.background_spawn(async move {
+                    let mesh = model_mesh::ModelMesh::parse(&extension, &content)?;
+                    anyhow::Ok((Vec::new(), Some(Arc::new(mesh))))
+                }).await?
+            } else { (content, None) };
             Ok(cx.new(|_| DocumentItem {
                 file,
                 contents: Arc::new(content),
                 format,
+                model,
             }))
         })
     }
@@ -168,6 +181,7 @@ enum DocumentChild {
     Pdf(Entity<PdfReader>),
     Epub(Entity<EpubReader>),
     Spreadsheet(Entity<ExcelReader>),
+    Model(Entity<model_reader::ModelReader>),
 }
 
 /// Workspace item that renders a binary document (PDF, EPUB or spreadsheet)
@@ -193,6 +207,7 @@ impl DocumentView {
     ) -> Self {
         let format = item.read(cx).format;
         let child = match format {
+            DocumentFormat::Model => DocumentChild::Model(cx.new(|cx| model_reader::ModelReader::new(item.clone(), window, cx))),
             DocumentFormat::Pdf => DocumentChild::Pdf(
                 cx.new(|cx| PdfReader::new(item.clone(), project.clone(), window, cx)),
             ),
@@ -360,6 +375,7 @@ impl Focusable for DocumentView {
             DocumentChild::Pdf(reader) => reader.read(cx).focus_handle(cx),
             DocumentChild::Epub(reader) => reader.read(cx).focus_handle(cx),
             DocumentChild::Spreadsheet(reader) => reader.read(cx).focus_handle(cx),
+            DocumentChild::Model(reader) => reader.read(cx).focus_handle(cx),
         }
     }
 }
@@ -370,6 +386,7 @@ impl gpui::Render for DocumentView {
             DocumentChild::Pdf(reader) => reader.clone().into_any_element(),
             DocumentChild::Epub(reader) => reader.clone().into_any_element(),
             DocumentChild::Spreadsheet(reader) => reader.clone().into_any_element(),
+            DocumentChild::Model(reader) => reader.clone().into_any_element(),
         }
     }
 }
@@ -739,7 +756,7 @@ impl workspace::ToolbarItemView for DocumentToolbarControls {
             }));
             self.document_view = Some(item.downgrade());
             cx.notify();
-            let is_spreadsheet = matches!(item.read(cx).child, DocumentChild::Spreadsheet(_));
+            let is_spreadsheet = matches!(item.read(cx).child, DocumentChild::Spreadsheet(_) | DocumentChild::Model(_));
             return if is_spreadsheet {
                 ToolbarItemLocation::Hidden
             } else {
@@ -760,11 +777,12 @@ impl gpui::Render for DocumentToolbarControls {
             DocumentChild::Pdf(reader) => DocumentChild::Pdf(reader.clone()),
             DocumentChild::Epub(reader) => DocumentChild::Epub(reader.clone()),
             DocumentChild::Spreadsheet(reader) => DocumentChild::Spreadsheet(reader.clone()),
+            DocumentChild::Model(reader) => DocumentChild::Model(reader.clone()),
         };
         match &child {
             DocumentChild::Pdf(reader) => Self::render_pdf_controls(reader, cx),
             DocumentChild::Epub(reader) => Self::render_epub_controls(reader, cx),
-            DocumentChild::Spreadsheet(_) => div().into_any_element(),
+            DocumentChild::Spreadsheet(_) | DocumentChild::Model(_) => div().into_any_element(),
         }
     }
 }
@@ -879,6 +897,30 @@ mod tests {
             .expect("test document should open");
 
         (project, item)
+    }
+
+    #[gpui::test(iterations = 20)]
+    async fn test_model_views_share_mesh_and_release_on_last_close(cx: &mut TestAppContext) {
+        init_test(cx);
+        let bytes = b"v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3".to_vec();
+        let (project, item) = open_test_document(cx, "triangle.obj", bytes).await;
+        let weak_mesh = item.read_with(cx, |item, _| {
+            assert!(item.contents.is_empty());
+            Arc::downgrade(item.model.as_ref().expect("mesh"))
+        });
+        let (view, window) = cx.add_window_view(|window, cx| DocumentView::new(item.clone(), project.clone(), window, cx));
+        let second = window.update(|window, cx| cx.new(|cx| DocumentView::new(item.clone(), project.clone(), window, cx)));
+        drop(item);
+        drop(second);
+        assert!(weak_mesh.upgrade().is_some());
+        window.update(|window, cx| {
+            window.replace_root(cx, |_, _| gpui::Empty);
+        });
+        drop(view);
+        window.run_until_parked();
+        let _arena_clear = window.update(|window, cx| window.draw(cx));
+        window.run_until_parked();
+        assert!(weak_mesh.upgrade().is_none(), "no retained geometry after last view closes");
     }
 
     #[gpui::test]
