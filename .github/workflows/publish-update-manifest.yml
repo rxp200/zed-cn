@@ -5,6 +5,13 @@ on:
     workflows: [Build multiplatform release]
     types: [completed]
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'website/**'
+      - 'script/assemble-pages.py'
+      - 'script/test_assemble_pages.py'
+      - '.github/workflows/publish-update-manifest.yml'
 
 permissions:
   contents: read
@@ -17,7 +24,7 @@ jobs:
   deploy:
     if: >-
       github.repository == 'rxp200/zed-cn' &&
-      (github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success')
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -42,9 +49,25 @@ jobs:
           if python3 -c 'import json,sys; sys.exit(not any(r["tag_name"].startswith("zed-cn-dev-v") and not r["draft"] for page in json.load(open("listed-releases.json")) for r in page))'; then
             python3 script/generate-update-manifest.py --channel dev --output update-site/updates-dev.json
           fi
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+      - name: Build and test public website
+        working-directory: website
+        run: |
+          npm ci
+          npm test
+          npm run build
+      - name: Assemble website and unchanged update feeds
+        run: |
+          python3 -m unittest script/test_assemble_pages.py script/test_generate_update_manifest.py
+          python3 script/assemble-pages.py
       - name: Configure Pages
         uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b
-      - name: Upload only the update feed
+      - name: Upload website and update feeds
         uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa
         with:
           path: update-site
@@ -69,3 +92,15 @@ jobs:
               exit 1
             fi
           done
+          verified=false
+          for attempt in {1..12}; do
+            if curl --fail --silent --show-error --location --max-time 30 "${PAGE_URL%/}/" -o deployed-index.html && cmp update-site/index.html deployed-index.html; then
+              verified=true
+              break
+            fi
+            sleep 10
+          done
+          if [[ "$verified" != true ]]; then
+            echo "The deployed website index could not be verified." >&2
+            exit 1
+          fi
