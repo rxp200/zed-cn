@@ -1,7 +1,7 @@
 use crate::{
     ActiveDebugLine, Anchor, Autoscroll, BufferSerialization, Capability, Editor, EditorEvent,
     EditorSettings, ExcerptRange, FormatTarget, MultiBuffer, MultiBufferSnapshot, NavigationData,
-    ReportEditorEvent, SelectionEffects, ToPoint as _,
+    ReportEditorEvent, SelectionEffects, ToPoint as _, code_explanations,
     display_map::HighlightKey,
     editor_settings::SeedQuerySetting,
     persistence::{EditorDb, SerializedEditor},
@@ -59,7 +59,7 @@ use workspace::{
     item::{FollowableItem, Item, ItemBufferKind, ItemEvent, ProjectItem, SaveOptions},
     searchable::{
         Direction, FilteredSearchRange, SearchEvent, SearchToken, SearchableItem,
-        SearchableItemHandle,
+        SearchableItemHandle, SelectSearchOptions,
     },
 };
 use workspace::{
@@ -870,6 +870,66 @@ impl Item for Editor {
         true
     }
 
+    fn can_detach_to_new_window(&self) -> bool {
+        true
+    }
+
+    fn detach_to_new_window(
+        &mut self,
+        source_pane: Entity<Pane>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let source_item = cx.entity();
+        let source_window = window.window_handle();
+        cx.defer(move |cx| {
+            source_window
+                .update(cx, |_, window, cx| {
+                    Workspace::detach_item_to_auxiliary_window(
+                        source_item,
+                        source_pane,
+                        window,
+                        cx,
+                    );
+                })
+                .ok();
+        });
+        true
+    }
+
+    fn detach_to_window(
+        &mut self,
+        target_window: gpui::AnyWindowHandle,
+        source_pane: Entity<Pane>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let source_item = cx.entity();
+        let source_window = window.window_handle();
+        cx.defer(move |cx| {
+            source_window
+                .update(cx, |_, window, cx| {
+                    Workspace::detach_item_to_workspace_window(
+                        source_item,
+                        source_pane,
+                        target_window,
+                        window,
+                        cx,
+                    );
+                })
+                .ok();
+        });
+        true
+    }
+
+    fn clone_to_new_window(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let Some(workspace) = self.workspace() else {
+            return false;
+        };
+        let clone = cx.new(|cx| self.clone(window, cx));
+        Workspace::open_item_clone_window(workspace, Box::new(clone), window, cx)
+    }
+
     fn clone_on_split(
         &self,
         _workspace_id: Option<WorkspaceId>,
@@ -1022,6 +1082,12 @@ impl Item for Editor {
                     .await?;
             }
 
+            if !options.autosave {
+                this.update(cx, |editor, cx| {
+                    code_explanations::request_refresh(editor);
+                    cx.notify();
+                })?;
+            }
             Ok(())
         })
     }
@@ -1216,7 +1282,10 @@ impl Item for Editor {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Vec<(SharedString, Box<dyn gpui::Action>)> {
-        let mut actions = Vec::new();
+        let mut actions = vec![(
+            i18n::t!("44d25ef922100d91").into(),
+            Box::new(workspace::CloneItemToNewWindow) as Box<dyn gpui::Action>,
+        )];
 
         let is_markdown = self
             .buffer()
@@ -2121,12 +2190,18 @@ impl SearchableItem for Editor {
         self.expect_bounds_change = self.last_bounds;
     }
 
-    fn set_search_is_case_sensitive(
+    fn set_select_search_options(
         &mut self,
-        case_sensitive: Option<bool>,
+        select_search_options: Option<SelectSearchOptions>,
         _cx: &mut Context<Self>,
     ) {
-        self.select_next_is_case_sensitive = case_sensitive;
+        if self.select_next_options == select_search_options {
+            return;
+        }
+
+        self.select_next_options = select_search_options;
+        self.select_next_state = None;
+        self.select_prev_state = None;
     }
 }
 
@@ -2520,8 +2595,18 @@ pub(crate) fn handle_lsp_show_document(
 ) -> Task<()> {
     let request = request.clone();
     if request.external {
-        cx.open_url(request.uri.as_str());
-        request.respond(true);
+        match request.uri.scheme() {
+            "http" | "https" => {
+                cx.open_url(request.uri.as_str());
+                request.respond(true);
+            }
+            scheme => {
+                log::error!(
+                    "language server requested to open an unsupported external URI scheme {scheme}"
+                );
+                request.respond(false);
+            }
+        }
         return Task::ready(());
     }
     let Ok(abs_path) = request.uri.to_file_path_ext(workspace.path_style(cx)) else {
@@ -2532,6 +2617,19 @@ pub(crate) fn handle_lsp_show_document(
         request.respond(false);
         return Task::ready(());
     };
+    if workspace
+        .project()
+        .read(cx)
+        .find_worktree(&abs_path, cx)
+        .is_none()
+    {
+        log::error!(
+            "language server requested to show a document outside the current project: {}",
+            abs_path.display()
+        );
+        request.respond(false);
+        return Task::ready(());
+    }
     let open_task = workspace.open_abs_path(
         abs_path,
         OpenOptions {
@@ -2707,6 +2805,188 @@ mod tests {
                 window[0], window[1],
             );
         }
+    }
+
+    #[gpui::test]
+    async fn moving_editor_to_new_window_preserves_editor_and_buffer(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        init_test(cx, |_| {});
+        let fs = FakeFs::new(cx.executor());
+        fs.create_dir(Path::new(path!("/root"))).await.unwrap();
+        fs.insert_file(path!("/root/file.rs"), "fn main() {}".into())
+            .await;
+        let project = Project::test(fs, [path!("/root").as_ref()], cx).await;
+        let buffer = project
+            .update(cx, |project, cx| {
+                project.open_local_buffer(path!("/root/file.rs"), cx)
+            })
+            .await
+            .unwrap();
+        let original_buffer_id = buffer.entity_id();
+        let project_for_window = project.clone();
+        let source_window = cx.add_window(move |window, cx| {
+            let multi_workspace = MultiWorkspace::test_new(project_for_window, window, cx);
+            let workspace = multi_workspace.workspace().clone();
+            let editor =
+                cx.new(|cx| Editor::for_buffer(buffer.clone(), Some(project.clone()), window, cx));
+            workspace.update(cx, |workspace, cx| {
+                workspace.add_item_to_active_pane(Box::new(editor), None, true, window, cx);
+            });
+            multi_workspace
+        });
+        let (source_workspace, source_pane, editor) = source_window
+            .update(cx, |multi_workspace, _, cx| {
+                let workspace = multi_workspace.workspace().clone();
+                let pane = workspace.read(cx).active_pane().clone();
+                let editor = workspace
+                    .read(cx)
+                    .active_item(cx)
+                    .and_then(|item| item.downcast::<Editor>())
+                    .unwrap();
+                (workspace, pane, editor)
+            })
+            .unwrap();
+        let original_editor_id = editor.entity_id();
+
+        let moved = source_window
+            .update(cx, |_, window, cx| {
+                Workspace::detach_item_to_auxiliary_window(editor.clone(), source_pane, window, cx)
+            })
+            .unwrap();
+        assert!(moved);
+        assert!(source_workspace.read_with(cx, |workspace, cx| {
+            workspace.pane_for_entity_id(original_editor_id).is_none()
+                && workspace.active_item(cx).is_none()
+        }));
+
+        let destination_workspace = cx
+            .windows()
+            .into_iter()
+            .filter(|window| window.window_id() != source_window.window_id())
+            .find_map(|window| {
+                window
+                    .downcast::<MultiWorkspace>()?
+                    .read_with(cx, |multi_workspace, _| multi_workspace.workspace().clone())
+                    .ok()
+            })
+            .expect("an auxiliary workspace should be opened");
+        assert!(destination_workspace.read_with(cx, |workspace, cx| {
+            workspace.is_auxiliary()
+                && workspace.active_item(cx).is_some_and(|item| {
+                    item.item_id() == original_editor_id
+                        && item.downcast::<Editor>().is_some_and(|editor| {
+                            editor
+                                .read(cx)
+                                .buffer()
+                                .read(cx)
+                                .as_singleton()
+                                .is_some_and(|buffer| buffer.entity_id() == original_buffer_id)
+                        })
+                })
+        }));
+    }
+
+    #[gpui::test]
+    async fn moving_editor_to_existing_window_preserves_editor_and_buffer(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        init_test(cx, |_| {});
+        let fs = FakeFs::new(cx.executor());
+        fs.create_dir(Path::new(path!("/root"))).await.unwrap();
+        fs.insert_file(path!("/root/file.rs"), "fn main() {}".into())
+            .await;
+        let project = Project::test(fs, [path!("/root").as_ref()], cx).await;
+        let buffer = project
+            .update(cx, |project, cx| {
+                project.open_local_buffer(path!("/root/file.rs"), cx)
+            })
+            .await
+            .unwrap();
+        let original_buffer_id = buffer.entity_id();
+        let project_for_window = project.clone();
+        let project_for_editor = project.clone();
+        let source_window = cx.add_window(move |window, cx| {
+            let multi_workspace = MultiWorkspace::test_new(project_for_window, window, cx);
+            let workspace = multi_workspace.workspace().clone();
+            let editor = cx.new(|cx| {
+                Editor::for_buffer(buffer.clone(), Some(project_for_editor.clone()), window, cx)
+            });
+            workspace.update(cx, |workspace, cx| {
+                workspace.add_item_to_active_pane(Box::new(editor), None, true, window, cx);
+            });
+            multi_workspace
+        });
+        let (source_workspace, source_pane, editor) = source_window
+            .update(cx, |multi_workspace, _, cx| {
+                let workspace = multi_workspace.workspace().clone();
+                let pane = workspace.read(cx).active_pane().clone();
+                let editor = workspace
+                    .read(cx)
+                    .active_item(cx)
+                    .and_then(|item| item.downcast::<Editor>())
+                    .unwrap();
+                (workspace, pane, editor)
+            })
+            .unwrap();
+        let original_editor_id = editor.entity_id();
+        let app_state =
+            source_workspace.read_with(cx, |workspace, _| workspace.app_state().clone());
+        let project_for_window = project.clone();
+        let destination_window = cx
+            .update(|cx| {
+                cx.open_window(gpui::WindowOptions::default(), |window, cx| {
+                    let workspace = cx.new(|cx| {
+                        Workspace::new_auxiliary(
+                            project_for_window.clone(),
+                            app_state.clone(),
+                            window,
+                            cx,
+                        )
+                    });
+                    cx.new(|cx| MultiWorkspace::new(workspace, window, cx))
+                })
+            })
+            .unwrap();
+
+        let moved = source_window
+            .update(cx, |_, window, cx| {
+                Workspace::detach_item_to_workspace_window(
+                    editor.clone(),
+                    source_pane,
+                    destination_window.into(),
+                    window,
+                    cx,
+                )
+            })
+            .unwrap();
+        assert!(moved);
+        assert!(source_workspace.read_with(cx, |workspace, cx| {
+            workspace.pane_for_entity_id(original_editor_id).is_none()
+                && workspace.active_item(cx).is_none()
+        }));
+
+        destination_window
+            .update(cx, |multi_workspace, _, cx| {
+                let workspace = multi_workspace.workspace().clone();
+                assert!(workspace.read_with(cx, |workspace, cx| {
+                    workspace.is_auxiliary()
+                        && workspace.active_item(cx).is_some_and(|item| {
+                            item.item_id() == original_editor_id
+                                && item.downcast::<Editor>().is_some_and(|editor| {
+                                    editor
+                                        .read(cx)
+                                        .buffer()
+                                        .read(cx)
+                                        .as_singleton()
+                                        .is_some_and(|buffer| {
+                                            buffer.entity_id() == original_buffer_id
+                                        })
+                                })
+                        })
+                }));
+            })
+            .unwrap();
     }
 
     #[gpui::test]

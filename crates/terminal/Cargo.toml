@@ -20,6 +20,7 @@ path = "src/terminal.rs"
 doctest = false
 
 [dependencies]
+i18n.workspace = true
 async-channel.workspace = true
 alacritty_terminal.workspace = true
 anyhow.workspace = true
@@ -32,6 +33,7 @@ libc.workspace = true
 log.workspace = true
 regex.workspace = true
 release_channel.workspace = true
+rpc = { workspace = true, features = ["gpui"] }
 schemars.workspace = true
 serde.workspace = true
 settings.workspace = true

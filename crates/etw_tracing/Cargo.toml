@@ -20,6 +20,7 @@ util.workspace = true
 workspace.workspace = true
 
 [target.'cfg(target_os = "windows")'.dependencies]
+i18n.workspace = true
 wprcontrol = { git = "https://github.com/zed-industries/wprcontrol", rev = "cd811f7" }
 windows-core = "0.61"
 windows = { version = "0.61", features = [

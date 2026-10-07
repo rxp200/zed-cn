@@ -5,6 +5,7 @@ use theme_settings::ThemeSettings;
 use ui::{IconButton, IconButtonShape};
 use ui::{Tooltip, prelude::*};
 
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum HistoryNavigationDirection {
     Previous,
     Next,
@@ -90,7 +91,7 @@ pub(crate) fn filter_search_results_input(
             .border_r_1()
             .border_color(cx.theme().colors().border)
             .bg(cx.theme().colors().text_accent.opacity(0.05))
-            .child(Label::new("Find in Results").color(Color::Muted)),
+            .child(Label::new(i18n::t!("a6526bddcb27fa0b")).color(Color::Muted)),
     )
 }
 

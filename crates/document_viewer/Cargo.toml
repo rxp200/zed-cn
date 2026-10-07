@@ -1,0 +1,54 @@
+[package]
+name = "document_viewer"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license = "GPL-3.0-or-later"
+
+[lints]
+workspace = true
+
+[lib]
+path = "src/document_viewer.rs"
+doctest = false
+
+[features]
+test-support = ["gpui/test-support"]
+
+[dependencies]
+i18n.workspace = true
+anyhow.workspace = true
+async-lock.workspace = true
+rpc.workspace = true
+calamine.workspace = true
+chrono.workspace = true
+db.workspace = true
+editor.workspace = true
+futures.workspace = true
+file_icons.workspace = true
+gpui.workspace = true
+hayro.workspace = true
+image.workspace = true
+language.workspace = true
+log.workspace = true
+markdown.workspace = true
+project.workspace = true
+settings.workspace = true
+smallvec.workspace = true
+tabular_data_preview.workspace = true
+theme_settings.workspace = true
+ui.workspace = true
+usvg.workspace = true
+util.workspace = true
+worktree.workspace = true
+workspace.workspace = true
+zip.workspace = true
+quick-xml.workspace = true
+
+[dev-dependencies]
+fs = { workspace = true, features = ["test-support"] }
+gpui = { workspace = true, features = ["test-support"] }
+project = { workspace = true, features = ["test-support"] }
+serde_json.workspace = true
+theme.workspace = true
+workspace = { workspace = true, features = ["test-support"] }

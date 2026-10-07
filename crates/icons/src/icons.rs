@@ -162,6 +162,7 @@ pub enum IconName {
     GenericMaximize,
     GenericMinimize,
     GenericRestore,
+    Gauge,
     Gerrit,
     GitBranch,
     GitBranchPlus,
@@ -292,6 +293,7 @@ pub enum IconName {
     UserGroup,
     UserRoundPen,
     Warning,
+    WarningCircle,
     WholeWord,
     XCircle,
     XCircleFilled,
@@ -309,9 +311,175 @@ pub enum IconName {
 
 impl IconName {
     /// Returns the path to this icon.
+    ///
+    /// Workbench chrome icons are rendered from the vendored VS Code codicon
+    /// artwork in `assets/icons/codicons` so the editor follows VS Code's icon
+    /// design. Product, brand and file-type icons keep their upstream artwork.
     pub fn path(&self) -> Arc<str> {
+        if let Some(codicon) = self.codicon() {
+            return format!("icons/codicons/{codicon}.svg").into();
+        }
         let file_stem: &'static str = self.into();
         format!("icons/{file_stem}.svg").into()
+    }
+
+    /// The codicon artwork used for this icon, if any.
+    fn codicon(&self) -> Option<&'static str> {
+        Some(match self {
+            Self::AcpRegistry => "extensions",
+            Self::Archive => "archive",
+            Self::ArrowCircle => "refresh",
+            Self::ArrowRightLeft => "arrow-swap",
+            Self::ArrowUpRight => "link-external",
+            Self::AtSign => "mention",
+            Self::AudioOff => "mute",
+            Self::AudioOn => "unmute",
+            Self::Bell => "bell",
+            Self::BellDot => "bell-dot",
+            Self::BellOff => "bell-slash",
+            Self::BellRing => "bell-dot",
+            Self::Binary => "file-binary",
+            Self::Blocks => "extensions",
+            Self::Book => "book",
+            Self::BookCopy => "book",
+            Self::Box => "package",
+            Self::CaseSensitive => "case-sensitive",
+            Self::Chat => "comment-discussion",
+            Self::Check => "check",
+            Self::ChevronDown => "chevron-down",
+            Self::ChevronLeft => "chevron-left",
+            Self::ChevronRight => "chevron-right",
+            Self::ChevronUp => "chevron-up",
+            Self::CircleHelp => "question",
+            Self::Clock => "clock",
+            Self::Close => "close",
+            Self::CloudDownload => "cloud-download",
+            Self::Copy => "copy",
+            Self::Dash => "dash",
+            Self::DatabaseZap => "database",
+            Self::Debug => "debug-alt",
+            Self::DebugBreakpoint => "debug-breakpoint",
+            Self::DebugContinue => "debug-continue",
+            Self::DebugContinueThread => "debug-continue-small",
+            Self::DebugDetach => "debug-disconnect",
+            Self::DebugDisabledBreakpoint => "debug-breakpoint-disabled",
+            Self::DebugDisabledLogBreakpoint => "debug-breakpoint-log-disabled",
+            Self::DebugIgnoreBreakpoints => "debug-breakpoint",
+            Self::DebugLogBreakpoint => "debug-breakpoint-log",
+            Self::DebugPause => "debug-pause",
+            Self::DebugStepInto => "debug-step-into",
+            Self::DebugStepOut => "debug-step-out",
+            Self::DebugStepOver => "debug-step-over",
+            Self::Diff => "diff",
+            Self::DiffSplit => "diff-sidebyside",
+            Self::DiffSplitAuto => "diff",
+            Self::DiffUnified => "diff-single",
+            Self::Disconnected => "debug-disconnect",
+            Self::Download => "download",
+            Self::Ellipsis => "ellipsis",
+            Self::Envelope => "mail",
+            Self::Eraser => "eraser",
+            Self::Eye => "eye",
+            Self::EyeOff => "eye-closed",
+            Self::FastForward => "debug-continue",
+            Self::FileTree => "files",
+            Self::Filter => "filter",
+            Self::FilterFunnel => "filter",
+            Self::Flame => "flame",
+            Self::FoldVertical => "fold-vertical",
+            Self::ForwardArrow => "forward",
+            Self::Gauge => "dashboard",
+            Self::GenericClose => "chrome-close",
+            Self::GenericMaximize => "chrome-maximize",
+            Self::GenericMinimize => "chrome-minimize",
+            Self::GenericRestore => "chrome-restore",
+            Self::GitBranch => "git-branch",
+            Self::GitBranchPlus => "git-branch-create",
+            Self::GitCommit => "git-commit",
+            Self::GitGraph => "graph",
+            Self::GitMergeConflict => "git-branch-conflicts",
+            Self::GitWorktree => "worktree",
+            Self::HistoryRerun => "history",
+            Self::Image => "file-media",
+            Self::Info => "info",
+            Self::Keyboard => "keyboard",
+            Self::Link => "link",
+            Self::ListCollapse => "collapse-all",
+            Self::ListTodo => "checklist",
+            Self::ListTree => "list-tree",
+            Self::LoadCircle => "loading",
+            Self::LocationEdit => "location",
+            Self::Lock => "lock",
+            Self::LockOff => "unlock",
+            Self::MagnifyingGlass => "search",
+            Self::Maximize => "screen-full",
+            Self::MaximizeAlt => "screen-full",
+            Self::Menu => "three-bars",
+            Self::Mic => "mic",
+            Self::MicMute => "mute",
+            Self::Minimize => "screen-normal",
+            Self::Notepad => "note",
+            Self::Paperclip => "attach",
+            Self::Pencil => "edit",
+            Self::Person => "person",
+            Self::Pin => "pin",
+            Self::PlayFilled => "play",
+            Self::PlayOutlined => "debug-start",
+            Self::Plus => "plus",
+            Self::Public => "globe",
+            Self::PullRequest => "git-pull-request",
+            Self::Quote => "quote",
+            Self::Reader => "book",
+            Self::RefreshTitle => "refresh",
+            Self::Regex => "regex",
+            Self::ReplNeutral => "repl",
+            Self::Replace => "replace",
+            Self::ReplaceAll => "replace-all",
+            Self::Rerun => "debug-rerun",
+            Self::RotateCcw => "refresh",
+            Self::Scissors => "screen-cut",
+            Self::Screen => "device-desktop",
+            Self::SelectAll => "selection",
+            Self::Send => "send",
+            Self::Server => "server",
+            Self::Settings => "settings",
+            Self::Share => "share",
+            Self::Sparkle => "sparkle",
+            Self::Split => "split-horizontal",
+            Self::SquareDot => "diff-modified",
+            Self::SquareMinus => "diff-removed",
+            Self::SquarePlus => "diff-added",
+            Self::Star => "star-empty",
+            Self::StarFilled => "star-full",
+            Self::Stop => "debug-stop",
+            Self::Terminal => "terminal",
+            Self::TerminalAlt => "terminal",
+            Self::TextSnippet => "symbol-snippet",
+            Self::TextWrap => "word-wrap",
+            Self::ThisWindow => "window",
+            Self::Thread => "comment-discussion",
+            Self::ToolCopy => "copy",
+            Self::ToolDeleteFile => "trash",
+            Self::ToolDiagnostics => "checklist",
+            Self::ToolHammer => "tools",
+            Self::ToolNotification => "bell",
+            Self::ToolPencil => "edit",
+            Self::ToolSearch => "search",
+            Self::ToolTerminal => "terminal",
+            Self::ToolThink => "thinking",
+            Self::ToolWeb => "globe",
+            Self::Trash => "trash",
+            Self::Triangle => "warning",
+            Self::TriangleRight => "chevron-right",
+            Self::UserGroup => "organization",
+            Self::Warning => "warning",
+            Self::WarningCircle => "warning",
+            Self::WholeWord => "whole-word",
+            Self::XCircle => "error",
+            Self::XCircleFilled => "error",
+            Self::ZedAssistant => "agent",
+            _ => return None,
+        })
     }
 }
 
@@ -354,5 +522,30 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    #[test]
+    fn test_no_dangling_codicons() {
+        let codicons_dir =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/icons/codicons");
+        let used: Vec<&'static str> = IconName::iter().filter_map(|icon| icon.codicon()).collect();
+
+        for entry in std::fs::read_dir(&codicons_dir).expect("failed to read codicons directory") {
+            let path = entry
+                .expect("failed to read codicons directory entry")
+                .path();
+            if path.extension().is_none_or(|extension| extension != "svg") {
+                continue;
+            }
+            let file_stem = path
+                .file_stem()
+                .and_then(|file_stem| file_stem.to_str())
+                .expect("codicon file name is not valid UTF-8");
+
+            assert!(
+                used.contains(&file_stem),
+                "Codicon {file_stem:?} is not referenced by any IconName",
+            );
+        }
     }
 }

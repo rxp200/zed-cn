@@ -136,14 +136,15 @@ To disable this behavior use:
   // Control which items are shown/hidden in the title bar
   "title_bar": {
     "show_branch_status_icon": false, // Show git status on branch icon
-    "show_branch_name": true,       // Show/hide branch name
-    "show_worktree_name": true,     // Show/hide worktree name
-    "show_project_items": true,     // Show/hide project host and name
-    "show_onboarding_banner": true, // Show/hide onboarding banners
-    "show_user_picture": true,      // Show/hide user avatar
-    "show_user_menu": true,         // Show/hide app user button
-    "show_sign_in": true,           // Show/hide sign-in button
-    "show_menus": false             // Show/hide menus
+    "show_branch_name": true,         // Show/hide branch name
+    "show_worktree_name": true,       // Show/hide worktree name
+    "show_project_items": true,       // Show/hide project host and name
+    "show_onboarding_banner": true,   // Show/hide onboarding banners
+    "show_user_picture": true,        // Show/hide user avatar
+    "show_user_menu": true,           // Show/hide app user button
+    "show_sign_in": true,             // Show/hide sign-in button
+    "show_menus": false,              // Show/hide menus
+    "open_menus_on_hover": false      // Automatically open menus on hover
   },
 ```
 
@@ -420,11 +421,42 @@ TBD: Centered layout related settings
   "colorize_brackets": true,
 ```
 
+### Rainbow Brackets {#rainbow-brackets}
+
+When `colorize_brackets` is enabled, brackets are painted with the theme's
+`accents`. The `rainbow_brackets` object tunes the color cycle and the
+bracket decorations around it:
+
+```json [settings]
+{
+  "colorize_brackets": true,
+  "rainbow_brackets": {
+    // Custom palette, in cycle order. Empty falls back to the theme's `accents`.
+    "colors": ["#e06c75", "#98c379", "#61afef", "#c678dd"],
+    // "consecutive": one depth counter across all bracket types (default).
+    // "independent": one depth counter per bracket type, so `()`, `[]` and `{}`
+    //                cycle through the palette on their own.
+    "color_mode": "consecutive",
+    // Advance the color with every opening bracket instead of by nesting depth.
+    "force_iteration_color_cycle": false,
+    // Never let an opening bracket reuse the color of the preceding one.
+    "force_unique_opening_color": false,
+    // Color for brackets that do not form a matched pair (null disables it).
+    "unmatched_bracket_color": "#ff0000",
+    // Highlight the bracket pair containing the cursor with its rainbow color.
+    "highlight_active_scope": false,
+    // "off": no guides, "active": only the pair at the cursor,
+    // "always": every visible bracket pair.
+    "bracket_pair_guides": "off",
+  },
+}
+```
+
 ### Edit Predictions {#editor-ai}
 
 ```json [settings]
   "edit_predictions": {
-    "mode": "eager"                  // Automatically show (eager) or hold-alt (subtle)
+    "mode": "eager"                  // Automatically request/show (eager) or request/show while holding alt (subtle)
   },
   "show_edit_predictions": true     // Show/hide predictions in editor
 ```

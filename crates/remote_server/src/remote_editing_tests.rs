@@ -43,7 +43,9 @@ use project::{
     CompletionSource, LanguageServerLogType, ProgressToken, Project, ProjectPath,
     agent_server_store::AgentServerCommand,
     image_store,
-    lsp_store::log_store::{LanguageServerKind, LanguageServerLogKey, LogStore},
+    lsp_store::log_store::{
+        GlobalLogStore, LanguageServerKind, LanguageServerLogKey, LogKind, LogStore,
+    },
     search::{SearchQuery, SearchResult},
 };
 use remote::{ConnectionState, RemoteClient, RemoteClientEvent};
@@ -342,6 +344,13 @@ async fn test_remote_telemetry_event_forwarding(
         })
         .detach();
 
+    // Forwarding is opt-in; do not rely on the application's privacy defaults.
+    cx.update_global(|settings_store: &mut SettingsStore, cx| {
+        settings_store.set_user_settings(r#"{"telemetry":{"metrics":true}}"#, cx)
+    })
+    .expect("enable metrics for forwarding test");
+    cx.run_until_parked();
+
     // The remote server forwards a bare `FlexibleEvent` as JSON; mirror that
     // here by sending the proto message the forwarding task would send.
     let event_json = json!({
@@ -453,6 +462,149 @@ impl gpui::Render for RemoteImageTestView {
     ) -> impl gpui::IntoElement {
         img(self.source.clone())
     }
+}
+
+#[gpui::test]
+async fn test_remote_document_loading(cx: &mut TestAppContext, server_cx: &mut TestAppContext) {
+    let fs = FakeFs::new(server_cx.executor());
+    fs.insert_tree(path!("/code"), json!({"project": {}})).await;
+    let bytes = vec![37; project::DOCUMENT_CHUNK_SIZE + 17];
+    for name in ["book.epub", "document.pdf", "sheet.xlsx", "empty.ods"] {
+        fs.insert_file(
+            &format!("/code/project/{name}"),
+            if name == "empty.ods" {
+                Vec::new()
+            } else {
+                bytes.clone()
+            },
+        )
+        .await;
+    }
+    let (project, _headless) = init_test(&fs, cx, server_cx).await;
+    let (worktree, _) = project
+        .update(cx, |project, cx| {
+            project.find_or_create_worktree(path!("/code/project"), true, cx)
+        })
+        .await
+        .expect("open remote worktree");
+    let worktree_id = worktree.read_with(cx, |worktree, _| worktree.id());
+    assert!(
+        worktree
+            .update(cx, |worktree, cx| worktree
+                .load_binary_file(rel_path("book.epub"), cx))
+            .await
+            .is_err(),
+        "the old document loading path cannot read remote files"
+    );
+    let client = project.read_with(cx, |project, cx| {
+        project
+            .remote_client()
+            .expect("remote client")
+            .read(cx)
+            .proto_client()
+    });
+    let first = client
+        .request(proto::ReadDocumentChunk {
+            worktree_id: worktree_id.to_proto(),
+            path: "book.epub".into(),
+            offset: 0,
+            expected_size: 0,
+            expected_mtime: None,
+        })
+        .await
+        .expect("first chunk");
+    let old_mtime = first.file.expect("file metadata").mtime;
+    fs.insert_file("/code/project/book.epub", vec![38; 5]).await;
+    assert!(
+        client
+            .request(proto::ReadDocumentChunk {
+                worktree_id: worktree_id.to_proto(),
+                path: "book.epub".into(),
+                offset: project::DOCUMENT_CHUNK_SIZE as u64,
+                expected_size: first.total_size,
+                expected_mtime: old_mtime,
+            })
+            .await
+            .is_err(),
+        "changed files must not produce mixed snapshots"
+    );
+    fs.insert_file("/code/project/book.epub", bytes.clone())
+        .await;
+    for invalid_path in ["../book.epub", "/code/project/book.epub", "unsupported.txt"] {
+        assert!(
+            client
+                .request(proto::ReadDocumentChunk {
+                    worktree_id: worktree_id.to_proto(),
+                    path: invalid_path.into(),
+                    offset: 0,
+                    expected_size: 0,
+                    expected_mtime: None,
+                })
+                .await
+                .is_err()
+        );
+    }
+    for name in ["book.epub", "document.pdf", "sheet.xlsx", "empty.ods"] {
+        let loaded = project
+            .update(cx, |project, cx| {
+                project.load_document_file(
+                    ProjectPath {
+                        worktree_id,
+                        path: rel_path(name).into(),
+                    },
+                    cx,
+                )
+            })
+            .await
+            .expect("load remote document");
+        assert!(!loaded.file.is_local);
+        assert_eq!(
+            loaded.content,
+            if name == "empty.ods" {
+                Vec::new()
+            } else {
+                bytes.clone()
+            }
+        );
+        assert_eq!(loaded.file.path.as_unix_str(), name);
+    }
+    for name in ["missing.epub", "unsupported.txt"] {
+        assert!(
+            project
+                .update(cx, |project, cx| project.load_document_file(
+                    ProjectPath {
+                        worktree_id,
+                        path: rel_path(name).into()
+                    },
+                    cx
+                ))
+                .await
+                .is_err()
+        );
+    }
+}
+
+#[gpui::test]
+async fn test_remote_epub_entries(cx: &mut TestAppContext, server_cx: &mut TestAppContext) {
+    use std::io::{Cursor, Write as _};
+    let fs = FakeFs::new(server_cx.executor());
+    fs.insert_tree(path!("/code"), json!({"project": {}})).await;
+    let mut archive = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    archive.start_file("chapter.xhtml", zip::write::FileOptions::default()).expect("entry");
+    archive.write_all(&vec![b'x'; project::epub::EPUB_CHUNK_SIZE + 7]).expect("write");
+    fs.insert_file("/code/project/book.epub", archive.finish().expect("ZIP").into_inner()).await;
+    let (project, _headless) = init_test(&fs, cx, server_cx).await;
+    let (worktree, _) = project.update(cx, |project, cx| {
+        project.find_or_create_worktree(path!("/code/project"), true, cx)
+    }).await.expect("worktree");
+    let path = ProjectPath { worktree_id: worktree.read_with(cx, |worktree, _| worktree.id()), path: rel_path("book.epub").into() };
+    let first = project.update(cx, |project, cx| project.read_epub_entry(path.clone(), "chapter.xhtml".into(), 0, None, cx)).await.expect("first chunk");
+    assert_eq!(first.content.len(), project::epub::EPUB_CHUNK_SIZE);
+    let snapshot = (first.total_size, first.file.expect("metadata").mtime.expect("mtime"));
+    let last = project.update(cx, |project, cx| project.read_epub_entry(path.clone(), "chapter.xhtml".into(), project::epub::EPUB_CHUNK_SIZE as u64, Some(snapshot), cx)).await.expect("last chunk");
+    assert_eq!(last.content, vec![b'x'; 7]);
+    fs.insert_file("/code/project/book.epub", b"changed".to_vec()).await;
+    assert!(project.update(cx, |project, cx| project.read_epub_entry(path.clone(), "chapter.xhtml".into(), 0, Some(snapshot), cx)).await.is_err());
 }
 
 #[gpui::test]
@@ -868,7 +1020,10 @@ async fn test_remote_settings(cx: &mut TestAppContext, server_cx: &mut TestAppCo
 
     cx.update_global(|settings_store: &mut SettingsStore, cx| {
         settings_store.set_user_settings(
-            r#"{"languages":{"Rust":{"language_servers":["from-local-settings"]}}}"#,
+            r#"{
+                "languages": {"Rust": {"language_servers": ["from-local-settings"]}},
+                "terminal": {"shell": {"program": "client-shell"}}
+            }"#,
             cx,
         )
     })
@@ -889,7 +1044,10 @@ async fn test_remote_settings(cx: &mut TestAppContext, server_cx: &mut TestAppCo
     server_cx
         .update_global(|settings_store: &mut SettingsStore, cx| {
             settings_store.set_server_settings(
-                r#"{"languages":{"Rust":{"language_servers":["from-server-settings"]}}}"#,
+                r#"{
+                    "languages": {"Rust": {"language_servers": ["from-server-settings"]}},
+                    "terminal": {"shell": {"program": "remote-shell"}}
+                }"#,
                 cx,
             )
         })
@@ -906,6 +1064,30 @@ async fn test_remote_settings(cx: &mut TestAppContext, server_cx: &mut TestAppCo
             "Server language settings should take precedence over the user settings"
         )
     });
+
+    let remote_client = project.read_with(cx, |project, _| project.remote_client());
+    let remote_shell = if let Some(remote_client) = remote_client {
+        remote_client
+            .read_with(cx, |remote_client, _| {
+                remote_client
+                    .proto_client()
+                    .request(proto::GetTerminalShell {
+                        project_id: proto::REMOTE_SERVER_PROJECT_ID,
+                        worktree_id: None,
+                    })
+            })
+            .await
+            .ok()
+            .and_then(|response| response.shell)
+            .and_then(|shell| task::shell_from_proto(shell).ok())
+    } else {
+        None
+    };
+    assert_eq!(
+        remote_shell,
+        Some(task::Shell::Program("remote-shell".to_string())),
+        "Server terminal shell settings should take precedence over user settings"
+    );
 
     fs.insert_tree(
         "/code/project1/.zed",
@@ -3051,6 +3233,20 @@ async fn test_reconnect(cx: &mut TestAppContext, server_cx: &mut TestAppContext)
     });
 
     let client = cx.read(|cx| project.read(cx).remote_client().unwrap());
+    let reconnect_status_seen = Arc::new(AtomicBool::new(false));
+    let _status_subscription = cx.update(|cx| {
+        let reconnect_status_seen = reconnect_status_seen.clone();
+        cx.observe(&client, move |client, cx| {
+            let client = client.read(cx);
+            if client.connection_state() == remote::ConnectionState::Reconnecting
+                && client
+                    .reconnect_status()
+                    .is_some_and(|status| !status.is_empty())
+            {
+                reconnect_status_seen.store(true, Ordering::SeqCst);
+            }
+        })
+    });
     let reconnected = Arc::new(AtomicBool::new(false));
     let _subscription = cx.update(|cx| {
         let reconnected = reconnected.clone();
@@ -3081,6 +3277,8 @@ async fn test_reconnect(cx: &mut TestAppContext, server_cx: &mut TestAppContext)
         reconnected.load(Ordering::SeqCst),
         "a successful reconnect should emit RemoteClientEvent::Reconnected"
     );
+    assert!(reconnect_status_seen.load(Ordering::SeqCst));
+    client.read_with(cx, |client, _| assert!(!client.was_manual_reconnect()));
 }
 
 #[gpui::test]
@@ -3221,15 +3419,22 @@ async fn test_copy_file_into_remote_project(
         )
         .await;
 
+    let transferred_entries = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let observer = transferred_entries.clone();
     worktree
         .update(cx, |worktree, cx| {
-            worktree.copy_external_entries(
+            worktree.copy_external_entries_with_progress(
                 rel_path("src").into(),
                 vec![
                     Path::new(path!("/local-code/dir1/file1")).into(),
                     Path::new(path!("/local-code/dir1/dir2")).into(),
                 ],
                 local_fs.clone(),
+                Some(Arc::new(move |event| {
+                    if matches!(event, worktree::FileTransferProgress::Finished) {
+                        observer.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    }
+                })),
                 cx,
             )
         })
@@ -3253,6 +3458,10 @@ async fn test_copy_file_into_remote_project(
             PathBuf::from(path!("/code/project1/src/dir2/file2")),
             PathBuf::from(path!("/code/project1/src/dir2/dir3/file3")),
         ]
+    );
+    assert_eq!(
+        transferred_entries.load(std::sync::atomic::Ordering::SeqCst),
+        6
     );
     assert_eq!(
         remote_fs
@@ -5285,6 +5494,284 @@ async fn test_remote_project_creation_notifies_new_entity_observers(
         "creating a remote project should notify new-entity observers with a connected remote client exactly once"
     );
     assert!(project.read_with(cx, |project, _| project.is_remote()));
+}
+
+#[gpui::test]
+async fn test_remote_log_streams_follow_aggregate_demand(
+    cx: &mut TestAppContext,
+    server_cx: &mut TestAppContext,
+) {
+    let server_fs = Arc::new(FakeFs::new(server_cx.executor()));
+    server_fs
+        .insert_tree(path!("/code"), json!({ "project1": { "README.md": "" } }))
+        .await;
+    let (project, headless) = init_test(&server_fs, cx, server_cx).await;
+
+    let server_id = LanguageServerId(42);
+    let remote_server_key = LanguageServerLogKey::new(
+        LanguageServerKind::Remote {
+            project: project.downgrade(),
+        },
+        server_id,
+    );
+    let local_log_store = cx.new(|cx| LogStore::new(false, cx));
+    local_log_store.update(cx, |log_store, cx| {
+        log_store.add_project(&project, cx);
+        log_store.add_language_server(
+            remote_server_key.kind.clone(),
+            server_id,
+            Some(LanguageServerName::new_static("test-server")),
+            None,
+            None,
+            cx,
+        );
+    });
+
+    let headless_lsp_store =
+        headless.read_with(server_cx, |headless, _| headless.lsp_store.downgrade());
+    let headless_server_key = LanguageServerLogKey::new(
+        LanguageServerKind::LocalSsh {
+            lsp_store: headless_lsp_store,
+        },
+        server_id,
+    );
+    let headless_log_store = server_cx.update(|cx| cx.global::<GlobalLogStore>().0.clone());
+    headless_log_store.update(server_cx, |log_store, cx| {
+        log_store.add_language_server(
+            headless_server_key.kind.clone(),
+            server_id,
+            Some(LanguageServerName::new_static("test-server")),
+            None,
+            None,
+            cx,
+        );
+    });
+
+    let peer_id = proto::PeerId { owner_id: 1, id: 1 };
+    local_log_store.update(cx, |log_store, cx| {
+        log_store.retain_view_log_stream(&remote_server_key, LogKind::Rpc, cx);
+    });
+    cx.run_until_parked();
+    server_cx.run_until_parked();
+    assert!(headless_log_store.read_with(server_cx, |log_store, _| {
+        log_store
+            .language_servers
+            .get(&headless_server_key)
+            .is_some_and(|state| state.rpc_state.is_some())
+    }));
+
+    project.update(cx, |_, cx| {
+        cx.emit(project::Event::ToggleLspLogs {
+            peer_id,
+            server_id,
+            enabled: true,
+            toggled_log_kind: LogKind::Rpc,
+        });
+    });
+    local_log_store.update(cx, |log_store, cx| {
+        log_store.release_view_log_stream(&remote_server_key, LogKind::Rpc, cx);
+    });
+    cx.run_until_parked();
+    server_cx.run_until_parked();
+    assert!(
+        headless_log_store.read_with(server_cx, |log_store, _| {
+            log_store
+                .language_servers
+                .get(&headless_server_key)
+                .is_some_and(|state| state.rpc_state.is_some())
+        }),
+        "releasing a local view must preserve downstream demand on the remote host"
+    );
+
+    let other_project = Project::test(FakeFs::new(cx.executor()), [], cx).await;
+    local_log_store.update(cx, |log_store, cx| {
+        log_store.add_project(&other_project, cx);
+    });
+    for event in [project::Event::Rejoined, project::Event::HostReshared] {
+        // Forget upstream ownership without changing the remaining downstream demand.
+        headless_log_store.update(server_cx, |log_store, cx| {
+            assert!(
+                log_store
+                    .language_servers
+                    .remove(&headless_server_key)
+                    .is_some()
+            );
+            log_store.add_language_server(
+                headless_server_key.kind.clone(),
+                server_id,
+                None,
+                None,
+                None,
+                cx,
+            );
+        });
+        other_project.update(cx, |_, cx| cx.emit(event.clone()));
+        cx.run_until_parked();
+        server_cx.run_until_parked();
+        assert!(
+            headless_log_store.read_with(server_cx, |log_store, _| {
+                log_store
+                    .language_servers
+                    .get(&headless_server_key)
+                    .is_some_and(|state| state.rpc_state.is_none())
+            }),
+            "reconnecting another project must not replay this project's streams"
+        );
+
+        for _ in 0..2 {
+            project.update(cx, |_, cx| cx.emit(event.clone()));
+            cx.run_until_parked();
+            server_cx.run_until_parked();
+            assert!(
+                headless_log_store.read_with(server_cx, |log_store, _| {
+                    log_store
+                        .language_servers
+                        .get(&headless_server_key)
+                        .is_some_and(|state| state.rpc_state.is_some())
+                }),
+                "{event:?} must replay downstream-only demand without a local view"
+            );
+        }
+    }
+
+    project.update(cx, |_, cx| {
+        cx.emit(project::Event::CollaboratorLeft(peer_id));
+    });
+    cx.run_until_parked();
+    server_cx.run_until_parked();
+    assert!(headless_log_store.read_with(server_cx, |log_store, _| {
+        log_store
+            .language_servers
+            .get(&headless_server_key)
+            .is_some_and(|state| state.rpc_state.is_none())
+    }));
+
+    project.update(cx, |_, cx| {
+        cx.emit(project::Event::ToggleLspLogs {
+            peer_id,
+            server_id,
+            enabled: true,
+            toggled_log_kind: LogKind::Rpc,
+        });
+    });
+    cx.run_until_parked();
+    server_cx.run_until_parked();
+    assert!(
+        headless_log_store.read_with(server_cx, |log_store, _| {
+            log_store
+                .language_servers
+                .get(&headless_server_key)
+                .is_some_and(|state| state.rpc_state.is_some())
+        }),
+        "downstream demand must enable the stream on the remote host"
+    );
+
+    local_log_store.update(cx, |log_store, cx| {
+        log_store.retain_view_log_stream(&remote_server_key, LogKind::Rpc, cx);
+    });
+    project.update(cx, |_, cx| {
+        cx.emit(project::Event::ToggleLspLogs {
+            peer_id,
+            server_id,
+            enabled: false,
+            toggled_log_kind: LogKind::Rpc,
+        });
+    });
+    cx.run_until_parked();
+    server_cx.run_until_parked();
+    assert!(
+        headless_log_store.read_with(server_cx, |log_store, _| {
+            log_store
+                .language_servers
+                .get(&headless_server_key)
+                .is_some_and(|state| state.rpc_state.is_some())
+        }),
+        "releasing downstream demand must preserve a local view on the remote host"
+    );
+
+    local_log_store.update(cx, |log_store, cx| {
+        log_store.release_view_log_stream(&remote_server_key, LogKind::Rpc, cx);
+    });
+    cx.run_until_parked();
+    server_cx.run_until_parked();
+    assert!(headless_log_store.read_with(server_cx, |log_store, _| {
+        log_store
+            .language_servers
+            .get(&headless_server_key)
+            .is_some_and(|state| state.rpc_state.is_none())
+    }));
+    project.update(cx, |_, cx| {
+        cx.emit(project::Event::Rejoined);
+        cx.emit(project::Event::HostReshared);
+    });
+    cx.run_until_parked();
+    server_cx.run_until_parked();
+    assert!(
+        headless_log_store.read_with(server_cx, |log_store, _| {
+            log_store
+                .language_servers
+                .get(&headless_server_key)
+                .is_some_and(|state| state.rpc_state.is_none())
+        }),
+        "reconnecting must not replay streams without any remaining demand"
+    );
+
+    for has_local_view in [false, true] {
+        project
+            .update(cx, |project, cx| project.shared(1, cx))
+            .expect("project should be shareable");
+        if has_local_view {
+            local_log_store.update(cx, |log_store, cx| {
+                log_store.retain_view_log_stream(&remote_server_key, LogKind::Rpc, cx);
+            });
+        }
+        project.update(cx, |_, cx| {
+            cx.emit(project::Event::ToggleLspLogs {
+                peer_id,
+                server_id,
+                enabled: true,
+                toggled_log_kind: LogKind::Rpc,
+            });
+        });
+        cx.run_until_parked();
+        server_cx.run_until_parked();
+        assert!(headless_log_store.read_with(server_cx, |log_store, _| {
+            log_store
+                .language_servers
+                .get(&headless_server_key)
+                .is_some_and(|state| state.rpc_state.is_some())
+        }));
+
+        project
+            .update(cx, |project, cx| project.unshare(cx))
+            .expect("shared project should unshare");
+        cx.run_until_parked();
+        server_cx.run_until_parked();
+        assert_eq!(
+            headless_log_store.read_with(server_cx, |log_store, _| {
+                log_store
+                    .language_servers
+                    .get(&headless_server_key)
+                    .map(|state| state.rpc_state.is_some())
+            }),
+            Some(has_local_view),
+            "unsharing must release downstream demand while preserving local views"
+        );
+
+        if has_local_view {
+            local_log_store.update(cx, |log_store, cx| {
+                log_store.release_view_log_stream(&remote_server_key, LogKind::Rpc, cx);
+            });
+            cx.run_until_parked();
+            server_cx.run_until_parked();
+            assert!(headless_log_store.read_with(server_cx, |log_store, _| {
+                log_store
+                    .language_servers
+                    .get(&headless_server_key)
+                    .is_some_and(|state| state.rpc_state.is_none())
+            }));
+        }
+    }
 }
 
 #[gpui::test]

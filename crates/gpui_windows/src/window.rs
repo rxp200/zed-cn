@@ -1,5 +1,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
+// Modified by the Zed CN project, 2026. See MODIFICATIONS.md.
+
 use std::{
     cell::{Cell, RefCell},
     num::NonZeroIsize,
@@ -31,6 +33,14 @@ use windows::{
 use crate::direct_manipulation::DirectManipulationHandler;
 use crate::*;
 use gpui::*;
+
+fn request_frame(hwnd: HWND) {
+    unsafe {
+        RedrawWindow(Some(hwnd), None, None, RDW_INVALIDATE)
+            .ok()
+            .log_err();
+    }
+}
 
 pub(crate) struct WindowsWindow(pub Rc<WindowsWindowInner>);
 
@@ -965,8 +975,17 @@ impl PlatformWindow for WindowsWindow {
         self.state.is_fullscreen()
     }
 
+    fn frame_waker(&self) -> Option<Rc<dyn Fn()>> {
+        let hwnd = SafeHwnd::from(self.0.hwnd);
+        Some(Rc::new(move || request_frame(hwnd.as_raw())))
+    }
+
     fn on_request_frame(&self, callback: Box<dyn FnMut(RequestFrameOptions)>) {
         self.state.callbacks.request_frame.set(Some(callback));
+    }
+
+    fn schedule_frame(&self) {
+        request_frame(self.0.hwnd);
     }
 
     fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> DispatchEventResult>) {
@@ -1438,6 +1457,8 @@ unsafe extern "system" fn window_procedure(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
+    let _wnd_proc_guard = WndProcGuard::enter();
+
     if msg == WM_NCCREATE {
         let window_params = unsafe { &*(lparam.0 as *const CREATESTRUCTW) };
         let window_creation_context = window_params.lpCreateParams as *mut WindowCreateContext;

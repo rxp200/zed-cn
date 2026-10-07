@@ -23,8 +23,9 @@ use crate::{
         HighlightKey, HighlightedChunk, ToDisplayPoint,
     },
     editor_settings::{
-        CurrentLineHighlight, DocumentColorsRenderMode, GitGutterWidth, Minimap, MinimapThumb,
-        MinimapThumbBorder, ScrollBeyondLastLine, ScrollbarAxes, ScrollbarDiagnostics, ShowMinimap,
+        BracketPairGuides, CurrentLineHighlight, DocumentColorsRenderMode, GitGutterWidth, Minimap,
+        MinimapThumb, MinimapThumbBorder, ScrollBeyondLastLine, ScrollbarAxes,
+        ScrollbarDiagnostics, ShowMinimap,
     },
     git::blame::{BlameRenderer, GitBlame, GlobalBlameRenderer},
     hover_popover::{
@@ -409,6 +410,16 @@ impl EditorElement {
         register_action(editor, window, Editor::select_page_up);
         register_action(editor, window, Editor::cancel);
         register_action(editor, window, Editor::blame_hover);
+        register_action(
+            editor,
+            window,
+            crate::hover_translation::translate_selection,
+        );
+        register_action(
+            editor,
+            window,
+            crate::code_explanations::deep_explain_selection,
+        );
         register_action(editor, window, Editor::next_snippet_tabstop);
         register_action(editor, window, Editor::previous_snippet_tabstop);
         register_action(editor, window, Editor::copy);
@@ -495,6 +506,8 @@ impl EditorElement {
             editor.find_previous_match(action, window, cx).log_err();
         });
         register_action(editor, window, Editor::select_larger_syntax_node);
+        register_action(editor, window, Editor::expand_bracket_selection);
+        register_action(editor, window, Editor::undo_bracket_selection);
         register_action(editor, window, Editor::select_smaller_syntax_node);
         register_action(editor, window, Editor::select_next_syntax_node);
         register_action(editor, window, Editor::select_prev_syntax_node);
@@ -2094,98 +2107,7 @@ impl EditorElement {
         })?;
 
         let buffer_point = display_point.to_point(&snapshot.display_snapshot);
-
-        // do not show code action for folded line
-        if snapshot.is_line_folded(MultiBufferRow(buffer_point.row)) {
-            return None;
-        }
-
-        // do not show code action for blank line with cursor
-        let line_indent = snapshot
-            .display_snapshot
-            .buffer_snapshot()
-            .line_indent_for_row(MultiBufferRow(buffer_point.row));
-        if line_indent.is_line_blank() {
-            return None;
-        }
-
-        const INLINE_SLOT_CHAR_LIMIT: u32 = 4;
-        const MAX_ALTERNATE_DISTANCE: u32 = 8;
-
-        let is_valid_row = |row_candidate: u32| -> bool {
-            // move to other row if folded row
-            if snapshot.is_line_folded(MultiBufferRow(row_candidate)) {
-                return false;
-            }
-            if buffer_point.row == row_candidate {
-                // move to other row if cursor is in slot
-                if buffer_point.column < INLINE_SLOT_CHAR_LIMIT {
-                    return false;
-                }
-            } else {
-                let candidate_point = MultiBufferPoint {
-                    row: row_candidate,
-                    column: 0,
-                };
-                // move to other row if different excerpt
-                let range = if candidate_point < buffer_point {
-                    candidate_point..buffer_point
-                } else {
-                    buffer_point..candidate_point
-                };
-                if snapshot
-                    .display_snapshot
-                    .buffer_snapshot()
-                    .excerpt_containing(range)
-                    .is_none()
-                {
-                    return false;
-                }
-            }
-            let line_indent = snapshot
-                .display_snapshot
-                .buffer_snapshot()
-                .line_indent_for_row(MultiBufferRow(row_candidate));
-            // use this row if it's blank
-            if line_indent.is_line_blank() {
-                true
-            } else {
-                // use this row if code starts after slot
-                let indent_size = snapshot
-                    .display_snapshot
-                    .buffer_snapshot()
-                    .indent_size_for_line(MultiBufferRow(row_candidate));
-                indent_size.len >= INLINE_SLOT_CHAR_LIMIT
-            }
-        };
-
-        let new_buffer_row = if is_valid_row(buffer_point.row) {
-            Some(buffer_point.row)
-        } else {
-            let max_row = snapshot.display_snapshot.buffer_snapshot().max_point().row;
-            (1..=MAX_ALTERNATE_DISTANCE).find_map(|offset| {
-                let row_above = buffer_point.row.saturating_sub(offset);
-                let row_below = buffer_point.row + offset;
-                if row_above != buffer_point.row && is_valid_row(row_above) {
-                    Some(row_above)
-                } else if row_below <= max_row && is_valid_row(row_below) {
-                    Some(row_below)
-                } else {
-                    None
-                }
-            })
-        }?;
-
-        let new_display_row = snapshot
-            .display_snapshot
-            .point_to_display_point(
-                Point {
-                    row: new_buffer_row,
-                    column: buffer_point.column,
-                },
-                text::Bias::Left,
-            )
-            .row();
+        let new_display_row = snapshot.display_row_for_inline_code_action(buffer_point)?;
 
         let start_y = content_origin.y
             + (((new_display_row.as_f64() - scroll_position.y) as f32) * line_height)
@@ -2544,6 +2466,111 @@ impl EditorElement {
                     .map(|width| px(width as f32 * 2.0))
             })
             .unwrap_or(px(0.0))
+    }
+
+    fn layout_bracket_guides(
+        &self,
+        content_origin: gpui::Point<Pixels>,
+        scroll_pixel_position: gpui::Point<ScrollPixelOffset>,
+        line_height: Pixels,
+        snapshot: &DisplaySnapshot,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Vec<BracketGuideLayout> {
+        let mode = EditorSettings::get_global(cx)
+            .rainbow_brackets
+            .bracket_pair_guides;
+        if mode == BracketPairGuides::Off {
+            return Vec::new();
+        }
+
+        let guides = self.editor.read(cx).bracket_guides.clone();
+        if guides.is_empty() {
+            return Vec::new();
+        }
+
+        let multi_buffer_snapshot = snapshot.buffer_snapshot();
+
+        // In `Active` mode only the innermost pair enclosing the cursor gets a guide.
+        let innermost = if mode == BracketPairGuides::Active {
+            let selection = self
+                .editor
+                .read(cx)
+                .selections
+                .newest::<MultiBufferOffset>(snapshot);
+            let head = multi_buffer_snapshot.anchor_before(selection.head());
+            let tail = multi_buffer_snapshot.anchor_after(selection.tail());
+            guides
+                .iter()
+                .enumerate()
+                .filter(|(_, guide)| {
+                    guide.open_range.start.cmp(&head, &multi_buffer_snapshot) != Ordering::Greater
+                        && guide.close_range.end.cmp(&tail, &multi_buffer_snapshot)
+                            != Ordering::Less
+                })
+                .max_by(|(_, left), (_, right)| {
+                    left.open_range
+                        .start
+                        .cmp(&right.open_range.start, &multi_buffer_snapshot)
+                        .then_with(|| {
+                            right
+                                .close_range
+                                .end
+                                .cmp(&left.close_range.end, &multi_buffer_snapshot)
+                        })
+                })
+                .map(|(index, _)| index)
+        } else {
+            None
+        };
+
+        if mode == BracketPairGuides::Active && innermost.is_none() {
+            return Vec::new();
+        }
+
+        guides
+            .iter()
+            .enumerate()
+            .filter_map(|(index, guide)| {
+                if mode == BracketPairGuides::Active && Some(index) != innermost {
+                    return None;
+                }
+
+                let open_point = guide.open_range.start.to_point(&multi_buffer_snapshot);
+                let close_point = guide.close_range.start.to_point(&multi_buffer_snapshot);
+                if close_point.row <= open_point.row {
+                    return None;
+                }
+
+                let open_display_point = open_point.to_display_point(snapshot);
+                let start_x = Pixels::from(
+                    ScrollOffset::from(
+                        content_origin.x
+                            + column_pixels(
+                                &self.style,
+                                open_display_point.column() as usize,
+                                window,
+                            ),
+                    ) - scroll_pixel_position.x,
+                );
+
+                let (offset_y, length, _) = Self::calculate_indent_guide_bounds(
+                    MultiBufferRow(open_point.row)..MultiBufferRow(close_point.row),
+                    line_height,
+                    snapshot,
+                );
+
+                let start_y = Pixels::from(
+                    ScrollOffset::from(content_origin.y) + offset_y - scroll_pixel_position.y,
+                );
+
+                Some(BracketGuideLayout {
+                    origin: point(start_x, start_y),
+                    length,
+                    color: guide.color,
+                })
+            })
+            .collect()
     }
 
     fn layout_wrap_guides(
@@ -2913,7 +2940,7 @@ impl EditorElement {
                         });
                     })
                     .tooltip(Tooltip::for_action_title(
-                        "Expand Excerpt",
+                        i18n::t!("60d4cbf2fff423ea"),
                         &crate::actions::ExpandExcerpts::default(),
                     ))
                     .into_any_element();
@@ -5356,6 +5383,25 @@ impl EditorElement {
         }
     }
 
+    fn paint_bracket_guides(
+        &mut self,
+        layout: &mut EditorLayout,
+        window: &mut Window,
+        _: &mut App,
+    ) {
+        for guide in &layout.bracket_guides {
+            let mut color = guide.color;
+            color.a = BRACKET_GUIDE_ALPHA;
+            window.paint_quad(fill(
+                window.pixel_snap_bounds(Bounds {
+                    origin: guide.origin,
+                    size: size(px(1.0), guide.length),
+                }),
+                color,
+            ));
+        }
+    }
+
     fn paint_line_numbers(&mut self, layout: &mut EditorLayout, window: &mut Window, cx: &mut App) {
         let is_singleton = self.editor.read(cx).buffer_kind(cx) == ItemBufferKind::Singleton;
 
@@ -7245,7 +7291,7 @@ pub fn render_breadcrumb_text(
                                     h_flex()
                                         .gap_1()
                                         .justify_between()
-                                        .child(Label::new("Show Symbol Outline"))
+                                        .child(Label::new(i18n::t!("fd33925c1b33af21")))
                                         .child(ui::KeyBinding::for_action_in(
                                             &zed_actions::outline::ToggleOutline,
                                             &focus_handle,
@@ -7260,7 +7306,7 @@ pub fn render_breadcrumb_text(
                                             .pt_1()
                                             .border_t_1()
                                             .border_color(cx.theme().colors().border_variant)
-                                            .child(Label::new("Right-Click to Copy Path")),
+                                            .child(Label::new(i18n::t!("be7f385edd235f4a"))),
                                     )
                                 })
                                 .into_any_element()
@@ -7655,6 +7701,16 @@ impl LineWithInvisibles {
                         if row == max_line_count {
                             return layouts;
                         }
+                    }
+
+                    // The current display line has already exceeded the maximum
+                    // display length. Skip the rest of its chunks without
+                    // processing them (the visible prefix has been laid out
+                    // already, and any further text is not displayed). This
+                    // keeps rendering cost bounded for very long lines (e.g.
+                    // minified JSON), regardless of the line's length.
+                    if line_exceeded_max_len {
+                        continue;
                     }
 
                     if !line_chunk.is_empty() && !line_exceeded_max_len {
@@ -9462,6 +9518,15 @@ impl Element for EditorElement {
                             indent_guides
                         };
 
+                    let bracket_guides = self.layout_bracket_guides(
+                        content_origin,
+                        scroll_pixel_position,
+                        line_height,
+                        &snapshot,
+                        window,
+                        cx,
+                    );
+
                     let crease_trailers =
                         window.with_element_namespace("crease_trailers", |window| {
                             self.prepaint_crease_trailers(
@@ -10062,6 +10127,7 @@ impl Element for EditorElement {
                         visible_display_row_range: start_row..end_row,
                         wrap_guides,
                         indent_guides,
+                        bracket_guides,
                         hitbox,
                         gutter_hitbox,
                         display_hunks,
@@ -10172,6 +10238,8 @@ impl Element for EditorElement {
                         self.paint_background(layout, window, cx);
 
                         self.paint_indent_guides(layout, window, cx);
+
+                        self.paint_bracket_guides(layout, window, cx);
 
                         if layout.gutter_hitbox.size.width > Pixels::ZERO {
                             self.paint_blamed_display_rows(layout, window, cx);
@@ -10287,6 +10355,7 @@ pub struct EditorLayout {
     mode: EditorMode,
     wrap_guides: SmallVec<[(Pixels, bool); 2]>,
     indent_guides: Option<Vec<IndentGuideLayout>>,
+    bracket_guides: Vec<BracketGuideLayout>,
     visible_display_row_range: Range<DisplayRow>,
     active_rows: BTreeMap<DisplayRow, LineHighlightSpec>,
     highlighted_rows: BTreeMap<DisplayRow, LineHighlight>,
@@ -10972,6 +11041,13 @@ pub struct IndentGuideLayout {
     settings: IndentGuideSettings,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct BracketGuideLayout {
+    origin: gpui::Point<Pixels>,
+    length: Pixels,
+    color: Hsla,
+}
+
 enum NavigationOverlayPaintCommand {
     Label(NavigationLabelLayout),
 }
@@ -10997,6 +11073,8 @@ struct NavigationOverlayLayoutContext<'a> {
 }
 
 const LABEL_LINE_HEIGHT_PADDING_PX: f32 = 2.0;
+
+const BRACKET_GUIDE_ALPHA: f32 = 0.45;
 
 pub struct CursorLayout {
     origin: gpui::Point<Pixels>,

@@ -1638,7 +1638,7 @@ impl Item for MarkdownPreviewView {
                 let title = buffer.title(cx);
                 format!("Preview {}", title).into()
             })
-            .unwrap_or_else(|| SharedString::from("Markdown Preview"))
+            .unwrap_or_else(|| SharedString::from(i18n::t!("e1abc26412f50969")))
     }
 
     fn tab_tooltip_text(&self, cx: &App) -> Option<SharedString> {

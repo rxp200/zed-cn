@@ -68,7 +68,7 @@ impl RenderOnce for ProjectEmptyState {
                             .child(Label::new(label).size(LabelSize::Small).color(Color::Muted)),
                     )
                     .child(
-                        Button::new("open_project", "Open Project")
+                        Button::new("open_project", i18n::t!("c565a6aa55bd3ccf"))
                             .full_width()
                             .key_binding(self.open_project_key_binding)
                             .when_some(self.on_open_project, |button, handler| {
@@ -83,7 +83,7 @@ impl RenderOnce for ProjectEmptyState {
                             .child(Divider::horizontal().color(DividerColor::Border)),
                     )
                     .child(
-                        Button::new("clone_repo", "Clone Repository")
+                        Button::new("clone_repo", i18n::t!("e678e4f97fea48f2"))
                             .full_width()
                             .when_some(self.on_clone_repo, |button, handler| {
                                 button.on_click(handler)

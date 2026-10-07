@@ -13,6 +13,7 @@ path = "src/extensions_ui.rs"
 doctest = false
 
 [dependencies]
+i18n.workspace = true
 anyhow.workspace = true
 cloud_api_types.workspace = true
 command_palette_hooks.workspace = true
@@ -22,6 +23,7 @@ db.workspace = true
 editor.workspace = true
 extension.workspace = true
 extension_host.workspace = true
+extension_suggest.workspace = true
 fs.workspace = true
 fuzzy.workspace = true
 git.workspace = true

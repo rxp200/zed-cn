@@ -192,9 +192,9 @@ impl BreakpointList {
     ) {
         self.strip_mode = Some(prop);
         let placeholder = match prop {
-            ActiveBreakpointStripMode::Log => "Set Log Message",
-            ActiveBreakpointStripMode::Condition => "Set Condition",
-            ActiveBreakpointStripMode::HitCondition => "Set Hit Condition",
+            ActiveBreakpointStripMode::Log => i18n::t!("402d0dbec06a9227"),
+            ActiveBreakpointStripMode::Condition => i18n::t!("6500c47399bfd391"),
+            ActiveBreakpointStripMode::HitCondition => i18n::t!("ad840fc869807a61"),
         };
         let mut is_exception_breakpoint = true;
         let active_value = self.selected_ix.and_then(|ix| {
@@ -580,21 +580,18 @@ impl BreakpointList {
         let focus_handle = self.focus_handle.clone();
 
         let remove_breakpoint_tooltip = selection_kind.map(|(kind, _)| match kind {
-            SelectedBreakpointKind::Source => "Remove breakpoint from a breakpoint list",
+            SelectedBreakpointKind::Source => i18n::t!("1b063704a8e9de34"),
             SelectedBreakpointKind::Exception => {
                 "Exception Breakpoints cannot be removed from the breakpoint list"
             }
-            SelectedBreakpointKind::Data => "Remove data breakpoint from a breakpoint list",
+            SelectedBreakpointKind::Data => i18n::t!("294ae785539ecd45"),
         });
 
         let toggle_label = selection_kind.map(|(_, is_enabled)| {
             if is_enabled {
-                (
-                    "Disable Breakpoint",
-                    "Disable a breakpoint without removing it from the list",
-                )
+                (i18n::t!("ed6f696c388547d9"), i18n::t!("14ea4078a90d6cae"))
             } else {
-                ("Enable Breakpoint", "Re-enable a breakpoint")
+                (i18n::t!("fcaa65a48d29efe2"), i18n::t!("468ac0d7b35f564f"))
             }
         });
 
@@ -636,7 +633,7 @@ impl BreakpointList {
                             let focus_handle = focus_handle.clone();
                             move |_window, cx| {
                                 Tooltip::with_meta_in(
-                                    "Remove Breakpoint",
+                                    i18n::t!("deef0c54dcd07db9"),
                                     Some(&UnsetBreakpoint),
                                     tooltip,
                                     &focus_handle,
@@ -1424,7 +1421,7 @@ impl RenderOnce for BreakpointOptionsStrip {
                         .on_click(self.on_click_callback(ActiveBreakpointStripMode::Log))
                         .tooltip(|_window, cx|  {
                             Tooltip::with_meta(
-                                "Set Log Message",
+                                i18n::t!("402d0dbec06a9227"),
                                 None,
                                 "Set log message to display (instead of stopping) when a breakpoint is hit.",
                                 cx,
@@ -1460,7 +1457,7 @@ impl RenderOnce for BreakpointOptionsStrip {
                             .on_click(self.on_click_callback(ActiveBreakpointStripMode::Condition))
                             .tooltip(|_window, cx|  {
                                 Tooltip::with_meta(
-                                    "Set Condition",
+                                    i18n::t!("6500c47399bfd391"),
                                     None,
                                     "Set condition to evaluate when a breakpoint is hit. Program execution will stop only when the condition is met.",
                                     cx,
@@ -1495,7 +1492,7 @@ impl RenderOnce for BreakpointOptionsStrip {
                         .on_click(self.on_click_callback(ActiveBreakpointStripMode::HitCondition))
                         .tooltip(|_window, cx|  {
                             Tooltip::with_meta(
-                                "Set Hit Condition",
+                                i18n::t!("ad840fc869807a61"),
                                 None,
                                 "Set expression that controls how many hits of the breakpoint are ignored.",
                                 cx,

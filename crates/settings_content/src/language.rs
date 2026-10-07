@@ -200,11 +200,45 @@ pub struct CustomEditPredictionProviderSettingsContent {
     ///
     /// Default: 256
     pub max_output_tokens: Option<u32>,
+    /// The API type to use for edit predictions.
+    ///
+    /// Use `completions` for text completion APIs (`/v1/completions`, native
+    /// FIM models) and `chat_completions` for chat completion APIs
+    /// (`/v1/chat/completions`, chat models). When `chat_completions` is used,
+    /// Zed builds an instruction-based fill-in-the-middle prompt instead of
+    /// using model-native FIM tokens.
+    ///
+    /// Default: "completions"
+    pub api_type: Option<OpenAiCompatibleApiTypeContent>,
     /// The debounce delay in milliseconds before automatically requesting a prediction
     /// after typing stops. Set to 0 to request predictions immediately.
     ///
     /// Default: 0
     pub prediction_debounce: Option<DelayMs>,
+}
+
+#[derive(
+    Copy,
+    Clone,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+    MergeFrom,
+    strum::VariantArray,
+    strum::VariantNames,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum OpenAiCompatibleApiTypeContent {
+    /// Text completion API (`/v1/completions`) using model-native FIM tokens.
+    #[default]
+    Completions,
+    /// Chat completion API (`/v1/chat/completions`) using an
+    /// instruction-based fill-in-the-middle prompt.
+    ChatCompletions,
 }
 
 #[derive(
@@ -403,8 +437,7 @@ pub enum EditPredictionDataCollectionChoice {
 )]
 #[serde(rename_all = "snake_case")]
 pub enum EditPredictionsMode {
-    /// If provider supports it, display inline when holding modifier key (e.g., alt).
-    /// Otherwise, eager preview is used.
+    /// Request and display predictions when holding a modifier key (e.g., alt).
     #[serde(alias = "auto")]
     Subtle,
     /// Display inline when there are no language server completions available.
@@ -526,6 +559,34 @@ impl<'de> Deserialize<'de> for ConfiguredLanguageServer {
     }
 }
 
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Serialize,
+    Deserialize,
+    PartialEq,
+    Eq,
+    JsonSchema,
+    MergeFrom,
+    strum::EnumString,
+    strum::VariantArray,
+    strum::VariantNames,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum SoftWrapIndent {
+    /// Continuation lines start at column 0.
+    None,
+    /// Continuation lines match the original line's indentation.
+    #[default]
+    Same,
+    /// Continuation lines get 1 extra indent level beyond the original.
+    ExtraOne,
+    /// Continuation lines get 2 extra indent levels beyond the original.
+    ExtraTwo,
+}
+
 /// The settings for a particular language.
 #[with_fallible_options]
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, MergeFrom)]
@@ -544,6 +605,10 @@ pub struct LanguageSettingsContent {
     ///
     /// Default: none
     pub soft_wrap: Option<SoftWrap>,
+    /// How to indent soft-wrapped continuation lines.
+    ///
+    /// Default: same
+    pub soft_wrap_indent: Option<SoftWrapIndent>,
     /// The column at which to soft-wrap lines, for buffers where soft-wrap
     /// is enabled.
     ///

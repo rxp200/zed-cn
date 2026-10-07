@@ -7,6 +7,8 @@ pub mod connection_manager;
 pub mod context_server_store;
 pub mod debounced_delay;
 pub mod debugger;
+pub mod file_transfer;
+pub mod epub;
 pub mod git_store;
 pub mod image_store;
 pub mod lsp_command;
@@ -78,7 +80,10 @@ pub use environment::ProjectEnvironment;
 
 use futures::{
     StreamExt,
-    channel::mpsc::{self, UnboundedReceiver},
+    channel::{
+        mpsc::{self, UnboundedReceiver},
+        oneshot,
+    },
     future::try_join_all,
 };
 pub use image_store::{ImageItem, ImageStore};
@@ -110,7 +115,10 @@ pub use prettier_store::PrettierStore;
 use project_settings::{ProjectSettings, SettingsObserver, SettingsObserverEvent};
 #[cfg(target_os = "windows")]
 use remote::wsl_path_to_windows_path;
-use remote::{RemoteClient, RemoteConnectionOptions, same_remote_connection_identity};
+use remote::{
+    RemoteClient, RemoteConnectionIdentity, RemoteConnectionOptions, remote_connection_identity,
+    same_remote_connection_identity,
+};
 use rpc::{
     AnyProtoClient, ErrorCode,
     proto::{LanguageServerPromptResponse, REMOTE_SERVER_PROJECT_ID},
@@ -209,6 +217,87 @@ pub enum OpenedBufferEvent {
     Err(BufferId, Arc<anyhow::Error>),
 }
 
+pub const DOCUMENT_CHUNK_SIZE: usize = 1024 * 1024;
+
+pub fn document_file_size_limit(extension: &str) -> Option<u64> {
+    match extension.to_ascii_lowercase().as_str() {
+        "stl" | "obj" | "ply" => Some(128 * 1024 * 1024),
+        "pdf" | "epub" => Some(512 * 1024 * 1024),
+        "xlsx" | "xlsm" | "xlsb" => Some(256 * 1024 * 1024),
+        "xls" | "ods" => Some(64 * 1024 * 1024),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod document_loading_tests {
+    use super::*;
+
+    #[test]
+    fn document_chunk_bounds() {
+        let size = DOCUMENT_CHUNK_SIZE as u64 + 3;
+        assert!(validate_document_chunk(0, 0, size, DOCUMENT_CHUNK_SIZE, size).is_ok());
+        assert!(validate_document_chunk(DOCUMENT_CHUNK_SIZE as u64, size, size, 3, size).is_ok());
+        assert!(validate_document_chunk(0, 0, 0, 0, size).is_ok());
+        assert!(validate_document_chunk(0, 0, size, 0, size).is_err());
+        assert!(validate_document_chunk(0, 0, size, DOCUMENT_CHUNK_SIZE + 1, size).is_err());
+        assert!(validate_document_chunk(size + 1, size, size, 0, size).is_err());
+        assert!(validate_document_chunk(1, size + 1, size, DOCUMENT_CHUNK_SIZE, size).is_err());
+        assert!(validate_document_chunk(0, 0, size, DOCUMENT_CHUNK_SIZE, size - 1).is_err());
+    }
+
+    #[test]
+    fn document_formats_and_server_source() {
+        for extension in ["pdf", "EPUB", "xlsx", "xlsm", "xlsb", "xls", "ods"] {
+            assert!(document_file_size_limit(extension).is_some());
+        }
+        assert!(document_file_size_limit("txt").is_none());
+        let options = remote::SshConnectionOptions::default();
+        assert!(!document_server_source_allowed(
+            &remote::RemoteConnectionOptions::Ssh(options.clone())
+        ));
+        let mut options = options;
+        options.remote_server_source = settings::RemoteServerSource::ZedCn;
+        assert!(document_server_source_allowed(
+            &remote::RemoteConnectionOptions::Ssh(options)
+        ));
+    }
+}
+
+fn document_server_source_allowed(options: &remote::RemoteConnectionOptions) -> bool {
+    match options {
+        remote::RemoteConnectionOptions::Ssh(options) => {
+            options.remote_server_source == settings::RemoteServerSource::ZedCn
+        }
+        #[cfg(any(test, feature = "test-support"))]
+        remote::RemoteConnectionOptions::Mock(_) => true,
+        _ => false,
+    }
+}
+
+fn validate_document_chunk(
+    offset: u64,
+    expected_size: u64,
+    total_size: u64,
+    chunk_size: usize,
+    limit: u64,
+) -> Result<()> {
+    anyhow::ensure!(total_size <= limit, "document is too large to preview");
+    anyhow::ensure!(
+        offset == 0 || expected_size == total_size,
+        "document changed while loading"
+    );
+    anyhow::ensure!(
+        offset <= total_size && chunk_size <= DOCUMENT_CHUNK_SIZE,
+        "invalid document chunk"
+    );
+    anyhow::ensure!(
+        chunk_size as u64 == (total_size - offset).min(DOCUMENT_CHUNK_SIZE as u64),
+        "incomplete document chunk"
+    );
+    Ok(())
+}
+
 /// Semantics-aware entity that is relevant to one or more [`Worktree`] with the files.
 /// `Project` is responsible for tasks, LSP and collab queries, synchronizing worktree states accordingly.
 /// Maps [`Worktree`] entries with its own logic using [`ProjectEntryId`] and [`ProjectPath`] structs.
@@ -253,7 +342,8 @@ pub struct Project {
     settings_observer: Entity<SettingsObserver>,
     toolchain_store: Option<Entity<ToolchainStore>>,
     agent_location: Option<AgentLocation>,
-    downloading_files: Arc<Mutex<HashMap<(WorktreeId, String), DownloadingFile>>>,
+    file_transfers: Option<Entity<file_transfer::FileTransfers>>,
+    downloading_files: Arc<Mutex<HashMap<(WorktreeId, String, u64), DownloadingFile>>>,
     last_worktree_paths: WorktreePaths,
 }
 
@@ -261,7 +351,32 @@ struct DownloadingFile {
     destination_path: PathBuf,
     chunks: Vec<u8>,
     total_size: u64,
-    file_id: Option<u64>, // Set when we receive the State message
+    file_id: Option<u64>,
+    progress: file_transfer::TransferHandle,
+    completion: oneshot::Sender<Result<()>>,
+}
+
+impl DownloadingFile {
+    async fn write(self) {
+        let result = async {
+            anyhow::ensure!(
+                self.chunks.len() as u64 == self.total_size,
+                i18n::t!("f149bf73e30550ce")
+            );
+            if let Some(parent) = self.destination_path.parent() {
+                smol::fs::create_dir_all(parent)
+                    .await
+                    .with_context(|| i18n::t_args!("82f83796064558c7", parent.display()))?;
+            }
+            smol::fs::write(&self.destination_path, &self.chunks)
+                .await
+                .with_context(|| i18n::t_args!("ca501ea4078e56a6", self.destination_path.display()))
+        }
+        .await;
+        if let Err(result) = self.completion.send(result) {
+            result.log_err();
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -350,6 +465,7 @@ pub enum Event {
         name: Option<LanguageServerName>,
     },
     ToggleLspLogs {
+        peer_id: proto::PeerId,
         server_id: LanguageServerId,
         enabled: bool,
         toggled_log_kind: LogKind,
@@ -1413,6 +1529,7 @@ impl Project {
                 search_excluded_history: Self::new_search_history(),
 
                 toolchain_store: Some(toolchain_store),
+                file_transfers: None,
 
                 agent_location: None,
                 downloading_files: Default::default(),
@@ -1657,6 +1774,7 @@ impl Project {
                 search_excluded_history: Self::new_search_history(),
 
                 toolchain_store: Some(toolchain_store),
+                file_transfers: None,
                 agent_location: None,
                 downloading_files: Default::default(),
                 last_worktree_paths: WorktreePaths::default(),
@@ -1948,6 +2066,7 @@ impl Project {
                 environment,
                 remotely_created_models: Arc::new(Mutex::new(RemotelyCreatedModels::default())),
                 toolchain_store: None,
+                file_transfers: None,
                 agent_location: None,
                 downloading_files: Default::default(),
                 last_worktree_paths: WorktreePaths::default(),
@@ -2268,9 +2387,53 @@ impl Project {
         self.collab_client.clone()
     }
 
+    #[cfg(feature = "test-support")]
+    pub fn set_remote_client_for_test(
+        &mut self,
+        client: Entity<RemoteClient>,
+        cx: &mut Context<Self>,
+    ) {
+        self.remote_client = Some(client);
+        cx.notify();
+    }
+
     #[inline]
     pub fn remote_client(&self) -> Option<Entity<RemoteClient>> {
         self.remote_client.clone()
+    }
+
+    pub fn supports_temporary_files(&self, cx: &App) -> bool {
+        self.remote_client
+            .as_ref()
+            .is_some_and(|client| client.read(cx).supports_temporary_files())
+    }
+
+    pub fn create_temporary_file(
+        &self,
+        suggested_name: String,
+        content: Vec<u8>,
+        cx: &App,
+    ) -> Task<Result<PathBuf>> {
+        let Some(remote_client) = &self.remote_client else {
+            return Task::ready(Err(anyhow!("project is not connected to a remote server")));
+        };
+        if !remote_client.read(cx).supports_temporary_files() {
+            return Task::ready(Err(anyhow!(
+                "remote server does not support temporary clipboard files"
+            )));
+        }
+
+        let request = remote_client
+            .read(cx)
+            .proto_client()
+            .request(proto::CreateTemporaryFile {
+                suggested_name,
+                content,
+            });
+        cx.spawn(async move |_| {
+            let response = request.await?;
+            Ok(PathBuf::from(response.path))
+        })
     }
 
     #[inline]
@@ -3205,6 +3368,135 @@ impl Project {
         }
     }
 
+    pub fn read_epub_entry(
+        &self,
+        path: ProjectPath,
+        entry_path: String,
+        offset: u64,
+        snapshot: Option<(u64, proto::Timestamp)>,
+        cx: &mut Context<Self>,
+    ) -> Task<Result<proto::ReadEpubEntryResponse>> {
+        let Some(worktree) = self.worktree_for_id(path.worktree_id, cx) else {
+            return Task::ready(Err(anyhow!("worktree not found")));
+        };
+        let request = proto::ReadEpubEntry {
+            worktree_id: path.worktree_id.to_proto(),
+            path: path.path.as_unix_str().to_owned(),
+            entry_path,
+            offset,
+            expected_size: snapshot.map_or(0, |snapshot| snapshot.0),
+            expected_mtime: snapshot.map(|snapshot| snapshot.1),
+        };
+        if let Some(local) = worktree.read(cx).as_local() {
+            let abs_path = local.absolutize(&path.path);
+            let fs = self.fs.clone();
+            let executor = cx.background_executor().clone();
+            return cx.spawn(async move |_, _| {
+                epub::read_entry_chunk(fs, abs_path, request, executor).await
+            });
+        }
+        let Some(client) = self.remote_client.as_ref().filter(|client| {
+            let client = client.read(cx);
+            client.supports_epub_entries()
+                && document_server_source_allowed(&client.connection_options())
+        }) else {
+            return Task::ready(Err(anyhow!(i18n::t!("05720b24baa5d61e"))));
+        };
+        let client = client.read(cx).proto_client();
+        cx.spawn(async move |_, _| client.request(request).await)
+    }
+
+    pub fn load_document_file(
+        &self,
+        path: ProjectPath,
+        cx: &mut Context<Self>,
+    ) -> Task<Result<worktree::LoadedBinaryFile>> {
+        let Some(limit) = path.path.extension().and_then(document_file_size_limit) else {
+            return Task::ready(Err(anyhow!("unsupported document format")));
+        };
+        let Some(worktree) = self.worktree_for_id(path.worktree_id, cx) else {
+            return Task::ready(Err(anyhow!("worktree not found")));
+        };
+        if worktree.read(cx).is_local() {
+            let load =
+                worktree.update(cx, |worktree, cx| worktree.load_binary_file(&path.path, cx));
+            return cx.spawn(async move |_, _| {
+                let loaded = load.await?;
+                anyhow::ensure!(
+                    loaded.content.len() as u64 <= limit,
+                    "document is too large to preview"
+                );
+                Ok(loaded)
+            });
+        }
+        let Some(client) = self.remote_client.as_ref().filter(|client| {
+            let client = client.read(cx);
+            let is_model = path.path.extension().is_some_and(|extension| matches!(extension.to_ascii_lowercase().as_str(), "stl" | "obj" | "ply"));
+            (if is_model { client.supports_model_chunks() } else { client.supports_document_chunks() })
+                && document_server_source_allowed(&client.connection_options())
+        }) else {
+            return Task::ready(Err(anyhow!(i18n::t!("05720b24baa5d61e"))));
+        };
+        let client = client.read(cx).proto_client();
+        cx.spawn(async move |_, cx| {
+            let mut content = Vec::new();
+            let mut file = None;
+            let mut expected_size = 0;
+            let mut expected_mtime = None;
+            loop {
+                let response = client
+                    .request(proto::ReadDocumentChunk {
+                        worktree_id: path.worktree_id.to_proto(),
+                        path: path.path.as_unix_str().to_owned(),
+                        offset: content.len() as u64,
+                        expected_size,
+                        expected_mtime,
+                    })
+                    .await?;
+                validate_document_chunk(
+                    content.len() as u64,
+                    expected_size,
+                    response.total_size,
+                    response.content.len(),
+                    limit,
+                )?;
+                let proto_file = response.file.context("missing document file metadata")?;
+                anyhow::ensure!(
+                    proto_file.worktree_id == path.worktree_id.to_proto(),
+                    "document worktree does not match request"
+                );
+                anyhow::ensure!(
+                    proto_file.path == path.path.as_unix_str(),
+                    "document path does not match request"
+                );
+                if file.is_none() {
+                    expected_size = response.total_size;
+                    expected_mtime = proto_file.mtime;
+                    content.try_reserve_exact(usize::try_from(expected_size)?)?;
+                    file = Some(cx.update(|cx| {
+                        worktree::File::from_proto(proto_file, worktree.clone(), cx)
+                    })?);
+                } else {
+                    anyhow::ensure!(
+                        proto_file.mtime == expected_mtime,
+                        "document changed while loading"
+                    );
+                }
+                content.extend_from_slice(&response.content);
+                if content.len() as u64 == expected_size {
+                    let mut file = file.context("missing document file")?;
+                    if let language::DiskState::Present { size, .. } = &mut file.disk_state {
+                        *size = expected_size;
+                    }
+                    return Ok(worktree::LoadedBinaryFile {
+                        file: Arc::new(file),
+                        content,
+                    });
+                }
+            }
+        })
+    }
+
     pub fn download_file(
         &mut self,
         worktree_id: WorktreeId,
@@ -3225,6 +3517,19 @@ impl Project {
         };
 
         let proto_client = remote_client.read(cx).proto_client();
+        let transfers = self
+            .file_transfers
+            .get_or_insert_with(|| cx.new(file_transfer::FileTransfers::new))
+            .clone();
+        let progress = transfers.update(cx, |transfers, cx| {
+            transfers.start(
+                file_transfer::TransferDirection::Download,
+                path.to_string(),
+                destination_path.display().to_string(),
+                cx,
+            )
+        });
+        let (completion, completed) = oneshot::channel();
         // For SSH remote projects, use REMOTE_SERVER_PROJECT_ID instead of remote_id()
         // because SSH projects have client_state: Local but still need to communicate with remote server
         let project_id = self.remote_id().unwrap_or(REMOTE_SERVER_PROJECT_ID);
@@ -3235,19 +3540,21 @@ impl Project {
         let file_id = NEXT_FILE_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 
         // Register BEFORE sending request to avoid race condition
-        let key = (worktree_id, path_str.clone());
+        let key = (worktree_id, path_str.clone(), file_id);
         log::debug!(
             "download_file: pre-registering download with key={:?}, file_id={}",
             key,
             file_id
         );
         downloading_files.lock().insert(
-            key,
+            key.clone(),
             DownloadingFile {
-                destination_path: destination_path,
+                destination_path,
                 chunks: Vec::new(),
                 total_size: 0,
                 file_id: Some(file_id),
+                progress: progress.clone(),
+                completion,
             },
         );
         log::debug!(
@@ -3255,21 +3562,34 @@ impl Project {
             path_str
         );
 
-        cx.spawn(async move |_this, _cx| {
+        let cleanup = util::defer(move || {
+            downloading_files.lock().remove(&key);
+        });
+        let task = cx.spawn(async move |_this, cx| {
+            let _cleanup = cleanup;
             log::debug!("download_file: sending request with file_id={}...", file_id);
             let response = proto_client
                 .request(proto::DownloadFileByPath {
                     project_id,
                     worktree_id: worktree_id.to_proto(),
-                    path: path_str.clone(),
+                    path: path_str,
                     file_id,
                 })
                 .await?;
 
             log::debug!("download_file: got response, file_id={}", response.file_id);
-            // The file_id is set from the State message, we just confirm the request succeeded
-            Ok(())
-        })
+            smol::future::or(
+                async { completed.await.context(i18n::t!("138df8abaf1c8971"))? },
+                async {
+                    cx.background_executor()
+                        .timer(Duration::from_secs(60))
+                        .await;
+                    anyhow::bail!(i18n::t!("87006af8ad166a78"))
+                },
+            )
+            .await
+        });
+        progress.track(task, cx)
     }
 
     #[ztracing::instrument(skip_all)]
@@ -3939,7 +4259,7 @@ impl Project {
                     cx.emit(Event::Toast {
                         notification_id: format!("local-tasks-{path:?}").into(),
                         link: Some(ToastLink {
-                            label: "Open Tasks Documentation",
+                            label: i18n::t!("b9bf3d790d0e0433"),
                             url: "https://zed.dev/docs/tasks",
                         }),
                         message,
@@ -5883,6 +6203,7 @@ impl Project {
         envelope: TypedEnvelope<proto::ToggleLspLogs>,
         mut cx: AsyncApp,
     ) -> Result<()> {
+        let peer_id = envelope.original_sender_id()?;
         let toggled_log_kind =
             match proto::toggle_lsp_logs::LogType::try_from(envelope.payload.log_type)
                 .ok()
@@ -5894,6 +6215,7 @@ impl Project {
             };
         project.update(&mut cx, |_, cx| {
             cx.emit(Event::ToggleLspLogs {
+                peer_id,
                 server_id: LanguageServerId::from_proto(envelope.payload.server_id),
                 enabled: envelope.payload.enabled,
                 toggled_log_kind,
@@ -6093,7 +6415,7 @@ impl Project {
         use proto::create_file_for_peer::Variant;
         log::debug!("handle_create_file_for_peer: received message");
 
-        let downloading_files: Arc<Mutex<HashMap<(WorktreeId, String), DownloadingFile>>> =
+        let downloading_files: Arc<Mutex<HashMap<(WorktreeId, String, u64), DownloadingFile>>> =
             this.update(&mut cx, |this, _| this.downloading_files.clone());
 
         match &envelope.payload.variant {
@@ -6108,10 +6430,10 @@ impl Project {
                 if let Some(ref file) = state.file {
                     let worktree_id = WorktreeId::from_proto(file.worktree_id);
                     let path = file.path.clone();
-                    let key = (worktree_id, path);
+                    let key = (worktree_id, path, state.id);
                     log::debug!("handle_create_file_for_peer: looking up key={:?}", key);
 
-                    let empty_file_destination: Option<PathBuf> = {
+                    let empty_file = {
                         let mut files = downloading_files.lock();
                         log::trace!(
                             "handle_create_file_for_peer: current downloading_files keys: {:?}",
@@ -6119,8 +6441,16 @@ impl Project {
                         );
 
                         if let Some(file_entry) = files.get_mut(&key) {
+                            if file_entry.file_id != Some(state.id) {
+                                return Ok(());
+                            }
                             file_entry.total_size = state.content_size;
-                            file_entry.file_id = Some(state.id);
+                            file_entry
+                                .progress
+                                .progress(worktree::FileTransferProgress::Bytes(
+                                    0,
+                                    state.content_size,
+                                ));
                             log::debug!(
                                 "handle_create_file_for_peer: updated file entry: total_size={}, file_id={}",
                                 state.content_size,
@@ -6135,27 +6465,14 @@ impl Project {
 
                         if state.content_size == 0 {
                             // No chunks will arrive for an empty file; write it now.
-                            files.remove(&key).map(|entry| entry.destination_path)
+                            files.remove(&key)
                         } else {
                             None
                         }
                     };
 
-                    if let Some(destination) = empty_file_destination {
-                        log::debug!(
-                            "handle_create_file_for_peer: writing empty file to {:?}",
-                            destination
-                        );
-                        match smol::fs::write(&destination, &[] as &[u8]).await {
-                            Ok(_) => log::info!(
-                                "handle_create_file_for_peer: successfully wrote file to {:?}",
-                                destination
-                            ),
-                            Err(e) => log::error!(
-                                "handle_create_file_for_peer: failed to write empty file: {:?}",
-                                e
-                            ),
-                        }
+                    if let Some(file) = empty_file {
+                        file.write().await;
                     }
                 } else {
                     log::warn!("handle_create_file_for_peer: State has no file field");
@@ -6169,17 +6486,19 @@ impl Project {
                 );
 
                 // Extract data while holding the lock, then release it before await
-                let (key_to_remove, write_info): (
-                    Option<(WorktreeId, String)>,
-                    Option<(PathBuf, Vec<u8>)>,
-                ) = {
+                let completed_file = {
                     let mut files = downloading_files.lock();
-                    let mut found_key: Option<(WorktreeId, String)> = None;
-                    let mut write_data: Option<(PathBuf, Vec<u8>)> = None;
+                    let mut found_key = None;
 
                     for (key, file_entry) in files.iter_mut() {
                         if file_entry.file_id == Some(chunk.file_id) {
                             file_entry.chunks.extend_from_slice(&chunk.data);
+                            file_entry
+                                .progress
+                                .progress(worktree::FileTransferProgress::Bytes(
+                                    file_entry.chunks.len() as u64,
+                                    file_entry.total_size,
+                                ));
                             log::debug!(
                                 "handle_create_file_for_peer: accumulated {} bytes, total_size={}",
                                 file_entry.chunks.len(),
@@ -6189,40 +6508,15 @@ impl Project {
                             if file_entry.chunks.len() as u64 >= file_entry.total_size
                                 && file_entry.total_size > 0
                             {
-                                let destination = file_entry.destination_path.clone();
-                                let content = std::mem::take(&mut file_entry.chunks);
                                 found_key = Some(key.clone());
-                                write_data = Some((destination, content));
                             }
                             break;
                         }
                     }
-                    (found_key, write_data)
-                }; // MutexGuard is dropped here
-
-                // Perform the async write outside the lock
-                if let Some((destination, content)) = write_info {
-                    log::debug!(
-                        "handle_create_file_for_peer: writing {} bytes to {:?}",
-                        content.len(),
-                        destination
-                    );
-                    match smol::fs::write(&destination, &content).await {
-                        Ok(_) => log::info!(
-                            "handle_create_file_for_peer: successfully wrote file to {:?}",
-                            destination
-                        ),
-                        Err(e) => log::error!(
-                            "handle_create_file_for_peer: failed to write file: {:?}",
-                            e
-                        ),
-                    }
-                }
-
-                // Remove the completed entry
-                if let Some(key) = key_to_remove {
-                    downloading_files.lock().remove(&key);
-                    log::debug!("handle_create_file_for_peer: removed completed download entry");
+                    found_key.and_then(|key| files.remove(&key))
+                };
+                if let Some(file) = completed_file {
+                    file.write().await;
                 }
             }
             None => {
@@ -6586,11 +6880,34 @@ impl Project {
 ///
 /// Paths are mapped to their main worktree path first so we can group
 /// workspaces by main repos.
-#[derive(PartialEq, Eq, Hash, Clone, Debug, Default)]
+///
+/// Groups are compared by their paths and by the stable identity of the remote
+/// host, so runtime-only connection fields (nicknames, SSH key arguments,
+/// download settings) never split one project into several groups.
+#[derive(Clone, Debug, Default)]
 pub struct ProjectGroupKey {
     /// The paths of the main worktrees for this project group.
     paths: PathList,
     host: Option<RemoteConnectionOptions>,
+}
+
+impl PartialEq for ProjectGroupKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.paths.distinct_paths() == other.paths.distinct_paths()
+            && same_remote_connection_identity(self.host.as_ref(), other.host.as_ref())
+    }
+}
+
+impl Eq for ProjectGroupKey {}
+
+impl std::hash::Hash for ProjectGroupKey {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.paths.distinct_paths().hash(state);
+        match self.host.as_ref() {
+            Some(host) => Some(remote_connection_identity(host)).hash(state),
+            None => Option::<RemoteConnectionIdentity>::None.hash(state),
+        }
+    }
 }
 
 impl ProjectGroupKey {
@@ -6654,9 +6971,12 @@ impl ProjectGroupKey {
         self.host.clone()
     }
 
+    /// Whether this key identifies the same project group as `other`.
+    ///
+    /// This is the same comparison as [`PartialEq`], named for call sites that
+    /// match one key against several candidates.
     pub fn matches(&self, other: &ProjectGroupKey) -> bool {
-        self.paths == other.paths
-            && same_remote_connection_identity(self.host.as_ref(), other.host.as_ref())
+        self == other
     }
 }
 

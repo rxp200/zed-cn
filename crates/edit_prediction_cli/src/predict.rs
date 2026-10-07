@@ -658,7 +658,10 @@ pub async fn predict_baseten(
         .method(Method::POST)
         .uri(&url)
         .header("Content-Type", "application/json")
-        .header("Authorization", format!("Api-Key {api_key}"))
+        .header(
+            "Authorization",
+            i18n::t!("d67bbae2ca7e146b", api_key = api_key),
+        )
         .body(AsyncBody::from(body_bytes))?;
 
     let mut response = http_client.send(request).await?;

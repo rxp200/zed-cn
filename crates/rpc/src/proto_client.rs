@@ -55,7 +55,20 @@ impl std::fmt::Debug for State {
     }
 }
 
+/// Serialized message bytes written to the local transport, not remote acknowledgement.
+/// Implementations without byte instrumentation leave the callback unused.
+pub type RequestProgress = Arc<dyn Fn(u64, u64) + Send + Sync>;
+
 pub trait ProtoClient: Send + Sync {
+    fn request_with_progress(
+        &self,
+        envelope: Envelope,
+        request_type: &'static str,
+        _progress: RequestProgress,
+    ) -> BoxFuture<'static, Result<Envelope>> {
+        self.request(envelope, request_type)
+    }
+
     fn request(
         &self,
         envelope: Envelope,
@@ -232,6 +245,22 @@ impl AnyProtoClient {
     ) -> impl Future<Output = Result<T::Response>> + use<T> {
         let envelope = request.into_envelope(0, None, None);
         let response = self.0.client.request(envelope, T::NAME);
+        async move {
+            T::Response::from_envelope(response.await?)
+                .context("received response of the wrong type")
+        }
+    }
+
+    pub fn request_with_progress<T: RequestMessage>(
+        &self,
+        request: T,
+        progress: RequestProgress,
+    ) -> impl Future<Output = Result<T::Response>> + use<T> {
+        let response = self.0.client.request_with_progress(
+            request.into_envelope(0, None, None),
+            T::NAME,
+            progress,
+        );
         async move {
             T::Response::from_envelope(response.await?)
                 .context("received response of the wrong type")
@@ -529,6 +558,58 @@ impl AnyProtoClient {
                         .boxed_local()
                 }),
             );
+    }
+
+    pub fn add_stream_request_handler<M, E, H, F, S>(&self, entity: gpui::WeakEntity<E>, handler: H)
+    where
+        M: RequestMessage,
+        E: 'static,
+        H: 'static + Sync + Fn(Entity<E>, TypedEnvelope<M>, AsyncApp) -> F + Send + Sync,
+        F: 'static + Future<Output = Result<S>>,
+        S: 'static + Stream<Item = Result<M::Response>>,
+    {
+        self.0
+            .client
+            .message_handler_set()
+            .lock()
+            .add_message_handler(
+                TypeId::of::<M>(),
+                entity.into(),
+                Arc::new(move |entity, envelope, client, cx| {
+                    let entity = entity.downcast::<E>().unwrap();
+                    let envelope = envelope.into_any().downcast::<TypedEnvelope<M>>().unwrap();
+                    let request_id = envelope.message_id();
+                    let stream = handler(entity, *envelope, cx);
+                    async move {
+                        // An Error response is itself a terminal stream frame on
+                        // both transports (Peer and ChannelClient), so we don't
+                        // need to follow it with an EndStream.
+                        match stream.await {
+                            Ok(stream) => {
+                                futures::pin_mut!(stream);
+                                while let Some(result) = stream.next().await {
+                                    match result {
+                                        Ok(response) => {
+                                            client.send_response(request_id, response)?
+                                        }
+                                        Err(error) => {
+                                            client.send_response(request_id, error.to_proto())?;
+                                            return Err(error);
+                                        }
+                                    }
+                                }
+                                client.send_response(request_id, proto::EndStream {})?;
+                                Ok(())
+                            }
+                            Err(error) => {
+                                client.send_response(request_id, error.to_proto())?;
+                                Err(error)
+                            }
+                        }
+                    }
+                    .boxed_local()
+                }),
+            )
     }
 
     pub fn add_entity_stream_request_handler<M, E, H, F, S>(&self, handler: H)
