@@ -1,3 +1,4 @@
+use crate::process_memory::{self, ProcessMemory};
 use gpui::{
     Action, App, Context, Div, Entity, EventEmitter, FocusHandle, Focusable, FontWeight, Hsla,
     InteractiveElement as _, PathBuilder, Render, StatefulInteractiveElement as _, Subscription,
@@ -88,33 +89,6 @@ struct LocalSampler {
     disks: Disks,
     networks: Networks,
     last_sample: std::time::Instant,
-}
-
-/// 只刷新当前进程的内存占用。整机数字在 [`SystemStats`] 里，而用户需要
-/// 知道“ Zed 自己用了多少”，这需要单独读一次自己的 pid。
-struct SelfMemorySampler {
-    system: System,
-    pid: Option<sysinfo::Pid>,
-}
-
-impl SelfMemorySampler {
-    fn new() -> Self {
-        Self {
-            system: System::new(),
-            pid: sysinfo::get_current_pid().ok(),
-        }
-    }
-
-    /// 只刷新本进程一项，是一次系统调用级别的开销，不需要占用后台线程。
-    fn sample(&mut self) -> Option<u64> {
-        let pid = self.pid?;
-        self.system.refresh_processes_specifics(
-            ProcessesToUpdate::Some(&[pid]),
-            false,
-            ProcessRefreshKind::nothing().with_memory(),
-        );
-        self.system.process(pid).map(|process| process.memory())
-    }
 }
 
 impl LocalSampler {
@@ -269,7 +243,8 @@ fn ranked_local_ip_addresses<'a>(
 
 pub struct SystemMonitorData {
     stats: Option<SystemStats>,
-    zed_memory_bytes: Option<u64>,
+    zed_private_memory_bytes: Option<u64>,
+    zed_shared_memory_bytes: Option<u64>,
     cpu_history: VecDeque<f32>,
     zed_memory_history: VecDeque<u64>,
     download_history: VecDeque<u64>,
@@ -292,7 +267,8 @@ impl SystemMonitorData {
         cx.new(|cx| {
             let mut this = Self {
                 stats: None,
-                zed_memory_bytes: None,
+                zed_private_memory_bytes: None,
+                zed_shared_memory_bytes: None,
                 cpu_history: VecDeque::with_capacity(HISTORY_LENGTH),
                 zed_memory_history: VecDeque::with_capacity(HISTORY_LENGTH),
                 download_history: VecDeque::with_capacity(HISTORY_LENGTH),
@@ -317,7 +293,6 @@ impl SystemMonitorData {
             if remote_client.is_none() {
                 local_sampler = Some(cx.background_spawn(async { LocalSampler::new() }).await);
             }
-            let mut self_sampler = SelfMemorySampler::new();
             loop {
                 let (result, zed_memory) = if let Some(remote_client) = remote_client.as_ref() {
                     let result = if remote_client
@@ -329,7 +304,7 @@ impl SystemMonitorData {
                     } else {
                         Err(anyhow::anyhow!(i18n::t!("83f186da8e216477")))
                     };
-                    (result, self_sampler.sample())
+                    (result, process_memory::current_process_memory())
                 } else if let Some(sampler) = local_sampler.take() {
                     let (sampler, stats) = cx
                         .background_spawn(async move {
@@ -339,11 +314,11 @@ impl SystemMonitorData {
                         })
                         .await;
                     local_sampler = Some(sampler);
-                    (Ok(stats), self_sampler.sample())
+                    (Ok(stats), process_memory::current_process_memory())
                 } else {
                     (
                         Err(anyhow::anyhow!(i18n::t!("2eb3f4971a546cad"))),
-                        self_sampler.sample(),
+                        process_memory::current_process_memory(),
                     )
                 };
                 let active = match this.update(cx, |this, cx| {
@@ -397,7 +372,7 @@ impl SystemMonitorData {
     fn apply_sample(
         &mut self,
         result: anyhow::Result<SystemStats>,
-        zed_memory_bytes: Option<u64>,
+        zed_memory: Option<ProcessMemory>,
         cx: &mut Context<Self>,
     ) {
         match result {
@@ -416,10 +391,11 @@ impl SystemMonitorData {
             }
             Err(error) => self.error = Some(format!("{error:#}")),
         }
-        if let Some(bytes) = zed_memory_bytes {
-            push_history(&mut self.zed_memory_history, bytes);
+        if let Some(sample) = zed_memory {
+            push_history(&mut self.zed_memory_history, sample.private_bytes);
         }
-        self.zed_memory_bytes = zed_memory_bytes;
+        self.zed_private_memory_bytes = zed_memory.map(|sample| sample.private_bytes);
+        self.zed_shared_memory_bytes = displayed_shared_bytes(zed_memory);
         cx.notify();
     }
 
@@ -775,13 +751,17 @@ impl Render for SystemMonitorPanel {
                         None,
                         cx,
                     ))
-                    .when_some(monitor.zed_memory_bytes, |element, bytes| {
-                        element.child(zed_memory_card(
-                            bytes,
-                            &monitor.zed_memory_history,
-                            monitor.remote_name.is_some(),
-                            cx,
-                        ))
+                    .when_some(monitor.zed_private_memory_bytes, |element, bytes| {
+                        element
+                            .child(zed_memory_card(
+                                bytes,
+                                &monitor.zed_memory_history,
+                                monitor.remote_name.is_some(),
+                                cx,
+                            ))
+                            .when_some(monitor.zed_shared_memory_bytes, |element, shared| {
+                                element.child(zed_shared_memory_card(shared, cx))
+                            })
                     })
                     .child(network_card(stats, monitor, cx))
                     .child(resource_card(
@@ -897,8 +877,9 @@ fn system_card(stats: &SystemStats, cx: &App) -> impl IntoElement {
         ))
 }
 
-/// Zed 自身进程的常驻内存。它不属于 `SystemStats`：那些字段描述的是当前
-/// 项目所在主机，而这里展示的是客户端进程自己占用了多少。
+/// Zed 自身进程的私有内存，即任务管理器「内存」列的口径：不含与其它进程
+/// 共享的页面。它不属于 `SystemStats`：那些字段描述的是当前项目所在主机，
+/// 而这里展示的是客户端进程自己占用了多少。
 fn zed_memory_card(
     bytes: u64,
     history: &VecDeque<u64>,
@@ -943,6 +924,42 @@ fn zed_memory_card(
         .when(values.len() >= 2, |element| {
             element.child(sparkline(&values, maximum, 16., cx.theme().status().info))
         })
+}
+
+/// Zed 自身进程的工作集中与其它进程共享的那部分。它与上面的私有内存共同
+/// 构成工作集，但共享页同时计入其它进程，因此单独列出而不是并入进程内存。
+fn zed_shared_memory_card(bytes: u64, cx: &App) -> impl IntoElement {
+    card(cx)
+        .gap_1()
+        .child(
+            h_flex()
+                .w_full()
+                .min_w_0()
+                .justify_between()
+                .gap_2()
+                .child(
+                    h_flex()
+                        .min_w_0()
+                        .gap_1p5()
+                        .child(
+                            Icon::new(IconName::DatabaseZap)
+                                .size(IconSize::Small)
+                                .color(Color::Muted),
+                        )
+                        .child(Label::new(i18n::t!("dec3c8a51c854aae")).truncate()),
+                )
+                .child(
+                    Label::new(format_bytes(bytes))
+                        .size(LabelSize::Small)
+                        .color(Color::Muted)
+                        .flex_none(),
+                ),
+        )
+        .child(
+            Label::new(i18n::t!("241ebb5455d2ec4c"))
+                .size(LabelSize::XSmall)
+                .color(Color::Muted),
+        )
 }
 
 fn resource_card(
@@ -1161,6 +1178,14 @@ fn metric_line(label: &'static str, value: String) -> impl IntoElement {
         .child(Label::new(value).size(LabelSize::Small).flex_none())
 }
 
+fn displayed_shared_bytes(sample: Option<ProcessMemory>) -> Option<u64> {
+    // 为 0 或读不到时都不单独展示：macOS 的 `phys_footprint` 可能大于常驻内存，
+    // 此时没有可以单独表述的共享页。
+    sample
+        .map(|sample| sample.shared_bytes())
+        .filter(|bytes| *bytes > 0)
+}
+
 fn panel_is_open(dock: &workspace::dock::Dock) -> bool {
     dock.visible_panel()
         .is_some_and(|panel| panel.panel_key() == SYSTEM_MONITOR_PANEL_KEY)
@@ -1249,9 +1274,42 @@ mod tests {
 
     #[test]
     fn reads_the_current_process_memory() {
-        let mut sampler = SelfMemorySampler::new();
-        let bytes = sampler.sample().expect("当前进程的内存占用应该可读");
-        assert!(bytes > 0, "期望非零常驻内存，实际为 {bytes}");
+        let sample = process_memory::current_process_memory().expect("当前进程的内存占用应该可读");
+        assert!(
+            sample.private_bytes > 0,
+            "期望非零私有内存，实际为 {}",
+            sample.private_bytes
+        );
+        assert_eq!(
+            sample.shared_bytes(),
+            sample
+                .working_set_bytes
+                .saturating_sub(sample.private_bytes),
+            "共享部分应当由工作集减去私有部分得到"
+        );
+    }
+
+    #[test]
+    fn hides_the_shared_part_when_nothing_is_shared() {
+        assert_eq!(displayed_shared_bytes(None), None);
+        let wholly_private = ProcessMemory {
+            working_set_bytes: 512 * 1024 * 1024,
+            private_bytes: 512 * 1024 * 1024,
+        };
+        assert_eq!(displayed_shared_bytes(Some(wholly_private)), None);
+        let footprint_above_resident = ProcessMemory {
+            working_set_bytes: 100 * 1024 * 1024,
+            private_bytes: 120 * 1024 * 1024,
+        };
+        assert_eq!(displayed_shared_bytes(Some(footprint_above_resident)), None);
+        let partly_shared = ProcessMemory {
+            working_set_bytes: 512 * 1024 * 1024,
+            private_bytes: 300 * 1024 * 1024,
+        };
+        assert_eq!(
+            displayed_shared_bytes(Some(partly_shared)),
+            Some(212 * 1024 * 1024)
+        );
     }
 
     #[test]

@@ -36,6 +36,12 @@ ui.workspace = true
 util.workspace = true
 workspace.workspace = true
 
+[target.'cfg(target_os = "macos")'.dependencies]
+libc.workspace = true
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { workspace = true, features = ["Win32_System_ProcessStatus", "Win32_System_Threading"] }
+
 [dev-dependencies]
 editor = { workspace = true, features = ["test-support"] }
 

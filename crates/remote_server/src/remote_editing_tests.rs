@@ -585,6 +585,50 @@ async fn test_remote_document_loading(cx: &mut TestAppContext, server_cx: &mut T
 }
 
 #[gpui::test]
+async fn test_remote_model_loading(cx: &mut TestAppContext, server_cx: &mut TestAppContext) {
+    let fs = FakeFs::new(server_cx.executor());
+    fs.insert_tree(path!("/code"), json!({"project": {}})).await;
+    let mut bytes = b"solid test\nfacet normal 0 0 1\nouter loop\nvertex 0 0 0\nvertex 1 0 0\nvertex 0 1 0\nendloop\nendfacet\nendsolid test\n".to_vec();
+    bytes.resize(project::DOCUMENT_CHUNK_SIZE + 17, b' ');
+    fs.insert_file("/code/project/model.STL", bytes.clone()).await;
+    let (project, headless) = init_test(&fs, cx, server_cx).await;
+    let (worktree, _) = project.update(cx, |project, cx| {
+        project.find_or_create_worktree(path!("/code/project"), true, cx)
+    }).await.expect("remote worktree");
+    let path = ProjectPath {
+        worktree_id: worktree.read_with(cx, |worktree, _| worktree.id()),
+        path: rel_path("model.STL").into(),
+    };
+    let loaded = project.update(cx, |project, cx| {
+        project.load_document_file(path.clone(), cx)
+    }).await.expect("load multi-chunk remote STL");
+    assert_eq!(loaded.content, bytes);
+    assert!(!loaded.file.is_local);
+    assert_eq!(loaded.file.path.as_unix_str(), "model.STL");
+
+    for capabilities in [vec![remote::remote_client::DOCUMENT_CHUNKS_CAPABILITY.to_owned()], Vec::new()] {
+        headless.update(server_cx, |headless, _| {
+            headless.session.send(proto::RemoteStarted { capabilities })
+        }).expect("advertise an older server");
+        cx.run_until_parked();
+        let error = project.update(cx, |project, cx| {
+            project.load_document_file(path.clone(), cx)
+        }).await.expect_err("document support alone must not enable models");
+        assert_eq!(error.to_string(), i18n::t!("3eb2f17c6a2710fa"));
+    }
+    headless.update(server_cx, |headless, _| {
+        headless.session.send(proto::RemoteStarted {
+            capabilities: vec![remote::remote_client::MODEL_CHUNKS_CAPABILITY.to_owned()],
+        })
+    }).expect("restore model capability");
+    cx.run_until_parked();
+    fs.remove_file(Path::new(path!("/code/project/model.STL")), Default::default()).await.expect("remove model");
+    assert!(project.update(cx, |project, cx| {
+        project.load_document_file(path, cx)
+    }).await.is_err());
+}
+
+#[gpui::test]
 async fn test_remote_epub_entries(cx: &mut TestAppContext, server_cx: &mut TestAppContext) {
     use std::io::{Cursor, Write as _};
     let fs = FakeFs::new(server_cx.executor());
