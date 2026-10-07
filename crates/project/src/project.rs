@@ -3429,13 +3429,18 @@ impl Project {
                 Ok(loaded)
             });
         }
+        let is_model = path.path.extension().is_some_and(|extension| matches!(extension.to_ascii_lowercase().as_str(), "stl" | "obj" | "ply"));
         let Some(client) = self.remote_client.as_ref().filter(|client| {
             let client = client.read(cx);
-            let is_model = path.path.extension().is_some_and(|extension| matches!(extension.to_ascii_lowercase().as_str(), "stl" | "obj" | "ply"));
             (if is_model { client.supports_model_chunks() } else { client.supports_document_chunks() })
                 && document_server_source_allowed(&client.connection_options())
         }) else {
-            return Task::ready(Err(anyhow!(i18n::t!("05720b24baa5d61e"))));
+            let message = if is_model {
+                i18n::t!("3eb2f17c6a2710fa")
+            } else {
+                i18n::t!("05720b24baa5d61e")
+            };
+            return Task::ready(Err(anyhow!(message)));
         };
         let client = client.read(cx).proto_client();
         cx.spawn(async move |_, cx| {

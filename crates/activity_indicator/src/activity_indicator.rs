@@ -1,4 +1,5 @@
 pub mod file_transfer;
+mod process_memory;
 pub mod system_monitor;
 
 use auto_update::DismissMessage;
