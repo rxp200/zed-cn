@@ -275,7 +275,7 @@ impl<TP: CloudLlmTokenProvider> CloudModelProvider<TP> {
                         builder.header(ZED_VERSION_HEADER_NAME, app_version.to_string())
                     })
                     .header("Content-Type", "application/json")
-                    .header("Authorization", format!("Bearer {token}"));
+                    .header("Authorization", i18n::t!("bf733da73429e88a", token = token));
                 if request_status_messages {
                     request = request
                         .header(CLIENT_SUPPORTS_STATUS_MESSAGES_HEADER_NAME, "true")
@@ -626,7 +626,7 @@ impl<TP: CloudLlmTokenProvider + 'static> CloudModelProvider<TP> {
                     .method(Method::GET)
                     .header(CLIENT_SUPPORTS_X_AI_HEADER_NAME, "true")
                     .uri(url.as_ref())
-                    .header("Authorization", format!("Bearer {token}"))
+                    .header("Authorization", i18n::t!("bf733da73429e88a", token = token))
                     .body(AsyncBody::empty())?)
             })
             .await

@@ -93,6 +93,23 @@ use crate::{
 const PROJECT_PANEL_KEY: &str = "ProjectPanel";
 const NEW_ENTRY_ID: ProjectEntryId = ProjectEntryId::MAX;
 
+fn unused_pasted_image_path(
+    target_directory: &RelPath,
+    extension: &str,
+    exists: impl Fn(&RelPath) -> bool,
+) -> Option<Arc<RelPath>> {
+    let mut filename = format!("image.{extension}");
+    let mut counter = 1usize;
+    loop {
+        let candidate = target_directory.join(RelPath::from_unix_str(&filename).ok()?);
+        if !exists(&candidate) {
+            return Some(candidate.into());
+        }
+        filename = format!("image_{counter}.{extension}");
+        counter = counter.checked_add(1)?;
+    }
+}
+
 struct VisibleEntriesForWorktree {
     worktree_id: WorktreeId,
     entries: Vec<GitEntry>,
@@ -222,7 +239,7 @@ enum DragTarget {
     Background,
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 struct FoldedDirectoryDragTarget {
     entry_id: ProjectEntryId,
     index: usize,
@@ -447,6 +464,8 @@ actions!(
         Redo,
         /// Opens a markdown preview for the selected file.
         OpenMarkdownPreview,
+        /// Generates complete AI explanations for the selected files and directories.
+        ScanSelectedEntriesForCodeExplanations,
         /// Opens the context menu for the selected entry.
         OpenContextMenu,
     ]
@@ -784,8 +803,25 @@ impl ProjectPanel {
                         this.update_visible_entries(None, false, false, window, cx);
                         cx.notify();
                     }
+                    project::Event::WorktreeAdded(worktree_id) => {
+                        this.update_visible_entries(None, false, false, window, cx);
+                        cx.spawn({
+                            let project = project.clone();
+                            let worktree_id = *worktree_id;
+                            async move |_, cx| {
+                                editor::code_explanations::load_code_explanation_file_index_for_worktree(
+                                    project,
+                                    worktree_id,
+                                    cx,
+                                )
+                                .await
+                                .log_err();
+                            }
+                        })
+                        .detach();
+                        cx.notify();
+                    }
                     project::Event::WorktreeUpdatedEntries(_, _)
-                    | project::Event::WorktreeAdded(_)
                     | project::Event::WorktreeOrderChanged => {
                         this.update_visible_entries(None, false, false, window, cx);
                         cx.notify();
@@ -846,6 +882,9 @@ impl ProjectPanel {
                 cx.notify();
             })
             .detach();
+            let explanation_index = editor::code_explanations::code_explanation_file_index(cx);
+            cx.observe(&explanation_index, |_, _, cx| cx.notify())
+                .detach();
 
             let mut project_panel_settings = *ProjectPanelSettings::get_global(cx);
             cx.observe_global_in::<SettingsStore>(window, move |this, window, cx| {
@@ -878,6 +917,16 @@ impl ProjectPanel {
 
             let scroll_handle = UniformListScrollHandle::new();
             let weak_project_panel = cx.weak_entity();
+            cx.spawn({
+                let project = project.clone();
+                async move |_, cx| {
+                    editor::code_explanations::load_code_explanation_file_index(project, cx)
+                        .await
+                        .log_err();
+                }
+            })
+            .detach();
+
             let mut this = Self {
                 project: project.clone(),
                 hover_scroll_task: None,
@@ -1177,18 +1226,32 @@ impl ProjectPanel {
             };
 
             let has_pasteable_content = self.has_pasteable_content(cx);
+            let can_scan_selection =
+                self.selected_code_explanation_paths(cx)
+                    .is_some_and(|paths| {
+                        !paths.is_empty() && !project::DisableAiSettings::get_global(cx).disable_ai
+                    });
             let context_menu = ContextMenu::build(window, cx, |menu, _, _| {
                 menu.context(self.focus_handle.clone()).map(|menu| {
                     if is_read_only {
                         menu.when(is_markdown, |menu| {
-                            menu.action("Open Markdown Preview", Box::new(OpenMarkdownPreview))
+                            menu.action(i18n::t!("ca5c3eff9a1731b6"), Box::new(OpenMarkdownPreview))
+                        })
+                        .when(can_scan_selection, |menu| {
+                            menu.separator().action(
+                                i18n::t!("b1844ba1b43e32a6"),
+                                Box::new(ScanSelectedEntriesForCodeExplanations),
+                            )
                         })
                         .when(is_dir, |menu| {
-                            menu.action("Search Inside", Box::new(NewSearchInDirectory))
+                            menu.action(
+                                i18n::t!("6c1cd766e05148bf"),
+                                Box::new(NewSearchInDirectory),
+                            )
                         })
                     } else {
-                        menu.action("New File", Box::new(NewFile))
-                            .action("New Folder", Box::new(NewDirectory))
+                        menu.action(i18n::t!("6ddd1eaccab127de"), Box::new(NewFile))
+                            .action(i18n::t!("84244abc71de03ac"), Box::new(NewDirectory))
                             .separator()
                             .when(is_local, |menu| {
                                 menu.action(
@@ -1197,104 +1260,159 @@ impl ProjectPanel {
                                 )
                             })
                             .when(is_local, |menu| {
-                                menu.action("Open in Default App", Box::new(OpenWithSystem))
+                                menu.action(i18n::t!("c4e5cbeefa2f8f77"), Box::new(OpenWithSystem))
                             })
-                            .action("Open in Terminal", Box::new(OpenInTerminal))
+                            .action(i18n::t!("a04c3bc562c5f568"), Box::new(OpenInTerminal))
                             .when(is_markdown, |menu| {
-                                menu.action("Open Markdown Preview", Box::new(OpenMarkdownPreview))
+                                menu.action(
+                                    i18n::t!("ca5c3eff9a1731b6"),
+                                    Box::new(OpenMarkdownPreview),
+                                )
+                            })
+                            .when(can_scan_selection, |menu| {
+                                menu.separator().action(
+                                    i18n::t!("b1844ba1b43e32a6"),
+                                    Box::new(ScanSelectedEntriesForCodeExplanations),
+                                )
                             })
                             .when(is_dir, |menu| {
-                                menu.separator()
-                                    .action("Find in Folder…", Box::new(NewSearchInDirectory))
+                                menu.separator().action(
+                                    i18n::t!("8d159f2c11b70f14"),
+                                    Box::new(NewSearchInDirectory),
+                                )
                             })
                             .when(is_unfoldable, |menu| {
-                                menu.action("Unfold Directory", Box::new(UnfoldDirectory))
+                                menu.action(i18n::t!("a49f5287fc9ef2d0"), Box::new(UnfoldDirectory))
                             })
                             .when(is_foldable, |menu| {
-                                menu.action("Fold Directory", Box::new(FoldDirectory))
+                                menu.action(i18n::t!("7b4c4c37a5658899"), Box::new(FoldDirectory))
                             })
                             .when(should_show_compare, |menu| {
-                                menu.separator()
-                                    .action("Compare Marked Files", Box::new(CompareMarkedFiles))
+                                menu.separator().action(
+                                    i18n::t!("209d5c710c5fcaec"),
+                                    Box::new(CompareMarkedFiles),
+                                )
                             })
                             .separator()
-                            .action("Cut", Box::new(Cut))
-                            .action("Copy", Box::new(Copy))
-                            .action("Duplicate", Box::new(Duplicate))
-                            .action_disabled_when(!has_pasteable_content, "Paste", Box::new(Paste))
+                            .action(i18n::t!("410a8e8a6bf253ac"), Box::new(Cut))
+                            .action(i18n::t!("63d90d977348ab1f"), Box::new(Copy))
+                            .action(i18n::t!("f2221ba3259d6d15"), Box::new(Duplicate))
+                            .action_disabled_when(
+                                !has_pasteable_content,
+                                i18n::t!("33517926747180e6"),
+                                Box::new(Paste),
+                            )
                             .when(!is_collab, |menu| {
                                 let can_undo = self.undo_manager.can_undo();
                                 let can_redo = self.undo_manager.can_redo();
 
-                                menu.action_disabled_when(!can_undo, "Undo", Box::new(Undo))
-                                    .action_disabled_when(!can_redo, "Redo", Box::new(Redo))
+                                menu.action_disabled_when(
+                                    !can_undo,
+                                    i18n::t!("926a50b98ece2667"),
+                                    Box::new(Undo),
+                                )
+                                .action_disabled_when(
+                                    !can_redo,
+                                    i18n::t!("03717b6f10700f87"),
+                                    Box::new(Redo),
+                                )
                             })
                             .when(is_remote, |menu| {
-                                menu.separator()
-                                    .action("Download...", Box::new(DownloadFromRemote))
+                                menu.separator().action(
+                                    i18n::t!("e4eb55f7972c2b6f"),
+                                    Box::new(DownloadFromRemote),
+                                )
                             })
                             .separator()
-                            .action("Copy Path", Box::new(zed_actions::workspace::CopyPath))
                             .action(
-                                "Copy Relative Path",
+                                i18n::t!("b97c49acb93028ec"),
+                                Box::new(zed_actions::workspace::CopyPath),
+                            )
+                            .action(
+                                i18n::t!("02bcdbc5a1453cb0"),
                                 Box::new(zed_actions::workspace::CopyRelativePath),
                             )
                             .when(has_git_repo, |menu| {
                                 menu.separator()
                                     .when(!is_dir && self.has_git_changes(entry_id), |menu| {
                                         menu.action(
-                                            "Restore File",
+                                            i18n::t!("56c4ecf097bdf54b"),
                                             Box::new(git::RestoreFile { skip_prompt: false }),
                                         )
                                     })
-                                    .action("Add to .gitignore", Box::new(git::AddToGitignore))
                                     .action(
-                                        "Add to .git/info/exclude",
+                                        i18n::t!("7f8d24cbc09baee0"),
+                                        Box::new(git::AddToGitignore),
+                                    )
+                                    .action(
+                                        i18n::t!("8d687cc65a2e45f0"),
                                         Box::new(git::AddToGitInfoExclude),
                                     )
                                     .when(has_history, |menu| {
-                                        menu.action("View History", Box::new(git::FileHistory))
+                                        menu.action(
+                                            i18n::t!("a5783b941d7dfa1a"),
+                                            Box::new(git::FileHistory),
+                                        )
                                     })
                                     .when(!is_dir, |menu| {
                                         menu.action(
-                                            "Open File Permalink",
+                                            i18n::t!("aa32d423e7138efa"),
                                             git::OpenFilePermalink.boxed_clone(),
                                         )
                                         .action(
-                                            "Copy File Permalink",
+                                            i18n::t!("d72898311fb0c0e3"),
                                             git::CopyFilePermalink.boxed_clone(),
                                         )
                                     })
                             })
                             .when(!should_hide_rename, |menu| {
-                                menu.separator().action("Rename", Box::new(Rename))
+                                menu.separator()
+                                    .action(i18n::t!("0d0cbac2eee54113"), Box::new(Rename))
                             })
                             .when(!is_root && !is_collab, |menu| {
-                                menu.action("Trash", Box::new(Trash { skip_prompt: false }))
+                                menu.action(
+                                    i18n::t!("50ba897c88fabc59"),
+                                    Box::new(Trash { skip_prompt: false }),
+                                )
                             })
                             .when(!is_root, |menu| {
-                                menu.action("Delete", Box::new(Delete { skip_prompt: false }))
+                                menu.action(
+                                    i18n::t!("2f9daa828907b93f"),
+                                    Box::new(Delete { skip_prompt: false }),
+                                )
                             })
                             .when(!is_collab && is_root, |menu| {
                                 menu.separator()
                                     .action(
-                                        "Add Folders to Project…",
+                                        i18n::t!("0fde73d53968b148"),
                                         Box::new(workspace::AddFolderToProject),
                                     )
-                                    .action("Remove from Project", Box::new(RemoveFromProject))
+                                    .action(
+                                        i18n::t!("ca2e662968ab7203"),
+                                        Box::new(RemoveFromProject),
+                                    )
                             })
                             .when(is_dir && !is_root, |menu| {
                                 menu.separator()
-                                    .action("Expand All", Box::new(ExpandSelectedEntryAndChildren))
                                     .action(
-                                        "Collapse All",
+                                        i18n::t!("19673b331b64107a"),
+                                        Box::new(ExpandSelectedEntryAndChildren),
+                                    )
+                                    .action(
+                                        i18n::t!("79f3c095aef4bf7b"),
                                         Box::new(CollapseSelectedEntryAndChildren),
                                     )
                             })
                             .when(is_dir && is_root, |menu| {
                                 menu.separator()
-                                    .action("Expand All", Box::new(ExpandAllEntries))
-                                    .action("Collapse All", Box::new(CollapseAllEntries))
+                                    .action(
+                                        i18n::t!("19673b331b64107a"),
+                                        Box::new(ExpandAllEntries),
+                                    )
+                                    .action(
+                                        i18n::t!("79f3c095aef4bf7b"),
+                                        Box::new(CollapseAllEntries),
+                                    )
                             })
                     }
                 })
@@ -1886,9 +2004,10 @@ impl ProjectPanel {
             });
             return;
         }
-        if let Some(selection) = self.selection {
-            let (mut worktree_ix, mut entry_ix, _) =
-                self.index_for_selection(selection).unwrap_or_default();
+        if let Some(previous_selection) = self.selection {
+            let (mut worktree_ix, mut entry_ix, _) = self
+                .index_for_selection(previous_selection)
+                .unwrap_or_default();
             if entry_ix > 0 {
                 entry_ix -= 1;
             } else if worktree_ix > 0 {
@@ -1909,12 +2028,36 @@ impl ProjectPanel {
             };
             self.selection = Some(selection);
             if window.modifiers().shift {
-                self.marked_entries.push(selection);
+                self.extend_marked_entries(previous_selection, selection);
             }
             self.autoscroll(cx);
             cx.notify();
         } else {
             self.select_first(&SelectFirst {}, window, cx);
+        }
+    }
+
+    fn extend_marked_entries(
+        &mut self,
+        previous_selection: SelectedEntry,
+        selection: SelectedEntry,
+    ) {
+        // Mark the entry the selection started from too, so that extending a selection
+        // with the keyboard includes it, the same as a shift-click range does.
+        if !self.marked_entries.contains(&previous_selection) {
+            self.marked_entries.push(previous_selection);
+        }
+        if !self.marked_entries.contains(&selection) {
+            self.marked_entries.push(selection);
+        }
+        self.select_outermost_folded_ancestor(selection.entry_id);
+    }
+
+    // A vertical selection gesture says nothing about which segment of a folded
+    // directory is meant, so select the whole folded directory.
+    fn select_outermost_folded_ancestor(&mut self, entry_id: ProjectEntryId) {
+        if let Some(folds) = self.state.ancestors.get_mut(&entry_id) {
+            folds.set_active_index(0);
         }
     }
 
@@ -2615,8 +2758,14 @@ impl ProjectPanel {
             let file_name = entry.path.file_name()?.to_string();
 
             let answer = if !action.skip_prompt {
-                let prompt = format!("Discard changes to {}?", MarkdownInlineCode(&file_name));
-                Some(window.prompt(PromptLevel::Info, &prompt, None, &["Restore", "Cancel"], cx))
+                let prompt = i18n::t_args!("500237ba2e75ec5b", MarkdownInlineCode(&file_name));
+                Some(window.prompt(
+                    PromptLevel::Info,
+                    &prompt,
+                    None,
+                    &[i18n::t!("e0534b8a4e46a0cb"), i18n::t!("2cd0f3be8738a86c")],
+                    cx,
+                ))
             } else {
                 None
             };
@@ -2637,7 +2786,7 @@ impl ProjectPanel {
                 if let Err(e) = task.await {
                     panel
                         .update(cx, |panel, cx| {
-                            let message = format!("Failed to restore {}: {}", file_name, e);
+                            let message = i18n::t_args!("c7a554c0d9879a43", file_name, e);
                             let toast = StatusToast::new(message, cx, |this, _| {
                                 this.icon(
                                     Icon::new(IconName::XCircle)
@@ -2709,7 +2858,7 @@ impl ProjectPanel {
                 if let Err(e) = receiver.await? {
                     if let Some(workspace) = workspace.upgrade() {
                         cx.update(|cx| {
-                            let message = format!("Failed to add to .gitignore: {}", e);
+                            let message = i18n::t_args!("6b15d16c82811ffe", e);
                             let toast = StatusToast::new(message, cx, |this, _| {
                                 this.icon(Icon::new(IconName::XCircle).color(Color::Error))
                                     .dismiss_button(true)
@@ -2756,7 +2905,7 @@ impl ProjectPanel {
                 if let Err(e) = receiver.await? {
                     if let Some(workspace) = workspace.upgrade() {
                         cx.update(|cx| {
-                            let message = format!("Failed to add to .git/info/exclude: {}", e);
+                            let message = i18n::t_args!("1088a8ac72262d44", e);
                             let toast = StatusToast::new(message, cx, |this, _| {
                                 this.icon(Icon::new(IconName::XCircle).color(Color::Error))
                                     .dismiss_button(true)
@@ -2790,16 +2939,20 @@ impl ProjectPanel {
         S: AsRef<str>,
     {
         let (message_start, confirmation_label, detail) = match kind {
-            RemovalKind::Trash => ("Do you want to trash", "Trash", None),
+            RemovalKind::Trash => (
+                i18n::t!("e5adde10db0293d0"),
+                i18n::t!("fa5e1982038ca189"),
+                None,
+            ),
             RemovalKind::Delete => (
-                "Are you sure you want to permanently delete",
-                "Delete",
-                Some("This cannot be undone."),
+                i18n::t!("91d6d11df040c45a"),
+                i18n::t!("2f9daa828907b93f"),
+                Some(i18n::t!("77f4797d861e5875")),
             ),
         };
 
         let mut message = match names {
-            [name] => format!("{message_start} {}?", MarkdownInlineCode(name.as_ref())),
+            [name] => format!("{message_start} {}？", MarkdownInlineCode(name.as_ref())),
             _ => {
                 const CUTOFF_POINT: usize = 10;
                 let mut listed_names = names
@@ -2809,30 +2962,24 @@ impl ProjectPanel {
                     .collect::<Vec<_>>();
                 let omitted_count = names.len().saturating_sub(CUTOFF_POINT);
                 if omitted_count == 1 {
-                    listed_names.push(".. 1 file not shown".into());
+                    listed_names.push(i18n::t!("25ea975dd7ccc210").into());
                 } else if omitted_count > 1 {
-                    listed_names.push(format!(".. {omitted_count} files not shown"));
+                    listed_names.push(i18n::t!("a58d77ec897cf02f", omitted_count = omitted_count));
                 }
 
-                format!(
-                    "{message_start} the following {} files?\n{}",
-                    names.len(),
-                    listed_names.join("\n")
-                )
+                i18n::t_mix!("d13191d4551c4fd2"; names.len(), listed_names.join("\n"); message_start = message_start)
             }
         };
         match dirty_buffers {
             0 => {}
             1 if names.len() == 1 => {
-                message.push_str("\n\nIt has unsaved changes, which will be lost.");
+                message.push_str(i18n::t!("6b4bc2bda14363f0"));
             }
             1 => {
-                message.push_str("\n\n1 of these has unsaved changes, which will be lost.");
+                message.push_str(i18n::t!("ac63ba71b9e1ec17"));
             }
             dirty_buffers => {
-                message.push_str(&format!(
-                    "\n\n{dirty_buffers} of these have unsaved changes, which will be lost."
-                ));
+                message.push_str(&i18n::t!("3fe6bb056d23793f", dirty_buffers = dirty_buffers));
             }
         }
 
@@ -2898,7 +3045,7 @@ impl ProjectPanel {
                     PromptLevel::Info,
                     &prompt.message,
                     prompt.detail,
-                    &[prompt.confirmation_label, "Cancel"],
+                    &[prompt.confirmation_label, i18n::t!("2cd0f3be8738a86c")],
                     cx,
                 ))
             } else {
@@ -2984,10 +3131,26 @@ impl ProjectPanel {
         cx: &mut Context<Self>,
     ) {
         let message = match (trash, total_count) {
-            (true, 1) => format!("Failed to trash {failed_count} of {total_count} file."),
-            (true, _) => format!("Failed to trash {failed_count} of {total_count} files."),
-            (false, 1) => format!("Failed to delete {failed_count} of {total_count} file."),
-            (false, _) => format!("Failed to delete {failed_count} of {total_count} files."),
+            (true, 1) => i18n::t!(
+                "0130f0fac582b83a",
+                failed_count = failed_count,
+                total_count = total_count
+            ),
+            (true, _) => i18n::t!(
+                "0130f0fac582b83a",
+                failed_count = failed_count,
+                total_count = total_count
+            ),
+            (false, 1) => i18n::t!(
+                "018af154831a26fe",
+                failed_count = failed_count,
+                total_count = total_count
+            ),
+            (false, _) => i18n::t!(
+                "018af154831a26fe",
+                failed_count = failed_count,
+                total_count = total_count
+            ),
         };
 
         let toast = StatusToast::new(message, cx, |this, _| {
@@ -3210,9 +3373,10 @@ impl ProjectPanel {
             });
             return;
         }
-        if let Some(selection) = self.selection {
-            let (mut worktree_ix, mut entry_ix, _) =
-                self.index_for_selection(selection).unwrap_or_default();
+        if let Some(previous_selection) = self.selection {
+            let (mut worktree_ix, mut entry_ix, _) = self
+                .index_for_selection(previous_selection)
+                .unwrap_or_default();
             if let Some(worktree_entries) = self
                 .state
                 .visible_entries
@@ -3240,7 +3404,7 @@ impl ProjectPanel {
                 };
                 self.selection = Some(selection);
                 if window.modifiers().shift {
-                    self.marked_entries.push(selection);
+                    self.extend_marked_entries(previous_selection, selection);
                 }
 
                 self.autoscroll(cx);
@@ -3626,6 +3790,11 @@ impl ProjectPanel {
             return;
         }
 
+        if let Some(image) = self.image_from_system_clipboard(cx) {
+            self.paste_image(image, window, cx);
+            return;
+        }
+
         maybe!({
             let (worktree, entry) = self.selected_entry_handle(cx)?;
             let entry = entry.clone();
@@ -3844,63 +4013,18 @@ impl ProjectPanel {
             return;
         }
 
-        let total_files = files_to_download.len();
-        let workspace = self.workspace.clone();
-
         let destination_dir = cx.prompt_for_paths(PathPromptOptions {
             files: false,
             directories: true,
             multiple: false,
-            prompt: Some("Download".into()),
+            prompt: Some(i18n::t!("083b6bc980d41874").into()),
         });
 
-        let fs = self.fs.clone();
-        let notification_id =
-            workspace::notifications::NotificationId::Named("download-progress".into());
         cx.spawn_in(window, async move |this, cx| {
             if let Ok(Ok(Some(mut paths))) = destination_dir.await {
                 if let Some(dest_dir) = paths.pop() {
-                    // Show initial toast
-                    workspace
-                        .update(cx, |workspace, cx| {
-                            workspace.show_toast(
-                                workspace::Toast::new(
-                                    notification_id.clone(),
-                                    format!("Downloading 0/{} files...", total_files),
-                                ),
-                                cx,
-                            );
-                        })
-                        .ok();
-
-                    for (index, (worktree_id, entry_path, relative_path)) in
-                        files_to_download.into_iter().enumerate()
-                    {
-                        // Update progress toast
-                        workspace
-                            .update(cx, |workspace, cx| {
-                                workspace.show_toast(
-                                    workspace::Toast::new(
-                                        notification_id.clone(),
-                                        format!(
-                                            "Downloading {}/{} files...",
-                                            index + 1,
-                                            total_files
-                                        ),
-                                    ),
-                                    cx,
-                                );
-                            })
-                            .ok();
-
+                    for (worktree_id, entry_path, relative_path) in files_to_download {
                         let destination_path = dest_dir.join(&relative_path);
-
-                        // Create parent directories if needed
-                        if let Some(parent) = destination_path.parent() {
-                            if !parent.exists() {
-                                fs.create_dir(parent).await.log_err();
-                            }
-                        }
 
                         let download_task = this.update(cx, |this, cx| {
                             let project = this.project.clone();
@@ -3912,19 +4036,6 @@ impl ProjectPanel {
                             task.await.log_err();
                         }
                     }
-
-                    // Show completion toast
-                    workspace
-                        .update(cx, |workspace, cx| {
-                            workspace.show_toast(
-                                workspace::Toast::new(
-                                    notification_id.clone(),
-                                    format!("Downloaded {} files", total_files),
-                                ),
-                                cx,
-                            );
-                        })
-                        .ok();
                 }
             }
         })
@@ -4267,6 +4378,42 @@ impl ProjectPanel {
         self.index_for_entry(selection.entry_id, selection.worktree_id)
     }
 
+    fn selected_code_explanation_paths(&self, cx: &App) -> Option<Vec<ProjectPath>> {
+        let project = self.project.read(cx);
+        let entries = self.disjoint_entries(self.effective_entries(), cx);
+        let mut paths = Vec::with_capacity(entries.len());
+        for selected in entries {
+            let worktree = project.worktree_for_id(selected.worktree_id, cx)?;
+            let worktree = worktree.read(cx);
+            let entry = worktree.entry_for_id(selected.entry_id)?;
+            if entry.is_private || entry.is_ignored || entry.is_external || entry.is_fifo {
+                continue;
+            }
+            paths.push(ProjectPath {
+                worktree_id: selected.worktree_id,
+                path: entry.path.clone(),
+            });
+        }
+        Some(paths)
+    }
+
+    fn scan_selected_entries_for_code_explanations(
+        &mut self,
+        _: &ScanSelectedEntriesForCodeExplanations,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(paths) = self.selected_code_explanation_paths(cx) else {
+            return;
+        };
+        editor::code_explanations::start_selected_project_scan(
+            self.project.clone(),
+            self.workspace.clone(),
+            paths,
+            cx,
+        );
+    }
+
     fn disjoint_effective_entries_excluding_roots(&self, cx: &App) -> BTreeSet<SelectedEntry> {
         let project = self.project.read(cx);
         let entries = self
@@ -4444,6 +4591,98 @@ impl ProjectPanel {
         None
     }
 
+    fn image_from_system_clipboard(&self, cx: &App) -> Option<gpui::Image> {
+        cx.read_from_clipboard()?
+            .into_entries()
+            .find_map(|entry| match entry {
+                GpuiClipboardEntry::Image(image) if !image.bytes().is_empty() => Some(image),
+                _ => None,
+            })
+    }
+
+    fn paste_image(&mut self, image: gpui::Image, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((worktree, target_entry)) = self.selected_sub_entry(cx) else {
+            return;
+        };
+        let target_directory = if target_entry.is_dir() {
+            target_entry.path.clone()
+        } else if let Some(parent) = target_entry.path.parent() {
+            parent.into()
+        } else {
+            return;
+        };
+        let worktree_id = worktree.read(cx).id();
+        let snapshot = worktree.read(cx).snapshot();
+        let Some(image_path) =
+            unused_pasted_image_path(&target_directory, image.format.extension(), |path| {
+                snapshot.entry_for_path(path).is_some()
+            })
+        else {
+            return;
+        };
+        let project_path = ProjectPath {
+            worktree_id,
+            path: image_path.clone(),
+        };
+        let transfers = project::file_transfer::store(&self.project, cx);
+        let direction = if worktree.read(cx).is_local() {
+            project::file_transfer::TransferDirection::Copy
+        } else {
+            project::file_transfer::TransferDirection::Upload
+        };
+        let progress = transfers.update(cx, |transfers, cx| {
+            transfers.start(
+                direction,
+                image_path.to_string(),
+                worktree
+                    .read(cx)
+                    .absolutize(&target_directory)
+                    .display()
+                    .to_string(),
+                cx,
+            )
+        });
+        let observer = progress.clone();
+        let create_task = worktree.update(cx, |worktree, cx| {
+            worktree.create_entry_with_progress(
+                image_path,
+                false,
+                Some(image.bytes().to_vec()),
+                Some(Arc::new(move |event| observer.progress(event))),
+                cx,
+            )
+        });
+        let create_task = progress.track(create_task, cx);
+        let workspace = self.workspace.clone();
+
+        cx.spawn_in(window, async move |project_panel, mut cx| {
+            let Some(created_entry) = create_task
+                .await
+                .notify_workspace_async_err(workspace, &mut cx)
+            else {
+                return;
+            };
+
+            project_panel
+                .update_in(cx, |project_panel, window, cx| {
+                    if let CreatedEntry::Included(entry) = created_entry {
+                        project_panel
+                            .undo_manager
+                            .record([Change::Created(project_path)])
+                            .log_err();
+                        project_panel.selection = Some(SelectedEntry {
+                            worktree_id,
+                            entry_id: entry.id,
+                        });
+                        project_panel.marked_entries.clear();
+                        project_panel.update_visible_entries(None, false, false, window, cx);
+                    }
+                })
+                .log_err();
+        })
+        .detach();
+    }
+
     fn has_pasteable_content(&self, cx: &App) -> bool {
         if self
             .clipboard
@@ -4453,6 +4692,7 @@ impl ProjectPanel {
             return true;
         }
         self.external_paths_from_system_clipboard(cx).is_some()
+            || self.image_from_system_clipboard(cx).is_some()
     }
 
     fn selected_entry_handle<'a>(
@@ -4829,6 +5069,7 @@ impl ProjectPanel {
                     this.update_visible_entries_task.autoscroll = false;
                     this.autoscroll(cx);
                 }
+                this.preload_initial_entry_icons(window, cx);
                 cx.notify();
             })
             .ok();
@@ -4840,6 +5081,77 @@ impl ProjectPanel {
                 || self.update_visible_entries_task.focus_filename_editor,
             autoscroll: autoscroll || self.update_visible_entries_task.autoscroll,
         };
+    }
+
+    fn preload_initial_entry_icons(&self, window: &Window, cx: &mut Context<Self>) {
+        if self.state.edit_state.is_some() {
+            return;
+        }
+        {
+            let scroll = self.scroll_handle.0.borrow();
+            if scroll
+                .last_item_size
+                .is_some_and(|size| size.contents.height > Pixels::ZERO)
+                || scroll.base_handle.offset().y != Pixels::ZERO
+                || scroll.deferred_scroll_to_item.is_some()
+            {
+                return;
+            }
+        }
+
+        let Some(workspace) = Workspace::for_window(window, cx)
+            .filter(|workspace| workspace.entity_id() == self.workspace.entity_id())
+        else {
+            return;
+        };
+        let workspace = workspace.read(cx);
+        let panel_id = cx.entity_id();
+        if workspace
+            .zoomed_item()
+            .and_then(|view| view.upgrade())
+            .is_some_and(|view| view.entity_id() != panel_id)
+            || !workspace.all_docks().into_iter().any(|dock| {
+                dock.read(cx)
+                    .visible_panel()
+                    .is_some_and(|panel| panel.panel_id() == panel_id)
+            })
+        {
+            return;
+        }
+
+        let scale_factor = window.scale_factor();
+        if !scale_factor.is_finite() || scale_factor <= 0.0 {
+            return;
+        }
+        let font_size = ThemeSettings::get_global(cx).ui_font_size(cx).as_f32();
+        let minimum_row_height = (1.5 * font_size * scale_factor).floor() / scale_factor;
+        let row_count = (window.viewport_size().height.as_f32() / minimum_row_height).ceil();
+        if minimum_row_height <= 0.0 || !row_count.is_finite() || row_count <= 0.0 {
+            return;
+        }
+        let row_count = (row_count as usize).saturating_add(1);
+        for (worktree_id, entry) in self
+            .state
+            .visible_entries
+            .iter()
+            .flat_map(|worktree| {
+                worktree
+                    .entries
+                    .iter()
+                    .map(move |entry| (worktree.worktree_id, entry))
+            })
+            .take(row_count)
+        {
+            let is_expanded = self
+                .state
+                .expanded_dir_ids
+                .get(&worktree_id)
+                .is_some_and(|entries| entries.binary_search(&entry.id).is_ok());
+            let (chevron, icon) = Self::entry_icons(entry, is_expanded, cx);
+            for path in chevron.into_iter().chain(icon) {
+                Icon::from_path(path).preload(cx);
+            }
+        }
     }
 
     fn expand_entry(
@@ -4933,7 +5245,7 @@ impl ProjectPanel {
                                 PromptLevel::Info,
                                 &prompt_message,
                                 None,
-                                &["Replace", "Cancel"],
+                                &[i18n::t!("131b13aa265996df"), i18n::t!("2cd0f3be8738a86c")],
                                 cx,
                             )
                         })?
@@ -4950,11 +5262,41 @@ impl ProjectPanel {
                     return Ok(());
                 }
 
-                let (worktree_id, task) = worktree.update(cx, |worktree, cx| {
-                    (
-                        worktree.id(),
-                        worktree.copy_external_entries(target_directory, paths, fs, cx),
+                let transfers = this.update(cx, |this, cx| {
+                    project::file_transfer::store(&this.project, cx)
+                })?;
+                let direction = worktree.read_with(cx, |worktree, _| {
+                    if worktree.is_local() {
+                        project::file_transfer::TransferDirection::Copy
+                    } else {
+                        project::file_transfer::TransferDirection::Upload
+                    }
+                });
+                let progress = transfers.update(cx, |transfers, cx| {
+                    transfers.start(
+                        direction,
+                        paths
+                            .first()
+                            .map(|path| path.display().to_string())
+                            .unwrap_or_else(|| i18n::t!("39932f24fe11a6ba").into()),
+                        worktree
+                            .read(cx)
+                            .absolutize(&target_directory)
+                            .display()
+                            .to_string(),
+                        cx,
                     )
+                });
+                let observer = progress.clone();
+                let (worktree_id, task) = worktree.update(cx, |worktree, cx| {
+                    let task = worktree.copy_external_entries_with_progress(
+                        target_directory,
+                        paths,
+                        fs,
+                        Some(Arc::new(move |event| observer.progress(event))),
+                        cx,
+                    );
+                    (worktree.id(), progress.track(task, cx))
                 });
 
                 let opened_entries: Vec<_> = task
@@ -5017,6 +5359,18 @@ impl ProjectPanel {
             if existing_cursor != new_cursor {
                 cx.set_active_drag_cursor_style(new_cursor, window);
             }
+        }
+    }
+
+    fn update_folded_directory_drag_target(
+        &mut self,
+        is_hovered: bool,
+        target: FoldedDirectoryDragTarget,
+    ) {
+        if is_hovered {
+            self.folded_directory_drag_target = Some(target);
+        } else if self.folded_directory_drag_target == Some(target) {
+            self.folded_directory_drag_target = None;
         }
     }
 
@@ -5930,7 +6284,7 @@ impl ProjectPanel {
         let kind = details.kind;
         let is_sticky = details.sticky.is_some();
         let sticky_index = details.sticky.as_ref().map(|this| this.sticky_index);
-        let settings = ProjectPanelSettings::get_global(cx);
+        let settings = *ProjectPanelSettings::get_global(cx);
         let show_editor = details.is_editing && !details.is_processing;
 
         let selection = SelectedEntry {
@@ -6046,6 +6400,15 @@ impl ProjectPanel {
             .git_status_indicator
             .then(|| git_status_indicator(details.git_status))
             .flatten();
+        let explanation_index = editor::code_explanations::code_explanation_file_index(cx);
+        let has_ai_explanation = kind.is_file()
+            && explanation_index.read(cx).contains(
+                &self.project,
+                &ProjectPath {
+                    worktree_id,
+                    path: path.clone(),
+                },
+            );
 
         let id: ElementId = if is_sticky {
             SharedString::from(format!("project_panel_sticky_item_{}", entry_id.to_usize())).into()
@@ -6087,7 +6450,11 @@ impl ProjectPanel {
                 },
             )
             .cursor_pointer()
-            .rounded_none()
+            // Inset the row background so its rounded corners read as a card instead
+            // of filling the panel edge to edge; the indent guides, drag targets and
+            // hit areas all stay on this same row element.
+            .mx(ui::LIST_ITEM_HIGHLIGHT_INSET)
+            .rounded_md()
             .bg(bg_color)
             .border_1()
             .border_r_2()
@@ -6356,9 +6723,18 @@ impl ProjectPanel {
                                 },
                             );
 
-                            for selection in &new_selections {
-                                if !project_panel.marked_entries.contains(selection) {
-                                    project_panel.marked_entries.push(*selection);
+                            for new_selection in &new_selections {
+                                if !project_panel.marked_entries.contains(new_selection) {
+                                    project_panel.marked_entries.push(*new_selection);
+                                }
+
+                                let is_intermediate_entry = new_selection.entry_id
+                                    != selection.entry_id
+                                    && new_selection.entry_id != clicked_entry.entry_id;
+
+                                if is_intermediate_entry {
+                                    project_panel
+                                        .select_outermost_folded_ancestor(new_selection.entry_id);
                                 }
                             }
 
@@ -6445,7 +6821,8 @@ impl ProjectPanel {
                     .when(
                         canonical_path.is_some()
                             || diagnostic_count.is_some()
-                            || git_indicator.is_some(),
+                            || git_indicator.is_some()
+                            || has_ai_explanation,
                         |this| {
                             let symlink_element = canonical_path.map(|path| {
                                 div()
@@ -6486,6 +6863,13 @@ impl ProjectPanel {
                                                         .color(Color::Warning),
                                                 )
                                             },
+                                        )
+                                    })
+                                    .when(has_ai_explanation, |this| {
+                                        this.child(
+                                            Label::new("AI")
+                                                .size(LabelSize::Custom(rems_from_px(8_f32)))
+                                                .color(Color::Muted),
                                         )
                                     })
                                     .when_some(git_indicator, |this, (label, color)| {
@@ -6714,32 +7098,21 @@ impl ProjectPanel {
                                     .ancestors
                                     .get(components_len - 1 - index)
                                     .cloned();
+                                let drag_target = FoldedDirectoryDragTarget {
+                                    entry_id,
+                                    index,
+                                    is_delimiter_target: false,
+                                };
                                 div.when(drag_and_drop_enabled, |div| {
                                     div.on_drag_move(cx.listener(
                                         move |this,
                                               event: &DragMoveEvent<DraggedSelection>,
                                               _,
                                               _| {
-                                            if event.bounds.contains(&event.event.position) {
-                                                this.folded_directory_drag_target =
-                                                    Some(FoldedDirectoryDragTarget {
-                                                        entry_id,
-                                                        index,
-                                                        is_delimiter_target: false,
-                                                    });
-                                            } else {
-                                                let is_current_target = this
-                                                    .folded_directory_drag_target
-                                                    .as_ref()
-                                                    .is_some_and(|target| {
-                                                        target.entry_id == entry_id
-                                                            && target.index == index
-                                                            && !target.is_delimiter_target
-                                                    });
-                                                if is_current_target {
-                                                    this.folded_directory_drag_target = None;
-                                                }
-                                            }
+                                            this.update_folded_directory_drag_target(
+                                                event.bounds.contains(&event.event.position),
+                                                drag_target,
+                                            );
                                         },
                                     ))
                                     .on_drop(cx.listener(
@@ -6750,6 +7123,27 @@ impl ProjectPanel {
                                                     selections,
                                                     target_entry_id,
                                                     is_file,
+                                                    window,
+                                                    cx,
+                                                );
+                                            }
+                                        },
+                                    ))
+                                    .on_drag_move(cx.listener(
+                                        move |this, event: &DragMoveEvent<ExternalPaths>, _, _| {
+                                            this.update_folded_directory_drag_target(
+                                                event.bounds.contains(&event.event.position),
+                                                drag_target,
+                                            );
+                                        },
+                                    ))
+                                    .on_drop(cx.listener(
+                                        move |this, external_paths: &ExternalPaths, window, cx| {
+                                            this.clear_drag_state(cx);
+                                            if let Some(target_entry_id) = target_entry_id {
+                                                this.drop_external_files(
+                                                    external_paths.paths(),
+                                                    target_entry_id,
                                                     window,
                                                     cx,
                                                 );
@@ -6785,6 +7179,7 @@ impl ProjectPanel {
                                 }
                             }),
                         )
+                        .debug_selector(|| format!("project_panel_path_component_{component}"))
                         .child(
                             Label::new(component)
                                 .single_line()
@@ -6836,6 +7231,11 @@ impl ProjectPanel {
             .ancestors
             .get(components_len - 1 - delimiter_target_index)
             .cloned();
+        let drag_target = FoldedDirectoryDragTarget {
+            entry_id,
+            index: delimiter_target_index,
+            is_delimiter_target: true,
+        };
         div()
             .when(!is_sticky, |div| {
                 div.when(drag_and_drop_enabled, |div| {
@@ -6849,24 +7249,31 @@ impl ProjectPanel {
                     ))
                     .on_drag_move(cx.listener(
                         move |this, event: &DragMoveEvent<DraggedSelection>, _, _| {
-                            if event.bounds.contains(&event.event.position) {
-                                this.folded_directory_drag_target =
-                                    Some(FoldedDirectoryDragTarget {
-                                        entry_id,
-                                        index: delimiter_target_index,
-                                        is_delimiter_target: true,
-                                    });
-                            } else {
-                                let is_current_target =
-                                    this.folded_directory_drag_target.is_some_and(|target| {
-                                        target.entry_id == entry_id
-                                            && target.index == delimiter_target_index
-                                            && target.is_delimiter_target
-                                    });
-                                if is_current_target {
-                                    this.folded_directory_drag_target = None;
-                                }
+                            this.update_folded_directory_drag_target(
+                                event.bounds.contains(&event.event.position),
+                                drag_target,
+                            );
+                        },
+                    ))
+                    .on_drop(cx.listener(
+                        move |this, external_paths: &ExternalPaths, window, cx| {
+                            this.clear_drag_state(cx);
+                            if let Some(target_entry_id) = target_entry_id {
+                                this.drop_external_files(
+                                    external_paths.paths(),
+                                    target_entry_id,
+                                    window,
+                                    cx,
+                                );
                             }
+                        },
+                    ))
+                    .on_drag_move(cx.listener(
+                        move |this, event: &DragMoveEvent<ExternalPaths>, _, _| {
+                            this.update_folded_directory_drag_target(
+                                event.bounds.contains(&event.event.position),
+                                drag_target,
+                            );
                         },
                     ))
                 })
@@ -6876,6 +7283,33 @@ impl ProjectPanel {
                     .single_line()
                     .color(filename_text_color),
             )
+    }
+
+    fn entry_icons(
+        entry: &Entry,
+        is_expanded: bool,
+        cx: &App,
+    ) -> (Option<SharedString>, Option<SharedString>) {
+        let settings = ProjectPanelSettings::get_global(cx);
+        match entry.kind {
+            EntryKind::File => {
+                let icon = if settings.file_icons {
+                    FileIcons::get_icon(entry.path.as_std_path(), cx)
+                } else {
+                    None
+                };
+                (None, icon)
+            }
+            _ => {
+                let indicator = FileIcons::get_folder_indicators(
+                    settings.folder_indicator,
+                    is_expanded,
+                    entry.path.as_std_path(),
+                    cx,
+                );
+                (indicator.chevron, indicator.icon)
+            }
+        }
     }
 
     fn details_for_entry(
@@ -6889,10 +7323,7 @@ impl ProjectPanel {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> EntryDetails {
-        let (show_file_icons, folder_indicator) = {
-            let settings = ProjectPanelSettings::get_global(cx);
-            (settings.file_icons, settings.folder_indicator)
-        };
+        let folder_indicator = ProjectPanelSettings::get_global(cx).folder_indicator;
 
         let expanded_entry_ids = self
             .state
@@ -6902,25 +7333,7 @@ impl ProjectPanel {
             .unwrap_or(&[]);
         let is_expanded = expanded_entry_ids.binary_search(&entry.id).is_ok();
 
-        let (chevron, icon) = match entry.kind {
-            EntryKind::File => {
-                let icon = if show_file_icons {
-                    FileIcons::get_icon(entry.path.as_std_path(), cx)
-                } else {
-                    None
-                };
-                (None, icon)
-            }
-            _ => {
-                let indicator = FileIcons::get_folder_indicators(
-                    folder_indicator,
-                    is_expanded,
-                    entry.path.as_std_path(),
-                    cx,
-                );
-                (indicator.chevron, indicator.icon)
-            }
-        };
+        let (chevron, icon) = Self::entry_icons(entry, is_expanded, cx);
 
         let path_style = self.project.read(cx).path_style(cx);
         let (depth, difference) =
@@ -7469,6 +7882,7 @@ impl Render for ProjectPanel {
                 .on_action(cx.listener(Self::fold_directory))
                 .on_action(cx.listener(Self::remove_from_project))
                 .on_action(cx.listener(Self::compare_marked_files))
+                .on_action(cx.listener(Self::scan_selected_entries_for_code_explanations))
                 .on_action(cx.listener(Self::open_context_menu))
                 .when(!project.is_read_only(cx), |el| {
                     el.on_action(cx.listener(Self::new_file))
@@ -7587,8 +8001,10 @@ impl Render for ProjectPanel {
                                     .with_render_fn(
                                         cx.entity(),
                                         move |this, params, _, cx| {
-                                            const LEFT_OFFSET: Pixels =
-                                                ui::LIST_ITEM_INDENT_GUIDE_LEFT_OFFSET;
+                                            // Rows are inset by `LIST_ITEM_HIGHLIGHT_INSET`, so
+                                            // their indent guides move with them.
+                                            let left_offset = ui::LIST_ITEM_INDENT_GUIDE_LEFT_OFFSET
+                                                + ui::LIST_ITEM_HIGHLIGHT_INSET;
                                             const PADDING_Y: Pixels = px(4.);
                                             const HITBOX_OVERDRAW: Pixels = px(3.);
 
@@ -7614,7 +8030,7 @@ impl Render for ProjectPanel {
                                                     let bounds = Bounds::new(
                                                         point(
                                                             layout.offset.x * indent_size
-                                                                + LEFT_OFFSET,
+                                                                + left_offset,
                                                             layout.offset.y * item_height + offset,
                                                         ),
                                                         size(
@@ -7684,8 +8100,11 @@ impl Render for ProjectPanel {
                                         .with_render_fn(
                                             cx.entity(),
                                             move |_, params, _, _| {
-                                                const LEFT_OFFSET: Pixels =
-                                                    ui::LIST_ITEM_INDENT_GUIDE_LEFT_OFFSET;
+                                                // Rows are inset by `LIST_ITEM_HIGHLIGHT_INSET`,
+                                                // so their indent guides move with them.
+                                                let left_offset =
+                                                    ui::LIST_ITEM_INDENT_GUIDE_LEFT_OFFSET
+                                                        + ui::LIST_ITEM_HIGHLIGHT_INSET;
 
                                                 let indent_size = params.indent_size;
                                                 let item_height = params.item_height;
@@ -7697,7 +8116,7 @@ impl Render for ProjectPanel {
                                                         let bounds = Bounds::new(
                                                             point(
                                                                 layout.offset.x * indent_size
-                                                                    + LEFT_OFFSET,
+                                                                    + left_offset,
                                                                 layout.offset.y * item_height,
                                                             ),
                                                             size(
@@ -8083,6 +8502,14 @@ impl Panel for ProjectPanel {
                 .root_entry()
                 .is_some_and(|entry| entry.is_dir())
         })
+    }
+
+    fn set_active(&mut self, active: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if active {
+            cx.defer_in(window, |panel, window, cx| {
+                panel.preload_initial_entry_icons(window, cx);
+            });
+        }
     }
 
     fn activation_priority(&self) -> u32 {

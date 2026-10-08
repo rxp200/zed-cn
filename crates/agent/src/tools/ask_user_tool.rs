@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use crate::{AgentTool, ToolCallEventStream, ToolInput};
 use agent_client_protocol::schema::v1 as acp;
+use agent_client_protocol::schema::v2 as acp_v2;
 use anyhow::Result;
 use gpui::{App, SharedString, Task};
 use language_model::LanguageModelToolResultContent;
@@ -59,7 +60,7 @@ impl From<AskUserToolOutput> for LanguageModelToolResultContent {
     fn from(value: AskUserToolOutput) -> Self {
         match value {
             AskUserToolOutput::Answered { selected } => {
-                format!("The user selected: {selected}").into()
+                i18n::t!("d920e08a909df273", selected = selected).into()
             }
             AskUserToolOutput::Error { error } => error.into(),
         }
@@ -85,7 +86,7 @@ impl AgentTool for AskUserTool {
     ) -> SharedString {
         match input {
             Ok(input) if !input.question.is_empty() => SharedString::from(input.question),
-            _ => "Asking a question".into(),
+            _ => i18n::t!("7a9276750f217fde").into(),
         }
     }
 
@@ -105,10 +106,7 @@ impl AgentTool for AskUserTool {
 
             if !input.allow_free_text && input.options.len() < 2 {
                 return Err(AskUserToolOutput::Error {
-                    error: "The `ask_user` tool needs at least two `options`, or \
-                            `allow_free_text` set to true. Ask an open-ended question \
-                            in prose instead."
-                        .to_string(),
+                    error: i18n::t!("70e1d1caa9be6a41").to_string(),
                 });
             }
 
@@ -121,35 +119,35 @@ impl AgentTool for AskUserTool {
             })?;
 
             let selected = match response.action {
-                acp::ElicitationAction::Accept(accept) => {
+                acp_v2::ElicitationAction::Accept(accept) => {
                     let content = accept.content.unwrap_or_default();
                     // A typed answer takes precedence over a picked option.
                     string_field(&content, OTHER_FIELD)
                         .or_else(|| string_field(&content, CHOICE_FIELD))
                         .ok_or_else(|| AskUserToolOutput::Error {
-                            error: "The user submitted the form without providing an answer."
-                                .to_string(),
+                            error: i18n::t!("0679788de9a15a67").to_string(),
                         })?
                 }
-                acp::ElicitationAction::Decline => {
+                acp_v2::ElicitationAction::Decline => {
                     return Err(AskUserToolOutput::Error {
-                        error: "The user declined to answer the question.".to_string(),
+                        error: i18n::t!("00f75817737826d5").to_string(),
                     });
                 }
-                acp::ElicitationAction::Cancel => {
+                acp_v2::ElicitationAction::Cancel => {
                     return Err(AskUserToolOutput::Error {
-                        error: "The user cancelled the question without answering.".to_string(),
+                        error: i18n::t!("159f67fd331ff43a").to_string(),
                     });
                 }
                 _ => {
                     return Err(AskUserToolOutput::Error {
-                        error: "The question was dismissed without an answer.".to_string(),
+                        error: i18n::t!("162b870e5e7916c0").to_string(),
                     });
                 }
             };
 
             event_stream.update_fields(
-                acp::ToolCallUpdateFields::new().title(format!("Answered: {selected}")),
+                acp::ToolCallUpdateFields::new()
+                    .title(i18n::t!("506225cf16411e86", selected = selected)),
             );
 
             Ok(AskUserToolOutput::Answered { selected })
@@ -163,18 +161,18 @@ impl AgentTool for AskUserTool {
 ///   unless free text is also allowed (in which case picking is optional).
 /// - Allowing free text adds a text field, required only when there are no
 ///   options to choose from.
-fn build_schema(options: &[String], allow_free_text: bool) -> acp::ElicitationSchema {
-    let mut schema = acp::ElicitationSchema::new();
+fn build_schema(options: &[String], allow_free_text: bool) -> acp_v2::ElicitationSchema {
+    let mut schema = acp_v2::ElicitationSchema::new();
 
     if !options.is_empty() {
         let enum_options = options
             .iter()
-            .map(|label| acp::EnumOption::new(label.clone(), label.clone()))
+            .map(|label| acp_v2::EnumOption::new(label.clone(), label.clone()))
             .collect::<Vec<_>>();
         schema = schema.property(
             CHOICE_FIELD,
-            acp::StringPropertySchema::new()
-                .title("Choose an option")
+            acp_v2::StringPropertySchema::new()
+                .title(i18n::t!("6737034c3ffdacd0"))
                 .one_of(enum_options),
             !allow_free_text,
         );
@@ -182,13 +180,13 @@ fn build_schema(options: &[String], allow_free_text: bool) -> acp::ElicitationSc
 
     if allow_free_text {
         let title = if options.is_empty() {
-            "Your answer"
+            i18n::t!("b569e63acb04bb58")
         } else {
-            "Or type your own answer"
+            i18n::t!("1fd6a790f9a01214")
         };
         schema = schema.property(
             OTHER_FIELD,
-            acp::StringPropertySchema::new().title(title),
+            acp_v2::StringPropertySchema::new().title(title),
             options.is_empty(),
         );
     }
@@ -198,11 +196,11 @@ fn build_schema(options: &[String], allow_free_text: bool) -> acp::ElicitationSc
 
 /// Extracts a non-empty string value for `key` from an elicitation response.
 fn string_field(
-    content: &BTreeMap<String, acp::ElicitationContentValue>,
+    content: &BTreeMap<String, acp_v2::ElicitationContentValue>,
     key: &str,
 ) -> Option<String> {
     match content.get(key) {
-        Some(acp::ElicitationContentValue::String(value)) if !value.is_empty() => {
+        Some(acp_v2::ElicitationContentValue::String(value)) if !value.is_empty() => {
             Some(value.clone())
         }
         _ => None,
@@ -216,18 +214,18 @@ mod tests {
 
     fn accept_with(
         entries: impl IntoIterator<Item = (&'static str, &'static str)>,
-    ) -> acp::CreateElicitationResponse {
-        let content: BTreeMap<String, acp::ElicitationContentValue> = entries
+    ) -> acp_v2::CreateElicitationResponse {
+        let content: BTreeMap<String, acp_v2::ElicitationContentValue> = entries
             .into_iter()
             .map(|(key, value)| {
                 (
                     key.to_string(),
-                    acp::ElicitationContentValue::String(value.to_string()),
+                    acp_v2::ElicitationContentValue::String(value.to_string()),
                 )
             })
             .collect();
-        acp::CreateElicitationResponse::new(acp::ElicitationAction::Accept(
-            acp::ElicitationAcceptAction::new().content(content),
+        acp_v2::CreateElicitationResponse::new(acp_v2::ElicitationAction::Accept(
+            acp_v2::ElicitationAcceptAction::new().content(content),
         ))
     }
 
@@ -249,7 +247,8 @@ mod tests {
         });
 
         let request = event_rx.expect_elicitation().await;
-        assert_eq!(request.tool_call_id, tool_call_id);
+        assert_eq!(request.tool_call_id.0, tool_call_id.0);
+        assert!(Arc::ptr_eq(&request.tool_call_id.0, &tool_call_id.0));
         assert_eq!(request.message, "Which approach?");
         assert!(request.schema.properties.contains_key(CHOICE_FIELD));
         assert!(!request.schema.properties.contains_key(OTHER_FIELD));
@@ -346,14 +345,14 @@ mod tests {
         let request = event_rx.expect_elicitation().await;
         request
             .response
-            .send(acp::CreateElicitationResponse::new(
-                acp::ElicitationAction::Decline,
+            .send(acp_v2::CreateElicitationResponse::new(
+                acp_v2::ElicitationAction::Decline,
             ))
             .unwrap();
 
         match task.await {
             Err(AskUserToolOutput::Error { error }) => {
-                assert!(error.contains("declined"), "got: {error}");
+                assert!(error.contains("拒绝"), "got: {error}");
             }
             other => panic!("expected an error, got {other:?}"),
         }
@@ -379,7 +378,7 @@ mod tests {
 
         match result {
             Err(AskUserToolOutput::Error { error }) => {
-                assert!(error.contains("at least two"), "got: {error}");
+                assert!(error.contains("至少两个"), "got: {error}");
             }
             other => panic!("expected an error, got {other:?}"),
         }

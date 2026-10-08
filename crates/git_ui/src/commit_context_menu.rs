@@ -1,10 +1,11 @@
-use crate::commit_view::CommitView;
+use crate::{commit_view::CommitView, create_tag_at_commit};
 use git::Oid;
 use gpui::{Action, ClipboardItem, Entity, FocusHandle, SharedString, WeakEntity, Window, actions};
 use project::{GIT_COMMAND_TASK_TAG, git_store::Repository};
 
 use task::{TaskContext, TaskVariables, VariableName};
 use ui::{Color, ContextMenu, ContextMenuEntry, IconName, IconPosition, prelude::*};
+use util::ResultExt as _;
 use workspace::Workspace;
 
 actions!(
@@ -20,11 +21,13 @@ actions!(
 );
 
 const COMMIT_TAG_LIST_WIDTH_IN_REMS: Rems = rems(10.);
-const CUSTOM_GIT_COMMANDS_DOCS_SLUG: &str = "tasks#custom-git-commands";
+pub(crate) const CUSTOM_GIT_COMMANDS_DOCS_SLUG: &str = "tasks#custom-git-commands";
 
 pub(crate) struct CommitContextMenuData {
     pub(crate) sha: Oid,
     pub(crate) tag_names: Vec<SharedString>,
+    pub(crate) author_name: Option<SharedString>,
+    pub(crate) author_email: Option<SharedString>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -59,33 +62,59 @@ pub(crate) fn commit_context_menu(
         context_menu
             .context(focus_handle)
             .header(header)
-            .entry("View Diff", Some(OpenCommitView.boxed_clone()), {
-                let repository = repository.clone();
-                let workspace = workspace.clone();
-                move |window, cx| {
-                    let Some(repository) = repository.clone() else {
-                        return;
-                    };
-                    CommitView::open(
-                        sha.to_string(),
-                        repository,
-                        workspace.clone(),
-                        None,
-                        None,
-                        window,
-                        cx,
-                    );
-                }
-            })
             .entry(
-                "Copy SHA",
+                i18n::t!("b35001374ea98a40"),
+                Some(OpenCommitView.boxed_clone()),
+                {
+                    let repository = repository.clone();
+                    let workspace = workspace.clone();
+                    move |window, cx| {
+                        let Some(repository) = repository.clone() else {
+                            return;
+                        };
+                        CommitView::open(
+                            sha.to_string(),
+                            repository,
+                            workspace.clone(),
+                            None,
+                            None,
+                            window,
+                            cx,
+                        );
+                    }
+                },
+            )
+            .entry(
+                i18n::t!("bf096e515eb6a7f4"),
                 Some(CopyCommitSha.boxed_clone()),
                 move |_window, cx| {
                     cx.write_to_clipboard(ClipboardItem::new_string(sha.to_string()));
                 },
             )
+            .when(
+                source == CommitContextMenuSource::GitGraph
+                    && commit.author_name.is_some()
+                    && commit.author_email.is_some(),
+                |menu| {
+                    let author_name = commit.author_name.clone().unwrap_or_default();
+                    let author_email = commit.author_email.clone().unwrap_or_default();
+                    menu.entry(
+                        i18n::t_args!("2cd1a5de0b4bdade", author_name),
+                        None,
+                        move |window, cx| {
+                            window.dispatch_action(
+                                Box::new(crate::git_graph::ShowAuthorCommits {
+                                    name: author_name.to_string(),
+                                    email: author_email.to_string(),
+                                }),
+                                cx,
+                            );
+                        },
+                    )
+                },
+            )
             .when_some(ref_name.clone(), |menu, ref_name| {
-                menu.entry("Copy Ref Name", None, move |_window, cx| {
+                menu.entry(i18n::t!("1b098861def3d887"), None, move |_window, cx| {
                     cx.write_to_clipboard(ClipboardItem::new_string(ref_name.to_string()));
                 })
             })
@@ -129,8 +158,22 @@ pub(crate) fn commit_context_menu(
                     }
                 })
             })
+            .entry("Create Tag…", None, {
+                let repository = repository.clone();
+                let workspace = workspace.clone();
+                move |window, cx| {
+                    let Some(repository) = repository.as_ref().and_then(WeakEntity::upgrade) else {
+                        return;
+                    };
+                    workspace
+                        .update(cx, |workspace, cx| {
+                            create_tag_at_commit(sha, false, repository, workspace, window, cx);
+                        })
+                        .log_err();
+                }
+            })
             .when(source == CommitContextMenuSource::GitPanel, |menu| {
-                menu.entry("Show in Git Graph", None, move |window, cx| {
+                menu.entry(i18n::t!("f85b68c5887f9d77"), None, move |window, cx| {
                     window.dispatch_action(
                         Box::new(crate::git_graph::OpenAtCommit {
                             sha: sha.to_string(),
@@ -140,11 +183,11 @@ pub(crate) fn commit_context_menu(
                 })
             })
             .map(|mut menu| {
-                menu = menu.separator().header("Custom Commands");
+                menu = menu.separator().header(i18n::t!("cbfc298326389fb1"));
 
                 if git_tasks.is_empty() {
                     return menu.item(
-                        ContextMenuEntry::new("Learn More")
+                        ContextMenuEntry::new(i18n::t!("ca66c2da6f5bf825"))
                             .icon(IconName::ArrowUpRight)
                             .icon_color(Color::Muted)
                             .icon_position(IconPosition::End)
@@ -179,7 +222,7 @@ pub(crate) fn commit_context_menu(
     })
 }
 
-fn git_task_context(
+pub(crate) fn git_task_context(
     repository: &Option<WeakEntity<Repository>>,
     commit_sha: git::Oid,
     ref_name: Option<&str>,
@@ -218,7 +261,7 @@ fn git_task_context(
     })
 }
 
-fn git_context_menu_tasks(
+pub(crate) fn git_context_menu_tasks(
     task_context: Option<TaskContext>,
     workspace: &WeakEntity<Workspace>,
     cx: &App,

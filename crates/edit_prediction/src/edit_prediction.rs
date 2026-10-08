@@ -1163,7 +1163,10 @@ impl EditPredictionStore {
                             Ok(http_client::Request::builder()
                                 .method(Method::GET)
                                 .uri(url.as_ref())
-                                .header("Authorization", format!("Bearer {token}"))
+                                .header(
+                                    "Authorization",
+                                    i18n::t!("bf733da73429e88a", token = token),
+                                )
                                 .header(ZED_VERSION_HEADER_NAME, app_version.to_string())
                                 .body(Default::default())?)
                         })
@@ -3079,7 +3082,7 @@ impl EditPredictionStore {
                         .method(Method::POST)
                         .header("Content-Type", "application/json")
                         .header(ZED_VERSION_HEADER_NAME, app_version.to_string())
-                        .header("Authorization", format!("Bearer {token}")),
+                        .header("Authorization", i18n::t!("bf733da73429e88a", token = token)),
                 )
             })
             .await?;

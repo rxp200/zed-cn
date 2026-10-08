@@ -1,4 +1,5 @@
 mod headless_project;
+mod persistent_terminal;
 
 #[cfg(test)]
 mod remote_editing_tests;
@@ -30,6 +31,8 @@ use paths::logs_dir;
 use project::{project_settings::ProjectSettings, trusted_worktrees};
 use proto::CrashReport;
 use release_channel::{AppCommitSha, AppVersion, RELEASE_CHANNEL, ReleaseChannel};
+#[cfg(unix)]
+use remote::command::RemoteCommand;
 use remote::{
     RemoteClient,
     json_log::LogRecord,
@@ -52,9 +55,16 @@ use std::{
     io::Write,
     mem,
     path::{Path, PathBuf},
-    str::FromStr,
     sync::{Arc, LazyLock},
     time::Instant,
+};
+#[cfg(unix)]
+use std::{
+    ffi::OsString,
+    os::{
+        fd::AsFd as _,
+        unix::{ffi::OsStrExt as _, process::CommandExt as _},
+    },
 };
 use thiserror::Error;
 use util::{ResultExt, command::new_command};
@@ -80,6 +90,8 @@ pub enum Commands {
         identifier: String,
     },
     Version,
+    #[cfg(unix)]
+    Exec,
 }
 
 pub fn run(command: Commands) -> anyhow::Result<()> {
@@ -104,6 +116,8 @@ pub fn run(command: Commands) -> anyhow::Result<()> {
             identifier,
             reconnect,
         } => execute_proxy(identifier, reconnect).context("running proxy on the remote server"),
+        #[cfg(unix)]
+        Commands::Exec => execute_command(),
         Commands::Version => {
             let release_channel = *RELEASE_CHANNEL;
             match release_channel {
@@ -138,6 +152,105 @@ pub static VERSION: LazyLock<String> = LazyLock::new(|| match *RELEASE_CHANNEL {
         }
     }
 });
+
+#[cfg(unix)]
+fn execute_command() -> Result<()> {
+    let mut stdin = File::from(std::io::stdin().as_fd().try_clone_to_owned()?);
+    let descriptor = RemoteCommand::read(&mut stdin)?;
+    drop(stdin);
+
+    let working_dir = descriptor
+        .working_dir
+        .as_deref()
+        .map(|working_dir| shellexpand::tilde(working_dir).into_owned());
+    if let Some(working_dir) = &working_dir {
+        std::env::set_current_dir(working_dir)
+            .with_context(|| format!("Failed to change directory to {working_dir}"))?;
+    }
+    let error = exec_with_script_fallback(&descriptor, working_dir.as_deref(), |mut command| {
+        command.exec()
+    });
+    Err(error).with_context(|| format!("Failed to execute {}", descriptor.program))
+}
+
+#[cfg(unix)]
+fn exec_with_script_fallback(
+    descriptor: &RemoteCommand,
+    working_dir: Option<&str>,
+    mut exec: impl FnMut(std::process::Command) -> std::io::Error,
+) -> std::io::Error {
+    let error = exec(exec_command(
+        descriptor,
+        working_dir,
+        &descriptor.program,
+        &descriptor.args,
+    ));
+    if error.raw_os_error() != Some(libc::ENOEXEC) {
+        return error;
+    }
+    let path = descriptor
+        .env
+        .get("PATH")
+        .map(OsString::from)
+        .or_else(|| std::env::var_os("PATH"));
+    for candidate in script_candidates(&descriptor.program, path.as_deref()) {
+        let candidate_error = exec(exec_command(
+            descriptor,
+            working_dir,
+            &candidate,
+            &descriptor.args,
+        ));
+        match candidate_error.raw_os_error() {
+            Some(libc::ENOEXEC) => {
+                let args = std::iter::once(candidate.into_os_string())
+                    .chain(descriptor.args.iter().map(OsString::from))
+                    .collect::<Vec<_>>();
+                return exec(exec_command(descriptor, working_dir, "/bin/sh", &args));
+            }
+            Some(libc::ENOENT | libc::ENOTDIR | libc::EACCES) => {}
+            _ => return candidate_error,
+        }
+    }
+    error
+}
+
+#[cfg(unix)]
+fn script_candidates(program: &str, path: Option<&OsStr>) -> Vec<PathBuf> {
+    let explicit = |candidate: PathBuf| {
+        if candidate.is_absolute() {
+            candidate
+        } else {
+            Path::new(".").join(candidate)
+        }
+    };
+    if program.contains('/') {
+        return vec![explicit(PathBuf::from(program))];
+    }
+    path.unwrap_or(OsStr::new(DEFAULT_PATH))
+        .as_bytes()
+        .split(|byte| *byte == b':')
+        .map(|directory| explicit(Path::new(OsStr::from_bytes(directory)).join(program)))
+        .collect()
+}
+
+#[cfg(unix)]
+const DEFAULT_PATH: &str = "/usr/local/bin:/bin:/usr/bin";
+
+#[cfg(unix)]
+fn exec_command(
+    descriptor: &RemoteCommand,
+    working_dir: Option<&str>,
+    program: impl AsRef<OsStr>,
+    args: impl IntoIterator<Item = impl AsRef<OsStr>>,
+) -> std::process::Command {
+    let mut command = std::process::Command::new(program);
+    command.args(args);
+    if let Some(working_dir) = working_dir {
+        command.env("PWD", working_dir);
+    }
+    command.envs(&descriptor.env);
+    command
+}
 
 fn init_logging_proxy() {
     env_logger::builder()
@@ -281,8 +394,6 @@ fn init_logging_server(log_file_path: &Path) -> Result<Receiver<Vec<u8>>> {
         let thread_name = current_thread.name().unwrap_or("<unnamed>");
 
         let msg = format!("thread '{thread_name}' panicked at {location}:\n{message}\n{backtrace}");
-        // NOTE: This log never reaches the client, as the communication is handled on a main thread task
-        // which will never run once we panic.
         log::error!("{msg}");
         old_hook(info);
     }));
@@ -388,11 +499,105 @@ struct ServerListeners {
     stdin: UnixListener,
     stdout: UnixListener,
     stderr: UnixListener,
+    grouped: UnixListener,
+}
+
+const GROUPED_CONNECTION_MAGIC: &[u8; 8] = b"ZEDCN001";
+const GROUPED_CONNECTION_LIMIT: usize = 16;
+const GROUPED_CONNECTION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+async fn read_grouped_stream(mut stream: UnixStream) -> Result<(uuid::Uuid, usize, UnixStream)> {
+    let mut header = [0u8; 25];
+    stream
+        .read_exact(&mut header)
+        .await
+        .context("reading grouped connection header")?;
+    anyhow::ensure!(
+        header.get(..8) == Some(GROUPED_CONNECTION_MAGIC.as_slice()),
+        "invalid grouped connection magic"
+    );
+    let identifier = uuid::Uuid::from_slice(&header[8..24])?;
+    let role = usize::from(header[24]);
+    anyhow::ensure!(role < 3, "invalid grouped connection role");
+    Ok((identifier, role, stream))
+}
+
+async fn accept_grouped_connection(
+    listener: &UnixListener,
+    executor: &gpui::BackgroundExecutor,
+) -> Result<(UnixStream, UnixStream, UnixStream)> {
+    use futures::stream::FuturesUnordered;
+    let mut readers = FuturesUnordered::new();
+    let mut groups: HashMap<uuid::Uuid, [Option<UnixStream>; 3]> = HashMap::default();
+    let (first_stream, _) = listener
+        .accept()
+        .await
+        .context("accepting first grouped stream")?;
+    readers.push(read_grouped_stream(first_stream));
+    let assembly_started = Instant::now();
+    log::info!(
+        "grouped transport assembly started: timeout={GROUPED_CONNECTION_TIMEOUT:?}, group_limit={GROUPED_CONNECTION_LIMIT}"
+    );
+    let deadline = executor.timer(GROUPED_CONNECTION_TIMEOUT).fuse();
+    futures::pin_mut!(deadline);
+    loop {
+        select_biased! {
+            _ = deadline => anyhow::bail!("grouped connection assembly timed out after {:?}: pending_groups={}, pending_headers={}", assembly_started.elapsed(), groups.len(), readers.len()),
+            result = async {
+                if readers.is_empty() {
+                    futures::future::pending().await
+                } else {
+                    readers.next().await
+                }
+            }.fuse() => {
+                if let Some(result) = result {
+                    let (identifier, role, stream) = match result {
+                        Ok(group) => group,
+                        Err(error) => {
+                            log::warn!("discarding incomplete grouped stream: {error:#}");
+                            continue;
+                        }
+                    };
+                    if !groups.contains_key(&identifier) && groups.len() >= GROUPED_CONNECTION_LIMIT {
+                        log::warn!("discarding grouped connection beyond pending limit");
+                        continue;
+                    }
+                    let group = groups.entry(identifier).or_insert_with(|| [None, None, None]);
+                    if group[role].is_some() {
+                        log::warn!("discarding duplicate grouped connection role");
+                        continue;
+                    }
+                    group[role] = Some(stream);
+                    log::info!("grouped transport {identifier}: role={role}, received={}/3, elapsed={:?}", group.iter().filter(|stream| stream.is_some()).count(), assembly_started.elapsed());
+                    if group.iter().all(Option::is_some) {
+                        let [Some(stdin), Some(stdout), Some(stderr)] = groups.remove(&identifier).context("missing connection group")? else {
+                            anyhow::bail!("incomplete connection group");
+                        };
+                        log::info!("grouped transport {identifier}: ready, elapsed={:?}, discarded_partial_groups={}", assembly_started.elapsed(), groups.len());
+                        return Ok((stdin, stdout, stderr));
+                    }
+                }
+            }
+            result = listener.accept().fuse() => {
+                let (stream, _) = result.context("accepting grouped stream")?;
+                if readers.len() < GROUPED_CONNECTION_LIMIT * 3 {
+                    readers.push(read_grouped_stream(stream));
+                } else {
+                    log::warn!("discarding grouped stream beyond reader limit");
+                }
+            }
+        }
+    }
 }
 
 impl ServerListeners {
     pub fn new(stdin_path: PathBuf, stdout_path: PathBuf, stderr_path: PathBuf) -> Result<Self> {
+        let grouped_path = stdin_path.with_file_name("connection-v1.sock");
+        if grouped_path.exists() {
+            std::fs::remove_file(&grouped_path).context("removing stale grouped socket")?;
+        }
         Ok(Self {
+            grouped: UnixListener::bind(grouped_path).context("failed to bind grouped socket")?,
             stdin: UnixListener::bind(stdin_path).context("failed to bind stdin socket")?,
             stdout: UnixListener::bind(stdout_path).context("failed to bind stdout socket")?,
             stderr: UnixListener::bind(stderr_path).context("failed to bind stderr socket")?,
@@ -407,7 +612,7 @@ fn start_server(
     is_wsl_interop: bool,
 ) -> AnyProtoClient {
     // This is the server idle timeout. If no connection comes in this timeout, the server will shut down.
-    const IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+    const IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30 * 60);
 
     let (incoming_tx, incoming_rx) = mpsc::unbounded::<Envelope>();
     let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded::<Envelope>();
@@ -423,16 +628,35 @@ fn start_server(
     .detach();
 
     cx.spawn(async move |cx| {
+        let executor = cx.background_executor().clone();
+        let mut grouped_accept = Box::pin(accept_grouped_connection(&listeners.grouped, &executor).fuse());
+        let mut replacement = None;
+        let mut transport_generation = 0u64;
+        let mut legacy_accept = Box::pin(futures::future::join3(
+            listeners.stdin.accept(),
+            listeners.stdout.accept(),
+            listeners.stderr.accept(),
+        ).fuse());
         loop {
-            let streams = futures::future::join3(
-                listeners.stdin.accept(),
-                listeners.stdout.accept(),
-                listeners.stderr.accept(),
-            );
 
             log::info!("accepting new connections");
-            let result = select! {
-                streams = streams.fuse() => {
+            let result = if let Some(streams) = replacement.take() {
+                Ok(streams)
+            } else { select! {
+                grouped = grouped_accept => {
+                    grouped_accept = Box::pin(accept_grouped_connection(&listeners.grouped, &executor).fuse());
+                    match grouped {
+                        Ok(streams) => Ok(streams),
+                        Err(error) => {
+                            log::warn!("grouped connection assembly ended: {error:#}");
+                            continue;
+                        }
+                    }
+                }
+                streams = legacy_accept => {
+                    legacy_accept = Box::pin(futures::future::join3(
+                        listeners.stdin.accept(), listeners.stdout.accept(), listeners.stderr.accept(),
+                    ).fuse());
                     let (Ok((stdin_stream, _)), Ok((stdout_stream, _)), Ok((stderr_stream, _))) = streams else {
                         log::error!("failed to accept new connections");
                         break;
@@ -454,21 +678,23 @@ fn start_server(
                     log::info!("app quit requested");
                     break;
                 }
-            };
+            }};
 
             let Ok((mut stdin_stream, mut stdout_stream, mut stderr_stream)) = result else {
                 break;
             };
 
+            transport_generation = transport_generation.wrapping_add(1);
+            log::info!("server transport activated: generation={transport_generation}, server_pid={}", std::process::id());
+            let transport_started = Instant::now();
             let mut input_buffer = Vec::new();
-            let mut output_buffer = Vec::new();
 
             let (mut stdin_msg_tx, mut stdin_msg_rx) = mpsc::unbounded::<Envelope>();
-            cx.background_spawn(async move {
+            let stdin_task = cx.background_spawn(async move {
                 loop {
                     match read_message(&mut stdin_stream, &mut input_buffer).await {
                         Ok(msg) => {
-                            if (stdin_msg_tx.send(msg).await).is_err() {
+                            if stdin_msg_tx.send(msg).await.is_err() {
                                 log::info!("stdin message channel closed, stopping stdin reader");
                                 break;
                             }
@@ -479,57 +705,44 @@ fn start_server(
                         }
                     }
                 }
-            }).detach();
+            });
 
-            loop {
-
-                select_biased! {
-                    _ = app_quit_rx.next().fuse() => {
-                        return anyhow::Ok(());
-                    }
-
-                    stdin_message = stdin_msg_rx.next().fuse() => {
-                        let Some(message) = stdin_message else {
-                            log::warn!("error reading message on stdin, dropping connection.");
-                            break;
-                        };
-                        if let Err(error) = incoming_tx.unbounded_send(message) {
-                            log::error!("failed to send message to application: {error:?}. exiting.");
-                            return Err(anyhow!(error));
-                        }
-                    }
-
-                    outgoing_message  = outgoing_rx.next().fuse() => {
-                        let Some(message) = outgoing_message else {
-                            log::error!("stdout handler, no message");
-                            break;
-                        };
-
-                        if let Err(error) =
-                            write_message(&mut stdout_stream, &mut output_buffer, message).await
-                        {
-                            log::error!("failed to write stdout message: {:?}", error);
-                            break;
-                        }
-                        if let Err(error) = stdout_stream.flush().await {
-                            log::error!("failed to flush stdout message: {:?}", error);
-                            break;
-                        }
-                    }
-
-                    log_message = log_rx.recv().fuse() => {
-                        if let Ok(log_message) = log_message {
-                            if let Err(error) = stderr_stream.write_all(&log_message).await {
-                                log::error!("failed to write log message to stderr: {:?}", error);
-                                break;
-                            }
-                            if let Err(error) = stderr_stream.flush().await {
-                                log::error!("failed to flush stderr stream: {:?}", error);
-                                break;
+            let mut stdout_stream = ProgressTimeoutWriter::new(&mut stdout_stream, executor.clone());
+            let mut stderr_stream = ProgressTimeoutWriter::new(&mut stderr_stream, executor.clone());
+            let result = {
+                let forward = forward_connection(
+                (&mut stdout_stream, &mut stderr_stream),
+                &mut stdin_msg_rx,
+                &incoming_tx,
+                &mut outgoing_rx,
+                &log_rx,
+                &mut app_quit_rx,
+                &executor,
+            ).fuse();
+                futures::pin_mut!(forward);
+                loop {
+                    select_biased! {
+                        result = forward => break Some(result),
+                        grouped = grouped_accept => {
+                            grouped_accept = Box::pin(accept_grouped_connection(&listeners.grouped, &executor).fuse());
+                            match grouped {
+                                Ok(streams) => {
+                                    replacement = Some(streams);
+                                    break None;
+                                }
+                                Err(error) => log::warn!("grouped connection assembly ended: {error:#}"),
                             }
                         }
                     }
                 }
+            };
+            drop(stdin_task);
+            log::info!("server transport stopped: generation={transport_generation}, lifetime={:?}, replacement_ready={}", transport_started.elapsed(), replacement.is_some());
+            match result {
+                Some(Ok(true)) => return Ok(()),
+                Some(Ok(false)) => log::info!("remote input closed, waiting for reconnection"),
+                Some(Err(error)) => log::warn!("remote connection closed: {error:#}"),
+                None => log::info!("complete grouped connection taking over existing session"),
             }
         }
         anyhow::Ok(())
@@ -537,6 +750,154 @@ fn start_server(
     .detach();
 
     RemoteClient::proto_client_from_channels(incoming_rx, outgoing_tx, cx, "server", is_wsl_interop)
+}
+
+const CONNECTION_WRITE_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
+struct ProgressTimeoutWriter<W> {
+    inner: W,
+    executor: gpui::BackgroundExecutor,
+    stalled: Option<gpui::Task<()>>,
+}
+
+impl<W> ProgressTimeoutWriter<W> {
+    fn new(inner: W, executor: gpui::BackgroundExecutor) -> Self {
+        Self {
+            inner,
+            executor,
+            stalled: None,
+        }
+    }
+
+    fn poll_stall(
+        &mut self,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        use std::future::Future;
+        let timer = self
+            .stalled
+            .get_or_insert_with(|| self.executor.timer(CONNECTION_WRITE_IDLE_TIMEOUT));
+        if std::pin::Pin::new(timer).poll(cx).is_ready() {
+            std::task::Poll::Ready(Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "remote connection write made no progress for 60 seconds",
+            )))
+        } else {
+            std::task::Poll::Pending
+        }
+    }
+}
+
+impl<W: AsyncWrite + Unpin> AsyncWrite for ProgressTimeoutWriter<W> {
+    fn poll_write(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        bytes: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        let this = self.get_mut();
+        match std::pin::Pin::new(&mut this.inner).poll_write(cx, bytes) {
+            std::task::Poll::Pending => this.poll_stall(cx).map(|result| result.map(|()| 0)),
+            result => {
+                this.stalled = None;
+                result
+            }
+        }
+    }
+
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        let this = self.get_mut();
+        match std::pin::Pin::new(&mut this.inner).poll_flush(cx) {
+            std::task::Poll::Pending => this.poll_stall(cx),
+            result => {
+                this.stalled = None;
+                result
+            }
+        }
+    }
+
+    fn poll_close(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        let this = self.get_mut();
+        match std::pin::Pin::new(&mut this.inner).poll_close(cx) {
+            std::task::Poll::Pending => this.poll_stall(cx),
+            result => {
+                this.stalled = None;
+                result
+            }
+        }
+    }
+}
+
+async fn forward_connection(
+    (stdout, stderr): (
+        &mut (impl AsyncWrite + Unpin),
+        &mut (impl AsyncWrite + Unpin),
+    ),
+    incoming: &mut mpsc::UnboundedReceiver<Envelope>,
+    application: &mpsc::UnboundedSender<Envelope>,
+    outgoing: &mut mpsc::UnboundedReceiver<Envelope>,
+    logs: &Receiver<Vec<u8>>,
+    quit: &mut mpsc::UnboundedReceiver<()>,
+    executor: &gpui::BackgroundExecutor,
+) -> Result<bool> {
+    // Preserve partial writes across input events, but cancel both writers on EOF.
+    // Awaiting either write inside the input loop can prevent reconnect forever.
+    let (output_activity_tx, output_activity_rx) = smol::channel::bounded(1);
+    let write_output = async {
+        let mut buffer = Vec::new();
+        while let Some(message) = outgoing.next().await {
+            write_message(stdout, &mut buffer, message).await?;
+            stdout.flush().await?;
+            match output_activity_tx.try_send(()) {
+                Ok(()) | Err(smol::channel::TrySendError::Full(())) => {}
+                Err(smol::channel::TrySendError::Closed(())) => {
+                    anyhow::bail!("output activity channel closed")
+                }
+            }
+        }
+        anyhow::bail!("outgoing message channel closed")
+    }
+    .fuse();
+    let write_logs = async {
+        while let Ok(message) = logs.recv().await {
+            stderr.write_all(&message).await?;
+            stderr.flush().await?;
+        }
+        anyhow::bail!("log channel closed")
+    }
+    .fuse();
+    futures::pin_mut!(write_output, write_logs);
+    // Older clients can postpone heartbeats while consuming server output.
+    // Successful output also rearms the deadline to retain that legacy behavior.
+    let mut input_deadline = executor.timer(std::time::Duration::from_secs(60)).fuse();
+    loop {
+        select_biased! {
+            _ = quit.next().fuse() => return Ok(true),
+            message = incoming.next().fuse() => {
+                let Some(message) = message else { return Ok(false) };
+                application.unbounded_send(message).context("forwarding remote input")?;
+                input_deadline = executor.timer(std::time::Duration::from_secs(60)).fuse();
+            }
+            activity = output_activity_rx.recv().fuse() => {
+                activity.context("receiving output activity")?;
+                input_deadline = executor.timer(std::time::Duration::from_secs(60)).fuse();
+            }
+            _ = input_deadline => anyhow::bail!("remote transport idle for 60 seconds; releasing transport for reconnection"),
+            result = write_output => {
+                let result: Result<()> = result;
+                return result.context("remote output writer stopped").map(|()| false);
+            }
+            result = write_logs => {
+                let result: Result<()> = result;
+                return result.context("remote log writer stopped").map(|()| false);
+            }
+        }
+    }
 }
 
 fn init_paths() -> anyhow::Result<()> {
@@ -722,11 +1083,8 @@ pub fn execute_run(
 
         handle_crash_files_requests(&project, &session);
 
-        cx.background_spawn(async move {
-            cleanup_old_binaries_wsl();
-            cleanup_old_binaries()
-        })
-        .detach();
+        // Older clients do not share a launch lock with this process. Retain their
+        // binaries and legacy WSL directory rather than racing their startup.
 
         mem::forget(project);
     };
@@ -911,42 +1269,22 @@ pub(crate) fn execute_proxy(
         }
     };
 
+    let (stdin_stream, stdout_stream, stderr_stream) =
+        gpui::block_on(connect_proxy_streams(&server_paths))
+            .map_err(ExecuteProxyError::StdinTask)?;
     let stdin_task = smol::spawn(async move {
         let stdin = smol::Unblock::new(std::io::stdin());
-        let stream = UnixStream::connect(&server_paths.stdin_socket)
-            .await
-            .with_context(|| {
-                format!(
-                    "Failed to connect to stdin socket {}",
-                    server_paths.stdin_socket.display()
-                )
-            })?;
-        handle_io(stdin, stream, "stdin").await
+        handle_io(stdin, stdin_stream, "stdin").await
     });
 
     let stdout_task: smol::Task<Result<()>> = smol::spawn(async move {
         let stdout = smol::Unblock::new(std::io::stdout());
-        let stream = UnixStream::connect(&server_paths.stdout_socket)
-            .await
-            .with_context(|| {
-                format!(
-                    "Failed to connect to stdout socket {}",
-                    server_paths.stdout_socket.display()
-                )
-            })?;
-        handle_io(stream, stdout, "stdout").await
+        handle_io(stdout_stream, stdout, "stdout").await
     });
 
     let stderr_task: smol::Task<Result<()>> = smol::spawn(async move {
         let mut stderr = smol::Unblock::new(std::io::stderr());
-        let mut stream = UnixStream::connect(&server_paths.stderr_socket)
-            .await
-            .with_context(|| {
-                format!(
-                    "Failed to connect to stderr socket {}",
-                    server_paths.stderr_socket.display()
-                )
-            })?;
+        let mut stream = stderr_stream;
         let mut stderr_buffer = vec![0; 2048];
         loop {
             match stream
@@ -985,6 +1323,62 @@ pub(crate) fn execute_proxy(
     }
 
     Ok(())
+}
+
+async fn connect_proxy_streams(
+    paths: &ServerPaths,
+) -> Result<(UnixStream, UnixStream, UnixStream)> {
+    let grouped_path = paths.stdin_socket.with_file_name("connection-v1.sock");
+    // This local versioned endpoint is advertised by the running server, not
+    // inferred from the application version or a client-side source label.
+    if paths
+        .pid_file
+        .parent()
+        .and_then(Path::file_name)
+        .and_then(OsStr::to_str)
+        .is_some_and(|identifier| identifier.starts_with("cn-"))
+        && grouped_path.exists()
+    {
+        let identifier = uuid::Uuid::new_v4();
+        let started = Instant::now();
+        log::info!("proxy grouped transport {identifier}: connecting to versioned server endpoint");
+        let mut streams = Vec::with_capacity(3);
+        for role in 0..3u8 {
+            let mut stream = UnixStream::connect(&grouped_path)
+                .await
+                .context("connecting grouped socket")?;
+            stream.write_all(GROUPED_CONNECTION_MAGIC).await?;
+            stream.write_all(identifier.as_bytes()).await?;
+            stream.write_all(&[role]).await?;
+            stream.flush().await?;
+            log::info!(
+                "proxy grouped transport {identifier}: role={role} connected, elapsed={:?}",
+                started.elapsed()
+            );
+            streams.push(stream);
+        }
+        let mut streams = streams.into_iter();
+        return Ok((
+            streams.next().context("missing stdin stream")?,
+            streams.next().context("missing stdout stream")?,
+            streams.next().context("missing stderr stream")?,
+        ));
+    }
+    log::info!(
+        "proxy using legacy transport: grouped_endpoint_present={}",
+        grouped_path.exists()
+    );
+    Ok((
+        UnixStream::connect(&paths.stdin_socket)
+            .await
+            .context("connecting stdin socket")?,
+        UnixStream::connect(&paths.stdout_socket)
+            .await
+            .context("connecting stdout socket")?,
+        UnixStream::connect(&paths.stderr_socket)
+            .await
+            .context("connecting stderr socket")?,
+    ))
 }
 
 fn kill_running_server(pid: u32, paths: &ServerPaths) -> Result<(), ExecuteProxyError> {
@@ -1316,63 +1710,485 @@ fn read_proxy_settings(cx: &mut Context<HeadlessProject>) -> Option<Url> {
         .or_else(read_proxy_from_env)
 }
 
-fn cleanup_old_binaries() -> Result<()> {
-    let server_dir = paths::remote_server_dir_relative();
-    let release_channel = release_channel::RELEASE_CHANNEL.dev_name();
-    let prefix = format!("zed-remote-server-{}-", release_channel);
-
-    for entry in std::fs::read_dir(server_dir.as_std_path())? {
-        let path = entry?.path();
-
-        if let Some(file_name) = path.file_name()
-            && let Some(version) = file_name.to_string_lossy().strip_prefix(&prefix)
-            && !is_new_version(version)
-            && !is_file_in_use(file_name)
-        {
-            log::info!("removing old remote server binary: {:?}", path);
-            std::fs::remove_file(&path)?;
-        }
-    }
-
-    Ok(())
-}
-
-// Remove this once 223 goes stable, we only have this to clean up old binaries on WSL
-// we no longer download them into this folder, we use the same folder as other remote servers
-fn cleanup_old_binaries_wsl() {
-    let server_dir = paths::remote_wsl_server_dir_relative();
-    if let Ok(()) = std::fs::remove_dir_all(server_dir.as_std_path()) {
-        log::info!("removing old wsl remote server folder: {:?}", server_dir);
-    }
-}
-
-fn is_new_version(version: &str) -> bool {
-    semver::Version::from_str(version)
-        .ok()
-        .zip(semver::Version::from_str(env!("ZED_PKG_VERSION")).ok())
-        .is_some_and(|(version, current_version)| version >= current_version)
-}
-
-fn is_file_in_use(file_name: &OsStr) -> bool {
-    let info = sysinfo::System::new_with_specifics(sysinfo::RefreshKind::nothing().with_processes(
-        sysinfo::ProcessRefreshKind::nothing().with_exe(sysinfo::UpdateKind::Always),
-    ));
-
-    for process in info.processes().values() {
-        if process
-            .exe()
-            .is_some_and(|exe| exe.file_name().is_some_and(|name| name == file_name))
-        {
-            return true;
-        }
-    }
-
-    false
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct BlockedWriter;
+
+    impl AsyncWrite for BlockedWriter {
+        fn poll_write(
+            self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+            _: &[u8],
+        ) -> std::task::Poll<std::io::Result<usize>> {
+            std::task::Poll::Pending
+        }
+        fn poll_flush(
+            self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            std::task::Poll::Pending
+        }
+        fn poll_close(
+            self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            std::task::Poll::Ready(Ok(()))
+        }
+    }
+
+    #[gpui::test]
+    async fn stalled_connection_writer_times_out(cx: &mut gpui::TestAppContext) {
+        let mut writer = ProgressTimeoutWriter::new(BlockedWriter, cx.background_executor.clone());
+        let error = writer
+            .write_all(&[1])
+            .await
+            .expect_err("stalled write must terminate");
+        assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+        let mut writer = ProgressTimeoutWriter::new(BlockedWriter, cx.background_executor.clone());
+        assert_eq!(
+            writer
+                .flush()
+                .await
+                .expect_err("stalled flush must terminate")
+                .kind(),
+            std::io::ErrorKind::TimedOut
+        );
+    }
+
+    #[gpui::test]
+    async fn write_progress_resets_stall_deadline(cx: &mut gpui::TestAppContext) {
+        struct GatedWriter(std::sync::Arc<std::sync::atomic::AtomicBool>);
+        impl AsyncWrite for GatedWriter {
+            fn poll_write(
+                self: std::pin::Pin<&mut Self>,
+                _: &mut std::task::Context<'_>,
+                bytes: &[u8],
+            ) -> std::task::Poll<std::io::Result<usize>> {
+                if self.0.load(std::sync::atomic::Ordering::SeqCst) {
+                    std::task::Poll::Ready(Ok(bytes.len()))
+                } else {
+                    std::task::Poll::Pending
+                }
+            }
+            fn poll_flush(
+                self: std::pin::Pin<&mut Self>,
+                _: &mut std::task::Context<'_>,
+            ) -> std::task::Poll<std::io::Result<()>> {
+                std::task::Poll::Ready(Ok(()))
+            }
+            fn poll_close(
+                self: std::pin::Pin<&mut Self>,
+                _: &mut std::task::Context<'_>,
+            ) -> std::task::Poll<std::io::Result<()>> {
+                std::task::Poll::Ready(Ok(()))
+            }
+        }
+        let writable = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let mut writer = ProgressTimeoutWriter::new(
+            GatedWriter(writable.clone()),
+            cx.background_executor.clone(),
+        );
+        let waker = futures::task::noop_waker();
+        let mut context = std::task::Context::from_waker(&waker);
+        assert!(
+            std::pin::Pin::new(&mut writer)
+                .poll_write(&mut context, &[1])
+                .is_pending()
+        );
+        cx.executor()
+            .advance_clock(CONNECTION_WRITE_IDLE_TIMEOUT / 2);
+        writable.store(true, std::sync::atomic::Ordering::SeqCst);
+        assert!(matches!(
+            std::pin::Pin::new(&mut writer).poll_write(&mut context, &[1]),
+            std::task::Poll::Ready(Ok(1))
+        ));
+        writable.store(false, std::sync::atomic::Ordering::SeqCst);
+        assert!(
+            std::pin::Pin::new(&mut writer)
+                .poll_write(&mut context, &[2])
+                .is_pending()
+        );
+        cx.executor()
+            .advance_clock(CONNECTION_WRITE_IDLE_TIMEOUT / 2);
+        assert!(
+            std::pin::Pin::new(&mut writer)
+                .poll_write(&mut context, &[2])
+                .is_pending()
+        );
+        cx.executor().advance_clock(CONNECTION_WRITE_IDLE_TIMEOUT);
+        assert!(
+            matches!(std::pin::Pin::new(&mut writer).poll_write(&mut context, &[2]), std::task::Poll::Ready(Err(error)) if error.kind() == std::io::ErrorKind::TimedOut)
+        );
+    }
+
+    #[gpui::test]
+    async fn idle_connection_writer_has_no_deadline(cx: &mut gpui::TestAppContext) {
+        let mut writer = ProgressTimeoutWriter::new(Vec::new(), cx.background_executor.clone());
+        cx.executor()
+            .advance_clock(CONNECTION_WRITE_IDLE_TIMEOUT * 2);
+        writer
+            .write_all(&[1, 2, 3])
+            .await
+            .expect("idle time is not write stall time");
+        writer.flush().await.expect("flush");
+        assert_eq!(writer.inner, vec![1, 2, 3]);
+        assert!(writer.stalled.is_none());
+    }
+
+    #[gpui::test]
+    async fn blocked_output_and_logs_do_not_block_input_or_disconnect(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (incoming_tx, mut incoming_rx) = mpsc::unbounded();
+        let (application_tx, mut application_rx) = mpsc::unbounded();
+        let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded();
+        let (log_tx, log_rx) = smol::channel::unbounded();
+        let (_quit_tx, mut quit_rx) = mpsc::unbounded();
+        outgoing_tx
+            .unbounded_send(Envelope::default())
+            .expect("queue output");
+        log_tx.send(vec![1]).await.expect("queue log");
+        let executor = cx.background_executor.clone();
+        let task = cx.executor().spawn(async move {
+            forward_connection(
+                (&mut BlockedWriter, &mut BlockedWriter),
+                &mut incoming_rx,
+                &application_tx,
+                &mut outgoing_rx,
+                &log_rx,
+                &mut quit_rx,
+                &executor,
+            )
+            .await
+        });
+        cx.run_until_parked();
+        incoming_tx
+            .unbounded_send(Envelope {
+                id: 42,
+                ..Default::default()
+            })
+            .expect("deliver input");
+        assert_eq!(
+            application_rx.next().await.expect("input progresses").id,
+            42
+        );
+        drop(incoming_tx);
+        assert!(
+            !task
+                .await
+                .expect("disconnect progresses despite blocked writers")
+        );
+    }
+
+    #[gpui::test]
+    async fn half_open_connection_releases_transport(cx: &mut gpui::TestAppContext) {
+        let (_incoming_tx, mut incoming_rx) = mpsc::unbounded();
+        let (application_tx, _application_rx) = mpsc::unbounded();
+        let (_outgoing_tx, mut outgoing_rx) = mpsc::unbounded();
+        let (_log_tx, log_rx) = smol::channel::unbounded();
+        let (_quit_tx, mut quit_rx) = mpsc::unbounded();
+        let executor = cx.background_executor.clone();
+        let task = cx.executor().spawn(async move {
+            forward_connection(
+                (&mut BlockedWriter, &mut BlockedWriter),
+                &mut incoming_rx,
+                &application_tx,
+                &mut outgoing_rx,
+                &log_rx,
+                &mut quit_rx,
+                &executor,
+            )
+            .await
+        });
+        cx.run_until_parked();
+        cx.executor()
+            .advance_clock(std::time::Duration::from_secs(60));
+        assert!(
+            task.await
+                .expect_err("half-open transport must expire")
+                .to_string()
+                .contains("remote transport idle")
+        );
+    }
+
+    #[gpui::test]
+    async fn incoming_activity_rearms_half_open_deadline(cx: &mut gpui::TestAppContext) {
+        let (incoming_tx, mut incoming_rx) = mpsc::unbounded();
+        let (application_tx, mut application_rx) = mpsc::unbounded();
+        let (_outgoing_tx, mut outgoing_rx) = mpsc::unbounded();
+        let (_log_tx, log_rx) = smol::channel::unbounded();
+        let (_quit_tx, mut quit_rx) = mpsc::unbounded();
+        let executor = cx.background_executor.clone();
+        let task = cx.executor().spawn(async move {
+            forward_connection(
+                (&mut BlockedWriter, &mut BlockedWriter),
+                &mut incoming_rx,
+                &application_tx,
+                &mut outgoing_rx,
+                &log_rx,
+                &mut quit_rx,
+                &executor,
+            )
+            .await
+        });
+        cx.run_until_parked();
+        for identifier in 1..=3 {
+            cx.executor()
+                .advance_clock(std::time::Duration::from_secs(40));
+            incoming_tx
+                .unbounded_send(Envelope {
+                    id: identifier,
+                    ..Default::default()
+                })
+                .expect("send activity");
+            assert_eq!(
+                application_rx.next().await.expect("forward activity").id,
+                identifier
+            );
+            cx.run_until_parked();
+        }
+        drop(incoming_tx);
+        assert!(!task.await.expect("healthy connection closes normally"));
+    }
+
+    #[gpui::test]
+    async fn grouped_connection_ignores_abandoned_other_attempt(cx: &mut gpui::TestAppContext) {
+        let directory = tempfile::tempdir().expect("socket directory");
+        let path = directory.path().join("groups.sock");
+        let listener = UnixListener::bind(&path).expect("listener");
+        smol::block_on(async {
+            let abandoned = uuid::Uuid::new_v4();
+            let complete = uuid::Uuid::new_v4();
+            let mut senders = Vec::new();
+            for (identifier, role) in [
+                (abandoned, 0),
+                (complete, 2),
+                (complete, 0),
+                (complete, 0),
+                (complete, 1),
+            ] {
+                let mut sender = UnixStream::connect(&path).await.expect("connect");
+                sender
+                    .write_all(GROUPED_CONNECTION_MAGIC)
+                    .await
+                    .expect("magic");
+                sender
+                    .write_all(identifier.as_bytes())
+                    .await
+                    .expect("identifier");
+                sender.write_all(&[role]).await.expect("role");
+                sender.write_all(&[role]).await.expect("marker");
+                senders.push(sender);
+            }
+            let (mut stdin, mut stdout, mut stderr) =
+                accept_grouped_connection(&listener, &cx.background_executor)
+                    .await
+                    .expect("complete group");
+            let mut marker = [0];
+            stdin.read_exact(&mut marker).await.expect("stdin marker");
+            assert_eq!(marker, [0]);
+            stdout.read_exact(&mut marker).await.expect("stdout marker");
+            assert_eq!(marker, [1]);
+            stderr.read_exact(&mut marker).await.expect("stderr marker");
+            assert_eq!(marker, [2]);
+        });
+    }
+
+    #[test]
+    fn proxy_retains_legacy_transport_without_grouped_endpoint() {
+        smol::block_on(async {
+            let directory = tempfile::tempdir().expect("socket directory");
+            let paths = ServerPaths {
+                log_file: directory.path().join("server.log"),
+                pid_file: directory.path().join("server.pid"),
+                stdin_socket: directory.path().join("stdin.sock"),
+                stdout_socket: directory.path().join("stdout.sock"),
+                stderr_socket: directory.path().join("stderr.sock"),
+            };
+            let stdin = UnixListener::bind(&paths.stdin_socket).expect("stdin listener");
+            let stdout = UnixListener::bind(&paths.stdout_socket).expect("stdout listener");
+            let stderr = UnixListener::bind(&paths.stderr_socket).expect("stderr listener");
+            let (mut input, mut output, mut logs) = connect_proxy_streams(&paths)
+                .await
+                .expect("legacy fallback");
+            input.write_all(&[1]).await.expect("input marker");
+            output.write_all(&[2]).await.expect("output marker");
+            logs.write_all(&[3]).await.expect("log marker");
+            for (listener, expected) in [(stdin, 1), (stdout, 2), (stderr, 3)] {
+                let (mut receiver, _) = listener.accept().await.expect("legacy accept");
+                let mut marker = [0];
+                receiver
+                    .read_exact(&mut marker)
+                    .await
+                    .expect("legacy marker");
+                assert_eq!(marker, [expected]);
+            }
+        });
+    }
+
+    #[test]
+    fn grouped_headers_reject_partial_and_invalid_roles() {
+        smol::block_on(async {
+            let directory = tempfile::tempdir().expect("socket directory");
+            let path = directory.path().join("header.sock");
+            let listener = UnixListener::bind(&path).expect("listener");
+            let mut sender = UnixStream::connect(&path).await.expect("connect");
+            let (receiver, _) = listener.accept().await.expect("accept");
+            sender
+                .write_all(GROUPED_CONNECTION_MAGIC)
+                .await
+                .expect("magic");
+            drop(sender);
+            assert!(read_grouped_stream(receiver).await.is_err());
+            let mut sender = UnixStream::connect(&path).await.expect("connect");
+            let (receiver, _) = listener.accept().await.expect("accept");
+            sender
+                .write_all(GROUPED_CONNECTION_MAGIC)
+                .await
+                .expect("magic");
+            sender
+                .write_all(uuid::Uuid::new_v4().as_bytes())
+                .await
+                .expect("identifier");
+            sender.write_all(&[3]).await.expect("invalid role");
+            assert!(read_grouped_stream(receiver).await.is_err());
+        });
+    }
+
+    #[cfg(unix)]
+    mod unix {
+        use super::*;
+        use gpui::TestAppContext;
+        use proto::EnvelopedMessage as _;
+
+        // Windows did not reproduce socket backpressure.
+        #[gpui::test]
+        async fn rpc_responds_when_stderr_is_blocked(cx: &mut TestAppContext) {
+            cx.executor().allow_parking();
+
+            let temp_dir = tempfile::tempdir().expect("create socket directory");
+            let stdin_path = temp_dir.path().join("stdin.sock");
+            let stdout_path = temp_dir.path().join("stdout.sock");
+            let stderr_path = temp_dir.path().join("stderr.sock");
+            let listeners =
+                ServerListeners::new(stdin_path.clone(), stdout_path.clone(), stderr_path.clone())
+                    .expect("bind server sockets");
+
+            let (log_tx, log_rx) = async_channel::unbounded();
+
+            let handler = cx.new(|_| ());
+            let server = cx.update(|cx| start_server(listeners, log_rx, cx, false));
+            server.add_request_handler::<proto::Ping, _, _, _>(
+                handler.downgrade(),
+                |_, _, _| async { Ok(proto::Ack {}) },
+            );
+
+            select! {
+                _ = async {
+                    let (mut stdin, mut stdout, mut stderr) = futures::future::try_join3(
+                        UnixStream::connect(&stdin_path),
+                        UnixStream::connect(&stdout_path),
+                        UnixStream::connect(&stderr_path),
+                    ).await.expect("connect server sockets");
+
+                    log_tx
+                        .try_send(vec![b'x'; 16 * 1024 * 1024])
+                        .expect("queue a log larger than the socket buffer");
+
+                    stderr
+                        .read_exact(&mut [0])
+                        .await
+                        .expect("wait until log forwarding starts");
+
+                    let mut buffer = Vec::new();
+                    write_message(
+                        &mut stdin,
+                        &mut buffer,
+                        proto::Ping {}.into_envelope(1, None, None),
+                    ).await.expect("send ping");
+
+                    loop {
+                        let response = read_message(&mut stdout, &mut buffer)
+                            .await
+                            .expect("read server message");
+
+                        if response.responding_to == Some(1) {
+                            assert!(matches!(response.payload, Some(proto::envelope::Payload::Ack(_))));
+                            break;
+                        }
+                    }
+                }.fuse() => {}
+
+                _ = cx.executor().timer(std::time::Duration::from_secs(2)).fuse() => {
+                    panic!("RPC response blocked by an unread log stream");
+                }
+            }
+        }
+
+        #[gpui::test]
+        async fn ping_is_handled_while_stdout_is_blocked(cx: &mut TestAppContext) {
+            cx.executor().allow_parking();
+
+            let temp_dir = tempfile::tempdir().expect("create socket directory");
+            let stdin_path = temp_dir.path().join("stdin.sock");
+            let stdout_path = temp_dir.path().join("stdout.sock");
+            let stderr_path = temp_dir.path().join("stderr.sock");
+            let listeners =
+                ServerListeners::new(stdin_path.clone(), stdout_path.clone(), stderr_path.clone())
+                    .expect("bind server sockets");
+
+            let (_log_tx, log_rx) = async_channel::unbounded();
+            let (ping_tx, mut ping_rx) = mpsc::unbounded();
+            let handler = cx.new(|_| ());
+            let server = cx.update(|cx| start_server(listeners, log_rx, cx, false));
+            server.add_request_handler::<proto::Ping, _, _, _>(
+                handler.downgrade(),
+                move |_, _, _| {
+                    ping_tx.unbounded_send(()).expect("report handled ping");
+                    async { Ok(proto::Ack {}) }
+                },
+            );
+
+            select! {
+                _ = async {
+                    let (mut stdin, mut stdout, _stderr) = futures::future::try_join3(
+                        UnixStream::connect(&stdin_path),
+                        UnixStream::connect(&stdout_path),
+                        UnixStream::connect(&stderr_path),
+                    ).await.expect("connect server sockets");
+
+                    let mut buffer = Vec::new();
+                    read_message(&mut stdout, &mut buffer)
+                        .await
+                        .expect("read server startup message");
+
+                    server.send(proto::CreateBufferForPeer {
+                        variant: Some(proto::create_buffer_for_peer::Variant::State(proto::BufferState {
+                            base_text: "x".repeat(16 * 1024 * 1024),
+                            ..Default::default()
+                        })),
+                        ..Default::default()
+                    }).expect("queue a buffer larger than the socket buffer");
+
+                    stdout.read_exact(&mut [0]).await.expect("wait until buffer forwarding starts");
+
+                    write_message(
+                        &mut stdin,
+                        &mut buffer,
+                        proto::Ping {}.into_envelope(1, None, None),
+                    ).await.expect("send ping");
+
+                    ping_rx.next().await.expect("ping handled without draining stdout");
+                }.fuse() => {}
+
+                _ = cx.executor().timer(std::time::Duration::from_secs(2)).fuse() => {
+                    panic!("Ping handling blocked by an unread stdout stream");
+                }
+            }
+        }
+    }
 
     #[test]
     fn rotated_remote_log_path_uses_numbered_log_suffix() {
@@ -1427,5 +2243,138 @@ mod tests {
             std::fs::read(&log_path).expect("read active log"),
             new_contents
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn script_candidates_never_start_with_a_dash() {
+        assert_eq!(
+            script_candidates("agent", Some(OsStr::new("/usr/bin:bin::-bin"))),
+            [
+                PathBuf::from("/usr/bin/agent"),
+                PathBuf::from("./bin/agent"),
+                PathBuf::from("./agent"),
+                PathBuf::from("./-bin/agent"),
+            ]
+        );
+        assert_eq!(
+            script_candidates("-a", Some(OsStr::new("/opt/bin"))),
+            [PathBuf::from("/opt/bin/-a")]
+        );
+        assert_eq!(
+            script_candidates("-x/agent", Some(OsStr::new("/opt/bin"))),
+            [PathBuf::from("./-x/agent")]
+        );
+        assert_eq!(
+            script_candidates("/srv/agent", Some(OsStr::new("/opt/bin"))),
+            [PathBuf::from("/srv/agent")]
+        );
+        assert_eq!(
+            script_candidates("agent", Some(OsStr::from_bytes(b"/not-utf8-\xff"))),
+            [PathBuf::from(OsStr::from_bytes(b"/not-utf8-\xff/agent"))]
+        );
+        assert_eq!(
+            script_candidates("agent", None),
+            [
+                PathBuf::from("/usr/local/bin/agent"),
+                PathBuf::from("/bin/agent"),
+                PathBuf::from("/usr/bin/agent"),
+            ]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn script_fallback_runs_option_like_wrapper_instead_of_its_arguments() {
+        use std::cell::RefCell;
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let directory = tempfile::tempdir().expect("create temp dir");
+        let missing_directory = directory.path().join("missing");
+        let binary_directory = directory.path().join("bin");
+        std::fs::create_dir(&binary_directory).expect("create bin dir");
+        let wrapper = binary_directory.join("-a");
+        std::fs::write(
+            &wrapper,
+            "printf 'WRAPPER_RAN|%s|%s|%s|%s\\n' \"$TOKEN\" \"$#\" \"$1\" \"$2\"\n",
+        )
+        .expect("write wrapper");
+        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod wrapper");
+        let descriptor = RemoteCommand {
+            program: String::from("-a"),
+            args: vec![
+                String::from("spoofed-argv0"),
+                String::from("/usr/bin/printf"),
+                String::from("OPTION_INTERPRETED"),
+            ],
+            env: HashMap::from_iter([
+                (String::from("TOKEN"), String::from("controlled")),
+                (
+                    String::from("PATH"),
+                    format!(
+                        "{}:{}",
+                        missing_directory.display(),
+                        binary_directory.display()
+                    ),
+                ),
+            ]),
+            working_dir: None,
+        };
+
+        let attempts = RefCell::new(Vec::new());
+        let shell_output = RefCell::new(None);
+        let error = exec_with_script_fallback(&descriptor, None, |command| {
+            let program = command.get_program().to_owned();
+            if program == "/bin/sh" {
+                let output = smol::block_on(smol::process::Command::from(command).output())
+                    .expect("run /bin/sh");
+                *shell_output.borrow_mut() = Some(output);
+                return std::io::Error::from_raw_os_error(libc::EIO);
+            }
+            attempts.borrow_mut().push(program.clone());
+            if program == "-a" || program == wrapper.as_os_str() {
+                std::io::Error::from_raw_os_error(libc::ENOEXEC)
+            } else {
+                std::io::Error::from_raw_os_error(libc::ENOENT)
+            }
+        });
+        assert_eq!(error.raw_os_error(), Some(libc::EIO));
+        assert_eq!(
+            attempts.into_inner(),
+            [
+                OsString::from("-a"),
+                missing_directory.join("-a").into_os_string(),
+                wrapper.into_os_string(),
+            ]
+        );
+        let shell_output = shell_output.into_inner().expect("shell fallback ran");
+        assert_eq!(
+            String::from_utf8_lossy(&shell_output.stderr),
+            "",
+            "{shell_output:?}"
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&shell_output.stdout),
+            "WRAPPER_RAN|controlled|3|spoofed-argv0|/usr/bin/printf\n"
+        );
+        assert_eq!(shell_output.status.code(), Some(0));
+
+        let attempts = RefCell::new(0);
+        let error = exec_with_script_fallback(&descriptor, None, |_| {
+            *attempts.borrow_mut() += 1;
+            std::io::Error::from_raw_os_error(libc::EACCES)
+        });
+        assert_eq!(error.raw_os_error(), Some(libc::EACCES));
+        assert_eq!(attempts.into_inner(), 1);
+
+        let error = exec_with_script_fallback(&descriptor, None, |command| {
+            if command.get_program() == "-a" {
+                std::io::Error::from_raw_os_error(libc::ENOEXEC)
+            } else {
+                std::io::Error::from_raw_os_error(libc::ELOOP)
+            }
+        });
+        assert_eq!(error.raw_os_error(), Some(libc::ELOOP));
     }
 }

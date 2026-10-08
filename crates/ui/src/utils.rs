@@ -44,11 +44,11 @@ pub fn buffer_text_style(cx: &App) -> gpui::TextStyle {
 /// Returns the platform-appropriate label for the "reveal in file manager" action.
 pub fn reveal_in_file_manager_label(is_remote: bool) -> &'static str {
     if cfg!(target_os = "macos") && !is_remote {
-        "Reveal in Finder"
+        i18n::t!("ded07da9efc6846c")
     } else if cfg!(target_os = "windows") && !is_remote {
-        "Reveal in File Explorer"
+        i18n::t!("59eb1eedf3341ea2")
     } else {
-        "Reveal in File Manager"
+        i18n::t!("978ef51c888c950f")
     }
 }
 
@@ -72,4 +72,16 @@ pub fn capitalize(str: &str) -> String {
         None => String::new(),
         Some(first_char) => first_char.to_uppercase().collect::<String>() + chars.as_str(),
     }
+}
+
+pub fn format_number_with_commas(value: u128) -> String {
+    let digits = value.to_string();
+    let mut formatted = String::with_capacity(digits.len() + (digits.len() - 1) / 3);
+    for (index, digit) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
+            formatted.push(',');
+        }
+        formatted.push(digit);
+    }
+    formatted
 }

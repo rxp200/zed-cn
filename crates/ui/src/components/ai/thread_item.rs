@@ -617,7 +617,7 @@ impl RenderOnce for ThreadItem {
                                 .size(IconSize::Small)
                                 .color(Color::Error),
                         )
-                        .child(Label::new("Thread has an Error"))
+                        .child(Label::new(i18n::t!("907a97a0c7b8ffb7")))
                         .into_any_element(),
                     AgentThreadStatus::WaitingForConfirmation => h_flex()
                         .gap_1()
@@ -626,7 +626,7 @@ impl RenderOnce for ThreadItem {
                                 .size(IconSize::Small)
                                 .color(Color::Warning),
                         )
-                        .child(Label::new("Waiting for Confirmation"))
+                        .child(Label::new(i18n::t!("e5d2184f2fed27d8")))
                         .into_any_element(),
                     _ => gpui::Empty.into_any_element(),
                 }))

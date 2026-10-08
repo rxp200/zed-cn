@@ -85,13 +85,24 @@ pub(crate) fn settings_data(cx: &App) -> Vec<SettingsPage> {
 fn developer_page(cx: &App) -> SettingsPage {
     use feature_flags::FeatureFlagAppExt as _;
 
-    let mut items: Vec<SettingsPageItem> = Vec::new();
+    let mut items: Vec<SettingsPageItem> = vec![SettingsPageItem::SettingItem(SettingItem {
+        title: i18n::t!("230da4c2d42f1598"),
+        description: i18n::t!("e5ffeaa025105eea"),
+        field: Box::new(SettingField {
+            organization_override: None,
+            json_path: Some("update_channel"),
+            pick: |content| content.update_channel.as_ref(),
+            write: |content, value, _| content.update_channel = value,
+        }),
+        metadata: None,
+        files: USER,
+    })];
 
     // Feature flag overrides are a staff-only affordance, so only surface the section when the overrides are enabled.
     if cx.feature_flag_overrides_enabled() {
         items.push(SettingsPageItem::SectionHeader("Feature Flags"));
         items.push(SettingsPageItem::SubPageLink(SubPageLink {
-            title: "Feature Flags".into(),
+            title: i18n::t!("50f87e4af37fb572").into(),
             r#type: Default::default(),
             description: None,
             search_aliases: &[],
@@ -102,10 +113,12 @@ fn developer_page(cx: &App) -> SettingsPage {
         }));
     }
 
-    items.push(SettingsPageItem::SectionHeader("Instrumentation"));
+    items.push(SettingsPageItem::SectionHeader(i18n::t!(
+        "83f2e6c57ab63dbf"
+    )));
     items.push(SettingsPageItem::SettingItem(SettingItem {
-        title: "Performance Profiler",
-        description: "Collect timing data for foreground and background executor tasks so they can be inspected via `zed: open performance profiler`. May lead to increased memory usage.",
+        title: i18n::t!("55f8aa09fcb0e8e8"),
+        description: i18n::t!("126b7c2c0585ea34"),
         field: Box::new(SettingField {
             organization_override: None,
             json_path: Some("instrumentation.performance_profiler.enabled"),
@@ -130,7 +143,7 @@ fn developer_page(cx: &App) -> SettingsPage {
     }));
 
     SettingsPage {
-        title: "Developer",
+        title: i18n::t!("38084d301e3f1a31"),
         items: items.into_boxed_slice(),
     }
 }
@@ -138,10 +151,10 @@ fn developer_page(cx: &App) -> SettingsPage {
 fn general_page(cx: &App) -> SettingsPage {
     fn general_settings_section(_cx: &App) -> Vec<SettingsPageItem> {
         vec![
-            SettingsPageItem::SectionHeader("General Settings"),
+            SettingsPageItem::SectionHeader(i18n::t!("18a9d61deeb3373d")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Accessible Mode",
-                description: "Optimize Zed's interface for assistive technology such as screen readers. When enabled, otherwise-collapsed controls stay expanded and keyboard-reachable.",
+                title: i18n::t!("0011112554026935"),
+                description: i18n::t!("2ff8e99695359021"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("accessible_mode"),
@@ -154,8 +167,8 @@ fn general_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "When Closing With No Tabs",
-                description: "What to do when using the 'close active item' action with no tabs.",
+                title: i18n::t!("94a5143840d13839"),
+                description: i18n::t!("68648cc8b6f4fcd4"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("when_closing_with_no_tabs"),
@@ -173,8 +186,8 @@ fn general_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "On New Window",
-                description: "What to show when opening a new window.",
+                title: i18n::t!("430a1ffc7492b510"),
+                description: i18n::t!("bf39996e71a45bf3"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("on_new_window"),
@@ -187,8 +200,8 @@ fn general_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "On Last Window Closed",
-                description: "What to do when the last window is closed.",
+                title: i18n::t!("497cae10a9114234"),
+                description: i18n::t!("7404121120333f5e"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("on_last_window_closed"),
@@ -203,8 +216,8 @@ fn general_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Use System Path Prompts",
-                description: "Use native OS dialogs for 'Open' and 'Save As'.",
+                title: i18n::t!("484a7f00ad7ccc09"),
+                description: i18n::t!("fb94b0ea927e2d81"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("use_system_path_prompts"),
@@ -219,8 +232,8 @@ fn general_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Use System Prompts",
-                description: "Use native OS dialogs for confirmations.",
+                title: i18n::t!("1955cc1e1e020c69"),
+                description: i18n::t!("a92718b5c1f700f0"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("use_system_prompts"),
@@ -233,8 +246,8 @@ fn general_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Redact Private Values",
-                description: "Hide the values of variables in private files.",
+                title: i18n::t!("a97ed73eef0ae006"),
+                description: i18n::t!("3f5597c781adf20c"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("redact_private_values"),
@@ -247,8 +260,8 @@ fn general_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Private Files",
-                description: "Globs to match against file paths to determine if a file is private.",
+                title: i18n::t!("e57f571d6140a6e5"),
+                description: i18n::t!("c85beffc5fc8cb97"),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -266,8 +279,8 @@ fn general_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "CLI Default Open Behavior",
-                description: "How `zed <path>` opens directories when no flag is specified.",
+                title: i18n::t!("8850d86331664bfa"),
+                description: i18n::t!("46b02620639dcbfb"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("cli_default_open_behavior"),
@@ -288,8 +301,8 @@ fn general_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Reveal If Open",
-                description: "when enabled, zed will prefer already-open buffers.",
+                title: i18n::t!("28ea4ef555bfc0f1"),
+                description: i18n::t!("adb2700141113411"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("reveal_if_open"),
@@ -302,8 +315,8 @@ fn general_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Default Open Behavior",
-                description: "How projects open from the UI by default.",
+                title: i18n::t!("3a28b3c4bae3afe1"),
+                description: i18n::t!("082fc6a07f61639a"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("default_open_behavior"),
@@ -324,10 +337,10 @@ fn general_page(cx: &App) -> SettingsPage {
     }
     fn security_section() -> [SettingsPageItem; 2] {
         [
-            SettingsPageItem::SectionHeader("Security"),
+            SettingsPageItem::SectionHeader(i18n::t!("afb63a620bdcff15")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Trust All Projects By Default",
-                description: "When opening Zed, avoid Restricted Mode by auto-trusting all projects, enabling use of all features without having to give permission to each new project.",
+                title: i18n::t!("b5d58f5a4aeb21b9"),
+                description: i18n::t!("0c7dac9871771a0d"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("session.trust_all_projects"),
@@ -352,10 +365,10 @@ fn general_page(cx: &App) -> SettingsPage {
 
     fn workspace_restoration_section() -> [SettingsPageItem; 3] {
         [
-            SettingsPageItem::SectionHeader("Workspace Restoration"),
+            SettingsPageItem::SectionHeader(i18n::t!("75d0f8540f72fa2d")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Restore Unsaved Buffers",
-                description: "Whether or not to restore unsaved buffers on restart.",
+                title: i18n::t!("9d915ae9f17bbb31"),
+                description: i18n::t!("3ec7ceeac4510475"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("session.restore_unsaved_buffers"),
@@ -376,8 +389,8 @@ fn general_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Restore On Startup",
-                description: "What to restore from the previous session when opening Zed.",
+                title: i18n::t!("0c7db6a74c3b2cdf"),
+                description: i18n::t!("2ce6e5e9c43d29c4"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("restore_on_startup"),
@@ -394,11 +407,11 @@ fn general_page(cx: &App) -> SettingsPage {
 
     fn scoped_settings_section() -> [SettingsPageItem; 3] {
         [
-            SettingsPageItem::SectionHeader("Scoped Settings"),
+            SettingsPageItem::SectionHeader(i18n::t!("10e4c125a796807d")),
             SettingsPageItem::SettingItem(SettingItem {
                 files: USER,
-                title: "Preview Channel",
-                description: "Which settings should be activated only in Preview build of Zed.",
+                title: i18n::t!("7c7714a1fd7f5315"),
+                description: i18n::t!("5a1d783af6b7002a"),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -412,8 +425,8 @@ fn general_page(cx: &App) -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 files: USER,
-                title: "Settings Profiles",
-                description: "Any number of settings profiles that are temporarily applied on top of your existing user settings.",
+                title: i18n::t!("0e2d914fdf49c377"),
+                description: i18n::t!("c9ccbb2742139c80"),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -430,10 +443,10 @@ fn general_page(cx: &App) -> SettingsPage {
 
     fn privacy_section() -> [SettingsPageItem; 4] {
         [
-            SettingsPageItem::SectionHeader("Privacy"),
+            SettingsPageItem::SectionHeader(i18n::t!("86651d17a401c55b")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Telemetry Diagnostics",
-                description: "Send debug information like crash reports.",
+                title: i18n::t!("58b224818bcc926a"),
+                description: i18n::t!("9bbab95bdaf2704d"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("telemetry.diagnostics"),
@@ -454,8 +467,8 @@ fn general_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Telemetry Metrics",
-                description: "Send anonymized usage data like what languages you're using Zed with.",
+                title: i18n::t!("8373d3ec31d728ea"),
+                description: i18n::t!("38525d13fb1fe980"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("telemetry.metrics"),
@@ -473,8 +486,8 @@ fn general_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Anthropic Data Retention",
-                description: "Allow sending requests to Anthropic models that cannot be offered with Zero Data Retention.",
+                title: i18n::t!("0469ffab0e7b13aa"),
+                description: i18n::t!("12af6b29d0857418"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("telemetry.anthropic_retention"),
@@ -499,10 +512,10 @@ fn general_page(cx: &App) -> SettingsPage {
 
     fn auto_update_section() -> [SettingsPageItem; 2] {
         [
-            SettingsPageItem::SectionHeader("Auto Update"),
+            SettingsPageItem::SectionHeader(i18n::t!("736cff237d7d9255")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Auto Update",
-                description: "Whether or not to automatically check for updates.",
+                title: i18n::t!("736cff237d7d9255"),
+                description: i18n::t!("0a2b66530a9a451e"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("auto_update"),
@@ -517,16 +530,58 @@ fn general_page(cx: &App) -> SettingsPage {
         ]
     }
 
+    fn language_section() -> [SettingsPageItem; 2] {
+        [
+            SettingsPageItem::SectionHeader(i18n::t!("9f6fee1aba17a565")),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: i18n::t!("3d13868593ae4eeb"),
+                description: i18n::t!("502c405590993170"),
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("language"),
+                    pick: |settings_content| settings_content.language.as_ref(),
+                    write: |settings_content, value, _| {
+                        settings_content.language = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+        ]
+    }
+
+    fn extensions_section() -> [SettingsPageItem; 2] {
+        [
+            SettingsPageItem::SectionHeader("Extensions"),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: i18n::t!("a7bf22284542c624"),
+                description: i18n::t!("1a69a23f597093b2"),
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("suggest_extensions"),
+                    pick: |settings_content| Some(&settings_content.extension.suggest_extensions),
+                    write: |settings_content, value, _| {
+                        settings_content.extension.suggest_extensions = value.unwrap_or(true);
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+        ]
+    }
+
     SettingsPage {
-        title: "General",
+        title: i18n::t!("835b700e028c9b20"),
         items: concat_sections!(
             @vec,
+            language_section(),
             general_settings_section(cx),
             security_section(),
             workspace_restoration_section(),
             scoped_settings_section(),
             privacy_section(),
             auto_update_section(),
+            extensions_section(),
         )
         .into(),
     }
@@ -535,37 +590,44 @@ fn general_page(cx: &App) -> SettingsPage {
 fn appearance_page() -> SettingsPage {
     fn theme_section() -> [SettingsPageItem; 3] {
         [
-            SettingsPageItem::SectionHeader("Theme"),
+            SettingsPageItem::SectionHeader(i18n::t!("788db1cfec2a3db5")),
             SettingsPageItem::DynamicItem(DynamicItem {
                 discriminant: SettingItem {
                     files: USER,
-                    title: "Theme Mode",
-                    description: "Choose a static, fixed theme or dynamically select themes based on appearance and light/dark modes.",
+                    title: i18n::t!("44fb814b166ed6ae"),
+                    description: i18n::t!("93e7de90e33550c8"),
                     field: Box::new(SettingField {
                         organization_override: None,
                         json_path: Some("theme$"),
                         pick: |settings_content| {
-                            Some(&dynamic_variants::<settings::ThemeSelection>()[
-                                settings_content
+                            Some(
+                                &dynamic_variants::<settings::ThemeSelection>()[settings_content
                                     .theme
                                     .theme
                                     .as_ref()?
-                                    .discriminant() as usize])
+                                    .discriminant()
+                                    as usize],
+                            )
                         },
                         write: |settings_content, value, app: &App| {
                             let Some(value) = value else {
                                 settings_content.theme.theme = None;
                                 return;
                             };
-                            let settings_value = settings_content.theme.theme.get_or_insert_default();
+                            let settings_value =
+                                settings_content.theme.theme.get_or_insert_default();
                             *settings_value = match value {
                                 settings::ThemeSelectionDiscriminants::Static => {
                                     let name = match settings_value {
                                         settings::ThemeSelection::Static(_) => return,
                                         settings::ThemeSelection::Dynamic { mode, light, dark } => {
                                             match mode {
-                                                theme_settings::ThemeAppearanceMode::Light => light.clone(),
-                                                theme_settings::ThemeAppearanceMode::Dark => dark.clone(),
+                                                theme_settings::ThemeAppearanceMode::Light => {
+                                                    light.clone()
+                                                }
+                                                theme_settings::ThemeAppearanceMode::Dark => {
+                                                    dark.clone()
+                                                }
                                                 theme_settings::ThemeAppearanceMode::System => {
                                                     if SystemAppearance::global(app).is_light() {
                                                         light.clone()
@@ -574,14 +636,16 @@ fn appearance_page() -> SettingsPage {
                                                     }
                                                 }
                                             }
-                                        },
+                                        }
                                     };
                                     settings::ThemeSelection::Static(name)
-                                },
+                                }
                                 settings::ThemeSelectionDiscriminants::Dynamic => {
                                     let static_name = match settings_value {
-                                        settings::ThemeSelection::Static(theme_name) => theme_name.clone(),
-                                        settings::ThemeSelection::Dynamic {..} => return,
+                                        settings::ThemeSelection::Static(theme_name) => {
+                                            theme_name.clone()
+                                        }
+                                        settings::ThemeSelection::Dynamic { .. } => return,
                                     };
 
                                     settings::ThemeSelection::Dynamic {
@@ -589,7 +653,7 @@ fn appearance_page() -> SettingsPage {
                                         light: static_name.clone(),
                                         dark: static_name,
                                     }
-                                },
+                                }
                             };
                         },
                     }),
@@ -598,171 +662,194 @@ fn appearance_page() -> SettingsPage {
                 pick_discriminant: |settings_content| {
                     Some(settings_content.theme.theme.as_ref()?.discriminant() as usize)
                 },
-                fields: dynamic_variants::<settings::ThemeSelection>().into_iter().map(|variant| {
-                    match variant {
-                        settings::ThemeSelectionDiscriminants::Static => vec![
-                            SettingItem {
-                                files: USER,
-                                title: "Theme Name",
-                                description: "The name of your selected theme.",
-                                field: Box::new(SettingField {
-                                    organization_override: None,
-                                    json_path: Some("theme"),
-                                    pick: |settings_content| {
-                                        match settings_content.theme.theme.as_ref() {
-                                            Some(settings::ThemeSelection::Static(name)) => Some(name),
-                                            _ => None
+                fields: dynamic_variants::<settings::ThemeSelection>()
+                    .into_iter()
+                    .map(|variant| match variant {
+                        settings::ThemeSelectionDiscriminants::Static => vec![SettingItem {
+                            files: USER,
+                            title: i18n::t!("e479c05c94a10744"),
+                            description: i18n::t!("6a7d5983eb67f3e0"),
+                            field: Box::new(SettingField {
+                                organization_override: None,
+                                json_path: Some("theme"),
+                                pick: |settings_content| match settings_content.theme.theme.as_ref()
+                                {
+                                    Some(settings::ThemeSelection::Static(name)) => Some(name),
+                                    _ => None,
+                                },
+                                write: |settings_content, value, _| {
+                                    let Some(value) = value else {
+                                        return;
+                                    };
+                                    match settings_content.theme.theme.get_or_insert_default() {
+                                        settings::ThemeSelection::Static(theme_name) => {
+                                            *theme_name = value
                                         }
-                                    },
-                                    write: |settings_content, value, _| {
-                                        let Some(value) = value else {
-                                            return;
-                                        };
-                                        match settings_content
-                                            .theme
-                                            .theme.get_or_insert_default() {
-                                                settings::ThemeSelection::Static(theme_name) => *theme_name = value,
-                                                _ => return
-                                            }
-                                    },
-                                }),
-                                metadata: None,
-                            }
-                        ],
+                                        _ => return,
+                                    }
+                                },
+                            }),
+                            metadata: None,
+                        }],
                         settings::ThemeSelectionDiscriminants::Dynamic => vec![
                             SettingItem {
                                 files: USER,
-                                title: "Mode",
-                                description: "Choose whether to use the selected light or dark theme or to follow your OS appearance configuration.",
+                                title: i18n::t!("47a270081ab2892f"),
+                                description: i18n::t!("2b5b7cc4ccfa598e"),
                                 field: Box::new(SettingField {
                                     organization_override: None,
                                     json_path: Some("theme.mode"),
-                                    pick: |settings_content| {
-                                        match settings_content.theme.theme.as_ref() {
-                                            Some(settings::ThemeSelection::Dynamic { mode, ..}) => Some(mode),
-                                            _ => None
-                                        }
+                                    pick: |settings_content| match settings_content
+                                        .theme
+                                        .theme
+                                        .as_ref()
+                                    {
+                                        Some(settings::ThemeSelection::Dynamic {
+                                            mode, ..
+                                        }) => Some(mode),
+                                        _ => None,
                                     },
                                     write: |settings_content, value, _| {
                                         let Some(value) = value else {
                                             return;
                                         };
-                                        match settings_content
-                                            .theme
-                                            .theme.get_or_insert_default() {
-                                                settings::ThemeSelection::Dynamic{ mode, ..} => *mode = value,
-                                                _ => return
+                                        match settings_content.theme.theme.get_or_insert_default() {
+                                            settings::ThemeSelection::Dynamic { mode, .. } => {
+                                                *mode = value
                                             }
+                                            _ => return,
+                                        }
                                     },
                                 }),
                                 metadata: None,
                             },
                             SettingItem {
                                 files: USER,
-                                title: "Light Theme",
-                                description: "The theme to use when mode is set to light, or when mode is set to system and it is in light mode.",
+                                title: i18n::t!("4bab51186df53fc0"),
+                                description: i18n::t!("d5cd89e02d9af4a3"),
                                 field: Box::new(SettingField {
                                     organization_override: None,
                                     json_path: Some("theme.light"),
-                                    pick: |settings_content| {
-                                        match settings_content.theme.theme.as_ref() {
-                                            Some(settings::ThemeSelection::Dynamic { light, ..}) => Some(light),
-                                            _ => None
-                                        }
+                                    pick: |settings_content| match settings_content
+                                        .theme
+                                        .theme
+                                        .as_ref()
+                                    {
+                                        Some(settings::ThemeSelection::Dynamic {
+                                            light, ..
+                                        }) => Some(light),
+                                        _ => None,
                                     },
                                     write: |settings_content, value, _| {
                                         let Some(value) = value else {
                                             return;
                                         };
-                                        match settings_content
-                                            .theme
-                                            .theme.get_or_insert_default() {
-                                                settings::ThemeSelection::Dynamic{ light, ..} => *light = value,
-                                                _ => return
+                                        match settings_content.theme.theme.get_or_insert_default() {
+                                            settings::ThemeSelection::Dynamic { light, .. } => {
+                                                *light = value
                                             }
+                                            _ => return,
+                                        }
                                     },
                                 }),
                                 metadata: None,
                             },
                             SettingItem {
                                 files: USER,
-                                title: "Dark Theme",
-                                description: "The theme to use when mode is set to dark, or when mode is set to system and it is in dark mode.",
+                                title: i18n::t!("352a598cd470b1e1"),
+                                description: i18n::t!("d8ba08df42e60a61"),
                                 field: Box::new(SettingField {
                                     organization_override: None,
                                     json_path: Some("theme.dark"),
-                                    pick: |settings_content| {
-                                        match settings_content.theme.theme.as_ref() {
-                                            Some(settings::ThemeSelection::Dynamic { dark, ..}) => Some(dark),
-                                            _ => None
-                                        }
+                                    pick: |settings_content| match settings_content
+                                        .theme
+                                        .theme
+                                        .as_ref()
+                                    {
+                                        Some(settings::ThemeSelection::Dynamic {
+                                            dark, ..
+                                        }) => Some(dark),
+                                        _ => None,
                                     },
                                     write: |settings_content, value, _| {
                                         let Some(value) = value else {
                                             return;
                                         };
-                                        match settings_content
-                                            .theme
-                                            .theme.get_or_insert_default() {
-                                                settings::ThemeSelection::Dynamic{ dark, ..} => *dark = value,
-                                                _ => return
+                                        match settings_content.theme.theme.get_or_insert_default() {
+                                            settings::ThemeSelection::Dynamic { dark, .. } => {
+                                                *dark = value
                                             }
+                                            _ => return,
+                                        }
                                     },
                                 }),
                                 metadata: None,
-                            }
+                            },
                         ],
-                    }
-                }).collect(),
+                    })
+                    .collect(),
             }),
             SettingsPageItem::DynamicItem(DynamicItem {
                 discriminant: SettingItem {
                     files: USER,
-                    title: "Icon Theme",
-                    description: "The custom set of icons Zed will associate with files and directories.",
+                    title: i18n::t!("62aec9c5a86a0bff"),
+                    description: i18n::t!("82a7fd7370b147c9"),
                     field: Box::new(SettingField {
                         organization_override: None,
                         json_path: Some("icon_theme$"),
                         pick: |settings_content| {
-                            Some(&dynamic_variants::<settings::IconThemeSelection>()[
-                                settings_content
+                            Some(
+                                &dynamic_variants::<settings::IconThemeSelection>()[settings_content
                                     .theme
                                     .icon_theme
                                     .as_ref()?
-                                    .discriminant() as usize])
+                                    .discriminant()
+                                    as usize],
+                            )
                         },
                         write: |settings_content, value, app| {
                             let Some(value) = value else {
                                 settings_content.theme.icon_theme = None;
                                 return;
                             };
-                            let settings_value = settings_content.theme.icon_theme.get_or_insert_with(|| {
-                                settings::IconThemeSelection::Static(settings::IconThemeName(theme::default_icon_theme().name.clone().into()))
-                            });
+                            let settings_value =
+                                settings_content.theme.icon_theme.get_or_insert_with(|| {
+                                    settings::IconThemeSelection::Static(settings::IconThemeName(
+                                        theme::default_icon_theme().name.clone().into(),
+                                    ))
+                                });
                             *settings_value = match value {
                                 settings::IconThemeSelectionDiscriminants::Static => {
                                     let name = match settings_value {
                                         settings::IconThemeSelection::Static(_) => return,
-                                        settings::IconThemeSelection::Dynamic { mode, light, dark } => {
-                                            match mode {
-                                                theme_settings::ThemeAppearanceMode::Light => light.clone(),
-                                                theme_settings::ThemeAppearanceMode::Dark => dark.clone(),
-                                                theme_settings::ThemeAppearanceMode::System => {
-                                                    if SystemAppearance::global(app).is_light() {
-                                                        light.clone()
-                                                    } else {
-                                                        dark.clone()
-                                                    }
+                                        settings::IconThemeSelection::Dynamic {
+                                            mode,
+                                            light,
+                                            dark,
+                                        } => match mode {
+                                            theme_settings::ThemeAppearanceMode::Light => {
+                                                light.clone()
+                                            }
+                                            theme_settings::ThemeAppearanceMode::Dark => {
+                                                dark.clone()
+                                            }
+                                            theme_settings::ThemeAppearanceMode::System => {
+                                                if SystemAppearance::global(app).is_light() {
+                                                    light.clone()
+                                                } else {
+                                                    dark.clone()
                                                 }
                                             }
                                         },
                                     };
                                     settings::IconThemeSelection::Static(name)
-                                },
+                                }
                                 settings::IconThemeSelectionDiscriminants::Dynamic => {
                                     let static_name = match settings_value {
-                                        settings::IconThemeSelection::Static(theme_name) => theme_name.clone(),
-                                        settings::IconThemeSelection::Dynamic {..} => return,
+                                        settings::IconThemeSelection::Static(theme_name) => {
+                                            theme_name.clone()
+                                        }
+                                        settings::IconThemeSelection::Dynamic { .. } => return,
                                     };
 
                                     settings::IconThemeSelection::Dynamic {
@@ -770,7 +857,7 @@ fn appearance_page() -> SettingsPage {
                                         light: static_name.clone(),
                                         dark: static_name,
                                     }
-                                },
+                                }
                             };
                         },
                     }),
@@ -779,132 +866,151 @@ fn appearance_page() -> SettingsPage {
                 pick_discriminant: |settings_content| {
                     Some(settings_content.theme.icon_theme.as_ref()?.discriminant() as usize)
                 },
-                fields: dynamic_variants::<settings::IconThemeSelection>().into_iter().map(|variant| {
-                    match variant {
-                        settings::IconThemeSelectionDiscriminants::Static => vec![
-                            SettingItem {
-                                files: USER,
-                                title: "Icon Theme Name",
-                                description: "The name of your selected icon theme.",
-                                field: Box::new(SettingField {
-                                    organization_override: None,
-                                    json_path: Some("icon_theme$string"),
-                                    pick: |settings_content| {
-                                        match settings_content.theme.icon_theme.as_ref() {
-                                            Some(settings::IconThemeSelection::Static(name)) => Some(name),
-                                            _ => None
+                fields: dynamic_variants::<settings::IconThemeSelection>()
+                    .into_iter()
+                    .map(|variant| match variant {
+                        settings::IconThemeSelectionDiscriminants::Static => vec![SettingItem {
+                            files: USER,
+                            title: i18n::t!("f4cf8b83d5ab239d"),
+                            description: i18n::t!("24dea9cf0df255a7"),
+                            field: Box::new(SettingField {
+                                organization_override: None,
+                                json_path: Some("icon_theme$string"),
+                                pick: |settings_content| match settings_content
+                                    .theme
+                                    .icon_theme
+                                    .as_ref()
+                                {
+                                    Some(settings::IconThemeSelection::Static(name)) => Some(name),
+                                    _ => None,
+                                },
+                                write: |settings_content, value, _| {
+                                    let Some(value) = value else {
+                                        return;
+                                    };
+                                    match settings_content.theme.icon_theme.as_mut() {
+                                        Some(settings::IconThemeSelection::Static(theme_name)) => {
+                                            *theme_name = value
                                         }
-                                    },
-                                    write: |settings_content, value, _| {
-                                        let Some(value) = value else {
-                                            return;
-                                        };
-                                        match settings_content
-                                            .theme
-                                            .icon_theme.as_mut() {
-                                                Some(settings::IconThemeSelection::Static(theme_name)) => *theme_name = value,
-                                                _ => return
-                                            }
-                                    },
-                                }),
-                                metadata: None,
-                            }
-                        ],
+                                        _ => return,
+                                    }
+                                },
+                            }),
+                            metadata: None,
+                        }],
                         settings::IconThemeSelectionDiscriminants::Dynamic => vec![
                             SettingItem {
                                 files: USER,
-                                title: "Mode",
-                                description: "Choose whether to use the selected light or dark icon theme or to follow your OS appearance configuration.",
+                                title: i18n::t!("47a270081ab2892f"),
+                                description: i18n::t!("9007a2953d994e93"),
                                 field: Box::new(SettingField {
                                     organization_override: None,
                                     json_path: Some("icon_theme"),
-                                    pick: |settings_content| {
-                                        match settings_content.theme.icon_theme.as_ref() {
-                                            Some(settings::IconThemeSelection::Dynamic { mode, ..}) => Some(mode),
-                                            _ => None
-                                        }
+                                    pick: |settings_content| match settings_content
+                                        .theme
+                                        .icon_theme
+                                        .as_ref()
+                                    {
+                                        Some(settings::IconThemeSelection::Dynamic {
+                                            mode,
+                                            ..
+                                        }) => Some(mode),
+                                        _ => None,
                                     },
                                     write: |settings_content, value, _| {
                                         let Some(value) = value else {
                                             return;
                                         };
-                                        match settings_content
-                                            .theme
-                                            .icon_theme.as_mut() {
-                                                Some(settings::IconThemeSelection::Dynamic{ mode, ..}) => *mode = value,
-                                                _ => return
-                                            }
+                                        match settings_content.theme.icon_theme.as_mut() {
+                                            Some(settings::IconThemeSelection::Dynamic {
+                                                mode,
+                                                ..
+                                            }) => *mode = value,
+                                            _ => return,
+                                        }
                                     },
                                 }),
                                 metadata: None,
                             },
                             SettingItem {
                                 files: USER,
-                                title: "Light Icon Theme",
-                                description: "The icon theme to use when mode is set to light, or when mode is set to system and it is in light mode.",
+                                title: i18n::t!("c71bc97ae617a5ea"),
+                                description: i18n::t!("e2fb7f0e9ae17c5c"),
                                 field: Box::new(SettingField {
                                     organization_override: None,
                                     json_path: Some("icon_theme.light"),
-                                    pick: |settings_content| {
-                                        match settings_content.theme.icon_theme.as_ref() {
-                                            Some(settings::IconThemeSelection::Dynamic { light, ..}) => Some(light),
-                                            _ => None
-                                        }
+                                    pick: |settings_content| match settings_content
+                                        .theme
+                                        .icon_theme
+                                        .as_ref()
+                                    {
+                                        Some(settings::IconThemeSelection::Dynamic {
+                                            light,
+                                            ..
+                                        }) => Some(light),
+                                        _ => None,
                                     },
                                     write: |settings_content, value, _| {
                                         let Some(value) = value else {
                                             return;
                                         };
-                                        match settings_content
-                                            .theme
-                                            .icon_theme.as_mut() {
-                                                Some(settings::IconThemeSelection::Dynamic{ light, ..}) => *light = value,
-                                                _ => return
-                                            }
+                                        match settings_content.theme.icon_theme.as_mut() {
+                                            Some(settings::IconThemeSelection::Dynamic {
+                                                light,
+                                                ..
+                                            }) => *light = value,
+                                            _ => return,
+                                        }
                                     },
                                 }),
                                 metadata: None,
                             },
                             SettingItem {
                                 files: USER,
-                                title: "Dark Icon Theme",
-                                description: "The icon theme to use when mode is set to dark, or when mode is set to system and it is in dark mode.",
+                                title: i18n::t!("9b43fcaa46b8d4fb"),
+                                description: i18n::t!("176aeffe0d1066c9"),
                                 field: Box::new(SettingField {
                                     organization_override: None,
                                     json_path: Some("icon_theme.dark"),
-                                    pick: |settings_content| {
-                                        match settings_content.theme.icon_theme.as_ref() {
-                                            Some(settings::IconThemeSelection::Dynamic { dark, ..}) => Some(dark),
-                                            _ => None
-                                        }
+                                    pick: |settings_content| match settings_content
+                                        .theme
+                                        .icon_theme
+                                        .as_ref()
+                                    {
+                                        Some(settings::IconThemeSelection::Dynamic {
+                                            dark,
+                                            ..
+                                        }) => Some(dark),
+                                        _ => None,
                                     },
                                     write: |settings_content, value, _| {
                                         let Some(value) = value else {
                                             return;
                                         };
-                                        match settings_content
-                                            .theme
-                                            .icon_theme.as_mut() {
-                                                Some(settings::IconThemeSelection::Dynamic{ dark, ..}) => *dark = value,
-                                                _ => return
-                                            }
+                                        match settings_content.theme.icon_theme.as_mut() {
+                                            Some(settings::IconThemeSelection::Dynamic {
+                                                dark,
+                                                ..
+                                            }) => *dark = value,
+                                            _ => return,
+                                        }
                                     },
                                 }),
                                 metadata: None,
-                            }
+                            },
                         ],
-                    }
-                }).collect(),
+                    })
+                    .collect(),
             }),
         ]
     }
 
     fn buffer_font_section() -> [SettingsPageItem; 7] {
         [
-            SettingsPageItem::SectionHeader("Buffer Font"),
+            SettingsPageItem::SectionHeader(i18n::t!("186e55deaf9d600b")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Font Family",
-                description: "Font family for editor text.",
+                title: i18n::t!("c75431892ad1880c"),
+                description: i18n::t!("38f8f77dd0e34436"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("buffer_font_family"),
@@ -917,8 +1023,8 @@ fn appearance_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Font Size",
-                description: "Font size for editor text.",
+                title: i18n::t!("0c30c37c6ead953b"),
+                description: i18n::t!("e22ddb0ca2a11cba"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("buffer_font_size"),
@@ -931,8 +1037,8 @@ fn appearance_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Font Weight",
-                description: "Font weight for editor text (100-900).",
+                title: i18n::t!("db0c79d9d7d6c577"),
+                description: i18n::t!("4b70b60e6fbbb670"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("buffer_font_weight"),
@@ -947,8 +1053,8 @@ fn appearance_page() -> SettingsPage {
             SettingsPageItem::DynamicItem(DynamicItem {
                 discriminant: SettingItem {
                     files: USER,
-                    title: "Line Height",
-                    description: "Line height for editor text.",
+                    title: i18n::t!("6b44b7ba432abf47"),
+                    description: i18n::t!("e7632e55ead5db3f"),
                     field: Box::new(SettingField {
                         organization_override: None,
                         json_path: Some("buffer_line_height$"),
@@ -1007,8 +1113,8 @@ fn appearance_page() -> SettingsPage {
                         settings::BufferLineHeightDiscriminants::Standard => vec![],
                         settings::BufferLineHeightDiscriminants::Custom => vec![SettingItem {
                             files: USER,
-                            title: "Custom Line Height",
-                            description: "Custom line height value (must be at least 1.0).",
+                            title: i18n::t!("bbc3144ff5dbba47"),
+                            description: i18n::t!("7d1ffbddcebfbf73"),
                             field: Box::new(SettingField {
                                 organization_override: None,
                                 json_path: Some("buffer_line_height"),
@@ -1039,8 +1145,8 @@ fn appearance_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 files: USER,
-                title: "Font Features",
-                description: "The OpenType features to enable for rendering in text buffers.",
+                title: i18n::t!("cf2674acf2bbad54"),
+                description: i18n::t!("4b5a43a25fa5f0ff"),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -1058,8 +1164,8 @@ fn appearance_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 files: USER,
-                title: "Font Fallbacks",
-                description: "The font fallbacks to use for rendering in text buffers.",
+                title: i18n::t!("e037c3476fcbc213"),
+                description: i18n::t!("094ed8739a6c6686"),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -1080,10 +1186,10 @@ fn appearance_page() -> SettingsPage {
 
     fn ui_font_section() -> [SettingsPageItem; 6] {
         [
-            SettingsPageItem::SectionHeader("UI Font"),
+            SettingsPageItem::SectionHeader(i18n::t!("a77a611a7c8298ed")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Font Family",
-                description: "Font family for UI elements.",
+                title: i18n::t!("c75431892ad1880c"),
+                description: i18n::t!("6b1c1e42e29de331"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("ui_font_family"),
@@ -1096,8 +1202,8 @@ fn appearance_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Font Size",
-                description: "Font size for UI elements.",
+                title: i18n::t!("0c30c37c6ead953b"),
+                description: i18n::t!("5b16dc095701bc9f"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("ui_font_size"),
@@ -1110,8 +1216,8 @@ fn appearance_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Font Weight",
-                description: "Font weight for UI elements (100-900).",
+                title: i18n::t!("db0c79d9d7d6c577"),
+                description: i18n::t!("5585c9b8f1361032"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("ui_font_weight"),
@@ -1125,8 +1231,8 @@ fn appearance_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 files: USER,
-                title: "Font Features",
-                description: "The OpenType features to enable for rendering in UI elements.",
+                title: i18n::t!("cf2674acf2bbad54"),
+                description: i18n::t!("f008b89d5c0ee08f"),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -1142,8 +1248,8 @@ fn appearance_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 files: USER,
-                title: "Font Fallbacks",
-                description: "The font fallbacks to use for rendering in the UI.",
+                title: i18n::t!("e037c3476fcbc213"),
+                description: i18n::t!("4a6b40d42638980c"),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -1162,10 +1268,10 @@ fn appearance_page() -> SettingsPage {
 
     fn agent_panel_font_section() -> [SettingsPageItem; 5] {
         [
-            SettingsPageItem::SectionHeader("Agent Panel Font"),
+            SettingsPageItem::SectionHeader(i18n::t!("5373158eadbed7a4")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "UI Font Family",
-                description: "Font family for agent response text in the agent panel. Falls back to the regular UI font family.",
+                title: i18n::t!("caa57f17b9d8386b"),
+                description: i18n::t!("8f112d03376f5482"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("agent_ui_font_family"),
@@ -1184,8 +1290,8 @@ fn appearance_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "UI Font Size",
-                description: "Font size for agent response text in the agent panel. Falls back to the regular UI font size.",
+                title: i18n::t!("b107622308080eb1"),
+                description: i18n::t!("b303f07f5c38bd76"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("agent_ui_font_size"),
@@ -1204,8 +1310,8 @@ fn appearance_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Buffer Font Family",
-                description: "Font family for user messages in the agent panel. Falls back to the regular buffer font family.",
+                title: i18n::t!("57a6ff77dd42b65d"),
+                description: i18n::t!("33e6bde3aabba581"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("agent_buffer_font_family"),
@@ -1224,8 +1330,8 @@ fn appearance_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Buffer Font Size",
-                description: "Font size for user messages text in the agent panel.",
+                title: i18n::t!("59265ec3bf4a871d"),
+                description: i18n::t!("6db08a1c683ee3e3"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("agent_buffer_font_size"),
@@ -1246,12 +1352,12 @@ fn appearance_page() -> SettingsPage {
         ]
     }
 
-    fn markdown_preview_font_section() -> [SettingsPageItem; 4] {
+    fn markdown_preview_font_section() -> [SettingsPageItem; 5] {
         [
-            SettingsPageItem::SectionHeader("Markdown Preview Font"),
+            SettingsPageItem::SectionHeader(i18n::t!("a6ddab2ec94b01c1")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Font Family",
-                description: "Font family for the markdown preview. Falls back to the UI font family.",
+                title: i18n::t!("c75431892ad1880c"),
+                description: i18n::t!("2ad15be3c6cafe94"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("markdown_preview.font_family"),
@@ -1273,8 +1379,8 @@ fn appearance_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Code Font Family",
-                description: "Font family for code blocks in the markdown preview. Falls back to the editor font family.",
+                title: i18n::t!("f9eef84daaf8157e"),
+                description: i18n::t!("d0c6dfe6fafc98d8"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("markdown_preview.code_font_family"),
@@ -1296,8 +1402,8 @@ fn appearance_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Font Size",
-                description: "Font size for the markdown preview. Falls back to the editor font size.",
+                title: i18n::t!("0c30c37c6ead953b"),
+                description: i18n::t!("71b093c6ec5912a2"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("markdown_preview.font_size"),
@@ -1318,15 +1424,64 @@ fn appearance_page() -> SettingsPage {
                 metadata: None,
                 files: USER,
             }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: i18n::t!("063ea5f7efe008b3"),
+                description: i18n::t!("04a260462e29eaea"),
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("markdown_preview.heading_font_weight"),
+                    pick: |settings_content| {
+                        settings_content
+                            .markdown_preview
+                            .as_ref()?
+                            .heading_font_weight
+                            .as_ref()
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content
+                            .markdown_preview
+                            .get_or_insert_default()
+                            .heading_font_weight = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+        ]
+    }
+
+    fn mermaid_font_section() -> [SettingsPageItem; 2] {
+        [
+            SettingsPageItem::SectionHeader("Mermaid Font"),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: i18n::t!("078838da4218490b"),
+                description: i18n::t!("a43d2ad82fc77c45"),
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("mermaid_font_family"),
+                    pick: |settings_content| {
+                        settings_content
+                            .theme
+                            .mermaid_font_family
+                            .as_ref()
+                            .or(settings_content.theme.ui_font_family.as_ref())
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content.theme.mermaid_font_family = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
         ]
     }
 
     fn text_rendering_section() -> [SettingsPageItem; 2] {
         [
-            SettingsPageItem::SectionHeader("Text Rendering"),
+            SettingsPageItem::SectionHeader(i18n::t!("72bb8c9e6023e181")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Text Rendering Mode",
-                description: "The text rendering mode to use.",
+                title: i18n::t!("7e428f9821e9119c"),
+                description: i18n::t!("0b3b638e41374680"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("text_rendering_mode"),
@@ -1345,10 +1500,10 @@ fn appearance_page() -> SettingsPage {
 
     fn cursor_section() -> [SettingsPageItem; 7] {
         [
-            SettingsPageItem::SectionHeader("Cursor"),
+            SettingsPageItem::SectionHeader(i18n::t!("47a75ca0b8fef37c")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Multi Cursor Modifier",
-                description: "Modifier key for adding multiple cursors.",
+                title: i18n::t!("19456bb1882a9d62"),
+                description: i18n::t!("a5704c1f95ac3cbf"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("multi_cursor_modifier"),
@@ -1361,8 +1516,8 @@ fn appearance_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Cursor Blink",
-                description: "Whether the cursor blinks in the editor.",
+                title: i18n::t!("9342b40e1c885cee"),
+                description: i18n::t!("5b7b4dca3b8136df"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("cursor_blink"),
@@ -1375,8 +1530,8 @@ fn appearance_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Cursor Animation",
-                description: "Whether the cursor smoothly animates when moving around the editor.",
+                title: i18n::t!("55000845a57808af"),
+                description: i18n::t!("9b63faf4f0acdbd6"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("cursor_animation.enabled"),
@@ -1400,8 +1555,8 @@ fn appearance_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Cursor Shape",
-                description: "Cursor shape for the editor.",
+                title: i18n::t!("98ec5a07a6ee6050"),
+                description: i18n::t!("5ce23a27e0fe20e6"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("cursor_shape"),
@@ -1414,8 +1569,8 @@ fn appearance_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Hide Mouse",
-                description: "When to hide the mouse cursor.",
+                title: i18n::t!("9e2bf7c699e18d4e"),
+                description: i18n::t!("a9668db274aa56d8"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("hide_mouse"),
@@ -1428,8 +1583,8 @@ fn appearance_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Reduce Motion",
-                description: "Whether to reduce non-essential motion, such as loading spinners, by rendering them in a static state.",
+                title: i18n::t!("b4ec700fc0ee22a7"),
+                description: i18n::t!("5618d04c8832f162"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("reduce_motion"),
@@ -1446,10 +1601,10 @@ fn appearance_page() -> SettingsPage {
 
     fn highlighting_section() -> [SettingsPageItem; 6] {
         [
-            SettingsPageItem::SectionHeader("Highlighting"),
+            SettingsPageItem::SectionHeader(i18n::t!("05f954565f29b0b6")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Unnecessary Code Fade",
-                description: "How much to fade out unused code (0.0 - 0.9).",
+                title: i18n::t!("bae28b05c12e963a"),
+                description: i18n::t!("f2ae47254b986d30"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("unnecessary_code_fade"),
@@ -1462,8 +1617,8 @@ fn appearance_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Current Line Highlight",
-                description: "How to highlight the current line.",
+                title: i18n::t!("78958d6e888cebed"),
+                description: i18n::t!("32332104b78785a9"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("current_line_highlight"),
@@ -1478,8 +1633,8 @@ fn appearance_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Selection Highlight",
-                description: "Highlight all occurrences of selected text.",
+                title: i18n::t!("4b0914fc8fb476f3"),
+                description: i18n::t!("cdb99a3ed55523f2"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("selection_highlight"),
@@ -1492,8 +1647,8 @@ fn appearance_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Rounded Selection",
-                description: "Whether the text selection should have rounded corners.",
+                title: i18n::t!("07389c9e4adf42e0"),
+                description: i18n::t!("a6027ce7357d023b"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("rounded_selection"),
@@ -1506,8 +1661,8 @@ fn appearance_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Minimum Contrast For Highlights",
-                description: "The minimum APCA perceptual contrast to maintain when rendering text over highlight backgrounds.",
+                title: i18n::t!("1d4cf8a5ceec0781"),
+                description: i18n::t!("f2d37deac60d2b92"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("minimum_contrast_for_highlights"),
@@ -1529,10 +1684,10 @@ fn appearance_page() -> SettingsPage {
 
     fn guides_section() -> [SettingsPageItem; 3] {
         [
-            SettingsPageItem::SectionHeader("Guides"),
+            SettingsPageItem::SectionHeader(i18n::t!("b34ce4d70417d1dc")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Show Wrap Guides",
-                description: "Show wrap guides (vertical rulers).",
+                title: i18n::t!("fac02752ade29996"),
+                description: i18n::t!("0628263125af432c"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("show_wrap_guides"),
@@ -1557,8 +1712,8 @@ fn appearance_page() -> SettingsPage {
             }),
             // todo(settings_ui): This needs a custom component
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Wrap Guides",
-                description: "Character counts at which to show wrap guides.",
+                title: i18n::t!("66a6577105c54d61"),
+                description: i18n::t!("35efd255d9312f85"),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -1583,20 +1738,314 @@ fn appearance_page() -> SettingsPage {
         ]
     }
 
+    fn indent_guides_section() -> [SettingsPageItem; 6] {
+        [
+            SettingsPageItem::SectionHeader(i18n::t!("6ad938c8c789f951")),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: i18n::t!("dfb802238b38fbd4"),
+                description: i18n::t!("88f25dc7f2c7dcb8"),
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("indent_guides.enabled"),
+                    pick: |settings_content| {
+                        settings_content
+                            .project
+                            .all_languages
+                            .defaults
+                            .indent_guides
+                            .as_ref()
+                            .and_then(|indent_guides| indent_guides.enabled.as_ref())
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content
+                            .project
+                            .all_languages
+                            .defaults
+                            .indent_guides
+                            .get_or_insert_default()
+                            .enabled = value;
+                    },
+                }),
+                metadata: None,
+                files: USER | PROJECT,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: i18n::t!("5eb9f4e84a63fb27"),
+                description: i18n::t!("efab44b0a6db76aa"),
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("indent_guides.line_width"),
+                    pick: |settings_content| {
+                        settings_content
+                            .project
+                            .all_languages
+                            .defaults
+                            .indent_guides
+                            .as_ref()
+                            .and_then(|indent_guides| indent_guides.line_width.as_ref())
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content
+                            .project
+                            .all_languages
+                            .defaults
+                            .indent_guides
+                            .get_or_insert_default()
+                            .line_width = value;
+                    },
+                }),
+                metadata: None,
+                files: USER | PROJECT,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: i18n::t!("62e66562fc72c865"),
+                description: i18n::t!("d987bf8d5c56aa27"),
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("indent_guides.active_line_width"),
+                    pick: |settings_content| {
+                        settings_content
+                            .project
+                            .all_languages
+                            .defaults
+                            .indent_guides
+                            .as_ref()
+                            .and_then(|indent_guides| indent_guides.active_line_width.as_ref())
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content
+                            .project
+                            .all_languages
+                            .defaults
+                            .indent_guides
+                            .get_or_insert_default()
+                            .active_line_width = value;
+                    },
+                }),
+                metadata: None,
+                files: USER | PROJECT,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: i18n::t!("7b6fd1f9a75ed3df"),
+                description: i18n::t!("179418cb9bffada7"),
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("indent_guides.coloring"),
+                    pick: |settings_content| {
+                        settings_content
+                            .project
+                            .all_languages
+                            .defaults
+                            .indent_guides
+                            .as_ref()
+                            .and_then(|indent_guides| indent_guides.coloring.as_ref())
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content
+                            .project
+                            .all_languages
+                            .defaults
+                            .indent_guides
+                            .get_or_insert_default()
+                            .coloring = value;
+                    },
+                }),
+                metadata: None,
+                files: USER | PROJECT,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: i18n::t!("98d41705630f0df5"),
+                description: i18n::t!("7a2d3d2de3ddfd35"),
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("indent_guides.background_coloring"),
+                    pick: |settings_content| {
+                        settings_content
+                            .project
+                            .all_languages
+                            .defaults
+                            .indent_guides
+                            .as_ref()
+                            .and_then(|indent_guides| indent_guides.background_coloring.as_ref())
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content
+                            .project
+                            .all_languages
+                            .defaults
+                            .indent_guides
+                            .get_or_insert_default()
+                            .background_coloring = value;
+                    },
+                }),
+                metadata: None,
+                files: USER | PROJECT,
+            }),
+        ]
+    }
+
+    fn rainbow_brackets_section() -> [SettingsPageItem; 7] {
+        [
+            SettingsPageItem::SectionHeader(i18n::t!("a767ac03fd5f7d21")),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: i18n::t!("23b02c2557996c35"),
+                description: i18n::t!("26757e6ec1960e32"),
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("colorize_brackets"),
+                    pick: |settings_content| {
+                        settings_content
+                            .project
+                            .all_languages
+                            .defaults
+                            .colorize_brackets
+                            .as_ref()
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content
+                            .project
+                            .all_languages
+                            .defaults
+                            .colorize_brackets = value;
+                    },
+                }),
+                metadata: None,
+                files: USER | PROJECT,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: i18n::t!("ba85cb887aff5a95"),
+                description: i18n::t!("14f5a6bfd226184f"),
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("rainbow_brackets.color_mode"),
+                    pick: |settings_content| {
+                        settings_content
+                            .editor
+                            .rainbow_brackets
+                            .as_ref()
+                            .and_then(|rainbow_brackets| rainbow_brackets.color_mode.as_ref())
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content
+                            .editor
+                            .rainbow_brackets
+                            .get_or_insert_default()
+                            .color_mode = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: i18n::t!("b5a791c90846d6b1"),
+                description: i18n::t!("e3370ecae97c4fd2"),
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("rainbow_brackets.force_iteration_color_cycle"),
+                    pick: |settings_content| {
+                        settings_content.editor.rainbow_brackets.as_ref().and_then(
+                            |rainbow_brackets| {
+                                rainbow_brackets.force_iteration_color_cycle.as_ref()
+                            },
+                        )
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content
+                            .editor
+                            .rainbow_brackets
+                            .get_or_insert_default()
+                            .force_iteration_color_cycle = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: i18n::t!("f92036c6ab3cf538"),
+                description: i18n::t!("767aff34b0e3b815"),
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("rainbow_brackets.force_unique_opening_color"),
+                    pick: |settings_content| {
+                        settings_content.editor.rainbow_brackets.as_ref().and_then(
+                            |rainbow_brackets| rainbow_brackets.force_unique_opening_color.as_ref(),
+                        )
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content
+                            .editor
+                            .rainbow_brackets
+                            .get_or_insert_default()
+                            .force_unique_opening_color = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: i18n::t!("7a87dcd61de312cb"),
+                description: i18n::t!("b274150d131c1f93"),
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("rainbow_brackets.highlight_active_scope"),
+                    pick: |settings_content| {
+                        settings_content.editor.rainbow_brackets.as_ref().and_then(
+                            |rainbow_brackets| rainbow_brackets.highlight_active_scope.as_ref(),
+                        )
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content
+                            .editor
+                            .rainbow_brackets
+                            .get_or_insert_default()
+                            .highlight_active_scope = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: i18n::t!("9c1426d7a60f2f14"),
+                description: i18n::t!("c3a32e2b7039a6a3"),
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("rainbow_brackets.bracket_pair_guides"),
+                    pick: |settings_content| {
+                        settings_content.editor.rainbow_brackets.as_ref().and_then(
+                            |rainbow_brackets| rainbow_brackets.bracket_pair_guides.as_ref(),
+                        )
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content
+                            .editor
+                            .rainbow_brackets
+                            .get_or_insert_default()
+                            .bracket_pair_guides = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+        ]
+    }
+
     let items: Box<[SettingsPageItem]> = concat_sections!(
         theme_section(),
         buffer_font_section(),
         ui_font_section(),
         agent_panel_font_section(),
         markdown_preview_font_section(),
+        mermaid_font_section(),
         text_rendering_section(),
         cursor_section(),
         highlighting_section(),
         guides_section(),
+        indent_guides_section(),
+        rainbow_brackets_section(),
     );
 
     SettingsPage {
-        title: "Appearance",
+        title: i18n::t!("86a63f23a076b11e"),
         items,
     }
 }
@@ -1604,11 +2053,11 @@ fn appearance_page() -> SettingsPage {
 fn keymap_page() -> SettingsPage {
     fn keybindings_section() -> [SettingsPageItem; 2] {
         [
-            SettingsPageItem::SectionHeader("Keybindings"),
+            SettingsPageItem::SectionHeader(i18n::t!("66239d367b0fb5ce")),
             SettingsPageItem::ActionLink(ActionLink {
-                title: "Edit Keybindings".into(),
-                description: Some("Customize keybindings in the keymap editor.".into()),
-                button_text: "Open Keymap".into(),
+                title: i18n::t!("8cd0663cb33f9b9b").into(),
+                description: Some(i18n::t!("05a72bbe589a24b4").into()),
+                button_text: i18n::t!("f6d844d023d08eac").into(),
                 on_click: Arc::new(|settings_window, window, cx| {
                     let Some(original_window) = settings_window.original_window else {
                         return;
@@ -1629,10 +2078,10 @@ fn keymap_page() -> SettingsPage {
 
     fn base_keymap_section() -> [SettingsPageItem; 2] {
         [
-            SettingsPageItem::SectionHeader("Base Keymap"),
+            SettingsPageItem::SectionHeader(i18n::t!("36f446e49bc9f495")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Base Keymap",
-                description: "The name of a base set of key bindings to use.",
+                title: i18n::t!("36f446e49bc9f495"),
+                description: i18n::t!("c7ca2309c305d388"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("base_keymap"),
@@ -1652,10 +2101,10 @@ fn keymap_page() -> SettingsPage {
 
     fn modal_editing_section() -> [SettingsPageItem; 3] {
         [
-            SettingsPageItem::SectionHeader("Modal Editing"),
+            SettingsPageItem::SectionHeader(i18n::t!("1033d4bbb19de4d9")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Vim Mode",
-                description: "Enable Vim mode and key bindings.",
+                title: i18n::t!("10043421065bbf14"),
+                description: i18n::t!("68f9fe68bfcc38c2"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("vim_mode"),
@@ -1666,8 +2115,8 @@ fn keymap_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Helix Mode",
-                description: "Enable Helix mode and key bindings.",
+                title: i18n::t!("d0ee3dbf6281161b"),
+                description: i18n::t!("11786261064ea1cf"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("helix_mode"),
@@ -1687,7 +2136,7 @@ fn keymap_page() -> SettingsPage {
     );
 
     SettingsPage {
-        title: "Keymap",
+        title: i18n::t!("166f65a9ea0b7fa3"),
         items,
     }
 }
@@ -1695,12 +2144,12 @@ fn keymap_page() -> SettingsPage {
 fn editor_page() -> SettingsPage {
     fn auto_save_section() -> [SettingsPageItem; 2] {
         [
-            SettingsPageItem::SectionHeader("Auto Save"),
+            SettingsPageItem::SectionHeader(i18n::t!("f2db3712a685913a")),
             SettingsPageItem::DynamicItem(DynamicItem {
                 discriminant: SettingItem {
                     files: USER,
-                    title: "Auto Save Mode",
-                    description: "When to auto save buffer changes.",
+                    title: i18n::t!("d16f0d0db09b2cdf"),
+                    description: i18n::t!("31ed5fe16138ac3f"),
                     field: Box::new(SettingField {
                         organization_override: None,
                         json_path: Some("autosave$"),
@@ -1756,8 +2205,8 @@ fn editor_page() -> SettingsPage {
                         settings::AutosaveSettingDiscriminants::Off => vec![],
                         settings::AutosaveSettingDiscriminants::AfterDelay => vec![SettingItem {
                             files: USER,
-                            title: "Delay (milliseconds)",
-                            description: "Save after inactivity period (in milliseconds).",
+                            title: i18n::t!("3ce4972a8598de6f"),
+                            description: i18n::t!("73f9944cb7c1b403"),
                             field: Box::new(SettingField {
                                 organization_override: None,
                                 json_path: Some("autosave.after_delay.milliseconds"),
@@ -1796,10 +2245,10 @@ fn editor_page() -> SettingsPage {
 
     fn which_key_section() -> [SettingsPageItem; 3] {
         [
-            SettingsPageItem::SectionHeader("Which-key Menu"),
+            SettingsPageItem::SectionHeader(i18n::t!("47084cf76ab6ec1a")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Show Which-key Menu",
-                description: "Display the which-key menu with matching bindings while a multi-stroke binding is pending. The pending keystrokes indicator remains visible, but its binding preview popover is disabled.",
+                title: i18n::t!("f26b86f913cca377"),
+                description: i18n::t!("22f48abc9e707f6a"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("which_key.enabled"),
@@ -1817,8 +2266,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Menu Delay",
-                description: "Delay in milliseconds before the which-key menu appears.",
+                title: i18n::t!("4b810df5eb96a054"),
+                description: i18n::t!("0328791a156d9a3b"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("which_key.delay_ms"),
@@ -1840,10 +2289,10 @@ fn editor_page() -> SettingsPage {
 
     fn multibuffer_section() -> [SettingsPageItem; 7] {
         [
-            SettingsPageItem::SectionHeader("Multibuffer"),
+            SettingsPageItem::SectionHeader(i18n::t!("5903780aba8c0f48")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Double Click In Multibuffer",
-                description: "What to do when multibuffer is double-clicked in some of its excerpts.",
+                title: i18n::t!("44b5e97f3abb3346"),
+                description: i18n::t!("7eab52595711b12b"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("double_click_in_multibuffer"),
@@ -1858,8 +2307,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Expand Excerpt Lines",
-                description: "How many lines to expand the multibuffer excerpts by default.",
+                title: i18n::t!("3ac51d203b3e1cea"),
+                description: i18n::t!("82049cfb813a124a"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("expand_excerpt_lines"),
@@ -1872,8 +2321,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Excerpt Context Lines",
-                description: "How many lines of context to provide in multibuffer excerpts by default.",
+                title: i18n::t!("05b36f579a7a1c3d"),
+                description: i18n::t!("7c07926653a9d1a7"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("excerpt_context_lines"),
@@ -1886,8 +2335,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Expand Outlines With Depth",
-                description: "Default depth to expand outline items in the current file.",
+                title: i18n::t!("8a09d7344f251ab3"),
+                description: i18n::t!("3e195af5b1d0e48a"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("outline_panel.expand_outlines_with_depth"),
@@ -1910,8 +2359,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Diff View Style",
-                description: "How to display diffs in the editor.",
+                title: i18n::t!("3f63841125a8f9de"),
+                description: i18n::t!("b612a64d35345623"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("diff_view_style"),
@@ -1924,8 +2373,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Minimum Split Diff Width",
-                description: "The minimum width (in columns) at which the split diff view is used. When the editor is narrower, the diff view automatically switches to unified mode. Set to 0 to disable.",
+                title: i18n::t!("38fec55a06e010fe"),
+                description: i18n::t!("9505d8ee20770e29"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("minimum_split_diff_width"),
@@ -1944,10 +2393,10 @@ fn editor_page() -> SettingsPage {
 
     fn scrolling_section() -> [SettingsPageItem; 9] {
         [
-            SettingsPageItem::SectionHeader("Scrolling"),
+            SettingsPageItem::SectionHeader(i18n::t!("34dedaffd3cc55f0")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Scroll Beyond Last Line",
-                description: "Whether the editor will scroll beyond the last line.",
+                title: i18n::t!("bdf56e7a45ecac2c"),
+                description: i18n::t!("f63d943298d08df7"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("scroll_beyond_last_line"),
@@ -1962,8 +2411,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Vertical Scroll Margin",
-                description: "The number of lines to keep above/below the cursor when auto-scrolling.",
+                title: i18n::t!("42f357c86ce9aa31"),
+                description: i18n::t!("0f218add3762cfe1"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("vertical_scroll_margin"),
@@ -1978,8 +2427,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Horizontal Scroll Margin",
-                description: "The number of characters to keep on either side when scrolling with the mouse.",
+                title: i18n::t!("e71b5db136ac64ac"),
+                description: i18n::t!("3b6a2434259da4ac"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("horizontal_scroll_margin"),
@@ -1994,8 +2443,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Scroll Sensitivity",
-                description: "Scroll sensitivity multiplier for both horizontal and vertical scrolling.",
+                title: i18n::t!("765866c4ff34c39d"),
+                description: i18n::t!("e9ff030661721b50"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("scroll_sensitivity"),
@@ -2008,8 +2457,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Mouse Wheel Zoom",
-                description: "Whether to zoom the editor font size with the mouse wheel while holding the primary modifier key.",
+                title: i18n::t!("1dd8407fe384f0db"),
+                description: i18n::t!("64f4432a7228aa33"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("mouse_wheel_zoom"),
@@ -2022,8 +2471,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Fast Scroll Sensitivity",
-                description: "Fast scroll sensitivity multiplier for both horizontal and vertical scrolling.",
+                title: i18n::t!("4338420e8def24c6"),
+                description: i18n::t!("9c73477e1bd6a58e"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("fast_scroll_sensitivity"),
@@ -2038,8 +2487,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Autoscroll On Clicks",
-                description: "Whether to scroll when clicking near the edge of the visible text area.",
+                title: i18n::t!("90116a03aad7b32c"),
+                description: i18n::t!("8c6985bf4fffc591"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("autoscroll_on_clicks"),
@@ -2052,8 +2501,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Sticky Scroll",
-                description: "Whether to stick scopes to the top of the editor",
+                title: i18n::t!("4455a54e440b6bb7"),
+                description: i18n::t!("4a9c80cf83146405"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("sticky_scroll.enabled"),
@@ -2080,10 +2529,10 @@ fn editor_page() -> SettingsPage {
 
     fn signature_help_section() -> [SettingsPageItem; 4] {
         [
-            SettingsPageItem::SectionHeader("Signature Help"),
+            SettingsPageItem::SectionHeader(i18n::t!("3e213486d69d019f")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Auto Signature Help",
-                description: "Automatically show a signature help pop-up.",
+                title: i18n::t!("6a9c86479a5fae46"),
+                description: i18n::t!("9d18f0d93269edea"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("auto_signature_help"),
@@ -2096,8 +2545,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Show Signature Help After Edits",
-                description: "Show the signature help pop-up after completions or bracket pairs are inserted.",
+                title: i18n::t!("d96ddd3fd8d80363"),
+                description: i18n::t!("568e869d3952235c"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("show_signature_help_after_edits"),
@@ -2115,8 +2564,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Snippet Sort Order",
-                description: "Determines how snippets are sorted relative to other completion items.",
+                title: i18n::t!("3768a9532b2d4500"),
+                description: i18n::t!("bffd933009e33378"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("snippet_sort_order"),
@@ -2131,12 +2580,175 @@ fn editor_page() -> SettingsPage {
         ]
     }
 
+    fn hover_translation_section() -> [SettingsPageItem; 8] {
+        [
+            SettingsPageItem::SectionHeader(i18n::t!("84f41f0b0c41982b")),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: i18n::t!("9ba27619e4a34c53"),
+                description: i18n::t!("1f17ceb9ed561cad"),
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("hover_translation.enabled"),
+                    pick: |settings_content| {
+                        settings_content
+                            .hover_translation
+                            .as_ref()?
+                            .enabled
+                            .as_ref()
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content
+                            .hover_translation
+                            .get_or_insert_default()
+                            .enabled = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: i18n::t!("148475fdd9ea8520"),
+                description: i18n::t!("32f62f10d655753a"),
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("hover_translation.provider"),
+                    pick: |settings_content| {
+                        settings_content
+                            .hover_translation
+                            .as_ref()?
+                            .provider
+                            .as_ref()
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content
+                            .hover_translation
+                            .get_or_insert_default()
+                            .provider = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: i18n::t!("1b3ae8feb8b283ea"),
+                description: i18n::t!("33ec843199d56ac3"),
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("hover_translation.model"),
+                    pick: |settings_content| {
+                        settings_content.hover_translation.as_ref()?.model.as_ref()
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content
+                            .hover_translation
+                            .get_or_insert_default()
+                            .model = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: i18n::t!("966a23e84aedeea5"),
+                description: i18n::t!("77e285dcda49b9ae"),
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("hover_translation.target_language"),
+                    pick: |settings_content| {
+                        settings_content
+                            .hover_translation
+                            .as_ref()?
+                            .target_language
+                            .as_ref()
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content
+                            .hover_translation
+                            .get_or_insert_default()
+                            .target_language = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: i18n::t!("e42cebb3a2521580"),
+                description: i18n::t!("46f1de338f4324ea"),
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("hover_translation.max_chars"),
+                    pick: |settings_content| {
+                        settings_content
+                            .hover_translation
+                            .as_ref()?
+                            .max_chars
+                            .as_ref()
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content
+                            .hover_translation
+                            .get_or_insert_default()
+                            .max_chars = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: i18n::t!("8818e0dd39df695f"),
+                description: i18n::t!("6027936434165b0d"),
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("hover_translation.cache_persist"),
+                    pick: |settings_content| {
+                        settings_content
+                            .hover_translation
+                            .as_ref()?
+                            .cache_persist
+                            .as_ref()
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content
+                            .hover_translation
+                            .get_or_insert_default()
+                            .cache_persist = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: i18n::t!("62b175a0af31aad1"),
+                description: i18n::t!("aced275fccbd996d"),
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("hover_translation.cache_max_bytes"),
+                    pick: |settings_content| {
+                        settings_content
+                            .hover_translation
+                            .as_ref()?
+                            .cache_max_bytes
+                            .as_ref()
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content
+                            .hover_translation
+                            .get_or_insert_default()
+                            .cache_max_bytes = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+        ]
+    }
+
     fn hover_popover_section() -> [SettingsPageItem; 5] {
         [
-            SettingsPageItem::SectionHeader("Hover Popover"),
+            SettingsPageItem::SectionHeader(i18n::t!("27473887e269cc16")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Enabled",
-                description: "Show the informational hover box when moving the mouse over symbols in the editor.",
+                title: i18n::t!("f4f0ead1116b5b62"),
+                description: i18n::t!("626ac00970222e6d"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("hover_popover_enabled"),
@@ -2150,8 +2762,8 @@ fn editor_page() -> SettingsPage {
             }),
             // todo(settings ui): add units to this number input
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Delay",
-                description: "Time to wait in milliseconds before showing the informational hover box.",
+                title: i18n::t!("18045b8c40f135cd"),
+                description: i18n::t!("8dd87b135222720d"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("hover_popover_delay"),
@@ -2164,8 +2776,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Sticky",
-                description: "Whether the hover popover sticks when the mouse moves toward it, allowing interaction with its contents.",
+                title: i18n::t!("ee3ed785cc97494f"),
+                description: i18n::t!("43c5f10cf17e430d"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("hover_popover_sticky"),
@@ -2179,8 +2791,8 @@ fn editor_page() -> SettingsPage {
             }),
             // todo(settings ui): add units to this number input
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Hiding Delay",
-                description: "Time to wait in milliseconds before hiding the hover popover after the mouse moves away.",
+                title: i18n::t!("18716faa275b8a69"),
+                description: i18n::t!("0031362a252d3e4a"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("hover_popover_hiding_delay"),
@@ -2199,10 +2811,10 @@ fn editor_page() -> SettingsPage {
 
     fn drag_and_drop_selection_section() -> [SettingsPageItem; 3] {
         [
-            SettingsPageItem::SectionHeader("Drag And Drop Selection"),
+            SettingsPageItem::SectionHeader(i18n::t!("6fe152bffbe86018")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Enabled",
-                description: "Enable drag and drop selection.",
+                title: i18n::t!("f4f0ead1116b5b62"),
+                description: i18n::t!("015f590007de190b"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("drag_and_drop_selection.enabled"),
@@ -2225,8 +2837,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Delay",
-                description: "Delay in milliseconds before drag and drop selection starts.",
+                title: i18n::t!("18045b8c40f135cd"),
+                description: i18n::t!("7f252b23a98cd6b4"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("drag_and_drop_selection.delay"),
@@ -2253,10 +2865,10 @@ fn editor_page() -> SettingsPage {
 
     fn gutter_section() -> [SettingsPageItem; 10] {
         [
-            SettingsPageItem::SectionHeader("Gutter"),
+            SettingsPageItem::SectionHeader(i18n::t!("17959d2bc972a09f")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Show Line Numbers",
-                description: "Show line numbers in the gutter.",
+                title: i18n::t!("f7cfa333b5d14095"),
+                description: i18n::t!("99b6587c88233ad3"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("gutter.line_numbers"),
@@ -2279,8 +2891,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Relative Line Numbers",
-                description: "Controls line number display in the editor's gutter. \"disabled\" shows absolute line numbers, \"enabled\" shows relative line numbers for each absolute line, and \"wrapped\" shows relative line numbers for every line, absolute or wrapped.",
+                title: i18n::t!("9e6953efd4f8f098"),
+                description: i18n::t!("1580cb2658d30aa6"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("relative_line_numbers"),
@@ -2293,8 +2905,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Show Runnables",
-                description: "Show runnable buttons in the gutter.",
+                title: i18n::t!("988742643affbed6"),
+                description: i18n::t!("9ba773654c04123c"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("gutter.runnables"),
@@ -2317,8 +2929,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Show Breakpoints",
-                description: "Show breakpoints in the gutter.",
+                title: i18n::t!("8ec39c792d765bed"),
+                description: i18n::t!("f3928cb2b4f4e2e7"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("gutter.breakpoints"),
@@ -2341,8 +2953,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Show Bookmarks",
-                description: "Show bookmarks in the gutter.",
+                title: i18n::t!("140b3a290cc0ed06"),
+                description: i18n::t!("ca197bee25b77ca6"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("gutter.bookmarks"),
@@ -2365,8 +2977,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Show Folds",
-                description: "Show code folding controls in the gutter.",
+                title: i18n::t!("bbb8812ed5cc8237"),
+                description: i18n::t!("d1535a9fca6f25a2"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("gutter.folds"),
@@ -2385,8 +2997,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Min Line Number Digits",
-                description: "Minimum number of characters to reserve space for in the gutter.",
+                title: i18n::t!("2102dc89672900df"),
+                description: i18n::t!("5415d65f73dedc4a"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("gutter.min_line_number_digits"),
@@ -2410,8 +3022,8 @@ fn editor_page() -> SettingsPage {
             }),
             SettingsPageItem::DynamicItem(DynamicItem {
                 discriminant: SettingItem {
-                    title: "Git Gutter Width",
-                    description: "Width of the git diff indicators in the gutter. Default scales with the buffer font size.",
+                    title: i18n::t!("d6e681d957c42897"),
+                    description: i18n::t!("26c416c201064d06"),
                     field: Box::new(SettingField {
                         organization_override: None,
                         json_path: Some("gutter.git_gutter_width$"),
@@ -2465,8 +3077,8 @@ fn editor_page() -> SettingsPage {
                         settings::GitGutterWidthDiscriminants::Default => vec![],
                         settings::GitGutterWidthDiscriminants::Custom => vec![SettingItem {
                             files: USER,
-                            title: "Custom Width",
-                            description: "Width in pixels of the git diff indicators.",
+                            title: i18n::t!("07616794f0ad7344"),
+                            description: i18n::t!("2eef9c6cf29c2437"),
                             field: Box::new(SettingField {
                                 organization_override: None,
                                 json_path: Some("gutter.git_gutter_width"),
@@ -2500,8 +3112,8 @@ fn editor_page() -> SettingsPage {
                     .collect(),
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Inline Code Actions",
-                description: "Show code action button at start of buffer line.",
+                title: i18n::t!("4201c13fbaaf1f85"),
+                description: i18n::t!("2305f749a9c9b088"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("inline_code_actions"),
@@ -2518,10 +3130,10 @@ fn editor_page() -> SettingsPage {
 
     fn scrollbar_section() -> [SettingsPageItem; 10] {
         [
-            SettingsPageItem::SectionHeader("Scrollbar"),
+            SettingsPageItem::SectionHeader(i18n::t!("53bcc015611bb7fa")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Show",
-                description: "When to show the scrollbar in the editor.",
+                title: i18n::t!("4e1449e7d5e50593"),
+                description: i18n::t!("7e8f2977ba35d157"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("scrollbar"),
@@ -2540,8 +3152,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Cursors",
-                description: "Show cursor positions in the scrollbar.",
+                title: i18n::t!("47a75ca0b8fef37c"),
+                description: i18n::t!("0b6abe53d3cf5e60"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("scrollbar.cursors"),
@@ -2560,8 +3172,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Git Diff",
-                description: "Show Git diff indicators in the scrollbar.",
+                title: i18n::t!("6a556c4bf3b83cf8"),
+                description: i18n::t!("90ab70ce8d6cf58f"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("scrollbar.git_diff"),
@@ -2585,8 +3197,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Search Results",
-                description: "Show buffer search result indicators in the scrollbar.",
+                title: i18n::t!("88d72ece7cf76737"),
+                description: i18n::t!("c2cdcdb63659ffb4"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("scrollbar.search_results"),
@@ -2610,8 +3222,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Selected Text",
-                description: "Show selected text occurrences in the scrollbar.",
+                title: i18n::t!("a12b558baecbdaf1"),
+                description: i18n::t!("abd8a64a96537351"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("scrollbar.selected_text"),
@@ -2635,8 +3247,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Selected Symbol",
-                description: "Show selected symbol occurrences in the scrollbar.",
+                title: i18n::t!("261d3ebb49628b68"),
+                description: i18n::t!("057291e45c93ed9b"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("scrollbar.selected_symbol"),
@@ -2660,8 +3272,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Diagnostics",
-                description: "Which diagnostic indicators to show in the scrollbar.",
+                title: i18n::t!("40ff6300f9817deb"),
+                description: i18n::t!("efe494fdfc63d189"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("scrollbar.diagnostics"),
@@ -2685,8 +3297,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Horizontal Scrollbar",
-                description: "When false, forcefully disables the horizontal scrollbar.",
+                title: i18n::t!("d1d1b9b2a5211a53"),
+                description: i18n::t!("cc3ab673d56b9c6b"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("scrollbar.axes.horizontal"),
@@ -2714,8 +3326,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Vertical Scrollbar",
-                description: "When false, forcefully disables the vertical scrollbar.",
+                title: i18n::t!("20f6657acf74d947"),
+                description: i18n::t!("75b10fc45555439a"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("scrollbar.axes.vertical"),
@@ -2747,10 +3359,10 @@ fn editor_page() -> SettingsPage {
 
     fn minimap_section() -> [SettingsPageItem; 7] {
         [
-            SettingsPageItem::SectionHeader("Minimap"),
+            SettingsPageItem::SectionHeader(i18n::t!("a623478771b1a95b")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Show",
-                description: "When to show the minimap in the editor.",
+                title: i18n::t!("4e1449e7d5e50593"),
+                description: i18n::t!("108588f49a7845af"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("minimap.show"),
@@ -2765,8 +3377,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Display In",
-                description: "Where to show the minimap in the editor.",
+                title: i18n::t!("5ac9489c03e4e9f9"),
+                description: i18n::t!("a5ec68711d179605"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("minimap.display_in"),
@@ -2790,8 +3402,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Thumb",
-                description: "When to show the minimap thumb.",
+                title: i18n::t!("9348e939e4965a5d"),
+                description: i18n::t!("f60900ba226b6c14"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("minimap.thumb"),
@@ -2810,8 +3422,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Thumb Border",
-                description: "Border style for the minimap's scrollbar thumb.",
+                title: i18n::t!("eb95b663e64122bc"),
+                description: i18n::t!("7be4b2914954b0ea"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("minimap.thumb_border"),
@@ -2835,8 +3447,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Current Line Highlight",
-                description: "How to highlight the current line in the minimap.",
+                title: i18n::t!("78958d6e888cebed"),
+                description: i18n::t!("40be6f0b2d899a33"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("minimap.current_line_highlight"),
@@ -2860,8 +3472,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Max Width Columns",
-                description: "Maximum number of columns to display in the minimap.",
+                title: i18n::t!("77c74c892a209547"),
+                description: i18n::t!("5f95d9a717cd1fc3"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("minimap.max_width_columns"),
@@ -2889,10 +3501,10 @@ fn editor_page() -> SettingsPage {
 
     fn toolbar_section() -> [SettingsPageItem; 6] {
         [
-            SettingsPageItem::SectionHeader("Toolbar"),
+            SettingsPageItem::SectionHeader(i18n::t!("3166d8af51f15eb6")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Breadcrumbs",
-                description: "Show breadcrumbs.",
+                title: i18n::t!("6c3f7b6a12a97468"),
+                description: i18n::t!("1a0a8e89fb85c2dd"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("toolbar.breadcrumbs"),
@@ -2916,8 +3528,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Quick Actions",
-                description: "Show quick action buttons (e.g., search, selection, editor controls, etc.).",
+                title: i18n::t!("2cf085b4eb79248a"),
+                description: i18n::t!("4a9160e69aba2741"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("toolbar.quick_actions"),
@@ -2941,8 +3553,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Selections Menu",
-                description: "Show the selections menu in the editor toolbar.",
+                title: i18n::t!("8d74a69aba011325"),
+                description: i18n::t!("9593120c17917448"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("toolbar.selections_menu"),
@@ -2966,8 +3578,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Agent Review",
-                description: "Show agent review buttons in the editor toolbar.",
+                title: i18n::t!("6bdf9057c4e8df71"),
+                description: i18n::t!("cd0c48254fd226c9"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("toolbar.agent_review"),
@@ -2991,8 +3603,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Code Actions",
-                description: "Show code action buttons in the editor toolbar.",
+                title: i18n::t!("567c0d21fcd613b5"),
+                description: i18n::t!("8aad09c242a336bf"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("toolbar.code_actions"),
@@ -3022,8 +3634,8 @@ fn editor_page() -> SettingsPage {
         [
             SettingsPageItem::SectionHeader("Vim"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Default Mode",
-                description: "The default mode when Vim starts.",
+                title: i18n::t!("ca0e02c309a977df"),
+                description: i18n::t!("c7ae0c3ba33aaf51"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("vim.default_mode"),
@@ -3036,8 +3648,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Toggle Relative Line Numbers",
-                description: "Toggle relative line numbers in Vim mode.",
+                title: i18n::t!("469e6d30e96519ea"),
+                description: i18n::t!("ad1e613da68ae482"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("vim.toggle_relative_line_numbers"),
@@ -3059,8 +3671,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Use System Clipboard",
-                description: "Controls when to use system clipboard in Vim mode.",
+                title: i18n::t!("54241968a990dbaf"),
+                description: i18n::t!("000c1a4b303623f6"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("vim.use_system_clipboard"),
@@ -3078,8 +3690,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Use Smartcase Find",
-                description: "Enable smartcase searching in Vim mode.",
+                title: i18n::t!("b048ed457a88bdbc"),
+                description: i18n::t!("ad4edb44a04a703e"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("vim.use_smartcase_find"),
@@ -3097,8 +3709,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Global Substitution Default",
-                description: "When enabled, the :substitute command replaces all matches in a line by default. The 'g' flag then toggles this behavior.",
+                title: i18n::t!("6dc3e367c159af87"),
+                description: i18n::t!("f25b0592e4d11dd8"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("vim.gdefault"),
@@ -3111,8 +3723,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Highlight on Yank Duration",
-                description: "Duration in milliseconds to highlight yanked text in Vim mode.",
+                title: i18n::t!("3f953f0f3414ce68"),
+                description: i18n::t!("f9f5a9209bbed027"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("vim.highlight_on_yank_duration"),
@@ -3134,8 +3746,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Regex Search",
-                description: "Use regex search by default in Vim search.",
+                title: i18n::t!("1b7b160b02769846"),
+                description: i18n::t!("43a5517b903bbb1f"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("vim.use_regex_search"),
@@ -3153,8 +3765,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Show Edit Predictions in Normal Mode",
-                description: "Whether edit predictions are shown in normal mode. By default, edit predictions are only shown in insert and replace modes.",
+                title: i18n::t!("5abf25647be21e73"),
+                description: i18n::t!("9533a149c969acd0"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("vim.show_edit_predictions_in_normal_mode"),
@@ -3176,8 +3788,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Cursor Shape - Normal Mode",
-                description: "Cursor shape for normal mode.",
+                title: i18n::t!("b794013a0ce6dfc2"),
+                description: i18n::t!("71242a773af93165"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("vim.cursor_shape.normal"),
@@ -3203,8 +3815,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Cursor Shape - Insert Mode",
-                description: "Cursor shape for insert mode. Inherit uses the editor's cursor shape.",
+                title: i18n::t!("7e9a7f0f048ea120"),
+                description: i18n::t!("3c2aa19adf2e5255"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("vim.cursor_shape.insert"),
@@ -3230,8 +3842,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Cursor Shape - Replace Mode",
-                description: "Cursor shape for replace mode.",
+                title: i18n::t!("a57c953ab965c06c"),
+                description: i18n::t!("d34b107ed872e031"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("vim.cursor_shape.replace"),
@@ -3257,8 +3869,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Cursor Shape - Visual Mode",
-                description: "Cursor shape for visual mode.",
+                title: i18n::t!("f0ed1ecb4616439e"),
+                description: i18n::t!("aa8ef27f70cdfa65"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("vim.cursor_shape.visual"),
@@ -3284,8 +3896,8 @@ fn editor_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Custom Digraphs",
-                description: "Custom digraph mappings for Vim mode.",
+                title: i18n::t!("a110228e6a567c6c"),
+                description: i18n::t!("57e78bb05b1cb2ff"),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -3312,6 +3924,7 @@ fn editor_page() -> SettingsPage {
         scrolling_section(),
         signature_help_section(),
         hover_popover_section(),
+        hover_translation_section(),
         drag_and_drop_selection_section(),
         gutter_section(),
         scrollbar_section(),
@@ -3322,7 +3935,7 @@ fn editor_page() -> SettingsPage {
     );
 
     SettingsPage {
-        title: "Editor",
+        title: i18n::t!("3b7f5965bdbfee34"),
         items: items,
     }
 }
@@ -3330,10 +3943,10 @@ fn editor_page() -> SettingsPage {
 fn languages_and_tools_page(cx: &App) -> SettingsPage {
     fn file_types_section() -> [SettingsPageItem; 2] {
         [
-            SettingsPageItem::SectionHeader("File Types"),
+            SettingsPageItem::SectionHeader(i18n::t!("9a8457b3dc844478")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "File Type Associations",
-                description: "A mapping from languages to files and file extensions that should be treated as that language.",
+                title: i18n::t!("e94c16837e3ef00c"),
+                description: i18n::t!("3ada78fa15c834d4"),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -3355,10 +3968,10 @@ fn languages_and_tools_page(cx: &App) -> SettingsPage {
 
     fn diagnostics_section() -> [SettingsPageItem; 3] {
         [
-            SettingsPageItem::SectionHeader("Diagnostics"),
+            SettingsPageItem::SectionHeader(i18n::t!("40ff6300f9817deb")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Max Severity",
-                description: "Which level to use to filter out diagnostics displayed in the editor.",
+                title: i18n::t!("52cf66734153babd"),
+                description: i18n::t!("740f4a182f929bdb"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("diagnostics_max_severity"),
@@ -3373,8 +3986,8 @@ fn languages_and_tools_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Include Warnings",
-                description: "Whether to show warnings or not by default.",
+                title: i18n::t!("9e4cbe5f6cb51559"),
+                description: i18n::t!("83d1c2facd844f92"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("diagnostics.include_warnings"),
@@ -3400,10 +4013,10 @@ fn languages_and_tools_page(cx: &App) -> SettingsPage {
 
     fn inline_diagnostics_section() -> [SettingsPageItem; 5] {
         [
-            SettingsPageItem::SectionHeader("Inline Diagnostics"),
+            SettingsPageItem::SectionHeader(i18n::t!("874ee510372ec389")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Enabled",
-                description: "Whether to show diagnostics inline or not.",
+                title: i18n::t!("f4f0ead1116b5b62"),
+                description: i18n::t!("ad796846f8752204"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("diagnostics.inline.enabled"),
@@ -3429,8 +4042,8 @@ fn languages_and_tools_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Update Debounce",
-                description: "The delay in milliseconds to show inline diagnostics after the last diagnostic update.",
+                title: i18n::t!("a60a7904f66371d2"),
+                description: i18n::t!("50d4db21cbcc2aec"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("diagnostics.inline.update_debounce_ms"),
@@ -3456,8 +4069,8 @@ fn languages_and_tools_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Padding",
-                description: "The amount of padding between the end of the source line and the start of the inline diagnostic.",
+                title: i18n::t!("c2dc4da52ed35127"),
+                description: i18n::t!("ab162ef09644cb2a"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("diagnostics.inline.padding"),
@@ -3483,8 +4096,8 @@ fn languages_and_tools_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Minimum Column",
-                description: "The minimum column at which to display inline diagnostics.",
+                title: i18n::t!("10f88762da79a5db"),
+                description: i18n::t!("0755192799d225a3"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("diagnostics.inline.min_column"),
@@ -3516,8 +4129,8 @@ fn languages_and_tools_page(cx: &App) -> SettingsPage {
         [
             SettingsPageItem::SectionHeader("LSP Pull Diagnostics"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Enabled",
-                description: "Whether to pull for language server-powered diagnostics or not.",
+                title: i18n::t!("f4f0ead1116b5b62"),
+                description: i18n::t!("a0b27328788dc9b0"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("diagnostics.lsp_pull_diagnostics.enabled"),
@@ -3544,8 +4157,8 @@ fn languages_and_tools_page(cx: &App) -> SettingsPage {
             }),
             // todo(settings_ui): Needs unit
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Debounce",
-                description: "Minimum time to wait before pulling diagnostics from the language server(s).",
+                title: i18n::t!("1e9f8da0f725c8e8"),
+                description: i18n::t!("476baef0753e7de0"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("diagnostics.lsp_pull_diagnostics.debounce_ms"),
@@ -3577,8 +4190,8 @@ fn languages_and_tools_page(cx: &App) -> SettingsPage {
         [
             SettingsPageItem::SectionHeader("LSP Highlights"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Debounce",
-                description: "The debounce delay before querying highlights from the language.",
+                title: i18n::t!("1e9f8da0f725c8e8"),
+                description: i18n::t!("b6840af071a8b24f"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("lsp_highlight_debounce"),
@@ -3598,38 +4211,35 @@ fn languages_and_tools_page(cx: &App) -> SettingsPage {
     fn languages_list_section(cx: &App) -> Box<[SettingsPageItem]> {
         // todo(settings_ui): Refresh on extension (un)/installed
         // Note that `crates/json_schema_store` solves the same problem, there is probably a way to unify the two
-        std::iter::once(SettingsPageItem::SectionHeader("Languages"))
-            .chain(all_language_names(cx).into_iter().map(|language_name| {
-                let link = format!("languages.{language_name}");
-                SettingsPageItem::SubPageLink(SubPageLink {
-                    title: language_name,
-                    r#type: crate::SubPageType::Language,
-                    description: None,
-                    search_aliases: &[],
-                    json_path: Some(link.leak()),
-                    in_json: true,
-                    files: USER | PROJECT,
-                    render: |this, scroll_handle, window, cx| {
-                        let items: Box<[SettingsPageItem]> = concat_sections!(
-                            language_settings_data(),
-                            non_editor_language_settings_data(),
-                            edit_prediction_language_settings_section()
-                        );
-                        this.render_sub_page_items(
-                            items.iter().enumerate(),
-                            scroll_handle,
-                            window,
-                            cx,
-                        )
+        std::iter::once(SettingsPageItem::SectionHeader(i18n::t!(
+            "9f6fee1aba17a565"
+        )))
+        .chain(all_language_names(cx).into_iter().map(|language_name| {
+            let link = format!("languages.{language_name}");
+            SettingsPageItem::SubPageLink(SubPageLink {
+                title: language_name,
+                r#type: crate::SubPageType::Language,
+                description: None,
+                search_aliases: &[],
+                json_path: Some(link.leak()),
+                in_json: true,
+                files: USER | PROJECT,
+                render: |this, scroll_handle, window, cx| {
+                    let items: Box<[SettingsPageItem]> = concat_sections!(
+                        language_settings_data(),
+                        non_editor_language_settings_data(),
+                        edit_prediction_language_settings_section()
+                    );
+                    this.render_sub_page_items(items.iter().enumerate(), scroll_handle, window, cx)
                         .into_any_element()
-                    },
-                })
-            }))
-            .collect()
+                },
+            })
+        }))
+        .collect()
     }
 
     SettingsPage {
-        title: "Languages & Tools",
+        title: i18n::t!("c22e51a826c237d4"),
         items: {
             concat_sections!(
                 non_editor_language_settings_data(),
@@ -3649,8 +4259,8 @@ fn search_and_files_page() -> SettingsPage {
         [
             SettingsPageItem::SectionHeader("Search"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Whole Word",
-                description: "Search for whole words by default.",
+                title: i18n::t!("7fff7e76a48a8a43"),
+                description: i18n::t!("3a92d3d476d73751"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("search.whole_word"),
@@ -3669,8 +4279,8 @@ fn search_and_files_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Case Sensitive",
-                description: "Search case-sensitively by default.",
+                title: i18n::t!("8c7e3447ec67023e"),
+                description: i18n::t!("81002dba1918879a"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("search.case_sensitive"),
@@ -3694,8 +4304,8 @@ fn search_and_files_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Use Smartcase Search",
-                description: "Whether to automatically enable case-sensitive search based on the search query.",
+                title: i18n::t!("23c9b65c53286e16"),
+                description: i18n::t!("e09c6c672c6dce97"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("use_smartcase_search"),
@@ -3708,8 +4318,8 @@ fn search_and_files_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Include Ignored",
-                description: "Include ignored files in search results by default.",
+                title: i18n::t!("6beb9d61f866fa56"),
+                description: i18n::t!("9bb3857eae5d2b1d"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("search.include_ignored"),
@@ -3733,8 +4343,8 @@ fn search_and_files_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Regex",
-                description: "Use regex search by default.",
+                title: i18n::t!("af33e62808ca6837"),
+                description: i18n::t!("7727b66f3996e17a"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("search.regex"),
@@ -3749,8 +4359,8 @@ fn search_and_files_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Search Wrap",
-                description: "Whether the editor search results will loop.",
+                title: i18n::t!("0980a4f0243faa47"),
+                description: i18n::t!("edab5dfd459e859c"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("search_wrap"),
@@ -3763,8 +4373,8 @@ fn search_and_files_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Center on Match",
-                description: "Whether to center the current match in the editor",
+                title: i18n::t!("d59ebc3ac3464687"),
+                description: i18n::t!("d0e39a7ad9a63e78"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("editor.search.center_on_match"),
@@ -3787,8 +4397,8 @@ fn search_and_files_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Search on Type",
-                description: "Start searching as you type in project search, without pressing Enter.",
+                title: i18n::t!("c102d09dfbb304e3"),
+                description: i18n::t!("9547b158901d0dfa"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("editor.search.search_on_type"),
@@ -3811,8 +4421,8 @@ fn search_and_files_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Seed Search Query From Cursor",
-                description: "When to populate a new search's query based on the text under the cursor.",
+                title: i18n::t!("33a6ca9eeb0c380e"),
+                description: i18n::t!("c743b387f155efb1"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("seed_search_query_from_cursor"),
@@ -3836,8 +4446,8 @@ fn search_and_files_page() -> SettingsPage {
         [
             SettingsPageItem::SectionHeader("Command Palette"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Use Command History",
-                description: "Whether to use command history ranking for sorting in the command palette.",
+                title: i18n::t!("d166cc48b6030749"),
+                description: i18n::t!("71f82b1ef2124fb0"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("command_palette.use_command_history"),
@@ -3861,13 +4471,13 @@ fn search_and_files_page() -> SettingsPage {
         ]
     }
 
-    fn file_finder_section() -> [SettingsPageItem; 4] {
+    fn file_finder_section() -> [SettingsPageItem; 5] {
         [
-            SettingsPageItem::SectionHeader("File Finder"),
+            SettingsPageItem::SectionHeader(i18n::t!("6d2716c20338d09a")),
             // todo: null by default
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Include Ignored in Search",
-                description: "Use gitignored files when searching.",
+                title: i18n::t!("3c1ad49d05df20fa"),
+                description: i18n::t!("7dfc27b214eba22e"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("file_finder.include_ignored"),
@@ -3889,8 +4499,8 @@ fn search_and_files_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "File Icons",
-                description: "Show file icons in the file finder.",
+                title: i18n::t!("f78d0dfd6e2b782c"),
+                description: i18n::t!("cc9b7122f281a503"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("file_finder.file_icons"),
@@ -3908,8 +4518,8 @@ fn search_and_files_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Skip Focus For Active In Search",
-                description: "Whether the file finder should skip focus for the active file in search results.",
+                title: i18n::t!("f60a32c25631d135"),
+                description: i18n::t!("be754a8289c11207"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("file_finder.skip_focus_for_active_in_search"),
@@ -3930,15 +4540,38 @@ fn search_and_files_page() -> SettingsPage {
                 metadata: None,
                 files: USER,
             }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: i18n::t!("61bf629110305ccd"),
+                description: i18n::t!("7c4eddac6e06766d"),
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("file_finder.prefill_query_from_selection"),
+                    pick: |settings_content| {
+                        settings_content
+                            .file_finder
+                            .as_ref()?
+                            .prefill_query_from_selection
+                            .as_ref()
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content
+                            .file_finder
+                            .get_or_insert_default()
+                            .prefill_query_from_selection = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
         ]
     }
 
     fn file_scan_section() -> [SettingsPageItem; 7] {
         [
-            SettingsPageItem::SectionHeader("File Scan"),
+            SettingsPageItem::SectionHeader(i18n::t!("bed24303d8574311")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "File Scan Exclusions",
-                description: "Files or globs of files that will be excluded by Zed entirely. They will be skipped during file scans, file searches, and not be displayed in the project file tree. Takes precedence over \"File Scan Inclusions\"",
+                title: i18n::t!("ff570eb57b21d2ba"),
+                description: i18n::t!("26134494eacbf430"),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -3960,8 +4593,8 @@ fn search_and_files_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "File Scan Inclusions",
-                description: "Files or globs of files that will be included by Zed, even when ignored by git. This is useful for files that are not tracked by git, but are still important to your project. Note that globs that are overly broad can slow down Zed's file scanning. \"File Scan Exclusions\" takes precedence over these inclusions",
+                title: i18n::t!("3221426d2e3862db"),
+                description: i18n::t!("2d19f1dcf2304b64"),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -3983,8 +4616,8 @@ fn search_and_files_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "File Scan Depth",
-                description: "Maximum directory depth to eagerly index outside of git repositories; contents of directories at this depth or deeper are indexed on demand. Repositories rooted shallower than this depth are always indexed fully. In projects that are not rooted at a git repository, repositories directly inside a root folder activate their git features immediately; deeper ones activate on first use. 0 means no limit and activates all git repositories immediately",
+                title: i18n::t!("24b496e200dfb02d"),
+                description: i18n::t!("c71504a08d04de3e"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("file_scan_depth"),
@@ -3999,8 +4632,8 @@ fn search_and_files_page() -> SettingsPage {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Scan Symbolic Links",
-                description: "When to scan content of linked directories",
+                title: i18n::t!("63a4d42187dddfcc"),
+                description: i18n::t!("b3846057b956fbc0"),
                 field: Box::new(SettingField {
                     json_path: Some("scan_symlinks"),
                     organization_override: None,
@@ -4015,8 +4648,8 @@ fn search_and_files_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Restore File State",
-                description: "Restore previous file state when reopening.",
+                title: i18n::t!("ee6da3d1dce0f7ef"),
+                description: i18n::t!("1c8c51ab48500baf"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("restore_on_file_reopen"),
@@ -4031,8 +4664,8 @@ fn search_and_files_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Close on File Delete",
-                description: "Automatically close files that have been deleted.",
+                title: i18n::t!("75940ec05e8617bc"),
+                description: i18n::t!("bc8c98dba09b0865"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("close_on_file_delete"),
@@ -4050,7 +4683,7 @@ fn search_and_files_page() -> SettingsPage {
     }
 
     SettingsPage {
-        title: "Search & Files",
+        title: i18n::t!("03d27c8d16837132"),
         items: concat_sections![
             search_section(),
             command_palette_section(),
@@ -4063,10 +4696,10 @@ fn search_and_files_page() -> SettingsPage {
 fn window_and_layout_page() -> SettingsPage {
     fn status_bar_section() -> [SettingsPageItem; 12] {
         [
-            SettingsPageItem::SectionHeader("Status Bar"),
+            SettingsPageItem::SectionHeader(i18n::t!("c8592da567d69005")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Project Panel Button",
-                description: "Show the project panel button in the status bar.",
+                title: i18n::t!("1235e45b8400283c"),
+                description: i18n::t!("85d8c0c3fdf52ad6"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.button"),
@@ -4084,8 +4717,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Active Language Button",
-                description: "Show the active language button in the status bar.",
+                title: i18n::t!("e48a7a6cc0c0647b"),
+                description: i18n::t!("25e152ca00f17737"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("status_bar.active_language_button"),
@@ -4107,8 +4740,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Active Encoding Button",
-                description: "Control when to show the active encoding in the status bar.",
+                title: i18n::t!("1b80f4823fa1b6c3"),
+                description: i18n::t!("6af14e1ebb3391ff"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("status_bar.active_encoding_button"),
@@ -4130,8 +4763,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Cursor Position Button",
-                description: "Show the cursor position button in the status bar.",
+                title: i18n::t!("8e1f63841c5d87a6"),
+                description: i18n::t!("8c4571d8652ab733"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("status_bar.cursor_position_button"),
@@ -4153,8 +4786,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Line Endings Button",
-                description: "Show the active line endings button in the status bar.",
+                title: i18n::t!("6960e6fbd4298e2d"),
+                description: i18n::t!("7913d4a41d8a41e7"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("status_bar.line_endings_button"),
@@ -4176,8 +4809,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Pending Keystrokes Indicator",
-                description: "Show an indicator while a multi-stroke key binding is pending. If the input has a timeout, a countdown is shown and hovering pauses it. Its binding preview popover is disabled when the which-key menu is enabled.",
+                title: i18n::t!("2bf1bcb1c21d3169"),
+                description: i18n::t!("d0ca8c54581839c7"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("status_bar.pending_keystrokes_indicator"),
@@ -4199,8 +4832,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Terminal Button",
-                description: "Show the terminal button in the status bar.",
+                title: i18n::t!("8c7f4de7be084cee"),
+                description: i18n::t!("d4f097c7d51ed616"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.button"),
@@ -4213,8 +4846,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Diagnostics Button",
-                description: "Show the project diagnostics button in the status bar.",
+                title: i18n::t!("04670c44935898c4"),
+                description: i18n::t!("4cdac2886a4bbbfb"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("diagnostics.button"),
@@ -4227,8 +4860,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Project Search Button",
-                description: "Show the project search button in the status bar.",
+                title: i18n::t!("e53231864c745408"),
+                description: i18n::t!("5d2afbf84c51dde2"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("search.button"),
@@ -4247,8 +4880,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Debugger Button",
-                description: "Show the debugger button in the status bar.",
+                title: i18n::t!("62ab43dfc6943206"),
+                description: i18n::t!("4df77b026d91f9ec"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("debugger.button"),
@@ -4261,8 +4894,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Active File Name",
-                description: "Show the name of the active file in the status bar.",
+                title: i18n::t!("d9cdce4a7dd52954"),
+                description: i18n::t!("5f7e42392f7b7849"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("status_bar.show_active_file"),
@@ -4288,10 +4921,10 @@ fn window_and_layout_page() -> SettingsPage {
 
     fn title_bar_section() -> [SettingsPageItem; 12] {
         [
-            SettingsPageItem::SectionHeader("Title Bar"),
+            SettingsPageItem::SectionHeader(i18n::t!("c3ebe56c4633ef87")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Show Branch Status Icon",
-                description: "Show git status indicators on the branch icon in the titlebar.",
+                title: i18n::t!("29409cc4faf25751"),
+                description: i18n::t!("315c790e7fbe87ef"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("title_bar.show_branch_status_icon"),
@@ -4313,8 +4946,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Show Branch Name",
-                description: "Show the branch name button in the titlebar.",
+                title: i18n::t!("b8c9f5e3118eaf80"),
+                description: i18n::t!("49e339d984aa6b6d"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("title_bar.show_branch_name"),
@@ -4336,8 +4969,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Show Worktree Name",
-                description: "Show the worktree name button in the titlebar.",
+                title: i18n::t!("24cceeaa0ee73a9a"),
+                description: i18n::t!("7eacc5d40cd6a1ad"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("title_bar.show_worktree_name"),
@@ -4359,8 +4992,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Show Project Items",
-                description: "Show the project host and name in the titlebar.",
+                title: i18n::t!("5710a6cfde9ee7c4"),
+                description: i18n::t!("60d2834a093a7f7a"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("title_bar.show_project_items"),
@@ -4382,8 +5015,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Show Onboarding Banner",
-                description: "Show banners announcing new features in the titlebar.",
+                title: i18n::t!("010c44f6c6c10320"),
+                description: i18n::t!("bb76cb38c621852f"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("title_bar.show_onboarding_banner"),
@@ -4405,8 +5038,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Show Sign In",
-                description: "Show the sign in button in the titlebar.",
+                title: i18n::t!("0713b4380997a283"),
+                description: i18n::t!("4344c4e4f18ad775"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("title_bar.show_sign_in"),
@@ -4424,8 +5057,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Show User Menu",
-                description: "Show the user menu button in the titlebar.",
+                title: i18n::t!("426c5c81529899e6"),
+                description: i18n::t!("6cf1cf0052c85266"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("title_bar.show_user_menu"),
@@ -4443,8 +5076,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Show User Picture",
-                description: "Show user picture in the titlebar.",
+                title: i18n::t!("ca91bf43d61c966f"),
+                description: i18n::t!("7d1b70cf70b22fc1"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("title_bar.show_user_picture"),
@@ -4466,8 +5099,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Show Menus",
-                description: "Show the menus in the titlebar.",
+                title: i18n::t!("b2734abb1a173cdf"),
+                description: i18n::t!("535fb088140ecdd1"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("title_bar.show_menus"),
@@ -4487,21 +5120,21 @@ fn window_and_layout_page() -> SettingsPage {
             SettingsPageItem::DynamicItem(DynamicItem {
                 discriminant: SettingItem {
                     files: USER,
-                    title: "Button Layout",
-                    description:
-                        "(Linux only) choose how window control buttons are laid out in the titlebar.",
+                    title: i18n::t!("6d0bed22c93a94a0"),
+                    description: i18n::t!("975490bbef5929de"),
                     field: Box::new(SettingField {
                         organization_override: None,
                         json_path: Some("title_bar.button_layout$"),
                         pick: |settings_content| {
                             Some(
-                                &dynamic_variants::<settings::WindowButtonLayoutContent>()[settings_content
-                                    .title_bar
-                                    .as_ref()?
-                                    .button_layout
-                                    .as_ref()?
-                                    .discriminant()
-                                    as usize],
+                                &dynamic_variants::<settings::WindowButtonLayoutContent>()
+                                    [settings_content
+                                        .title_bar
+                                        .as_ref()?
+                                        .button_layout
+                                        .as_ref()?
+                                        .discriminant()
+                                        as usize],
                             )
                         },
                         write: |settings_content, value, _| {
@@ -4565,12 +5198,11 @@ fn window_and_layout_page() -> SettingsPage {
                             vec![]
                         }
                         settings::WindowButtonLayoutContentDiscriminants::Standard => vec![],
-                        settings::WindowButtonLayoutContentDiscriminants::Custom => vec![
-                            SettingItem {
+                        settings::WindowButtonLayoutContentDiscriminants::Custom => {
+                            vec![SettingItem {
                                 files: USER,
-                                title: "Custom Button Layout",
-                                description:
-                                    "GNOME-style layout string such as \"close:minimize,maximize\".",
+                                title: i18n::t!("39f14bd3657ede8b"),
+                                description: i18n::t!("c1cf3b34837b4047"),
                                 field: Box::new(SettingField {
                                     organization_override: None,
                                     json_path: Some("title_bar.button_layout"),
@@ -4589,27 +5221,31 @@ fn window_and_layout_page() -> SettingsPage {
                                         settings_content
                                             .title_bar
                                             .get_or_insert_default()
-                                            .button_layout = value
-                                            .map(settings::WindowButtonLayoutContent::Custom);
+                                            .button_layout =
+                                            value.map(settings::WindowButtonLayoutContent::Custom);
                                     },
                                 }),
                                 metadata: Some(Box::new(SettingsFieldMetadata {
                                     placeholder: Some("close:minimize,maximize"),
                                     ..Default::default()
                                 })),
-                            },
-                        ],
+                            }]
+                        }
                     })
                     .collect(),
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Open Menus on Hover",
-                description: "Automatically open menus in the titlebar on hover.",
+                title: i18n::t!("749397d74a23065e"),
+                description: i18n::t!("664832180567d9bb"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("title_bar.open_menus_on_hover"),
                     pick: |settings_content| {
-                        settings_content.title_bar.as_ref()?.open_menus_on_hover.as_ref()
+                        settings_content
+                            .title_bar
+                            .as_ref()?
+                            .open_menus_on_hover
+                            .as_ref()
                     },
                     write: |settings_content, value, _| {
                         settings_content
@@ -4626,10 +5262,10 @@ fn window_and_layout_page() -> SettingsPage {
 
     fn tab_bar_section() -> [SettingsPageItem; 9] {
         [
-            SettingsPageItem::SectionHeader("Tab Bar"),
+            SettingsPageItem::SectionHeader(i18n::t!("c62deb22f9b2f98c")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Show Tab Bar",
-                description: "Show the tab bar in the editor.",
+                title: i18n::t!("ba4571eb66942a71"),
+                description: i18n::t!("7065b0f0fd9097d8"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("tab_bar.show"),
@@ -4642,8 +5278,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Show Git Status In Tabs",
-                description: "Show the Git file status on a tab item.",
+                title: i18n::t!("005a50765b8c067b"),
+                description: i18n::t!("daf5b97050c6a911"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("tabs.git_status"),
@@ -4656,8 +5292,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Show File Icons In Tabs",
-                description: "Show the file icon for a tab.",
+                title: i18n::t!("ebdc862811f0ec0b"),
+                description: i18n::t!("b42b257184b631e8"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("tabs.file_icons"),
@@ -4670,8 +5306,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Tab Close Position",
-                description: "Position of the close button in a tab.",
+                title: i18n::t!("7892cad3b7219d60"),
+                description: i18n::t!("a24e4ee3e6a50c00"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("tabs.close_position"),
@@ -4687,8 +5323,8 @@ fn window_and_layout_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 files: USER,
-                title: "Maximum Tabs",
-                description: "Maximum open tabs in a pane. Will not close an unsaved tab.",
+                title: i18n::t!("b15430bf745852eb"),
+                description: i18n::t!("c051a4747c0cfebf"),
                 // todo(settings_ui): The default for this value is null and it's use in code
                 // is complex, so I'm going to come back to this later
                 field: Box::new(
@@ -4705,8 +5341,8 @@ fn window_and_layout_page() -> SettingsPage {
                 metadata: None,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Show Navigation History Buttons",
-                description: "Show the navigation history buttons in the tab bar.",
+                title: i18n::t!("c7353e6fa4d7c820"),
+                description: i18n::t!("1777ba7728aa71c3"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("tab_bar.show_nav_history_buttons"),
@@ -4728,8 +5364,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Show Tab Bar Buttons",
-                description: "Show the tab bar buttons (New, Split Pane, Zoom).",
+                title: i18n::t!("72744d02fee052d2"),
+                description: i18n::t!("9ab2c3ae4576d500"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("tab_bar.show_tab_bar_buttons"),
@@ -4751,8 +5387,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Pinned Tabs Layout",
-                description: "Show pinned tabs in a separate row above unpinned tabs.",
+                title: i18n::t!("03263dd9fed32aef"),
+                description: i18n::t!("66db8914fb43a80c"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("tab_bar.show_pinned_tabs_in_separate_row"),
@@ -4778,10 +5414,10 @@ fn window_and_layout_page() -> SettingsPage {
 
     fn tab_settings_section() -> [SettingsPageItem; 4] {
         [
-            SettingsPageItem::SectionHeader("Tab Settings"),
+            SettingsPageItem::SectionHeader(i18n::t!("9f7697216e24a014")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Activate On Close",
-                description: "What to do after closing the current tab.",
+                title: i18n::t!("945517953290058d"),
+                description: i18n::t!("bfbb827d22bc9231"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("tabs.activate_on_close"),
@@ -4799,8 +5435,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Tab Show Diagnostics",
-                description: "Which files containing diagnostic errors/warnings to mark in the tabs.",
+                title: i18n::t!("25676f42dbc07103"),
+                description: i18n::t!("e71f4bf766e84f1d"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("tabs.show_diagnostics"),
@@ -4818,8 +5454,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Show Close Button",
-                description: "Controls the appearance behavior of the tab's close button.",
+                title: i18n::t!("72404ccd86bfa2a5"),
+                description: i18n::t!("a6370b2b9ba53d6e"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("tabs.show_close_button"),
@@ -4841,10 +5477,10 @@ fn window_and_layout_page() -> SettingsPage {
 
     fn preview_tabs_section() -> [SettingsPageItem; 8] {
         [
-            SettingsPageItem::SectionHeader("Preview Tabs"),
+            SettingsPageItem::SectionHeader(i18n::t!("b1781a3be7f2e6ca")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Preview Tabs Enabled",
-                description: "Show opened editors as preview tabs.",
+                title: i18n::t!("1c2a5d250d4f8950"),
+                description: i18n::t!("468e9f2601e00ca3"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("preview_tabs.enabled"),
@@ -4862,8 +5498,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Enable Preview From Project Panel",
-                description: "Whether to open tabs in preview mode when opened from the project panel with a single click or the Open action.",
+                title: i18n::t!("2fe2c1eb195ec986"),
+                description: i18n::t!("fc845d1226d611b2"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("preview_tabs.enable_preview_from_project_panel"),
@@ -4885,8 +5521,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Enable Preview From File Finder",
-                description: "Whether to open tabs in preview mode when selected from the file finder.",
+                title: i18n::t!("a0691f6762a91637"),
+                description: i18n::t!("d4ff5987a3315c1f"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("preview_tabs.enable_preview_from_file_finder"),
@@ -4908,8 +5544,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Enable Preview From Multibuffer",
-                description: "Whether to open tabs in preview mode when opened from a multibuffer.",
+                title: i18n::t!("4e4cf190b0f6ab93"),
+                description: i18n::t!("2344a2c163e0adb8"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("preview_tabs.enable_preview_from_multibuffer"),
@@ -4931,8 +5567,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Enable Preview Multibuffer From Code Navigation",
-                description: "Whether to open tabs in preview mode when code navigation is used to open a multibuffer.",
+                title: i18n::t!("e9f8381850388a7b"),
+                description: i18n::t!("0c937836c3d02b86"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("preview_tabs.enable_preview_multibuffer_from_code_navigation"),
@@ -4954,8 +5590,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Enable Preview File From Code Navigation",
-                description: "Whether to open tabs in preview mode when code navigation is used to open a single file.",
+                title: i18n::t!("99517f653adb629d"),
+                description: i18n::t!("8c3165d231880afe"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("preview_tabs.enable_preview_file_from_code_navigation"),
@@ -4977,8 +5613,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Enable Keep Preview On Code Navigation",
-                description: "Whether to keep tabs in preview mode when code navigation is used to navigate away from them. If `enable_preview_file_from_code_navigation` or `enable_preview_multibuffer_from_code_navigation` is also true, the new tab may replace the existing one.",
+                title: i18n::t!("ce515128b40891c4"),
+                description: i18n::t!("0926f891e8455a29"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("preview_tabs.enable_keep_preview_on_code_navigation"),
@@ -5006,8 +5642,8 @@ fn window_and_layout_page() -> SettingsPage {
         [
             SettingsPageItem::SectionHeader("Layout"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Bottom Dock Layout",
-                description: "Layout mode for the bottom dock.",
+                title: i18n::t!("3be54f50e25210b0"),
+                description: i18n::t!("f513363043560320"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("bottom_dock_layout"),
@@ -5021,8 +5657,8 @@ fn window_and_layout_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 files: USER,
-                title: "Centered Layout Left Padding",
-                description: "Left padding for centered layout.",
+                title: i18n::t!("e2c2a98aaa0e33e0"),
+                description: i18n::t!("4a28da9778662f06"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("centered_layout.left_padding"),
@@ -5046,8 +5682,8 @@ fn window_and_layout_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 files: USER,
-                title: "Centered Layout Right Padding",
-                description: "Right padding for centered layout.",
+                title: i18n::t!("e3f301540fd43f6e"),
+                description: i18n::t!("4fcc831ef24cfbd4"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("centered_layout.right_padding"),
@@ -5070,8 +5706,8 @@ fn window_and_layout_page() -> SettingsPage {
                 metadata: None,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Focus Follows Mouse",
-                description: "Whether to change focus to a pane when the mouse hovers over it.",
+                title: i18n::t!("45c0f0d76caf72ff"),
+                description: i18n::t!("3525c6d3801896dc"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("focus_follows_mouse.enabled"),
@@ -5094,8 +5730,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Focus Follows Mouse Debounce ms",
-                description: "Amount of time to wait before changing focus.",
+                title: i18n::t!("f10060f3d1fbb056"),
+                description: i18n::t!("71f44b176ce7f28f"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("focus_follows_mouse.debounce_ms"),
@@ -5124,8 +5760,8 @@ fn window_and_layout_page() -> SettingsPage {
         [
             SettingsPageItem::SectionHeader("Window"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Title Format",
-                description: "Window title template. Available variables are `${projectName}`, `${fileName}`, `${filePath}`, `${relativePath}`, `${fileStem}`, `${remoteName}`, `${remoteHost}`, `${appName}`, `${branch}`, and `${separator}`. `${separator}` is omitted when adjacent variables are empty, but literal text is preserved. The collaboration indicator, when present, is appended after the rendered template. If the template renders to nothing, the default template is used instead.",
+                title: i18n::t!("aa0122a68568f559"),
+                description: i18n::t!("46e36dd4c6833888"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("window_title_format"),
@@ -5144,8 +5780,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Title Separator",
-                description: "String substituted for `${separator}` in the window title format. Include any surrounding whitespace in the value.",
+                title: i18n::t!("548c3830e51260e8"),
+                description: i18n::t!("597f4d7c440fc8f7"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("window_title_separator"),
@@ -5164,8 +5800,8 @@ fn window_and_layout_page() -> SettingsPage {
             }),
             // todo(settings_ui): Should we filter by platform.as_ref()?
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Use System Window Tabs",
-                description: "(macOS only) whether to allow Windows to tab together.",
+                title: i18n::t!("9d8dfec636f8af98"),
+                description: i18n::t!("50e7d3cd0669dd9f"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("use_system_window_tabs"),
@@ -5180,8 +5816,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Fullscreen Mode",
-                description: "(macOS only) which fullscreen mode the toggle fullscreen action enters.",
+                title: i18n::t!("7d2f05b34a712f7b"),
+                description: i18n::t!("202b6ccad3157053"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("fullscreen_mode"),
@@ -5194,8 +5830,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Window Decorations",
-                description: "(Linux only) whether Zed or your compositor should draw window decorations.",
+                title: i18n::t!("005de36a9f46a273"),
+                description: i18n::t!("a54e5179dc17399d"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("window_decorations"),
@@ -5214,8 +5850,8 @@ fn window_and_layout_page() -> SettingsPage {
         [
             SettingsPageItem::SectionHeader("Pane Modifiers"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Inactive Opacity",
-                description: "Opacity of inactive panels (0.0 - 1.0).",
+                title: i18n::t!("49f3986174d46768"),
+                description: i18n::t!("a47efb51e8ce41f0"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("active_pane_modifiers.inactive_opacity"),
@@ -5239,8 +5875,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Border Size",
-                description: "Size of the border surrounding the active pane.",
+                title: i18n::t!("17d2634a018f7f1b"),
+                description: i18n::t!("1dfd6b607d303f9f"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("active_pane_modifiers.border_size"),
@@ -5264,8 +5900,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Zoomed Padding",
-                description: "Show padding for zoomed panes.",
+                title: i18n::t!("028babcff3c57600"),
+                description: i18n::t!("b23235145f221155"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("zoomed_padding"),
@@ -5278,8 +5914,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Close Panel on Toggle",
-                description: "Whether invoking a panel's ToggleFocus action while it's already focused closes the panel, instead of just moving focus back to the editor.",
+                title: i18n::t!("e6edfe9a1e112b0d"),
+                description: i18n::t!("ed25880c7cfa22ef"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("close_panel_on_toggle"),
@@ -5300,8 +5936,8 @@ fn window_and_layout_page() -> SettingsPage {
         [
             SettingsPageItem::SectionHeader("Pane Split Direction"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Vertical Split Direction",
-                description: "Direction to split vertically.",
+                title: i18n::t!("07fc08c582d57129"),
+                description: i18n::t!("142484dabffe051c"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("pane_split_direction_vertical"),
@@ -5319,8 +5955,8 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Horizontal Split Direction",
-                description: "Direction to split horizontally.",
+                title: i18n::t!("05ee953c510bc4b6"),
+                description: i18n::t!("0ed9330e4b3f8c6d"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("pane_split_direction_horizontal"),
@@ -5341,7 +5977,7 @@ fn window_and_layout_page() -> SettingsPage {
     }
 
     SettingsPage {
-        title: "Window & Layout",
+        title: i18n::t!("5940f6c7ed446c6c"),
         items: concat_sections![
             status_bar_section(),
             title_bar_section(),
@@ -5361,8 +5997,8 @@ fn panels_page() -> SettingsPage {
         [
             SettingsPageItem::SectionHeader("Project Panel"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Project Panel Dock",
-                description: "Where to dock the project panel.",
+                title: i18n::t!("63ce3040afaddfe1"),
+                description: i18n::t!("be7cba8d7690124d"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.dock"),
@@ -5375,8 +6011,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Project Panel Default Width",
-                description: "Default width of the project panel in pixels.",
+                title: i18n::t!("9244fd0a960ceeef"),
+                description: i18n::t!("ea5af0512489598b"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.default_width"),
@@ -5399,8 +6035,8 @@ fn panels_page() -> SettingsPage {
             }),
             SettingsPageItem::DynamicItem(DynamicItem {
                 discriminant: SettingItem {
-                    title: "Project Panel Title Tooltips Delay",
-                    description: "Delay in milliseconds before tooltips appear for project panel titles.",
+                    title: i18n::t!("6d4885d84bc954d3"),
+                    description: i18n::t!("fca63e9b0b25f2be"),
                     field: Box::new(SettingField {
                         organization_override: None,
                         json_path: Some("project_panel.title_tooltip_delay$"),
@@ -5459,8 +6095,8 @@ fn panels_page() -> SettingsPage {
                         settings::ProjectPanelTitleTooltipDelayDiscriminants::Custom => {
                             vec![SettingItem {
                                 files: USER,
-                                title: "Custom Delay",
-                                description: "Delay in milliseconds of the project panel title tooltips.",
+                                title: i18n::t!("33c2c3d68ba7e4a5"),
+                                description: i18n::t!("31f958c56ce25eb8"),
                                 field: Box::new(SettingField {
                                     organization_override: None,
                                     json_path: Some("project_panel.title_tooltip_delay"),
@@ -5497,8 +6133,8 @@ fn panels_page() -> SettingsPage {
                     .collect(),
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Hide .gitignore",
-                description: "Whether to hide the gitignore entries in the project panel.",
+                title: i18n::t!("99ff55e1d0d81a90"),
+                description: i18n::t!("366d0c6199434366"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.hide_gitignore"),
@@ -5520,8 +6156,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Entry Spacing",
-                description: "Spacing between worktree entries in the project panel.",
+                title: i18n::t!("3e320caedd44f106"),
+                description: i18n::t!("fb393293c06f755f"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.entry_spacing"),
@@ -5543,8 +6179,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "File Icons",
-                description: "Show file icons in the project panel.",
+                title: i18n::t!("f78d0dfd6e2b782c"),
+                description: i18n::t!("c002c1269900f846"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.file_icons"),
@@ -5562,8 +6198,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Folder Indicator",
-                description: "What to show for directories in the project panel.",
+                title: i18n::t!("fb360e3288f59da9"),
+                description: i18n::t!("d232aba7d6279218"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.folder_indicator"),
@@ -5585,8 +6221,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Git Status",
-                description: "Show the Git status in the project panel.",
+                title: i18n::t!("54030c68e840e87d"),
+                description: i18n::t!("d5ca2daf51425d0c"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.git_status"),
@@ -5604,8 +6240,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Indent Size",
-                description: "Amount of indentation for nested items.",
+                title: i18n::t!("5ad91c4760bcade2"),
+                description: i18n::t!("f645294f8e082773"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.indent_size"),
@@ -5627,8 +6263,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Auto Reveal Entries",
-                description: "Whether to reveal entries in the project panel automatically when a corresponding project entry becomes active.",
+                title: i18n::t!("56e61454db9a0c8c"),
+                description: i18n::t!("45ace7bb0f932a59"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.auto_reveal_entries"),
@@ -5650,8 +6286,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Starts Open",
-                description: "Whether the project panel should open on startup.",
+                title: i18n::t!("5e0500491910a5b9"),
+                description: i18n::t!("8ca7c953ba2e1a32"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.starts_open"),
@@ -5673,8 +6309,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Auto Fold Directories",
-                description: "Whether to fold directories automatically and show compact folders when a directory has only one subdirectory inside.",
+                title: i18n::t!("c50dcc2d5c4bb179"),
+                description: i18n::t!("b245fd2dc036d084"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.auto_fold_dirs"),
@@ -5696,8 +6332,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Bold Folder Labels",
-                description: "Whether to show folder names with bold text in the project panel.",
+                title: i18n::t!("5a350cdeb5c54bd4"),
+                description: i18n::t!("8b876aa8fe2342f6"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.bold_folder_labels"),
@@ -5719,8 +6355,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Show Scrollbar",
-                description: "Show the scrollbar in the project panel.",
+                title: i18n::t!("c647d06905390229"),
+                description: i18n::t!("de929dfa4f137d44"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.scrollbar.show"),
@@ -5748,8 +6384,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Horizontal Scroll",
-                description: "Whether to allow horizontal scrolling in the project panel. When disabled, the view is always locked to the leftmost position and long file names are clipped.",
+                title: i18n::t!("d8e6506f4650c614"),
+                description: i18n::t!("dc3ca466a3c0b57b"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.scrollbar.horizontal_scroll"),
@@ -5775,8 +6411,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Show Diagnostics",
-                description: "Which files containing diagnostic errors/warnings to mark in the project panel.",
+                title: i18n::t!("36bca67cb267c768"),
+                description: i18n::t!("2bde22e7ea9f98bf"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.show_diagnostics"),
@@ -5798,8 +6434,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Diagnostic Badges",
-                description: "Show error and warning count badges next to file names in the project panel.",
+                title: i18n::t!("bdf863e18d4f1efa"),
+                description: i18n::t!("0399266c17412e57"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.diagnostic_badges"),
@@ -5821,8 +6457,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Git Status Indicator",
-                description: "Show a git status indicator next to file names in the project panel.",
+                title: i18n::t!("c045d9b62c44c695"),
+                description: i18n::t!("a29ab27a1ea82493"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.git_status_indicator"),
@@ -5844,8 +6480,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Sticky Scroll",
-                description: "Whether to stick parent directories at top of the project panel.",
+                title: i18n::t!("4455a54e440b6bb7"),
+                description: i18n::t!("b414b441b1f032fa"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.sticky_scroll"),
@@ -5868,8 +6504,8 @@ fn panels_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 files: USER,
-                title: "Show Indent Guides",
-                description: "Show indent guides in the project panel.",
+                title: i18n::t!("46f58252bbc80887"),
+                description: i18n::t!("44a51aa30f64a2a2"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.indent_guides.show"),
@@ -5894,8 +6530,8 @@ fn panels_page() -> SettingsPage {
                 metadata: None,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Drag and Drop",
-                description: "Whether to enable drag-and-drop operations in the project panel.",
+                title: i18n::t!("1cf6dead9cf5f062"),
+                description: i18n::t!("8d1664b1c4d71ace"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.drag_and_drop"),
@@ -5917,8 +6553,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Hide Root",
-                description: "Whether to hide the root entry when only one folder is open in the window.",
+                title: i18n::t!("ad7ff46e4a5d37e4"),
+                description: i18n::t!("cb64fec7fd708ec7"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.hide_root"),
@@ -5936,8 +6572,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Hide Hidden",
-                description: "Whether to hide the hidden entries in the project panel.",
+                title: i18n::t!("c4eca2d409677f54"),
+                description: i18n::t!("5c7aafbcb627a843"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.hide_hidden"),
@@ -5959,8 +6595,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Sort Mode",
-                description: "Sort order for entries in the project panel.",
+                title: i18n::t!("3c1f0a5d3f436693"),
+                description: i18n::t!("cfb4ae7a99393e94"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.sort_mode"),
@@ -5978,8 +6614,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Sort Order",
-                description: "Whether to sort file and folder names case-sensitively in the project panel.",
+                title: i18n::t!("a4ab9e7aadd8e3f1"),
+                description: i18n::t!("6508435f4a6349bc"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     pick: |settings_content| {
@@ -5997,8 +6633,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Auto Open Files On Create",
-                description: "Whether to automatically open newly created files in the editor.",
+                title: i18n::t!("0d2ffb71dcad2867"),
+                description: i18n::t!("f97a02cd34348aec"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.auto_open.on_create"),
@@ -6024,8 +6660,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Auto Open Files On Paste",
-                description: "Whether to automatically open files after pasting or duplicating them.",
+                title: i18n::t!("a88fd39b7668b177"),
+                description: i18n::t!("5aeb9865027da0ca"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.auto_open.on_paste"),
@@ -6051,8 +6687,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Auto Open Files On Drop",
-                description: "Whether to automatically open files dropped from external sources.",
+                title: i18n::t!("599169572965101d"),
+                description: i18n::t!("a219144683701419"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.auto_open.on_drop"),
@@ -6078,8 +6714,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Hidden Files",
-                description: "Globs to match files that will be considered \"hidden\" and can be hidden from the project panel.",
+                title: i18n::t!("10f6c8db8a48e1da"),
+                description: i18n::t!("2fceeaa27c6d2f83"),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -6103,8 +6739,8 @@ fn panels_page() -> SettingsPage {
         [
             SettingsPageItem::SectionHeader("Terminal Panel"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Terminal Dock",
-                description: "Where to dock the terminal panel.",
+                title: i18n::t!("74e7958da58c458a"),
+                description: i18n::t!("8efc9a18df123a4c"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.dock"),
@@ -6117,8 +6753,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Starts Open",
-                description: "Whether the terminal panel should open on startup.",
+                title: i18n::t!("5e0500491910a5b9"),
+                description: i18n::t!("086db6874f5df527"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.starts_open"),
@@ -6136,8 +6772,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Terminal Panel Flexible Sizing",
-                description: "Whether the terminal panel should use flexible (proportional) sizing when docked to the left or right.",
+                title: i18n::t!("fd019327f574df1e"),
+                description: i18n::t!("0bc367ff5446314b"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.flexible"),
@@ -6150,8 +6786,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Show Count Badge",
-                description: "Show a badge on the terminal panel icon with the count of open terminals.",
+                title: i18n::t!("aad5920997259f70"),
+                description: i18n::t!("454f93b4a344bfce"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.show_count_badge"),
@@ -6179,8 +6815,8 @@ fn panels_page() -> SettingsPage {
         [
             SettingsPageItem::SectionHeader("Outline Panel"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Outline Panel Button",
-                description: "Show the outline panel button in the status bar.",
+                title: i18n::t!("91f66898fc193df4"),
+                description: i18n::t!("5db7d02f6ebb72b1"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("outline_panel.button"),
@@ -6198,8 +6834,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Outline Panel Dock",
-                description: "Where to dock the outline panel.",
+                title: i18n::t!("9dc2c72bdc49b005"),
+                description: i18n::t!("1033b81e3f601e47"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("outline_panel.dock"),
@@ -6212,8 +6848,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Outline Panel Default Width",
-                description: "Default width of the outline panel in pixels.",
+                title: i18n::t!("9106b73f268d304f"),
+                description: i18n::t!("81d8a921c3a6f8e9"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("outline_panel.default_width"),
@@ -6235,8 +6871,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "File Icons",
-                description: "Show file icons in the outline panel.",
+                title: i18n::t!("f78d0dfd6e2b782c"),
+                description: i18n::t!("d26938ed8db7fb38"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("outline_panel.file_icons"),
@@ -6254,8 +6890,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Folder Indicator",
-                description: "What to show for directories in the outline panel.",
+                title: i18n::t!("fb360e3288f59da9"),
+                description: i18n::t!("41850017763e939d"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("outline_panel.folder_indicator"),
@@ -6277,8 +6913,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Git Status",
-                description: "Show the Git status in the outline panel.",
+                title: i18n::t!("54030c68e840e87d"),
+                description: i18n::t!("26a4282f39316720"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("outline_panel.git_status"),
@@ -6296,8 +6932,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Indent Size",
-                description: "Amount of indentation for nested items.",
+                title: i18n::t!("5ad91c4760bcade2"),
+                description: i18n::t!("f645294f8e082773"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("outline_panel.indent_size"),
@@ -6319,8 +6955,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Auto Reveal Entries",
-                description: "Whether to reveal when a corresponding outline entry becomes active.",
+                title: i18n::t!("56e61454db9a0c8c"),
+                description: i18n::t!("cc8b513037450947"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("outline_panel.auto_reveal_entries"),
@@ -6342,8 +6978,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Auto Fold Directories",
-                description: "Whether to fold directories automatically when a directory contains only one subdirectory.",
+                title: i18n::t!("c50dcc2d5c4bb179"),
+                description: i18n::t!("bf6a2e5ffd6dbae7"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("outline_panel.auto_fold_dirs"),
@@ -6366,8 +7002,8 @@ fn panels_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 files: USER,
-                title: "Show Indent Guides",
-                description: "When to show indent guides in the outline panel.",
+                title: i18n::t!("46f58252bbc80887"),
+                description: i18n::t!("9ead645588bf8db6"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("outline_panel.indent_guides.show"),
@@ -6392,8 +7028,8 @@ fn panels_page() -> SettingsPage {
                 metadata: None,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Hide Symbols in Multi-Buffers",
-                description: "Whether to hide symbols, excerpts and search matches in the outline panel when a multi-buffer view is active.",
+                title: i18n::t!("b34f5fc1b520746b"),
+                description: i18n::t!("9ec655ec499ba59a"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("outline_panel.multi_buffer_hide_symbols"),
@@ -6417,12 +7053,12 @@ fn panels_page() -> SettingsPage {
         ]
     }
 
-    fn git_panel_section() -> [SettingsPageItem; 18] {
+    fn git_panel_section() -> [SettingsPageItem; 19] {
         [
             SettingsPageItem::SectionHeader("Git Panel"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Git Panel Button",
-                description: "Show the Git panel button in the status bar.",
+                title: i18n::t!("b7146d8b96befc16"),
+                description: i18n::t!("df2a2022a7625151"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git_panel.button"),
@@ -6435,8 +7071,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Git Panel Dock",
-                description: "Where to dock the Git panel.",
+                title: i18n::t!("522916e808778031"),
+                description: i18n::t!("6836da87c818b8c8"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git_panel.dock"),
@@ -6449,8 +7085,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Starts Open",
-                description: "Whether the git panel should open on startup.",
+                title: i18n::t!("5e0500491910a5b9"),
+                description: i18n::t!("8922a5e142449269"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git_panel.starts_open"),
@@ -6468,8 +7104,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Git Panel Default Width",
-                description: "Default width of the Git panel in pixels.",
+                title: i18n::t!("ad5cf22cd20e03cd"),
+                description: i18n::t!("8225941aecbd4d6e"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git_panel.default_width"),
@@ -6487,8 +7123,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Git Panel Status Style",
-                description: "How entry statuses are displayed.",
+                title: i18n::t!("11cb320353141dac"),
+                description: i18n::t!("07859d05329367c2"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git_panel.status_style"),
@@ -6506,8 +7142,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Fallback Branch Name",
-                description: "Default branch name will be when init.defaultbranch is not set in Git.",
+                title: i18n::t!("379d53bc64cfede1"),
+                description: i18n::t!("77a711c33b2fd396"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git_panel.fallback_branch_name"),
@@ -6529,8 +7165,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Sort By",
-                description: "How to sort entries in the git panel.",
+                title: i18n::t!("1ce6b1d7c95ce2ee"),
+                description: i18n::t!("1e65f71321b35885"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git_panel.sort_by"),
@@ -6543,8 +7179,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Group By",
-                description: "How to group entries in the git panel.",
+                title: i18n::t!("72148c2201764726"),
+                description: i18n::t!("629bfdc2013fd82b"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git_panel.group_by"),
@@ -6557,8 +7193,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Collapse Untracked Diff",
-                description: "Whether to collapse untracked files in the diff panel.",
+                title: i18n::t!("cb230abecb75e659"),
+                description: i18n::t!("fdf261a7d3a65450"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git_panel.collapse_untracked_diff"),
@@ -6580,8 +7216,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Tree View",
-                description: "Enable to show entries in tree view list, disable to show in flat view list.",
+                title: i18n::t!("64f1f87721d5d160"),
+                description: i18n::t!("e8d4a7dc8ff8c255"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git_panel.tree_view"),
@@ -6596,8 +7232,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "File Icons",
-                description: "Show file icons next to the Git status icon.",
+                title: i18n::t!("f78d0dfd6e2b782c"),
+                description: i18n::t!("23cb492dd5525756"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git_panel.file_icons"),
@@ -6615,8 +7251,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Folder Indicator",
-                description: "What to show for directories in the git panel.",
+                title: i18n::t!("fb360e3288f59da9"),
+                description: i18n::t!("5c56c09026010e35"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git_panel.folder_indicator"),
@@ -6638,8 +7274,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Diff Stats",
-                description: "Whether to show the addition/deletion change count next to each file in the Git panel.",
+                title: i18n::t!("8966b3ba4a5ecea7"),
+                description: i18n::t!("f4115a7d484bf52c"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git_panel.diff_stats"),
@@ -6657,8 +7293,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Primary Click Behavior",
-                description: "Default action when clicking a changed file in the Git panel.",
+                title: i18n::t!("e259b1a21335a96d"),
+                description: i18n::t!("fb743eed213e40d3"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git_panel.entry_primary_click_action"),
@@ -6680,8 +7316,27 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Show Count Badge",
-                description: "Whether to show a badge on the git panel icon with the count of uncommitted changes.",
+                title: i18n::t!("23696719b8bf5136"),
+                description: i18n::t!("57e1383c54f8007a"),
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("git_panel.commit_editor"),
+                    pick: |settings_content| {
+                        settings_content.git_panel.as_ref()?.commit_editor.as_ref()
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content
+                            .git_panel
+                            .get_or_insert_default()
+                            .commit_editor = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: i18n::t!("5d20c06ff82bbc4c"),
+                description: i18n::t!("8b2f538111c2929a"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git_panel.show_count_badge"),
@@ -6703,8 +7358,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Commit Title Max Length",
-                description: "Maximum length of the commit message title before a warning is shown. Set to 0 to disable.",
+                title: i18n::t!("248b851da508dbb6"),
+                description: i18n::t!("57738efd9d4f064a"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git_panel.commit_title_max_length"),
@@ -6726,8 +7381,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Scroll Bar",
-                description: "How and when the scrollbar should be displayed.",
+                title: i18n::t!("53bcc015611bb7fa"),
+                description: i18n::t!("8ab140f77a34dbfa"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git_panel.scrollbar.show"),
@@ -6759,10 +7414,10 @@ fn panels_page() -> SettingsPage {
 
     fn debugger_panel_section() -> [SettingsPageItem; 2] {
         [
-            SettingsPageItem::SectionHeader("Debugger Panel"),
+            SettingsPageItem::SectionHeader(i18n::t!("66c849d89d539e9e")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Debugger Panel Dock",
-                description: "The dock position of the debug panel.",
+                title: i18n::t!("765be2fd92c66af9"),
+                description: i18n::t!("4455a5b23567c5a4"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("debugger.dock"),
@@ -6779,10 +7434,10 @@ fn panels_page() -> SettingsPage {
 
     fn collaboration_panel_section() -> [SettingsPageItem; 4] {
         [
-            SettingsPageItem::SectionHeader("Collaboration Panel"),
+            SettingsPageItem::SectionHeader(i18n::t!("538fd707c82e7e9b")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Collaboration Panel Button",
-                description: "Show the collaboration panel button in the status bar.",
+                title: i18n::t!("fefcce3784f47e72"),
+                description: i18n::t!("49710fcc320ca5d6"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("collaboration_panel.button"),
@@ -6804,8 +7459,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Collaboration Panel Dock",
-                description: "Where to dock the collaboration panel.",
+                title: i18n::t!("186d472198e5f531"),
+                description: i18n::t!("0e68bcdfaca9c7b5"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("collaboration_panel.dock"),
@@ -6823,8 +7478,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Collaboration Panel Default Width",
-                description: "Default width of the collaboration panel in pixels.",
+                title: i18n::t!("97e23d68713e3a21"),
+                description: i18n::t!("807b613f5e5e9145"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("collaboration_panel.dock"),
@@ -6850,10 +7505,10 @@ fn panels_page() -> SettingsPage {
 
     fn agent_panel_section() -> [SettingsPageItem; 7] {
         [
-            SettingsPageItem::SectionHeader("Agent Panel"),
+            SettingsPageItem::SectionHeader(i18n::t!("3bb0698e654c0693")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Agent Panel Button",
-                description: "Whether to show the agent panel button in the status bar.",
+                title: i18n::t!("1ee4f777a32227c4"),
+                description: i18n::t!("db7a6982a63b3e53"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("agent.button"),
@@ -6866,8 +7521,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Agent Panel Dock",
-                description: "Where to dock the agent panel.",
+                title: i18n::t!("aa82728fc30d680f"),
+                description: i18n::t!("bf94af22003a927e"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("agent.dock"),
@@ -6880,8 +7535,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Agent Panel Flexible Sizing",
-                description: "Whether the agent panel should use flexible (proportional) sizing when docked to the left or right. When enabled, the default width does not control the panel width, and resetting the panel restores the default proportion.",
+                title: i18n::t!("2df257a79e2dbb40"),
+                description: i18n::t!("35e7185def0da785"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("agent.flexible"),
@@ -6894,8 +7549,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Agent Panel Default Width",
-                description: "Default fixed width when the agent panel is docked to the left or right and flexible sizing is disabled.",
+                title: i18n::t!("99de6b0502429398"),
+                description: i18n::t!("23ed39607f6a4ef4"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("agent.default_width"),
@@ -6910,8 +7565,8 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Agent Panel Default Height",
-                description: "Default height when the agent panel is docked to the bottom.",
+                title: i18n::t!("54c749e086ce046f"),
+                description: i18n::t!("68fb222eb91d2723"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("agent.default_height"),
@@ -6931,8 +7586,8 @@ fn panels_page() -> SettingsPage {
             SettingsPageItem::DynamicItem(DynamicItem {
                 discriminant: SettingItem {
                     files: USER,
-                    title: "Limit Content Width",
-                    description: "Whether to constrain the agent panel content to a maximum width, centering it when the panel is wider, for optimal readability.",
+                    title: i18n::t!("a56775aeae3f1d3b"),
+                    description: i18n::t!("0e46e48786fbf355"),
                     field: Box::new(SettingField::<bool> {
                         organization_override: None,
                         json_path: Some("agent.limit_content_width"),
@@ -6964,8 +7619,8 @@ fn panels_page() -> SettingsPage {
                     vec![],
                     vec![SettingItem {
                         files: USER,
-                        title: "Max Content Width",
-                        description: "Maximum content width in pixels. Content will be centered when the panel is wider than this value.",
+                        title: i18n::t!("f6fb5b8116113851"),
+                        description: i18n::t!("a338a4121e13f4ee"),
                         field: Box::new(SettingField {
                             organization_override: None,
                             json_path: Some("agent.max_content_width"),
@@ -6987,7 +7642,7 @@ fn panels_page() -> SettingsPage {
     }
 
     SettingsPage {
-        title: "Panels",
+        title: i18n::t!("3c8c5939d685319a"),
         items: concat_sections![
             project_panel_section(),
             terminal_panel_section(),
@@ -7003,10 +7658,10 @@ fn panels_page() -> SettingsPage {
 fn debugger_page() -> SettingsPage {
     fn general_section() -> [SettingsPageItem; 6] {
         [
-            SettingsPageItem::SectionHeader("General"),
+            SettingsPageItem::SectionHeader(i18n::t!("40fae00b7c6d8ac0")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Stepping Granularity",
-                description: "Determines the stepping granularity for debug operations.",
+                title: i18n::t!("7ecf48280a19f20b"),
+                description: i18n::t!("db54cf415942cd0b"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("debugger.stepping_granularity"),
@@ -7028,8 +7683,8 @@ fn debugger_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Save Breakpoints",
-                description: "Whether breakpoints should be reused across Zed sessions.",
+                title: i18n::t!("0bec6de8fbcd5bc6"),
+                description: i18n::t!("ed80dae8bc3a5109"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("debugger.save_breakpoints"),
@@ -7051,8 +7706,8 @@ fn debugger_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Timeout",
-                description: "Time in milliseconds until timeout error when connecting to a TCP debug adapter.",
+                title: i18n::t!("e512cf016f960728"),
+                description: i18n::t!("c31d73dd415fc283"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("debugger.timeout"),
@@ -7065,8 +7720,8 @@ fn debugger_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Log DAP Communications",
-                description: "Whether to log messages between active debug adapters and Zed.",
+                title: i18n::t!("22218a0cfa089715"),
+                description: i18n::t!("53085bfc4e45e95f"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("debugger.log_dap_communications"),
@@ -7088,8 +7743,8 @@ fn debugger_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Format DAP Log Messages",
-                description: "Whether to format DAP messages when adding them to debug adapter logger.",
+                title: i18n::t!("f3d44df700bce24e"),
+                description: i18n::t!("5997a772f9947dfb"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("debugger.format_dap_log_messages"),
@@ -7114,7 +7769,7 @@ fn debugger_page() -> SettingsPage {
     }
 
     SettingsPage {
-        title: "Debugger",
+        title: i18n::t!("20fe3f3e72ca01b8"),
         items: concat_sections![general_section()],
     }
 }
@@ -7122,100 +7777,150 @@ fn debugger_page() -> SettingsPage {
 fn terminal_page() -> SettingsPage {
     fn environment_section() -> [SettingsPageItem; 5] {
         [
-                SettingsPageItem::SectionHeader("Environment"),
-                SettingsPageItem::DynamicItem(DynamicItem {
-                    discriminant: SettingItem {
-                        files: USER | PROJECT,
-                        title: "Shell",
-                        description: "What shell to use when opening a terminal.",
-                        field: Box::new(SettingField {
-                            organization_override: None,
-                            json_path: Some("terminal.shell$"),
-                            pick: |settings_content| {
-                                Some(&dynamic_variants::<settings::Shell>()[
-                                    settings_content
-                                        .terminal
-                                        .as_ref()?
-                                        .project
-                                        .shell
-                                        .as_ref()?
-                                        .discriminant() as usize
-                                ])
-                            },
-                            write: |settings_content, value, _| {
-                                let Some(value) = value else {
-                                    if let Some(terminal) = settings_content.terminal.as_mut() {
-                                        terminal.project.shell = None;
-                                    }
-                                    return;
-                                };
-                                let settings_value = settings_content
+            SettingsPageItem::SectionHeader(i18n::t!("904dd029c768820d")),
+            SettingsPageItem::DynamicItem(DynamicItem {
+                discriminant: SettingItem {
+                    files: USER | PROJECT,
+                    title: "Shell",
+                    description: i18n::t!("3599a6b9724ffd11"),
+                    field: Box::new(SettingField {
+                        organization_override: None,
+                        json_path: Some("terminal.shell$"),
+                        pick: |settings_content| {
+                            Some(
+                                &dynamic_variants::<settings::Shell>()[settings_content
                                     .terminal
-                                    .get_or_insert_default()
+                                    .as_ref()?
                                     .project
                                     .shell
-                                    .get_or_insert_with(|| settings::Shell::default());
-                                let default_shell = if cfg!(target_os = "windows") {
-                                    "powershell.exe"
-                                } else {
-                                    "sh"
-                                };
-                                *settings_value = match value {
-                                    settings::ShellDiscriminants::System => settings::Shell::System,
-                                    settings::ShellDiscriminants::Program => {
-                                        let program = match settings_value {
-                                            settings::Shell::Program(program) => program.clone(),
-                                            settings::Shell::WithArguments { program, .. } => program.clone(),
-                                            _ => String::from(default_shell),
-                                        };
-                                        settings::Shell::Program(program)
-                                    }
-                                    settings::ShellDiscriminants::WithArguments => {
-                                        let (program, args, title_override) = match settings_value {
-                                            settings::Shell::Program(program) => (program.clone(), vec![], None),
-                                            settings::Shell::WithArguments {
-                                                program,
-                                                args,
-                                                title_override,
-                                            } => (program.clone(), args.clone(), title_override.clone()),
-                                            _ => (String::from(default_shell), vec![], None),
-                                        };
+                                    .as_ref()?
+                                    .discriminant()
+                                    as usize],
+                            )
+                        },
+                        write: |settings_content, value, _| {
+                            let Some(value) = value else {
+                                if let Some(terminal) = settings_content.terminal.as_mut() {
+                                    terminal.project.shell = None;
+                                }
+                                return;
+                            };
+                            let settings_value = settings_content
+                                .terminal
+                                .get_or_insert_default()
+                                .project
+                                .shell
+                                .get_or_insert_with(|| settings::Shell::default());
+                            let default_shell = if cfg!(target_os = "windows") {
+                                "powershell.exe"
+                            } else {
+                                "sh"
+                            };
+                            *settings_value = match value {
+                                settings::ShellDiscriminants::System => settings::Shell::System,
+                                settings::ShellDiscriminants::Program => {
+                                    let program = match settings_value {
+                                        settings::Shell::Program(program) => program.clone(),
+                                        settings::Shell::WithArguments { program, .. } => {
+                                            program.clone()
+                                        }
+                                        _ => String::from(default_shell),
+                                    };
+                                    settings::Shell::Program(program)
+                                }
+                                settings::ShellDiscriminants::WithArguments => {
+                                    let (program, args, title_override) = match settings_value {
+                                        settings::Shell::Program(program) => {
+                                            (program.clone(), vec![], None)
+                                        }
                                         settings::Shell::WithArguments {
                                             program,
                                             args,
                                             title_override,
+                                        } => {
+                                            (program.clone(), args.clone(), title_override.clone())
                                         }
+                                        _ => (String::from(default_shell), vec![], None),
+                                    };
+                                    settings::Shell::WithArguments {
+                                        program,
+                                        args,
+                                        title_override,
                                     }
-                                };
-                            },
-                        }),
-                        metadata: None,
-                    },
-                    pick_discriminant: |settings_content| {
-                        Some(
-                            settings_content
-                                .terminal
-                                .as_ref()?
-                                .project
-                                .shell
-                                .as_ref()?
-                                .discriminant() as usize,
-                        )
-                    },
-                    fields: dynamic_variants::<settings::Shell>()
-                        .into_iter()
-                        .map(|variant| match variant {
-                            settings::ShellDiscriminants::System => vec![],
-                            settings::ShellDiscriminants::Program => vec![SettingItem {
+                                }
+                            };
+                        },
+                    }),
+                    metadata: None,
+                },
+                pick_discriminant: |settings_content| {
+                    Some(
+                        settings_content
+                            .terminal
+                            .as_ref()?
+                            .project
+                            .shell
+                            .as_ref()?
+                            .discriminant() as usize,
+                    )
+                },
+                fields: dynamic_variants::<settings::Shell>()
+                    .into_iter()
+                    .map(|variant| match variant {
+                        settings::ShellDiscriminants::System => vec![],
+                        settings::ShellDiscriminants::Program => vec![SettingItem {
+                            files: USER | PROJECT,
+                            title: i18n::t!("5d942dbe52a46039"),
+                            description: i18n::t!("3a61a2b4358ea645"),
+                            field: Box::new(SettingField {
+                                organization_override: None,
+                                json_path: Some("terminal.shell"),
+                                pick: |settings_content| match settings_content
+                                    .terminal
+                                    .as_ref()?
+                                    .project
+                                    .shell
+                                    .as_ref()
+                                {
+                                    Some(settings::Shell::Program(program)) => Some(program),
+                                    _ => None,
+                                },
+                                write: |settings_content, value, _| {
+                                    let Some(value) = value else {
+                                        return;
+                                    };
+                                    match settings_content
+                                        .terminal
+                                        .get_or_insert_default()
+                                        .project
+                                        .shell
+                                        .as_mut()
+                                    {
+                                        Some(settings::Shell::Program(program)) => *program = value,
+                                        _ => return,
+                                    }
+                                },
+                            }),
+                            metadata: None,
+                        }],
+                        settings::ShellDiscriminants::WithArguments => vec![
+                            SettingItem {
                                 files: USER | PROJECT,
-                                title: "Program",
-                                description: "The shell program to use.",
+                                title: i18n::t!("5d942dbe52a46039"),
+                                description: i18n::t!("2db41c8e0c9e7988"),
                                 field: Box::new(SettingField {
                                     organization_override: None,
-                                    json_path: Some("terminal.shell"),
-                                    pick: |settings_content| match settings_content.terminal.as_ref()?.project.shell.as_ref()
+                                    json_path: Some("terminal.shell.program"),
+                                    pick: |settings_content| match settings_content
+                                        .terminal
+                                        .as_ref()?
+                                        .project
+                                        .shell
+                                        .as_ref()
                                     {
-                                        Some(settings::Shell::Program(program)) => Some(program),
+                                        Some(settings::Shell::WithArguments {
+                                            program, ..
+                                        }) => Some(program),
                                         _ => None,
                                     },
                                     write: |settings_content, value, _| {
@@ -7229,26 +7934,35 @@ fn terminal_page() -> SettingsPage {
                                             .shell
                                             .as_mut()
                                         {
-                                            Some(settings::Shell::Program(program)) => *program = value,
+                                            Some(settings::Shell::WithArguments {
+                                                program,
+                                                ..
+                                            }) => *program = value,
                                             _ => return,
                                         }
                                     },
                                 }),
                                 metadata: None,
-                            }],
-                            settings::ShellDiscriminants::WithArguments => vec![
-                                SettingItem {
-                                    files: USER | PROJECT,
-                                    title: "Program",
-                                    description: "The shell program to run.",
-                                    field: Box::new(SettingField {
+                            },
+                            SettingItem {
+                                files: USER | PROJECT,
+                                title: i18n::t!("9634fb0832be624f"),
+                                description: i18n::t!("55b325b4e3795806"),
+                                field: Box::new(
+                                    SettingField {
                                         organization_override: None,
-                                        json_path: Some("terminal.shell.program"),
-                                        pick: |settings_content| {
-                                            match settings_content.terminal.as_ref()?.project.shell.as_ref() {
-                                                Some(settings::Shell::WithArguments { program, .. }) => Some(program),
-                                                _ => None,
-                                            }
+                                        json_path: Some("terminal.shell.args"),
+                                        pick: |settings_content| match settings_content
+                                            .terminal
+                                            .as_ref()?
+                                            .project
+                                            .shell
+                                            .as_ref()
+                                        {
+                                            Some(settings::Shell::WithArguments {
+                                                args, ..
+                                            }) => Some(args),
+                                            _ => None,
                                         },
                                         write: |settings_content, value, _| {
                                             let Some(value) = value else {
@@ -7261,118 +7975,94 @@ fn terminal_page() -> SettingsPage {
                                                 .shell
                                                 .as_mut()
                                             {
-                                                Some(settings::Shell::WithArguments { program, .. }) => {
-                                                    *program = value
-                                                }
+                                                Some(settings::Shell::WithArguments {
+                                                    args,
+                                                    ..
+                                                }) => *args = value,
                                                 _ => return,
                                             }
                                         },
-                                    }),
-                                    metadata: None,
-                                },
-                                SettingItem {
-                                    files: USER | PROJECT,
-                                    title: "Arguments",
-                                    description: "The arguments to pass to the shell program.",
-                                    field: Box::new(
-                                        SettingField {
-                                            organization_override: None,
-                                            json_path: Some("terminal.shell.args"),
-                                            pick: |settings_content| {
-                                                match settings_content.terminal.as_ref()?.project.shell.as_ref() {
-                                                    Some(settings::Shell::WithArguments { args, .. }) => Some(args),
-                                                    _ => None,
-                                                }
-                                            },
-                                            write: |settings_content, value, _| {
-                                                let Some(value) = value else {
-                                                    return;
-                                                };
-                                                match settings_content
-                                                    .terminal
-                                                    .get_or_insert_default()
-                                                    .project
-                                                    .shell
-                                                    .as_mut()
-                                                {
-                                                    Some(settings::Shell::WithArguments { args, .. }) => *args = value,
-                                                    _ => return,
-                                                }
-                                            },
-                                        }
-                                        .unimplemented(),
-                                    ),
-                                    metadata: None,
-                                },
-                                SettingItem {
-                                    files: USER | PROJECT,
-                                    title: "Title Override",
-                                    description: "An optional string to override the title of the terminal tab.",
-                                    field: Box::new(SettingField {
-                                        organization_override: None,
-                                        json_path: Some("terminal.shell.title_override"),
-                                        pick: |settings_content| {
-                                            match settings_content.terminal.as_ref()?.project.shell.as_ref() {
-                                                Some(settings::Shell::WithArguments { title_override, .. }) => {
-                                                    title_override.as_ref().or(DEFAULT_EMPTY_STRING)
-                                                }
-                                                _ => None,
-                                            }
-                                        },
-                                        write: |settings_content, value, _| {
-                                            match settings_content
-                                                .terminal
-                                                .get_or_insert_default()
-                                                .project
-                                                .shell
-                                                .as_mut()
-                                            {
-                                                Some(settings::Shell::WithArguments { title_override, .. }) => {
-                                                    *title_override = value.filter(|s| !s.is_empty())
-                                                }
-                                                _ => return,
-                                            }
-                                        },
-                                    }),
-                                    metadata: None,
-                                },
-                            ],
-                        })
-                        .collect(),
-                }),
-                SettingsPageItem::DynamicItem(DynamicItem {
-                    discriminant: SettingItem {
-                        files: USER | PROJECT,
-                        title: "Working Directory",
-                        description: "What working directory to use when launching the terminal.",
-                        field: Box::new(SettingField {
-                            organization_override: None,
-                            json_path: Some("terminal.working_directory$"),
-                            pick: |settings_content| {
-                                Some(&dynamic_variants::<settings::WorkingDirectory>()[
-                                    settings_content
+                                    }
+                                    .unimplemented(),
+                                ),
+                                metadata: None,
+                            },
+                            SettingItem {
+                                files: USER | PROJECT,
+                                title: i18n::t!("725e9f0fe15ef49c"),
+                                description: i18n::t!("4eab0b9a4f9a1edb"),
+                                field: Box::new(SettingField {
+                                    organization_override: None,
+                                    json_path: Some("terminal.shell.title_override"),
+                                    pick: |settings_content| match settings_content
                                         .terminal
                                         .as_ref()?
                                         .project
-                                        .working_directory
-                                        .as_ref()?
-                                        .discriminant() as usize
-                                ])
+                                        .shell
+                                        .as_ref()
+                                    {
+                                        Some(settings::Shell::WithArguments {
+                                            title_override,
+                                            ..
+                                        }) => title_override.as_ref().or(DEFAULT_EMPTY_STRING),
+                                        _ => None,
+                                    },
+                                    write: |settings_content, value, _| match settings_content
+                                        .terminal
+                                        .get_or_insert_default()
+                                        .project
+                                        .shell
+                                        .as_mut()
+                                    {
+                                        Some(settings::Shell::WithArguments {
+                                            title_override,
+                                            ..
+                                        }) => *title_override = value.filter(|s| !s.is_empty()),
+                                        _ => return,
+                                    },
+                                }),
+                                metadata: None,
                             },
-                            write: |settings_content, value, _| {
-                                let Some(value) = value else {
-                                    if let Some(terminal) = settings_content.terminal.as_mut() {
-                                        terminal.project.working_directory = None;
-                                    }
-                                    return;
-                                };
-                                let settings_value = settings_content
+                        ],
+                    })
+                    .collect(),
+            }),
+            SettingsPageItem::DynamicItem(DynamicItem {
+                discriminant: SettingItem {
+                    files: USER | PROJECT,
+                    title: i18n::t!("3db7b06b5f6de0e0"),
+                    description: i18n::t!("8aaf537636a72b64"),
+                    field: Box::new(SettingField {
+                        organization_override: None,
+                        json_path: Some("terminal.working_directory$"),
+                        pick: |settings_content| {
+                            Some(
+                                &dynamic_variants::<settings::WorkingDirectory>()[settings_content
                                     .terminal
-                                    .get_or_insert_default()
+                                    .as_ref()?
                                     .project
                                     .working_directory
-                                    .get_or_insert_with(|| settings::WorkingDirectory::CurrentProjectDirectory);
-                                *settings_value = match value {
+                                    .as_ref()?
+                                    .discriminant()
+                                    as usize],
+                            )
+                        },
+                        write: |settings_content, value, _| {
+                            let Some(value) = value else {
+                                if let Some(terminal) = settings_content.terminal.as_mut() {
+                                    terminal.project.working_directory = None;
+                                }
+                                return;
+                            };
+                            let settings_value = settings_content
+                                .terminal
+                                .get_or_insert_default()
+                                .project
+                                .working_directory
+                                .get_or_insert_with(|| {
+                                    settings::WorkingDirectory::CurrentProjectDirectory
+                                });
+                            *settings_value = match value {
                                     settings::WorkingDirectoryDiscriminants::CurrentFileDirectory => {
                                         settings::WorkingDirectory::CurrentFileDirectory
                                     },
@@ -7393,107 +8083,128 @@ fn terminal_page() -> SettingsPage {
                                         settings::WorkingDirectory::Always { directory }
                                     }
                                 };
-                            },
-                        }),
-                        metadata: None,
-                    },
-                    pick_discriminant: |settings_content| {
-                        Some(
+                        },
+                    }),
+                    metadata: None,
+                },
+                pick_discriminant: |settings_content| {
+                    Some(
+                        settings_content
+                            .terminal
+                            .as_ref()?
+                            .project
+                            .working_directory
+                            .as_ref()?
+                            .discriminant() as usize,
+                    )
+                },
+                fields: dynamic_variants::<settings::WorkingDirectory>()
+                    .into_iter()
+                    .map(|variant| match variant {
+                        settings::WorkingDirectoryDiscriminants::CurrentFileDirectory => vec![],
+                        settings::WorkingDirectoryDiscriminants::CurrentProjectDirectory => vec![],
+                        settings::WorkingDirectoryDiscriminants::FirstProjectDirectory => vec![],
+                        settings::WorkingDirectoryDiscriminants::AlwaysHome => vec![],
+                        settings::WorkingDirectoryDiscriminants::Always => vec![SettingItem {
+                            files: USER | PROJECT,
+                            title: i18n::t!("52daa71ebc310581"),
+                            description: i18n::t!("0cb9d3da5aa05987"),
+                            field: Box::new(SettingField {
+                                organization_override: None,
+                                json_path: Some("terminal.working_directory.always"),
+                                pick: |settings_content| match settings_content
+                                    .terminal
+                                    .as_ref()?
+                                    .project
+                                    .working_directory
+                                    .as_ref()
+                                {
+                                    Some(settings::WorkingDirectory::Always { directory }) => {
+                                        Some(directory)
+                                    }
+                                    _ => None,
+                                },
+                                write: |settings_content, value, _| {
+                                    let value = value.unwrap_or_default();
+                                    match settings_content
+                                        .terminal
+                                        .get_or_insert_default()
+                                        .project
+                                        .working_directory
+                                        .as_mut()
+                                    {
+                                        Some(settings::WorkingDirectory::Always { directory }) => {
+                                            *directory = value
+                                        }
+                                        _ => return,
+                                    }
+                                },
+                            }),
+                            metadata: None,
+                        }],
+                    })
+                    .collect(),
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: i18n::t!("ae27b474ea4d6ee6"),
+                description: i18n::t!("b71e9c60d83925ac"),
+                field: Box::new(
+                    SettingField {
+                        organization_override: None,
+                        json_path: Some("terminal.env"),
+                        pick: |settings_content| {
+                            settings_content.terminal.as_ref()?.project.env.as_ref()
+                        },
+                        write: |settings_content, value, _| {
+                            settings_content
+                                .terminal
+                                .get_or_insert_default()
+                                .project
+                                .env = value;
+                        },
+                    }
+                    .unimplemented(),
+                ),
+                metadata: None,
+                files: USER | PROJECT,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: i18n::t!("06c1aca06a1a9c16"),
+                description: i18n::t!("f0bbe114c1db38e0"),
+                field: Box::new(
+                    SettingField {
+                        organization_override: None,
+                        json_path: Some("terminal.detect_venv"),
+                        pick: |settings_content| {
                             settings_content
                                 .terminal
                                 .as_ref()?
                                 .project
-                                .working_directory
-                                .as_ref()?
-                                .discriminant() as usize,
-                        )
-                    },
-                    fields: dynamic_variants::<settings::WorkingDirectory>()
-                        .into_iter()
-                        .map(|variant| match variant {
-                            settings::WorkingDirectoryDiscriminants::CurrentFileDirectory => vec![],
-                            settings::WorkingDirectoryDiscriminants::CurrentProjectDirectory => vec![],
-                            settings::WorkingDirectoryDiscriminants::FirstProjectDirectory => vec![],
-                            settings::WorkingDirectoryDiscriminants::AlwaysHome => vec![],
-                            settings::WorkingDirectoryDiscriminants::Always => vec![SettingItem {
-                                files: USER | PROJECT,
-                                title: "Directory",
-                                description: "The directory path to use (will be shell expanded).",
-                                field: Box::new(SettingField {
-                                    organization_override: None,
-                                    json_path: Some("terminal.working_directory.always"),
-                                    pick: |settings_content| {
-                                        match settings_content.terminal.as_ref()?.project.working_directory.as_ref() {
-                                            Some(settings::WorkingDirectory::Always { directory }) => Some(directory),
-                                            _ => None,
-                                        }
-                                    },
-                                    write: |settings_content, value, _| {
-                                        let value = value.unwrap_or_default();
-                                        match settings_content
-                                            .terminal
-                                            .get_or_insert_default()
-                                            .project
-                                            .working_directory
-                                            .as_mut()
-                                        {
-                                            Some(settings::WorkingDirectory::Always { directory }) => *directory = value,
-                                            _ => return,
-                                        }
-                                    },
-                                }),
-                                metadata: None,
-                            }],
-                        })
-                        .collect(),
-                }),
-                SettingsPageItem::SettingItem(SettingItem {
-                    title: "Environment Variables",
-                    description: "Key-value pairs to add to the terminal's environment.",
-                    field: Box::new(
-                        SettingField {
-                            organization_override: None,
-                            json_path: Some("terminal.env"),
-                            pick: |settings_content| settings_content.terminal.as_ref()?.project.env.as_ref(),
-                            write: |settings_content, value, _| {
-                                settings_content.terminal.get_or_insert_default().project.env = value;
-                            },
-                        }
-                        .unimplemented(),
-                    ),
-                    metadata: None,
-                    files: USER | PROJECT,
-                }),
-                SettingsPageItem::SettingItem(SettingItem {
-                    title: "Detect Virtual Environment",
-                    description: "Activates the Python virtual environment, if one is found, in the terminal's working directory.",
-                    field: Box::new(
-                        SettingField {
-                            organization_override: None,
-                            json_path: Some("terminal.detect_venv"),
-                            pick: |settings_content| settings_content.terminal.as_ref()?.project.detect_venv.as_ref(),
-                            write: |settings_content, value, _| {
-                                settings_content
-                                    .terminal
-                                    .get_or_insert_default()
-                                    .project
-                                    .detect_venv = value;
-                            },
-                        }
-                        .unimplemented(),
-                    ),
-                    metadata: None,
-                    files: USER | PROJECT,
-                }),
-            ]
+                                .detect_venv
+                                .as_ref()
+                        },
+                        write: |settings_content, value, _| {
+                            settings_content
+                                .terminal
+                                .get_or_insert_default()
+                                .project
+                                .detect_venv = value;
+                        },
+                    }
+                    .unimplemented(),
+                ),
+                metadata: None,
+                files: USER | PROJECT,
+            }),
+        ]
     }
 
     fn font_section() -> [SettingsPageItem; 6] {
         [
             SettingsPageItem::SectionHeader("Font"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Font Size",
-                description: "Font size for terminal text. If not set, defaults to buffer font size.",
+                title: i18n::t!("0c30c37c6ead953b"),
+                description: i18n::t!("2ef749159c9477c1"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.font_size"),
@@ -7512,8 +8223,8 @@ fn terminal_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Font Family",
-                description: "Font family for terminal text. If not set, defaults to buffer font family.",
+                title: i18n::t!("078838da4218490b"),
+                description: i18n::t!("ef4960f417a6aef7"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.font_family"),
@@ -7535,8 +8246,8 @@ fn terminal_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Font Fallbacks",
-                description: "Font fallbacks for terminal text. If not set, defaults to buffer font fallbacks.",
+                title: i18n::t!("e037c3476fcbc213"),
+                description: i18n::t!("c80d7075ff6299cd"),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -7561,8 +8272,8 @@ fn terminal_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Font Weight",
-                description: "Font weight for terminal text in CSS weight units (100-900).",
+                title: i18n::t!("db0c79d9d7d6c577"),
+                description: i18n::t!("c9b5d2c5547ae26d"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.font_weight"),
@@ -7580,8 +8291,8 @@ fn terminal_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Font Features",
-                description: "Font features for terminal text.",
+                title: i18n::t!("cf2674acf2bbad54"),
+                description: i18n::t!("63c434526f4662b0"),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -7612,8 +8323,8 @@ fn terminal_page() -> SettingsPage {
         [
             SettingsPageItem::SectionHeader("Display Settings"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Line Height",
-                description: "Line height for terminal text.",
+                title: i18n::t!("6b44b7ba432abf47"),
+                description: i18n::t!("1648db4664860e2d"),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -7634,8 +8345,8 @@ fn terminal_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Cursor Shape",
-                description: "Default cursor shape for the terminal (bar, block, underline, or hollow).",
+                title: i18n::t!("98ec5a07a6ee6050"),
+                description: i18n::t!("6263f867863ca78f"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.cursor_shape"),
@@ -7653,8 +8364,8 @@ fn terminal_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Cursor Blinking",
-                description: "Sets the cursor blinking behavior in the terminal.",
+                title: i18n::t!("9342b40e1c885cee"),
+                description: i18n::t!("456ec0e3f9555db9"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.blinking"),
@@ -7667,8 +8378,8 @@ fn terminal_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Alternate Scroll",
-                description: "Whether alternate scroll mode is active by default (converts mouse scroll to arrow keys in apps like Vim).",
+                title: i18n::t!("7083b782cefe7a44"),
+                description: i18n::t!("15e5f96ba2225dec"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.alternate_scroll"),
@@ -7690,8 +8401,8 @@ fn terminal_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Minimum Contrast",
-                description: "The minimum APCA perceptual contrast between foreground and background colors (0-106).",
+                title: i18n::t!("4d880ba1b2d6976c"),
+                description: i18n::t!("d1f168ee46f4af26"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.minimum_contrast"),
@@ -7717,10 +8428,10 @@ fn terminal_page() -> SettingsPage {
 
     fn behavior_settings_section() -> [SettingsPageItem; 6] {
         [
-            SettingsPageItem::SectionHeader("Behavior Settings"),
+            SettingsPageItem::SectionHeader(i18n::t!("865b5c594bca761b")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Option As Meta",
-                description: "Whether the option key behaves as the meta key.",
+                title: i18n::t!("77c9b917a55647e8"),
+                description: i18n::t!("96fd7000e41a2ab0"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.option_as_meta"),
@@ -7738,8 +8449,8 @@ fn terminal_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Copy On Select",
-                description: "Whether selecting text in the terminal automatically copies to the system clipboard.",
+                title: i18n::t!("082f4459ba955599"),
+                description: i18n::t!("e67f8c328cbe6ed5"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.copy_on_select"),
@@ -7757,8 +8468,8 @@ fn terminal_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Keep Selection On Copy",
-                description: "Whether to keep the text selection after copying it to the clipboard.",
+                title: i18n::t!("a7d13e4290ceda8a"),
+                description: i18n::t!("5579f7ed989b9b21"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.keep_selection_on_copy"),
@@ -7780,8 +8491,8 @@ fn terminal_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Open Links In Mouse Mode",
-                description: "Whether cmd-click (ctrl-click on Linux and Windows) opens hyperlinks even when the terminal application has enabled mouse reporting. When disabled, these clicks are forwarded to the application; links can still be opened with shift-cmd-click.",
+                title: i18n::t!("cb93cdcdc0b4124b"),
+                description: i18n::t!("7c64bd1a094d391f"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.open_links_in_mouse_mode"),
@@ -7803,8 +8514,8 @@ fn terminal_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Audible Bell",
-                description: "Whether to play a sound when the BEL character (`\\a`, `0x07`) is printed",
+                title: i18n::t!("fd1eae3f0f49ff87"),
+                description: i18n::t!("52bff65cee92e46c"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.bell"),
@@ -7821,10 +8532,10 @@ fn terminal_page() -> SettingsPage {
 
     fn layout_settings_section() -> [SettingsPageItem; 3] {
         [
-            SettingsPageItem::SectionHeader("Layout Settings"),
+            SettingsPageItem::SectionHeader(i18n::t!("c27e95dbdcae100d")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Default Width",
-                description: "Default width when the terminal is docked to the left or right (in pixels).",
+                title: i18n::t!("5d9918272ebc486a"),
+                description: i18n::t!("922f474db6ca149c"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.default_width"),
@@ -7842,8 +8553,8 @@ fn terminal_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Default Height",
-                description: "Default height when the terminal is docked to the bottom (in pixels).",
+                title: i18n::t!("3bd02fe3c0363409"),
+                description: i18n::t!("614f418b6c3a1e9a"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.default_height"),
@@ -7865,10 +8576,10 @@ fn terminal_page() -> SettingsPage {
 
     fn advanced_settings_section() -> [SettingsPageItem; 3] {
         [
-            SettingsPageItem::SectionHeader("Advanced Settings"),
+            SettingsPageItem::SectionHeader(i18n::t!("44455611b9108b91")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Max Scroll History Lines",
-                description: "Maximum number of lines to keep in scrollback history (max: 100,000; 0 disables scrolling).",
+                title: i18n::t!("5a2766516b0c64ee"),
+                description: i18n::t!("01351f7658584678"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.max_scroll_history_lines"),
@@ -7890,8 +8601,8 @@ fn terminal_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Scroll Multiplier",
-                description: "The multiplier for scrolling in the terminal with the mouse wheel",
+                title: i18n::t!("8f04460e874acb5e"),
+                description: i18n::t!("28771ac11b886532"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.scroll_multiplier"),
@@ -7917,10 +8628,10 @@ fn terminal_page() -> SettingsPage {
 
     fn toolbar_section() -> [SettingsPageItem; 2] {
         [
-            SettingsPageItem::SectionHeader("Toolbar"),
+            SettingsPageItem::SectionHeader(i18n::t!("3166d8af51f15eb6")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Breadcrumbs",
-                description: "Display the terminal title in breadcrumbs inside the terminal pane.",
+                title: i18n::t!("6c3f7b6a12a97468"),
+                description: i18n::t!("f441673b0faef4ec"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.toolbar.breadcrumbs"),
@@ -7950,10 +8661,10 @@ fn terminal_page() -> SettingsPage {
 
     fn scrollbar_section() -> [SettingsPageItem; 2] {
         [
-            SettingsPageItem::SectionHeader("Scrollbar"),
+            SettingsPageItem::SectionHeader(i18n::t!("53bcc015611bb7fa")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Show Scrollbar",
-                description: "When to show the scrollbar in the terminal.",
+                title: i18n::t!("c647d06905390229"),
+                description: i18n::t!("5d69e690433ba672"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.scrollbar.show"),
@@ -7984,7 +8695,7 @@ fn terminal_page() -> SettingsPage {
     }
 
     SettingsPage {
-        title: "Terminal",
+        title: i18n::t!("e2a76ef1f12e147f"),
         items: concat_sections![
             environment_section(),
             font_section(),
@@ -8001,12 +8712,12 @@ fn terminal_page() -> SettingsPage {
 fn version_control_page() -> SettingsPage {
     fn git_integration_section() -> [SettingsPageItem; 2] {
         [
-            SettingsPageItem::SectionHeader("Git Integration"),
+            SettingsPageItem::SectionHeader(i18n::t!("53191ac96b572350")),
             SettingsPageItem::DynamicItem(DynamicItem {
                 discriminant: SettingItem {
                     files: USER,
-                    title: "Disable Git Integration",
-                    description: "Disable all Git integration features in Zed.",
+                    title: i18n::t!("6b116198324968d2"),
+                    description: i18n::t!("feb1e5889907f8f0"),
                     field: Box::new(SettingField::<bool> {
                         organization_override: None,
                         json_path: Some("git.disable_git"),
@@ -8045,8 +8756,8 @@ fn version_control_page() -> SettingsPage {
                     vec![
                         SettingItem {
                             files: USER,
-                            title: "Enable Git Status",
-                            description: "Show Git status information in the editor.",
+                            title: i18n::t!("a50f2d9ab0491514"),
+                            description: i18n::t!("217ba1f1299a6685"),
                             field: Box::new(SettingField::<bool> {
                                 organization_override: None,
                                 json_path: Some("git.enable_status"),
@@ -8072,8 +8783,8 @@ fn version_control_page() -> SettingsPage {
                         },
                         SettingItem {
                             files: USER,
-                            title: "Enable Git Diff",
-                            description: "Show Git diff information in the editor.",
+                            title: i18n::t!("6059874f6c760f94"),
+                            description: i18n::t!("f6eb32b31f2ee2a2"),
                             field: Box::new(SettingField::<bool> {
                                 organization_override: None,
                                 json_path: Some("git.enable_diff"),
@@ -8105,10 +8816,10 @@ fn version_control_page() -> SettingsPage {
 
     fn git_gutter_section() -> [SettingsPageItem; 3] {
         [
-            SettingsPageItem::SectionHeader("Git Gutter"),
+            SettingsPageItem::SectionHeader(i18n::t!("3984a1d67996fbf8")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Visibility",
-                description: "Control whether Git status is shown in the editor's gutter.",
+                title: i18n::t!("7e228d4688a260d3"),
+                description: i18n::t!("eed5e57a734c9b34"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git.git_gutter"),
@@ -8122,8 +8833,8 @@ fn version_control_page() -> SettingsPage {
             }),
             // todo(settings_ui): Figure out the right default for this value in default.json
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Debounce",
-                description: "Debounce threshold in milliseconds after which changes are reflected in the Git gutter.",
+                title: i18n::t!("4c4ed8a01ec725eb"),
+                description: i18n::t!("d7848676aa85ee2f"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git.gutter_debounce"),
@@ -8142,11 +8853,11 @@ fn version_control_page() -> SettingsPage {
 
     fn inline_git_blame_section() -> [SettingsPageItem; 6] {
         [
-            SettingsPageItem::SectionHeader("Inline Git Blame"),
+            SettingsPageItem::SectionHeader(i18n::t!("31bf21d98197fb54")),
             SettingsPageItem::DynamicItem(DynamicItem {
                 discriminant: SettingItem {
-                    title: "Enabled",
-                    description: "Whether or not to show Git blame data for the currently focused line.",
+                    title: i18n::t!("f4f0ead1116b5b62"),
+                    description: i18n::t!("2030e4c9853da8f9"),
                     field: Box::new(SettingField {
                         organization_override: None,
                         json_path: Some("git.inline_blame.enabled"),
@@ -8185,8 +8896,8 @@ fn version_control_page() -> SettingsPage {
                 fields: vec![
                     vec![],
                     vec![SettingItem {
-                        title: "Location",
-                        description: "Where to render Git blame when it is enabled.",
+                        title: i18n::t!("1fb4d574da92f1c1"),
+                        description: i18n::t!("486348116120664f"),
                         field: Box::new(SettingField {
                             organization_override: None,
                             json_path: Some("git.inline_blame.location"),
@@ -8214,8 +8925,8 @@ fn version_control_page() -> SettingsPage {
                 ],
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Delay",
-                description: "The delay after which the inline blame information is shown.",
+                title: i18n::t!("18045b8c40f135cd"),
+                description: i18n::t!("71d970a9d5aeb9d6"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git.inline_blame.delay_ms"),
@@ -8241,8 +8952,8 @@ fn version_control_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Padding",
-                description: "Padding between the end of the source line and the start of the inline blame in columns.",
+                title: i18n::t!("c2dc4da52ed35127"),
+                description: i18n::t!("96c537fc1762c357"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git.inline_blame.padding"),
@@ -8268,8 +8979,8 @@ fn version_control_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Minimum Column",
-                description: "The minimum column number at which to show the inline blame information.",
+                title: i18n::t!("dce0114c58004cf4"),
+                description: i18n::t!("a28adc541ec7f198"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git.inline_blame.min_column"),
@@ -8295,8 +9006,8 @@ fn version_control_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Show Commit Summary",
-                description: "Show commit summary as part of the inline blame.",
+                title: i18n::t!("afc7a9c4d858fc42"),
+                description: i18n::t!("9848898abbe8b4e5"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git.inline_blame.show_commit_summary"),
@@ -8326,10 +9037,10 @@ fn version_control_page() -> SettingsPage {
 
     fn git_blame_view_section() -> [SettingsPageItem; 2] {
         [
-            SettingsPageItem::SectionHeader("Git Blame View"),
+            SettingsPageItem::SectionHeader(i18n::t!("db4c94b7360c48bb")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Show Avatar",
-                description: "Show the avatar of the author of the commit.",
+                title: i18n::t!("02a53df5f4003a89"),
+                description: i18n::t!("a9fc4fd93ec04f63"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git.blame.show_avatar"),
@@ -8359,10 +9070,10 @@ fn version_control_page() -> SettingsPage {
 
     fn branch_picker_section() -> [SettingsPageItem; 2] {
         [
-            SettingsPageItem::SectionHeader("Branch Picker"),
+            SettingsPageItem::SectionHeader(i18n::t!("c8dd9a8ccc750a2c")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Show Author Name",
-                description: "Show author name as part of the commit information in branch picker.",
+                title: i18n::t!("94eb0eb869e5c0ac"),
+                description: i18n::t!("1c532c24fea5fbb8"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git.branch_picker.show_author_name"),
@@ -8392,10 +9103,10 @@ fn version_control_page() -> SettingsPage {
 
     fn git_hunks_section() -> [SettingsPageItem; 5] {
         [
-            SettingsPageItem::SectionHeader("Git Hunks"),
+            SettingsPageItem::SectionHeader(i18n::t!("fb48af6f4dbc580d")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Hunk Style",
-                description: "How Git hunks are displayed visually in the editor.",
+                title: i18n::t!("8f82ddc193d62cac"),
+                description: i18n::t!("f0c563dbe81999c0"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git.hunk_style"),
@@ -8408,8 +9119,8 @@ fn version_control_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Diff Base",
-                description: "Whether git features show changes relative to HEAD (uncommitted changes) or to the default branch (all changes on the current branch).",
+                title: i18n::t!("4d49cbee517ccf9b"),
+                description: i18n::t!("ac546edaf7f55b98"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git.diff_base"),
@@ -8422,8 +9133,8 @@ fn version_control_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Path Style",
-                description: "Should the name or path be displayed first in the git view.",
+                title: i18n::t!("1148ddeaf12dc80d"),
+                description: i18n::t!("6a2c48aa52d4eea0"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git.path_style"),
@@ -8436,8 +9147,8 @@ fn version_control_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Show Stage/Restore Buttons",
-                description: "Whether to show the stage and restore buttons on diff hunks.",
+                title: i18n::t!("ae66b438017feae4"),
+                description: i18n::t!("3561987887316114"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git.show_stage_restore_buttons"),
@@ -8463,10 +9174,10 @@ fn version_control_page() -> SettingsPage {
 
     fn file_diff_section() -> [SettingsPageItem; 2] {
         [
-            SettingsPageItem::SectionHeader("File Diff"),
+            SettingsPageItem::SectionHeader(i18n::t!("8764e343564f13ef")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Show Full File by Default",
-                description: "Whether newly opened file diffs show the full file instead of changes only.",
+                title: i18n::t!("62b34050692a4c7d"),
+                description: i18n::t!("be7c7ae7b1f367c9"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git.file_diff.show_full_file"),
@@ -8495,7 +9206,7 @@ fn version_control_page() -> SettingsPage {
     }
 
     SettingsPage {
-        title: "Version Control",
+        title: i18n::t!("c031c36068c60f86"),
         items: concat_sections![
             git_integration_section(),
             git_gutter_section(),
@@ -8511,10 +9222,10 @@ fn version_control_page() -> SettingsPage {
 fn collaboration_page() -> SettingsPage {
     fn calls_section() -> [SettingsPageItem; 3] {
         [
-            SettingsPageItem::SectionHeader("Calls"),
+            SettingsPageItem::SectionHeader(i18n::t!("3d5b23d1a15d06ae")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Mute On Join",
-                description: "Whether the microphone should be muted when joining a channel or a call.",
+                title: i18n::t!("085564ed766f1f44"),
+                description: i18n::t!("cb48f988cd1c815d"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("calls.mute_on_join"),
@@ -8527,8 +9238,8 @@ fn collaboration_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Share On Join",
-                description: "Whether your current project should be shared when joining an empty channel.",
+                title: i18n::t!("11ec5eeb88d7fe0d"),
+                description: i18n::t!("929e7e972cefac04"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("calls.share_on_join"),
@@ -8548,17 +9259,17 @@ fn collaboration_page() -> SettingsPage {
     fn audio_settings() -> [SettingsPageItem; 3] {
         [
             SettingsPageItem::ActionLink(ActionLink {
-                title: "Test Audio".into(),
-                description: Some("Test your microphone and speaker setup".into()),
-                button_text: "Test Audio".into(),
+                title: i18n::t!("dd1df075f74320a4").into(),
+                description: Some(i18n::t!("fe80e6f484586b90").into()),
+                button_text: i18n::t!("dd1df075f74320a4").into(),
                 on_click: Arc::new(|_settings_window, window, cx| {
                     open_audio_test_window(window, cx);
                 }),
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Output Audio Device",
-                description: "Select output audio device",
+                title: i18n::t!("b79205ef8c43a49f"),
+                description: i18n::t!("129ba95513bb085d"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("audio.experimental.output_audio_device"),
@@ -8581,8 +9292,8 @@ fn collaboration_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Input Audio Device",
-                description: "Select input audio device",
+                title: i18n::t!("807d643aff00b6be"),
+                description: i18n::t!("92ca34ff34daf687"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("audio.experimental.input_audio_device"),
@@ -8608,18 +9319,217 @@ fn collaboration_page() -> SettingsPage {
     }
 
     SettingsPage {
-        title: "Collaboration",
+        title: i18n::t!("19bf536853e2e78a"),
         items: concat_sections![calls_section(), audio_settings()],
     }
+}
+
+fn code_explanations_section() -> [SettingsPageItem; 12] {
+    [
+        SettingsPageItem::SectionHeader(i18n::t!("16ece1acc00be44a")),
+        SettingsPageItem::SettingItem(SettingItem {
+            title: i18n::t!("24453781bc0e3043"),
+            description: i18n::t!("639e8d4930fd5c4a"),
+            field: Box::new(SettingField {
+                organization_override: None,
+                json_path: Some("code_explanations.target_language"),
+                pick: |content| content.code_explanations.as_ref()?.target_language.as_ref(),
+                write: |content, value, _| {
+                    content
+                        .code_explanations
+                        .get_or_insert_default()
+                        .target_language = value
+                },
+            }),
+            metadata: None,
+            files: USER,
+        }),
+        SettingsPageItem::SettingItem(SettingItem {
+            title: i18n::t!("4abe198a7a3869f5"),
+            description: i18n::t!("359c97c1f596e474"),
+            field: Box::new(SettingField {
+                organization_override: None,
+                json_path: Some("code_explanations.provider"),
+                pick: |content| content.code_explanations.as_ref()?.provider.as_ref(),
+                write: |content, value, _| {
+                    content.code_explanations.get_or_insert_default().provider = value
+                },
+            }),
+            metadata: None,
+            files: USER,
+        }),
+        SettingsPageItem::SettingItem(SettingItem {
+            title: i18n::t!("0f16310584adb487"),
+            description: i18n::t!("914e936b494e5a19"),
+            field: Box::new(SettingField {
+                organization_override: None,
+                json_path: Some("code_explanations.model"),
+                pick: |content| content.code_explanations.as_ref()?.model.as_ref(),
+                write: |content, value, _| {
+                    content.code_explanations.get_or_insert_default().model = value
+                },
+            }),
+            metadata: None,
+            files: USER,
+        }),
+        SettingsPageItem::SettingItem(SettingItem {
+            title: i18n::t!("1af345c17ce268f1"),
+            description: i18n::t!("109a36df07e8642e"),
+            field: Box::new(SettingField {
+                organization_override: None,
+                json_path: Some("code_explanations.prefer_existing_comments"),
+                pick: |content| {
+                    content
+                        .code_explanations
+                        .as_ref()?
+                        .prefer_existing_comments
+                        .as_ref()
+                },
+                write: |content, value, _| {
+                    content
+                        .code_explanations
+                        .get_or_insert_default()
+                        .prefer_existing_comments = value
+                },
+            }),
+            metadata: None,
+            files: USER,
+        }),
+        SettingsPageItem::SettingItem(SettingItem {
+            title: i18n::t!("087e804ea52c252b"),
+            description: i18n::t!("581a074491460678"),
+            field: Box::new(SettingField {
+                organization_override: None,
+                json_path: Some("code_explanations.cache_persist"),
+                pick: |content| content.code_explanations.as_ref()?.cache_persist.as_ref(),
+                write: |content, value, _| {
+                    content
+                        .code_explanations
+                        .get_or_insert_default()
+                        .cache_persist = value
+                },
+            }),
+            metadata: None,
+            files: USER,
+        }),
+        SettingsPageItem::SettingItem(SettingItem {
+            title: i18n::t!("bfc1d294381c8179"),
+            description: i18n::t!("62704fe91d7b2afb"),
+            field: Box::new(SettingField {
+                organization_override: None,
+                json_path: Some("code_explanations.cache_max_bytes"),
+                pick: |content| content.code_explanations.as_ref()?.cache_max_bytes.as_ref(),
+                write: |content, value, _| {
+                    content
+                        .code_explanations
+                        .get_or_insert_default()
+                        .cache_max_bytes = value
+                },
+            }),
+            metadata: None,
+            files: USER,
+        }),
+        SettingsPageItem::SettingItem(SettingItem {
+            title: i18n::t!("769a2f0db1f64f03"),
+            description: i18n::t!("9f5eee44d146b69a"),
+            field: Box::new(SettingField {
+                organization_override: None,
+                json_path: Some("code_explanations.enabled"),
+                pick: |content| content.code_explanations.as_ref()?.enabled.as_ref(),
+                write: |content, value, _| {
+                    content.code_explanations.get_or_insert_default().enabled = value
+                },
+            }),
+            metadata: None,
+            files: USER,
+        }),
+        SettingsPageItem::SettingItem(SettingItem {
+            title: i18n::t!("4b3c79c7aec094b4"),
+            description: i18n::t!("d261d83a4133f761"),
+            field: Box::new(SettingField {
+                organization_override: None,
+                json_path: Some("code_explanations.max_function_lines"),
+                pick: |content| {
+                    content
+                        .code_explanations
+                        .as_ref()?
+                        .max_function_lines
+                        .as_ref()
+                },
+                write: |content, value, _| {
+                    content
+                        .code_explanations
+                        .get_or_insert_default()
+                        .max_function_lines = value
+                },
+            }),
+            metadata: None,
+            files: USER,
+        }),
+        SettingsPageItem::SettingItem(SettingItem {
+            title: i18n::t!("babef8581dfa7e5a"),
+            description: i18n::t!("c96216bcfe43bca0"),
+            field: Box::new(SettingField {
+                organization_override: None,
+                json_path: Some("code_explanations.max_concurrent_requests"),
+                pick: |content| {
+                    content
+                        .code_explanations
+                        .as_ref()?
+                        .max_concurrent_requests
+                        .as_ref()
+                },
+                write: |content, value, _| {
+                    content
+                        .code_explanations
+                        .get_or_insert_default()
+                        .max_concurrent_requests = value
+                },
+            }),
+            metadata: None,
+            files: USER,
+        }),
+        SettingsPageItem::SettingItem(SettingItem {
+            title: i18n::t!("e1b59b01297f7af0"),
+            description: i18n::t!("d94b0ed7d0b5b021"),
+            field: Box::new(SettingField {
+                organization_override: None,
+                json_path: Some("code_explanations.preload_lines"),
+                pick: |content| content.code_explanations.as_ref()?.preload_lines.as_ref(),
+                write: |content, value, _| {
+                    content
+                        .code_explanations
+                        .get_or_insert_default()
+                        .preload_lines = value
+                },
+            }),
+            metadata: None,
+            files: USER,
+        }),
+        SettingsPageItem::SettingItem(SettingItem {
+            title: i18n::t!("d8f750ac52b2f47b"),
+            description: i18n::t!("b0105a23c91e5905"),
+            field: Box::new(SettingField {
+                organization_override: None,
+                json_path: Some("code_explanations.detailed"),
+                pick: |content| content.code_explanations.as_ref()?.detailed.as_ref(),
+                write: |content, value, _| {
+                    content.code_explanations.get_or_insert_default().detailed = value
+                },
+            }),
+            metadata: None,
+            files: USER,
+        }),
+    ]
 }
 
 fn ai_page(cx: &App) -> SettingsPage {
     fn general_section() -> [SettingsPageItem; 8] {
         [
-            SettingsPageItem::SectionHeader("General"),
+            SettingsPageItem::SectionHeader(i18n::t!("692873ddd8f40e66")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Disable AI",
-                description: "Whether to disable all AI features in Zed.",
+                title: i18n::t!("af571f248d7bf8f8"),
+                description: i18n::t!("9b246e4584710db1"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("disable_ai"),
@@ -8632,8 +9542,8 @@ fn ai_page(cx: &App) -> SettingsPage {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Threads Sidebar Position",
-                description: "Which side of the window the Threads Sidebar appears on.",
+                title: i18n::t!("86837a4449e60b81"),
+                description: i18n::t!("53374aa15301e281"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("agent.threads_sidebar.position"),
@@ -8657,8 +9567,8 @@ fn ai_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Threads Sidebar Default Width",
-                description: "Default width of the Threads Sidebar. Changing this setting also updates a manually resized sidebar. Double-click the divider to reset to this width.",
+                title: i18n::t!("a8a43ac220365f28"),
+                description: i18n::t!("c598b5661f4eddb4"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("agent.threads_sidebar.default_width"),
@@ -8682,8 +9592,8 @@ fn ai_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Threads Sidebar Auto Open",
-                description: "Whether opening a folder in an existing window automatically opens the Threads Sidebar.",
+                title: i18n::t!("daa5f89292ed82a9"),
+                description: i18n::t!("307b267fe715c9d9"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("agent.threads_sidebar.auto_open"),
@@ -8707,10 +9617,10 @@ fn ai_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SubPageLink(SubPageLink {
-                title: "LLM Providers".into(),
+                title: i18n::t!("1eabe31d01dca963").into(),
                 r#type: Default::default(),
                 json_path: Some("llm_providers"),
-                description: Some("Configure natively-included model providers.".into()),
+                description: Some(i18n::t!("edaa7302dd7d8531").into()),
                 search_aliases: &[
                     "ai",
                     "amazon",
@@ -8742,13 +9652,10 @@ fn ai_page(cx: &App) -> SettingsPage {
                 render: render_llm_providers_page,
             }),
             SettingsPageItem::SubPageLink(SubPageLink {
-                title: "External Agents".into(),
+                title: i18n::t!("8dc040d2283eab03").into(),
                 r#type: Default::default(),
                 json_path: Some("agent_servers"),
-                description: Some(
-                    "View, add, and remove agents connected through the Agent Client Protocol."
-                        .into(),
-                ),
+                description: Some(i18n::t!("735025642c0d702c").into()),
                 search_aliases: &[
                     "acp",
                     "agent client protocol",
@@ -8770,12 +9677,10 @@ fn ai_page(cx: &App) -> SettingsPage {
                 render: render_external_agents_page,
             }),
             SettingsPageItem::SubPageLink(SubPageLink {
-                title: "MCP Servers".into(),
+                title: i18n::t!("a203f86cf6a6a841").into(),
                 r#type: Default::default(),
                 json_path: Some("context_servers"),
-                description: Some(
-                    "View, add, configure, and remove Model Context Protocol servers.".into(),
-                ),
+                description: Some(i18n::t!("02e19b1c0aebe736").into()),
                 search_aliases: &["context server", "mcp", "model context protocol"],
                 in_json: false,
                 files: USER,
@@ -8785,21 +9690,23 @@ fn ai_page(cx: &App) -> SettingsPage {
     }
 
     fn agent_configuration_section(_cx: &App) -> Box<[SettingsPageItem]> {
-        let mut items = vec![SettingsPageItem::SectionHeader("Agent Configuration")];
+        let mut items = vec![SettingsPageItem::SectionHeader(i18n::t!(
+            "9c2a11d4e1c407b6"
+        ))];
 
         items.extend([
             SettingsPageItem::SubPageLink(SubPageLink {
-                title: "Skills".into(),
+                title: i18n::t!("99aea2f9131ad6da").into(),
                 r#type: Default::default(),
                 json_path: Some(zed_actions::AGENT_SKILLS_SETTINGS_PATH),
-                description: Some("View and manage agent skills installed globally or in project worktrees.".into()),
+                description: Some(i18n::t!("f78eaae8d47089bf").into()),
                 search_aliases: &["agent skill", "agent skills", "custom instructions", "skill", "skills"],
                 in_json: false,
                 files: USER | PROJECT,
                 render: render_skills_setup_page,
             }),
             SettingsPageItem::SubPageLink(SubPageLink {
-                title: "Sandbox".into(),
+                title: i18n::t!("05fdf30411d98d32").into(),
                 r#type: Default::default(),
                 json_path: Some(zed_actions::AGENT_SANDBOX_SETTINGS_PATH),
                 description: Some(
@@ -8820,7 +9727,7 @@ fn ai_page(cx: &App) -> SettingsPage {
                 render: render_sandbox_settings_page,
             }),
             SettingsPageItem::SubPageLink(SubPageLink {
-                title: "Tool Permissions".into(),
+                title: i18n::t!("a2b60a34a75b7a8e").into(),
                 r#type: Default::default(),
                 json_path: Some("agent.tool_permissions"),
                 description: Some("Set up regex patterns to auto-allow, auto-deny, or always request confirmation, for specific tool inputs.".into()),
@@ -8833,8 +9740,8 @@ fn ai_page(cx: &App) -> SettingsPage {
 
         items.extend([
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Single File Review",
-                description: "When enabled, agent edits will also be displayed in single-file buffers for review.",
+                title: i18n::t!("315377cc99066a95"),
+                description: i18n::t!("a69260570adcba4f"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("agent.single_file_review"),
@@ -8852,13 +9759,15 @@ fn ai_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Enable Feedback",
-                description: "Show voting thumbs up/down icon buttons for feedback on agent edits.",
+                title: i18n::t!("689723ab0d18014d"),
+                description: i18n::t!("77e583e55fe84b99"),
                 field: Box::new(SettingField {
-                    organization_override: Some(|org_config| if org_config.is_agent_thread_feedback_enabled {
-                        None
-                    } else {
-                        Some(&false)
+                    organization_override: Some(|org_config| {
+                        if org_config.is_agent_thread_feedback_enabled {
+                            None
+                        } else {
+                            Some(&false)
+                        }
                     }),
                     json_path: Some("agent.enable_feedback"),
                     pick: |settings_content| {
@@ -8875,8 +9784,8 @@ fn ai_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Notify When Agent Waiting",
-                description: "Where to show notifications when the agent has completed its response or needs confirmation before running a tool action.",
+                title: i18n::t!("7a5f49b13d03da1b"),
+                description: i18n::t!("0daea386c0e32815"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("agent.notify_when_agent_waiting"),
@@ -8898,8 +9807,8 @@ fn ai_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Play Sound When Agent Done",
-                description: "When to play a sound when the agent has either completed its response, or needs user input.",
+                title: i18n::t!("6d61ab97328dafe5"),
+                description: i18n::t!("957e458af07aae8c"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("agent.play_sound_when_agent_done"),
@@ -8921,8 +9830,8 @@ fn ai_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Prevent Idle Sleep",
-                description: "Whether to keep the system awake while agent threads are running.",
+                title: i18n::t!("05ad0bb85d819ebd"),
+                description: i18n::t!("bfe0ee394bf97fbb"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("agent.prevent_idle_sleep"),
@@ -8940,8 +9849,8 @@ fn ai_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Max Idle Threads",
-                description: "Maximum number of idle agent threads with loadable sessions to keep loaded. When the limit is exceeded, the least recently updated threads are unloaded.",
+                title: i18n::t!("03dff872ae6b9f32"),
+                description: i18n::t!("b7fc5f7fef26f494"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("agent.max_idle_retained_threads"),
@@ -8963,8 +9872,8 @@ fn ai_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Expand Edit Card",
-                description: "Whether to have edit cards in the agent panel expanded, showing a Preview of the diff.",
+                title: i18n::t!("85c01169d106418b"),
+                description: i18n::t!("bb6216a31fbe7b0f"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("agent.expand_edit_card"),
@@ -8982,8 +9891,8 @@ fn ai_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Expand Terminal Card",
-                description: "Whether to have terminal cards in the agent panel expanded, showing the whole command output.",
+                title: i18n::t!("5e55a521541bbcd4"),
+                description: i18n::t!("61a000e3ba751132"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("agent.expand_terminal_card"),
@@ -9005,8 +9914,8 @@ fn ai_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Terminal Thread Init Command",
-                description: "Command to automatically run when Zed creates a Terminal Thread shell in the agent panel. Runs in your configured shell.",
+                title: i18n::t!("1c92a6eafef10588"),
+                description: i18n::t!("d452e3a8e0083b88"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("agent.terminal_init_command"),
@@ -9035,17 +9944,13 @@ fn ai_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Thinking Display",
-                description: "How thinking blocks should be displayed by default. 'Auto' fully expands during streaming, then auto-collapses when done. 'Preview' auto-expands with a height constraint during streaming. 'Always Expanded' shows full content. 'Always Collapsed' keeps them collapsed.",
+                title: i18n::t!("779707adf31b1163"),
+                description: i18n::t!("834115938ff3429d"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("agent.thinking_display"),
                     pick: |settings_content| {
-                        settings_content
-                            .agent
-                            .as_ref()?
-                            .thinking_display
-                            .as_ref()
+                        settings_content.agent.as_ref()?.thinking_display.as_ref()
                     },
                     write: |settings_content, value, _| {
                         settings_content
@@ -9058,8 +9963,8 @@ fn ai_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Cancel Generation On Terminal Stop",
-                description: "Whether clicking the stop button on a running terminal tool should also cancel the agent's generation. Note that this only applies to the stop button, not to ctrl+c inside the terminal.",
+                title: i18n::t!("d4ef5ec56497e679"),
+                description: i18n::t!("ddd5d7e735b037fc"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("agent.cancel_generation_on_terminal_stop"),
@@ -9081,8 +9986,8 @@ fn ai_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Use Modifier To Send",
-                description: "Whether to always use cmd-enter (or ctrl-enter on Linux or Windows) to send messages.",
+                title: i18n::t!("ac5b10d3c5c6b2d8"),
+                description: i18n::t!("c56b9a52913af2a4"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("agent.use_modifier_to_send"),
@@ -9104,8 +10009,8 @@ fn ai_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Message Editor Min Lines",
-                description: "Minimum number of lines to display in the agent message editor.",
+                title: i18n::t!("19785e06a679ca9a"),
+                description: i18n::t!("3047f4cb99c8f4ef"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("agent.message_editor_min_lines"),
@@ -9127,8 +10032,8 @@ fn ai_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Show Turn Stats",
-                description: "Whether to show turn statistics like elapsed time during generation and final turn duration.",
+                title: i18n::t!("b64bafd3eb399704"),
+                description: i18n::t!("5b5a3e6df5c00289"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("agent.show_turn_stats"),
@@ -9146,13 +10051,17 @@ fn ai_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Show Merge Conflict Indicator",
-                description: "Whether to show the merge conflict indicator in the status bar that offers to resolve conflicts using the agent.",
+                title: i18n::t!("f43ccf2b6fc77695"),
+                description: i18n::t!("f74bda4a991e7a67"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("agent.show_merge_conflict_indicator"),
                     pick: |settings_content| {
-                        settings_content.agent.as_ref()?.show_merge_conflict_indicator.as_ref()
+                        settings_content
+                            .agent
+                            .as_ref()?
+                            .show_merge_conflict_indicator
+                            .as_ref()
                     },
                     write: |settings_content, value, _| {
                         settings_content
@@ -9168,8 +10077,8 @@ fn ai_page(cx: &App) -> SettingsPage {
 
         items.extend([
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Auto Compact",
-                description: "Automatically compact the agent's context when it grows too large, summarizing earlier messages to free up room in the model's context window.",
+                title: i18n::t!("5c8f67f0721e29b7"),
+                description: i18n::t!("ad0fb89817253e7b"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("agent.auto_compact.enabled"),
@@ -9195,8 +10104,8 @@ fn ai_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Auto Compact Threshold",
-                description: "When auto compaction runs. A percentage string like \"90%\" is measured against the context window. A positive integer is the number of used tokens to compact after. A negative integer is the number of tokens remaining in the context window before compacting.",
+                title: i18n::t!("87b3056583c36c45"),
+                description: i18n::t!("5c47bd41e0bb805b"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("agent.auto_compact.threshold"),
@@ -9231,8 +10140,8 @@ fn ai_page(cx: &App) -> SettingsPage {
 
     fn edit_prediction_display_sub_section() -> [SettingsPageItem; 1] {
         [SettingsPageItem::SettingItem(SettingItem {
-            title: "Display Mode",
-            description: "When to show edit predictions previews in buffer. The eager mode displays them inline, while the subtle mode displays them only when holding a modifier key.",
+            title: i18n::t!("8b91a131263f2b5f"),
+            description: i18n::t!("0182d67ca14ff066"),
             field: Box::new(SettingField {
                 organization_override: None,
                 json_path: Some("edit_prediction.display_mode"),
@@ -9264,6 +10173,7 @@ fn ai_page(cx: &App) -> SettingsPage {
         items: concat_sections!(
             @vec,
             general_section(),
+            code_explanations_section(),
             agent_configuration_section(cx),
             edit_prediction_language_settings_section(),
             edit_prediction_display_sub_section(),
@@ -9275,10 +10185,10 @@ fn ai_page(cx: &App) -> SettingsPage {
 fn network_page() -> SettingsPage {
     fn network_section() -> [SettingsPageItem; 3] {
         [
-            SettingsPageItem::SectionHeader("Network"),
+            SettingsPageItem::SectionHeader(i18n::t!("97b31b5d63f57e51")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Proxy",
-                description: "The proxy to use for network requests.",
+                title: i18n::t!("5e84ea61e8386af7"),
+                description: i18n::t!("1a0081da0b64c4ef"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("proxy"),
@@ -9294,8 +10204,8 @@ fn network_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Server URL",
-                description: "The URL of the Zed server to connect to.",
+                title: i18n::t!("ee58ddc56a6304aa"),
+                description: i18n::t!("1ae1a9c68224b3bc"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("server_url"),
@@ -9313,9 +10223,31 @@ fn network_page() -> SettingsPage {
         ]
     }
 
+    fn remote_server_section() -> [SettingsPageItem; 2] {
+        [
+            SettingsPageItem::SectionHeader(i18n::t!("9beed95cb3cfacc9")),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: i18n::t!("45507efef78ba917"),
+                description: i18n::t!("bd435dd3a1eee5d7"),
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("china_server_adaptation"),
+                    pick: |settings_content| {
+                        settings_content.remote.china_server_adaptation.as_ref()
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content.remote.china_server_adaptation = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+        ]
+    }
+
     SettingsPage {
-        title: "Network",
-        items: concat_sections![network_section()],
+        title: i18n::t!("97b31b5d63f57e51"),
+        items: concat_sections![network_section(), remote_server_section()],
     }
 }
 
@@ -9357,10 +10289,10 @@ fn language_settings_field_mut<T>(
 fn language_settings_data() -> Box<[SettingsPageItem]> {
     fn indentation_section() -> [SettingsPageItem; 5] {
         [
-            SettingsPageItem::SectionHeader("Indentation"),
+            SettingsPageItem::SectionHeader(i18n::t!("66c740387e6b3827")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Tab Size",
-                description: "How many columns a tab should occupy.",
+                title: i18n::t!("376be073a8d2f506"),
+                description: i18n::t!("2c5a08e1f9cad17e"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).tab_size"), // TODO(cameron): not JQ syntax because not URL-safe
@@ -9379,8 +10311,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Hard Tabs",
-                description: "Whether to indent lines using tab characters, as opposed to multiple spaces.",
+                title: i18n::t!("5cabf599ffe684d7"),
+                description: i18n::t!("3502ed2c29622228"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).hard_tabs"),
@@ -9399,8 +10331,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Auto Indent",
-                description: "Controls automatic indentation behavior when typing.",
+                title: i18n::t!("e5eea15164c04dbe"),
+                description: i18n::t!("ade4f6246c24c68f"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).auto_indent"),
@@ -9419,8 +10351,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Auto Indent On Paste",
-                description: "Whether indentation of pasted content should be adjusted based on the context.",
+                title: i18n::t!("628749307ab6f0b2"),
+                description: i18n::t!("7d67d36f71e22cf9"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).auto_indent_on_paste"),
@@ -9443,10 +10375,10 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
 
     fn wrapping_section() -> [SettingsPageItem; 7] {
         [
-            SettingsPageItem::SectionHeader("Wrapping"),
+            SettingsPageItem::SectionHeader(i18n::t!("bd609a8e2d40f3ef")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Soft Wrap",
-                description: "How to soft-wrap long lines of text.",
+                title: i18n::t!("77a01689bd6dd157"),
+                description: i18n::t!("520243f8eebe1c73"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).soft_wrap"),
@@ -9465,8 +10397,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Soft Wrap Indent",
-                description: "How to indent soft-wrapped lines.",
+                title: i18n::t!("70700ef73581f803"),
+                description: i18n::t!("e25b84764e5405df"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).soft_wrap_indent"),
@@ -9485,8 +10417,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Show Wrap Guides",
-                description: "Show wrap guides in the editor.",
+                title: i18n::t!("a422942fcc4a0141"),
+                description: i18n::t!("4bd0a2995869f353"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).show_wrap_guides"),
@@ -9505,8 +10437,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Preferred Line Length",
-                description: "The column at which to soft-wrap lines, for buffers where soft-wrap is enabled.",
+                title: i18n::t!("b5b9d9cd79c0285e"),
+                description: i18n::t!("6315dab1c7efb456"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).preferred_line_length"),
@@ -9525,8 +10457,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Wrap Guides",
-                description: "Character counts at which to show wrap guides in the editor.",
+                title: i18n::t!("66a6577105c54d61"),
+                description: i18n::t!("23a9b0556f89d830"),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -9552,8 +10484,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Allow Rewrap",
-                description: "Controls where the `editor::rewrap` action is allowed for this language.",
+                title: i18n::t!("286453355ca21440"),
+                description: i18n::t!("70ba715c021d728b"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).allow_rewrap"),
@@ -9576,10 +10508,10 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
 
     fn indent_guides_section() -> [SettingsPageItem; 6] {
         [
-            SettingsPageItem::SectionHeader("Indent Guides"),
+            SettingsPageItem::SectionHeader(i18n::t!("6ad938c8c789f951")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Enabled",
-                description: "Display indent guides in the editor.",
+                title: i18n::t!("dfb802238b38fbd4"),
+                description: i18n::t!("88f25dc7f2c7dcb8"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).indent_guides.enabled"),
@@ -9601,8 +10533,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Line Width",
-                description: "The width of the indent guides in pixels, between 1 and 10.",
+                title: i18n::t!("5eb9f4e84a63fb27"),
+                description: i18n::t!("efab44b0a6db76aa"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).indent_guides.line_width"),
@@ -9624,8 +10556,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Active Line Width",
-                description: "The width of the active indent guide in pixels, between 1 and 10.",
+                title: i18n::t!("62e66562fc72c865"),
+                description: i18n::t!("d987bf8d5c56aa27"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).indent_guides.active_line_width"),
@@ -9650,8 +10582,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Coloring",
-                description: "Determines how indent guides are colored.",
+                title: i18n::t!("7b6fd1f9a75ed3df"),
+                description: i18n::t!("179418cb9bffada7"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).indent_guides.coloring"),
@@ -9673,8 +10605,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Background Coloring",
-                description: "Determines how indent guide backgrounds are colored.",
+                title: i18n::t!("98d41705630f0df5"),
+                description: i18n::t!("7a2d3d2de3ddfd35"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).indent_guides.background_coloring"),
@@ -9704,8 +10636,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
         [
             SettingsPageItem::SectionHeader("Formatting"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Format On Save",
-                description: "On: format the whole buffer.\nOff: do not format.\nModifications: format only lines with unstaged changes; skips formatting when a git diff or LSP range formatting is unavailable.\nModifications If Available: same, but falls back to formatting the whole buffer.",
+                title: i18n::t!("23365ae4886a70f9"),
+                description: i18n::t!("09512500b9f07089"),
                 field: Box::new(
                     // TODO(settings_ui): this setting should just be a bool
                     SettingField {
@@ -9731,8 +10663,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Remove Trailing Whitespace On Save",
-                description: "Whether or not to remove any trailing whitespace from lines of a buffer before saving it.",
+                title: i18n::t!("805a56f2b74ccc0f"),
+                description: i18n::t!("fa0fd2bd3b3b22d6"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).remove_trailing_whitespace_on_save"),
@@ -9751,8 +10683,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Ensure Final Newline On Save",
-                description: "Whether or not to ensure there's a single newline at the end of a buffer when saving it.",
+                title: i18n::t!("49a57e2bed8b3f99"),
+                description: i18n::t!("d205ce1e6cd4951f"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).ensure_final_newline_on_save"),
@@ -9771,8 +10703,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Line Ending",
-                description: "How line endings should be handled for new files and during format and save operations.",
+                title: i18n::t!("58872d8055045153"),
+                description: i18n::t!("19e88cff5b60ca18"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).line_ending"),
@@ -9794,8 +10726,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Formatter",
-                description: "How to perform a buffer format.",
+                title: i18n::t!("1c968521e85255c7"),
+                description: i18n::t!("8762f8c56ce498ef"),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -9821,8 +10753,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Use On Type Format",
-                description: "Whether to use additional LSP queries to format (and amend) the code after every \"trigger\" symbol input, defined by LSP server capabilities",
+                title: i18n::t!("092abf62dce6f65a"),
+                description: i18n::t!("e9542ab8829ac793"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).use_on_type_format"),
@@ -9841,8 +10773,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Code Actions On Format",
-                description: "Additional code actions to run when formatting.",
+                title: i18n::t!("0c258d86ce02f0c8"),
+                description: i18n::t!("f6c37aafa9999a43"),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -9874,8 +10806,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
         [
             SettingsPageItem::SectionHeader("Autoclose"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Use Autoclose",
-                description: "Whether to automatically type closing characters for you. For example, when you type '(', Zed will automatically add a closing ')' at the correct position.",
+                title: i18n::t!("f0a46252de308641"),
+                description: i18n::t!("e0114f0db9a492d9"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).use_autoclose"),
@@ -9894,8 +10826,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Use Auto Surround",
-                description: "Whether to automatically surround text with characters for you. For example, when you select text and type '(', Zed will automatically surround text with ().",
+                title: i18n::t!("83241d462b1e1e1a"),
+                description: i18n::t!("b6118ebe10455abe"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).use_auto_surround"),
@@ -9914,8 +10846,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Always Treat Brackets As Autoclosed",
-                description: "Controls whether the closing characters are always skipped over and auto-removed no matter how they were inserted.",
+                title: i18n::t!("1852cf079a43ef8a"),
+                description: i18n::t!("22bd0a29dfc54759"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).always_treat_brackets_as_autoclosed"),
@@ -9934,8 +10866,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "JSX Tag Auto Close",
-                description: "Whether to automatically close JSX tags.",
+                title: i18n::t!("891d310253e5ab81"),
+                description: i18n::t!("df481f3d759529db"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).jsx_tag_auto_close"),
@@ -9961,8 +10893,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
         [
             SettingsPageItem::SectionHeader("Whitespace"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Show Whitespaces",
-                description: "Whether to show tabs and spaces in the editor.",
+                title: i18n::t!("1439be2bfa25c6d3"),
+                description: i18n::t!("8f0dd8960ea60bca"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).show_whitespaces"),
@@ -9981,8 +10913,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Space Whitespace Indicator",
-                description: "Visible character used to render space characters when show_whitespaces is enabled (default: \"•\")",
+                title: i18n::t!("c14f6dbdc86e4b67"),
+                description: i18n::t!("71e80fe90b03c341"),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -10008,8 +10940,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Tab Whitespace Indicator",
-                description: "Visible character used to render tab characters when show_whitespaces is enabled (default: \"→\")",
+                title: i18n::t!("a5186f4ebfb121a8"),
+                description: i18n::t!("8775903c17a7cfd3"),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -10041,8 +10973,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
         [
             SettingsPageItem::SectionHeader("Completions"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Show Completions On Input",
-                description: "Whether to pop the completions menu while typing in an editor without explicitly requesting it.",
+                title: i18n::t!("0757e1c1af31c04e"),
+                description: i18n::t!("764934dda34bb2ff"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).show_completions_on_input"),
@@ -10061,8 +10993,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Show Completion Documentation",
-                description: "Whether to display inline and alongside documentation for items in the completions menu.",
+                title: i18n::t!("0557a24b555e76d3"),
+                description: i18n::t!("0f386770f5cbee5c"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).show_completion_documentation"),
@@ -10081,8 +11013,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Words",
-                description: "Controls how words are completed.",
+                title: i18n::t!("f3b5980f18ff903e"),
+                description: i18n::t!("efd88b03ff8bfaee"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).completions.words"),
@@ -10101,8 +11033,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Words Min Length",
-                description: "How many characters has to be in the completions query to automatically show the words-based completions.",
+                title: i18n::t!("cbc4c284d1d7f6aa"),
+                description: i18n::t!("8c12d10d54bd0201"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).completions.words_min_length"),
@@ -10124,8 +11056,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Completion Menu Scrollbar",
-                description: "When to show the scrollbar in the completion menu.",
+                title: i18n::t!("5a0fca58e2c4cbe2"),
+                description: i18n::t!("d8a6bab6cfc71d40"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("editor.completion_menu_scrollbar"),
@@ -10140,8 +11072,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Completion Detail Alignment",
-                description: "Whether to align detail text in code completions context menus left or right.",
+                title: i18n::t!("36f0178704be373c"),
+                description: i18n::t!("0c1efa29126e9622"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("editor.completion_detail_alignment"),
@@ -10156,8 +11088,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Completion Menu Item Kind",
-                description: "How to display the LSP item kind (function, method, variable, etc.) of each entry in the completions menu.",
+                title: i18n::t!("b77d7a296775eef2"),
+                description: i18n::t!("ad53f76e20e346d9"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("editor.completion_menu_item_kind"),
@@ -10176,10 +11108,10 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
 
     fn inlay_hints_section() -> [SettingsPageItem; 10] {
         [
-            SettingsPageItem::SectionHeader("Inlay Hints"),
+            SettingsPageItem::SectionHeader(i18n::t!("b3a81b56d7f63e8c")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Enabled",
-                description: "Global switch to toggle hints on and off.",
+                title: i18n::t!("dfb802238b38fbd4"),
+                description: i18n::t!("0f076b5e96f758f0"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).inlay_hints.enabled"),
@@ -10198,8 +11130,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Show Value Hints",
-                description: "Global switch to toggle inline values on and off when debugging.",
+                title: i18n::t!("2ade72ddf164a27f"),
+                description: i18n::t!("4e22635a7b598894"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).inlay_hints.show_value_hints"),
@@ -10221,8 +11153,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Show Type Hints",
-                description: "Whether type hints should be shown.",
+                title: i18n::t!("fdcb0d42c70ccec2"),
+                description: i18n::t!("a9a79f9da735c1d2"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).inlay_hints.show_type_hints"),
@@ -10241,8 +11173,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Show Parameter Hints",
-                description: "Whether parameter hints should be shown.",
+                title: i18n::t!("ef58f97477e750bf"),
+                description: i18n::t!("db287e854fe6cbec"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).inlay_hints.show_parameter_hints"),
@@ -10264,8 +11196,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Show Other Hints",
-                description: "Whether other hints should be shown.",
+                title: i18n::t!("286fa862654bf77c"),
+                description: i18n::t!("38e55af13fd8f0f5"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).inlay_hints.show_other_hints"),
@@ -10287,8 +11219,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Show Background",
-                description: "Show a background for inlay hints.",
+                title: i18n::t!("6a35332ddb66fd7f"),
+                description: i18n::t!("012de2df1b1a314e"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).inlay_hints.show_background"),
@@ -10307,8 +11239,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Edit Debounce Ms",
-                description: "Whether or not to debounce inlay hints updates after buffer edits (set to 0 to disable debouncing).",
+                title: i18n::t!("7eb07228ffa8c4d2"),
+                description: i18n::t!("2250e63535353c83"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).inlay_hints.edit_debounce_ms"),
@@ -10330,8 +11262,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Scroll Debounce Ms",
-                description: "Whether or not to debounce inlay hints updates after buffer scrolls (set to 0 to disable debouncing).",
+                title: i18n::t!("1eb021c2d86389ab"),
+                description: i18n::t!("26215649c4f68872"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).inlay_hints.scroll_debounce_ms"),
@@ -10353,8 +11285,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Toggle On Modifiers Press",
-                description: "Toggles inlay hints (hides or shows) when the user presses the modifiers specified.",
+                title: i18n::t!("246da760a74227b8"),
+                description: i18n::t!("67823628b87ea87d"),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -10393,10 +11325,10 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
 
     fn tasks_section() -> [SettingsPageItem; 4] {
         [
-            SettingsPageItem::SectionHeader("Tasks"),
+            SettingsPageItem::SectionHeader(i18n::t!("5253040db8643c85")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Enabled",
-                description: "Whether tasks are enabled for this language.",
+                title: i18n::t!("dfb802238b38fbd4"),
+                description: i18n::t!("b24886f7f89484fb"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).tasks.enabled"),
@@ -10415,8 +11347,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Variables",
-                description: "Extra task variables to set for a particular language.",
+                title: i18n::t!("a772fa4ebe36b63d"),
+                description: i18n::t!("28f1dd506aac8cd6"),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -10442,8 +11374,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Prefer LSP",
-                description: "Use LSP tasks over Zed language extension tasks.",
+                title: i18n::t!("4c8852ac266ef37c"),
+                description: i18n::t!("8002c8f500d405e9"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).tasks.prefer_lsp"),
@@ -10468,8 +11400,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
         [
             SettingsPageItem::SectionHeader("Miscellaneous"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Language Detection",
-                description: "Whether to enable automatic language detection in unsaved buffers.",
+                title: i18n::t!("bce42437c31f4fc1"),
+                description: i18n::t!("df049040f7a79950"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("language_detection"),
@@ -10482,8 +11414,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Word Diff Enabled",
-                description: "Whether to enable word diff highlighting in the editor. When enabled, changed words within modified lines are highlighted to show exactly what changed.",
+                title: i18n::t!("d3424ce0d61f2b56"),
+                description: i18n::t!("a1f966e1383d34d0"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).word_diff_enabled"),
@@ -10502,8 +11434,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Debuggers",
-                description: "Preferred debuggers for this language.",
+                title: i18n::t!("20fe3f3e72ca01b8"),
+                description: i18n::t!("f2fa43f200fb29e7"),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -10529,8 +11461,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Middle Click Paste",
-                description: "Enable middle-click paste on Linux.",
+                title: i18n::t!("d3f6f1d5395c6598"),
+                description: i18n::t!("be3f033b3c65c38f"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).editor.middle_click_paste"),
@@ -10543,8 +11475,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Extend Comment On Newline",
-                description: "Whether to start a new line with a comment when a previous line is a comment as well.",
+                title: i18n::t!("84e3bc0dad6ccd80"),
+                description: i18n::t!("71cb2ed278dbf919"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).extend_comment_on_newline"),
@@ -10563,8 +11495,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Colorize Brackets",
-                description: "Whether to colorize brackets in the editor.",
+                title: i18n::t!("23b02c2557996c35"),
+                description: i18n::t!("26757e6ec1960e32"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).colorize_brackets"),
@@ -10583,8 +11515,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Vim/Emacs Modeline Support",
-                description: "Number of lines to search for modelines (set to 0 to disable).",
+                title: i18n::t!("27547de3cbac3f79"),
+                description: i18n::t!("d6b404da9277e4ee"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("modeline_lines"),
@@ -10602,8 +11534,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
     fn global_only_miscellaneous_sub_section() -> [SettingsPageItem; 4] {
         [
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Image Viewer",
-                description: "The unit for image file sizes.",
+                title: i18n::t!("166ed1e941490fac"),
+                description: i18n::t!("189beb5cf4fa55af"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("image_viewer.unit"),
@@ -10621,8 +11553,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Open Markdown Files in Preview",
-                description: "Whether to automatically open Markdown files in the preview.",
+                title: i18n::t!("ff691edfa683b148"),
+                description: i18n::t!("17928e418bae42a9"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("markdown_preview.open_markdown_files_in_preview"),
@@ -10646,8 +11578,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
             SettingsPageItem::DynamicItem(DynamicItem {
                 discriminant: SettingItem {
                     files: USER,
-                    title: "Limit Markdown Preview Width",
-                    description: "Whether to constrain the markdown preview content to a maximum width, centering it when the pane is wider, for optimal readability.",
+                    title: i18n::t!("ec048840b3f51843"),
+                    description: i18n::t!("ac2527f11f07ede8"),
                     field: Box::new(SettingField::<bool> {
                         organization_override: None,
                         json_path: Some("markdown_preview.limit_content_width"),
@@ -10679,8 +11611,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                     vec![],
                     vec![SettingItem {
                         files: USER,
-                        title: "Max Width",
-                        description: "Maximum content width in pixels. Content will be centered when the pane is wider than this value.",
+                        title: i18n::t!("d36a6a740ac75f4a"),
+                        description: i18n::t!("93c89d04cea63297"),
                         field: Box::new(SettingField {
                             organization_override: None,
                             json_path: Some("markdown_preview.max_width"),
@@ -10703,8 +11635,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 ],
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Drop Size Target",
-                description: "Relative size of the drop target in the editor that will open dropped file as a split pane.",
+                title: i18n::t!("76c5a2a8b436ab80"),
+                description: i18n::t!("2f4bd1624d786e03"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("drop_target_size"),
@@ -10722,8 +11654,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
     let is_global = active_language().is_none();
 
     let code_lens_item = [SettingsPageItem::SettingItem(SettingItem {
-        title: "Code Lens",
-        description: "Whether and how to display code lenses from language servers.",
+        title: i18n::t!("3ca23395b0aaaec2"),
+        description: i18n::t!("b0a67da0d72cb736"),
         field: Box::new(SettingField {
             organization_override: None,
             json_path: Some("code_lens"),
@@ -10737,8 +11669,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
     })];
 
     let lsp_document_colors_item = [SettingsPageItem::SettingItem(SettingItem {
-        title: "LSP Document Colors",
-        description: "How to render LSP color previews in the editor.",
+        title: i18n::t!("8c43d04815b785ac"),
+        description: i18n::t!("014dde7cfa3083a8"),
         field: Box::new(SettingField {
             organization_override: None,
             json_path: Some("lsp_document_colors"),
@@ -10791,8 +11723,8 @@ fn non_editor_language_settings_data() -> Box<[SettingsPageItem]> {
         [
             SettingsPageItem::SectionHeader("LSP"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Enable Language Server",
-                description: "Whether to use language servers to provide code intelligence.",
+                title: i18n::t!("0cd695db93a638f7"),
+                description: i18n::t!("543888ff18f9ea98"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).enable_language_server"),
@@ -10811,8 +11743,8 @@ fn non_editor_language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Language Servers",
-                description: "The list of language servers to use (or disable) for this language.",
+                title: i18n::t!("09375000f874c8ec"),
+                description: i18n::t!("a878a583d2fcd92b"),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -10838,8 +11770,8 @@ fn non_editor_language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Linked Edits",
-                description: "Whether to perform linked edits of associated ranges, if the LS supports it. For example, when editing opening <html> tag, the contents of the closing </html> tag will be edited as well.",
+                title: i18n::t!("85c8d53febbf47b6"),
+                description: i18n::t!("aecb83cd54cd7ddb"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).linked_edits"),
@@ -10858,8 +11790,8 @@ fn non_editor_language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Go To Definition Fallback",
-                description: "Whether to follow-up empty Go to definition responses from the language server.",
+                title: i18n::t!("0dd114a5a9217b68"),
+                description: i18n::t!("67e50825b86bb2d4"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("go_to_definition_fallback"),
@@ -10874,8 +11806,8 @@ fn non_editor_language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Go To Definition Scroll Strategy",
-                description: "How to scroll the target into view when navigating to a definition or reference.",
+                title: i18n::t!("4987408009427d78"),
+                description: i18n::t!("7b2b0b4e4f860145"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("go_to_definition_scroll_strategy"),
@@ -10893,8 +11825,8 @@ fn non_editor_language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "LSP Results Location",
-                description: "Where to show LSP results that can contain multiple locations (Go to Definition, Go to Implementation, Find All References).",
+                title: i18n::t!("fcfed20e9daf9a1b"),
+                description: i18n::t!("359e1b4ea0918697"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("lsp_results_location"),
@@ -10907,7 +11839,7 @@ fn non_editor_language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Semantic Tokens",
+                title: i18n::t!("8e4fcf30ffb033a0"),
                 description: {
                     static DESCRIPTION: OnceLock<&'static str> = OnceLock::new();
                     DESCRIPTION.get_or_init(|| {
@@ -10943,8 +11875,8 @@ fn non_editor_language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "LSP Folding Ranges",
-                description: "When enabled, use folding ranges from the language server instead of indent-based folding.",
+                title: i18n::t!("804763e6388801e3"),
+                description: i18n::t!("81a936a4848c8835"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).document_folding_ranges"),
@@ -10963,8 +11895,8 @@ fn non_editor_language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "LSP Document Symbols",
-                description: "When enabled, use the language server's document symbols for outlines and breadcrumbs instead of tree-sitter.",
+                title: i18n::t!("600eddee8d190fbf"),
+                description: i18n::t!("fa37699dd5f65d21"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).document_symbols"),
@@ -10987,10 +11919,10 @@ fn non_editor_language_settings_data() -> Box<[SettingsPageItem]> {
 
     fn lsp_completions_section() -> [SettingsPageItem; 4] {
         [
-            SettingsPageItem::SectionHeader("LSP Completions"),
+            SettingsPageItem::SectionHeader(i18n::t!("0f5be66b352bfe9b")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Enabled",
-                description: "Whether to fetch LSP completions or not.",
+                title: i18n::t!("f4f0ead1116b5b62"),
+                description: i18n::t!("6dfa8e74e68d2627"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).completions.lsp"),
@@ -11009,8 +11941,8 @@ fn non_editor_language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Fetch Timeout (milliseconds)",
-                description: "When fetching LSP completions, determines how long to wait for a response of a particular server (set to 0 to wait indefinitely).",
+                title: i18n::t!("cab24754d8c3cac7"),
+                description: i18n::t!("8a6629862a4123dd"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).completions.lsp_fetch_timeout_ms"),
@@ -11032,8 +11964,8 @@ fn non_editor_language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Insert Mode",
-                description: "Controls how LSP completions are inserted.",
+                title: i18n::t!("6d6f240895aca008"),
+                description: i18n::t!("020b6f5235aa09a5"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).completions.lsp_insert_mode"),
@@ -11056,10 +11988,10 @@ fn non_editor_language_settings_data() -> Box<[SettingsPageItem]> {
 
     fn debugger_section() -> [SettingsPageItem; 2] {
         [
-            SettingsPageItem::SectionHeader("Debuggers"),
+            SettingsPageItem::SectionHeader(i18n::t!("20fe3f3e72ca01b8")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Debuggers",
-                description: "Preferred debuggers for this language.",
+                title: i18n::t!("20fe3f3e72ca01b8"),
+                description: i18n::t!("f2fa43f200fb29e7"),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -11091,8 +12023,8 @@ fn non_editor_language_settings_data() -> Box<[SettingsPageItem]> {
         [
             SettingsPageItem::SectionHeader("Prettier"),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Allowed",
-                description: "Enables or disables formatting with Prettier for a given language.",
+                title: i18n::t!("ce7ef28b670ade58"),
+                description: i18n::t!("9ede04faf4154db2"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).prettier.allowed"),
@@ -11111,8 +12043,8 @@ fn non_editor_language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Parser",
-                description: "Forces Prettier integration to use a specific parser name when formatting files with the language.",
+                title: i18n::t!("2a06708ff6b14f10"),
+                description: i18n::t!("960d5d8bd1729975"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).prettier.parser"),
@@ -11131,8 +12063,8 @@ fn non_editor_language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Plugins",
-                description: "Forces Prettier integration to use specific plugins when formatting files with the language.",
+                title: i18n::t!("e806fbbe8ec6e82d"),
+                description: i18n::t!("590cf39c689d4358"),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -11158,8 +12090,8 @@ fn non_editor_language_settings_data() -> Box<[SettingsPageItem]> {
                 files: USER | PROJECT,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Options",
-                description: "Default Prettier options, in the format as in package.json section for Prettier.",
+                title: i18n::t!("bb7486f4410fd370"),
+                description: i18n::t!("500570e878149ca6"),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -11197,23 +12129,24 @@ fn non_editor_language_settings_data() -> Box<[SettingsPageItem]> {
 
 fn edit_prediction_language_settings_section() -> [SettingsPageItem; 5] {
     [
-        SettingsPageItem::SectionHeader("Edit Predictions"),
+        SettingsPageItem::SectionHeader(i18n::t!("34627253269ac8a6")),
         SettingsPageItem::SubPageLink(SubPageLink {
-            title: "Configure Providers".into(),
+            title: i18n::t!("4b08b9a69dd7a595").into(),
             r#type: Default::default(),
             json_path: Some("edit_predictions.providers"),
-            description: Some("Set up different edit prediction providers in complement to Zed's built-in Zeta model.".into()),
+            description: Some(i18n::t!("bc1739d9f184f06d").into()),
             search_aliases: &[],
             in_json: false,
             files: USER,
-            render: render_edit_prediction_setup_page
+            render: render_edit_prediction_setup_page,
         }),
         SettingsPageItem::SettingItem(SettingItem {
-            title: "Data Collection",
-            description: "Controls whether Zed may collect training data when using Zed's Edit Predictions. Data is only collected for files in projects detected as open source. The default value uses the preference previously set via the status-bar toggle, or false if no preference has been stored.",
+            title: i18n::t!("7d7b4beebaa2d4a3"),
+            description: i18n::t!("537709fe6a4e9547"),
             field: Box::new(SettingField {
                 organization_override: Some(|org_settings| {
-                    const DATA_COLLECTION_DISABLED: EditPredictionDataCollectionChoice = EditPredictionDataCollectionChoice::No;
+                    const DATA_COLLECTION_DISABLED: EditPredictionDataCollectionChoice =
+                        EditPredictionDataCollectionChoice::No;
 
                     if !org_settings.edit_prediction.is_feedback_enabled {
                         Some(&DATA_COLLECTION_DISABLED)
@@ -11244,8 +12177,8 @@ fn edit_prediction_language_settings_section() -> [SettingsPageItem; 5] {
             files: USER,
         }),
         SettingsPageItem::SettingItem(SettingItem {
-            title: "Show Edit Predictions",
-            description: "Controls whether edit predictions are shown immediately or manually.",
+            title: i18n::t!("b7abea77feb0b8b9"),
+            description: i18n::t!("b68ba59b36f0d447"),
             field: Box::new(SettingField {
                 organization_override: None,
                 json_path: Some("languages.$(language).show_edit_predictions"),
@@ -11264,8 +12197,8 @@ fn edit_prediction_language_settings_section() -> [SettingsPageItem; 5] {
             files: USER | PROJECT,
         }),
         SettingsPageItem::SettingItem(SettingItem {
-            title: "Disable in Language Scopes",
-            description: "Disable edit predictions in these language scopes, such as \"comment\" and \"string\". Use \"...\" to add scopes without repeating the inherited list.",
+            title: i18n::t!("6fe11c1f3b880f90"),
+            description: i18n::t!("71fc41d075e084f7"),
             field: Box::new(
                 SettingField {
                     organization_override: None,
@@ -11338,6 +12271,37 @@ fn write_helix_mode_inner(settings: &mut SettingsContent, value: Option<bool>) {
 mod tests {
     use super::*;
 
+    #[gpui::test]
+    fn test_developer_update_channel_round_trips(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            let page = developer_page(cx);
+            let field = page
+                .items
+                .iter()
+                .find_map(|item| match item {
+                    SettingsPageItem::SettingItem(item) => item
+                        .field
+                        .as_any()
+                        .downcast_ref::<SettingField<settings::UpdateChannel>>(),
+                    _ => None,
+                })
+                .expect("developer page exposes update channel");
+            assert_eq!(field.json_path, Some("update_channel"));
+            let mut content = SettingsContent::default();
+            assert_eq!(
+                settings::UpdateChannel::default(),
+                settings::UpdateChannel::Stable
+            );
+            (field.write)(&mut content, Some(settings::UpdateChannel::Dev), cx);
+            assert_eq!((field.pick)(&content), Some(&settings::UpdateChannel::Dev));
+            (field.write)(&mut content, Some(settings::UpdateChannel::Stable), cx);
+            assert_eq!(
+                (field.pick)(&content),
+                Some(&settings::UpdateChannel::Stable)
+            );
+        });
+    }
+
     #[test]
     fn test_write_vim_helix_mode() {
         // Enabling vim mode while `vim_mode` and `helix_mode` are not yet set
@@ -11377,5 +12341,99 @@ mod tests {
         write_vim_mode_inner(&mut settings, Some(true));
         assert_eq!(settings.vim_mode, Some(true));
         assert_eq!(settings.helix_mode, Some(false));
+    }
+
+    #[gpui::test]
+    fn test_language_setting_round_trips(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            let page = general_page(cx);
+            let item = page
+                .items
+                .iter()
+                .find_map(|item| match item {
+                    SettingsPageItem::SettingItem(item)
+                        if item.title == i18n::t!("3d13868593ae4eeb") =>
+                    {
+                        Some(item)
+                    }
+                    _ => None,
+                })
+                .expect("general page should expose the interface language setting");
+
+            let field = item
+                .field
+                .as_any()
+                .downcast_ref::<SettingField<settings::UiLanguage>>()
+                .expect("interface language setting should use the UiLanguage field type");
+            assert_eq!(field.json_path, Some("language"));
+
+            let mut content = SettingsContent::default();
+            assert!((field.pick)(&content).is_none());
+
+            (field.write)(
+                &mut content,
+                Some(settings::UiLanguage("en".to_string())),
+                cx,
+            );
+            assert_eq!(
+                content.language.as_ref().map(|language| language.as_str()),
+                Some("en")
+            );
+            assert_eq!(
+                (field.pick)(&content).map(|language| language.as_str()),
+                Some("en")
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn test_appearance_indent_guide_background_coloring_round_trips(cx: &mut gpui::TestAppContext) {
+        cx.update(|_cx| {
+            let page = appearance_page();
+            let item = page
+                .items
+                .iter()
+                .find_map(|item| match item {
+                    SettingsPageItem::SettingItem(item)
+                        if item.field.json_path() == Some("indent_guides.background_coloring") =>
+                    {
+                        Some(item)
+                    }
+                    _ => None,
+                })
+                .expect("appearance page should expose indent guide background coloring");
+
+            let field = item
+                .field
+                .as_any()
+                .downcast_ref::<SettingField<settings::IndentGuideBackgroundColoring>>()
+                .expect(
+                    "indent guide background coloring should use the \
+                     IndentGuideBackgroundColoring field type",
+                );
+
+            let mut content = SettingsContent::default();
+            assert!((field.pick)(&content).is_none());
+
+            (field.write)(
+                &mut content,
+                Some(settings::IndentGuideBackgroundColoring::IndentAware),
+                _cx,
+            );
+            assert_eq!(
+                content
+                    .project
+                    .all_languages
+                    .defaults
+                    .indent_guides
+                    .as_ref()
+                    .and_then(|indent_guides| indent_guides.background_coloring),
+                Some(settings::IndentGuideBackgroundColoring::IndentAware)
+            );
+            assert_eq!(
+                (field.pick)(&content),
+                Some(&settings::IndentGuideBackgroundColoring::IndentAware)
+            );
+        });
     }
 }

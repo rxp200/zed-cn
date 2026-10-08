@@ -523,8 +523,26 @@ message Envelope {
     ExecuteLspCommand execute_lsp_command = 491;
     ExecuteLspCommandResponse execute_lsp_command_response = 492;
     RefreshDocumentHighlights refresh_document_highlights = 493;
-    GetTerminalShell get_terminal_shell = 494;
-    GetTerminalShellResponse get_terminal_shell_response = 495; // current max
+    CreateTemporaryFile create_temporary_file = 494;
+    CreateTemporaryFileResponse create_temporary_file_response = 495;
+    GetSystemStats get_system_stats = 496;
+    GetSystemStatsResponse get_system_stats_response = 497;
+    CreatePersistentTerminal create_persistent_terminal = 498;
+    CreatePersistentTerminalResponse create_persistent_terminal_response = 499;
+    PersistentTerminalInput persistent_terminal_input = 500;
+    ResizePersistentTerminal resize_persistent_terminal = 501;
+    ReadPersistentTerminal read_persistent_terminal = 502;
+    ReadPersistentTerminalResponse read_persistent_terminal_response = 503;
+    ClosePersistentTerminal close_persistent_terminal = 504;
+    GetTerminalShell get_terminal_shell = 505;
+    GetTerminalShellResponse get_terminal_shell_response = 506;
+    SubscribePersistentTerminal subscribe_persistent_terminal = 507;
+    PersistentTerminalOutput persistent_terminal_output = 508;
+    PersistentTerminalOutputCredit persistent_terminal_output_credit = 509;
+    ReadDocumentChunk read_document_chunk = 510;
+    ReadDocumentChunkResponse read_document_chunk_response = 511;
+    ReadEpubEntry read_epub_entry = 512;
+    ReadEpubEntryResponse read_epub_entry_response = 513; // current max
   }
 
   reserved 87 to 88;
@@ -601,7 +619,9 @@ message FlushBufferedMessages {}
 
 message FlushBufferedMessagesResponse {}
 
-message RemoteStarted {}
+message RemoteStarted {
+  repeated string capabilities = 1;
+}
 
 message SpawnKernel {
   string kernel_name = 1;

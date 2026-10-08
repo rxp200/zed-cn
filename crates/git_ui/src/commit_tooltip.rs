@@ -460,7 +460,7 @@ impl Render for CommitTooltip {
                                         .child(Divider::vertical())
                                         .child(
                                             CopyButton::new("copy-commit-sha", full_sha)
-                                                .tooltip_label("Copy SHA"),
+                                                .tooltip_label(i18n::t!("bf096e515eb6a7f4")),
                                         ),
                                 ),
                         ),
@@ -524,45 +524,33 @@ pub(crate) fn shallow_boundary_notice(
                     )
                     .child(
                         div().flex_1().min_w_0().child(
-                            Label::new(
-                                "Shallow clone boundary: earlier history is missing, so these lines may come from an older commit.",
-                            )
-                            .size(LabelSize::Small)
-                            .line_height_style(LineHeightStyle::UiLabel),
+                            Label::new(i18n::t!("c172ace009967671"))
+                                .size(LabelSize::Small)
+                                .line_height_style(LineHeightStyle::UiLabel),
                         ),
                     ),
             )
             .when(can_fetch, |this| {
                 this.child(
-                    h_flex()
-                        .gap_2()
-                        .child(div().w(avatar_width))
-                        .child(
-                            Button::new(
-                                "fetch-unshallow",
-                                if in_flight {
-                                    "Fetching…"
-                                } else {
-                                    "Fetch Missing History"
-                                },
-                            )
-                            .style(ButtonStyle::Outlined)
-                            .label_size(LabelSize::Small)
-                            .disabled(in_flight)
-                            .tooltip(Tooltip::text(
-                                "Run `git fetch --unshallow` to download the full history",
-                            ))
-                            .on_click(move |_, window, cx| {
-                                cx.stop_propagation();
-                                fetch_unshallow(
-                                    repository.clone(),
-                                    workspace.clone(),
-                                    window,
-                                    cx,
-                                )
+                    h_flex().gap_2().child(div().w(avatar_width)).child(
+                        Button::new(
+                            "fetch-unshallow",
+                            if in_flight {
+                                i18n::t!("85ab30269d8fc924")
+                            } else {
+                                i18n::t!("9ce16a4ad8542f62")
+                            },
+                        )
+                        .style(ButtonStyle::Outlined)
+                        .label_size(LabelSize::Small)
+                        .disabled(in_flight)
+                        .tooltip(Tooltip::text(i18n::t!("72b05cfc42112180")))
+                        .on_click(move |_, window, cx| {
+                            cx.stop_propagation();
+                            fetch_unshallow(repository.clone(), workspace.clone(), window, cx)
                                 .detach_and_log_err(cx);
-                            }),
-                        ),
+                        }),
+                    ),
                 )
             }),
     )
@@ -619,17 +607,14 @@ pub(crate) fn fetch_unshallow(
             match result {
                 Ok(_) => {
                     workspace.update(cx, |workspace, cx| {
-                        let toast = StatusToast::new(
-                            "Fetched the missing commit history",
-                            cx,
-                            |this, _| {
+                        let toast =
+                            StatusToast::new(i18n::t!("528a8bb5b9f88894"), cx, |this, _| {
                                 this.icon(
                                     Icon::new(IconName::GitBranch)
                                         .size(IconSize::Small)
                                         .color(Color::Muted),
                                 )
-                            },
-                        );
+                            });
                         workspace.toggle_status_toast(toast, cx);
                     });
                     Ok(())

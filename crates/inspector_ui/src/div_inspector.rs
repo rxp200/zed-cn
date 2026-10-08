@@ -29,7 +29,11 @@ use util::split_str_with_ranges;
 
 /// Path used for unsaved buffer that contains style json. To support the json language server, this
 /// matches the name used in the generated schemas.
-const ZED_INSPECTOR_STYLE_JSON: &str = util_macros::path!("/zed-inspector-style.json");
+const ZED_INSPECTOR_STYLE_JSON: &str = if cfg!(target_os = "windows") {
+    r"C:\zed-inspector-style.json"
+} else {
+    "/zed-inspector-style.json"
+};
 
 pub(crate) struct DivInspector {
     state: State,
@@ -105,7 +109,7 @@ impl DivInspector {
 
                             // Initialize editors immediately instead of waiting for
                             // `update_inspected_element`. This avoids continuing to show
-                            // "Loading..." until the user moves the mouse to a different element.
+                            // "加载中…" until the user moves the mouse to a different element.
                             if let Some(id) = this.inspector_id.take() {
                                 let inspector_state = window
                                     .with_inspector_state(Some(&id), cx, |state, _window| {
@@ -520,13 +524,13 @@ impl Render for DivInspector {
             .when_some(self.inspector_state.as_ref(), |this, inspector_state| {
                 this.child(
                     v_flex()
-                        .child(Label::new("Layout").size(LabelSize::Large))
+                        .child(Label::new(i18n::t!("faa2f2ed67357847")).size(LabelSize::Large))
                         .child(render_layout_state(inspector_state, cx)),
                 )
             })
             .map(|this| match &self.state {
                 State::Loading | State::BuffersLoaded { .. } => {
-                    this.child(Label::new("Loading..."))
+                    this.child(Label::new(i18n::t!("4927a53bcc886afb")))
                 }
                 State::LoadError { message } => this.child(
                     div()
@@ -546,10 +550,13 @@ impl Render for DivInspector {
                             .child(
                                 h_flex()
                                     .justify_between()
-                                    .child(Label::new("Rust Style").size(LabelSize::Large))
+                                    .child(
+                                        Label::new(i18n::t!("46bdeb6f60239813"))
+                                            .size(LabelSize::Large),
+                                    )
                                     .child(
                                         IconButton::new("reset-style", IconName::Eraser)
-                                            .tooltip(Tooltip::text("Reset style"))
+                                            .tooltip(Tooltip::text(i18n::t!("d06524e3ae652b6c")))
                                             .on_click(cx.listener(|this, _, _window, cx| {
                                                 this.reset_style(cx);
                                             })),
@@ -560,7 +567,7 @@ impl Render for DivInspector {
                     .child(
                         v_flex()
                             .gap_2()
-                            .child(Label::new("JSON Style").size(LabelSize::Large))
+                            .child(Label::new(i18n::t!("c7a721dde7badb1b")).size(LabelSize::Large))
                             .child(div().h_128().child(json_style_editor.clone()))
                             .when_some(self.json_style_error.as_ref(), |this, last_error| {
                                 this.child(
@@ -593,7 +600,7 @@ fn render_layout_state(inspector_state: &DivInspectorState, cx: &App) -> Div {
             div()
                 .id("content-size")
                 .text_ui(cx)
-                .tooltip(Tooltip::text("Size of the element's children"))
+                .tooltip(Tooltip::text(i18n::t!("fa8bbb81bfeae471")))
                 .child(
                     if inspector_state.content_size != inspector_state.bounds.size {
                         format!("Content size: {}", inspector_state.content_size)

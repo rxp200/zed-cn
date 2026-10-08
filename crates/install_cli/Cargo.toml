@@ -17,6 +17,7 @@ doctest = false
 test-support = []
 
 [dependencies]
+i18n.workspace = true
 anyhow.workspace = true
 client.workspace = true
 gpui.workspace = true
@@ -24,4 +25,6 @@ log.workspace = true
 release_channel.workspace = true
 smol.workspace = true
 util.workspace = true
+
+[target.'cfg(not(target_os = "windows"))'.dependencies]
 workspace.workspace = true

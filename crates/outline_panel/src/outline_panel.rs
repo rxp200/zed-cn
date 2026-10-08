@@ -1072,7 +1072,7 @@ impl OutlinePanel {
         cx.new(|cx| {
             let filter_editor = cx.new(|cx| {
                 let mut editor = Editor::single_line(window, cx);
-                editor.set_placeholder_text("Search buffer symbols…", window, cx);
+                editor.set_placeholder_text(i18n::t!("e91ad374cf85632a"), window, cx);
                 editor
             });
             let filter_update_subscription = cx.subscribe_in(
@@ -1812,15 +1812,18 @@ impl OutlinePanel {
                     ui::utils::reveal_in_file_manager_label(false),
                     Box::new(RevealInFileManager),
                 )
-                .action("Open in Terminal", Box::new(OpenInTerminal))
+                .action(i18n::t!("a04c3bc562c5f568"), Box::new(OpenInTerminal))
                 .when(is_unfoldable, |menu| {
-                    menu.action("Unfold Directory", Box::new(UnfoldDirectory))
+                    menu.action(i18n::t!("a49f5287fc9ef2d0"), Box::new(UnfoldDirectory))
                 })
                 .when(is_foldable, |menu| {
-                    menu.action("Fold Directory", Box::new(FoldDirectory))
+                    menu.action(i18n::t!("7b4c4c37a5658899"), Box::new(FoldDirectory))
                 })
                 .separator()
-                .action("Copy Path", Box::new(zed_actions::workspace::CopyPath))
+                .action(
+                    i18n::t!("b97c49acb93028ec"),
+                    Box::new(zed_actions::workspace::CopyPath),
+                )
                 .action(
                     "Copy Relative Path",
                     Box::new(zed_actions::workspace::CopyRelativePath),
@@ -3054,10 +3057,14 @@ impl OutlinePanel {
                 })
             })
             .cursor_pointer()
+            // Inset the row so its rounded highlight reads as a card, matching the
+            // project panel and the activity bar.
+            .mx(ui::LIST_ITEM_HIGHLIGHT_INSET)
             .child(
                 ListItem::new(item_id)
                     .indent_level(depth)
                     .indent_step_size(px(settings.indent_size))
+                    .rounded()
                     .toggle_state(is_active)
                     .child(
                         h_flex()
@@ -5288,7 +5295,7 @@ impl OutlinePanel {
                     h_flex()
                         .gap_1()
                         .justify_center()
-                        .child(Label::new("Toggle Panel With").color(Color::Muted))
+                        .child(Label::new(i18n::t!("32a0c71b85c05235")).color(Color::Muted))
                         .child({
                             let key_binding = match self.position(window, cx) {
                                 DockPosition::Left => {
@@ -5396,7 +5403,10 @@ impl OutlinePanel {
                                 }
                             })
                             .with_render_fn(cx.entity(), move |outline_panel, params, _, _| {
-                                const LEFT_OFFSET: Pixels = ui::LIST_ITEM_INDENT_GUIDE_LEFT_OFFSET;
+                                // Rows are inset by `LIST_ITEM_HIGHLIGHT_INSET`, so their
+                                // indent guides move with them.
+                                let left_offset = ui::LIST_ITEM_INDENT_GUIDE_LEFT_OFFSET
+                                    + ui::LIST_ITEM_HIGHLIGHT_INSET;
 
                                 let indent_size = params.indent_size;
                                 let item_height = params.item_height;
@@ -5412,7 +5422,7 @@ impl OutlinePanel {
                                     .map(|(ix, layout)| {
                                         let bounds = Bounds::new(
                                             point(
-                                                layout.offset.x * indent_size + LEFT_OFFSET,
+                                                layout.offset.x * indent_size + left_offset,
                                                 layout.offset.y * item_height,
                                             ),
                                             size(px(1.), layout.length * item_height),
@@ -5470,9 +5480,9 @@ impl OutlinePanel {
         let show_symbols_toggle = self.multi_buffer_active(cx);
         let hide_symbols = self.hide_symbols_active(cx);
         let (hide_symbols_icon, hide_symbols_tooltip) = if hide_symbols {
-            (IconName::FileCodeOff, "Show Symbols")
+            (IconName::FileCodeOff, i18n::t!("d27ac93dd575e204"))
         } else {
-            (IconName::FileCode, "Hide Symbols")
+            (IconName::FileCode, i18n::t!("1c183e690a9a315e"))
         };
 
         h_flex()
@@ -5498,7 +5508,7 @@ impl OutlinePanel {
                         this.child(
                             IconButton::new("clear_filter", IconName::Close)
                                 .shape(IconButtonShape::Square)
-                                .tooltip(Tooltip::text("Clear Filter"))
+                                .tooltip(Tooltip::text(i18n::t!("657d9cbf45ec9e6a")))
                                 .on_click(cx.listener(|outline_panel, _, window, cx| {
                                     outline_panel.filter_editor.update(cx, |editor, cx| {
                                         editor.set_text("", window, cx);
@@ -5781,7 +5791,7 @@ impl Render for OutlinePanel {
                         .gap_0p5()
                         .border_b_1()
                         .border_color(cx.theme().colors().border_variant)
-                        .child(Label::new("Searching:").color(Color::Muted))
+                        .child(Label::new(i18n::t!("0f7df62bdd1df7cf")).color(Color::Muted))
                         .child(Label::new(query_text)),
                 )
             })

@@ -38,6 +38,28 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use settings_macros::{MergeFrom, with_fallible_options};
 
+/// Desktop update stream, independent of the installed application's build channel.
+#[derive(
+    Copy,
+    Clone,
+    Debug,
+    Default,
+    Serialize,
+    Deserialize,
+    PartialEq,
+    Eq,
+    JsonSchema,
+    MergeFrom,
+    strum::VariantArray,
+    strum::VariantNames,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum UpdateChannel {
+    #[default]
+    Stable,
+    Dev,
+}
+
 /// A non-negative size in pixels.
 ///
 /// Valid range: 0.0 and up
@@ -98,7 +120,7 @@ macro_rules! settings_overrides {
         }
     }
 }
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::hash::Hash;
 use std::sync::Arc;
 pub use util::serde::default_true;
@@ -169,6 +191,27 @@ pub enum ReduceMotionMode {
     Off,
 }
 
+/// The interface language, as a BCP-47 tag (`zh-Hans`, `en`, ...).
+///
+/// Only languages compiled into `locales/` are accepted; unknown values fall
+/// back to the default. Default: `zh-Hans`.
+#[with_fallible_options]
+#[derive(Clone, Default, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, MergeFrom)]
+#[serde(transparent)]
+pub struct UiLanguage(pub String);
+
+impl UiLanguage {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<String> for UiLanguage {
+    fn from(value: String) -> Self {
+        Self(value)
+    }
+}
+
 #[with_fallible_options]
 #[derive(Debug, PartialEq, Default, Clone, Serialize, JsonSchema, MergeFrom)]
 pub struct SettingsContent {
@@ -216,6 +259,9 @@ pub struct SettingsContent {
     ///
     /// Default: true
     pub auto_update: Option<bool>,
+
+    /// Zed CN desktop update stream. Defaults to stable.
+    pub update_channel: Option<UpdateChannel>,
 
     /// This base keymap settings adjusts the default keybindings in Zed to be similar
     /// to other common code editors. By default, Zed's keymap closely follows VSCode's
@@ -270,6 +316,8 @@ pub struct SettingsContent {
 
     pub language_models: Option<AllLanguageModelSettingsContent>,
 
+    pub copilot: Option<CopilotSettingsContent>,
+
     pub outline_panel: Option<OutlinePanelSettingsContent>,
 
     pub project_panel: Option<ProjectPanelSettingsContent>,
@@ -305,10 +353,22 @@ pub struct SettingsContent {
 
     pub title_bar: Option<TitleBarSettingsContent>,
 
+    /// Configuration for AI-powered translation in the editor's hover popovers.
+    pub hover_translation: Option<HoverTranslationSettingsContent>,
+
+    /// Read-only AI explanations displayed above code. User configuration only.
+    pub code_explanations: Option<CodeExplanationSettingsContent>,
+
     /// Whether or not to enable Vim mode.
     ///
     /// Default: false
     pub vim_mode: Option<bool>,
+
+    /// Interface language, as a BCP-47 tag (`zh-Hans`, `en`, ...).
+    ///
+    /// Only languages compiled into `locales/` are accepted; unknown values
+    /// fall back to the default. Default: `zh-Hans`.
+    pub language: Option<UiLanguage>,
 
     // Settings related to calls in Zed
     pub calls: Option<CallSettingsContent>,
@@ -403,13 +463,13 @@ fallible_options::flattened_deserialize!(SettingsContent {
     sections: { project, theme, extension, workspace, editor, remote },
     options: {
         call_hierarchy, command_palette, file_finder, git_panel, tabs, tab_bar, status_bar, preview_tabs, agent,
-        agent_servers, audio, auto_update, base_keymap, collaboration_panel, debugger, diagnostics,
+        agent_servers, audio, auto_update, update_channel, base_keymap, collaboration_panel, debugger, diagnostics,
         git,
         global_lsp_settings, image_viewer, markdown_preview, repl, helix_mode, hide_mouse,
-        journal, log, line_indicator_format, language_models, outline_panel, project_panel,
+        journal, log, line_indicator_format, language_models, copilot, outline_panel, project_panel,
         node, proxy, reduce_motion, server_url, credentials_url, session, telemetry, terminal,
-        title_bar, vim_mode, calls, which_key, vim, modeline_lines, feature_flags,
-        instrumentation,
+        title_bar, vim_mode, calls, which_key, vim, modeline_lines, feature_flags, language,
+        instrumentation, hover_translation, code_explanations,
     },
     defaults: {},
 });
@@ -811,6 +871,34 @@ pub struct GitPanelSettingsContent {
     ///
     /// Default: project_diff
     pub entry_primary_click_action: Option<GitPanelClickBehavior>,
+
+    /// Whether the commit message editor is shown in the Git panel by default.
+    ///
+    /// Default: expanded
+    pub commit_editor: Option<GitPanelCommitEditor>,
+}
+
+#[derive(
+    Copy,
+    Clone,
+    Debug,
+    Default,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+    MergeFrom,
+    PartialEq,
+    Eq,
+    strum::VariantArray,
+    strum::VariantNames,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum GitPanelCommitEditor {
+    /// Show the commit message editor.
+    #[default]
+    Expanded,
+    /// Hide the commit message editor, leaving only the commit button row.
+    Collapsed,
 }
 
 #[derive(
@@ -960,6 +1048,11 @@ pub struct FileFinderSettingsContent {
     ///
     /// Default: false
     pub include_channels: Option<bool>,
+    /// Whether to pre-fill the file finder's query with the text selected in the
+    /// focused item (e.g. an editor or a terminal) when it is opened.
+    ///
+    /// Default: true
+    pub prefill_query_from_selection: Option<bool>,
 }
 
 #[derive(
@@ -1302,6 +1395,12 @@ pub struct MarkdownPreviewSettingsContent {
     /// The theme to use for the markdown preview.
     /// Falls back to the main editor theme if unset.
     pub theme: Option<ThemeSelection>,
+    /// The weight of headings (H1 through H6) in the markdown preview, in CSS
+    /// units from 100 to 900. Also applies to rendered Markdown cells in
+    /// notebooks, which share the preview typography.
+    ///
+    /// Default: 600
+    pub heading_font_weight: Option<FontWeightContent>,
     /// Whether to automatically open Markdown files in the preview.
     ///
     /// Default: false
@@ -1359,6 +1458,14 @@ pub struct RemoteSettingsContent {
     pub wsl_connections: Option<Vec<WslConnection>>,
     pub dev_container_connections: Option<Vec<DevContainerConnection>>,
     pub read_ssh_config: Option<bool>,
+    /// Whether SSH remote server binaries should be downloaded by the local Zed client and then
+    /// uploaded over SSH, without first attempting a download from the remote host.
+    ///
+    /// This is useful for servers that cannot access Zed's release assets directly. The local
+    /// download uses Zed's configured proxy.
+    ///
+    /// Default: false
+    pub china_server_adaptation: Option<bool>,
     pub use_podman: Option<bool>,
     /// Whether to build dev container images with BuildKit.
     ///
@@ -1393,15 +1500,25 @@ pub struct SshConnection {
     pub port: Option<u16>,
     #[serde(default)]
     pub args: Vec<String>,
+    /// Recently used project locations on this host, most recently used
+    /// first. Kept to a bounded length; the least recently used entries are
+    /// dropped once the limit is exceeded.
     #[serde(default)]
-    pub projects: collections::BTreeSet<RemoteProject>,
+    pub projects: Vec<RemoteProject>,
     /// Name to use for this server in UI.
     pub nickname: Option<String>,
     // By default Zed will download the binary to the host directly.
     // If this is set to true, Zed will download the binary to your local machine,
     // and then upload it over the SSH connection. Useful if your SSH server has
-    // limited outbound internet access.
+    // limited outbound internet access. The global `china_server_adaptation`
+    // setting forces this behavior for every SSH connection.
     pub upload_binary_over_ssh: Option<bool>,
+    /// Selects the Remote Server distribution for this SSH host.
+    ///
+    /// When left unset, Zed CN clients use the Remote Server matching their own
+    /// custom release, and clients without a validated custom release use Zed's
+    /// official Remote Server.
+    pub remote_server_source: Option<RemoteServerSource>,
 
     pub port_forwards: Option<Vec<SshPortForwardOption>>,
     /// Timeout in seconds for SSH connection and downloading the remote server binary.
@@ -1409,12 +1526,25 @@ pub struct SshConnection {
     pub connection_timeout: Option<u16>,
 }
 
+#[derive(
+    Clone, Copy, Default, Debug, Serialize, Deserialize, PartialEq, Eq, Hash, JsonSchema, MergeFrom,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum RemoteServerSource {
+    #[default]
+    Official,
+    ZedCn,
+}
+
 #[derive(Clone, Default, Serialize, Deserialize, PartialEq, JsonSchema, MergeFrom, Debug)]
 pub struct WslConnection {
     pub distro_name: String,
     pub user: Option<String>,
+    /// Recently used project locations in this distribution, most recently
+    /// used first. Kept to a bounded length; the least recently used entries
+    /// are dropped once the limit is exceeded.
     #[serde(default)]
-    pub projects: BTreeSet<RemoteProject>,
+    pub projects: Vec<RemoteProject>,
 }
 
 #[with_fallible_options]

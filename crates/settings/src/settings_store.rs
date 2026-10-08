@@ -1032,27 +1032,17 @@ impl SettingsStore {
     /// or by third-party extensions (via `semantic_token_rules.json` in their language
     /// directories). They are stored separately from the global rules and are only
     /// applied to buffers of the matching language by the `SemanticTokenStylizer`.
-    ///
-    /// This triggers a settings recomputation so that observers (e.g. `LspStore`)
-    /// are notified and can invalidate cached stylizers.
     pub fn set_language_semantic_token_rules(
         &mut self,
         language: SharedString,
         rules: SemanticTokenRules,
-        cx: &mut App,
     ) {
         self.language_semantic_token_rules.insert(language, rules);
-        self.recompute_values(None, cx);
     }
 
     /// Removes language-specific semantic token rules for the given language.
-    ///
-    /// This should be called when an extension that registered rules for a language
-    /// is unloaded. Triggers a settings recomputation so that observers (e.g.
-    /// `LspStore`) are notified and can invalidate cached stylizers.
-    pub fn remove_language_semantic_token_rules(&mut self, language: &str, cx: &mut App) {
+    pub fn remove_language_semantic_token_rules(&mut self, language: &str) {
         self.language_semantic_token_rules.remove(language);
-        self.recompute_values(None, cx);
     }
 
     /// Returns the language-specific semantic token rules for the given language,
@@ -1077,7 +1067,7 @@ impl SettingsStore {
         match (path.clone(), kind, content) {
             (LocalSettingsPath::InWorktree(directory_path), LocalSettingsKind::Tasks, _) => {
                 return Err(InvalidSettingsError::Tasks {
-                    message: "Attempted to submit tasks into the settings store".to_string(),
+                    message: i18n::t!("c76bda9a6c1bf141").to_string(),
                     path: directory_path
                         .join(RelPath::from_unix_str(task_file_name()).unwrap())
                         .as_std_path()
@@ -1086,8 +1076,7 @@ impl SettingsStore {
             }
             (LocalSettingsPath::InWorktree(directory_path), LocalSettingsKind::Debug, _) => {
                 return Err(InvalidSettingsError::Debug {
-                    message: "Attempted to submit debugger config into the settings store"
-                        .to_string(),
+                    message: i18n::t!("9ee89bc70fb90dbb").to_string(),
                     path: directory_path
                         .join(RelPath::from_unix_str(task_file_name()).unwrap())
                         .as_std_path()
@@ -1373,8 +1362,11 @@ impl SettingsStore {
 
         if changed_local_path.is_none() {
             let mut merged = self.default_settings.as_ref().clone();
+            let default_explanations = merged.code_explanations.clone();
             merged.merge_from_option(self.extension_settings.as_deref());
             merged.merge_from_option(self.global_settings.as_deref());
+            // Automatic code disclosure may only be authorized by local user settings.
+            merged.code_explanations = default_explanations;
             if let Some(user_settings) = self.user_settings.as_ref() {
                 let active_profile = user_settings.for_profile(cx);
                 let should_merge_user_settings =
@@ -1390,7 +1382,12 @@ impl SettingsStore {
                     merged.merge_from(&profile.settings);
                 }
             }
+            let user_explanations = merged.code_explanations.clone();
+            let user_language_models = merged.language_models.clone();
             merged.merge_from_option(self.server_settings.as_deref());
+            merged.code_explanations = user_explanations;
+            // A remote host must not redirect client-side model requests to another endpoint.
+            merged.language_models = user_language_models;
 
             // Merge `disable_ai` from all project/local settings into the global value.
             // Since `SaturatingBool` uses OR logic, if any project has `disable_ai: true`,
@@ -1467,6 +1464,8 @@ impl SettingsStore {
                 self.merged_settings.as_ref().clone()
             };
             merged_local_settings.merge_from(local_settings);
+            merged_local_settings.code_explanations =
+                self.merged_settings.code_explanations.clone();
 
             project_settings_stack.push(merged_local_settings);
 
@@ -2767,6 +2766,45 @@ mod tests {
     }
 
     #[gpui::test]
+    fn code_explanations_only_accept_user_authorization(cx: &mut App) {
+        let mut store = SettingsStore::new(cx, &test_settings());
+        let hostile =
+            r#"{"code_explanations":{"enabled":true,"provider":"unexpected","model":"remote"}}"#;
+        store.set_global_settings(hostile, cx).unwrap();
+        store.set_server_settings(hostile, cx).unwrap();
+        assert!(
+            !store
+                .merged_settings()
+                .code_explanations
+                .as_ref()
+                .and_then(|settings| settings.enabled)
+                .unwrap_or(false)
+        );
+        store
+            .set_user_settings(
+                r#"{"code_explanations":{"enabled":true,"provider":"chosen","model":"local"}}"#,
+                cx,
+            )
+            .unwrap();
+        store.set_server_settings(hostile, cx).unwrap();
+        let settings = store.merged_settings().code_explanations.as_ref().unwrap();
+        assert_eq!(settings.provider.as_ref().unwrap().0, "chosen");
+        assert_eq!(settings.model.as_ref().unwrap().0, "local");
+        store
+            .set_user_settings(r#"{"code_explanations":{"enabled":false}}"#, cx)
+            .unwrap();
+        assert_eq!(
+            store
+                .merged_settings()
+                .code_explanations
+                .as_ref()
+                .unwrap()
+                .enabled,
+            Some(false)
+        );
+    }
+
+    #[gpui::test]
     fn test_global_settings(cx: &mut App) {
         let mut store = SettingsStore::new(cx, &test_settings());
         store.register_setting::<ItemSettings>();
@@ -3167,6 +3205,51 @@ mod tests {
                 &SettingsFile::Default,
             ]
         )
+    }
+
+    #[gpui::test]
+    fn test_agent_profile_tool_schema(cx: &mut App) {
+        SettingsStore::test(cx);
+
+        let schema = SettingsStore::json_schema(&SettingsJsonSchemaParams {
+            language_names: &[],
+            font_names: &[],
+            theme_names: &[],
+            icon_theme_names: &[],
+            lsp_adapter_names: &[],
+            action_names: &[],
+            action_documentation: &HashMap::default(),
+            deprecations: &HashMap::default(),
+            deprecation_messages: &HashMap::default(),
+        });
+        let tools = schema
+            .pointer("/$defs/AgentProfileContent/properties/tools")
+            .expect("agent profile tools schema should exist");
+        let properties = tools
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("agent profile tools should have named properties");
+        let boolean_schema = serde_json::json!({ "type": "boolean" });
+        for tool_schema in properties.values() {
+            assert_eq!(tool_schema, &boolean_schema);
+        }
+        assert_eq!(tools.get("additionalProperties"), Some(&Value::Bool(false)));
+
+        let defaults: Value = crate::parse_json_with_comments(default_settings().as_ref())
+            .expect("default settings should parse");
+        for profile in ["write", "ask"] {
+            let path = format!("/agent/profiles/{profile}/tools");
+            let default_tools = defaults
+                .pointer(&path)
+                .and_then(Value::as_object)
+                .expect("built-in profile should have tools");
+            for tool_name in default_tools.keys() {
+                assert!(
+                    properties.contains_key(tool_name),
+                    "{profile} tool {tool_name} should be suggested in the schema"
+                );
+            }
+        }
     }
 
     #[gpui::test]

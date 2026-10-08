@@ -19,8 +19,9 @@ pub use settings::{
     AutoIndentMode, CompletionSettingsContent, ConfiguredLanguageServer,
     EditPredictionDataCollectionChoice, EditPredictionPromptFormatContent, EditPredictionProvider,
     EditPredictionsMode, FormatOnSave, Formatter, FormatterList, InlayHintKind,
-    LanguageSettingsContent, LineEndingSetting, LspInsertMode, REST_OF_LANGUAGE_SERVERS,
-    RewrapBehavior, ShowWhitespaceSetting, SoftWrap, SoftWrapIndent, WordsCompletionMode,
+    LanguageSettingsContent, LineEndingSetting, LspInsertMode, OpenAiCompatibleApiTypeContent,
+    REST_OF_LANGUAGE_SERVERS, RewrapBehavior, ShowWhitespaceSetting, SoftWrap, SoftWrapIndent,
+    WordsCompletionMode,
 };
 use settings::{RegisterSetting, Settings, SettingsLocation, SettingsStore, merge_from::MergeFrom};
 use shellexpand;
@@ -525,7 +526,7 @@ pub struct EditPredictionSettings {
     /// Configures how edit predictions are displayed in the buffer.
     pub mode: settings::EditPredictionsMode,
     /// Settings specific to GitHub Copilot.
-    pub copilot: CopilotSettings,
+    pub copilot: CopilotEditPredictionSettings,
     /// Settings specific to Codestral.
     pub codestral: CodestralSettings,
     /// Settings specific to Ollama.
@@ -598,13 +599,11 @@ pub struct DisabledGlob {
 }
 
 #[derive(Clone, Debug, Default)]
-pub struct CopilotSettings {
+pub struct CopilotEditPredictionSettings {
     /// HTTP/HTTPS proxy to use for Copilot.
     pub proxy: Option<String>,
     /// Disable certificate verification for proxy (not recommended).
     pub proxy_no_verify: Option<bool>,
-    /// Enterprise URI for Copilot.
-    pub enterprise_uri: Option<String>,
     /// Whether the Copilot Next Edit Suggestions feature is enabled.
     pub enable_next_edit_suggestions: Option<bool>,
     /// Automatic prediction debounce delay.
@@ -647,8 +646,29 @@ pub struct OpenAiCompatibleEditPredictionSettings {
     /// The prompt format to use for completions. When `None`, the format
     /// will be derived from the model name at request time.
     pub prompt_format: EditPredictionPromptFormat,
+    /// The API type to use for edit predictions.
+    pub api_type: OpenAiCompatibleApiType,
     /// Automatic prediction debounce delay.
     pub prediction_debounce: DelayMs,
+}
+
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub enum OpenAiCompatibleApiType {
+    /// Text completion API (`/v1/completions`) using model-native FIM tokens.
+    #[default]
+    Completions,
+    /// Chat completion API (`/v1/chat/completions`) using an
+    /// instruction-based fill-in-the-middle prompt.
+    ChatCompletions,
+}
+
+impl From<OpenAiCompatibleApiTypeContent> for OpenAiCompatibleApiType {
+    fn from(value: OpenAiCompatibleApiTypeContent) -> Self {
+        match value {
+            OpenAiCompatibleApiTypeContent::Completions => Self::Completions,
+            OpenAiCompatibleApiTypeContent::ChatCompletions => Self::ChatCompletions,
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
@@ -955,10 +975,9 @@ impl settings::Settings for AllLanguageSettings {
             .collect();
 
         let copilot = edit_predictions.copilot.unwrap();
-        let copilot_settings = CopilotSettings {
+        let copilot_settings = CopilotEditPredictionSettings {
             proxy: copilot.proxy,
             proxy_no_verify: copilot.proxy_no_verify,
-            enterprise_uri: copilot.enterprise_uri,
             enable_next_edit_suggestions: copilot.enable_next_edit_suggestions,
             prediction_debounce: copilot.prediction_debounce.unwrap(),
         };
@@ -980,6 +999,7 @@ impl settings::Settings for AllLanguageSettings {
                 max_output_tokens: ollama.max_output_tokens.unwrap(),
                 api_url: ollama.api_url.unwrap().into(),
                 prompt_format: ollama.prompt_format.unwrap().into(),
+                api_type: OpenAiCompatibleApiType::Completions,
                 prediction_debounce: ollama.prediction_debounce.unwrap(),
             });
         let openai_compatible_settings = edit_predictions.open_ai_compatible_api.unwrap();
@@ -996,6 +1016,7 @@ impl settings::Settings for AllLanguageSettings {
                 max_output_tokens: openai_compatible_settings.max_output_tokens.unwrap(),
                 api_url: api_url.into(),
                 prompt_format: openai_compatible_settings.prompt_format.unwrap().into(),
+                api_type: openai_compatible_settings.api_type.unwrap().into(),
                 prediction_debounce: openai_compatible_settings.prediction_debounce.unwrap(),
             });
         let zed_settings = edit_predictions.zed.unwrap();

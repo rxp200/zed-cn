@@ -707,15 +707,21 @@ impl VariableList {
             cx.update(|window, cx| {
                 let context_menu = ContextMenu::build(window, cx, |menu, _, _| {
                     menu.when_some(entry.as_variable(), |menu, _| {
-                        menu.action("Copy Name", CopyVariableName.boxed_clone())
-                            .action("Copy Value", CopyVariableValue.boxed_clone())
+                        menu.action(i18n::t!("a77a6cca3ce275e0"), CopyVariableName.boxed_clone())
+                            .action(
+                                i18n::t!("81e146176431cbe8"),
+                                CopyVariableValue.boxed_clone(),
+                            )
                             .when(supports_set_variable, |menu| {
-                                menu.action("Edit Value", EditVariable.boxed_clone())
+                                menu.action(
+                                    i18n::t!("72e29c1114385098"),
+                                    EditVariable.boxed_clone(),
+                                )
                             })
                             .when(supports_go_to_memory, |menu| {
-                                menu.action("Go To Memory", GoToMemory.boxed_clone())
+                                menu.action(i18n::t!("761a5ffe0f5bec80"), GoToMemory.boxed_clone())
                             })
-                            .action("Watch Variable", AddWatch.boxed_clone())
+                            .action(i18n::t!("04298f7d3b0a99d7"), AddWatch.boxed_clone())
                             .when_some(can_toggle_data_breakpoint, |mut menu, data_info| {
                                 menu = menu.separator();
                                 if let Some(access_types) = data_info.access_types {
@@ -724,8 +730,10 @@ impl VariableList {
                                             format!(
                                                 "Toggle {} Data Breakpoint",
                                                 match access {
-                                                    dap::DataBreakpointAccessType::Read => "Read",
-                                                    dap::DataBreakpointAccessType::Write => "Write",
+                                                    dap::DataBreakpointAccessType::Read =>
+                                                        i18n::t!("534cb3fa8fbf373f"),
+                                                    dap::DataBreakpointAccessType::Write =>
+                                                        i18n::t!("5c783c4679655185"),
                                                     dap::DataBreakpointAccessType::ReadWrite =>
                                                         "Read/Write",
                                                 }
@@ -740,7 +748,7 @@ impl VariableList {
                                     menu
                                 } else {
                                     menu.action(
-                                        "Toggle Data Breakpoint",
+                                        i18n::t!("f3e4bd47b902997e"),
                                         crate::ToggleDataBreakpoint { access_type: None }
                                             .boxed_clone(),
                                     )
@@ -748,12 +756,18 @@ impl VariableList {
                             })
                     })
                     .when(entry.as_watcher().is_some(), |menu| {
-                        menu.action("Copy Name", CopyVariableName.boxed_clone())
-                            .action("Copy Value", CopyVariableValue.boxed_clone())
+                        menu.action(i18n::t!("a77a6cca3ce275e0"), CopyVariableName.boxed_clone())
+                            .action(
+                                i18n::t!("81e146176431cbe8"),
+                                CopyVariableValue.boxed_clone(),
+                            )
                             .when(supports_set_variable, |menu| {
-                                menu.action("Edit Value", EditVariable.boxed_clone())
+                                menu.action(
+                                    i18n::t!("72e29c1114385098"),
+                                    EditVariable.boxed_clone(),
+                                )
                             })
-                            .action("Remove Watch", RemoveWatch.boxed_clone())
+                            .action(i18n::t!("faf1689424b58cf8"), RemoveWatch.boxed_clone())
                     })
                     .context(focus_handle.clone())
                 });
@@ -1094,6 +1108,8 @@ impl VariableList {
     fn variable_color(
         &self,
         presentation_hint: Option<&VariablePresentationHint>,
+        value: &str,
+        type_hint: Option<&str>,
         cx: &Context<Self>,
     ) -> VariableColor {
         let syntax_color_for = |name| {
@@ -1121,9 +1137,43 @@ impl VariableList {
         let value = self
             .disabled
             .then(|| Color::Disabled.color(cx))
-            .or_else(|| syntax_color_for("variable.special"));
+            .or_else(|| {
+                syntax_color_for(Self::syntax_token_for_value(value, type_hint))
+                    .or_else(|| syntax_color_for("variable.special"))
+            });
 
         VariableColor { name, value }
+    }
+
+    // pattern match by variable value as types are called different things
+    fn syntax_token_for_value(value: &str, type_hint: Option<&str>) -> &'static str {
+        if let Some(hint) = type_hint {
+            match hint.trim().to_ascii_lowercase().as_str() {
+                "bool" | "boolean" => return "boolean",
+                "nonetype" | "null" | "nil" | "none" | "undefined" | "void" => return "comment",
+                "str" | "string" | "char" | "&str" | "string_view" | "std::string" => {
+                    return "string";
+                }
+                "int" | "integer" | "long" | "short" | "byte" | "float" | "double" | "number"
+                | "int8" | "int16" | "int32" | "int64" | "uint8" | "uint16" | "uint32"
+                | "uint64" | "usize" | "isize" | "size_t" | "f32" | "f64" => return "number",
+                _ => {}
+            }
+        }
+
+        let trimmed = value.trim();
+        let is_quoted = |quote: char| {
+            trimmed.len() >= 2 && trimmed.starts_with(quote) && trimmed.ends_with(quote)
+        };
+        if is_quoted('"') || is_quoted('\'') {
+            return "string";
+        }
+        match trimmed {
+            "true" | "false" | "True" | "False" | "TRUE" | "FALSE" => "boolean",
+            "nil" | "null" | "None" | "NULL" | "nullptr" | "undefined" | "NoneType" => "comment",
+            _ if !trimmed.is_empty() && trimmed.parse::<f64>().is_ok() => "number",
+            _ => "variable.special",
+        }
     }
 
     fn render_variable_value(
@@ -1175,14 +1225,26 @@ impl VariableList {
                                 },
                             )
                             .child(
-                                Label::new(format!("=  {value}"))
-                                    .single_line()
-                                    .truncate()
-                                    .size(LabelSize::Small)
-                                    .color(Color::Muted)
-                                    .when_some(variable_color.value, |this, color| {
-                                        this.color(Color::from(color))
-                                    }),
+                                h_flex()
+                                    .min_w_0()
+                                    .child(
+                                        Label::new("=  ")
+                                            .single_line()
+                                            .size(LabelSize::Small)
+                                            .color(Color::Muted)
+                                            .flex_shrink_0(),
+                                    )
+                                    .child(
+                                        Label::new(value.clone())
+                                            .single_line()
+                                            .truncate()
+                                            .size(LabelSize::Small)
+                                            .color(Color::Muted)
+                                            .when_some(variable_color.value, |this, color| {
+                                                this.color(Color::from(color))
+                                            })
+                                            .flex_1(),
+                                    ),
                             )
                             .tooltip(Tooltip::text(value))
                     }
@@ -1246,7 +1308,8 @@ impl VariableList {
             return div().into_any_element();
         };
 
-        let variable_color = self.variable_color(watcher.presentation_hint.as_ref(), cx);
+        let variable_color =
+            self.variable_color(watcher.presentation_hint.as_ref(), &watcher.value, None, cx);
 
         let is_selected = self
             .selection
@@ -1363,7 +1426,12 @@ impl VariableList {
                         }
                     })
                     .tooltip(move |_window, cx| {
-                        Tooltip::for_action_in("Remove Watch", &RemoveWatch, &focus_handle, cx)
+                        Tooltip::for_action_in(
+                            i18n::t!("faf1689424b58cf8"),
+                            &RemoveWatch,
+                            &focus_handle,
+                            cx,
+                        )
                     })
                     .icon_size(ui::IconSize::Indicator),
                 ),
@@ -1456,7 +1524,12 @@ impl VariableList {
             return div().into_any_element();
         };
 
-        let variable_color = self.variable_color(dap.presentation_hint.as_ref(), cx);
+        let variable_color = self.variable_color(
+            dap.presentation_hint.as_ref(),
+            &dap.value,
+            dap.type_.as_deref(),
+            cx,
+        );
 
         let var_ref = dap.variables_reference;
         let colors = get_entry_color(cx);

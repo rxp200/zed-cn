@@ -45,6 +45,7 @@
 
 - [Overview](./ai/overview.md)
 - [AI Quick Start](./ai/quick-start.md)
+- [AI 代码讲解](./code-explanations.md)
 - [AI by Company](./ai/by-company.md)
 - [Agents](./ai/agents.md)
   - [Zed Agent](./ai/zed-agent.md)
@@ -131,6 +132,7 @@
 - [Elixir](./languages/elixir.md)
 - [Elm](./languages/elm.md)
 - [Emmet](./languages/emmet.md)
+- [Env](./languages/env.md)
 - [Erlang](./languages/erlang.md)
 - [Fish](./languages/fish.md)
 - [GDScript](./languages/gdscript.md)

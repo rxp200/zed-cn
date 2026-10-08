@@ -141,7 +141,7 @@ impl Component for ConfiguredApiCard {
                 container()
                     .child(
                         ConfiguredApiCard::new("with-tooltip", "Anthropic API key configured")
-                            .tooltip_label("Click to reset your API key"),
+                            .tooltip_label(i18n::t!("3c730b4356d3b80a")),
                     )
                     .into_any_element(),
             ),

@@ -3,7 +3,7 @@ use std::ops::Range;
 
 use crate::utils::replace_control_characters;
 use crate::{LabelLike, prelude::*};
-use gpui::{HighlightStyle, StyleRefinement, StyledText};
+use gpui::{HighlightStyle, StyleRefinement, StyledText, TextAlign};
 
 /// A struct representing a label element in the UI.
 ///
@@ -99,6 +99,11 @@ impl Label {
     gpui::margin_style_methods!({
         visibility: pub
     });
+
+    pub fn text_center(mut self) -> Self {
+        self.style().text.text_align = Some(TextAlign::Center);
+        self
+    }
 
     pub fn flex_1(mut self) -> Self {
         self.style().flex_grow = Some(1.);
@@ -395,27 +400,27 @@ impl Component for Label {
                     example_group_with_title(
                         "Sizes",
                         vec![
-                            single_example("Default", Label::new("Project Explorer").into_any_element()),
+                            single_example("Default", Label::new("项目浏览器").into_any_element()),
                             single_example("Small", Label::new("File: main.rs").size(LabelSize::Small).into_any_element()),
-                            single_example("Large", Label::new("Welcome to Zed").size(LabelSize::Large).into_any_element()),
+                            single_example("Large", Label::new("欢迎使用 Zed").size(LabelSize::Large).into_any_element()),
                         ],
                     ),
                     example_group_with_title(
                         "Colors",
                         vec![
                             single_example("Default", Label::new("Status: Ready").into_any_element()),
-                            single_example("Accent", Label::new("New Update Available").color(Color::Accent).into_any_element()),
-                            single_example("Error", Label::new("Build Failed").color(Color::Error).into_any_element()),
+                            single_example("Accent", Label::new("新更新可用").color(Color::Accent).into_any_element()),
+                            single_example("Error", Label::new("构建失败").color(Color::Error).into_any_element()),
                         ],
                     ),
                     example_group_with_title(
                         "Styles",
                         vec![
-                            single_example("Default", Label::new("Normal Text").into_any_element()),
-                            single_example("Bold", Label::new("Important Notice").weight(gpui::FontWeight::BOLD).into_any_element()),
-                            single_example("Italic", Label::new("Code Comment").italic().into_any_element()),
-                            single_example("Strikethrough", Label::new("Deprecated Feature").strikethrough().into_any_element()),
-                            single_example("Underline", Label::new("Clickable Link").underline().into_any_element()),
+                            single_example("Default", Label::new("普通文本").into_any_element()),
+                            single_example("Bold", Label::new("重要通知").weight(gpui::FontWeight::BOLD).into_any_element()),
+                            single_example("Italic", Label::new("代码注释").italic().into_any_element()),
+                            single_example("Strikethrough", Label::new("已弃用功能").strikethrough().into_any_element()),
+                            single_example("Underline", Label::new("可点击链接").underline().into_any_element()),
                             single_example("Inline Code", Label::new("fn main() {}").inline_code(cx).into_any_element()),
                         ],
                     ),

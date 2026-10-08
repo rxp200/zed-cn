@@ -79,6 +79,9 @@
   "agent_buffer_font_size": 12,
   // The default font size for the commit editor in the git panel and commit modal.
   "git_commit_buffer_font_size": 12,
+  // The font family for Mermaid diagrams in the agent panel and markdown preview.
+  // Falls back to the UI font family if unset.
+  "mermaid_font_family": null,
   // How much to fade out unused code.
   "unnecessary_code_fade": 0.3,
   // Active pane styling settings.
@@ -118,6 +121,8 @@
     "font_family": null,
     // The font family for code blocks in the markdown preview. Falls back to the editor font family if unset.
     "code_font_family": null,
+    // The font weight for headings in the markdown preview, in CSS units from 100 to 900.
+    "heading_font_weight": 600,
     // Whether to automatically open Markdown files in the preview.
     "open_markdown_files_in_preview": false,
     // Whether to limit the width of the rendered markdown content. When
@@ -155,6 +160,9 @@
   "hover_popover_hiding_delay": 300,
   // Whether to confirm before quitting Zed.
   "confirm_quit": false,
+  // Interface language (BCP-47 tag). Available languages live in the
+  // repository's `locales/` directory; unknown values fall back to zh-Hans.
+  "language": "zh-Hans",
   // Whether to restore last closed project when fresh Zed instance is opened
   // May take 3 values:
   //  1. All workspaces open during last session
@@ -414,6 +422,54 @@
   //
   // Default: 100
   "minimum_split_diff_width": 100,
+  // Settings for rainbow brackets (bracket colorization).
+  // Requires `colorize_brackets` to be enabled for the buffer's language.
+  "rainbow_brackets": {
+    // Palette used to colorize brackets, in cycle order. Any CSS color
+    // accepted by the theme, such as "#ff0000" or "hsl(0, 100%, 50%)".
+    // When empty, the theme's `accents` are used.
+    //
+    // Default: []
+    "colors": [],
+    // How the color cycle is mapped onto brackets.
+    //
+    // 1. Count nesting depth across all bracket types, so brackets at the
+    //    same depth share a color:
+    //    "consecutive" (default)
+    // 2. Keep an independent nesting depth per bracket type, so `()`,
+    //    `[]` and `{}` cycle through the palette independently:
+    //    "independent"
+    "color_mode": "consecutive",
+    // Whether colors advance with every opening bracket instead of following
+    // the nesting depth.
+    //
+    // Default: false
+    "force_iteration_color_cycle": false,
+    // Whether an opening bracket is forced to use a different color than the
+    // opening bracket that precedes it.
+    //
+    // Default: false
+    "force_unique_opening_color": false,
+    // Color used for brackets that do not form a matched pair. Unmatched
+    // brackets are left uncolored when this is null.
+    //
+    // Default: null
+    "unmatched_bracket_color": null,
+    // Whether the highlighted bracket pair at the cursor uses the pair's
+    // rainbow color instead of the theme's bracket highlight background.
+    //
+    // Default: false
+    "highlight_active_scope": false,
+    // When to draw vertical guides that connect matched bracket pairs.
+    //
+    // 1. Never draw bracket pair guides:
+    //    "off" (default)
+    // 2. Only draw the guide of the bracket pair containing the cursor:
+    //    "active"
+    // 3. Draw guides for every visible bracket pair:
+    //    "always"
+    "bracket_pair_guides": "off"
+  },
   // Show method signatures in the editor, when inside parentheses.
   "auto_signature_help": false,
   // Whether to automatically detect the language of an untitled buffer from its contents.
@@ -630,6 +686,42 @@
     "open_menus_on_hover": false,
     // The layout of window control buttons in the title bar (Linux only).
     "button_layout": "platform_default",
+  },
+  "code_explanations": {
+    "enabled": false,
+    "provider": null,
+    "model": null,
+    "target_language": "中文",
+    "max_function_lines": 500,
+    "max_concurrent_requests": 5,
+    "preload_lines": 100,
+    "detailed": false,
+    "prefer_existing_comments": true,
+    "cache_persist": true,
+    "cache_max_bytes": 52428800
+  },
+  "hover_translation": {
+    // Whether to automatically translate non-Chinese hover documentation
+    // into the target language (shown underlined below the original text).
+    "enabled": false,
+    // The language model provider used for translation, matching one of the
+    // providers configured under `language_models`. `null` means the default
+    // fast model is used.
+    "provider": null,
+    // The model used for translation. `null` means the provider's default.
+    "model": null,
+    // The target language to translate into.
+    "target_language": "中文",
+    // Maximum number of documentation characters sent for translation.
+    "max_chars": 4000,
+    // Whether translations are persisted to an on-disk cache reused across
+    // sessions, so repeatedly translating the same documentation does not
+    // call the model again.
+    "cache_persist": true,
+    // Maximum size of the on-disk translation cache, in bytes. When the cache
+    // grows beyond this limit, the least useful entries (least
+    // recently/frequently viewed and largest) are evicted.
+    "cache_max_bytes": 5242880,
   },
   "audio": {
     // Select specific output audio device.
@@ -877,7 +969,7 @@
     // Default width of the project panel.
     "default_width": 240,
     // Where to dock the project panel. Can be 'left' or 'right'.
-    "dock": "right",
+    "dock": "left",
     // Spacing between worktree entries in the project panel. Can be 'comfortable' or 'standard'.
     "entry_spacing": "comfortable",
     // Whether to show file icons in the project panel.
@@ -1145,6 +1237,11 @@
     // Choices: project_diff, file_diff, view_file
     // Default: project_diff
     "entry_primary_click_action": "project_diff",
+    // Whether the commit message editor is shown in the git panel by default.
+    //
+    // Choices: expanded, collapsed
+    // Default: expanded
+    "commit_editor": "expanded",
   },
   "agent": {
     // Whether the inline assistant should use streaming tools, when available
@@ -1287,30 +1384,30 @@
         "name": "Write",
         "enable_all_context_servers": true,
         "tools": {
+          "apply_code_action": true,
+          "ask_user": false,
           "copy_path": true,
           "create_directory": true,
           "create_thread": true,
           "delete_path": true,
           "diagnostics": true,
-          "apply_code_action": true,
-          "ask_user": false,
           "edit_file": true,
-          "write_file": true,
           "fetch": true,
           "find_path": true,
           "find_references": true,
           "get_code_actions": true,
           "go_to_definition": true,
+          "grep": true,
           "list_agents_and_models": true,
           "list_directory": true,
           "move_path": true,
-          "rename_symbol": true,
           "read_file": true,
-          "grep": true,
+          "rename_symbol": true,
+          "search_web": true,
           "skill": true,
           "spawn_agent": true,
           "terminal": true,
-          "search_web": true,
+          "write_file": true,
         },
       },
       "ask": {
@@ -1318,21 +1415,21 @@
         // We don't know which of the context server tools are safe for the "Ask" profile, so we don't enable them by default.
         // "enable_all_context_servers": true,
         "tools": {
+          "ask_user": false,
           "create_thread": true,
           "diagnostics": true,
-          "ask_user": false,
           "fetch": true,
-          "list_agents_and_models": true,
-          "list_directory": true,
           "find_path": true,
           "find_references": true,
           "get_code_actions": true,
           "go_to_definition": true,
-          "read_file": true,
           "grep": true,
+          "list_agents_and_models": true,
+          "list_directory": true,
+          "read_file": true,
+          "search_web": true,
           "skill": true,
           "spawn_agent": true,
-          "search_web": true,
         },
       },
       "minimal": {
@@ -1580,6 +1677,11 @@
     "include_ignored": "smart",
     // Whether to include text channels in file finder results.
     "include_channels": false,
+    // Whether to pre-fill the file finder's query with the text selected in the
+    // focused item (e.g. an editor or a terminal) when it is opened.
+    //
+    // Default: true
+    "prefill_query_from_selection": true,
   },
   // Whether or not to remove any trailing whitespace from lines of a buffer
   // before saving it.
@@ -1686,9 +1788,9 @@
   // Control what info is collected by Zed.
   "telemetry": {
     // Send debug info like crash reports.
-    "diagnostics": true,
+    "diagnostics": false,
     // Send anonymized usage data like what languages you're using Zed with.
-    "metrics": true,
+    "metrics": false,
     // Allow sending requests to Anthropic models that cannot be offered with
     // Zero Data Retention
     "anthropic_retention": false,
@@ -1700,6 +1802,7 @@
   // Automatically update Zed. This setting may be ignored on Linux if
   // installed through a package manager.
   "auto_update": true,
+  "update_channel": "stable",
   // How to render LSP `textDocument/documentColor` colors in the editor.
   //
   // Possible values:
@@ -1921,16 +2024,15 @@
       "/**/zed/settings.json", // zed user settings
       "/**/zed/keymap.json",
     ],
-    // When to show edit predictions previews in buffer.
+    // When to request and show edit prediction previews in buffer.
     // This setting takes two possible values:
-    // 1. Display predictions inline when there are no language server completions available.
+    // 1. Request predictions automatically and display them inline when there are no language server completions available.
     //     "mode": "eager"
-    // 2. Display predictions inline only when holding a modifier key (alt by default).
+    // 2. Request and display predictions only when holding a modifier key (alt by default).
     //     "mode": "subtle"
     "mode": "eager",
     // Copilot-specific settings
     // "copilot": {
-    //   "enterprise_uri": "",
     //   "proxy": "",
     //   "proxy_no_verify": false,
     //   "enable_next_edit_suggestions": true,
@@ -1939,7 +2041,6 @@
     //   "prediction_debounce": 75
     // },
     "copilot": {
-      "enterprise_uri": null,
       "proxy": null,
       "proxy_no_verify": null,
       "enable_next_edit_suggestions": true,
@@ -1963,6 +2064,12 @@
       "model": "",
       "prompt_format": "infer",
       "max_output_tokens": 64,
+      // The API type used for edit predictions:
+      // - "completions": text completion API (e.g. /v1/completions), for native FIM models;
+      // - "chat_completions": chat completion API (e.g. /v1/chat/completions), for chat
+      //   models. Zed builds an instruction-based fill-in-the-middle prompt, so chat
+      //   models without native FIM support can be used for edit predictions.
+      "api_type": "completions",
       "prediction_debounce": 0,
     },
     "zed": {
@@ -2304,7 +2411,7 @@
       "tsconfig*.json",
     ],
     "Markdown": [".rules", ".cursorrules", ".windsurfrules", ".clinerules"],
-    "Shell Script": [".env.*"],
+    "Env": [".env.*"],
   },
   // Settings for which version of Node.js and NPM to use when installing
   // language servers and Copilot.
@@ -2329,6 +2436,8 @@
   "auto_install_extensions": {
     "html": true,
   },
+  // Whether to suggest installing extensions based on the files you open.
+  "suggest_extensions": true,
   // The capabilities granted to extensions.
   //
   // This list can be customized to restrict what extensions are able to do.
@@ -2638,6 +2747,10 @@
       "language_servers": ["zls", "..."],
     },
   },
+  // Settings shared by Copilot Chat and edit predictions.
+  "copilot": {
+    "enterprise_uri": null,
+  },
   // Different settings for specific language models.
   "language_models": {
     "anthropic": {
@@ -2939,6 +3052,9 @@
   "ssh_connections": [],
   // Whether to read ~/.ssh/config for ssh connection sources.
   "read_ssh_config": true,
+  // 中国服务器适配。启用后，SSH 远程开发服务将直接由本机通过已配置的代理下载，
+  // 再经 SSH 上传到远程主机，不会先尝试由远程主机直接下载。
+  "china_server_adaptation": true,
   // Default timeout in seconds for all context server tool calls.
   // Individual servers can override this in their configuration.
   // Examples:

@@ -19,15 +19,18 @@ build-remote-server-binary = []
 test-support = ["fs/test-support"]
 
 [dependencies]
+i18n.workspace = true
 anyhow.workspace = true
 askpass.workspace = true
 async-trait.workspace = true
+async-compression.workspace = true
 base64.workspace = true
+chrono.workspace = true
 collections.workspace = true
-fs.workspace = true
+fs = { workspace = true, optional = true }
 futures.workspace = true
 gpui.workspace = true
-log.workspace = true
+log = { workspace = true, features = ["kv_unstable_std"] }
 parking_lot.workspace = true
 paths.workspace = true
 release_channel.workspace = true
@@ -37,15 +40,19 @@ semver.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 settings.workspace = true
+sha2.workspace = true
+settings_content.workspace = true
 smol.workspace = true
 telemetry.workspace = true
 tempfile.workspace = true
 thiserror.workspace = true
 urlencoding.workspace = true
 util.workspace = true
+uuid.workspace = true
 which.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, features = ["Win32_Storage_FileSystem"] }
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
-fs = { workspace = true, features = ["test-support"] }
-util = { workspace = true, features = ["test-support"] }

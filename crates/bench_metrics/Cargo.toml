@@ -16,8 +16,11 @@ doctest = false
 test-support = []
 
 [dependencies]
+i18n.workspace = true
 anyhow.workspace = true
 criterion.workspace = true
+
+[target.'cfg(unix)'.dependencies]
 libc.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]

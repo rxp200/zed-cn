@@ -16,6 +16,8 @@ pub mod blink_manager;
 mod bracket_colorization;
 mod clangd_ext;
 pub mod code_context_menus;
+mod code_explanation_units;
+pub mod code_explanations;
 mod code_lens;
 pub mod display_map;
 mod document_colors;
@@ -30,6 +32,7 @@ mod git;
 mod highlight_matching_bracket;
 pub mod hover_links;
 pub mod hover_popover;
+pub mod hover_translation;
 mod indent_guides;
 mod inlays;
 mod inline_input;
@@ -47,6 +50,7 @@ mod selections_collection;
 pub mod semantic_tokens;
 mod split;
 pub mod split_editor_view;
+mod translation_cache;
 
 mod bookmarks;
 #[cfg(test)]
@@ -76,6 +80,7 @@ mod rewrap;
 mod selection;
 
 pub(crate) use actions::*;
+pub use actions::{DeepExplainSelection, RunCode, RunFile, RunSelection, StopCode};
 pub use clipboard::ClipboardSelection;
 pub use code_actions::CodeActionProvider;
 use collections::TypeIdHashMap;
@@ -232,7 +237,8 @@ use project::{
 use rand::seq::SliceRandom;
 use regex::Regex;
 use rpc::{ErrorCode, ErrorExt, proto::PeerId};
-use scroll::{Autoscroll, ScrollAnchor, ScrollManager, SharedScrollAnchor};
+pub(crate) use scroll::Autoscroll;
+use scroll::{ScrollAnchor, ScrollManager, SharedScrollAnchor};
 use selections_collection::{MutableSelectionsCollection, SelectionsCollection};
 use serde::{Deserialize, Serialize};
 use settings::{
@@ -326,9 +332,9 @@ enum ReportEditorEvent {
 impl ReportEditorEvent {
     pub fn event_type(&self) -> &'static str {
         match self {
-            Self::Saved { .. } => "Editor Saved",
-            Self::EditorOpened => "Editor Opened",
-            Self::Closed => "Editor Closed",
+            Self::Saved { .. } => i18n::t!("5868f3b90522396b"),
+            Self::EditorOpened => i18n::t!("bb8f8a48dd750b44"),
+            Self::Closed => i18n::t!("07b1f4fd110411bd"),
         }
     }
 }
@@ -991,6 +997,7 @@ pub struct Editor {
     autoclose_regions: Vec<AutocloseRegion>,
     snippet_stack: InvalidationStack<SnippetState>,
     select_syntax_node_history: SelectSyntaxNodeHistory,
+    bracket_selection_history: Vec<Vec<Selection<MultiBufferOffset>>>,
     ime_transaction: Option<TransactionId>,
     pub diagnostics_max_severity: DiagnosticSeverity,
     active_diagnostics: ActiveDiagnostic,
@@ -1086,6 +1093,7 @@ pub struct Editor {
     leader_id: Option<CollaboratorId>,
     remote_id: Option<ViewId>,
     pub hover_state: HoverState,
+    pub(crate) explanations: code_explanations::ExplanationState,
     pending_mouse_down: Option<Rc<RefCell<Option<MouseDownEvent>>>>,
     prev_pressure_stage: Option<PressureStage>,
     gutter_hovered: bool,
@@ -1209,6 +1217,7 @@ pub struct Editor {
     applicable_language_settings: HashMap<Option<LanguageName>, Arc<LanguageSettings>>,
     accent_data: Option<AccentData>,
     bracket_fetched_tree_sitter_chunks: HashMap<Range<text::Anchor>, HashSet<Range<BufferRow>>>,
+    bracket_guides: Vec<bracket_colorization::BracketGuide>,
     semantic_token_state: SemanticTokenState,
     pub(crate) refresh_matching_bracket_highlights_task: Task<()>,
     refresh_document_symbols_task: Shared<Task<()>>,
@@ -1705,8 +1714,8 @@ enum GutterButtonIntent {
 impl GutterButtonIntent {
     fn as_str(&self) -> &'static str {
         match self {
-            Self::SetBookmark => "Set Bookmark",
-            Self::SetBreakpoint => "Set Breakpoint",
+            Self::SetBookmark => i18n::t!("d6042b9049c7853b"),
+            Self::SetBreakpoint => i18n::t!("587c60ff7b52bd83"),
         }
     }
 
@@ -2367,6 +2376,7 @@ impl Editor {
             autoclose_regions: Vec::new(),
             snippet_stack: InvalidationStack::default(),
             select_syntax_node_history: SelectSyntaxNodeHistory::default(),
+            bracket_selection_history: Vec::new(),
             ime_transaction: None,
             active_diagnostics: ActiveDiagnostic::None,
             show_inline_diagnostics: ProjectSettings::get_global(cx).diagnostics.inline.enabled,
@@ -2464,6 +2474,7 @@ impl Editor {
             leader_id: None,
             remote_id: None,
             hover_state: HoverState::default(),
+            explanations: code_explanations::ExplanationState::default(),
             pending_mouse_down: None,
             prev_pressure_stage: None,
             hovered_link_state: None,
@@ -2580,6 +2591,7 @@ impl Editor {
             semantic_token_state: SemanticTokenState::new(cx, full_mode),
             accent_data: None,
             bracket_fetched_tree_sitter_chunks: HashMap::default(),
+            bracket_guides: Vec::new(),
             number_deleted_lines: false,
             refresh_matching_bracket_highlights_task: Task::ready(()),
             refresh_document_symbols_task: Task::ready(()).shared(),
@@ -2972,7 +2984,7 @@ impl Editor {
         cx: &mut Context<Workspace>,
     ) {
         Self::new_in_workspace(workspace, window, cx).detach_and_prompt_err(
-            "Failed to create buffer",
+            i18n::t!("156d2f0095713ee8"),
             window,
             cx,
             |e, _, _| match e.error_code() {
@@ -3060,7 +3072,7 @@ impl Editor {
             })?;
             anyhow::Ok(())
         })
-        .detach_and_prompt_err("Failed to create buffer", window, cx, |e, _, _| {
+        .detach_and_prompt_err(i18n::t!("156d2f0095713ee8"), window, cx, |e, _, _| {
             match e.error_code() {
                 ErrorCode::RemoteUpgradeRequired => Some(format!(
                 "The remote instance of Zed does not support this yet. It must be upgraded to {}",
@@ -4164,6 +4176,7 @@ impl Editor {
 
         self.update_hovered_link(
             position_map.point_for_position(mouse_position),
+            position_map.inlay_hint_glyph_for_position(mouse_position),
             Some(mouse_position),
             &position_map.snapshot,
             modifiers,
@@ -4356,9 +4369,9 @@ impl Editor {
             }))
             .tooltip(move |_window, cx| {
                 Tooltip::with_meta_in(
-                    "Remove Bookmark",
+                    i18n::t!("88f343822f860138"),
                     Some(&ToggleBookmark),
-                    SharedString::from("Right-click for more options"),
+                    SharedString::from(i18n::t!("cf35be2b6df8dc80")),
                     &focus_handle,
                     cx,
                 )
@@ -4446,47 +4459,47 @@ impl Editor {
             .map(|(anchor, bp)| (anchor, Arc::from(bp)));
 
         let log_breakpoint_msg = if breakpoint.as_ref().is_some_and(|bp| bp.1.message.is_some()) {
-            "Edit Log Breakpoint"
+            i18n::t!("ec4c4b2c5ecbc072")
         } else {
-            "Set Log Breakpoint"
+            i18n::t!("a7fca8b4a196198f")
         };
 
         let condition_breakpoint_msg = if breakpoint
             .as_ref()
             .is_some_and(|bp| bp.1.condition.is_some())
         {
-            "Edit Condition Breakpoint"
+            i18n::t!("48533ca8da794ce7")
         } else {
-            "Set Condition Breakpoint"
+            i18n::t!("2648de35fa820a99")
         };
 
         let hit_condition_breakpoint_msg = if breakpoint
             .as_ref()
             .is_some_and(|bp| bp.1.hit_condition.is_some())
         {
-            "Edit Hit Condition Breakpoint"
+            i18n::t!("a563db1ffb32fd7f")
         } else {
-            "Set Hit Condition Breakpoint"
+            i18n::t!("8dd2f9b014e5e147")
         };
 
         let set_breakpoint_msg = if breakpoint.as_ref().is_some() {
-            "Unset Breakpoint"
+            i18n::t!("deef0c54dcd07db9")
         } else {
-            "Set Breakpoint"
+            i18n::t!("587c60ff7b52bd83")
         };
 
         let git_blame_msg = if self.show_git_blame_gutter {
-            "Close Git Blame"
+            i18n::t!("df4ee7ba241de132")
         } else {
-            "Open Git Blame"
+            i18n::t!("18f9cac44671f3e3")
         };
 
         let bookmark = self.bookmark_at_row(row, window, cx);
 
         let set_bookmark_msg = if bookmark.as_ref().is_some() {
-            "Remove Bookmark"
+            i18n::t!("88f343822f860138")
         } else {
-            "Add Bookmark"
+            i18n::t!("a60529441b4397a7")
         };
         let has_bookmark = bookmark.as_ref().is_some();
 
@@ -4503,12 +4516,14 @@ impl Editor {
 
         let toggle_state_entry: Option<(&str, Box<dyn Action>)> =
             breakpoint.as_ref().map(|bp| match bp.1.state {
-                BreakpointState::Enabled => {
-                    ("Disable", crate::actions::DisableBreakpoint.boxed_clone())
-                }
-                BreakpointState::Disabled => {
-                    ("Enable", crate::actions::EnableBreakpoint.boxed_clone())
-                }
+                BreakpointState::Enabled => (
+                    i18n::t!("7df5c456c765e4c3"),
+                    crate::actions::DisableBreakpoint.boxed_clone(),
+                ),
+                BreakpointState::Disabled => (
+                    i18n::t!("f4f0ead1116b5b62"),
+                    crate::actions::EnableBreakpoint.boxed_clone(),
+                ),
             });
 
         let (anchor, breakpoint) =
@@ -4520,7 +4535,7 @@ impl Editor {
                 .when_some(
                     clear_runnable_task_status,
                     |this, (buffer_id, buffer_row)| {
-                        this.entry("Clear Run Status", None, {
+                        this.entry(i18n::t!("edbd68425a606cab"), None, {
                             let weak_editor = weak_editor.clone();
                             move |_window, cx| {
                                 weak_editor
@@ -4536,7 +4551,7 @@ impl Editor {
                 .when(run_to_cursor, |this| {
                     let weak_editor = weak_editor.clone();
                     this.entry(
-                        "Run to Cursor",
+                        i18n::t!("800844fdbd4f9fe3"),
                         Some(RunToCursor.boxed_clone()),
                         move |window, cx| {
                             weak_editor
@@ -4676,7 +4691,7 @@ impl Editor {
                 })
                 .when(has_bookmark, |this| {
                     this.entry(
-                        "Edit Bookmark",
+                        i18n::t!("2c1b74bf946a6c9a"),
                         Some(EditBookmark.boxed_clone()),
                         move |window, cx| {
                             weak_editor
@@ -4728,7 +4743,7 @@ impl Editor {
         let has_context_menu = self.has_mouse_context_menu();
 
         let meta = if is_rejected {
-            SharedString::from("No executable code is associated with this line.")
+            SharedString::from(i18n::t!("e95b1a8a52646860"))
         } else if !breakpoint.is_disabled() {
             SharedString::from(format!(
                 "{alt_as_text}-click to disable\nright-click for more options"
@@ -6261,7 +6276,7 @@ impl Editor {
             BreakpointPromptEditAction::Condition => {
                 "Condition when a breakpoint is hit. Expressions within {} are interpolated."
             }
-            BreakpointPromptEditAction::HitCondition => "How many breakpoint hits to ignore",
+            BreakpointPromptEditAction::HitCondition => i18n::t!("61a4d840cb6d2792"),
         };
 
         let breakpoint = breakpoint.clone();
@@ -8836,6 +8851,7 @@ impl Editor {
         let blocks = self
             .display_map
             .update(cx, |display_map, cx| display_map.insert_blocks(blocks, cx));
+        self.inlay_hint_visibility_changed(cx);
         if let Some(autoscroll) = autoscroll {
             self.request_autoscroll(autoscroll, cx);
         }
@@ -8880,6 +8896,7 @@ impl Editor {
         self.display_map.update(cx, |display_map, cx| {
             display_map.remove_blocks(block_ids, cx)
         });
+        self.inlay_hint_visibility_changed(cx);
         if let Some(autoscroll) = autoscroll {
             self.request_autoscroll(autoscroll, cx);
         }
@@ -10054,6 +10071,9 @@ impl Editor {
                 edited_buffer,
                 source,
             } => {
+                if self.explanations.version.is_some() {
+                    code_explanations::code_edited(self, cx);
+                }
                 self.scrollbar_marker_state.dirty = true;
                 self.active_indent_guides_state.dirty = true;
                 self.fit_gutter_line_number_width(false, cx);
@@ -10090,6 +10110,7 @@ impl Editor {
                     self.detect_buffer_language(buffer_id, cx);
                 }
 
+                self.inlay_hint_visibility_changed(cx);
                 cx.emit(EditorEvent::BufferEdited);
                 cx.emit(SearchEvent::MatchesInvalidated);
 
@@ -10121,6 +10142,7 @@ impl Editor {
                 self.register_visible_buffers(cx);
                 self.update_lsp_data(Some(buffer_id), window, cx);
                 self.refresh_inlay_hints(InlayHintRefreshReason::NewLinesShown, cx);
+                self.inlay_hint_visibility_changed(cx);
                 self.refresh_runnables(None, window, cx);
                 self.bracket_fetched_tree_sitter_chunks
                     .retain(|range, _| range.start.buffer_id != buffer_id);
@@ -10156,6 +10178,7 @@ impl Editor {
                 self.display_map.update(cx, |display_map, cx| {
                     display_map.unfold_buffers(removed_buffer_ids.iter().copied(), cx);
                 });
+                self.inlay_hint_visibility_changed(cx);
 
                 jsx_tag_auto_close::refresh_enabled_in_any_buffer(self, multibuffer, cx);
                 cx.emit(EditorEvent::BuffersRemoved {
@@ -10166,6 +10189,7 @@ impl Editor {
                 self.display_map.update(cx, |map, cx| {
                     map.unfold_buffers(buffer_ids.iter().copied(), cx)
                 });
+                self.inlay_hint_visibility_changed(cx);
                 cx.emit(EditorEvent::BuffersEdited {
                     buffer_ids: buffer_ids.clone(),
                 });
@@ -10235,6 +10259,7 @@ impl Editor {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.inlay_hint_visibility_changed(cx);
         cx.notify();
     }
 
@@ -10300,6 +10325,9 @@ impl Editor {
     }
 
     fn settings_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.explanations.version.is_some() {
+            code_explanations::clear(self, cx);
+        }
         let new_language_settings = self.fetch_applicable_language_settings(cx);
         let language_settings_changed = new_language_settings != self.applicable_language_settings;
         self.applicable_language_settings = new_language_settings;
@@ -10993,6 +11021,7 @@ impl Editor {
     }
 
     pub fn handle_blur(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        code_explanations::request_refresh(self);
         self.cursor_animations.clear();
         self.blink_manager.update(cx, BlinkManager::disable);
         self.buffer
@@ -12615,7 +12644,14 @@ impl Focusable for Editor {
 }
 
 impl Render for Editor {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if code_explanations::CodeExplanationSettings::get_global(cx).enabled
+            || self.explanations.version.is_some()
+        {
+            cx.defer_in(window, |editor, window, cx| {
+                code_explanations::schedule(editor, window, cx);
+            });
+        }
         EditorElement::new(&cx.entity(), self.create_style(cx))
     }
 }
@@ -13165,7 +13201,12 @@ impl PromptEditor {
             .icon_color(Color::Muted)
             .shape(IconButtonShape::Square)
             .tooltip(move |_window, cx| {
-                Tooltip::for_action_in("Cancel", &menu::Cancel, &focus_handle, cx)
+                Tooltip::for_action_in(
+                    i18n::t!("2cd0f3be8738a86c"),
+                    &menu::Cancel,
+                    &focus_handle,
+                    cx,
+                )
             })
             .on_click(cx.listener(|this, _, window, cx| {
                 this.cancel(&menu::Cancel, window, cx);
@@ -13178,7 +13219,12 @@ impl PromptEditor {
             .icon_color(Color::Muted)
             .shape(IconButtonShape::Square)
             .tooltip(move |_window, cx| {
-                Tooltip::for_action_in("Confirm", &menu::Confirm, &focus_handle, cx)
+                Tooltip::for_action_in(
+                    i18n::t!("36f33adaf0942634"),
+                    &menu::Confirm,
+                    &focus_handle,
+                    cx,
+                )
             })
             .on_click(cx.listener(|this, _, window, cx| {
                 this.confirm(&menu::Confirm, window, cx);

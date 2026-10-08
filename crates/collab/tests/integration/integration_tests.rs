@@ -1631,7 +1631,7 @@ async fn assert_lsp_log_streams_reconnect(
         LanguageConfig {
             name: "Rust".into(),
             matcher: LanguageMatcher {
-                path_suffixes: vec!["rs".to_string()],
+                path_suffixes: vec!["rs".into()],
                 ..Default::default()
             }
             .into(),
@@ -2921,7 +2921,7 @@ async fn test_propagate_saves_and_fs_changes(
         LanguageConfig {
             name: "Rust".into(),
             matcher: (LanguageMatcher {
-                path_suffixes: vec!["rs".to_string()],
+                path_suffixes: vec!["rs".into()],
                 ..Default::default()
             })
             .into(),
@@ -2933,7 +2933,7 @@ async fn test_propagate_saves_and_fs_changes(
         LanguageConfig {
             name: "JavaScript".into(),
             matcher: (LanguageMatcher {
-                path_suffixes: vec!["js".to_string()],
+                path_suffixes: vec!["js".into()],
                 ..Default::default()
             })
             .into(),
@@ -4805,7 +4805,7 @@ async fn test_collaborating_with_diagnostics(
         LanguageConfig {
             name: "Rust".into(),
             matcher: (LanguageMatcher {
-                path_suffixes: vec!["rs".to_string()],
+                path_suffixes: vec!["rs".into()],
                 ..Default::default()
             })
             .into(),
@@ -5530,7 +5530,7 @@ async fn test_prettier_formatting_buffer(
         LanguageConfig {
             name: "TypeScript".into(),
             matcher: (LanguageMatcher {
-                path_suffixes: vec!["ts".to_string()],
+                path_suffixes: vec!["ts".into()],
                 ..Default::default()
             })
             .into(),
@@ -7746,7 +7746,7 @@ async fn test_right_click_menu_behind_collab_panel(cx: &mut TestAppContext) {
     });
 
     // regression test that the right click menu for tabs does not open.
-    assert!(cx.debug_bounds("MENU_ITEM-Close").is_none());
+    assert!(cx.debug_bounds("MENU_ITEM-关闭").is_none());
 
     let tab_bounds = cx.debug_bounds("TAB-1").unwrap();
     cx.simulate_event(MouseDownEvent {
@@ -7756,7 +7756,7 @@ async fn test_right_click_menu_behind_collab_panel(cx: &mut TestAppContext) {
         click_count: 1,
         first_mouse: false,
     });
-    assert!(cx.debug_bounds("MENU_ITEM-Close").is_some());
+    assert!(cx.debug_bounds("MENU_ITEM-关闭").is_some());
 }
 
 #[gpui::test]

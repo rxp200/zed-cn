@@ -11,7 +11,7 @@ fn main() {
     }
 
     // Populate git sha environment variable if git is available
-    println!("cargo:rerun-if-changed=../../.git/logs/HEAD");
+    println!("cargo:rerun-if-env-changed=ZED_COMMIT_SHA");
     if let Some(output) = Command::new("git")
         .args(["rev-parse", "HEAD"])
         .output()
@@ -27,7 +27,7 @@ fn main() {
         println!("cargo:rustc-env=ZED_BUILD_ID={build_identifier}");
     }
 
-    #[cfg(windows)]
+    #[cfg(all(windows, feature = "cli"))]
     {
         println!("cargo:rerun-if-env-changed=RELEASE_CHANNEL");
         println!("cargo:rerun-if-env-changed=GITHUB_RUN_NUMBER");

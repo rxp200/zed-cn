@@ -755,6 +755,79 @@ impl Editor {
         ));
     }
 
+    pub fn expand_bracket_selection(
+        &mut self,
+        _: &ExpandBracketSelection,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let snapshot = self.snapshot(window, cx);
+        let buffer = self.buffer.read(cx).snapshot(cx);
+        let old_selections = self.selections.all::<MultiBufferOffset>(&snapshot);
+        if old_selections.is_empty() {
+            return;
+        }
+
+        let mut expanded = false;
+        let new_selections = old_selections
+            .iter()
+            .map(|selection| {
+                let range = selection.start..selection.end;
+                let pair = buffer
+                    .enclosing_bracket_ranges(range.clone())
+                    .and_then(|pairs| {
+                        pairs
+                            .filter(|(open, close)| {
+                                open.end != range.start || close.start != range.end
+                            })
+                            .min_by_key(|(open, close)| close.end.0 - open.start.0)
+                    });
+
+                let Some((open, close)) = pair else {
+                    return *selection;
+                };
+
+                let start = open.end;
+                let end = close.start;
+                if range.start == start && range.end == end {
+                    return *selection;
+                }
+
+                expanded = true;
+                Selection {
+                    id: selection.id,
+                    start,
+                    end,
+                    goal: SelectionGoal::None,
+                    reversed: selection.reversed,
+                }
+            })
+            .collect::<Vec<_>>();
+
+        if !expanded {
+            return;
+        }
+
+        self.bracket_selection_history.push(old_selections);
+        self.change_selections(SelectionEffects::no_scroll(), window, cx, |s| {
+            s.select(new_selections);
+        });
+    }
+
+    pub fn undo_bracket_selection(
+        &mut self,
+        _: &UndoBracketSelection,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(selections) = self.bracket_selection_history.pop() else {
+            return;
+        };
+        self.change_selections(SelectionEffects::no_scroll(), window, cx, |s| {
+            s.select(selections);
+        });
+    }
+
     pub fn select_smaller_syntax_node(
         &mut self,
         _: &SelectSmallerSyntaxNode,

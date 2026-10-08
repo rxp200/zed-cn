@@ -22,6 +22,7 @@ load-grammars = [
 ]
 
 [dependencies]
+i18n.workspace = true
 anyhow.workspace = true
 async-compression.workspace = true
 async-fs.workspace = true
@@ -69,8 +70,9 @@ util.workspace = true
 
 [dev-dependencies]
 fs = { workspace = true, features = ["test-support"] }
+language = { workspace = true, features = ["test-support"] }
 pretty_assertions.workspace = true
-tempfile = { workspace = true}
+tempfile.workspace = true
 settings = { workspace = true, features = ["test-support"] }
 theme = { workspace = true, features = ["test-support"] }
 tree-sitter-bash.workspace = true

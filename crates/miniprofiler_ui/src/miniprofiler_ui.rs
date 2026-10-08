@@ -43,10 +43,10 @@ enum ProfileSource {
 impl ProfileSource {
     fn label(&self) -> &'static str {
         match self {
-            ProfileSource::Foreground => "Foreground",
-            ProfileSource::AllThreads => "All threads",
-            ProfileSource::RemoteForeground => "Remote: Foreground",
-            ProfileSource::RemoteAllThreads => "Remote: All threads",
+            ProfileSource::Foreground => i18n::t!("bc211adc0f77e8a6"),
+            ProfileSource::AllThreads => i18n::t!("23a63ef298cf8584"),
+            ProfileSource::RemoteForeground => i18n::t!("4f4672fd87607423"),
+            ProfileSource::RemoteAllThreads => i18n::t!("ca0104433f22a22d"),
         }
     }
 
@@ -156,7 +156,7 @@ fn open_performance_profiler(
         cx.open_window(
             WindowOptions {
                 titlebar: Some(TitlebarOptions {
-                    title: Some("Profiler Window".into()),
+                    title: Some(i18n::t!("40d1dcb34831e997").into()),
                     appears_transparent: false,
                     traffic_light_position: None,
                 }),
@@ -547,7 +547,11 @@ impl Render for ProfilerWindow {
                             .child(
                                 Button::new(
                                     "switch-mode",
-                                    if self.paused { "Resume" } else { "Pause" },
+                                    if self.paused {
+                                        i18n::t!("7c9691192f1b7340")
+                                    } else {
+                                        i18n::t!("8d12fc0d4eb26021")
+                                    },
                                 )
                                 .style(ButtonStyle::Filled)
                                 .on_click(cx.listener(
@@ -563,7 +567,7 @@ impl Render for ProfilerWindow {
                                 )),
                             )
                             .child(
-                                Button::new("export-data", "Save")
+                                Button::new("export-data", i18n::t!("a3030bf8f16dc63c"))
                                     .style(ButtonStyle::Filled)
                                     .on_click(cx.listener(|this, _, _window, cx| {
                                         let Some(workspace) = this.workspace.as_ref() else {
@@ -620,7 +624,7 @@ impl Render for ProfilerWindow {
                     )
                     .child(
                         Checkbox::new("include-self", self.include_self_timings)
-                            .label("Include profiler timings")
+                            .label(i18n::t!("fd3a134ac579d1ad"))
                             .on_click(cx.listener(|this, checked, _window, cx| {
                                 this.include_self_timings = *checked;
                                 cx.notify();

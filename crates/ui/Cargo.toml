@@ -13,6 +13,7 @@ name = "ui"
 path = "src/ui.rs"
 
 [dependencies]
+i18n.workspace = true
 chrono.workspace = true
 component.workspace = true
 documented.workspace = true
@@ -22,7 +23,6 @@ icons.workspace = true
 itertools.workspace = true
 log.workspace = true
 menu.workspace = true
-num-format.workspace = true
 schemars.workspace = true
 serde.workspace = true
 smallvec.workspace = true

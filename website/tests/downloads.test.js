@@ -1,0 +1,11 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {selectDownloads} from '../src/downloads.js';
+const asset=(tag,name='Zed-x86_64.exe')=>({name,state:'uploaded',size:100,sha256:'a'.repeat(64),browser_download_url:`https://github.com/rxp200/zed-cn/releases/download/${tag}/${name}`});
+const release=(tag,assets,prerelease=false)=>({tag_name:tag,assets,draft:false,prerelease});
+const feed=(...releases)=>({schema_version:1,releases});
+test('numeric sorting retains historical platform fallback',()=>{const a='zed-cn-v1.22.0-r9',b='zed-cn-v1.22.0-r10';const result=selectDownloads(feed(release(a,[asset(a),asset(a,'Zed-aarch64.dmg')]),release(b,[asset(b)])));assert.equal(result.find(x=>x.platform==='Windows').tag,b);assert.equal(result.find(x=>x.platform==='macOS').tag,a)});
+test('channels never mix',()=>{const s='zed-cn-v1.22.0-r9',d='zed-cn-dev-v1.24.0-r1';const data=feed(release(s,[asset(s)]),release(d,[asset(d)],true));assert.equal(selectDownloads(data)[0].tag,s);assert.equal(selectDownloads(data,'dev')[0].tag,d)});
+test('rejects foreign URLs and unavailable assets',()=>{const tag='zed-cn-v1.22.0-r1';for(const override of [{browser_download_url:'javascript:alert(1)'},{sha256:'bad'},{size:0},{state:'pending'},{name:'zed-remote-server.exe'}])assert.equal(selectDownloads(feed(release(tag,[{...asset(tag),...override}]))).length,0)});
+test('rejects malformed feed',()=>{assert.throws(()=>selectDownloads({}));assert.throws(()=>selectDownloads({schema_version:1,releases:null}))});
+test('draft releases ignored',()=>{const tag='zed-cn-v1.22.0-r1';assert.equal(selectDownloads(feed({...release(tag,[asset(tag)]),draft:true})).length,0)});

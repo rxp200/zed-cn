@@ -727,7 +727,7 @@ impl PickerDelegate for Delegate {
     }
 
     fn placeholder_text(&self, _window: &mut Window, _cx: &mut App) -> Arc<str> {
-        "Search all files…".into()
+        i18n::t!("bab1937a42fc7107").into()
     }
 
     fn searchbar_trailer(
@@ -805,13 +805,16 @@ impl PickerDelegate for Delegate {
             picker::PickerAction::separator(),
             picker::PickerAction::button(
                 if self.selected_matches.len() > 1 {
-                    "Open Multiple"
+                    i18n::t!("ed7baea6114ed7dd")
                 } else {
-                    "Open File"
+                    i18n::t!("4c8a4e3da39e5c2a")
                 },
                 menu::Confirm.boxed_clone(),
             ),
-            picker::PickerAction::button("Open as Tab", super::ToProjectSearch.boxed_clone()),
+            picker::PickerAction::button(
+                i18n::t!("9ca2033aabe17a63"),
+                super::ToProjectSearch.boxed_clone(),
+            ),
         ]
     }
 

@@ -2,6 +2,7 @@ use std::fmt::Display;
 use std::num;
 
 use collections::HashMap;
+use gpui::Hsla;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use settings_macros::{MergeFrom, with_fallible_options};
@@ -287,6 +288,113 @@ pub struct EditorSettingsContent {
     ///
     /// Default: 100
     pub minimum_split_diff_width: Option<f32>,
+
+    /// Settings for rainbow brackets (bracket colorization).
+    ///
+    /// Requires `colorize_brackets` to be enabled for the buffer's language.
+    pub rainbow_brackets: Option<RainbowBracketsSettingsContent>,
+}
+
+/// Settings that control how brackets are colorized and decorated in the editor.
+#[with_fallible_options]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, MergeFrom)]
+#[serde(rename_all = "snake_case")]
+pub struct RainbowBracketsSettingsContent {
+    /// Palette used to colorize brackets, in cycle order.
+    ///
+    /// Any CSS color accepted by the theme, such as `#ff0000` or `hsl(0, 100%, 50%)`.
+    /// When empty, the theme's `accents` are used.
+    ///
+    /// Default: []
+    pub colors: Option<Vec<Hsla>>,
+    /// How the color cycle is mapped onto brackets.
+    ///
+    /// - "consecutive": nesting depth is counted across all bracket types, so
+    ///   brackets at the same depth share a color.
+    /// - "independent": each bracket type keeps its own depth counter, so
+    ///   `()`, `[]` and `{}` cycle through the palette independently.
+    ///
+    /// Default: "consecutive"
+    pub color_mode: Option<BracketColorMode>,
+    /// Whether colors advance with every opening bracket instead of following
+    /// the nesting depth. Useful for avoiding repeats in deeply nested code.
+    ///
+    /// Default: false
+    pub force_iteration_color_cycle: Option<bool>,
+    /// Whether an opening bracket is forced to use a different color than the
+    /// opening bracket that precedes it.
+    ///
+    /// Default: false
+    pub force_unique_opening_color: Option<bool>,
+    /// Color used for brackets that do not form a matched pair.
+    ///
+    /// Unmatched brackets are left uncolored when this is unset.
+    ///
+    /// Default: null
+    pub unmatched_bracket_color: Option<Hsla>,
+    /// Whether the highlighted bracket pair at the cursor uses the pair's
+    /// rainbow color instead of the theme's bracket highlight background.
+    ///
+    /// Default: false
+    pub highlight_active_scope: Option<bool>,
+    /// When to draw vertical guides that connect matched bracket pairs.
+    ///
+    /// - "off": never draw bracket pair guides.
+    /// - "active": only draw the guide of the bracket pair containing the cursor.
+    /// - "always": draw guides for every visible bracket pair.
+    ///
+    /// Default: "off"
+    pub bracket_pair_guides: Option<BracketPairGuides>,
+}
+
+/// Determines how nesting depth maps onto the bracket color palette.
+#[derive(
+    Debug,
+    Default,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+    MergeFrom,
+    strum::VariantArray,
+    strum::VariantNames,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum BracketColorMode {
+    /// Count nesting depth across all bracket types.
+    #[default]
+    Consecutive,
+    /// Keep an independent nesting depth per bracket type.
+    Independent,
+}
+
+/// Determines when bracket pair guides are drawn.
+#[derive(
+    Debug,
+    Default,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+    MergeFrom,
+    strum::VariantArray,
+    strum::VariantNames,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum BracketPairGuides {
+    /// Never draw bracket pair guides.
+    #[default]
+    Off,
+    /// Draw the guide of the bracket pair containing the cursor.
+    Active,
+    /// Draw guides for every visible bracket pair.
+    Always,
 }
 
 #[derive(
@@ -1035,6 +1143,109 @@ pub struct JupyterContent {
     ///
     /// Default: `{}`
     pub kernel_selections: Option<HashMap<String, String>>,
+}
+
+/// The language model provider (channel) used for translation, matching one
+/// of the providers configured under `language_models`.
+#[with_fallible_options]
+#[derive(Clone, Default, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, MergeFrom)]
+#[serde(transparent)]
+pub struct TranslationProviderSetting(pub String);
+
+impl TranslationProviderSetting {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<String> for TranslationProviderSetting {
+    fn from(value: String) -> Self {
+        Self(value)
+    }
+}
+
+/// The model to use for translation, provided by the selected provider.
+#[with_fallible_options]
+#[derive(Clone, Default, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, MergeFrom)]
+#[serde(transparent)]
+pub struct TranslationModelSetting(pub String);
+
+impl TranslationModelSetting {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<String> for TranslationModelSetting {
+    fn from(value: String) -> Self {
+        Self(value)
+    }
+}
+
+/// Settings for AI-powered translation in the editor's hover popovers.
+#[with_fallible_options]
+#[derive(Clone, Default, Debug, Serialize, Deserialize, JsonSchema, MergeFrom, PartialEq, Eq)]
+pub struct HoverTranslationSettingsContent {
+    /// Whether to automatically translate non-Chinese parts of hover
+    /// documentation (e.g. LSP hover information) into the target language.
+    /// The translation is shown underlined below the original text.
+    ///
+    /// Default: false
+    pub enabled: Option<bool>,
+    /// The language model provider (channel) used for translation, matching
+    /// one of the providers configured under `language_models`, e.g.
+    /// "openai_compatible", "anthropic", "google", "ollama".
+    /// When unset, the default fast model is used.
+    ///
+    /// Default: null
+    pub provider: Option<TranslationProviderSetting>,
+    /// The model to use for translation, as provided by the configured
+    /// `provider`.
+    ///
+    /// Default: null
+    pub model: Option<TranslationModelSetting>,
+    /// The target language to translate into.
+    ///
+    /// Default: 中文
+    pub target_language: Option<String>,
+    /// Maximum number of characters of documentation sent for translation.
+    /// Longer documents are truncated to limit token usage.
+    ///
+    /// Default: 4000
+    pub max_chars: Option<u64>,
+    /// Whether translations are persisted to an on-disk cache that is reused
+    /// across sessions, so repeatedly translating the same documentation does
+    /// not call the model again.
+    ///
+    /// Default: true
+    pub cache_persist: Option<bool>,
+    /// Maximum size of the on-disk translation cache, in bytes. When the cache
+    /// grows beyond this limit, the least useful entries (least
+    /// recently/frequently viewed and largest) are evicted.
+    ///
+    /// Default: 5242880 (5 MiB)
+    pub cache_max_bytes: Option<u64>,
+}
+
+#[with_fallible_options]
+#[derive(Clone, Default, Debug, Serialize, Deserialize, JsonSchema, MergeFrom, PartialEq, Eq)]
+pub struct CodeExplanationSettingsContent {
+    /// Automatically send visible code and its context to the selected AI service.
+    pub enabled: Option<bool>,
+    pub provider: Option<TranslationProviderSetting>,
+    pub model: Option<TranslationModelSetting>,
+    pub target_language: Option<String>,
+    /// Explain a file as one request within this line count; larger files are split by syntax.
+    /// Individual functions over the same threshold still require confirmation.
+    pub max_function_lines: Option<u64>,
+    /// Number of code explanation model requests allowed to run at once per project.
+    pub max_concurrent_requests: Option<u64>,
+    /// Number of buffer lines to preload above and below the visible viewport.
+    pub preload_lines: Option<u64>,
+    pub detailed: Option<bool>,
+    pub prefer_existing_comments: Option<bool>,
+    pub cache_persist: Option<bool>,
+    pub cache_max_bytes: Option<u64>,
 }
 
 /// Whether to allow drag and drop text selection in buffer.

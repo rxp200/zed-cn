@@ -52,6 +52,7 @@ message RemoveWorktree {
 message GetPathMetadata {
   uint64 project_id = 1;
   string path = 2;
+  bool canonicalize = 3;
 }
 
 message GetPathMetadataResponse {
@@ -99,6 +100,145 @@ message CreateProjectEntry {
   string path = 3;
   bool is_directory = 4;
   optional bytes content = 5;
+}
+
+message CreateTemporaryFile {
+  string suggested_name = 1;
+  bytes content = 2;
+}
+
+message CreateTemporaryFileResponse {
+  string path = 1;
+}
+
+message ReadDocumentChunk {
+  uint64 worktree_id = 1;
+  string path = 2;
+  uint64 offset = 3;
+  uint64 expected_size = 4;
+  optional Timestamp expected_mtime = 5;
+}
+
+message ReadDocumentChunkResponse {
+  File file = 1;
+  bytes content = 2;
+  uint64 total_size = 3;
+}
+
+message ReadEpubEntry {
+  uint64 worktree_id = 1;
+  string path = 2;
+  string entry_path = 3;
+  uint64 offset = 4;
+  uint64 expected_size = 5;
+  optional Timestamp expected_mtime = 6;
+}
+
+message ReadEpubEntryResponse {
+  File file = 1;
+  bytes content = 2;
+  uint64 total_size = 3;
+  uint64 entry_size = 4;
+}
+
+message GetSystemStats {}
+
+message GetSystemStatsResponse {
+  string hostname = 1;
+  string os_name = 2;
+  string kernel_version = 3;
+  uint64 uptime_seconds = 4;
+  float cpu_usage_percent = 5;
+  repeated float cpu_core_usage_percent = 6;
+  uint64 memory_used_bytes = 7;
+  uint64 memory_total_bytes = 8;
+  uint64 swap_used_bytes = 9;
+  uint64 swap_total_bytes = 10;
+  uint64 disk_used_bytes = 11;
+  uint64 disk_total_bytes = 12;
+  uint64 network_received_bytes_per_second = 13;
+  uint64 network_transmitted_bytes_per_second = 14;
+  uint32 process_count = 15;
+  double load_average_one = 16;
+  double load_average_five = 17;
+  double load_average_fifteen = 18;
+  int64 sampled_at_unix_seconds = 19;
+  repeated string local_ip_addresses = 20;
+}
+
+message CreatePersistentTerminal {
+  string creation_id = 1;
+  string program = 2;
+  repeated string args = 3;
+  map<string, string> env = 4;
+  optional string working_directory = 5;
+  uint32 rows = 6;
+  uint32 columns = 7;
+  uint32 pixel_width = 8;
+  uint32 pixel_height = 9;
+}
+
+message CreatePersistentTerminalResponse {
+  string server_instance_id = 1;
+  string terminal_id = 2;
+}
+
+message PersistentTerminalInput {
+  string server_instance_id = 1;
+  string terminal_id = 2;
+  uint64 sequence = 3;
+  bytes data = 4;
+}
+
+message ResizePersistentTerminal {
+  string server_instance_id = 1;
+  string terminal_id = 2;
+  uint32 rows = 3;
+  uint32 columns = 4;
+  uint32 pixel_width = 5;
+  uint32 pixel_height = 6;
+}
+
+message ReadPersistentTerminal {
+  string server_instance_id = 1;
+  string terminal_id = 2;
+  uint64 offset = 3;
+  uint32 max_bytes = 4;
+}
+
+message ReadPersistentTerminalResponse {
+  bytes data = 1;
+  uint64 next_offset = 2;
+  bool history_truncated = 3;
+  bool exited = 4;
+  optional int32 exit_code = 5;
+}
+
+message ClosePersistentTerminal {
+  string server_instance_id = 1;
+  string terminal_id = 2;
+}
+
+message SubscribePersistentTerminal {
+  string server_instance_id = 1;
+  string terminal_id = 2;
+  uint64 offset = 3;
+}
+
+message PersistentTerminalOutput {
+  string server_instance_id = 1;
+  string terminal_id = 2;
+  uint64 offset = 3;
+  bytes data = 4;
+  bool history_truncated = 5;
+  bool exited = 6;
+  optional int32 exit_code = 7;
+}
+
+message PersistentTerminalOutputCredit {
+  string server_instance_id = 1;
+  string terminal_id = 2;
+  uint64 offset = 3;
 }
 
 message RenameProjectEntry {

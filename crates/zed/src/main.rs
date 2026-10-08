@@ -40,7 +40,7 @@ use language::LanguageRegistry;
 use onboarding::{FIRST_OPEN, show_onboarding_view};
 use project_panel::ProjectPanel;
 use prompt_store::PromptBuilder;
-use remote::RemoteConnectionOptions;
+use remote::{RemoteConnectionOptions, remote_client::MachineIdentity};
 use reqwest_client::ReqwestClient;
 
 use assets::Assets;
@@ -133,7 +133,7 @@ fn files_not_created_on_launch(errors: HashMap<io::ErrorKind, Vec<&Path>>) {
                             gpui::PromptLevel::Critical,
                             message,
                             Some(&error_details),
-                            &["Exit"],
+                            &[i18n::t!("498e1d59b4d787ee")],
                             cx,
                         );
 
@@ -176,7 +176,7 @@ fn fail_to_open_window(e: anyhow::Error, _cx: &mut App) {
             proxy
                 .add_notification(
                     notification_id,
-                    Notification::new("Zed failed to launch")
+                    Notification::new(i18n::t!("ed35c4875b3a8bea"))
                         .body(Some(
                             format!(
                                 "{e:?}. See https://zed.dev/docs/linux for troubleshooting steps."
@@ -490,6 +490,9 @@ fn main() {
         zed_actions::init();
 
         release_channel::init(app_version, cx);
+        if let Some(tag) = option_env!("ZED_CUSTOM_RELEASE_TAG") {
+            cx.set_global(release_channel::CustomReleaseTag(tag.to_owned()));
+        }
         gpui_tokio::init(cx);
         if let Some(app_commit_sha) = app_commit_sha {
             AppCommitSha::set_global(app_commit_sha, cx);
@@ -595,6 +598,12 @@ fn main() {
 
         let system_id = cx.foreground_executor().block_on(system_id).ok();
         let installation_id = cx.foreground_executor().block_on(installation_id).ok();
+        if let Some(installation_id) = installation_id.as_ref() {
+            // Namespaces remote server session names to this installation so
+            // that two machines connecting to the same remote account never
+            // share, and therefore never replace, each other's sessions.
+            cx.set_global(MachineIdentity::new(installation_id.to_string()));
+        }
         let session = cx.foreground_executor().block_on(session);
 
         let telemetry = client.telemetry();
@@ -676,9 +685,7 @@ fn main() {
         );
         command_palette::init(cx);
         let copilot_chat_configuration = copilot_chat::CopilotChatConfiguration {
-            enterprise_uri: language::language_settings::all_language_settings(None, cx)
-                .edit_predictions
-                .copilot
+            enterprise_uri: settings::CopilotSettings::get_global(cx)
                 .enterprise_uri
                 .clone(),
         };
@@ -732,6 +739,7 @@ fn main() {
 
         editor::init(cx);
         image_viewer::init(cx);
+        document_viewer::init(cx);
         repl::notebook::init(cx);
         diagnostics::init(cx);
 
@@ -780,6 +788,7 @@ fn main() {
         markdown_preview::init(cx);
         tabular_data_preview::init(cx);
         svg_preview::init(cx);
+        web_preview::init(cx);
         onboarding::init(cx);
         settings_ui::init(cx);
         keymap_editor::init(cx);
@@ -1926,7 +1935,12 @@ fn load_user_themes_in_background(fs: Arc<dyn fs::Fs>, cx: &mut App) {
                 let Some(theme_path) = theme_path.log_err() else {
                     continue;
                 };
-                let Some(bytes) = fs.load_bytes(&theme_path).await.log_err() else {
+                let Some(bytes) = fs
+                    .load_bytes(&theme_path)
+                    .await
+                    .with_context(|| format!("loading theme bytes from {theme_path:?}"))
+                    .log_err()
+                else {
                     continue;
                 };
 
@@ -1958,7 +1972,11 @@ fn watch_themes(fs: Arc<dyn fs::Fs>, cx: &mut App) {
                     .is_some_and(|m| !m.is_dir)
                 {
                     let theme_registry = cx.update(|cx| ThemeRegistry::global(cx));
-                    if let Some(bytes) = fs.load_bytes(&event.path).await.log_err()
+                    if let Some(bytes) = fs
+                        .load_bytes(&event.path)
+                        .await
+                        .with_context(|| format!("loading theme bytes from {:?}", event.path))
+                        .log_err()
                         && load_user_theme(&theme_registry, &bytes).log_err().is_some()
                     {
                         cx.update(theme_settings::reload_theme);

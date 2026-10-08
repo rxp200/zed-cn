@@ -13,6 +13,7 @@ path = "src/language_models_cloud.rs"
 doctest = false
 
 [dependencies]
+i18n.workspace = true
 anthropic = { workspace = true, features = ["schemars"] }
 anyhow.workspace = true
 cloud_api_client.workspace = true

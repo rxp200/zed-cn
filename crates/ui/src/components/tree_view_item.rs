@@ -1,14 +1,15 @@
-use std::sync::Arc;
+use std::{ops::Range, sync::Arc};
 
 use gpui::{AnyElement, AnyView, ClickEvent, MouseButton, MouseDownEvent, Role};
 
-use crate::{Disclosure, prelude::*};
+use crate::{Disclosure, HighlightedLabel, prelude::*};
 
 #[derive(IntoElement, RegisterComponent)]
 pub struct TreeViewItem {
     id: ElementId,
     group_name: Option<SharedString>,
     label: SharedString,
+    highlight_ranges: Vec<Range<usize>>,
     expanded: bool,
     selected: bool,
     disabled: bool,
@@ -30,6 +31,7 @@ impl TreeViewItem {
             id: id.into(),
             group_name: None,
             label: label.into(),
+            highlight_ranges: Vec::new(),
             expanded: false,
             selected: false,
             disabled: false,
@@ -44,6 +46,11 @@ impl TreeViewItem {
             tab_index: None,
             focus_handle: None,
         }
+    }
+
+    pub fn highlight_ranges(mut self, highlight_ranges: Vec<Range<usize>>) -> Self {
+        self.highlight_ranges = highlight_ranges;
+        self
     }
 
     pub fn group_name(mut self, group_name: impl Into<SharedString>) -> Self {
@@ -188,6 +195,11 @@ impl RenderOnce for TreeViewItem {
                     .hover(|s| s.bg(cx.theme().colors().element_hover))
                     .map(|this| {
                         let label = self.label;
+                        let highlight_ranges = self.highlight_ranges;
+                        let render_label = || {
+                            HighlightedLabel::from_ranges(label.clone(), highlight_ranges.clone())
+                                .when(!self.selected, |this| this.color(Color::Muted))
+                        };
 
                         if self.root_item {
                             this.child(
@@ -198,20 +210,14 @@ impl RenderOnce for TreeViewItem {
                                     .opened_icon(IconName::ChevronDown)
                                     .closed_icon(IconName::ChevronRight),
                             )
-                            .child(
-                                Label::new(label)
-                                    .when(!self.selected, |this| this.color(Color::Muted)),
-                            )
+                            .child(render_label())
                         } else {
                             this.child(indentation_line).child(
                                 h_flex()
                                     .id("nested_inner_tree_view_item")
                                     .w_full()
                                     .flex_grow_1()
-                                    .child(
-                                        Label::new(label)
-                                            .when(!self.selected, |this| this.color(Color::Muted)),
-                                    ),
+                                    .child(render_label()),
                             )
                         }
                     })

@@ -101,7 +101,7 @@ impl RatePredictionsModal {
                 RatePredictionsModal::new(ep_store, language_registry, window, cx)
             });
 
-            telemetry::event!("Rate Prediction Modal Open", source = "Edit Prediction");
+            telemetry::event!("Rate Prediction Modal Open", source = "编辑预测");
         }
     }
 
@@ -367,6 +367,7 @@ impl RatePredictionsModal {
                             padding_left: false,
                             padding_right: false,
                             tooltip: None,
+                            text_edits: None,
                             resolve_state: ResolveState::Resolved,
                         },
                     ),
@@ -380,6 +381,7 @@ impl RatePredictionsModal {
                             padding_left: false,
                             padding_right: false,
                             tooltip: None,
+                            text_edits: None,
                             resolve_state: ResolveState::Resolved,
                         },
                     ),
@@ -797,7 +799,7 @@ impl RatePredictionsModal {
                     editor.set_show_wrap_guides(false, cx);
                     editor.set_show_indent_guides(false, cx);
                     editor.set_show_edit_predictions(Some(false), window, cx);
-                    editor.set_placeholder_text("Add your feedback…", window, cx);
+                    editor.set_placeholder_text(i18n::t!("bf49c8b2fb58421d"), window, cx);
                     editor.set_completion_provider(Some(Rc::new(FeedbackCompletionProvider)));
                     if focus {
                         cx.focus_self(window);
@@ -880,7 +882,9 @@ impl RatePredictionsModal {
                                 .px_2()
                                 .border_b_1()
                                 .border_color(border_color)
-                                .child(Label::new("Predicted Patch").size(LabelSize::Small)),
+                                .child(
+                                    Label::new(i18n::t!("d62efb70bea309ce")).size(LabelSize::Small),
+                                ),
                         )
                         .child(
                             div()
@@ -906,7 +910,9 @@ impl RatePredictionsModal {
                                 .gap_2()
                                 .border_b_1()
                                 .border_color(border_color)
-                                .child(Label::new("Expected Patch").size(LabelSize::Small)),
+                                .child(
+                                    Label::new(i18n::t!("05479eacd2f23b7b")).size(LabelSize::Small),
+                                ),
                         )
                         .child(
                             div()
@@ -996,7 +1002,7 @@ impl RatePredictionsModal {
                             .into_any_element()
                         } else {
                             div()
-                                .child("No active completion".to_string())
+                                .child(i18n::t!("33cce181d47851eb").to_string())
                                 .into_any_element()
                         }),
                 )
@@ -1144,7 +1150,7 @@ impl RatePredictionsModal {
                                             .size(IconSize::Small)
                                             .color(Color::Success),
                                     )
-                                    .child(Label::new("Rated completion.").color(Color::Muted)),
+                                    .child(Label::new(i18n::t!("53db3feb66fe3f8f")).color(Color::Muted)),
                             )
                         } else if active_prediction.prediction.edits.is_empty() {
                             Some(
@@ -1154,7 +1160,7 @@ impl RatePredictionsModal {
                                             .size(IconSize::Small)
                                             .color(Color::Warning),
                                     )
-                                    .child(Label::new("No edits produced.").color(Color::Muted)),
+                                    .child(Label::new(i18n::t!("81703e7a62ba40e9")).color(Color::Muted)),
                             )
                         } else {
                             Some(label_container)
@@ -1163,7 +1169,7 @@ impl RatePredictionsModal {
                             h_flex()
                                 .gap_1()
                                 .child(
-                                    Button::new("bad", "Bad Prediction")
+                                    Button::new("bad", i18n::t!("6d04b70f4205c5ae"))
                                         .start_icon(Icon::new(IconName::ThumbsDown).size(IconSize::Small))
                                         .disabled(rated || feedback_empty)
                                         .when(feedback_empty, |this| {
@@ -1187,7 +1193,7 @@ impl RatePredictionsModal {
                                         })),
                                 )
                                 .child(
-                                    Button::new("good", "Good Prediction")
+                                    Button::new("good", i18n::t!("da8b60a2178b4bb9"))
                                         .start_icon(Icon::new(IconName::ThumbsUp).size(IconSize::Small))
                                         .disabled(rated)
                                         .key_binding(KeyBinding::for_action_in(
@@ -1356,7 +1362,7 @@ impl Render for RatePredictionsModal {
                             .border_color(border_color)
                             .child(Icon::new(icons.base).size(IconSize::Small))
                             .child(
-                                Label::new("From most recent to oldest")
+                                Label::new(i18n::t!("4199c8c2cdd3d5f2"))
                                     .color(Color::Muted)
                                     .size(LabelSize::Small),
                             )

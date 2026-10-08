@@ -29,12 +29,14 @@ test-support = [
 ]
 
 [dependencies]
+i18n.workspace = true
 anyhow.workspace = true
 async-channel.workspace = true
 async-lock.workspace = true
 clock.workspace = true
 collections.workspace = true
 encoding_rs.workspace = true
+file_content.workspace = true
 fs.workspace = true
 futures.workspace = true
 futures-lite.workspace = true

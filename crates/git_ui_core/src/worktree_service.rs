@@ -285,7 +285,7 @@ impl Render for WorktreeFetchFailedToast {
                 })),
             )
             .child(
-                Button::new("view-worktree-fetch-log", "Show Error Logs")
+                Button::new("view-worktree-fetch-log", i18n::t!("88e5cebeafca6466"))
                     .color(Color::Muted)
                     .on_click(cx.listener(move |_, _event, window, cx| {
                         cx.emit(DismissEvent);
@@ -456,7 +456,7 @@ async fn fetch_remote_for_worktree_base(
 /// Multiple entries in `git_repos` can be linked worktrees of the *same*
 /// underlying repository (e.g. a project that has both the main checkout and
 /// one of its linked worktrees open as separate Zed worktrees). Those entries
-/// resolve to the same target path via [`Repository::path_for_new_linked_worktree`],
+/// resolve to the same target path via [`project::git_store::RepositorySnapshot::path_for_new_linked_worktree`],
 /// so we create the new worktree only once and remap every contributing
 /// work directory onto it. Without this dedup, the second `git worktree add`
 /// fails with "already exists".

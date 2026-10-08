@@ -1,5 +1,6 @@
 use std::{
     borrow::Cow,
+    cmp,
     collections::HashMap,
     sync::{
         Arc,
@@ -27,6 +28,25 @@ use crate::{
     },
     types::AnyColumn,
 };
+
+#[derive(PartialEq, Eq)]
+struct NaturallyOrdered<'a>(&'a str);
+
+impl Ord for NaturallyOrdered<'_> {
+    fn cmp(&self, other: &Self) -> cmp::Ordering {
+        util::paths::natural_sort(self.0, other.0)
+    }
+}
+
+impl PartialOrd for NaturallyOrdered<'_> {
+    fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+fn natural_content(entry: &FilterEntry) -> Option<NaturallyOrdered<'_>> {
+    entry.content.as_deref().map(NaturallyOrdered)
+}
 
 struct ColumnFilterRow {
     entry: FilterEntry,
@@ -90,14 +110,14 @@ impl ColumnFilterDelegate {
             FilterSortOrder::AlphaThenCount => available.sort_by(|(a, a_app), (b, b_app)| {
                 b_app
                     .cmp(a_app)
-                    .then_with(|| a.content.cmp(&b.content))
+                    .then_with(|| natural_content(a).cmp(&natural_content(b)))
                     .then_with(|| b.occurred_times().cmp(&a.occurred_times()))
             }),
             FilterSortOrder::CountThenAlpha => available.sort_by(|(a, a_app), (b, b_app)| {
                 b_app
                     .cmp(a_app)
                     .then_with(|| b.occurred_times().cmp(&a.occurred_times()))
-                    .then_with(|| a.content.cmp(&b.content))
+                    .then_with(|| natural_content(a).cmp(&natural_content(b)))
             }),
         }
 
@@ -500,7 +520,7 @@ impl PickerDelegate for ColumnFilterDelegate {
                         .id("table-filter-clear-all")
                         .cursor_pointer()
                         .child(
-                            Label::new("Clear all")
+                            Label::new(i18n::t!("55f1033fab699842"))
                                 .size(LabelSize::Small)
                                 .color(Color::Accent),
                         )
@@ -675,7 +695,7 @@ impl TableView {
             })
             .toggle_state(has_active_filters),
             Tooltip::text(if has_active_filters {
-                "Column has active filters. Click to manage"
+                i18n::t!("fb3c49d3cda03b92")
             } else {
                 "No filters applied. Click to add filters"
             }),

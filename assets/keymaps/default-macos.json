@@ -69,6 +69,7 @@
       "ctrl-y": "editor::KillRingYank",
       "cmd-k cmd-q": "editor::Rewrap",
       "cmd-k q": "editor::Rewrap",
+      "ctrl-alt-t": "editor::TranslateSelection",
       "cmd-backspace": "editor::DeleteToBeginningOfLine",
       "cmd-delete": "editor::DeleteToEndOfLine",
       "alt-backspace": ["editor::DeleteToPreviousWordStart", { "ignore_newlines": false, "ignore_brackets": false }],
@@ -146,6 +147,8 @@
       "cmd-i": "editor::ShowSignatureHelp",
       "f9": "editor::ToggleBreakpoint",
       "shift-f9": "editor::EditLogBreakpoint",
+      // 有选区时运行选中代码，否则保存并运行当前文件。
+      "ctrl-alt-n": "editor::RunCode",
       "ctrl-f12": "editor::GoToDeclaration",
       "alt-ctrl-f12": "editor::GoToDeclarationSplit",
       "ctrl-cmd-e": "editor::ToggleEditPrediction",
@@ -792,6 +795,10 @@
       // Use the `"reevaluate_context"` parameter to control this.
       "cmd-alt-r": ["task::Rerun", { "reevaluate_context": false }],
       "ctrl-alt-shift-r": ["task::Spawn", { "reveal_target": "center" }],
+      // Spawns the task tagged "run-current" (e.g. a "run current file" task);
+      // falls back to the task picker when no matching task is found.
+      "ctrl-alt-m": ["task::Spawn", { "task_tag": "run-current" }],
+      "ctrl-alt-shift-j": "editor::StopCode",
       // also possible to spawn tasks by name:
       // "foo-bar": ["task::Spawn", { "task_name": "MyTask", "reveal_target": "dock" }]
       // or by tag:
@@ -1673,6 +1680,55 @@
     },
   },
   {
+    "context": "PdfReader",
+    "bindings": {
+      "cmd-=": "pdf_reader::ZoomIn",
+      "cmd-+": "pdf_reader::ZoomIn",
+      "cmd--": "pdf_reader::ZoomOut",
+      "cmd-0": "pdf_reader::FitToWidth",
+      "cmd-1": "pdf_reader::ZoomToActualSize",
+      "cmd-k r": "editor::RevealInFileManager",
+      "pageup": "pdf_reader::ScrollPageUp",
+      "pagedown": "pdf_reader::ScrollPageDown",
+      "shift-pageup": "pdf_reader::PreviousPage",
+      "shift-pagedown": "pdf_reader::NextPage",
+      "up": "pdf_reader::ScrollUp",
+      "down": "pdf_reader::ScrollDown",
+      "left": "pdf_reader::PreviousPage",
+      "right": "pdf_reader::NextPage",
+      "cmd-home": "pdf_reader::ScrollToStart",
+      "cmd-end": "pdf_reader::ScrollToEnd"
+  },
+    "use_key_equivalents": true
+  },
+  {
+    "context": "ExcelReader",
+    "use_key_equivalents": true,
+    "bindings": {
+      "cmd-k r": "editor::RevealInFileManager",
+    },
+  },
+  {
+    "context": "EpubReader",
+    "bindings": {
+      "cmd-=": "epub_reader::IncreaseFontSize",
+      "cmd-+": "epub_reader::IncreaseFontSize",
+      "cmd--": "epub_reader::DecreaseFontSize",
+      "cmd-0": "epub_reader::ResetFontSize",
+      "cmd-t": "epub_reader::ToggleTableOfContents",
+      "cmd-k r": "editor::RevealInFileManager",
+      "cmd-left": "epub_reader::PreviousChapter",
+      "cmd-right": "epub_reader::NextChapter",
+      "pageup": "epub_reader::ScrollPageUp",
+      "pagedown": "epub_reader::ScrollPageDown",
+      "up": "epub_reader::ScrollUp",
+      "down": "epub_reader::ScrollDown",
+      "cmd-home": "epub_reader::ScrollToStart",
+      "cmd-end": "epub_reader::ScrollToEnd"
+  },
+    "use_key_equivalents": true
+  },
+  {
     "context": "RunModal",
     "bindings": {
       "cmd-1": "new_process_modal::ActivateTaskTab",
@@ -1768,6 +1824,16 @@
       "cmd-enter": "skill_creator::SaveSkill",
       "tab": "skill_creator::FocusNextField",
       "shift-tab": "skill_creator::FocusPreviousField",
+    },
+  },
+  {
+    "context": "TableView",
+    "use_key_equivalents": true,
+    "bindings": {
+      "up": ["tabular_data::MoveFocusedCell", { "direction": "up" }],
+      "down": ["tabular_data::MoveFocusedCell", { "direction": "down" }],
+      "left": ["tabular_data::MoveFocusedCell", { "direction": "left" }],
+      "right": ["tabular_data::MoveFocusedCell", { "direction": "right" }],
     },
   },
 ]

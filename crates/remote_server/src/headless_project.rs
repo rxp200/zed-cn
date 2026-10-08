@@ -9,7 +9,8 @@ use lsp::LanguageServerId;
 use extension::ExtensionHostProxy;
 use extension_host::headless_host::HeadlessExtensionStore;
 use fs::Fs;
-use gpui::{App, AppContext as _, AsyncApp, Context, Entity, PromptLevel, TaskExt};
+use futures::{channel::oneshot, stream::StreamExt as _};
+use gpui::{App, AppContext as _, AsyncApp, Context, Entity, PromptLevel, Task, TaskExt};
 use http_client::HttpClient;
 use language::{Buffer, BufferEvent, LanguageRegistry, proto::serialize_operation};
 use node_runtime::NodeRuntime;
@@ -35,22 +36,188 @@ use rpc::{
     AnyProtoClient, TypedEnvelope,
     proto::{self, REMOTE_SERVER_PEER_ID, REMOTE_SERVER_PROJECT_ID},
 };
-use smol::process::Child;
+use smol::{fs as async_fs, process::Child};
+
+use futures::{SinkExt, Stream, channel::mpsc};
 
 use settings::{Settings as _, SettingsLocation, initial_server_settings_content};
 use std::{
+    mem,
     num::NonZeroU64,
     path::{Path, PathBuf},
     sync::{
-        Arc,
+        Arc, Mutex, OnceLock,
         atomic::{AtomicU64, AtomicUsize, Ordering},
     },
-    time::Instant,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-use sysinfo::{ProcessRefreshKind, RefreshKind, System, UpdateKind};
+use sysinfo::{Disks, Networks, ProcessRefreshKind, RefreshKind, System, UpdateKind};
 use terminal::terminal_settings::TerminalSettings;
 use util::{ResultExt, paths::PathStyle, rel_path::RelPath};
 use worktree::Worktree;
+
+use crate::persistent_terminal::{OutputPull, PersistentTerminalManager};
+
+struct SystemStatsSampler {
+    system: System,
+    disks: Disks,
+    networks: Networks,
+    last_sample: Instant,
+}
+
+impl SystemStatsSampler {
+    fn new() -> Self {
+        let mut system = System::new();
+        system.refresh_cpu_all();
+        system.refresh_memory();
+        system.refresh_processes_specifics(
+            sysinfo::ProcessesToUpdate::All,
+            true,
+            ProcessRefreshKind::nothing(),
+        );
+        Self {
+            system,
+            disks: Disks::new_with_refreshed_list(),
+            networks: Networks::new_with_refreshed_list(),
+            last_sample: Instant::now(),
+        }
+    }
+
+    fn sample(&mut self) -> proto::GetSystemStatsResponse {
+        let elapsed = self.last_sample.elapsed().as_secs_f64().max(0.001);
+        self.system.refresh_cpu_usage();
+        self.system.refresh_memory();
+        self.system.refresh_processes_specifics(
+            sysinfo::ProcessesToUpdate::All,
+            true,
+            ProcessRefreshKind::nothing(),
+        );
+        self.disks.refresh(true);
+        self.networks.refresh(true);
+        self.last_sample = Instant::now();
+
+        let disk_total_bytes: u64 = self.disks.iter().map(|disk| disk.total_space()).sum();
+        let disk_available_bytes: u64 = self.disks.iter().map(|disk| disk.available_space()).sum();
+        let received: u64 = self.networks.values().map(|data| data.received()).sum();
+        let transmitted: u64 = self.networks.values().map(|data| data.transmitted()).sum();
+        let load = System::load_average();
+        let local_ip_addresses =
+            ranked_local_ip_addresses(self.networks.iter().flat_map(|(name, data)| {
+                data.ip_networks()
+                    .iter()
+                    .map(move |network| (name.as_str(), network.addr))
+            }));
+
+        proto::GetSystemStatsResponse {
+            hostname: System::host_name().unwrap_or_else(|| i18n::t!("26c953ee7077ba21").into()),
+            os_name: System::long_os_version()
+                .or_else(System::name)
+                .unwrap_or_else(|| i18n::t!("8ba4d93bac24e511").into()),
+            kernel_version: System::kernel_version().unwrap_or_default(),
+            uptime_seconds: System::uptime(),
+            cpu_usage_percent: self.system.global_cpu_usage(),
+            cpu_core_usage_percent: self
+                .system
+                .cpus()
+                .iter()
+                .map(|cpu| cpu.cpu_usage())
+                .collect(),
+            memory_used_bytes: self.system.used_memory(),
+            memory_total_bytes: self.system.total_memory(),
+            swap_used_bytes: self.system.used_swap(),
+            swap_total_bytes: self.system.total_swap(),
+            disk_used_bytes: disk_total_bytes.saturating_sub(disk_available_bytes),
+            disk_total_bytes,
+            network_received_bytes_per_second: (received as f64 / elapsed) as u64,
+            network_transmitted_bytes_per_second: (transmitted as f64 / elapsed) as u64,
+            process_count: self.system.processes().len().try_into().unwrap_or(u32::MAX),
+            load_average_one: load.one,
+            load_average_five: load.five,
+            load_average_fifteen: load.fifteen,
+            local_ip_addresses: local_ip_addresses
+                .into_iter()
+                .map(|address| address.to_string())
+                .collect(),
+            sampled_at_unix_seconds: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|duration| duration.as_secs().try_into().unwrap_or(i64::MAX))
+                .unwrap_or_default(),
+        }
+    }
+}
+
+fn is_local_address(address: std::net::IpAddr) -> bool {
+    match address {
+        std::net::IpAddr::V4(address) => {
+            !address.is_loopback()
+                && !address.is_link_local()
+                && !address.is_unspecified()
+                && !address.is_broadcast()
+        }
+        std::net::IpAddr::V6(address) => {
+            !address.is_loopback()
+                && !address.is_unspecified()
+                && address.to_ipv4_mapped().is_none()
+                && (address.segments()[0] & 0xffc0) != 0xfe80
+        }
+    }
+}
+
+fn is_virtual_interface(name: &str) -> bool {
+    const VIRTUAL_INTERFACE_PREFIXES: &[&str] = &[
+        "docker",
+        "veth",
+        "br-",
+        "virbr",
+        "vmnet",
+        "vboxnet",
+        "vethernet",
+        "hyper-v",
+        "tun",
+        "tap",
+        "wg",
+        "zt",
+        "tailscale",
+        "utun",
+        "awdl",
+        "llw",
+        "bridge",
+        "dummy",
+    ];
+    let name = name.to_ascii_lowercase();
+    VIRTUAL_INTERFACE_PREFIXES
+        .iter()
+        .any(|prefix| name.starts_with(prefix))
+}
+
+/// Orders local addresses by how likely they are to be the one a user wants to
+/// connect to: a private IPv4 on a physical interface first, then a public
+/// IPv4, and virtual/bridge or IPv6 addresses last. Kept in sync with the
+/// activity indicator's local sampler; the client shows only the first entry.
+fn ranked_local_ip_addresses<'a>(
+    interfaces: impl IntoIterator<Item = (&'a str, std::net::IpAddr)>,
+) -> Vec<std::net::IpAddr> {
+    let mut addresses: Vec<(u8, u8, std::net::IpAddr)> = interfaces
+        .into_iter()
+        .filter(|(_, address)| is_local_address(*address))
+        .map(|(name, address)| {
+            let interface_rank = u8::from(is_virtual_interface(name));
+            let family_rank = match address {
+                std::net::IpAddr::V4(address) => u8::from(!address.is_private()),
+                std::net::IpAddr::V6(_) => 2,
+            };
+            (interface_rank, family_rank, address)
+        })
+        .collect();
+    addresses.sort_by_key(|(interface_rank, family_rank, address)| {
+        (*interface_rank, *family_rank, *address)
+    });
+    addresses.dedup_by_key(|(_, _, address)| *address);
+    addresses
+        .into_iter()
+        .map(|(_, _, address)| address)
+        .collect()
+}
 
 pub struct HeadlessProject {
     pub fs: Arc<dyn Fs>,
@@ -74,6 +241,10 @@ pub struct HeadlessProject {
     // Local variant is used within LSP store, but that's a separate entity.
     pub _toolchain_store: Entity<ToolchainStore>,
     pub kernels: HashMap<String, Child>,
+    persistent_terminals: Arc<PersistentTerminalManager>,
+    epub_read_limiter: Arc<async_lock::Semaphore>,
+    search_buffer_batches: async_channel::Sender<SearchBufferBatch>,
+    _search_buffer_sender: Task<()>,
 }
 
 pub struct HeadlessAppState {
@@ -84,6 +255,45 @@ pub struct HeadlessAppState {
     pub languages: Arc<LanguageRegistry>,
     pub extension_host_proxy: Arc<ExtensionHostProxy>,
     pub startup_time: Instant,
+}
+
+async fn cleanup_temporary_files(directory: &Path) {
+    const RETENTION: Duration = Duration::from_secs(24 * 60 * 60);
+
+    let Ok(mut entries) = async_fs::read_dir(directory).await else {
+        return;
+    };
+    while let Some(entry) = futures::StreamExt::next(&mut entries).await {
+        let Ok(entry) = entry else {
+            continue;
+        };
+        let Ok(metadata) = entry.metadata().await else {
+            continue;
+        };
+        let is_expired = metadata
+            .modified()
+            .ok()
+            .and_then(|modified| SystemTime::now().duration_since(modified).ok())
+            .is_some_and(|age| age >= RETENTION);
+        if !is_expired {
+            continue;
+        }
+
+        if let Err(error) = async_fs::remove_file(entry.path()).await {
+            log::warn!("failed to remove expired temporary clipboard file: {error:#}");
+        }
+    }
+}
+
+const MAX_SEARCH_CANDIDATES_PER_BATCH: usize = 64;
+const MAX_UNACKNOWLEDGED_SEARCH_BYTES: usize = 1024 * 1024;
+
+struct SearchBufferBatch {
+    buffers: Vec<Entity<Buffer>>,
+    handle: u64,
+    peer_id: proto::PeerId,
+    project_id: u64,
+    completion: oneshot::Sender<Result<()>>,
 }
 
 impl HeadlessProject {
@@ -298,6 +508,23 @@ impl HeadlessProject {
         session.add_request_handler(cx.weak_entity(), Self::handle_ping);
         session.add_request_handler(cx.weak_entity(), Self::handle_get_processes);
         session.add_request_handler(cx.weak_entity(), Self::handle_get_remote_profiling_data);
+        session.add_request_handler(cx.weak_entity(), Self::handle_create_temporary_file);
+        session.add_request_handler(cx.weak_entity(), Self::handle_get_system_stats);
+        session.add_request_handler(cx.weak_entity(), Self::handle_read_document_chunk);
+        session.add_request_handler(cx.weak_entity(), Self::handle_read_epub_entry);
+        session.add_request_handler(cx.weak_entity(), Self::handle_create_persistent_terminal);
+        session.add_request_handler(cx.weak_entity(), Self::handle_persistent_terminal_input);
+        session.add_request_handler(cx.weak_entity(), Self::handle_resize_persistent_terminal);
+        session.add_request_handler(cx.weak_entity(), Self::handle_read_persistent_terminal);
+        session.add_request_handler(cx.weak_entity(), Self::handle_close_persistent_terminal);
+        session.add_stream_request_handler(
+            cx.weak_entity(),
+            Self::handle_subscribe_persistent_terminal,
+        );
+        session.add_request_handler(
+            cx.weak_entity(),
+            Self::handle_persistent_terminal_output_credit,
+        );
 
         session.add_entity_request_handler(Self::handle_add_worktree);
         session.add_request_handler(cx.weak_entity(), Self::handle_remove_worktree);
@@ -343,6 +570,59 @@ impl HeadlessProject {
         AgentServerStore::init_headless(&session);
         ContextServerStore::init_headless(&session);
 
+        let (search_buffer_batches, batches) = async_channel::bounded::<SearchBufferBatch>(1);
+        let search_buffer_sender = cx.spawn({
+            let buffer_store = buffer_store.clone();
+            let client = session.clone();
+            async move |_, cx| {
+                while let Ok(batch) = batches.recv().await {
+                    let result = async {
+                        let mut buffer_ids = Vec::new();
+                        let mut unacknowledged_bytes = 0;
+                        for buffer in &batch.buffers {
+                            if batch.completion.is_canceled() {
+                                break;
+                            }
+                            let (buffer_id, transferred_bytes, transfer) =
+                                buffer_store.update(cx, |store, cx| {
+                                    let buffer_id = buffer.read(cx).remote_id();
+                                    let transferred_bytes = if store.is_shared(buffer_id, cx) {
+                                        0
+                                    } else {
+                                        buffer.read(cx).len()
+                                    };
+                                    let transfer = store.create_buffer_for_peer(
+                                        buffer,
+                                        REMOTE_SERVER_PEER_ID,
+                                        cx,
+                                    );
+                                    (buffer_id, transferred_bytes, transfer)
+                                });
+                            transfer.await?;
+                            buffer_ids.push(buffer_id.to_proto());
+                            unacknowledged_bytes += transferred_bytes;
+                            if unacknowledged_bytes >= MAX_UNACKNOWLEDGED_SEARCH_BYTES {
+                                Self::send_search_candidates(
+                                    &client,
+                                    &batch,
+                                    mem::take(&mut buffer_ids),
+                                )
+                                .await?;
+                                unacknowledged_bytes = 0;
+                            }
+                        }
+                        if !buffer_ids.is_empty() {
+                            Self::send_search_candidates(&client, &batch, buffer_ids).await?;
+                        }
+                        anyhow::Ok(())
+                    }
+                    .await;
+
+                    batch.completion.send(result).ok();
+                }
+            }
+        });
+
         HeadlessProject {
             next_entry_id: Default::default(),
             session,
@@ -363,6 +643,10 @@ impl HeadlessProject {
             profiling_collector: gpui::ProfilingCollector::new(startup_time),
             _toolchain_store: toolchain_store,
             kernels: Default::default(),
+            persistent_terminals: Arc::new(PersistentTerminalManager::new()),
+            epub_read_limiter: Arc::new(async_lock::Semaphore::new(2)),
+            search_buffer_batches,
+            _search_buffer_sender: search_buffer_sender,
         }
     }
 
@@ -779,6 +1063,103 @@ impl HeadlessProject {
         Ok(proto::Ack {})
     }
 
+    async fn handle_read_epub_entry(
+        this: Entity<Self>,
+        message: TypedEnvelope<proto::ReadEpubEntry>,
+        cx: AsyncApp,
+    ) -> Result<proto::ReadEpubEntryResponse> {
+        let request = message.payload;
+        let path = RelPath::from_unix_str(&request.path)?;
+        let limiter = this.read_with(&cx, |this, _| this.epub_read_limiter.clone());
+        let _permit = limiter.acquire_arc().await;
+        let (abs_path, fs) = this.read_with(&cx, |this, cx| {
+            let worktree = this
+                .worktree_store
+                .read(cx)
+                .worktree_for_id(WorktreeId::from_proto(request.worktree_id), cx)
+                .context("worktree not found")?;
+            anyhow::Ok((worktree.read(cx).absolutize(&path), this.fs.clone()))
+        })?;
+        project::epub::read_entry_chunk(fs, abs_path, request, cx.background_executor().clone())
+            .await
+    }
+
+    async fn handle_read_document_chunk(
+        this: Entity<Self>,
+        message: TypedEnvelope<proto::ReadDocumentChunk>,
+        cx: AsyncApp,
+    ) -> Result<proto::ReadDocumentChunkResponse> {
+        use std::io::{Read as _, Seek as _};
+        let request = message.payload;
+        let path = RelPath::from_unix_str(&request.path)?;
+        let limit = path
+            .extension()
+            .and_then(project::document_file_size_limit)
+            .context("unsupported document format")?;
+        let (worktree, fs) = this.read_with(&cx, |this, cx| {
+            let worktree = this
+                .worktree_store
+                .read(cx)
+                .worktree_for_id(WorktreeId::from_proto(request.worktree_id), cx);
+            (worktree, this.fs.clone())
+        });
+        let worktree = worktree.context("worktree not found")?;
+        let abs_path = worktree.read_with(&cx, |worktree, _| worktree.absolutize(&path));
+        let metadata = fs
+            .metadata(&abs_path)
+            .await?
+            .context("document not found")?;
+        anyhow::ensure!(
+            !metadata.is_dir && !metadata.is_fifo,
+            "not a regular document file"
+        );
+        anyhow::ensure!(
+            metadata.len <= limit && request.offset <= metadata.len,
+            "document is too large or offset is invalid"
+        );
+        let mtime: proto::Timestamp = metadata.mtime.into();
+        if request.offset > 0 {
+            anyhow::ensure!(
+                request.expected_size == metadata.len && request.expected_mtime == Some(mtime),
+                "document changed while loading"
+            );
+        }
+        let mut handle = fs.open_sync(&abs_path).await?;
+        let length =
+            (metadata.len - request.offset).min(project::DOCUMENT_CHUNK_SIZE as u64) as usize;
+        let content = cx
+            .background_spawn(async move {
+                handle.seek(std::io::SeekFrom::Start(request.offset))?;
+                let mut content = vec![0; length];
+                handle.read_exact(&mut content)?;
+                anyhow::Ok(content)
+            })
+            .await?;
+        let after = fs
+            .metadata(&abs_path)
+            .await?
+            .context("document removed while loading")?;
+        anyhow::ensure!(
+            after.len == metadata.len && after.mtime == metadata.mtime,
+            "document changed while loading"
+        );
+        let file = worktree.read_with(&cx, |worktree, _| proto::File {
+            worktree_id: request.worktree_id,
+            entry_id: worktree
+                .entry_for_path(&path)
+                .map(|entry| entry.id.to_proto()),
+            path: request.path.clone(),
+            mtime: Some(mtime),
+            is_deleted: false,
+            is_historic: false,
+        });
+        Ok(proto::ReadDocumentChunkResponse {
+            file: Some(file),
+            content,
+            total_size: metadata.len,
+        })
+    }
+
     pub async fn handle_download_file_by_path(
         this: Entity<Self>,
         message: TypedEnvelope<proto::DownloadFileByPath>,
@@ -869,6 +1250,184 @@ impl HeadlessProject {
             file_id
         );
         Ok(proto::DownloadFileResponse { file_id })
+    }
+
+    async fn handle_get_system_stats(
+        _this: Entity<Self>,
+        _message: TypedEnvelope<proto::GetSystemStats>,
+        cx: AsyncApp,
+    ) -> Result<proto::GetSystemStatsResponse> {
+        cx.background_spawn(async move {
+            static SAMPLER: OnceLock<Mutex<SystemStatsSampler>> = OnceLock::new();
+            let sampler = SAMPLER.get_or_init(|| Mutex::new(SystemStatsSampler::new()));
+            let mut sampler = sampler
+                .lock()
+                .map_err(|_| anyhow!("system statistics sampler is unavailable"))?;
+            Ok(sampler.sample())
+        })
+        .await
+    }
+
+    async fn handle_create_persistent_terminal(
+        this: Entity<Self>,
+        message: TypedEnvelope<proto::CreatePersistentTerminal>,
+        cx: AsyncApp,
+    ) -> Result<proto::CreatePersistentTerminalResponse> {
+        let manager = this.read_with(&cx, |this, _| this.persistent_terminals.clone());
+        cx.background_spawn(async move { manager.create(message.payload) })
+            .await
+    }
+
+    async fn handle_persistent_terminal_input(
+        this: Entity<Self>,
+        message: TypedEnvelope<proto::PersistentTerminalInput>,
+        cx: AsyncApp,
+    ) -> Result<proto::Ack> {
+        let manager = this.read_with(&cx, |this, _| this.persistent_terminals.clone());
+        cx.background_spawn(async move { manager.input(message.payload) })
+            .await?;
+        Ok(proto::Ack {})
+    }
+
+    async fn handle_resize_persistent_terminal(
+        this: Entity<Self>,
+        message: TypedEnvelope<proto::ResizePersistentTerminal>,
+        cx: AsyncApp,
+    ) -> Result<proto::Ack> {
+        let manager = this.read_with(&cx, |this, _| this.persistent_terminals.clone());
+        cx.background_spawn(async move { manager.resize(message.payload) })
+            .await?;
+        Ok(proto::Ack {})
+    }
+
+    async fn handle_read_persistent_terminal(
+        this: Entity<Self>,
+        message: TypedEnvelope<proto::ReadPersistentTerminal>,
+        cx: AsyncApp,
+    ) -> Result<proto::ReadPersistentTerminalResponse> {
+        let manager = this.read_with(&cx, |this, _| this.persistent_terminals.clone());
+        cx.background_spawn(async move { manager.read(message.payload) })
+            .await
+    }
+
+    async fn handle_close_persistent_terminal(
+        this: Entity<Self>,
+        message: TypedEnvelope<proto::ClosePersistentTerminal>,
+        cx: AsyncApp,
+    ) -> Result<proto::Ack> {
+        let manager = this.read_with(&cx, |this, _| this.persistent_terminals.clone());
+        cx.background_spawn(async move {
+            manager.close(
+                &message.payload.server_instance_id,
+                &message.payload.terminal_id,
+            )
+        })
+        .await?;
+        Ok(proto::Ack {})
+    }
+
+    async fn handle_subscribe_persistent_terminal(
+        this: Entity<Self>,
+        message: TypedEnvelope<proto::SubscribePersistentTerminal>,
+        cx: AsyncApp,
+    ) -> Result<impl Stream<Item = Result<proto::PersistentTerminalOutput>>> {
+        let manager = this.read_with(&cx, |this, _| this.persistent_terminals.clone());
+        let server_instance_id = message.payload.server_instance_id.clone();
+        let terminal_id = message.payload.terminal_id.clone();
+        let (generation, kick_rx) = cx
+            .background_spawn({
+                let manager = manager.clone();
+                async move { manager.subscribe(message.payload) }
+            })
+            .await?;
+
+        let (mut frame_tx, frame_rx) = mpsc::unbounded();
+        cx.background_spawn(async move {
+            loop {
+                match manager.pull_output(&server_instance_id, &terminal_id, generation) {
+                    Ok(OutputPull::Frame(frame)) => {
+                        let exited = frame.exited;
+                        if frame_tx.send(Ok(frame)).await.is_err() || exited {
+                            break;
+                        }
+                    }
+                    Ok(OutputPull::WaitForKick) => {
+                        if kick_rx.recv().await.is_err() {
+                            break;
+                        }
+                    }
+                    Ok(OutputPull::Superseded) => break,
+                    Err(error) => {
+                        log::debug!("persistent terminal output stream ended: {error:#}");
+                        break;
+                    }
+                }
+            }
+        })
+        .detach();
+        Ok(frame_rx)
+    }
+
+    async fn handle_persistent_terminal_output_credit(
+        this: Entity<Self>,
+        message: TypedEnvelope<proto::PersistentTerminalOutputCredit>,
+        cx: AsyncApp,
+    ) -> Result<proto::Ack> {
+        let manager = this.read_with(&cx, |this, _| this.persistent_terminals.clone());
+        cx.background_spawn(async move { manager.set_output_credit(message.payload) })
+            .await?;
+        Ok(proto::Ack {})
+    }
+
+    async fn handle_create_temporary_file(
+        _this: Entity<Self>,
+        message: TypedEnvelope<proto::CreateTemporaryFile>,
+        _cx: AsyncApp,
+    ) -> Result<proto::CreateTemporaryFileResponse> {
+        const MAX_TEMPORARY_FILE_BYTES: usize = 100 * 1024 * 1024;
+        anyhow::ensure!(
+            message.payload.content.len() <= MAX_TEMPORARY_FILE_BYTES,
+            "temporary clipboard file exceeds the 100 MiB limit"
+        );
+
+        let suggested_name = Path::new(&message.payload.suggested_name)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .filter(|name| !name.is_empty() && name.len() <= 255)
+            .context("invalid temporary clipboard file name")?;
+        anyhow::ensure!(
+            suggested_name == message.payload.suggested_name,
+            "temporary clipboard file name must not contain a directory"
+        );
+
+        let directory = paths::temp_dir().join("clipboard-files");
+        async_fs::create_dir_all(&directory).await?;
+        cleanup_temporary_files(&directory).await;
+
+        let extension = Path::new(suggested_name)
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .map(|extension| format!(".{extension}"))
+            .unwrap_or_default();
+        let stem = Path::new(suggested_name)
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .filter(|stem| !stem.is_empty())
+            .unwrap_or("clipboard-file");
+        let path = directory.join(format!("{stem}-{}{extension}", uuid::Uuid::new_v4()));
+        let temporary_path = directory.join(format!(".{}.part", uuid::Uuid::new_v4()));
+
+        async_fs::write(&temporary_path, &message.payload.content).await?;
+        if let Err(error) = async_fs::rename(&temporary_path, &path).await {
+            if let Err(cleanup_error) = async_fs::remove_file(&temporary_path).await {
+                log::warn!("failed to remove temporary clipboard staging file: {cleanup_error:#}");
+            }
+            return Err(error.into());
+        }
+
+        Ok(proto::CreateTemporaryFileResponse {
+            path: path.to_string_lossy().into_owned(),
+        })
     }
 
     pub async fn handle_open_new_buffer(
@@ -1128,8 +1687,6 @@ impl HeadlessProject {
         envelope: TypedEnvelope<proto::FindSearchCandidates>,
         mut cx: AsyncApp,
     ) -> Result<proto::Ack> {
-        use futures::stream::StreamExt as _;
-
         let peer_id = envelope.original_sender_id.unwrap_or(envelope.sender_id);
         let message = envelope.payload;
         let query = SearchQuery::from_proto(
@@ -1140,8 +1697,9 @@ impl HeadlessProject {
         let project_id = message.project_id;
         let buffer_store = this.read_with(&cx, |this, _| this.buffer_store.clone());
         let handle = message.handle;
-        let _buffer_store = buffer_store.clone();
-        let client = this.read_with(&cx, |this, _| this.session.clone());
+        let client = this.read_with(&cx, |project, _| project.session.clone());
+        let search_buffer_batches =
+            this.read_with(&cx, |project, _| project.search_buffer_batches.clone());
         let task = cx.spawn(async move |cx| {
             let results = this.update(cx, |this, cx| {
                 project::Search::local(
@@ -1154,44 +1712,25 @@ impl HeadlessProject {
                 .into_handle(query, cx)
                 .matching_buffers(cx)
             });
-            let (batcher, batches) =
-                project::project_search::AdaptiveBatcher::new(cx.background_executor());
-            let mut new_matches = Box::pin(results.rx);
-
-            let sender_task = cx.background_executor().spawn({
-                let client = client.clone();
-                async move {
-                    let mut batches = std::pin::pin!(batches);
-                    while let Some(buffer_ids) = batches.next().await {
-                        client
-                            .request(proto::FindSearchCandidatesChunk {
-                                handle,
-                                peer_id: Some(peer_id),
-                                project_id,
-                                variant: Some(
-                                    proto::find_search_candidates_chunk::Variant::Matches(
-                                        proto::FindSearchCandidatesMatches { buffer_ids },
-                                    ),
-                                ),
-                            })
-                            .await?;
-                    }
-                    anyhow::Ok(())
-                }
-            });
-
-            while let Some((buffer, _)) = new_matches.next().await {
-                let _ = buffer_store
-                    .update(cx, |this, cx| {
-                        this.create_buffer_for_peer(&buffer, REMOTE_SERVER_PEER_ID, cx)
+            let mut batches = std::pin::pin!(
+                results
+                    .rx
+                    .map(|(buffer, _)| buffer)
+                    .ready_chunks(MAX_SEARCH_CANDIDATES_PER_BATCH)
+            );
+            while let Some(buffers) = batches.next().await {
+                let (completion, completed) = oneshot::channel();
+                search_buffer_batches
+                    .send(SearchBufferBatch {
+                        buffers,
+                        handle,
+                        peer_id,
+                        project_id,
+                        completion,
                     })
-                    .await;
-                let buffer_id = buffer.read_with(cx, |this, _| this.remote_id().to_proto());
-                batcher.push(buffer_id).await;
+                    .await?;
+                completed.await??;
             }
-            batcher.flush().await;
-
-            sender_task.await?;
 
             client
                 .request(proto::FindSearchCandidatesChunk {
@@ -1205,11 +1744,29 @@ impl HeadlessProject {
                 .await?;
             anyhow::Ok(())
         });
-        _buffer_store.update(&mut cx, |this, _| {
-            this.register_ongoing_project_search((peer_id, handle), task);
+        buffer_store.update(&mut cx, |store, _| {
+            store.register_ongoing_project_search((peer_id, handle), task);
         });
 
         Ok(proto::Ack {})
+    }
+
+    async fn send_search_candidates(
+        client: &AnyProtoClient,
+        batch: &SearchBufferBatch,
+        buffer_ids: Vec<u64>,
+    ) -> Result<()> {
+        client
+            .request(proto::FindSearchCandidatesChunk {
+                handle: batch.handle,
+                peer_id: Some(batch.peer_id),
+                project_id: batch.project_id,
+                variant: Some(proto::find_search_candidates_chunk::Variant::Matches(
+                    proto::FindSearchCandidatesMatches { buffer_ids },
+                )),
+            })
+            .await?;
+        Ok(())
     }
 
     // Goes from client to host.
@@ -1227,7 +1784,6 @@ impl HeadlessProject {
         envelope: TypedEnvelope<proto::ListRemoteDirectory>,
         cx: AsyncApp,
     ) -> Result<proto::ListRemoteDirectoryResponse> {
-        use smol::stream::StreamExt;
         let fs = cx.read_entity(&this, |this, _| this.fs.clone());
         let expanded = PathBuf::from(shellexpand::tilde(&envelope.payload.path).to_string());
         let check_info = envelope
@@ -1265,11 +1821,20 @@ impl HeadlessProject {
 
         let metadata = fs.metadata(&expanded).await?;
         let is_dir = metadata.map(|metadata| metadata.is_dir).unwrap_or(false);
+        let path = if envelope.payload.canonicalize && metadata.is_some() {
+            fs.canonicalize(&expanded)
+                .await?
+                .to_str()
+                .context("canonical file path is not valid UTF-8")?
+                .to_owned()
+        } else {
+            expanded.to_string_lossy().into_owned()
+        };
 
         Ok(proto::GetPathMetadataResponse {
             exists: metadata.is_some(),
             is_dir,
-            path: expanded.to_string_lossy().into_owned(),
+            path,
         })
     }
 
@@ -1458,4 +2023,21 @@ fn find_venv_python(working_directory: &str) -> Option<std::path::PathBuf> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 系统监控采样只需要进程数量，因此用最小刷新种类；这条用例确认换成
+    /// `ProcessRefreshKind::nothing()` 后整机指标与进程计数仍然有效。
+    #[test]
+    fn stats_sampler_reports_machine_metrics_without_process_details() {
+        let mut sampler = SystemStatsSampler::new();
+        let stats = sampler.sample();
+        assert!(stats.process_count > 0, "进程数量应大于 0");
+        assert!(stats.memory_total_bytes > 0, "总内存应大于 0");
+        assert!(stats.memory_used_bytes <= stats.memory_total_bytes);
+        assert!(!stats.hostname.is_empty(), "主机名不应为空");
+    }
 }

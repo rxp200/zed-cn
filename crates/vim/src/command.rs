@@ -340,9 +340,9 @@ pub fn register(editor: &mut Editor, cx: &mut Context<Vim>) {
     Vim::action(editor, cx, |_, _: &ArgumentRequired, window, cx| {
         let _ = window.prompt(
             gpui::PromptLevel::Critical,
-            "Argument required",
+            i18n::t!("76eb72d6b89771e9"),
             None,
-            &["Cancel"],
+            &[i18n::t!("2cd0f3be8738a86c")],
             cx,
         );
     });
@@ -377,9 +377,9 @@ pub fn register(editor: &mut Editor, cx: &mut Context<Vim>) {
                     else {
                         let _ = window.prompt(
                             gpui::PromptLevel::Warning,
-                            "No file name",
-                            Some("Partial buffer write requires file name."),
-                            &["Cancel"],
+                            i18n::t!("df09f17844415c96"),
+                            Some(i18n::t!("52766b74838d4c4f")),
+                            &[i18n::t!("2cd0f3be8738a86c")],
                             cx,
                         );
                         return;
@@ -407,9 +407,9 @@ pub fn register(editor: &mut Editor, cx: &mut Context<Vim>) {
                     if Some(SaveIntent::Overwrite) != action.save_intent {
                         let _ = window.prompt(
                             gpui::PromptLevel::Warning,
-                            "Use ! to write partial buffer",
-                            Some("Overwriting the current file with selected buffer content requires '!'."),
-                            &["Cancel"],
+                            i18n::t!("6287496e07dc2864"),
+                            Some(i18n::t!("476279ab32c0615e")),
+                            &[i18n::t!("2cd0f3be8738a86c")],
                             cx,
                         );
                         return;
@@ -437,7 +437,7 @@ pub fn register(editor: &mut Editor, cx: &mut Context<Vim>) {
                                 Some(
                                     "A file or folder with the same name already exists. Replacing it will overwrite its current contents.",
                                 ),
-                                &["Replace", "Cancel"],
+                                &[i18n::t!("131b13aa265996df"), i18n::t!("2cd0f3be8738a86c")],
                                 cx
                             )
                         });
@@ -518,7 +518,7 @@ pub fn register(editor: &mut Editor, cx: &mut Context<Vim>) {
                         "A file or folder with the same name already exists. \
                         Replacing it will overwrite its current contents.",
                     ),
-                    &["Replace", "Cancel"],
+                    &[i18n::t!("131b13aa265996df"), i18n::t!("2cd0f3be8738a86c")],
                     cx,
                 );
                 cx.spawn_in(window, async move |editor, cx| {
@@ -2198,22 +2198,17 @@ impl OnMatchingLines {
         };
 
         vim.update_editor(cx, |_, editor, cx| {
-            let snapshot = editor.snapshot(window, cx);
+            let snapshot = editor.buffer().read(cx).snapshot(cx);
             let mut row = range.start.0;
 
             let point_range = Point::new(range.start.0, 0)
-                ..snapshot
-                    .buffer_snapshot()
-                    .clip_point(Point::new(range.end.0 + 1, 0), Bias::Left);
+                ..snapshot.clip_point(Point::new(range.end.0 + 1, 0), Bias::Left);
             cx.spawn_in(window, async move |editor, cx| {
-                let new_selections = cx
+                let matching_lines = cx
                     .background_spawn(async move {
                         let mut line = String::new();
-                        let mut new_selections = Vec::new();
-                        let chunks = snapshot
-                            .buffer_snapshot()
-                            .text_for_range(point_range)
-                            .chain(["\n"]);
+                        let mut matching_lines = Vec::new();
+                        let chunks = snapshot.text_for_range(point_range).chain(["\n"]);
 
                         for chunk in chunks {
                             for (newline_ix, text) in chunk.split('\n').enumerate() {
@@ -2221,8 +2216,8 @@ impl OnMatchingLines {
                                     if regexes.iter().all(|(regex, should_match)| {
                                         regex.is_match(&line) == *should_match
                                     }) {
-                                        new_selections
-                                            .push(Point::new(row, 0).to_display_point(&snapshot))
+                                        matching_lines
+                                            .push(snapshot.anchor_after(Point::new(row, 0)))
                                     }
                                     row += 1;
                                     line.clear();
@@ -2231,31 +2226,38 @@ impl OnMatchingLines {
                             }
                         }
 
-                        new_selections
+                        matching_lines
                     })
                     .await;
 
-                if new_selections.is_empty() {
-                    return;
-                }
-
-                if let Some(vim_norm) = action.as_any().downcast_ref::<VimNorm>() {
-                    let mut vim_norm = vim_norm.clone();
-                    vim_norm.override_rows =
-                        Some(new_selections.iter().map(|point| point.row().0).collect());
-                    editor
-                        .update_in(cx, |_, window, cx| {
-                            window.dispatch_action(vim_norm.boxed_clone(), cx);
-                        })
-                        .log_err();
-                    return;
-                }
-
                 editor
                     .update_in(cx, |editor, window, cx| {
+                        let snapshot = editor.buffer().read(cx).snapshot(cx);
+                        let new_selections = matching_lines
+                            .into_iter()
+                            .filter(|anchor| anchor.is_valid(&snapshot))
+                            .map(|anchor| Point::new(anchor.to_point(&snapshot).row, 0))
+                            .collect::<Vec<_>>();
+                        if new_selections.is_empty() {
+                            return;
+                        }
+
+                        if let Some(vim_norm) = action.as_any().downcast_ref::<VimNorm>() {
+                            let mut vim_norm = vim_norm.clone();
+                            vim_norm.override_rows =
+                                Some(new_selections.iter().map(|point| point.row).collect());
+                            window.dispatch_action(vim_norm.boxed_clone(), cx);
+                            return;
+                        }
+
                         editor.start_transaction_at(Instant::now(), window, cx);
                         editor.change_selections(SelectionEffects::no_scroll(), window, cx, |s| {
-                            s.replace_cursors_with(|_| new_selections);
+                            s.replace_cursors_with(|map| {
+                                new_selections
+                                    .iter()
+                                    .map(|point| point.to_display_point(map))
+                                    .collect()
+                            });
                         });
                         window.dispatch_action(action, cx);
 
@@ -2274,7 +2276,7 @@ impl OnMatchingLines {
                             editor.end_transaction_at(Instant::now(), cx);
                         })
                     })
-                    .log_err();
+                    .ok();
             })
             .detach();
         });
@@ -2630,16 +2632,23 @@ impl ShellExec {
 
 #[cfg(test)]
 mod test {
-    use std::path::{Path, PathBuf};
+    use std::{
+        path::{Path, PathBuf},
+        slice,
+    };
 
+    use super::{CommandRange, OnMatchingLines, VimNorm, WrappedAction};
     use crate::{
         VimAddon,
         state::Mode,
         test::{NeovimBackedTestContext, VimTestContext},
+        visual::VisualDeleteLine,
     };
-    use editor::{Editor, EditorSettings};
-    use gpui::{Context, TestAppContext};
+    use editor::{Editor, EditorSettings, display_map::ToDisplayPoint};
+    use gpui::{Action, AppContext as _, Context, TestAppContext};
     use indoc::indoc;
+    use language::Point;
+    use multi_buffer::{MultiBuffer, PathKey};
     use settings::Settings;
     use util::path;
     use workspace::{OpenOptions, Workspace};
@@ -2752,7 +2761,7 @@ mod test {
         // conflict!
         cx.simulate_keystrokes("i @ escape");
         cx.simulate_keystrokes(": w enter");
-        cx.simulate_prompt_answer("Cancel");
+        cx.simulate_prompt_answer("取消");
 
         assert_eq!(fs.load(path).await.unwrap().replace("\r\n", "\n"), "oops\n");
         assert!(!cx.has_pending_prompt());
@@ -3002,7 +3011,7 @@ mod test {
         cx.simulate_keystrokes(": w space dir/file.rs");
         cx.simulate_keystrokes("enter");
 
-        cx.simulate_prompt_answer("Replace");
+        cx.simulate_prompt_answer("替换");
         cx.run_until_parked();
 
         cx.workspace(|workspace, _, cx| {
@@ -3099,6 +3108,150 @@ mod test {
             a
             a
             ˇa"});
+    }
+
+    #[gpui::test]
+    async fn test_command_matching_lines_after_edit(cx: &mut TestAppContext) {
+        let mut cx = VimTestContext::new(cx, true).await;
+
+        for normal_command in [true, false] {
+            cx.set_state("ˇmatch α\nkeep β\nmatch γ\nlast δ\n", Mode::Normal);
+            start_matching_lines(&mut cx, normal_command);
+            cx.update_buffer(|buffer, cx| {
+                buffer.edit(
+                    [
+                        (Point::new(0, 0)..Point::new(0, 0), "match 新\n前置\n"),
+                        (Point::new(2, 0)..Point::new(2, 0), "😀"),
+                    ],
+                    None,
+                    cx,
+                );
+            });
+            cx.run_until_parked();
+
+            let expected = if normal_command {
+                "match 新\n前置\nmatch α!\nkeep β\n😀match γ!\nlast δ\n"
+            } else {
+                "match 新\n前置\nkeep β\nlast δ\n"
+            };
+            assert_eq!(cx.buffer_text(), expected);
+
+            cx.set_state("ˇ前置\nmatch α\nkeep β\nmatch γ\nlast δ\n", Mode::Normal);
+            start_matching_lines(&mut cx, normal_command);
+            cx.update_buffer(|buffer, cx| {
+                buffer.edit([(Point::new(0, 0)..Point::new(2, 0), "")], None, cx);
+            });
+            cx.run_until_parked();
+
+            let expected = if normal_command {
+                "keep β\nmatch γ!\nlast δ\n"
+            } else {
+                "keep β\nlast δ\n"
+            };
+            assert_eq!(cx.buffer_text(), expected);
+        }
+    }
+
+    #[gpui::test]
+    async fn test_command_matching_lines_after_fold_change(cx: &mut TestAppContext) {
+        let mut cx = VimTestContext::new(cx, true).await;
+
+        for normal_command in [true, false] {
+            for (fold_before, fold_after) in [(true, true), (false, true), (true, false)] {
+                cx.set_state(
+                    "ˇheader\nhidden α\nhidden β\nmatch γ\nkeep δ\nmatch ε\nlast\n",
+                    Mode::Normal,
+                );
+                let fold_range = Point::new(0, 6)..Point::new(2, 9);
+                cx.update_editor(|editor, window, cx| {
+                    editor.unfold_ranges(slice::from_ref(&fold_range), true, false, cx);
+                    if fold_before {
+                        editor.fold_ranges(vec![fold_range.clone()], false, window, cx);
+                    }
+                    assert_eq!(
+                        Point::new(3, 0)
+                            .to_display_point(&editor.snapshot(window, cx))
+                            .row()
+                            .0,
+                        if fold_before { 1 } else { 3 },
+                    );
+                });
+                start_matching_lines(&mut cx, normal_command);
+                cx.update_editor(|editor, window, cx| {
+                    if fold_after {
+                        editor.fold_ranges(vec![fold_range], false, window, cx);
+                    } else {
+                        editor.unfold_ranges(&[fold_range], true, false, cx);
+                    }
+                });
+                cx.run_until_parked();
+
+                let expected = if normal_command {
+                    "header\nhidden α\nhidden β\nmatch γ!\nkeep δ\nmatch ε!\nlast\n"
+                } else {
+                    "header\nhidden α\nhidden β\nkeep δ\nlast\n"
+                };
+                assert_eq!(
+                    cx.buffer_text(),
+                    expected,
+                    "normal_command={normal_command}, fold_before={fold_before}, fold_after={fold_after}",
+                );
+            }
+        }
+    }
+
+    #[gpui::test]
+    async fn test_command_matching_lines_after_excerpt_removal(cx: &mut TestAppContext) {
+        let mut cx = VimTestContext::new(cx, true).await;
+
+        for normal_command in [true, false] {
+            for keep_match in [false, true] {
+                let editor = cx.workspace(|workspace, window, cx| {
+                    let (remaining_text, remaining_rows) = if keep_match {
+                        ("keep\nmatch survives\nlast\n", 3)
+                    } else {
+                        ("keep\nlast\n", 2)
+                    };
+                    let multibuffer = MultiBuffer::build_multi(
+                        [
+                            ("match removed\n", vec![Point::row_range(0..1)]),
+                            (remaining_text, vec![Point::row_range(0..remaining_rows)]),
+                        ],
+                        cx,
+                    );
+                    let editor = cx.new(|cx| {
+                        Editor::for_multibuffer(
+                            multibuffer,
+                            Some(workspace.project().clone()),
+                            window,
+                            cx,
+                        )
+                    });
+                    workspace.add_item_to_active_pane(
+                        Box::new(editor.clone()),
+                        None,
+                        true,
+                        window,
+                        cx,
+                    );
+                    editor
+                });
+                cx.editor = editor;
+                cx.run_until_parked();
+                start_matching_lines(&mut cx, normal_command);
+                cx.update_multibuffer(|multibuffer, cx| {
+                    multibuffer.remove_excerpts(PathKey::sorted(0), cx);
+                });
+                cx.run_until_parked();
+
+                let expected = if normal_command && keep_match {
+                    "keep\nmatch survives!\nlast\n"
+                } else {
+                    "keep\nlast\n"
+                };
+                assert_eq!(cx.buffer_text(), expected);
+            }
+        }
     }
 
     #[gpui::test]
@@ -3621,5 +3774,29 @@ mod test {
             "},
             Mode::VisualLine,
         );
+    }
+
+    fn start_matching_lines(cx: &mut VimTestContext, normal_command: bool) {
+        let vim = cx.editor(|editor, _, _| editor.addon::<VimAddon>().unwrap().entity.clone());
+        cx.update(|window, cx| {
+            vim.update(cx, |vim, cx| {
+                OnMatchingLines {
+                    range: CommandRange::buffer(),
+                    search: String::from("match"),
+                    action: WrappedAction(if normal_command {
+                        VimNorm {
+                            range: None,
+                            command: String::from("A!"),
+                            override_rows: None,
+                        }
+                        .boxed_clone()
+                    } else {
+                        VisualDeleteLine.boxed_clone()
+                    }),
+                    invert: false,
+                }
+                .run(vim, window, cx);
+            });
+        });
     }
 }

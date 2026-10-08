@@ -13,6 +13,7 @@ path = "src/extensions_ui.rs"
 doctest = false
 
 [dependencies]
+i18n.workspace = true
 anyhow.workspace = true
 cloud_api_types.workspace = true
 command_palette_hooks.workspace = true
@@ -30,7 +31,6 @@ gpui.workspace = true
 language.workspace = true
 log.workspace = true
 markdown.workspace = true
-num-format.workspace = true
 picker.workspace = true
 project.workspace = true
 release_channel.workspace = true

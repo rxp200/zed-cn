@@ -251,12 +251,11 @@ impl LanguageServerState {
                                         .size(IconSize::XSmall),
                                 )
                                 .child(
-                                    Label::new("Project is in Restricted Mode")
-                                        .size(LabelSize::Small),
+                                    Label::new(i18n::t!("0f10972485d5fea7")).size(LabelSize::Small),
                                 ),
                         )
                         .child(
-                            Label::new("Language Servers can't run until you trust this project.")
+                            Label::new(i18n::t!("44133835dedb7043"))
                                 .size(LabelSize::Small)
                                 .color(Color::Muted),
                         )
@@ -703,7 +702,7 @@ fn tooltip_for_server_binary(
     let runtime = path_style.file_name(&server_binary.path).and_then(|name| {
         ["node", "python"]
             .into_iter()
-            .find(|runtime| name.starts_with(runtime))
+            .find(|runtime| name.to_string_lossy().starts_with(runtime))
     });
 
     let target_path = runtime
@@ -1470,7 +1469,12 @@ impl Render for LspButton {
                         .when(is_restricted, |s| s.icon_color(Color::Warning))
                         .indicator_border_color(Some(cx.theme().colors().status_bar_background)),
                     move |_window, cx| {
-                        Tooltip::with_meta("Language Servers", Some(&ToggleMenu), description, cx)
+                        Tooltip::with_meta(
+                            i18n::t!("09375000f874c8ec"),
+                            Some(&ToggleMenu),
+                            description,
+                            cx,
+                        )
                     },
                 ),
         )

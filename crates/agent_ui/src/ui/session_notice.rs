@@ -1,4 +1,4 @@
-use agent_client_protocol::schema::v1 as acp;
+use agent_client_protocol::schema::v2 as acp;
 use component::{Component, ComponentScope, example_group_with_title, single_example};
 use gpui::{AnyElement, App, ClickEvent, ElementId, Stateful, Window, px};
 use ui::{Callout, Color, IconButton, IconName, IconSize, Severity, Tooltip, prelude::*};
@@ -41,7 +41,7 @@ impl SessionNotice {
                                 .icon_color(Color::Muted)
                                 .aria_label(format!("Dismiss notice: {}", notice.title))
                                 .tab_index(0_isize)
-                                .tooltip(Tooltip::text("Dismiss Notice"))
+                                .tooltip(Tooltip::text(i18n::t!("7f7e450d69a6b5a8")))
                                 .on_click(on_dismiss),
                         ),
                 ),
@@ -86,7 +86,7 @@ impl Component for SessionNoticePreview {
 
     fn preview(_window: &mut Window, _cx: &mut App) -> AnyElement {
         let detailed = acp::Notice::new(acp::NoticeSeverity::Warning, "MCP server unavailable")
-            .description("Continuing without it. Other integrations are still available.");
+            .description(i18n::t!("e77b475c0bd1ae65"));
         let long = acp::Notice::new(
             acp::NoticeSeverity::Warning,
             "The optional documentation integration is unavailable in this remote environment",
@@ -122,7 +122,7 @@ impl Component for SessionNoticePreview {
                                     acp::NoticeSeverity::Error,
                                     "Optional integration failed",
                                 )
-                                .description("Work will continue without this integration."),
+                                .description(i18n::t!("67ac106df0c972be")),
                             ),
                         )
                         .width(px(640.)),
@@ -145,7 +145,7 @@ impl Component for SessionNoticePreview {
                                     acp::NoticeSeverity::Other("_agent_advisory".into()),
                                     "Using the workspace configuration",
                                 )
-                                .description("Agent-specific and future severities use the same generic presentation."),
+                                .description(i18n::t!("6cba8de7164c848f")),
                             ),
                         )
                         .width(px(640.)),
@@ -175,7 +175,7 @@ impl Component for SessionNoticePreview {
                                             acp::NoticeSeverity::Warning,
                                             "Network performance is degraded",
                                         )
-                                        .description("Responses may take longer than usual."),
+                                        .description(i18n::t!("c700fefe12402878")),
                                     ),
                                 ])
                                 .into_any_element(),
@@ -191,7 +191,7 @@ impl Component for SessionNoticePreview {
                                             acp::NoticeSeverity::Warning,
                                             "MCP server unavailable",
                                         )
-                                        .description("Continuing without it. Repeated notices are shown as separate events."),
+                                        .description(i18n::t!("e3368813c1ff9d7f")),
                                     )
                                 }))
                                 .into_any_element(),

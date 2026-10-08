@@ -160,7 +160,7 @@ pub struct EditPredictionSettingsContent {
     /// Provider support required.
     pub mode: Option<EditPredictionsMode>,
     /// Settings specific to GitHub Copilot.
-    pub copilot: Option<CopilotSettingsContent>,
+    pub copilot: Option<CopilotEditPredictionSettingsContent>,
     /// Settings specific to Codestral.
     pub codestral: Option<CodestralSettingsContent>,
     /// Settings specific to Ollama.
@@ -200,11 +200,45 @@ pub struct CustomEditPredictionProviderSettingsContent {
     ///
     /// Default: 256
     pub max_output_tokens: Option<u32>,
+    /// The API type to use for edit predictions.
+    ///
+    /// Use `completions` for text completion APIs (`/v1/completions`, native
+    /// FIM models) and `chat_completions` for chat completion APIs
+    /// (`/v1/chat/completions`, chat models). When `chat_completions` is used,
+    /// Zed builds an instruction-based fill-in-the-middle prompt instead of
+    /// using model-native FIM tokens.
+    ///
+    /// Default: "completions"
+    pub api_type: Option<OpenAiCompatibleApiTypeContent>,
     /// The debounce delay in milliseconds before automatically requesting a prediction
     /// after typing stops. Set to 0 to request predictions immediately.
     ///
     /// Default: 0
     pub prediction_debounce: Option<DelayMs>,
+}
+
+#[derive(
+    Copy,
+    Clone,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+    MergeFrom,
+    strum::VariantArray,
+    strum::VariantNames,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum OpenAiCompatibleApiTypeContent {
+    /// Text completion API (`/v1/completions`) using model-native FIM tokens.
+    #[default]
+    Completions,
+    /// Chat completion API (`/v1/chat/completions`) using an
+    /// instruction-based fill-in-the-middle prompt.
+    ChatCompletions,
 }
 
 #[derive(
@@ -241,6 +275,15 @@ pub enum EditPredictionPromptFormatContent {
 #[with_fallible_options]
 #[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema, MergeFrom, PartialEq)]
 pub struct CopilotSettingsContent {
+    /// Enterprise URI shared by Copilot Chat and edit predictions.
+    ///
+    /// Default: none
+    pub enterprise_uri: Option<String>,
+}
+
+#[with_fallible_options]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema, MergeFrom, PartialEq)]
+pub struct CopilotEditPredictionSettingsContent {
     /// HTTP/HTTPS proxy to use for Copilot.
     ///
     /// Default: none
@@ -249,10 +292,6 @@ pub struct CopilotSettingsContent {
     ///
     /// Default: false
     pub proxy_no_verify: Option<bool>,
-    /// Enterprise URI for Copilot.
-    ///
-    /// Default: none
-    pub enterprise_uri: Option<String>,
     /// Whether the Copilot Next Edit Suggestions feature is enabled.
     ///
     /// Default: true
@@ -403,8 +442,7 @@ pub enum EditPredictionDataCollectionChoice {
 )]
 #[serde(rename_all = "snake_case")]
 pub enum EditPredictionsMode {
-    /// If provider supports it, display inline when holding modifier key (e.g., alt).
-    /// Otherwise, eager preview is used.
+    /// Request and display predictions when holding a modifier key (e.g., alt).
     #[serde(alias = "auto")]
     Subtle,
     /// Display inline when there are no language server completions available.
@@ -596,7 +634,7 @@ pub struct LanguageSettingsContent {
     pub indent_guides: Option<IndentGuideSettingsContent>,
     /// Whether or not to perform a buffer format before saving.
     ///
-    /// Default: on
+    /// Default: off
     pub format_on_save: Option<FormatOnSave>,
     /// Whether or not to remove any trailing whitespace from lines of a buffer
     /// before saving it.
