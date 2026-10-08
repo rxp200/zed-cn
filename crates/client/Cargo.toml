@@ -20,7 +20,7 @@ i18n.workspace = true
 anyhow.workspace = true
 async-channel.workspace = true
 async-tungstenite = { workspace = true, features = ["tokio", "tokio-rustls-manual-roots"] }
-chrono = { workspace = true, features = ["serde"] }
+chrono.workspace = true
 clock.workspace = true
 cloud_api_client.workspace = true
 cloud_api_types.workspace = true
@@ -74,7 +74,7 @@ util = { workspace = true, features = ["test-support"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 semver.workspace = true
-windows.workspace = true
+windows = { workspace = true, features = ["Wdk_System_SystemServices", "Win32_System_SystemInformation"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2-foundation.workspace = true

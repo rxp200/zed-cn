@@ -30,7 +30,7 @@ project.workspace = true
 remote.workspace = true
 proto.workspace = true
 smallvec.workspace = true
-sysinfo.workspace = true
+sysinfo = { workspace = true, features = ["disk", "network"] }
 terminal_view.workspace = true
 ui.workspace = true
 util.workspace = true

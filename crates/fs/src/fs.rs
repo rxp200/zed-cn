@@ -1475,6 +1475,8 @@ struct FakeWatches {
     registered_paths: Vec<PathBuf>,
     watch_calls: Vec<PathBuf>,
     event_sink: Option<Box<dyn Fn(notify::Result<notify::Event>) + Send + Sync>>,
+    /// A file to create, without an event, when the given path is next watched.
+    file_to_create_on_watch: Option<(PathBuf, PathBuf)>,
 }
 
 #[cfg(feature = "test-support")]
@@ -1784,6 +1786,29 @@ impl fs_watcher::WatchBackend for FakeWatchBackend {
             "fake filesystem state is locked; this execution would have caused a test hang",
         );
         state.watches.watch_calls.push(path.clone());
+        if let Some((_, file_path)) = state
+            .watches
+            .file_to_create_on_watch
+            .take_if(|(watch_path, _)| *watch_path == path)
+        {
+            let inode = state.get_and_increment_inode();
+            let mtime = state.get_and_increment_mtime();
+            state
+                .write_path(&file_path, |entry| {
+                    let btree_map::Entry::Vacant(entry) = entry else {
+                        anyhow::bail!("file already exists: {}", file_path.display());
+                    };
+                    entry.insert(FakeFsEntry::File {
+                        inode,
+                        mtime,
+                        len: 0,
+                        content: Vec::new(),
+                        git_dir_path: None,
+                    });
+                    Ok(())
+                })
+                .map_err(|error| notify::Error::generic(&error.to_string()))?;
+        }
         state.watches.registered_paths.push(path);
         Ok(())
     }
@@ -2049,6 +2074,19 @@ impl FakeFs {
     /// including paths that were later unwatched.
     pub fn watch_calls(&self) -> Vec<PathBuf> {
         self.state.lock().watches.watch_calls.clone()
+    }
+
+    /// Creates `path` without emitting an event when `watch_path` is next
+    /// watched, simulating a change that lands while the watch is installed.
+    pub fn create_file_before_next_watch_add(
+        &self,
+        watch_path: impl AsRef<Path>,
+        path: impl AsRef<Path>,
+    ) {
+        self.state.lock().watches.file_to_create_on_watch = Some((
+            normalize_path(watch_path.as_ref()),
+            normalize_path(path.as_ref()),
+        ));
     }
 
     pub fn flush_events(&self, count: usize) {
