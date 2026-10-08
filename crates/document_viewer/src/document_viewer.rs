@@ -899,6 +899,32 @@ mod tests {
         (project, item)
     }
 
+    #[gpui::test]
+    async fn test_model_viewport_has_height(cx: &mut TestAppContext) {
+        init_test(cx);
+        let (project, item) = open_test_document(
+            cx,
+            "triangle.obj",
+            b"v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3".to_vec(),
+        ).await;
+        let (_view, window) = cx.add_window_view(|window, cx| {
+            DocumentView::new(item, project, window, cx)
+        });
+        window.run_until_parked();
+        let bounds = window.debug_bounds("model-viewport").expect("viewport");
+        assert!(bounds.size.width > gpui::px(100.0), "{bounds:?}");
+        assert!(bounds.size.height > gpui::px(100.0), "{bounds:?}");
+        let panel = window.debug_bounds("model-panel").expect("panel");
+        assert_eq!(panel.size.width, gpui::px(300.0));
+        assert!(panel.size.height > bounds.size.height);
+        let toolbar = window.debug_bounds("model-toolbar").expect("toolbar");
+        assert!(toolbar.size.height >= gpui::px(40.0), "{toolbar:?}");
+        let geometry = window.debug_bounds("model-geometry-header").expect("geometry");
+        let topology = window.debug_bounds("model-topology-header").expect("topology");
+        assert!(geometry.origin.x > panel.origin.x);
+        assert!(topology.origin.y > geometry.origin.y + geometry.size.height);
+    }
+
     #[gpui::test(iterations = 20)]
     async fn test_model_views_share_mesh_and_release_on_last_close(cx: &mut TestAppContext) {
         init_test(cx);

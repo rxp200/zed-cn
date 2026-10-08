@@ -12,7 +12,8 @@ use std::sync::{
 };
 use ui::prelude::*;
 use ui::{
-    ContextMenu, Divider, DropdownMenu, Indicator, ToggleButtonGroup, ToggleButtonSimple, Tooltip,
+    ContextMenu, Divider, DropdownMenu, Indicator, ToggleButtonGroup, ToggleButtonGroupSize,
+    ToggleButtonGroupStyle, ToggleButtonSimple, Tooltip,
 };
 use util::ResultExt as _;
 
@@ -93,7 +94,7 @@ impl Default for Camera {
             zoom: 1.0,
             pan: [0.0; 2],
             perspective: true,
-            shading: Shading::Solid,
+            shading: Shading::SolidEdges,
             grid: true,
             axes: true,
         }
@@ -117,10 +118,6 @@ fn color_rgb(color: impl Into<Rgba>) -> [u8; 3] {
         (color.g * 255.0) as u8,
         (color.b * 255.0) as u8,
     ]
-}
-
-fn darken(color: [u8; 3], factor: f32) -> [u8; 3] {
-    color.map(|channel| (channel as f32 * factor) as u8)
 }
 
 pub struct ModelReader {
@@ -213,7 +210,7 @@ impl ModelReader {
         let model = color_rgb(colors.text_accent);
         RasterStyle {
             model,
-            edge: darken(model, 0.4),
+            edge: model.map(|channel| (u16::from(channel) * 3 / 4 + 63) as u8),
             wire: color_rgb(colors.text_muted),
             grid: {
                 let border: Rgba = colors.border.into();
@@ -329,8 +326,11 @@ impl ModelReader {
         let axes = self.camera.axes;
         let panel_open = self.panel_open;
         h_flex()
-            .gap_1()
-            .p_1()
+            .debug_selector(|| "model-toolbar".to_string())
+            .flex_none()
+            .gap_2()
+            .px_3()
+            .py_2()
             .items_center()
             .border_b_1()
             .border_color(cx.theme().colors().border)
@@ -350,7 +350,7 @@ impl ModelReader {
             )
             .child(
                 DropdownMenu::new("model-view-dropdown", current.label(), view_menu)
-                    .trigger_size(ButtonSize::Compact),
+                    .trigger_size(ButtonSize::Large),
             )
             .child(Divider::vertical())
             .child(
@@ -381,6 +381,10 @@ impl ModelReader {
                         }),
                     ],
                 )
+                .auto_width()
+                .size(ToggleButtonGroupSize::Large)
+                .style(ToggleButtonGroupStyle::Outlined)
+                .label_size(LabelSize::Default)
                 .selected_index(usize::from(!perspective)),
             )
             .child(
@@ -422,6 +426,10 @@ impl ModelReader {
                         }),
                     ],
                 )
+                .auto_width()
+                .size(ToggleButtonGroupSize::Large)
+                .style(ToggleButtonGroupStyle::Outlined)
+                .label_size(LabelSize::Default)
                 .selected_index(match shading {
                     Shading::Solid => 0,
                     Shading::SolidEdges => 1,
@@ -474,7 +482,8 @@ impl ModelReader {
         let topology_open = self.topology_open;
         let file_open = self.file_open;
         v_flex()
-            .w(px(260.0))
+            .debug_selector(|| "model-panel".to_string())
+            .w(px(300.0))
             .flex_none()
             .h_full()
             .border_l_1()
@@ -501,10 +510,12 @@ impl ModelReader {
             .child(
                 v_flex()
                     .id("model-panel-sections")
+                    .p_3()
+                    .gap_3()
                     .overflow_y_scroll()
                     .flex_1()
                     .min_h_0()
-                    .child(section_header(
+                    .child(model_card(cx).child(section_header(
                         "model-geometry-header",
                         i18n::t!("fa9da5754ccfd409"),
                         geometry_open,
@@ -550,8 +561,8 @@ impl ModelReader {
                                     ),
                                 ))
                             })
-                    })
-                    .child(section_header(
+                    }))
+                    .child(model_card(cx).child(section_header(
                         "model-topology-header",
                         i18n::t!("3a6c23b78b17490b"),
                         topology_open,
@@ -604,8 +615,8 @@ impl ModelReader {
                                 ),
                             )
                         })
-                    })
-                    .child(section_header(
+                    }))
+                    .child(model_card(cx).child(section_header(
                         "model-file-header",
                         i18n::t!("50009ce1da4d15e1"),
                         file_open,
@@ -631,7 +642,7 @@ impl ModelReader {
                                     value = format_quantity(self.mesh.area)
                                 ),
                             ))
-                    }),
+                    })),
             )
     }
 
@@ -640,8 +651,10 @@ impl ModelReader {
         let gizmo = self.camera.axes.then(|| gizmo_axes(&self.camera));
         div()
             .id("model-viewport")
+            .debug_selector(|| "model-viewport".to_string())
             .relative()
             .flex_1()
+            .h_full()
             .min_w_0()
             .min_h_0()
             .overflow_hidden()
@@ -716,6 +729,51 @@ impl ModelReader {
                 .size_full(),
             )
             .when_some(gizmo, |element, axes| element.child(render_gizmo(axes)))
+            .child(self.render_view_navigation(cx))
+    }
+
+    fn render_view_navigation(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        v_flex()
+            .absolute()
+            .top_4()
+            .right_4()
+            .gap_1()
+            .items_center()
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .child(
+                v_flex()
+                    .w(px(84.0))
+                    .rounded_lg()
+                    .border_1()
+                    .border_color(cx.theme().colors().border_variant)
+                    .bg(cx.theme().colors().panel_background)
+                    .overflow_hidden()
+                    .child(
+                        Button::new("model-navigation-top", ViewPreset::Top.label())
+                            .full_width()
+                            .on_click(cx.listener(|reader, _, _, cx| {
+                                reader.set_preset(ViewPreset::Top, cx);
+                            })),
+                    )
+                    .child(
+                        h_flex()
+                            .child(Button::new("model-navigation-front", ViewPreset::Front.label())
+                                .on_click(cx.listener(|reader, _, _, cx| {
+                                    reader.set_preset(ViewPreset::Front, cx);
+                                })))
+                            .child(Button::new("model-navigation-right", ViewPreset::Right.label())
+                                .on_click(cx.listener(|reader, _, _, cx| {
+                                    reader.set_preset(ViewPreset::Right, cx);
+                                }))),
+                    ),
+            )
+            .child(
+                Button::new("model-navigation-isometric", ViewPreset::Isometric.label())
+                    .label_size(LabelSize::Small)
+                    .on_click(cx.listener(|reader, _, _, cx| {
+                        reader.set_preset(ViewPreset::Isometric, cx);
+                    })),
+            )
     }
 
     fn render_status_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -725,14 +783,15 @@ impl ModelReader {
             i18n::t!("0f04d53421188d24")
         };
         h_flex()
-            .px_2()
-            .py_1()
+            .flex_none()
+            .px_3()
+            .py_1p5()
             .justify_between()
             .border_t_1()
             .border_color(cx.theme().colors().border)
             .child(
                 Label::new(i18n::t!("30bd16f9d01e8dc6"))
-                    .size(LabelSize::XSmall)
+                    .size(LabelSize::Small)
                     .color(Color::Muted),
             )
             .child(
@@ -817,13 +876,24 @@ fn render_gizmo(axes: [GizmoAxis; 3]) -> impl IntoElement {
             div()
                 .absolute()
                 .left(px(half + dx * GIZMO_LABEL_RADIUS - 4.0))
-                .top(px(half - dy * GIZMO_LABEL_RADIUS - 5.0))
+                .top(px(half + dy * GIZMO_LABEL_RADIUS - 5.0))
                 .child(
                     Label::new(label)
                         .size(LabelSize::XSmall)
                         .color(Color::Custom(rgb(color).into())),
                 )
         }))
+}
+
+fn model_card(cx: &App) -> gpui::Div {
+    v_flex()
+        .flex_none()
+        .pb_2()
+        .rounded_lg()
+        .border_1()
+        .border_color(cx.theme().colors().border_variant)
+        .bg(cx.theme().colors().element_background)
+        .overflow_hidden()
 }
 
 fn section_header(
@@ -834,9 +904,10 @@ fn section_header(
 ) -> impl IntoElement {
     h_flex()
         .id(id)
-        .px_2()
-        .py_1()
-        .gap_1()
+        .debug_selector(move || id.to_string())
+        .px_3()
+        .py_2()
+        .gap_2()
         .items_center()
         .cursor_pointer()
         .on_click(on_click)
@@ -849,17 +920,17 @@ fn section_header(
             .size(IconSize::Small)
             .color(Color::Muted),
         )
-        .child(Label::new(title).size(LabelSize::Small).color(Color::Muted))
+        .child(Label::new(title).size(LabelSize::Default))
 }
 
 fn property_row(label: &'static str, value: impl Into<SharedString>) -> impl IntoElement {
     h_flex()
         .px_3()
-        .py_0p5()
+        .py_1p5()
         .justify_between()
         .gap_2()
-        .child(Label::new(label).size(LabelSize::Small).color(Color::Muted))
-        .child(Label::new(value).size(LabelSize::Small))
+        .child(Label::new(label).size(LabelSize::Default).color(Color::Muted))
+        .child(Label::new(value).size(LabelSize::Default))
 }
 
 fn check_row(label: &'static str, count: Option<usize>, inspecting: bool) -> impl IntoElement {
@@ -871,14 +942,14 @@ fn check_row(label: &'static str, count: Option<usize>, inspecting: bool) -> imp
     };
     h_flex()
         .px_3()
-        .py_0p5()
+        .py_1p5()
         .justify_between()
-        .child(Label::new(label).size(LabelSize::Small).color(Color::Muted))
+        .child(Label::new(label).size(LabelSize::Default).color(Color::Muted))
         .child(
             h_flex()
                 .gap_1p5()
                 .items_center()
-                .child(Label::new(value).size(LabelSize::Small))
+                .child(Label::new(value).size(LabelSize::Default))
                 .child(Indicator::dot().color(color)),
         )
 }
@@ -954,12 +1025,19 @@ impl Render for ModelReader {
                 h_flex()
                     .flex_1()
                     .min_h_0()
-                    .child(self.render_viewport(cx))
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .h_full()
+                            .min_w_0()
+                            .min_h_0()
+                            .child(self.render_viewport(cx))
+                            .child(self.render_status_bar(cx)),
+                    )
                     .when(self.panel_open, |element| {
                         element.child(self.render_panel(cx))
                     }),
             )
-            .child(self.render_status_bar(cx))
     }
 }
 
