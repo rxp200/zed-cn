@@ -15,6 +15,10 @@ class BundleMacTests(unittest.TestCase):
     def run_packaging(self, *, profile="release", local_install=False, sentry=False, fail_bundle=False):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            for license_name in ("LICENSE-GPL", "LICENSE-APACHE", "MODIFICATIONS.md"):
+                (root / license_name).write_text("test license\n")
+            (root / "assets").mkdir()
+            (root / "assets/licenses.md").write_text("test third-party licenses\n")
             crate = root / "crates/zed"
             crate.mkdir(parents=True)
             manifest = "[package.metadata.bundle-stable]\n"

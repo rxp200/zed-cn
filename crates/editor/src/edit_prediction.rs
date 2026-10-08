@@ -1415,7 +1415,9 @@ impl Editor {
                                     .child(self.render_edit_prediction_popover_keystroke(
                                         keystroke, key_color, cx,
                                     ))
-                                    .child(Label::new(i18n::t!("13d61fea9f174905")).into_any_element())
+                                    .child(
+                                        Label::new(i18n::t!("13d61fea9f174905")).into_any_element(),
+                                    )
                                     .opacity(if has_completion { 1.0 } else { 0.4 }),
                             )
                         } else {
@@ -1773,17 +1775,27 @@ impl Editor {
             .items_end()
             .when(flag_on_right, |el| el.items_start())
             .child(if flag_on_right {
-                self.render_edit_prediction_line_popover(i18n::t!("afd0b9482dfa57f0"), None, window, cx)
-                    .rounded_bl(px(0.))
-                    .rounded_tl(px(0.))
-                    .border_l_2()
-                    .border_color(border_color)
+                self.render_edit_prediction_line_popover(
+                    i18n::t!("afd0b9482dfa57f0"),
+                    None,
+                    window,
+                    cx,
+                )
+                .rounded_bl(px(0.))
+                .rounded_tl(px(0.))
+                .border_l_2()
+                .border_color(border_color)
             } else {
-                self.render_edit_prediction_line_popover(i18n::t!("afd0b9482dfa57f0"), None, window, cx)
-                    .rounded_br(px(0.))
-                    .rounded_tr(px(0.))
-                    .border_r_2()
-                    .border_color(border_color)
+                self.render_edit_prediction_line_popover(
+                    i18n::t!("afd0b9482dfa57f0"),
+                    None,
+                    window,
+                    cx,
+                )
+                .rounded_br(px(0.))
+                .rounded_tr(px(0.))
+                .border_r_2()
+                .border_color(border_color)
             })
             .child(div().w(POLE_WIDTH).bg(border_color).h(line_height))
             .into_any();
@@ -1819,7 +1831,12 @@ impl Editor {
         cx: &mut App,
     ) -> Option<(AnyElement, gpui::Point<Pixels>)> {
         let mut element = self
-            .render_edit_prediction_line_popover(i18n::t!("34dedaffd3cc55f0"), Some(scroll_icon), window, cx)
+            .render_edit_prediction_line_popover(
+                i18n::t!("34dedaffd3cc55f0"),
+                Some(scroll_icon),
+                window,
+                cx,
+            )
             .into_any();
 
         let size = element.layout_as_root(AvailableSpace::min_size(), window, cx);
@@ -2463,7 +2480,10 @@ impl Editor {
                         .gap_2()
                         .flex_1()
                         .child(Icon::new(icons.base))
-                        .child(Label::new(i18n::t!("93a81da4e2ece1e1", file_name = file_name))),
+                        .child(Label::new(i18n::t!(
+                            "93a81da4e2ece1e1",
+                            file_name = file_name
+                        ))),
                 )
             }
             EditPrediction::Edit {

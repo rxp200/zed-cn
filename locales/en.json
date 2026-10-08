@@ -5370,5 +5370,17 @@
   "72bb90897ab1eadc": "Read-only",
   "3eb2f17c6a2710fa": "Remote model preview requires a Zed CN SSH server with model reading support. Select Zed CN as the server source and reconnect after updating the server.",
   "241ebb5455d2ec4c": "System DLLs, GPU drivers and font caches shared with other processes; not counted in Zed process memory",
-  "dec3c8a51c854aae": "Zed shared memory"
+  "dec3c8a51c854aae": "Zed shared memory",
+  "61cda0d0a2368b3f": "Zed's edit predictions not included in the Free plan.",
+  "e63041e5e0b5c828": "Ref {name}",
+  "a7bf22284542c624": "Suggest Extensions",
+  "1a69a23f597093b2": "Whether to suggest installing extensions based on the files you open.",
+  "063ea5f7efe008b3": "Heading Font Weight",
+  "04a260462e29eaea": "Font weight for headings in the markdown preview, in CSS units from 100 to 900.",
+  "a43d2ad82fc77c45": "Font family for Mermaid diagrams in the agent panel and markdown preview. Falls back to the UI font family.",
+  "61bf629110305ccd": "Prefill Query From Selection",
+  "7c4eddac6e06766d": "Whether to pre-fill the file finder's query with the text selected in the focused item (e.g. an editor or a terminal).",
+  "23696719b8bf5136": "Commit Editor",
+  "57e1383c54f8007a": "Whether the commit message editor is shown in the Git panel by default.",
+  "6285ce5d271764bb": "More Options"
 }

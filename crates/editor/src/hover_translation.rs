@@ -9,6 +9,7 @@
 //!   contents when [`HoverTranslationSettings::enabled`] is set. The
 //!   translation is rendered underlined below the original documentation.
 
+use crate::code_explanations::ConfiguredModel;
 use crate::{
     Editor,
     actions::TranslateSelection,
@@ -23,7 +24,6 @@ use gpui::{
     App, AppContext as _, AsyncApp, Context, Entity, Global, ScrollHandle, SharedString, Task,
     Window,
 };
-use crate::code_explanations::ConfiguredModel;
 use itertools::Itertools as _;
 use language::CharKind;
 use language_model::{
@@ -555,7 +555,10 @@ mod tests {
 
     fn setup_fake_model(
         cx: &mut gpui::TestAppContext,
-    ) -> (Arc<FakeLanguageModelProvider>, language_model::LanguageModel) {
+    ) -> (
+        Arc<FakeLanguageModelProvider>,
+        language_model::LanguageModel,
+    ) {
         cx.update(|cx| {
             LanguageModelRegistry::test(cx);
             let provider = Arc::new(FakeLanguageModelProvider::new(

@@ -2,6 +2,7 @@
 use crate::transport::mock::ConnectGuard;
 use crate::{
     SshConnectionOptions,
+    command::RemoteCommand,
     protocol::MessageId,
     proxy::ProxyLaunchError,
     transport::{
@@ -575,7 +576,7 @@ pub async fn connect(
         cx.update(|cx| connection_options_with_settings(connection_options, cx));
     cx.update(|cx| {
         cx.update_default_global(|pool: &mut ConnectionPool, cx| {
-            pool.connect(connection_options.clone(), delegate.clone(), cx)
+            pool.connect(connection_options.clone(), None, delegate.clone(), cx)
         })
     })
     .await
@@ -999,7 +1000,7 @@ impl RemoteClient {
                 let (remote_connection, io_task) = match async {
                     let remote_connection = cx
                         .update_global(|pool: &mut ConnectionPool, cx| {
-                            pool.connect(connection_options, delegate.clone(), cx)
+                            pool.connect(connection_options, Some(remote_connection.remote_platform().os), delegate.clone(), cx)
                         })
                         .await
                         .map_err(|error| error.cloned())?;
@@ -1385,6 +1386,16 @@ impl RemoteClient {
             return Err(anyhow!("no remote connection"));
         };
         connection.build_command(program, args, env, working_dir, port_forward, interactive)
+    }
+
+    pub fn build_stdio_command(
+        &self,
+        command: RemoteCommand,
+    ) -> Result<(CommandTemplate, Vec<u8>)> {
+        let Some(connection) = self.remote_connection() else {
+            return Err(anyhow!("no remote connection"));
+        };
+        connection.build_stdio_command(command)
     }
 
     pub fn build_forward_ports_command(
@@ -1779,6 +1790,7 @@ impl ConnectionPool {
     fn connect(
         &mut self,
         opts: RemoteConnectionOptions,
+        known_os: Option<RemoteOs>,
         delegate: Arc<dyn RemoteClientDelegate>,
         cx: &mut App,
     ) -> Shared<Task<Result<Arc<dyn RemoteConnection>, Arc<anyhow::Error>>>> {
@@ -1818,7 +1830,7 @@ impl ConnectionPool {
                 async move |cx| {
                     let connection = match opts.clone() {
                         RemoteConnectionOptions::Ssh(opts) => {
-                            SshRemoteConnection::new(opts, delegate, cx)
+                            SshRemoteConnection::new(opts, known_os, delegate, cx)
                                 .await
                                 .map(|connection| Arc::new(connection) as Arc<dyn RemoteConnection>)
                         }
@@ -2667,12 +2679,19 @@ mod tests {
             (vec![EPUB_ENTRIES_CAPABILITY.to_owned()], true),
             (Vec::new(), false),
         ] {
-            incoming_tx.unbounded_send(proto::RemoteStarted { capabilities }.into_envelope(0, None, None)).expect("deliver EPUB capabilities");
+            incoming_tx
+                .unbounded_send(proto::RemoteStarted { capabilities }.into_envelope(0, None, None))
+                .expect("deliver EPUB capabilities");
             cx.run_until_parked();
             assert_eq!(client.supports_epub_entries.load(SeqCst), expected);
         }
-        for (capabilities, expected) in [(vec![MODEL_CHUNKS_CAPABILITY.to_owned()], true), (Vec::new(), false)] {
-            incoming_tx.unbounded_send(proto::RemoteStarted { capabilities }.into_envelope(0, None, None)).expect("deliver model capabilities");
+        for (capabilities, expected) in [
+            (vec![MODEL_CHUNKS_CAPABILITY.to_owned()], true),
+            (Vec::new(), false),
+        ] {
+            incoming_tx
+                .unbounded_send(proto::RemoteStarted { capabilities }.into_envelope(0, None, None))
+                .expect("deliver model capabilities");
             cx.run_until_parked();
             assert_eq!(client.supports_model_chunks.load(SeqCst), expected);
         }
@@ -2934,6 +2953,11 @@ pub trait RemoteConnection: Send + Sync {
         port_forward: Option<(u16, String, u16)>,
         interactive: Interactive,
     ) -> Result<CommandTemplate>;
+    fn build_stdio_command(&self, _command: RemoteCommand) -> Result<(CommandTemplate, Vec<u8>)> {
+        Err(anyhow!(
+            "stdio commands are not supported by this remote connection"
+        ))
+    }
     fn build_forward_ports_command(
         &self,
         forwards: Vec<(u16, String, u16)>,
@@ -3137,11 +3161,17 @@ impl ChannelClient {
                         SeqCst,
                     );
                     this.supports_epub_entries.store(
-                        started.capabilities.iter().any(|capability| capability == EPUB_ENTRIES_CAPABILITY),
+                        started
+                            .capabilities
+                            .iter()
+                            .any(|capability| capability == EPUB_ENTRIES_CAPABILITY),
                         SeqCst,
                     );
                     this.supports_model_chunks.store(
-                        started.capabilities.iter().any(|capability| capability == MODEL_CHUNKS_CAPABILITY),
+                        started
+                            .capabilities
+                            .iter()
+                            .any(|capability| capability == MODEL_CHUNKS_CAPABILITY),
                         SeqCst,
                     );
                     this.supports_document_chunks.store(

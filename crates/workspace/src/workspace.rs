@@ -4149,7 +4149,11 @@ impl Workspace {
                             PromptLevel::Warning,
                             i18n::t!("d0f4aa77b951c48a"),
                             Some(&detail),
-                            &[i18n::t!("592b52ba3cd3cd5a"), i18n::t!("2725e3b0b5b06397"), i18n::t!("2cd0f3be8738a86c")],
+                            &[
+                                i18n::t!("592b52ba3cd3cd5a"),
+                                i18n::t!("2725e3b0b5b06397"),
+                                i18n::t!("2cd0f3be8738a86c"),
+                            ],
                             cx,
                         )
                     })?;
@@ -4525,6 +4529,13 @@ impl Workspace {
 
     pub fn active_item(&self, cx: &App) -> Option<Box<dyn ItemHandle>> {
         self.active_pane().read(cx).active_item()
+    }
+
+    pub fn item_for_action(&self, window: &Window, cx: &App) -> Option<Box<dyn ItemHandle>> {
+        self.items(cx)
+            .find(|item| item.item_focus_handle(cx).contains_focused(window, cx))
+            .map(|item| item.boxed_clone())
+            .or_else(|| self.active_item(cx))
     }
 
     pub fn active_item_as<I: 'static>(&self, cx: &App) -> Option<Entity<I>> {
@@ -11122,41 +11133,44 @@ pub fn activate_any_workspace_window(cx: &mut AsyncApp) -> Option<WindowHandle<M
     })
 }
 
-fn same_workspace_host(left: &RemoteConnectionOptions, right: &RemoteConnectionOptions) -> bool {
-    match (left, right) {
-        (RemoteConnectionOptions::Ssh(a), RemoteConnectionOptions::Ssh(b)) => {
-            (&a.host, &a.username, &a.port) == (&b.host, &b.username, &b.port)
-        }
-        (RemoteConnectionOptions::Wsl(a), RemoteConnectionOptions::Wsl(b)) => {
-            // The WSL username is not consistently populated in the workspace location, so ignore it for now.
-            a.distro_name == b.distro_name
-        }
-        (RemoteConnectionOptions::Docker(a), RemoteConnectionOptions::Docker(b)) => {
-            a.container_id == b.container_id
-        }
-        #[cfg(any(test, feature = "test-support"))]
-        (RemoteConnectionOptions::Mock(a), RemoteConnectionOptions::Mock(b)) => a.id == b.id,
-        _ => false,
-    }
-}
-
-fn workspace_matches_location(
+fn workspace_is_at_location(
     workspace: &Entity<Workspace>,
-    serialized_location: &SerializedWorkspaceLocation,
+    location: &SerializedWorkspaceLocation,
     cx: &App,
 ) -> bool {
-    match (
-        workspace.read(cx).workspace_location(cx),
-        serialized_location,
-    ) {
+    let WorkspaceLocation::Location(workspace_location, _) =
+        workspace.read(cx).workspace_location(cx)
+    else {
+        return false;
+    };
+
+    match (&workspace_location, location) {
+        (SerializedWorkspaceLocation::Local, SerializedWorkspaceLocation::Local) => true,
         (
-            WorkspaceLocation::Location(SerializedWorkspaceLocation::Local, _),
-            SerializedWorkspaceLocation::Local,
-        ) => true,
-        (
-            WorkspaceLocation::Location(SerializedWorkspaceLocation::Remote(left), _),
-            SerializedWorkspaceLocation::Remote(right),
-        ) => same_workspace_host(&left, right),
+            SerializedWorkspaceLocation::Remote(workspace_remote),
+            SerializedWorkspaceLocation::Remote(remote),
+        ) => match (workspace_remote, remote) {
+            (RemoteConnectionOptions::Ssh(_), RemoteConnectionOptions::Ssh(_)) => {
+                same_remote_connection_identity(Some(workspace_remote), Some(remote))
+            }
+            (
+                RemoteConnectionOptions::Wsl(workspace_remote),
+                RemoteConnectionOptions::Wsl(remote),
+            ) => {
+                // The WSL username is not consistently populated in the workspace location, so ignore it for now.
+                workspace_remote.distro_name == remote.distro_name
+            }
+            (
+                RemoteConnectionOptions::Docker(workspace_remote),
+                RemoteConnectionOptions::Docker(remote),
+            ) => workspace_remote.container_id == remote.container_id,
+            #[cfg(any(test, feature = "test-support"))]
+            (
+                RemoteConnectionOptions::Mock(workspace_remote),
+                RemoteConnectionOptions::Mock(remote),
+            ) => workspace_remote.id == remote.id,
+            _ => false,
+        },
         _ => false,
     }
 }
@@ -11167,13 +11181,13 @@ fn workspace_for_location(
     cx: &App,
 ) -> Option<Entity<Workspace>> {
     let active_workspace = multi_workspace.workspace();
-    if workspace_matches_location(active_workspace, serialized_location, cx) {
+    if workspace_is_at_location(active_workspace, serialized_location, cx) {
         return Some(active_workspace.clone());
     }
 
     multi_workspace
         .workspaces()
-        .find(|workspace| workspace_matches_location(workspace, serialized_location, cx))
+        .find(|workspace| workspace_is_at_location(workspace, serialized_location, cx))
         .cloned()
 }
 
@@ -11210,6 +11224,10 @@ pub async fn find_existing_workspace(
             for window in workspace_windows_for_location(location, cx) {
                 if let Ok(multi_workspace) = window.read(cx) {
                     for workspace in multi_workspace.workspaces() {
+                        if !workspace_is_at_location(workspace, location, cx) {
+                            continue;
+                        }
+
                         let project = workspace.read(cx).project.read(cx);
                         let m = match open_options.workspace_matching {
                             WorkspaceMatching::None => None,
@@ -11504,10 +11522,8 @@ pub fn open_paths(
 
             if all_metadatas.into_iter().all(|file| !file.is_dir) {
                 cx.update(|cx| {
-                    let windows = workspace_windows_for_location(
-                        &SerializedWorkspaceLocation::Local,
-                        cx,
-                    );
+                    let windows =
+                        workspace_windows_for_location(&SerializedWorkspaceLocation::Local, cx);
                     let window = cx
                         .active_window()
                         .and_then(|window| window.downcast::<MultiWorkspace>())
@@ -11543,10 +11559,8 @@ pub fn open_paths(
 
             if use_existing_window {
                 let target_window = cx.update(|cx| {
-                    let windows = workspace_windows_for_location(
-                        &SerializedWorkspaceLocation::Local,
-                        cx,
-                    );
+                    let windows =
+                        workspace_windows_for_location(&SerializedWorkspaceLocation::Local, cx);
                     let window = cx
                         .active_window()
                         .and_then(|window| window.downcast::<MultiWorkspace>())
@@ -11613,12 +11627,23 @@ pub fn open_paths(
                 });
             });
 
-            Ok(OpenResult { window: existing, workspace: target_workspace, opened_items: open_task })
+            Ok(OpenResult {
+                window: existing,
+                workspace: target_workspace,
+                opened_items: open_task,
+            })
         } else {
             let init = if open_in_dev_container {
-                Some(Box::new(|workspace: &mut Workspace, _window: &mut Window, _cx: &mut Context<Workspace>| {
-                    workspace.set_open_in_dev_container(true);
-                }) as Box<dyn FnOnce(&mut Workspace, &mut Window, &mut Context<Workspace>) + Send>)
+                Some(Box::new(
+                    |workspace: &mut Workspace,
+                     _window: &mut Window,
+                     _cx: &mut Context<Workspace>| {
+                        workspace.set_open_in_dev_container(true);
+                    },
+                )
+                    as Box<
+                        dyn FnOnce(&mut Workspace, &mut Window, &mut Context<Workspace>) + Send,
+                    >)
             } else {
                 None
             };
@@ -11637,7 +11662,8 @@ pub fn open_paths(
                 .await;
 
             if let Ok(ref result) = result {
-                result.window
+                result
+                    .window
                     .update(cx, |_, window, _cx| {
                         window.activate_window();
                     })
@@ -11648,33 +11674,41 @@ pub fn open_paths(
         };
 
         #[cfg(target_os = "windows")]
-        if let Some(util::paths::WslPath{distro, path}) = wsl_path
+        if let Some(util::paths::WslPath { distro, path }) = wsl_path
             && let Ok(ref result) = result
         {
-            result.window
+            result
+                .window
                 .update(cx, move |multi_workspace, _window, cx| {
                     struct OpenInWsl;
                     let workspace = multi_workspace.workspace().clone();
                     workspace.update(cx, |workspace, cx| {
-                        workspace.show_notification(NotificationId::unique::<OpenInWsl>(), cx, move |cx| {
-                            let display_path =
-                                util::markdown::MarkdownInlineCode(&path.to_string_lossy());
-                            let msg = i18n::t!("1e39879f07639d9c", display_path = display_path);
-                            cx.new(move |cx| {
-                                MessageNotification::new(msg, cx)
-                                    .primary_message(i18n::t!("fcee8b7672871a06"))
-                                    .primary_icon(IconName::FolderOpen)
-                                    .primary_on_click(move |window, cx| {
-                                        window.dispatch_action(Box::new(remote::OpenWslPath {
-                                                distro: remote::WslConnectionOptions {
+                        workspace.show_notification(
+                            NotificationId::unique::<OpenInWsl>(),
+                            cx,
+                            move |cx| {
+                                let display_path =
+                                    util::markdown::MarkdownInlineCode(&path.to_string_lossy());
+                                let msg = i18n::t!("1e39879f07639d9c", display_path = display_path);
+                                cx.new(move |cx| {
+                                    MessageNotification::new(msg, cx)
+                                        .primary_message(i18n::t!("fcee8b7672871a06"))
+                                        .primary_icon(IconName::FolderOpen)
+                                        .primary_on_click(move |window, cx| {
+                                            window.dispatch_action(
+                                                Box::new(remote::OpenWslPath {
+                                                    distro: remote::WslConnectionOptions {
                                                         distro_name: distro.clone(),
-                                                    user: None,
-                                                },
-                                                paths: vec![path.clone().into()],
-                                            }), cx)
-                                    })
-                            })
-                        });
+                                                        user: None,
+                                                    },
+                                                    paths: vec![path.clone().into()],
+                                                }),
+                                                cx,
+                                            )
+                                        })
+                                })
+                            },
+                        );
                     });
                 })
                 .unwrap();
@@ -16082,7 +16116,10 @@ mod tests {
             pane_card.left() - dock_card.right(),
             WORKBENCH_MODULE_INSET * 2.
         );
-        assert_eq!(handle.center().x, (dock_card.right() + pane_card.left()) / 2.);
+        assert_eq!(
+            handle.center().x,
+            (dock_card.right() + pane_card.left()) / 2.
+        );
     }
 
     #[gpui::test]

@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use crate::{AgentTool, ToolCallEventStream, ToolInput};
 use agent_client_protocol::schema::v1 as acp;
+use agent_client_protocol::schema::v2 as acp_v2;
 use anyhow::Result;
 use gpui::{App, SharedString, Task};
 use language_model::LanguageModelToolResultContent;
@@ -118,7 +119,7 @@ impl AgentTool for AskUserTool {
             })?;
 
             let selected = match response.action {
-                acp::ElicitationAction::Accept(accept) => {
+                acp_v2::ElicitationAction::Accept(accept) => {
                     let content = accept.content.unwrap_or_default();
                     // A typed answer takes precedence over a picked option.
                     string_field(&content, OTHER_FIELD)
@@ -127,12 +128,12 @@ impl AgentTool for AskUserTool {
                             error: i18n::t!("0679788de9a15a67").to_string(),
                         })?
                 }
-                acp::ElicitationAction::Decline => {
+                acp_v2::ElicitationAction::Decline => {
                     return Err(AskUserToolOutput::Error {
                         error: i18n::t!("00f75817737826d5").to_string(),
                     });
                 }
-                acp::ElicitationAction::Cancel => {
+                acp_v2::ElicitationAction::Cancel => {
                     return Err(AskUserToolOutput::Error {
                         error: i18n::t!("159f67fd331ff43a").to_string(),
                     });
@@ -160,17 +161,17 @@ impl AgentTool for AskUserTool {
 ///   unless free text is also allowed (in which case picking is optional).
 /// - Allowing free text adds a text field, required only when there are no
 ///   options to choose from.
-fn build_schema(options: &[String], allow_free_text: bool) -> acp::ElicitationSchema {
-    let mut schema = acp::ElicitationSchema::new();
+fn build_schema(options: &[String], allow_free_text: bool) -> acp_v2::ElicitationSchema {
+    let mut schema = acp_v2::ElicitationSchema::new();
 
     if !options.is_empty() {
         let enum_options = options
             .iter()
-            .map(|label| acp::EnumOption::new(label.clone(), label.clone()))
+            .map(|label| acp_v2::EnumOption::new(label.clone(), label.clone()))
             .collect::<Vec<_>>();
         schema = schema.property(
             CHOICE_FIELD,
-            acp::StringPropertySchema::new()
+            acp_v2::StringPropertySchema::new()
                 .title(i18n::t!("6737034c3ffdacd0"))
                 .one_of(enum_options),
             !allow_free_text,
@@ -185,7 +186,7 @@ fn build_schema(options: &[String], allow_free_text: bool) -> acp::ElicitationSc
         };
         schema = schema.property(
             OTHER_FIELD,
-            acp::StringPropertySchema::new().title(title),
+            acp_v2::StringPropertySchema::new().title(title),
             options.is_empty(),
         );
     }
@@ -195,11 +196,11 @@ fn build_schema(options: &[String], allow_free_text: bool) -> acp::ElicitationSc
 
 /// Extracts a non-empty string value for `key` from an elicitation response.
 fn string_field(
-    content: &BTreeMap<String, acp::ElicitationContentValue>,
+    content: &BTreeMap<String, acp_v2::ElicitationContentValue>,
     key: &str,
 ) -> Option<String> {
     match content.get(key) {
-        Some(acp::ElicitationContentValue::String(value)) if !value.is_empty() => {
+        Some(acp_v2::ElicitationContentValue::String(value)) if !value.is_empty() => {
             Some(value.clone())
         }
         _ => None,
@@ -213,18 +214,18 @@ mod tests {
 
     fn accept_with(
         entries: impl IntoIterator<Item = (&'static str, &'static str)>,
-    ) -> acp::CreateElicitationResponse {
-        let content: BTreeMap<String, acp::ElicitationContentValue> = entries
+    ) -> acp_v2::CreateElicitationResponse {
+        let content: BTreeMap<String, acp_v2::ElicitationContentValue> = entries
             .into_iter()
             .map(|(key, value)| {
                 (
                     key.to_string(),
-                    acp::ElicitationContentValue::String(value.to_string()),
+                    acp_v2::ElicitationContentValue::String(value.to_string()),
                 )
             })
             .collect();
-        acp::CreateElicitationResponse::new(acp::ElicitationAction::Accept(
-            acp::ElicitationAcceptAction::new().content(content),
+        acp_v2::CreateElicitationResponse::new(acp_v2::ElicitationAction::Accept(
+            acp_v2::ElicitationAcceptAction::new().content(content),
         ))
     }
 
@@ -246,7 +247,8 @@ mod tests {
         });
 
         let request = event_rx.expect_elicitation().await;
-        assert_eq!(request.tool_call_id, tool_call_id);
+        assert_eq!(request.tool_call_id.0, tool_call_id.0);
+        assert!(Arc::ptr_eq(&request.tool_call_id.0, &tool_call_id.0));
         assert_eq!(request.message, "Which approach?");
         assert!(request.schema.properties.contains_key(CHOICE_FIELD));
         assert!(!request.schema.properties.contains_key(OTHER_FIELD));
@@ -343,8 +345,8 @@ mod tests {
         let request = event_rx.expect_elicitation().await;
         request
             .response
-            .send(acp::CreateElicitationResponse::new(
-                acp::ElicitationAction::Decline,
+            .send(acp_v2::CreateElicitationResponse::new(
+                acp_v2::ElicitationAction::Decline,
             ))
             .unwrap();
 
