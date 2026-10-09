@@ -86,6 +86,16 @@ impl FileIcons {
                 return maybe_path;
             }
         }
+        // Keep exact filename and compound-suffix overrides ahead of case-insensitive
+        // extension matching, particularly for third-party icon themes.
+        if let Some(extension) = extension {
+            let lowercase = extension.to_ascii_lowercase();
+            if let Some(typ) = this.icon_theme.file_suffixes.get(lowercase.as_str()) {
+                if let Some(icon) = this.get_icon_for_type(typ, cx) {
+                    return Some(icon);
+                }
+            }
+        }
         this.get_icon_for_type("default", cx)
     }
 
@@ -197,6 +207,104 @@ impl FileIcons {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[gpui::test]
+    fn test_common_file_icons(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| theme::init(theme::LoadThemes::JustBase, cx));
+        cx.update(|cx| {
+            for (filename, icon) in [
+                ("bundle.zip", "archive"),
+                ("bundle.ZIP", "archive"),
+                ("bundle.tar.gz", "archive"),
+                ("bundle.tar.zst", "archive"),
+                (".hidden.rar", "archive"),
+                ("report.docx", "document"),
+                ("notes.txt", "document"),
+                ("report.PDF", "pdf"),
+                ("book.epub", "book"),
+                ("budget.xlsx", "spreadsheet"),
+                ("budget.ods", "spreadsheet"),
+                ("slides.pptx", "presentation"),
+                ("system.iso", "disk"),
+                ("disk.qcow2", "disk"),
+                ("setup.msi", "package"),
+                ("app.apk", "package"),
+                ("music.aiff", "audio"),
+                ("movie.mpeg", "video"),
+                ("picture.TIF", "image"),
+                ("font.ttc", "font"),
+                ("data.sqlite3", "database"),
+                ("settings.env", "settings"),
+                ("certificate.pem", "lock"),
+                ("saved.bak", "backup"),
+                ("model.stl", "model"),
+                ("module.wasm", "code"),
+                ("src/main.rs", "rust"),
+                ("src/view.tsx", "react"),
+                ("eslint.config.js", "eslint"),
+                ("Dockerfile", "docker"),
+                ("Chart.yaml", "helm"),
+                (".data.json", "code"),
+                ("movie.ts", "typescript"),
+                ("README.md", "book"),
+                ("unknown.extension", "file"),
+                ("no-extension", "file"),
+            ] {
+                assert_eq!(
+                    FileIcons::get_icon(Path::new(filename), cx),
+                    Some(format!("icons/file_icons/{icon}.svg").into()),
+                    "{filename}"
+                );
+            }
+        });
+    }
+
+    #[gpui::test]
+    fn test_custom_icon_associations_keep_precedence(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            theme::init(theme::LoadThemes::JustBase, cx);
+            let mut custom = theme::IconTheme {
+                id: "custom".into(),
+                name: "Custom".into(),
+                appearance: theme::Appearance::Dark,
+                directory_icons: theme::DirectoryIcons {
+                    collapsed: None,
+                    expanded: None,
+                },
+                named_directory_icons: Default::default(),
+                chevron_icons: theme::ChevronIcons {
+                    collapsed: None,
+                    expanded: None,
+                },
+                file_stems: Default::default(),
+                file_suffixes: Default::default(),
+                file_icons: Default::default(),
+            };
+            custom
+                .file_stems
+                .insert("special.ZIP".into(), "rust".into());
+            custom.file_suffixes.insert("ZIP".into(), "image".into());
+            custom.file_suffixes.insert("zip".into(), "audio".into());
+            custom
+                .file_suffixes
+                .insert("bundle.ZIP".into(), "video".into());
+            GlobalTheme::update_icon_theme(cx, Arc::new(custom));
+            for (filename, icon) in [
+                ("special.ZIP", "rust"),
+                ("file.ZIP", "image"),
+                ("file.zip", "audio"),
+                ("file.Zip", "audio"),
+                ("file.bundle.ZIP", "video"),
+                ("unknown.bin", "file"),
+            ] {
+                assert_eq!(
+                    FileIcons::get_icon(Path::new(filename), cx),
+                    Some(format!("icons/file_icons/{icon}.svg").into()),
+                    "{filename}"
+                );
+            }
+        });
+    }
 
     #[gpui::test]
     fn test_folder_indicators_per_setting(cx: &mut gpui::TestAppContext) {

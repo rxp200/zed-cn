@@ -5382,5 +5382,9 @@
   "7c4eddac6e06766d": "Whether to pre-fill the file finder's query with the text selected in the focused item (e.g. an editor or a terminal).",
   "23696719b8bf5136": "Commit Editor",
   "57e1383c54f8007a": "Whether the commit message editor is shown in the Git panel by default.",
-  "6285ce5d271764bb": "More Options"
+  "6285ce5d271764bb": "More Options",
+  "136cbc80612aee9b": "Open in Remote Terminal Mode",
+  "3e282fc5e171f21e": "Failed to connect to remote terminal",
+  "6d8e57b4b0276717": "Show Git graph",
+  "ae4f33a0a02fc9a0": "Hide Git graph"
 }

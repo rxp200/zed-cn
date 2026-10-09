@@ -79,7 +79,7 @@ use workspace::{
     notifications::{DetachAndPromptErr, NotifyResultExt, NotifyTaskExt},
     open_file_permalink,
 };
-use worktree::CreatedEntry;
+use worktree::{CreatedEntry, RemoteUploadOptions};
 use zed_actions::{
     project_panel::{Toggle, ToggleFocus},
     workspace::OpenWithSystem,
@@ -182,6 +182,10 @@ pub struct ProjectPanel {
     last_reported_update: Instant,
     update_visible_entries_task: UpdateVisibleEntriesTask,
     undo_manager: UndoManager,
+    /// Worktree created on demand to show a terminal's working directory
+    /// outside the regular project roots; replaced when the terminal moves to
+    /// another directory outside every worktree.
+    temporary_worktree_id: Option<WorktreeId>,
     state: State,
 }
 
@@ -778,6 +782,9 @@ impl ProjectPanel {
                             cx.emit(PanelEvent::Activate);
                         }
                     }
+                    project::Event::RevealPathInProjectPanel(path) => {
+                        this.reveal_abs_path(path.clone(), window, cx);
+                    }
                     project::Event::ActivateProjectPanel => {
                         cx.emit(PanelEvent::Activate);
                     }
@@ -962,6 +969,7 @@ impl ProjectPanel {
                     unfolded_dir_ids: Default::default(),
                 },
                 update_visible_entries_task: Default::default(),
+                temporary_worktree_id: None,
                 undo_manager: UndoManager::new(
                     workspace.weak_handle(),
                     weak_project_panel,
@@ -5288,11 +5296,15 @@ impl ProjectPanel {
                     )
                 });
                 let observer = progress.clone();
+                let chunked_uploads = this.update(cx, |this, cx| {
+                    this.project.read(cx).supports_remote_chunked_uploads(cx)
+                })?;
                 let (worktree_id, task) = worktree.update(cx, |worktree, cx| {
                     let task = worktree.copy_external_entries_with_progress(
                         target_directory,
                         paths,
                         fs,
+                        RemoteUploadOptions { chunked_uploads },
                         Some(Arc::new(move |event| observer.progress(event))),
                         cx,
                     );
@@ -7500,6 +7512,102 @@ impl ProjectPanel {
         });
         cx.notify();
         Ok(())
+    }
+
+    /// Reveals an absolute host path, loading not-yet-scanned ancestors on
+    /// demand. Used to follow the working directory of a terminal (e.g. after
+    /// `cd` or an explicit `pwd`), including into shallowly scanned worktrees
+    /// where deeper entries only exist after their parent is expanded.
+    ///
+    /// Paths outside every worktree (e.g. the terminal moved to /etc) open the
+    /// directory itself as a temporary worktree root; the previous temporary
+    /// root is removed so they don't accumulate.
+    fn reveal_abs_path(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        let project = self.project.clone();
+        let existing = project.read(cx).find_worktree(&path, cx);
+
+        cx.spawn_in(window, async move |this, cx| {
+            let (worktree, worktree_id, rel_path) = match existing {
+                Some((worktree, rel_path)) => {
+                    let worktree_id = worktree.read_with(cx, |worktree, _| worktree.id());
+                    (worktree, worktree_id, rel_path.as_ref().to_rel_path_buf())
+                }
+                None => {
+                    let create_task = project.update(cx, |project, cx| {
+                        project.find_or_create_worktree(&path, true, cx)
+                    });
+                    let (worktree, rel_path) = create_task.await?;
+                    let worktree_id = worktree.read_with(cx, |worktree, _| worktree.id());
+                    this.update(cx, |this, cx| {
+                        if let Some(old_id) = this.temporary_worktree_id.replace(worktree_id)
+                            && old_id != worktree_id
+                        {
+                            project.update(cx, |project, cx| {
+                                project.remove_worktree(old_id, cx);
+                            });
+                        }
+                    })?;
+                    (worktree, worktree_id, rel_path.as_ref().to_rel_path_buf())
+                }
+            };
+
+            // Expand ancestors top-down, waiting for each level to scan so the
+            // next component becomes visible in the snapshot.
+            let mut ancestors = rel_path.ancestors().collect::<Vec<_>>();
+            ancestors.reverse();
+            let mut ancestors = ancestors.into_iter().skip(1).peekable(); // skip the root
+            let mut pending_expand: Option<Task<Result<()>>> = None;
+            while let Some(ancestor) = ancestors.next() {
+                if let Some(task) = pending_expand.take() {
+                    task.await.log_err();
+                }
+                let entry = worktree.read_with(cx, |worktree, _| {
+                    worktree
+                        .entry_for_path(ancestor)
+                        .map(|entry| (entry.id, entry.is_dir()))
+                });
+                let Some((entry_id, is_dir)) = entry else {
+                    return anyhow::Result::<()>::Err(anyhow::anyhow!(
+                        "entry for {ancestor:?} is not available"
+                    ));
+                };
+                if is_dir && ancestors.peek().is_some() {
+                    pending_expand = this.update(cx, |_this, cx| {
+                        project.update(cx, |project, cx| {
+                            project.expand_entry(worktree_id, entry_id, cx)
+                        })
+                    })?;
+                }
+            }
+            if let Some(task) = pending_expand.take() {
+                task.await.log_err();
+            }
+
+            this.update_in(cx, |this, window, cx| {
+                let Some(entry_id) = worktree.read_with(cx, |worktree, _| {
+                    worktree
+                        .entry_for_path(rel_path.as_ref())
+                        .map(|entry| entry.id)
+                }) else {
+                    return;
+                };
+                this.expand_entry(worktree_id, entry_id, cx);
+                this.update_visible_entries(Some((worktree_id, entry_id)), false, true, window, cx);
+                this.marked_entries.clear();
+                this.marked_entries.push(SelectedEntry {
+                    worktree_id,
+                    entry_id,
+                });
+                this.selection = Some(SelectedEntry {
+                    worktree_id,
+                    entry_id,
+                });
+                this.autoscroll(cx);
+                cx.notify();
+            })?;
+            Ok(())
+        })
+        .detach_and_log_err(cx);
     }
 
     fn find_active_indent_guide(

@@ -49,6 +49,7 @@ log.workspace = true
 parking_lot.workspace = true
 paths.workspace = true
 postage.workspace = true
+rand.workspace = true
 pretty_assertions = { workspace = true, optional = true }
 rpc = { workspace = true, features = ["gpui"] }
 settings.workspace = true

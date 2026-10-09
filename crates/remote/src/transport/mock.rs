@@ -311,6 +311,10 @@ impl RemoteConnection for MockRemoteConnection {
         })
     }
 
+    fn home_dir(&self) -> Option<String> {
+        None
+    }
+
     fn path_style(&self) -> PathStyle {
         PathStyle::local()
     }

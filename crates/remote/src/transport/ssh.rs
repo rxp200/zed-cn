@@ -849,6 +849,10 @@ impl RemoteConnection for SshRemoteConnection {
         self.socket.connection_options.remote_server_source == settings::RemoteServerSource::ZedCn
     }
 
+    fn home_dir(&self) -> Option<String> {
+        self.ssh_home_dir.clone()
+    }
+
     fn path_style(&self) -> PathStyle {
         self.ssh_path_style
     }

@@ -924,6 +924,10 @@ impl RemoteConnection for DockerExecConnection {
         RemoteConnectionOptions::Docker(self.connection_options.clone())
     }
 
+    fn home_dir(&self) -> Option<String> {
+        None
+    }
+
     fn path_style(&self) -> PathStyle {
         self.path_style.unwrap_or(PathStyle::Unix)
     }

@@ -680,6 +680,9 @@ pub enum Event {
     SelectionsChanged,
     NewNavigationTarget(Option<MaybeNavigationTarget>),
     Open(MaybeNavigationTarget),
+    /// The remote shell's working directory was detected from the terminal
+    /// stream (OSC 7 or the output of an explicit `pwd`).
+    WorkingDirectoryDetected(PathBuf),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1092,6 +1095,8 @@ impl TerminalBuilder {
             path_style,
             cwd_history: Vec::new(),
             pending_cwd_boundary: None,
+            remote_detected_cwd: None,
+            cwd_observer: CwdObserver::new(false),
             last_output_at: None,
             #[cfg(any(test, feature = "test-support"))]
             input_log: Vec::new(),
@@ -1145,6 +1150,7 @@ impl TerminalBuilder {
         builder.terminal.task = task;
         builder.terminal.completion_tx = completion_tx;
         builder.terminal.is_remote_terminal = true;
+        builder.terminal.cwd_observer = CwdObserver::new(true);
         // A remote terminal renders a real interactive PTY stream, so programs on the
         // remote host (e.g. agents or editors copying via OSC 52) must be able to
         // reach the client clipboard. Pure display-only terminals keep OSC 52 disabled.
@@ -1466,6 +1472,8 @@ impl TerminalBuilder {
                         .unwrap_or_default()
                 },
                 pending_cwd_boundary: None,
+                remote_detected_cwd: None,
+                cwd_observer: CwdObserver::new(is_remote_terminal),
                 last_output_at: None,
                 #[cfg(any(test, feature = "test-support"))]
                 input_log: Vec::new(),
@@ -1904,6 +1912,11 @@ pub struct Terminal {
     path_style: PathStyle,
     cwd_history: Vec<CwdHistoryEntry>,
     pending_cwd_boundary: Option<i32>,
+    /// Working directory detected from the remote shell's output stream
+    /// (OSC 7 reports or the output of an explicit `pwd`), used to follow the
+    /// remote shell's location in the project panel.
+    remote_detected_cwd: Option<PathBuf>,
+    cwd_observer: CwdObserver,
     last_output_at: Option<Instant>,
     #[cfg(any(test, feature = "test-support"))]
     input_log: Vec<Vec<u8>>,
@@ -1929,6 +1942,213 @@ struct CopyTemplate {
     path_hyperlink_regexes: Vec<String>,
     path_hyperlink_timeout: Duration,
     window_id: u64,
+}
+
+/// Observes a remote terminal's input and output byte streams to recover the
+/// shell's working directory without shell-side integration scripts.
+///
+/// Two sources are recognized:
+/// - OSC 7 (`ESC ] 7 ; file://host/path ST`) reports, emitted by shells that
+///   support them (e.g. fish by default, many distro bash setups).
+/// - The output of an explicit `pwd` typed by the user: when the tracked
+///   input line is exactly `pwd` (optionally with `-L`/`-P`), the first
+///   absolute-path line in the following output is treated as the answer.
+///
+/// The observer never removes bytes from the stream; it only watches. All
+/// buffers are bounded so hostile or noisy output cannot grow state.
+struct CwdObserver {
+    enabled: bool,
+    scan: CwdScanState,
+    /// Current input line as typed by the user, used to detect `pwd`.
+    input_line: String,
+    /// Set when the user just submitted `pwd`; the next absolute-path output
+    /// line is the answer.
+    pwd_capture: Option<PwdCapture>,
+}
+
+#[derive(Default)]
+enum CwdScanState {
+    #[default]
+    Ground,
+    /// Saw ESC, expecting `[` (CSI, skipped) or `]` (OSC, captured).
+    Esc,
+    /// Inside a CSI sequence; skip until a final byte.
+    Csi,
+    /// Inside an OSC sequence, accumulating its content.
+    Osc(Vec<u8>),
+    /// Saw ESC inside an OSC sequence; a following `\` terminates it (ST).
+    OscEsc(Vec<u8>),
+}
+
+struct PwdCapture {
+    /// Current output line (printable bytes only).
+    line: Vec<u8>,
+    /// Lines seen since the capture started.
+    lines_seen: usize,
+}
+
+/// Bounds for the observer buffers: longer sequences or more output mean the
+/// observation is abandoned rather than grown.
+const MAX_OSC_LEN: usize = 4096;
+const MAX_INPUT_LINE_LEN: usize = 512;
+const MAX_PWD_LINE_LEN: usize = 4096;
+const MAX_PWD_CAPTURE_LINES: usize = 64;
+
+impl CwdObserver {
+    fn new(enabled: bool) -> Self {
+        Self {
+            enabled,
+            scan: CwdScanState::Ground,
+            input_line: String::new(),
+            pwd_capture: None,
+        }
+    }
+
+    /// Tracks user input so an explicit `pwd` can be recognized. Line editing
+    /// keys beyond backspace (arrows, control sequences) invalidate the tracked
+    /// line, because we cannot model the shell's line editor reliably.
+    fn observe_input(&mut self, input: &[u8]) {
+        if !self.enabled {
+            return;
+        }
+        for &byte in input {
+            match byte {
+                b'\r' | b'\n' => {
+                    let line = self.input_line.trim();
+                    if matches!(line, "pwd" | "pwd -L" | "pwd -P" | "pwd -LP" | "pwd -PL") {
+                        self.pwd_capture = Some(PwdCapture {
+                            line: Vec::new(),
+                            lines_seen: 0,
+                        });
+                    }
+                    self.input_line.clear();
+                }
+                0x7f | 0x08 => {
+                    self.input_line.pop();
+                }
+                // Ctrl-C / Ctrl-U / Ctrl-L and any escape sequence make the
+                // tracked line unreliable.
+                0x03 | 0x15 | 0x0c | 0x1b => {
+                    self.input_line.clear();
+                    if byte == 0x03 {
+                        self.pwd_capture = None;
+                    }
+                }
+                0x20..=0x7e => {
+                    if self.input_line.len() < MAX_INPUT_LINE_LEN {
+                        self.input_line.push(byte as char);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Scans output bytes, returning a newly detected working directory when
+    /// an OSC 7 report or a `pwd` answer carries one.
+    fn observe_output(&mut self, bytes: &[u8]) -> Option<PathBuf> {
+        if !self.enabled {
+            return None;
+        }
+        let mut detected = None;
+        for &byte in bytes {
+            let osc = match std::mem::take(&mut self.scan) {
+                CwdScanState::Ground => match byte {
+                    0x1b => Some(CwdScanState::Esc),
+                    b'\n' => {
+                        if let Some(path) = self.finish_pwd_line() {
+                            detected = Some(path);
+                        }
+                        Some(CwdScanState::Ground)
+                    }
+                    0x20..=0x7e => {
+                        if let Some(capture) = &mut self.pwd_capture {
+                            if capture.line.len() < MAX_PWD_LINE_LEN {
+                                capture.line.push(byte);
+                            }
+                        }
+                        Some(CwdScanState::Ground)
+                    }
+                    _ => Some(CwdScanState::Ground),
+                },
+                CwdScanState::Esc => Some(match byte {
+                    b'[' => CwdScanState::Csi,
+                    b']' => CwdScanState::Osc(Vec::new()),
+                    _ => CwdScanState::Ground,
+                }),
+                CwdScanState::Csi => {
+                    if (0x40..=0x7e).contains(&byte) {
+                        Some(CwdScanState::Ground)
+                    } else {
+                        Some(CwdScanState::Csi)
+                    }
+                }
+                CwdScanState::Osc(mut content) => match byte {
+                    0x07 => {
+                        if let Some(path) = Self::parse_osc7(&content) {
+                            detected = Some(path);
+                        }
+                        Some(CwdScanState::Ground)
+                    }
+                    0x1b => Some(CwdScanState::OscEsc(content)),
+                    _ => {
+                        if content.len() < MAX_OSC_LEN {
+                            content.push(byte);
+                            Some(CwdScanState::Osc(content))
+                        } else {
+                            Some(CwdScanState::Ground)
+                        }
+                    }
+                },
+                CwdScanState::OscEsc(content) => {
+                    if byte == b'\\' {
+                        if let Some(path) = Self::parse_osc7(&content) {
+                            detected = Some(path);
+                        }
+                    }
+                    Some(CwdScanState::Ground)
+                }
+            };
+            if let Some(scan) = osc {
+                self.scan = scan;
+            }
+        }
+        detected
+    }
+
+    fn finish_pwd_line(&mut self) -> Option<PathBuf> {
+        let capture = self.pwd_capture.as_mut()?;
+        capture.lines_seen += 1;
+        let line = std::mem::take(&mut capture.line);
+        if capture.lines_seen > MAX_PWD_CAPTURE_LINES {
+            self.pwd_capture = None;
+            return None;
+        }
+        let line = String::from_utf8_lossy(&line).trim().to_string();
+        if line.len() > 1 && line.starts_with('/') && !line.contains('\0') {
+            self.pwd_capture = None;
+            return Some(PathBuf::from(line));
+        }
+        None
+    }
+
+    /// Parses an OSC 7 payload of the form `7;file://host/path`. The host is
+    /// not verified: for remote terminals the path is interpreted on the
+    /// remote host regardless.
+    fn parse_osc7(content: &[u8]) -> Option<PathBuf> {
+        let content = std::str::from_utf8(content).ok()?;
+        let uri = content.strip_prefix("7;")?;
+        let rest = uri.strip_prefix("file://")?;
+        let path_start = rest.find('/')?;
+        let encoded_path = &rest[path_start..];
+        let decoded = urlencoding::decode(encoded_path).ok()?;
+        let path = decoded.trim();
+        if path.len() > 1 && path.starts_with('/') {
+            Some(PathBuf::from(path))
+        } else {
+            None
+        }
+    }
 }
 
 /// Runtime state for a task-backed terminal.
@@ -2349,6 +2569,11 @@ impl Terminal {
 
     /// Terminal byte streams already contain their control sequences and must not be normalized.
     pub fn write_raw_output(&mut self, bytes: &[u8], cx: &mut Context<Self>) {
+        if self.is_remote_terminal
+            && let Some(cwd) = self.cwd_observer.observe_output(bytes)
+        {
+            self.record_detected_cwd(cwd, cx);
+        }
         let mut term = self.term.lock();
         self.output_processor
             .get_or_insert_with(Processor::<StdSyncHandler>::new)
@@ -2357,6 +2582,28 @@ impl Terminal {
         self.note_program_output();
         self.detect_init_command_startup_marker();
         cx.emit(Event::Wakeup);
+    }
+
+    /// Records a working directory detected from the remote shell's output
+    /// stream and notifies subscribers (e.g. the project panel) so they can
+    /// follow the shell's location. Duplicate and root-only reports are
+    /// ignored.
+    fn record_detected_cwd(&mut self, cwd: PathBuf, cx: &mut Context<Self>) {
+        if !self.is_remote_terminal {
+            return;
+        }
+        if self.remote_detected_cwd.as_deref() == Some(cwd.as_path()) {
+            return;
+        }
+        self.remote_detected_cwd = Some(cwd.clone());
+        cx.emit(Event::WorkingDirectoryDetected(cwd));
+    }
+
+    /// The working directory detected from the remote shell's output stream,
+    /// if any. Unlike [`Self::working_directory`], which is client-side only,
+    /// this reflects the shell running on the remote host.
+    pub fn detected_remote_working_directory(&self) -> Option<&Path> {
+        self.remote_detected_cwd.as_deref()
     }
 
     /// Replaces all display-only output while retaining the terminal entity and its dimensions.
@@ -2590,6 +2837,12 @@ impl Terminal {
     pub fn input(&mut self, input: impl Into<Cow<'static, [u8]>>) {
         self.keyboard_input_sent = true;
         self.complete_init_command_startup_handshake();
+        let input = input.into();
+        // Fullscreen programs (vim, top, ...) have their own line handling; a
+        // tracked `pwd` there would be meaningless.
+        if self.is_remote_terminal && !self.last_content.mode.contains(Modes::ALT_SCREEN) {
+            self.cwd_observer.observe_input(&input);
+        }
         self.write_input(input);
     }
 
@@ -5786,9 +6039,193 @@ mod tests {
         });
         cx.run_until_parked();
 
-        let clipboard_text =
-            cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text()));
+        let clipboard_text = cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text()));
         assert_eq!(clipboard_text.as_deref(), Some("overwritten"));
+    }
+
+    #[test]
+    fn test_cwd_observer_detects_osc7() {
+        let mut observer = CwdObserver::new(true);
+        assert_eq!(
+            observer.observe_output(b"\x1b]7;file://host/home/user/projects\x07"),
+            Some(PathBuf::from("/home/user/projects"))
+        );
+        // Same directory again is still returned; deduplication happens in the Terminal.
+        assert_eq!(
+            observer.observe_output(b"\x1b]7;file://host/home/user/projects\x1b\\"),
+            Some(PathBuf::from("/home/user/projects"))
+        );
+        // Percent-decoding.
+        assert_eq!(
+            observer.observe_output(b"\x1b]7;file://host/home/user/my%20dir\x07"),
+            Some(PathBuf::from("/home/user/my dir"))
+        );
+    }
+
+    #[test]
+    fn test_cwd_observer_detects_osc7_split_across_writes() {
+        let mut observer = CwdObserver::new(true);
+        assert_eq!(
+            observer.observe_output(b"output \x1b]7;file://host/ho"),
+            None
+        );
+        assert_eq!(
+            observer.observe_output(b"me/user/code\x07more output"),
+            Some(PathBuf::from("/home/user/code"))
+        );
+    }
+
+    #[test]
+    fn test_cwd_observer_ignores_unrelated_osc_and_missing_host_path() {
+        let mut observer = CwdObserver::new(true);
+        assert_eq!(observer.observe_output(b"\x1b]52;c;AAAA\x07"), None);
+        assert_eq!(observer.observe_output(b"\x1b]0;title\x07"), None);
+        assert_eq!(observer.observe_output(b"\x1b]7;http://host/x\x07"), None);
+        assert_eq!(observer.observe_output(b"\x1b]7;file://host\x07"), None);
+        assert_eq!(observer.observe_output(b"\x1b]7;file:///\x07"), None);
+    }
+
+    #[test]
+    fn test_cwd_observer_detects_pwd_output() {
+        let mut observer = CwdObserver::new(true);
+        observer.observe_input(b"pwd\r");
+        // Echoed command and prompt with color codes; the first absolute-path
+        // line is the answer.
+        assert_eq!(
+            observer.observe_output(b"pwd\r\n/home/user/code\r\n\x1b[32m$\x1b[0m "),
+            Some(PathBuf::from("/home/user/code"))
+        );
+    }
+
+    #[test]
+    fn test_cwd_observer_pwd_variants_and_editing() {
+        let mut observer = CwdObserver::new(true);
+        observer.observe_input(b"pwX\x7fd -P\r");
+        assert_eq!(
+            observer.observe_output(b"\r\n/srv/data\r\n"),
+            Some(PathBuf::from("/srv/data"))
+        );
+
+        // `echo pwd` must not arm the capture.
+        observer.observe_input(b"echo pwd\r");
+        assert_eq!(observer.observe_output(b"/etc\r\n"), None);
+
+        // Ctrl-C clears the tracked line.
+        observer.observe_input(b"pwd\x03\r");
+        assert_eq!(observer.observe_output(b"/etc\r\n"), None);
+    }
+
+    #[test]
+    fn test_cwd_observer_ignores_paths_without_pwd() {
+        let mut observer = CwdObserver::new(true);
+        assert_eq!(observer.observe_output(b"total 4\r\n/home/user\r\n"), None);
+        observer.observe_input(b"ls /home/user\r");
+        assert_eq!(observer.observe_output(b"/home/user\r\n"), None);
+    }
+
+    #[test]
+    fn test_cwd_observer_pwd_capture_gives_up_after_many_lines() {
+        let mut observer = CwdObserver::new(true);
+        observer.observe_input(b"pwd\r");
+        for _ in 0..100 {
+            assert_eq!(observer.observe_output(b"some output\r\n"), None);
+        }
+        // The capture is disarmed; a later path line is not picked up.
+        assert_eq!(observer.observe_output(b"/late/path\r\n"), None);
+    }
+
+    #[test]
+    fn test_cwd_observer_disabled_for_local_terminals() {
+        let mut observer = CwdObserver::new(false);
+        assert_eq!(
+            observer.observe_output(b"\x1b]7;file://host/home/user\x07"),
+            None
+        );
+        observer.observe_input(b"pwd\r");
+        assert_eq!(observer.observe_output(b"/home/user\r\n"), None);
+    }
+
+    #[gpui::test]
+    async fn test_remote_terminal_emits_detected_working_directory(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            let settings_store = settings::SettingsStore::test(cx);
+            cx.set_global(settings_store);
+        });
+
+        let terminal = cx.new(|cx| {
+            TerminalBuilder::new_remote(
+                TerminalMode::interactive(),
+                Shell::Program("bash".into()),
+                SettingsCursorShape::default(),
+                AlternateScroll::On,
+                None,
+                Vec::new(),
+                Duration::ZERO,
+                0,
+                PathStyle::local(),
+                AnyProtoClient::new(Arc::new(TestProtoClient {
+                    handler_set: Mutex::new(ProtoMessageHandlerSet::default()),
+                })),
+                "server".into(),
+                "terminal".into(),
+                false,
+                cx.background_executor(),
+            )
+            .subscribe(cx)
+        });
+
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let _subscription = terminal.update(cx, |_, cx| {
+            cx.subscribe(&cx.entity(), {
+                let events = events.clone();
+                move |_, _, event: &Event, _| {
+                    if let Event::WorkingDirectoryDetected(path) = event {
+                        events.lock().push(path.clone());
+                    }
+                }
+            })
+        });
+
+        terminal.update(cx, |terminal, cx| {
+            terminal.write_raw_output(b"\x1b]7;file://host/home/user/projects\x07", cx);
+        });
+        cx.run_until_parked();
+
+        assert_eq!(
+            terminal.read_with(cx, |terminal, _| {
+                terminal
+                    .detected_remote_working_directory()
+                    .map(Path::to_path_buf)
+            }),
+            Some(PathBuf::from("/home/user/projects"))
+        );
+        assert_eq!(
+            events.lock().as_slice(),
+            &[PathBuf::from("/home/user/projects")]
+        );
+
+        // A repeated report of the same directory does not re-emit.
+        terminal.update(cx, |terminal, cx| {
+            terminal.write_raw_output(b"\x1b]7;file://host/home/user/projects\x07", cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(events.lock().len(), 1);
+
+        // pwd fallback.
+        terminal.update(cx, |terminal, cx| {
+            terminal.input("pwd\r".to_string().into_bytes());
+            terminal.write_raw_output(b"pwd\r\n/home/user/other\r\n$ ", cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            terminal.read_with(cx, |terminal, _| {
+                terminal
+                    .detected_remote_working_directory()
+                    .map(Path::to_path_buf)
+            }),
+            Some(PathBuf::from("/home/user/other"))
+        );
+        assert_eq!(events.lock().len(), 2);
     }
 
     mod hyperlinks {

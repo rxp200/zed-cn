@@ -263,30 +263,43 @@ impl CommitView {
 
                         let pane = workspace.active_pane();
                         pane.update(cx, |pane, cx| {
-                            let ix = pane.items().position(|item| {
-                                let commit_view = item.downcast::<CommitView>();
-                                commit_view
-                                    .is_some_and(|view| view.read(cx).commit.sha == commit_sha)
-                            });
-                            if let Some(ix) = ix {
-                                let existing = pane
-                                    .items()
-                                    .filter_map(|item| item.downcast::<CommitView>())
-                                    .find(|view| view.read(cx).commit.sha == commit_sha)
-                                    .unwrap();
-
-                                pane.remove_item(existing.item_id(), false, false, window, cx);
-                                pane.add_item(
-                                    Box::new(commit_view),
-                                    true,
-                                    true,
-                                    Some(ix),
-                                    window,
-                                    cx,
-                                );
-                            } else {
-                                pane.add_item(Box::new(commit_view), true, true, None, window, cx);
+                            // Browsing commits from the git history should not pile up tabs: a new
+                            // commit diff replaces the previously opened one unless the user pinned
+                            // it. A view for the exact same commit is always reused in place.
+                            let mut same_commit_item = None;
+                            let mut reusable_item = None;
+                            for item in pane.items() {
+                                let Some(view) = item.downcast::<CommitView>() else {
+                                    continue;
+                                };
+                                let item_id = view.item_id();
+                                if view.read(cx).commit.sha == commit_sha {
+                                    same_commit_item = Some(item_id);
+                                    break;
+                                }
+                                if reusable_item.is_none() && !pane.is_item_pinned(item_id) {
+                                    reusable_item = Some(item_id);
+                                }
                             }
+
+                            let destination_index = same_commit_item
+                                .or(reusable_item)
+                                .and_then(|item_id| {
+                                    let index = pane
+                                        .items()
+                                        .position(|item| item.item_id() == item_id)?;
+                                    pane.remove_item(item_id, false, false, window, cx);
+                                    Some(index)
+                                });
+
+                            pane.add_item(
+                                Box::new(commit_view),
+                                true,
+                                true,
+                                destination_index,
+                                window,
+                                cx,
+                            );
                         })
                     })
                     .log_err()
@@ -1705,6 +1718,157 @@ mod tests {
         cx.run_until_parked();
         view.update_in(cx, |view, window, cx| {
             assert!(view.focus_handle(cx).is_focused(window))
+        });
+    }
+
+    #[gpui::test]
+    async fn test_opening_another_commit_reuses_unpinned_commit_view(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            let settings_store = SettingsStore::test(cx);
+            cx.set_global(settings_store);
+            theme_settings::init(theme::LoadThemes::JustBase, cx);
+            language_model::init(cx);
+            crate::init(cx);
+        });
+        let fs = FakeFs::new(cx.executor());
+        fs.insert_tree(
+            Path::new("/project"),
+            serde_json::json!({".git": {}, "file.txt": "content"}),
+        )
+        .await;
+        let project = Project::test(fs, [Path::new("/project")], cx).await;
+        cx.run_until_parked();
+        let repository = project.read_with(cx, |project, cx| {
+            project.active_repository(cx).expect("repository")
+        });
+        let (multi_workspace, cx) = cx.add_window_view(|window, cx| {
+            workspace::MultiWorkspace::test_new(project.clone(), window, cx)
+        });
+        let workspace = multi_workspace.read_with(cx, |multi, _| multi.workspace().clone());
+
+        let first_sha = "0101010101010101010101010101010101010101";
+        let second_sha = "0202020202020202020202020202020202020202";
+
+        for sha in [first_sha, second_sha] {
+            workspace.update_in(cx, |_, window, cx| {
+                CommitView::open(
+                    sha.to_string(),
+                    repository.downgrade(),
+                    cx.weak_entity(),
+                    None,
+                    None,
+                    window,
+                    cx,
+                );
+            });
+            cx.run_until_parked();
+        }
+
+        let pane = workspace.read_with(cx, |workspace, _| workspace.active_pane().clone());
+        pane.read_with(cx, |pane, cx| {
+            let commit_views = pane
+                .items()
+                .filter_map(|item| item.downcast::<CommitView>())
+                .collect::<Vec<_>>();
+            assert_eq!(
+                commit_views.len(),
+                1,
+                "opening another commit should reuse the unpinned commit diff tab"
+            );
+            assert_eq!(commit_views[0].read(cx).commit.sha, second_sha);
+        });
+    }
+
+    #[gpui::test]
+    async fn test_pinned_commit_view_is_not_replaced(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            let settings_store = SettingsStore::test(cx);
+            cx.set_global(settings_store);
+            theme_settings::init(theme::LoadThemes::JustBase, cx);
+            language_model::init(cx);
+            crate::init(cx);
+        });
+        let fs = FakeFs::new(cx.executor());
+        fs.insert_tree(
+            Path::new("/project"),
+            serde_json::json!({".git": {}, "file.txt": "content"}),
+        )
+        .await;
+        let project = Project::test(fs, [Path::new("/project")], cx).await;
+        cx.run_until_parked();
+        let repository = project.read_with(cx, |project, cx| {
+            project.active_repository(cx).expect("repository")
+        });
+        let (multi_workspace, cx) = cx.add_window_view(|window, cx| {
+            workspace::MultiWorkspace::test_new(project.clone(), window, cx)
+        });
+        let workspace = multi_workspace.read_with(cx, |multi, _| multi.workspace().clone());
+
+        let first_sha = "0101010101010101010101010101010101010101";
+        let second_sha = "0202020202020202020202020202020202020202";
+
+        workspace.update_in(cx, |_, window, cx| {
+            CommitView::open(
+                first_sha.to_string(),
+                repository.downgrade(),
+                cx.weak_entity(),
+                None,
+                None,
+                window,
+                cx,
+            );
+        });
+        cx.run_until_parked();
+
+        let pane = workspace.read_with(cx, |workspace, _| workspace.active_pane().clone());
+        let pane_focus_handle = pane.read_with(cx, |pane, cx| pane.focus_handle(cx));
+        workspace.update_in(cx, |_, window, cx| {
+            pane_focus_handle.dispatch_action(&workspace::pane::TogglePinTab, window, cx);
+        });
+        cx.run_until_parked();
+        pane.read_with(cx, |pane, _| {
+            assert!(
+                pane.is_active_item_pinned(),
+                "dispatching TogglePinTab should pin the active commit view"
+            );
+        });
+        cx.run_until_parked();
+
+        workspace.update_in(cx, |_, window, cx| {
+            CommitView::open(
+                second_sha.to_string(),
+                repository.downgrade(),
+                cx.weak_entity(),
+                None,
+                None,
+                window,
+                cx,
+            );
+        });
+        cx.run_until_parked();
+
+        pane.read_with(cx, |pane, cx| {
+            let commit_views = pane
+                .items()
+                .filter_map(|item| item.downcast::<CommitView>())
+                .collect::<Vec<_>>();
+            assert_eq!(
+                commit_views.len(),
+                2,
+                "a pinned commit view must not be replaced by the next commit"
+            );
+            assert!(
+                commit_views
+                    .iter()
+                    .any(|view| view.read(cx).commit.sha == first_sha),
+                "the pinned commit view should still be open"
+            );
+            assert!(
+                commit_views
+                    .iter()
+                    .any(|view| view.read(cx).commit.sha == second_sha),
+                "the newly opened commit view should be open as well"
+            );
         });
     }
 

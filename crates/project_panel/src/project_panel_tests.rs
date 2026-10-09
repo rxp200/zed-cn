@@ -7207,6 +7207,245 @@ async fn test_autoreveal_follows_multibuffer_selection(cx: &mut gpui::TestAppCon
 }
 
 #[gpui::test]
+async fn test_reveal_abs_path_loads_unscanned_ancestors(cx: &mut gpui::TestAppContext) {
+    init_test(cx);
+    cx.update(|cx| {
+        cx.update_global::<SettingsStore, _>(|store, cx| {
+            store.update_user_settings(cx, |settings| {
+                settings.project.worktree.file_scan_depth = Some(1);
+            });
+        });
+    });
+
+    let fs = FakeFs::new(cx.executor());
+    fs.insert_tree(
+        "/root",
+        json!({
+            "a": {
+                "b": {
+                    "c": {
+                        "file.txt": "",
+                    },
+                },
+            },
+            "other": {},
+        }),
+    )
+    .await;
+
+    let project = Project::test(fs.clone(), ["/root".as_ref()], cx).await;
+    let window = cx.add_window(|window, cx| MultiWorkspace::test_new(project.clone(), window, cx));
+    let workspace = window
+        .read_with(cx, |mw, _| mw.workspace().clone())
+        .unwrap();
+    let cx = &mut VisualTestContext::from_window(window.into(), cx);
+    let panel = workspace.update_in(cx, |workspace, window, cx| {
+        let panel = ProjectPanel::new(workspace, window, cx);
+        workspace.add_panel(panel.clone(), window, cx);
+        panel
+    });
+    cx.run_until_parked();
+
+    // With file_scan_depth=1, only the top level is scanned.
+    assert_eq!(
+        visible_entries_as_strings(&panel, 0..50, cx),
+        ["v root", "    > a", "    > other"],
+        "deeper directories must not be scanned eagerly"
+    );
+
+    project.update(cx, |_, cx| {
+        cx.emit(project::Event::RevealPathInProjectPanel(PathBuf::from(
+            "/root/a/b/c",
+        )));
+    });
+    cx.run_until_parked();
+    cx.run_until_parked();
+    cx.run_until_parked();
+
+    panel.update(cx, |panel, cx| {
+        let selected = panel
+            .selected_entry(cx)
+            .map(|(_, entry)| entry.path.as_unix_str().to_string());
+        assert_eq!(selected.as_deref(), Some("a/b/c"));
+    });
+    assert_eq!(
+        visible_entries_as_strings(&panel, 0..50, cx),
+        [
+            "v root",
+            "    v a",
+            "        v b",
+            "            v c  <== selected  <== marked",
+            "                  file.txt",
+            "    > other"
+        ],
+        "ancestors of the revealed path must be expanded and scanned"
+    );
+}
+
+#[gpui::test]
+async fn test_reveal_abs_path_outside_worktrees_opens_temporary_root(
+    cx: &mut gpui::TestAppContext,
+) {
+    init_test(cx);
+
+    let fs = FakeFs::new(cx.executor());
+    fs.insert_tree(
+        "/root",
+        json!({
+            "a": {},
+        }),
+    )
+    .await;
+    fs.insert_tree(
+        "/elsewhere",
+        json!({
+            "x": {
+                "y": {
+                    "file.txt": "",
+                },
+            },
+        }),
+    )
+    .await;
+
+    let project = Project::test(fs.clone(), ["/root".as_ref()], cx).await;
+    let window = cx.add_window(|window, cx| MultiWorkspace::test_new(project.clone(), window, cx));
+    let workspace = window
+        .read_with(cx, |mw, _| mw.workspace().clone())
+        .unwrap();
+    let cx = &mut VisualTestContext::from_window(window.into(), cx);
+    let panel = workspace.update_in(cx, |workspace, window, cx| {
+        let panel = ProjectPanel::new(workspace, window, cx);
+        workspace.add_panel(panel.clone(), window, cx);
+        panel
+    });
+    cx.run_until_parked();
+
+    project.update(cx, |_, cx| {
+        cx.emit(project::Event::RevealPathInProjectPanel(PathBuf::from(
+            "/elsewhere/x",
+        )));
+    });
+    for _ in 0..5 {
+        cx.run_until_parked();
+    }
+
+    panel.update(cx, |panel, cx| {
+        let selected = panel
+            .selected_entry_project_path(cx)
+            .map(|project_path| project_path.path.as_unix_str().to_string());
+        assert_eq!(
+            selected.as_deref(),
+            Some(""),
+            "the new worktree root itself is selected"
+        );
+    });
+
+    // Moving to another outside directory replaces the temporary root.
+    fs.insert_tree(
+        "/other_place",
+        json!({
+            "z": {},
+        }),
+    )
+    .await;
+    project.update(cx, |_, cx| {
+        cx.emit(project::Event::RevealPathInProjectPanel(PathBuf::from(
+            "/other_place/z",
+        )));
+    });
+    for _ in 0..5 {
+        cx.run_until_parked();
+    }
+
+    assert_eq!(
+        visible_entries_as_strings(&panel, 0..50, cx),
+        ["v root", "    > a", "v z  <== selected  <== marked",],
+        "the previous temporary worktree must be replaced"
+    );
+}
+
+#[gpui::test]
+async fn test_reveal_abs_path_ignores_missing_paths_outside_worktrees(
+    cx: &mut gpui::TestAppContext,
+) {
+    init_test(cx);
+
+    let fs = FakeFs::new(cx.executor());
+    fs.insert_tree(
+        "/root",
+        json!({
+            "a": {},
+        }),
+    )
+    .await;
+
+    let project = Project::test(fs.clone(), ["/root".as_ref()], cx).await;
+    let window = cx.add_window(|window, cx| MultiWorkspace::test_new(project.clone(), window, cx));
+    let workspace = window
+        .read_with(cx, |mw, _| mw.workspace().clone())
+        .unwrap();
+    let cx = &mut VisualTestContext::from_window(window.into(), cx);
+    let panel = workspace.update_in(cx, |workspace, window, cx| {
+        let panel = ProjectPanel::new(workspace, window, cx);
+        workspace.add_panel(panel.clone(), window, cx);
+        panel
+    });
+    cx.run_until_parked();
+
+    project.update(cx, |_, cx| {
+        cx.emit(project::Event::RevealPathInProjectPanel(PathBuf::from(
+            "/elsewhere/x/y",
+        )));
+    });
+    cx.run_until_parked();
+
+    panel.update(cx, |panel, cx| {
+        assert!(panel.selected_entry(cx).is_none());
+    });
+}
+
+#[gpui::test]
+async fn test_reveal_abs_path_missing_entry_does_not_panic(cx: &mut gpui::TestAppContext) {
+    init_test(cx);
+
+    let fs = FakeFs::new(cx.executor());
+    fs.insert_tree(
+        "/root",
+        json!({
+            "a": {},
+        }),
+    )
+    .await;
+
+    let project = Project::test(fs.clone(), ["/root".as_ref()], cx).await;
+    let window = cx.add_window(|window, cx| MultiWorkspace::test_new(project.clone(), window, cx));
+    let workspace = window
+        .read_with(cx, |mw, _| mw.workspace().clone())
+        .unwrap();
+    let cx = &mut VisualTestContext::from_window(window.into(), cx);
+    let panel = workspace.update_in(cx, |workspace, window, cx| {
+        let panel = ProjectPanel::new(workspace, window, cx);
+        workspace.add_panel(panel.clone(), window, cx);
+        panel
+    });
+    cx.run_until_parked();
+
+    project.update(cx, |_, cx| {
+        cx.emit(project::Event::RevealPathInProjectPanel(PathBuf::from(
+            "/root/a/missing/deep",
+        )));
+    });
+    for _ in 0..5 {
+        cx.run_until_parked();
+    }
+
+    panel.update(cx, |panel, cx| {
+        assert!(panel.selected_entry(cx).is_none());
+    });
+}
+
+#[gpui::test]
 async fn test_reveal_in_project_panel_fallback(cx: &mut gpui::TestAppContext) {
     init_test_with_editor(cx);
     let fs = FakeFs::new(cx.background_executor.clone());

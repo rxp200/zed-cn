@@ -3927,6 +3927,7 @@ async fn test_copy_file_into_remote_project(
                     Path::new(path!("/local-code/dir1/dir2")).into(),
                 ],
                 local_fs.clone(),
+                worktree::RemoteUploadOptions::default(),
                 Some(Arc::new(move |event| {
                     if matches!(event, worktree::FileTransferProgress::Finished) {
                         observer.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -3980,6 +3981,311 @@ async fn test_copy_file_into_remote_project(
             .await
             .unwrap(),
         ""
+    );
+}
+
+#[gpui::test]
+async fn test_chunked_upload_writes_large_file_into_remote_project(
+    cx: &mut TestAppContext,
+    server_cx: &mut TestAppContext,
+) {
+    let remote_fs = FakeFs::new(server_cx.executor());
+    remote_fs
+        .insert_tree(
+            path!("/code"),
+            json!({
+                "project1": {
+                    ".git": {},
+                },
+            }),
+        )
+        .await;
+
+    let (project, _) = init_test(&remote_fs, cx, server_cx).await;
+    let (worktree, _) = project
+        .update(cx, |project, cx| {
+            project.find_or_create_worktree(path!("/code/project1"), true, cx)
+        })
+        .await
+        .unwrap();
+    cx.run_until_parked();
+
+    assert!(
+        project.read_with(cx, |project, cx| project
+            .supports_remote_chunked_uploads(cx)),
+        "the mock server advertises the chunked upload capability"
+    );
+
+    let expected_content = "0123456789abcdef".repeat(96 * 1024);
+    let local_fs = project
+        .read_with(cx, |project, _| project.fs().clone())
+        .as_fake();
+    local_fs
+        .insert_tree(
+            path!("/local-code"),
+            json!({
+                "large.bin": expected_content,
+            }),
+        )
+        .await;
+
+    // The source file is larger than one idle-sized chunk, so this upload
+    // cannot complete with a single chunk request.
+    let copied_entries = worktree
+        .update(cx, |worktree, cx| {
+            worktree.copy_external_entries_with_progress(
+                rel_path("").into(),
+                vec![Path::new(path!("/local-code/large.bin")).into()],
+                local_fs.clone(),
+                worktree::RemoteUploadOptions {
+                    chunked_uploads: true,
+                },
+                None,
+                cx,
+            )
+        })
+        .await
+        .unwrap();
+    cx.run_until_parked();
+
+    assert_eq!(copied_entries.len(), 1);
+    assert_eq!(
+        remote_fs
+            .load(path!("/code/project1/large.bin").as_ref())
+            .await
+            .unwrap(),
+        "0123456789abcdef".repeat(96 * 1024)
+    );
+}
+
+#[gpui::test]
+async fn test_chunked_upload_abort_discards_the_staged_file(
+    cx: &mut TestAppContext,
+    server_cx: &mut TestAppContext,
+) {
+    let remote_fs = FakeFs::new(server_cx.executor());
+    remote_fs
+        .insert_tree(
+            path!("/code"),
+            json!({
+                "project1": {
+                    ".git": {},
+                },
+            }),
+        )
+        .await;
+
+    let (project, _) = init_test(&remote_fs, cx, server_cx).await;
+    let (worktree, _) = project
+        .update(cx, |project, cx| {
+            project.find_or_create_worktree(path!("/code/project1"), true, cx)
+        })
+        .await
+        .unwrap();
+    cx.run_until_parked();
+
+    let client = project.read_with(cx, |project, cx| {
+        project
+            .remote_client()
+            .expect("remote client")
+            .read(cx)
+            .proto_client()
+    });
+    let worktree_id = worktree.read_with(cx, |worktree, _| worktree.id().to_proto());
+    let project_id = proto::REMOTE_SERVER_PROJECT_ID;
+    let upload_id = 0xfeed_beefu64;
+
+    client
+        .request(proto::BeginProjectEntryUpload {
+            project_id,
+            worktree_id,
+            path: "partial.bin".into(),
+            total_size: 8,
+            upload_id,
+        })
+        .await
+        .unwrap();
+    client
+        .request(proto::WriteProjectEntryChunk {
+            project_id,
+            worktree_id,
+            upload_id,
+            offset: 0,
+            content: b"1234".to_vec(),
+        })
+        .await
+        .unwrap();
+    client
+        .request(proto::AbortProjectEntryUpload {
+            project_id,
+            worktree_id,
+            upload_id,
+        })
+        .await
+        .unwrap();
+    cx.run_until_parked();
+    server_cx.run_until_parked();
+
+    assert!(
+        !remote_fs
+            .is_file(path!("/code/project1/partial.bin").as_ref())
+            .await,
+        "an aborted upload must not publish a partial entry"
+    );
+    assert!(
+        !remote_fs
+            .paths(true)
+            .iter()
+            .any(|path| path.to_string_lossy().contains("zed-upload-")),
+        "an aborted upload must remove its staged file"
+    );
+
+    let error = client
+        .request(proto::WriteProjectEntryChunk {
+            project_id,
+            worktree_id,
+            upload_id,
+            offset: 4,
+            content: b"5678".to_vec(),
+        })
+        .await
+        .expect_err("a chunk after abort is rejected");
+    assert!(format!("{error}").contains("unknown entry upload"));
+}
+
+#[gpui::test]
+async fn test_chunked_upload_rejects_invalid_chunks(
+    cx: &mut TestAppContext,
+    server_cx: &mut TestAppContext,
+) {
+    let remote_fs = FakeFs::new(server_cx.executor());
+    remote_fs
+        .insert_tree(
+            path!("/code"),
+            json!({
+                "project1": {
+                    ".git": {},
+                },
+            }),
+        )
+        .await;
+
+    let (project, _) = init_test(&remote_fs, cx, server_cx).await;
+    let (worktree, _) = project
+        .update(cx, |project, cx| {
+            project.find_or_create_worktree(path!("/code/project1"), true, cx)
+        })
+        .await
+        .unwrap();
+    cx.run_until_parked();
+
+    let client = project.read_with(cx, |project, cx| {
+        project
+            .remote_client()
+            .expect("remote client")
+            .read(cx)
+            .proto_client()
+    });
+    let worktree_id = worktree.read_with(cx, |worktree, _| worktree.id().to_proto());
+    let project_id = proto::REMOTE_SERVER_PROJECT_ID;
+
+    let oversized = client
+        .request(proto::BeginProjectEntryUpload {
+            project_id,
+            worktree_id,
+            path: "too-large.bin".into(),
+            total_size: 5 * 1024 * 1024 * 1024,
+            upload_id: 1,
+        })
+        .await
+        .expect_err("entries larger than the cap are rejected");
+    assert!(format!("{oversized}").contains("too large"));
+
+    let upload_id = 0x1234_5678u64;
+    client
+        .request(proto::BeginProjectEntryUpload {
+            project_id,
+            worktree_id,
+            path: "validated.bin".into(),
+            total_size: 8,
+            upload_id,
+        })
+        .await
+        .unwrap();
+
+    let oversized_chunk = client
+        .request(proto::WriteProjectEntryChunk {
+            project_id,
+            worktree_id,
+            upload_id,
+            offset: 0,
+            content: vec![0; 8 * 1024 * 1024 + 1],
+        })
+        .await
+        .expect_err("a chunk larger than the chunk cap is rejected");
+    assert!(format!("{oversized_chunk}").contains("too large"));
+
+    let skipped = client
+        .request(proto::WriteProjectEntryChunk {
+            project_id,
+            worktree_id,
+            upload_id,
+            offset: 4,
+            content: b"5678".to_vec(),
+        })
+        .await
+        .expect_err("a chunk that skips ahead is rejected");
+    assert!(format!("{skipped}").contains("out of order"));
+
+    let exceeding = client
+        .request(proto::WriteProjectEntryChunk {
+            project_id,
+            worktree_id,
+            upload_id,
+            offset: 0,
+            content: b"123456789".to_vec(),
+        })
+        .await
+        .expect_err("a chunk larger than the declared size is rejected");
+    assert!(format!("{exceeding}").contains("exceeds"));
+
+    let empty = client
+        .request(proto::WriteProjectEntryChunk {
+            project_id,
+            worktree_id,
+            upload_id,
+            offset: 0,
+            content: Vec::new(),
+        })
+        .await
+        .expect_err("an empty chunk is rejected");
+    assert!(format!("{empty}").contains("empty"));
+
+    let incomplete = client
+        .request(proto::FinishProjectEntryUpload {
+            project_id,
+            worktree_id,
+            upload_id,
+        })
+        .await
+        .expect_err("finishing before all bytes arrived is rejected");
+    assert!(format!("{incomplete}").contains("before all bytes arrived"));
+
+    assert!(
+        !remote_fs
+            .is_file(path!("/code/project1/validated.bin").as_ref())
+            .await,
+        "a rejected upload must not publish an entry"
+    );
+    assert!(
+        client
+            .request(proto::AbortProjectEntryUpload {
+                project_id,
+                worktree_id,
+                upload_id,
+            })
+            .await
+            .is_ok()
     );
 }
 

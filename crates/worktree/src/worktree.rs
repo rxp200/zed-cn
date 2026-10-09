@@ -10,11 +10,11 @@ use file_content::{
     ByteContent, DecodingReader, decode_byte_header, detect_encoding, encode_text, read_byte_header,
 };
 use fs::{
-    Fs, MTime, PathEvent, PathEventKind, RemoveOptions, TrashId, Watcher, copy_recursive,
-    read_dir_items,
+    CopyOptions, Fs, MTime, PathEvent, PathEventKind, RemoveOptions, RenameOptions, TrashId,
+    Watcher, copy_recursive, read_dir_items,
 };
 use futures::{
-    FutureExt as _, Stream, StreamExt,
+    AsyncReadExt as _, FutureExt as _, Stream, StreamExt,
     channel::{
         mpsc::{self, UnboundedSender},
         oneshot,
@@ -68,7 +68,7 @@ use std::{
     pin::Pin,
     sync::{
         Arc,
-        atomic::{AtomicUsize, Ordering::SeqCst},
+        atomic::{AtomicBool, AtomicUsize, Ordering::SeqCst},
     },
     time::{Duration, Instant},
 };
@@ -113,6 +113,102 @@ pub enum FileTransferProgress {
 }
 
 pub type FileTransferObserver = Arc<dyn Fn(FileTransferProgress) + Send + Sync>;
+
+/// How files dropped onto a remote worktree are uploaded.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RemoteUploadOptions {
+    /// Split large files into bounded chunks and pace them while the
+    /// connection carries interactive traffic, instead of sending each file as
+    /// a single message. The caller enables this only when the server
+    /// advertised the `upload_chunks_v1` capability.
+    pub chunked_uploads: bool,
+}
+
+/// Files at least this large use the chunked upload path when the server
+/// supports it. Smaller files are cheaper to send as a single message.
+const MIN_CHUNKED_ENTRY_UPLOAD_SIZE: u64 = 256 * 1024;
+
+/// Largest single entry accepted through the chunked upload path.
+const MAX_ENTRY_UPLOAD_SIZE: u64 = 4 * 1024 * 1024 * 1024;
+
+/// Largest chunk accepted through the chunked upload path. The client uses
+/// much smaller chunks; this only bounds what one request can allocate.
+const MAX_ENTRY_UPLOAD_CHUNK_SIZE: usize = 8 * 1024 * 1024;
+
+/// Chunked uploads retained per worktree before an arbitrary in-progress one is
+/// discarded. Bounds staged files and sessions left behind by disconnected or
+/// cancelled clients.
+const MAX_CONCURRENT_ENTRY_UPLOADS: usize = 8;
+
+/// Chunks buffered by the staging writer. This is what applies backpressure to
+/// an upload while the host disk catches up.
+const ENTRY_UPLOAD_BUFFERED_CHUNKS: usize = 4;
+
+/// A chunked entry upload in progress on the host that owns the worktree.
+///
+/// Chunks are streamed from a bounded channel into a staged file, so the whole
+/// entry is never retained in memory. The staged file is owned by this upload's
+/// writer task, which removes it when the upload is aborted or fails.
+struct EntryUpload {
+    path: Arc<RelPath>,
+    abs_path: PathBuf,
+    temp_path: PathBuf,
+    total_size: u64,
+    received: u64,
+    sender: Option<mpsc::Sender<Vec<u8>>>,
+    writer: Option<Task<Result<()>>>,
+    aborted: Arc<AtomicBool>,
+}
+
+/// Feeds the staging writer with the chunks of one entry upload.
+struct EntryUploadReader {
+    receiver: mpsc::Receiver<Vec<u8>>,
+    pending: Vec<u8>,
+    pending_offset: usize,
+}
+
+impl EntryUploadReader {
+    fn new(receiver: mpsc::Receiver<Vec<u8>>) -> Self {
+        Self {
+            receiver,
+            pending: Vec::new(),
+            pending_offset: 0,
+        }
+    }
+}
+
+impl futures::io::AsyncRead for EntryUploadReader {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buffer: &mut [u8],
+    ) -> Poll<std::io::Result<usize>> {
+        let this = self.get_mut();
+        loop {
+            if this.pending_offset < this.pending.len() {
+                let available = this.pending.len() - this.pending_offset;
+                let len = available.min(buffer.len());
+                buffer[..len]
+                    .copy_from_slice(&this.pending[this.pending_offset..this.pending_offset + len]);
+                this.pending_offset += len;
+                if this.pending_offset == this.pending.len() {
+                    this.pending.clear();
+                    this.pending_offset = 0;
+                }
+                return Poll::Ready(Ok(len));
+            }
+
+            match this.receiver.poll_next_unpin(cx) {
+                Poll::Ready(Some(chunk)) => {
+                    this.pending = chunk;
+                    this.pending_offset = 0;
+                }
+                Poll::Ready(None) => return Poll::Ready(Ok(0)),
+                Poll::Pending => return Poll::Pending,
+            }
+        }
+    }
+}
 
 /// An entry, created in the worktree.
 #[derive(Debug)]
@@ -160,9 +256,13 @@ pub struct LocalWorktree {
     visible: bool,
     next_entry_id: Arc<AtomicUsize>,
     settings: WorktreeSettings,
+    /// Client-requested scan depth (e.g. terminal workspaces), applied on top
+    /// of the configured `file_scan_depth` and reapplied on settings reloads.
+    scan_depth_override: Option<u32>,
     share_private_files: bool,
     scanning_enabled: bool,
     force_defer_watch: bool,
+    entry_uploads: HashMap<u64, EntryUpload>,
 }
 
 pub struct PathPrefixScanRequest {
@@ -567,7 +667,10 @@ impl Worktree {
             let settings = WorktreeSettings::get(settings_location, cx).clone();
             cx.observe_global::<SettingsStore>(move |this, cx| {
                 if let Self::Local(this) = this {
-                    let settings = WorktreeSettings::get(settings_location, cx).clone();
+                    let mut settings = WorktreeSettings::get(settings_location, cx).clone();
+                    if let Some(depth) = this.scan_depth_override {
+                        settings.file_scan_depth = Some(depth);
+                    }
                     if this.settings != settings {
                         this.settings = settings;
                         this.restart_background_scanners(cx);
@@ -618,8 +721,10 @@ impl Worktree {
                 fs_case_sensitive,
                 visible,
                 settings,
+                scan_depth_override: None,
                 scanning_enabled,
                 force_defer_watch: false,
+                entry_uploads: HashMap::default(),
             };
             worktree.start_background_scanner(scan_requests_rx, path_prefixes_to_scan_rx, cx);
             Worktree::Local(worktree)
@@ -803,6 +908,14 @@ impl Worktree {
             Some(worktree)
         } else {
             None
+        }
+    }
+
+    /// Applies a client-requested scan-depth override; no-op for remote
+    /// (client-side) worktrees, whose scanning is driven by the host.
+    pub fn set_scan_depth_override(&mut self, depth: Option<u32>, cx: &Context<Worktree>) {
+        if let Worktree::Local(worktree) = self {
+            worktree.set_scan_depth_override(depth, cx);
         }
     }
 
@@ -1112,7 +1225,14 @@ impl Worktree {
         fs: Arc<dyn Fs>,
         cx: &Context<Worktree>,
     ) -> Task<Result<Vec<ProjectEntryId>>> {
-        self.copy_external_entries_with_progress(target_directory, paths, fs, None, cx)
+        self.copy_external_entries_with_progress(
+            target_directory,
+            paths,
+            fs,
+            RemoteUploadOptions::default(),
+            None,
+            cx,
+        )
     }
 
     pub fn copy_external_entries_with_progress(
@@ -1120,6 +1240,7 @@ impl Worktree {
         target_directory: Arc<RelPath>,
         paths: Vec<Arc<Path>>,
         fs: Arc<dyn Fs>,
+        upload_options: RemoteUploadOptions,
         progress: Option<FileTransferObserver>,
         cx: &Context<Worktree>,
     ) -> Task<Result<Vec<ProjectEntryId>>> {
@@ -1127,9 +1248,66 @@ impl Worktree {
             Worktree::Local(this) => {
                 this.copy_external_entries(target_directory, paths, progress, cx)
             }
-            Worktree::Remote(this) => {
-                this.copy_external_entries(target_directory, paths, fs, progress, cx)
-            }
+            Worktree::Remote(this) => this.copy_external_entries(
+                target_directory,
+                paths,
+                fs,
+                upload_options,
+                progress,
+                cx,
+            ),
+        }
+    }
+
+    /// Starts a chunked upload of a new entry. Only the host that owns the
+    /// worktree can accept uploads; a client-side remote worktree rejects them.
+    pub fn begin_entry_upload(
+        &mut self,
+        request: proto::BeginProjectEntryUpload,
+        cx: &Context<Worktree>,
+    ) -> Result<()> {
+        match self {
+            Worktree::Local(this) => this.begin_entry_upload(request, cx),
+            Worktree::Remote(_) => Err(anyhow!(
+                "remote worktrees cannot accept chunked entry uploads"
+            )),
+        }
+    }
+
+    pub fn prepare_entry_chunk(
+        &mut self,
+        request: proto::WriteProjectEntryChunk,
+    ) -> Result<(mpsc::Sender<Vec<u8>>, Vec<u8>)> {
+        match self {
+            Worktree::Local(this) => this.prepare_entry_chunk(request),
+            Worktree::Remote(_) => Err(anyhow!(
+                "remote worktrees cannot accept chunked entry uploads"
+            )),
+        }
+    }
+
+    pub fn record_entry_chunk(&mut self, upload_id: u64, len: usize) {
+        if let Worktree::Local(this) = self {
+            this.record_entry_chunk(upload_id, len);
+        }
+    }
+
+    pub fn finish_entry_upload(
+        &mut self,
+        request: proto::FinishProjectEntryUpload,
+        cx: &Context<Worktree>,
+    ) -> Result<Task<Result<CreatedEntry>>> {
+        match self {
+            Worktree::Local(this) => this.finish_entry_upload(request, cx),
+            Worktree::Remote(_) => Err(anyhow!(
+                "remote worktrees cannot accept chunked entry uploads"
+            )),
+        }
+    }
+
+    pub fn abort_entry_upload(&mut self, upload_id: u64, cx: &Context<Worktree>) {
+        if let Worktree::Local(this) = self {
+            this.abort_entry_upload(upload_id, cx);
         }
     }
 
@@ -1212,6 +1390,62 @@ impl Worktree {
             },
             worktree_scan_id: scan_id as u64,
         })
+    }
+
+    pub async fn handle_begin_entry_upload(
+        this: Entity<Self>,
+        request: proto::BeginProjectEntryUpload,
+        mut cx: AsyncApp,
+    ) -> Result<proto::BeginProjectEntryUploadResponse> {
+        this.update(&mut cx, |this, cx| this.begin_entry_upload(request, cx))?;
+        Ok(proto::BeginProjectEntryUploadResponse {})
+    }
+
+    pub async fn handle_write_entry_chunk(
+        this: Entity<Self>,
+        request: proto::WriteProjectEntryChunk,
+        mut cx: AsyncApp,
+    ) -> Result<proto::WriteProjectEntryChunkResponse> {
+        let upload_id = request.upload_id;
+        let (mut sender, content) =
+            this.update(&mut cx, |this, _| this.prepare_entry_chunk(request))?;
+        let len = content.len();
+        futures::SinkExt::send(&mut sender, content)
+            .await
+            .map_err(|_| anyhow!("entry upload was cancelled"))?;
+        drop(sender);
+        this.update(&mut cx, |this, _| this.record_entry_chunk(upload_id, len));
+        Ok(proto::WriteProjectEntryChunkResponse {})
+    }
+
+    pub async fn handle_finish_entry_upload(
+        this: Entity<Self>,
+        request: proto::FinishProjectEntryUpload,
+        mut cx: AsyncApp,
+    ) -> Result<proto::FinishProjectEntryUploadResponse> {
+        let (scan_id, entry) = this.update(&mut cx, |this, cx| {
+            anyhow::Ok((this.scan_id(), this.finish_entry_upload(request, cx)))
+        })?;
+        let entry = entry?;
+        let entry = entry.await?;
+        Ok(proto::FinishProjectEntryUploadResponse {
+            entry: match &entry {
+                CreatedEntry::Included(entry) => Some(entry.into()),
+                CreatedEntry::Excluded { .. } => None,
+            },
+            worktree_scan_id: scan_id as u64,
+        })
+    }
+
+    pub async fn handle_abort_entry_upload(
+        this: Entity<Self>,
+        request: proto::AbortProjectEntryUpload,
+        mut cx: AsyncApp,
+    ) -> Result<proto::AbortProjectEntryUploadResponse> {
+        this.update(&mut cx, |this, cx| {
+            this.abort_entry_upload(request.upload_id, cx)
+        });
+        Ok(proto::AbortProjectEntryUploadResponse {})
     }
 
     pub async fn handle_trash_entry(
@@ -1352,6 +1586,53 @@ impl Worktree {
     }
 }
 
+/// Publishes an entry whose file or directory has already been written on the
+/// host, refreshing the worktree entries and reporting excluded paths.
+fn publish_created_entry(
+    path: Arc<RelPath>,
+    abs_path: PathBuf,
+    path_excluded: bool,
+    lowest_ancestor: Arc<RelPath>,
+    write: Task<Result<()>>,
+    cx: &Context<Worktree>,
+) -> Task<Result<CreatedEntry>> {
+    cx.spawn(async move |this, cx| {
+        write.await?;
+        if path_excluded {
+            return Ok(CreatedEntry::Excluded { abs_path });
+        }
+
+        let (result, refreshes) = this.update(cx, |this, cx| {
+            let mut refreshes = Vec::new();
+            let refresh_paths = path.strip_prefix(&lowest_ancestor).unwrap();
+            for refresh_path in refresh_paths.ancestors() {
+                if refresh_path == RelPath::empty() {
+                    continue;
+                }
+                let refresh_full_path = lowest_ancestor.join(refresh_path);
+
+                refreshes.push(this.as_local_mut().unwrap().refresh_entry(
+                    refresh_full_path.into(),
+                    None,
+                    cx,
+                ));
+            }
+            (
+                this.as_local_mut().unwrap().refresh_entry(path, None, cx),
+                refreshes,
+            )
+        })?;
+        for refresh in refreshes {
+            refresh.await.log_err();
+        }
+
+        Ok(result
+            .await?
+            .map(CreatedEntry::Included)
+            .unwrap_or_else(|| CreatedEntry::Excluded { abs_path }))
+    })
+}
+
 impl LocalWorktree {
     pub fn fs(&self) -> &Arc<dyn Fs> {
         &self.fs
@@ -1363,6 +1644,20 @@ impl LocalWorktree {
 
     pub fn fs_is_case_sensitive(&self) -> bool {
         self.fs_case_sensitive
+    }
+
+    /// Applies a client-requested scan-depth override (used by terminal
+    /// workspaces to avoid eagerly indexing large roots like a home
+    /// directory) and restarts the background scanner when it changes.
+    pub fn set_scan_depth_override(&mut self, depth: Option<u32>, cx: &Context<Worktree>) {
+        if self.scan_depth_override == depth {
+            return;
+        }
+        self.scan_depth_override = depth;
+        if let Some(depth) = depth {
+            self.settings.file_scan_depth = Some(depth);
+            self.restart_background_scanners(cx);
+        }
     }
 
     fn restart_background_scanners(&mut self, cx: &Context<Worktree>) {
@@ -1849,41 +2144,227 @@ impl LocalWorktree {
         });
 
         let lowest_ancestor = self.lowest_ancestor(&path);
-        cx.spawn(async move |this, cx| {
-            write.await?;
-            if path_excluded {
-                return Ok(CreatedEntry::Excluded { abs_path });
-            }
+        publish_created_entry(path, abs_path, path_excluded, lowest_ancestor, write, cx)
+    }
 
-            let (result, refreshes) = this.update(cx, |this, cx| {
-                let mut refreshes = Vec::new();
-                let refresh_paths = path.strip_prefix(&lowest_ancestor).unwrap();
-                for refresh_path in refresh_paths.ancestors() {
-                    if refresh_path == RelPath::empty() {
-                        continue;
-                    }
-                    let refresh_full_path = lowest_ancestor.join(refresh_path);
+    /// Starts a chunked entry upload, staging its bytes outside the worktree
+    /// until [`LocalWorktree::finish_entry_upload`] publishes them.
+    fn begin_entry_upload(
+        &mut self,
+        request: proto::BeginProjectEntryUpload,
+        cx: &Context<Worktree>,
+    ) -> Result<()> {
+        anyhow::ensure!(request.upload_id != 0, "invalid upload id");
+        anyhow::ensure!(
+            request.total_size <= MAX_ENTRY_UPLOAD_SIZE,
+            "uploaded entry is too large"
+        );
 
-                    refreshes.push(this.as_local_mut().unwrap().refresh_entry(
-                        refresh_full_path.into(),
-                        None,
-                        cx,
-                    ));
+        let path: Arc<RelPath> = RelPath::from_unix_str(&request.path)
+            .with_context(|| format!("received invalid relative path {:?}", request.path))?
+            .into();
+        let abs_path = self.absolutize(&path);
+
+        self.abort_entry_upload(request.upload_id, cx);
+        if self.entry_uploads.len() >= MAX_CONCURRENT_ENTRY_UPLOADS
+            && let Some(upload_id) = self.entry_uploads.keys().next().copied()
+        {
+            self.abort_entry_upload(upload_id, cx);
+        }
+
+        // The name is random so an existing path in the shared temporary
+        // directory cannot be picked as a staging target in advance.
+        let temp_path = paths::temp_dir().join(format!(
+            "zed-upload-{}-{}-{}.tmp",
+            self.id().to_proto(),
+            request.upload_id,
+            rand::random::<u64>(),
+        ));
+        let (sender, receiver) = mpsc::channel::<Vec<u8>>(ENTRY_UPLOAD_BUFFERED_CHUNKS);
+        let aborted = Arc::new(AtomicBool::new(false));
+        let temp_dir = paths::temp_dir().clone();
+        let writer = {
+            let fs = self.fs.clone();
+            let temp_path = temp_path.clone();
+            let aborted = aborted.clone();
+            cx.background_spawn(async move {
+                let reader = EntryUploadReader::new(receiver);
+                futures::pin_mut!(reader);
+                let result = async {
+                    fs.create_dir(&temp_dir)
+                        .await
+                        .with_context(|| format!("creating staging directory {temp_dir:?}"))?;
+                    fs.create_file_with(&temp_path, reader).await
                 }
-                (
-                    this.as_local_mut().unwrap().refresh_entry(path, None, cx),
-                    refreshes,
-                )
-            })?;
-            for refresh in refreshes {
-                refresh.await.log_err();
-            }
+                .await;
+                if result.is_err() || aborted.load(SeqCst) {
+                    fs.remove_file(&temp_path, RemoveOptions::default())
+                        .await
+                        .log_err();
+                }
+                result
+            })
+        };
 
-            Ok(result
+        self.entry_uploads.insert(
+            request.upload_id,
+            EntryUpload {
+                path,
+                abs_path,
+                temp_path,
+                total_size: request.total_size,
+                received: 0,
+                sender: Some(sender),
+                writer: Some(writer),
+                aborted,
+            },
+        );
+        Ok(())
+    }
+
+    /// Validates one chunk and returns the channel that feeds the staging
+    /// writer together with the chunk's bytes.
+    fn prepare_entry_chunk(
+        &mut self,
+        request: proto::WriteProjectEntryChunk,
+    ) -> Result<(mpsc::Sender<Vec<u8>>, Vec<u8>)> {
+        let content = request.content;
+        let session = self
+            .entry_uploads
+            .get_mut(&request.upload_id)
+            .context("unknown entry upload")?;
+        anyhow::ensure!(!content.is_empty(), "empty entry upload chunk");
+        anyhow::ensure!(
+            content.len() <= MAX_ENTRY_UPLOAD_CHUNK_SIZE,
+            "entry upload chunk is too large"
+        );
+        anyhow::ensure!(
+            request.offset == session.received,
+            "entry upload chunk arrived out of order"
+        );
+        let end = request
+            .offset
+            .checked_add(content.len() as u64)
+            .context("entry upload offset overflow")?;
+        anyhow::ensure!(
+            end <= session.total_size,
+            "entry upload chunk exceeds the declared size"
+        );
+        let sender = session
+            .sender
+            .clone()
+            .context("entry upload was cancelled")?;
+        Ok((sender, content))
+    }
+
+    fn record_entry_chunk(&mut self, upload_id: u64, len: usize) {
+        if let Some(session) = self.entry_uploads.get_mut(&upload_id) {
+            session.received += len as u64;
+        }
+    }
+
+    /// Publishes a completed upload: closes the staging stream, moves the
+    /// staged file into the worktree and refreshes its entries.
+    fn finish_entry_upload(
+        &mut self,
+        request: proto::FinishProjectEntryUpload,
+        cx: &Context<Worktree>,
+    ) -> Result<Task<Result<CreatedEntry>>> {
+        let session = self
+            .entry_uploads
+            .remove(&request.upload_id)
+            .context("unknown entry upload")?;
+        let EntryUpload {
+            path,
+            abs_path,
+            temp_path,
+            total_size,
+            received,
+            sender,
+            writer,
+            aborted: _,
+        } = session;
+        // Closing the stream lets the staging writer finish the file.
+        drop(sender);
+
+        let path_excluded = self.settings.is_path_excluded(&path);
+        let lowest_ancestor = self.lowest_ancestor(&path);
+        let fs = self.fs.clone();
+        let publish_abs_path = abs_path.clone();
+        let write = cx.background_spawn(async move {
+            writer.context("entry upload was cancelled")?.await?;
+            anyhow::ensure!(
+                received == total_size,
+                "entry upload ended before all bytes arrived"
+            );
+            let metadata = fs
+                .metadata(&temp_path)
                 .await?
-                .map(CreatedEntry::Included)
-                .unwrap_or_else(|| CreatedEntry::Excluded { abs_path }))
-        })
+                .context("staged entry upload is missing")?;
+            anyhow::ensure!(
+                metadata.len == total_size,
+                "staged entry upload has an unexpected size"
+            );
+
+            let rename_options = RenameOptions {
+                overwrite: true,
+                ignore_if_exists: false,
+                create_parents: true,
+            };
+            match fs
+                .rename(&temp_path, &publish_abs_path, rename_options)
+                .await
+            {
+                Ok(()) => Ok(()),
+                Err(rename_error) => {
+                    // A staging directory on another filesystem cannot be
+                    // renamed into the worktree.
+                    fs.copy_file(
+                        &temp_path,
+                        &publish_abs_path,
+                        CopyOptions {
+                            overwrite: true,
+                            ignore_if_exists: false,
+                        },
+                    )
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "publishing {publish_abs_path:?} after rename failed: {rename_error}"
+                        )
+                    })?;
+                    fs.remove_file(&temp_path, RemoveOptions::default())
+                        .await
+                        .log_err();
+                    Ok(())
+                }
+            }
+        });
+
+        Ok(publish_created_entry(
+            path,
+            abs_path,
+            path_excluded,
+            lowest_ancestor,
+            write,
+            cx,
+        ))
+    }
+
+    /// Discards an in-progress upload. The staging writer removes its staged
+    /// file once it observes the abort.
+    fn abort_entry_upload(&mut self, upload_id: u64, cx: &Context<Worktree>) {
+        let Some(mut session) = self.entry_uploads.remove(&upload_id) else {
+            return;
+        };
+        session.aborted.store(true, SeqCst);
+        session.sender.take();
+        if let Some(writer) = session.writer.take() {
+            cx.background_spawn(async move {
+                writer.await.log_err();
+            })
+            .detach();
+        }
     }
 
     pub fn write_file(
@@ -2521,12 +3002,14 @@ impl RemoteWorktree {
         target_directory: Arc<RelPath>,
         paths_to_copy: Vec<Arc<Path>>,
         local_fs: Arc<dyn Fs>,
+        upload_options: RemoteUploadOptions,
         progress: Option<FileTransferObserver>,
         cx: &Context<Worktree>,
     ) -> Task<anyhow::Result<Vec<ProjectEntryId>>> {
         let client = self.client.clone();
         let worktree_id = self.id().to_proto();
         let project_id = self.project_id;
+        let executor = cx.background_executor().clone();
 
         cx.background_spawn(async move {
             let mut requests = Vec::new();
@@ -2564,42 +3047,214 @@ impl RemoteWorktree {
                 progress(FileTransferProgress::TotalEntries(requests.len()));
             }
             let mut copied_entry_ids = Vec::new();
+            let mut pacer = rpc::network_pacing::UploadPacer::new();
             for (path, source, is_directory) in requests {
                 if let Some(progress) = &progress {
                     progress(FileTransferProgress::Started(path.clone()));
                 }
-                let content = if is_directory {
-                    None
-                } else {
-                    Some(local_fs.load_bytes(&source).await?)
-                };
-                let request = proto::CreateProjectEntry {
-                    project_id,
-                    worktree_id,
-                    path,
-                    is_directory,
-                    content,
-                };
-                let observer = progress.clone();
-                let response = client
-                    .request_with_progress(
-                        request,
-                        Arc::new(move |written, total| {
-                            if let Some(progress) = &observer {
-                                progress(FileTransferProgress::Bytes(written, total));
-                            }
-                        }),
+
+                let entry = if is_directory {
+                    send_project_entry(
+                        &client,
+                        project_id,
+                        worktree_id,
+                        path,
+                        true,
+                        None,
+                        &progress,
                     )
-                    .await?;
+                    .await?
+                } else {
+                    let total_size = local_fs
+                        .metadata(&source)
+                        .await
+                        .with_context(|| format!("reading metadata for {source:?}"))?
+                        .with_context(|| format!("missing source file {source:?}"))?
+                        .len;
+                    if upload_options.chunked_uploads && total_size >= MIN_CHUNKED_ENTRY_UPLOAD_SIZE
+                    {
+                        upload_entry_in_chunks(
+                            &client,
+                            project_id,
+                            worktree_id,
+                            &path,
+                            &source,
+                            &local_fs,
+                            total_size,
+                            &progress,
+                            &executor,
+                            &mut pacer,
+                        )
+                        .await?
+                    } else {
+                        let content = local_fs.load_bytes(&source).await?;
+                        send_project_entry(
+                            &client,
+                            project_id,
+                            worktree_id,
+                            path.clone(),
+                            false,
+                            Some(content),
+                            &progress,
+                        )
+                        .await?
+                    }
+                };
+
                 if let Some(progress) = &progress {
                     progress(FileTransferProgress::Finished);
                 }
-                copied_entry_ids.extend(response.entry.map(|e| ProjectEntryId::from_proto(e.id)));
+                copied_entry_ids.extend(entry.map(|entry| ProjectEntryId::from_proto(entry.id)));
+
+                let delay = pacer.entry_delay(rpc::network_pacing::interactive_activity_age());
+                if !delay.is_zero() {
+                    executor.timer(delay).await;
+                }
             }
 
             Ok(copied_entry_ids)
         })
     }
+}
+
+/// Sends a project entry as a single message. Used for directories and files
+/// that are too small to be worth chunking.
+async fn send_project_entry(
+    client: &AnyProtoClient,
+    project_id: u64,
+    worktree_id: u64,
+    path: String,
+    is_directory: bool,
+    content: Option<Vec<u8>>,
+    progress: &Option<FileTransferObserver>,
+) -> Result<Option<proto::Entry>> {
+    let observer = progress.clone();
+    let response = client
+        .request_with_progress(
+            proto::CreateProjectEntry {
+                project_id,
+                worktree_id,
+                path,
+                is_directory,
+                content,
+            },
+            Arc::new(move |written, total| {
+                if let Some(progress) = &observer {
+                    progress(FileTransferProgress::Bytes(written, total));
+                }
+            }),
+        )
+        .await?;
+    Ok(response.entry)
+}
+
+/// Uploads one file in bounded, sequentially acknowledged chunks so that
+/// interactive requests are not stuck behind a whole file and the client can
+/// pace itself while the connection is busy.
+#[allow(clippy::too_many_arguments)]
+async fn upload_entry_in_chunks(
+    client: &AnyProtoClient,
+    project_id: u64,
+    worktree_id: u64,
+    path: &str,
+    source: &Path,
+    local_fs: &Arc<dyn Fs>,
+    total_size: u64,
+    progress: &Option<FileTransferObserver>,
+    executor: &BackgroundExecutor,
+    pacer: &mut rpc::network_pacing::UploadPacer,
+) -> Result<Option<proto::Entry>> {
+    let upload_id = rand::random::<u64>() | 1;
+    client
+        .request(proto::BeginProjectEntryUpload {
+            project_id,
+            worktree_id,
+            path: path.to_owned(),
+            total_size,
+            upload_id,
+        })
+        .await?;
+
+    let mut reader = local_fs.open_read(source).await?;
+    let mut buffer = Vec::new();
+    let mut offset = 0u64;
+    let result: Result<Option<proto::Entry>> = async {
+        while offset < total_size {
+            let plan = pacer.plan_next_chunk(rpc::network_pacing::interactive_activity_age());
+            let chunk_len = plan.chunk_size.min((total_size - offset) as usize);
+            buffer.resize(chunk_len, 0);
+            let read = read_fully(&mut *reader, &mut buffer).await?;
+            anyhow::ensure!(read > 0, "source file changed while uploading {source:?}");
+
+            let observer = progress.clone();
+            let sent_before = offset;
+            let started = Instant::now();
+            client
+                .request_with_progress(
+                    proto::WriteProjectEntryChunk {
+                        project_id,
+                        worktree_id,
+                        upload_id,
+                        offset,
+                        content: buffer[..read].to_vec(),
+                    },
+                    Arc::new(move |written, _| {
+                        if let Some(progress) = &observer {
+                            progress(FileTransferProgress::Bytes(
+                                sent_before + written,
+                                total_size,
+                            ));
+                        }
+                    }),
+                )
+                .await?;
+            pacer.observe_round_trip(started.elapsed());
+            offset += read as u64;
+
+            if !plan.delay.is_zero() {
+                executor.timer(plan.delay).await;
+            }
+        }
+
+        let response = client
+            .request(proto::FinishProjectEntryUpload {
+                project_id,
+                worktree_id,
+                upload_id,
+            })
+            .await?;
+        Ok(response.entry)
+    }
+    .await;
+
+    if result.is_err() {
+        client
+            .send(proto::AbortProjectEntryUpload {
+                project_id,
+                worktree_id,
+                upload_id,
+            })
+            .log_err();
+    }
+
+    result
+}
+
+/// Fills `buffer` from `reader`, returning how many bytes were read. A short
+/// read only happens at the end of the file.
+async fn read_fully(
+    reader: &mut (dyn futures::io::AsyncRead + Send + Unpin),
+    buffer: &mut [u8],
+) -> Result<usize> {
+    let mut filled = 0;
+    while filled < buffer.len() {
+        let read = reader.read(&mut buffer[filled..]).await?;
+        if read == 0 {
+            break;
+        }
+        filled += read;
+    }
+    Ok(filled)
 }
 
 impl Snapshot {
@@ -7507,18 +8162,59 @@ mod tests {
     use super::{
         BackgroundScanner, BackgroundScannerPhase, BackgroundScannerState, IgnoreStack,
         NullWatcher, RemovedEntries, STREAM_BLOCK_BYTES, ScanRequest, UpdateIgnoreStatusJob,
-        Worktree, stream_utf8_into_rope,
+        Worktree, read_fully, stream_utf8_into_rope,
     };
     use collections::{HashMap, HashSet};
     use fs::{FakeFs, Fs, RemoveOptions, RenameOptions};
     use futures::{FutureExt as _, channel::mpsc};
-    use gpui::TestAppContext;
+    use gpui::{BorrowAppContext, TestAppContext};
     use serde_json::json;
     use settings::{SettingsStore, WorktreeId};
     use smallvec::SmallVec;
     use std::{path::Path, sync::Arc};
     use text::LineEnding;
     use util::{path, rel_path::rel_path};
+
+    /// Yields at most one byte per read, like a file whose reader returns
+    /// short reads before the end of the file.
+    struct TricklingReader {
+        remaining: usize,
+    }
+
+    impl futures::io::AsyncRead for TricklingReader {
+        fn poll_read(
+            mut self: std::pin::Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+            buffer: &mut [u8],
+        ) -> std::task::Poll<std::io::Result<usize>> {
+            if self.remaining == 0 || buffer.is_empty() {
+                return std::task::Poll::Ready(Ok(0));
+            }
+            buffer[0] = b'x';
+            self.remaining -= 1;
+            std::task::Poll::Ready(Ok(1))
+        }
+    }
+
+    #[gpui::test]
+    async fn test_read_fully_fills_the_buffer_across_short_reads() {
+        let mut reader = TricklingReader { remaining: 10 };
+
+        let mut first = [0u8; 4];
+        assert_eq!(read_fully(&mut reader, &mut first).await.unwrap(), 4);
+        assert_eq!(&first, b"xxxx");
+
+        let mut second = [0u8; 4];
+        assert_eq!(read_fully(&mut reader, &mut second).await.unwrap(), 4);
+
+        let mut last = [0u8; 4];
+        assert_eq!(
+            read_fully(&mut reader, &mut last).await.unwrap(),
+            2,
+            "an incomplete buffer is only returned at the end of the file"
+        );
+        assert_eq!(read_fully(&mut reader, &mut last).await.unwrap(), 0);
+    }
 
     /// Streams `bytes` the way `decode_file_text_to_rope` would, returning the
     /// decoded text and detected line ending, or `None` if the fast path bailed.
@@ -7540,6 +8236,133 @@ mod tests {
                 .is_none()
         );
         assert_eq!(reader.position(), STREAM_BLOCK_BYTES as u64);
+    }
+
+    #[gpui::test]
+    async fn test_scan_depth_override_limits_eager_scanning(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            let settings_store = SettingsStore::test(cx);
+            cx.set_global(settings_store);
+        });
+        let fs = FakeFs::new(cx.background_executor.clone());
+        fs.insert_tree(
+            path!("/root"),
+            json!({
+                "a": {
+                    "b": {
+                        "c": {
+                            "file.txt": "",
+                        },
+                    },
+                },
+                "other": {
+                    "file.txt": "",
+                },
+            }),
+        )
+        .await;
+        let tree = Worktree::local(
+            Path::new(path!("/root")),
+            true,
+            fs.clone(),
+            Arc::default(),
+            true,
+            WorktreeId::from_proto(0),
+            &mut cx.to_async(),
+        )
+        .await
+        .unwrap();
+        tree.update(cx, |tree, cx| {
+            tree.set_scan_depth_override(Some(1), cx);
+        });
+        tree.read_with(cx, |tree, _| tree.as_local().unwrap().scan_complete())
+            .await;
+
+        tree.read_with(cx, |tree, _| {
+            let snapshot = tree.snapshot();
+            let entry_a = snapshot.entry_for_path(rel_path("a")).unwrap();
+            assert!(
+                entry_a.kind.is_unloaded(),
+                "top-level directories must stay unloaded with scan depth 1"
+            );
+            assert!(
+                snapshot.entry_for_path(rel_path("a/b")).is_none(),
+                "deeper directories must not be scanned"
+            );
+        });
+
+        // Settings reloads must not clobber the override.
+        cx.update(|cx| {
+            cx.update_global::<SettingsStore, _>(|store, cx| {
+                store.update_user_settings(cx, |settings| {
+                    settings.project.worktree.file_scan_depth = Some(5);
+                });
+            });
+        });
+        tree.read_with(cx, |tree, _| tree.as_local().unwrap().scan_complete())
+            .await;
+        tree.read_with(cx, |tree, _| {
+            let snapshot = tree.snapshot();
+            let entry_a = snapshot.entry_for_path(rel_path("a")).unwrap();
+            assert!(
+                entry_a.kind.is_unloaded(),
+                "the override must survive settings reloads"
+            );
+            assert!(snapshot.entry_for_path(rel_path("a/b")).is_none());
+        });
+    }
+
+    #[gpui::test]
+    async fn test_scan_depth_override_still_scans_expanded_entries(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            let settings_store = SettingsStore::test(cx);
+            cx.set_global(settings_store);
+        });
+        let fs = FakeFs::new(cx.background_executor.clone());
+        fs.insert_tree(
+            path!("/root"),
+            json!({
+                "a": {
+                    "b": {
+                        "file.txt": "",
+                    },
+                },
+            }),
+        )
+        .await;
+        let tree = Worktree::local(
+            Path::new(path!("/root")),
+            true,
+            fs.clone(),
+            Arc::default(),
+            true,
+            WorktreeId::from_proto(0),
+            &mut cx.to_async(),
+        )
+        .await
+        .unwrap();
+        tree.update(cx, |tree, cx| {
+            tree.set_scan_depth_override(Some(1), cx);
+        });
+        tree.read_with(cx, |tree, _| tree.as_local().unwrap().scan_complete())
+            .await;
+
+        let entry_a = tree.read_with(cx, |tree, _| tree.entry_for_path(rel_path("a")).unwrap().id);
+        let expand_task = tree
+            .update(cx, |tree, cx| tree.expand_entry(entry_a, cx))
+            .expect("expand_entry should return a task");
+        expand_task.await.unwrap();
+
+        tree.read_with(cx, |tree, _| {
+            let snapshot = tree.snapshot();
+            let entry_a = snapshot.entry_for_path(rel_path("a")).unwrap();
+            assert!(
+                !entry_a.kind.is_unloaded(),
+                "expanded directories are scanned"
+            );
+            assert!(snapshot.entry_for_path(rel_path("a/b")).is_some());
+            assert!(snapshot.entry_for_path(rel_path("a/b/file.txt")).is_none());
+        });
     }
 
     #[gpui::test]
