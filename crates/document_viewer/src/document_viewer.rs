@@ -3,6 +3,7 @@ mod excel_reader;
 mod pdf_reader;
 mod model_mesh;
 mod model_reader;
+mod model_section;
 
 use std::{path::Path, sync::Arc};
 
@@ -923,6 +924,47 @@ mod tests {
         let topology = window.debug_bounds("model-topology-header").expect("topology");
         assert!(geometry.origin.x > panel.origin.x);
         assert!(topology.origin.y > geometry.origin.y + geometry.size.height);
+    }
+
+    #[gpui::test]
+    async fn test_model_view_cube_selects_presets(cx: &mut TestAppContext) {
+        init_test(cx);
+        let (project, item) = open_test_document(
+            cx,
+            "triangle.obj",
+            b"v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3".to_vec(),
+        )
+        .await;
+        let (view, window) =
+            cx.add_window_view(|window, cx| DocumentView::new(item, project, window, cx));
+        let reader = window.update(|_, cx| match &view.read(cx).child {
+            DocumentChild::Model(reader) => reader.clone(),
+            _ => panic!("model documents should open the model reader"),
+        });
+        window.run_until_parked();
+        let viewport = window.debug_bounds("model-viewport").expect("viewport");
+        let cube = window.debug_bounds("model-view-cube").expect("view cube");
+        assert_eq!(cube.size.width, cube.size.height);
+        assert!(cube.origin.x > viewport.origin.x + viewport.size.width * 0.75);
+        assert!(cube.origin.y < viewport.origin.y + viewport.size.height * 0.25);
+        for (selector, expected) in [
+            ("model-view-cube-top", i18n::t!("d5cdfcf7ff75338f")),
+            ("model-view-cube-front", i18n::t!("a617590202898821")),
+            ("model-view-cube-right", i18n::t!("883361d5d682a157")),
+        ] {
+            let region = window.debug_bounds(selector).expect("view cube region");
+            assert!(
+                cube.contains(&region.center()),
+                "{selector} must be inside the cube"
+            );
+            window.simulate_click(region.center(), gpui::Modifiers::none());
+            window.run_until_parked();
+            assert_eq!(
+                window.update(|_, cx| reader.read(cx).preset_label()),
+                expected,
+                "{selector} must select its preset"
+            );
+        }
     }
 
     #[gpui::test(iterations = 20)]
