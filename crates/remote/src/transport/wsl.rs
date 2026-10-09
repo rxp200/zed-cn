@@ -681,6 +681,10 @@ impl RemoteConnection for WslRemoteConnection {
         RemoteConnectionOptions::Wsl(self.connection_options.clone())
     }
 
+    fn home_dir(&self) -> Option<String> {
+        self.home_dir.clone()
+    }
+
     fn path_style(&self) -> PathStyle {
         PathStyle::Unix
     }

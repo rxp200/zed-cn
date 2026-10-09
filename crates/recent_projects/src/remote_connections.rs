@@ -357,6 +357,7 @@ pub async fn open_remote_project(
                     delegate.clone(),
                     app_state.clone(),
                     paths.clone(),
+                    None,
                     cx,
                 )
             })

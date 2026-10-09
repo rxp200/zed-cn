@@ -244,6 +244,9 @@ impl AnyProtoClient {
         request: T,
     ) -> impl Future<Output = Result<T::Response>> + use<T> {
         let envelope = request.into_envelope(0, None, None);
+        if crate::network_pacing::is_interactive_payload(&envelope.payload) {
+            crate::network_pacing::record_interactive_activity();
+        }
         let response = self.0.client.request(envelope, T::NAME);
         async move {
             T::Response::from_envelope(response.await?)
@@ -256,11 +259,14 @@ impl AnyProtoClient {
         request: T,
         progress: RequestProgress,
     ) -> impl Future<Output = Result<T::Response>> + use<T> {
-        let response = self.0.client.request_with_progress(
-            request.into_envelope(0, None, None),
-            T::NAME,
-            progress,
-        );
+        let envelope = request.into_envelope(0, None, None);
+        if crate::network_pacing::is_interactive_payload(&envelope.payload) {
+            crate::network_pacing::record_interactive_activity();
+        }
+        let response = self
+            .0
+            .client
+            .request_with_progress(envelope, T::NAME, progress);
         async move {
             T::Response::from_envelope(response.await?)
                 .context("received response of the wrong type")
@@ -286,6 +292,9 @@ impl AnyProtoClient {
 
     pub fn send<T: EnvelopedMessage>(&self, request: T) -> Result<()> {
         let envelope = request.into_envelope(0, None, None);
+        if crate::network_pacing::is_interactive_payload(&envelope.payload) {
+            crate::network_pacing::record_interactive_activity();
+        }
         self.0.client.send(envelope, T::NAME)
     }
 

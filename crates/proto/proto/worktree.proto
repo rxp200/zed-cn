@@ -36,6 +36,9 @@ message AddWorktree {
   string path = 1;
   uint64 project_id = 2;
   bool visible = 3;
+  // When set, limits eager scanning to this directory depth; deeper entries
+  // load on demand. Absent on older clients; ignored by older servers.
+  optional uint32 file_scan_depth = 4;
 }
 
 message AddWorktreeResponse {
@@ -101,6 +104,49 @@ message CreateProjectEntry {
   bool is_directory = 4;
   optional bytes content = 5;
 }
+
+// Chunked project entry upload, used only with the `upload_chunks_v1`
+// capability. The client sends one bounded chunk at a time and waits for its
+// response, so interactive requests can be interleaved on the same connection
+// instead of queueing behind a whole file.
+message BeginProjectEntryUpload {
+  uint64 project_id = 1;
+  uint64 worktree_id = 2;
+  string path = 3;
+  uint64 total_size = 4;
+  uint64 upload_id = 5;
+}
+
+message BeginProjectEntryUploadResponse {}
+
+message WriteProjectEntryChunk {
+  uint64 project_id = 1;
+  uint64 worktree_id = 2;
+  uint64 upload_id = 3;
+  uint64 offset = 4;
+  bytes content = 5;
+}
+
+message WriteProjectEntryChunkResponse {}
+
+message FinishProjectEntryUpload {
+  uint64 project_id = 1;
+  uint64 worktree_id = 2;
+  uint64 upload_id = 3;
+}
+
+message FinishProjectEntryUploadResponse {
+  optional Entry entry = 1;
+  uint64 worktree_scan_id = 2;
+}
+
+message AbortProjectEntryUpload {
+  uint64 project_id = 1;
+  uint64 worktree_id = 2;
+  uint64 upload_id = 3;
+}
+
+message AbortProjectEntryUploadResponse {}
 
 message CreateTemporaryFile {
   string suggested_name = 1;

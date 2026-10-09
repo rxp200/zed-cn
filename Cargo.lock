@@ -15214,6 +15214,7 @@ dependencies = [
  "settings",
  "smol",
  "telemetry",
+ "terminal_view",
  "ui",
  "util",
  "windows-registry 0.6.1",

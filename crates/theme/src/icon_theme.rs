@@ -72,14 +72,25 @@ const FILE_STEMS_BY_ICON_KEY: &[(&str, &[&str])] = &[
 ];
 
 const FILE_SUFFIXES_BY_ICON_KEY: &[(&str, &[&str])] = &[
+    (
+        "archive",
+        &[
+            "7z", "zip", "zipx", "rar", "tar", "gz", "gzip", "bz", "bz2", "xz", "lz", "lz4",
+            "lzma", "zst", "zstd", "tgz", "tbz", "tbz2", "txz", "tzst", "cab", "arj", "cpio",
+        ],
+    ),
     ("astro", &["astro"]),
     (
         "audio",
         &[
-            "aac", "flac", "m4a", "mka", "mp3", "ogg", "opus", "wav", "wma", "wv",
+            "aac", "aif", "aiff", "alac", "amr", "ape", "au", "flac", "m4a", "mid", "midi", "mka",
+            "mp3", "oga", "ogg", "opus", "wav", "wma", "wv",
         ],
     ),
-    ("backup", &["bak"]),
+    (
+        "backup",
+        &["bak", "backup", "old", "orig", "tmp", "temp", "swp", "swo"],
+    ),
     ("ballerina", &["bal"]),
     ("bicep", &["bicep"]),
     ("bun", &["lockb"]),
@@ -112,8 +123,66 @@ const FILE_SUFFIXES_BY_ICON_KEY: &[(&str, &[&str])] = &[
     (
         "document",
         &[
-            "doc", "docx", "epub", "mdx", "odp", "ods", "odt", "pdf", "ppt", "pptx", "rtf", "txt",
-            "xls", "xlsm", "xlsb", "xlsx",
+            "doc", "docx", "docm", "dot", "dotx", "dotm", "odt", "ott", "rtf", "txt", "text",
+            "pages", "wps", "mdx",
+        ],
+    ),
+    ("ebook", &["epub", "mobi", "azw", "azw3", "fb2", "djvu"]),
+    ("pdf", &["pdf"]),
+    (
+        "spreadsheet",
+        &[
+            "xls", "xlsx", "xlsm", "xlsb", "xlt", "xltx", "xltm", "ods", "ots", "numbers", "et",
+        ],
+    ),
+    (
+        "presentation",
+        &[
+            "ppt", "pptx", "pptm", "pot", "potx", "potm", "pps", "ppsx", "ppsm", "odp", "otp",
+            "key", "dps",
+        ],
+    ),
+    (
+        "disk",
+        &[
+            "iso", "img", "dmg", "vhd", "vhdx", "vmdk", "qcow", "qcow2", "vdi",
+        ],
+    ),
+    (
+        "package",
+        &[
+            "exe",
+            "msi",
+            "msix",
+            "msixbundle",
+            "appx",
+            "appxbundle",
+            "apk",
+            "aab",
+            "deb",
+            "rpm",
+            "pkg",
+            "appimage",
+            "crx",
+            "vsix",
+        ],
+    ),
+    (
+        "binary",
+        &[
+            "bin", "o", "obj", "a", "lib", "so", "dylib", "class", "jar", "war", "ear", "wasm",
+        ],
+    ),
+    (
+        "certificate",
+        &[
+            "pem", "crt", "cer", "der", "p12", "pfx", "p7b", "p7c", "csr", "pub",
+        ],
+    ),
+    (
+        "model",
+        &[
+            "stl", "ply", "fbx", "gltf", "glb", "blend", "3ds", "dae", "step", "stp", "iges", "igs",
         ],
     ),
     ("editorconfig", &["editorconfig"]),
@@ -146,7 +215,12 @@ const FILE_SUFFIXES_BY_ICON_KEY: &[(&str, &[&str])] = &[
             "eslintrc.json",
         ],
     ),
-    ("font", &["otf", "ttf", "woff", "woff2"]),
+    (
+        "font",
+        &[
+            "otf", "ttf", "ttc", "woff", "woff2", "eot", "pfb", "pfm", "bdf", "pcf",
+        ],
+    ),
     ("fsharp", &["fs"]),
     ("fsproj", &["fsproj"]),
     ("gitlab", &["gitlab-ci.yml", "gitlab-ci.yaml"]),
@@ -175,7 +249,8 @@ const FILE_SUFFIXES_BY_ICON_KEY: &[(&str, &[&str])] = &[
         "image",
         &[
             "avif", "bmp", "gif", "heic", "heif", "ico", "j2k", "jfif", "jp2", "jpeg", "jpg",
-            "jxl", "png", "psd", "qoi", "svg", "tiff", "webp",
+            "jxl", "png", "psd", "psb", "ai", "eps", "xcf", "kra", "qoi", "svg", "svgz", "tif",
+            "tiff", "tga", "dds", "icns", "cur", "webp",
         ],
     ),
     ("ipynb", &["ipynb"]),
@@ -224,14 +299,17 @@ const FILE_SUFFIXES_BY_ICON_KEY: &[(&str, &[&str])] = &[
     ("rust", &["rs"]),
     ("sass", &["sass", "scss"]),
     ("scala", &["scala", "sc"]),
-    ("settings", &["conf", "ini"]),
+    (
+        "settings",
+        &["conf", "cfg", "config", "ini", "env", "properties", "prefs"],
+    ),
     ("solidity", &["sol"]),
     (
         "storage",
         &[
             "accdb", "csv", "dat", "db", "dbf", "dll", "fmp", "fp7", "frm", "gdb", "ib", "ldf",
             "mdb", "mdf", "myd", "myi", "pdb", "psv", "RData", "rdata", "sav", "sdf", "sql",
-            "sqlite", "ssv", "tsv",
+            "sqlite", "sqlite3", "db3", "parquet", "arrow", "feather", "h5", "hdf5", "ssv", "tsv",
         ],
     ),
     (
@@ -300,7 +378,13 @@ const FILE_SUFFIXES_BY_ICON_KEY: &[(&str, &[&str])] = &[
         ],
     ),
     ("vbproj", &["vbproj"]),
-    ("video", &["avi", "m4v", "mkv", "mov", "mp4", "webm", "wmv"]),
+    (
+        "video",
+        &[
+            "3gp", "avi", "flv", "m4v", "mkv", "mov", "mp4", "mpeg", "mpg", "m2ts", "ogv", "vob",
+            "webm", "wmv",
+        ],
+    ),
     ("vs_sln", &["sln"]),
     ("vs_suo", &["suo"]),
     ("vue", &["vue"]),
@@ -312,6 +396,17 @@ const FILE_SUFFIXES_BY_ICON_KEY: &[(&str, &[&str])] = &[
 
 /// A mapping of a file type identifier to its corresponding icon.
 const FILE_ICONS: &[(&str, &str)] = &[
+    ("archive", "icons/file_icons/archive.svg"),
+    ("backup", "icons/file_icons/backup.svg"),
+    ("binary", "icons/file_icons/code.svg"),
+    ("certificate", "icons/file_icons/lock.svg"),
+    ("disk", "icons/file_icons/disk.svg"),
+    ("ebook", "icons/file_icons/book.svg"),
+    ("model", "icons/file_icons/model.svg"),
+    ("package", "icons/file_icons/package.svg"),
+    ("pdf", "icons/file_icons/pdf.svg"),
+    ("presentation", "icons/file_icons/presentation.svg"),
+    ("spreadsheet", "icons/file_icons/spreadsheet.svg"),
     ("astro", "icons/file_icons/astro.svg"),
     ("audio", "icons/file_icons/audio.svg"),
     ("ballerina", "icons/file_icons/ballerina.svg"),
@@ -331,7 +426,7 @@ const FILE_ICONS: &[(&str, &str)] = &[
     ("default", "icons/file_icons/file.svg"),
     ("diff", "icons/file_icons/diff.svg"),
     ("docker", "icons/file_icons/docker.svg"),
-    ("document", "icons/file_icons/book.svg"),
+    ("document", "icons/file_icons/document.svg"),
     ("editorconfig", "icons/file_icons/editorconfig.svg"),
     ("elixir", "icons/file_icons/elixir.svg"),
     ("elm", "icons/file_icons/elm.svg"),
@@ -453,4 +548,30 @@ static DEFAULT_ICON_THEME: LazyLock<Arc<IconTheme>> = LazyLock::new(|| {
 /// Returns the default icon theme.
 pub fn default_icon_theme() -> Arc<IconTheme> {
     DEFAULT_ICON_THEME.clone()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn default_file_associations_have_unique_keys_and_existing_assets() {
+        let theme = default_icon_theme();
+        let assets = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets");
+        for associations in [FILE_STEMS_BY_ICON_KEY, FILE_SUFFIXES_BY_ICON_KEY] {
+            let mut seen = std::collections::HashSet::new();
+            for (icon_key, suffixes) in associations {
+                assert!(theme.file_icons.contains_key(*icon_key), "{icon_key}");
+                for suffix in *suffixes {
+                    assert!(seen.insert(suffix), "duplicate association: {suffix}");
+                }
+            }
+        }
+        let mut seen = std::collections::HashSet::new();
+        for (icon_key, asset) in FILE_ICONS {
+            assert!(seen.insert(icon_key), "duplicate icon key: {icon_key}");
+            assert!(assets.join(asset).is_file(), "missing asset: {asset}");
+        }
+    }
 }

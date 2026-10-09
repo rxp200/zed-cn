@@ -134,6 +134,15 @@ pub trait Fs: Send + Sync {
     async fn remove_file(&self, path: &Path, options: RemoveOptions) -> Result<()>;
 
     async fn open_handle(&self, path: &Path) -> Result<Arc<dyn FileHandle>>;
+    /// Opens a file for streaming reads. Callers that must not retain a whole
+    /// file in memory (for example chunked remote uploads) should prefer this
+    /// over [`Fs::load_bytes`]. Implementations without a native async reader
+    /// fall back to buffering the file.
+    async fn open_read(&self, path: &Path) -> Result<Box<dyn AsyncRead + Send + Unpin>> {
+        Ok(Box::new(futures::io::Cursor::new(
+            self.load_bytes(path).await?,
+        )))
+    }
     async fn open_sync(&self, path: &Path) -> Result<Box<dyn ReadSeek + Send + Sync>>;
     async fn load(&self, path: &Path) -> Result<String> {
         Ok(String::from_utf8(self.load_bytes(path).await?)?)
@@ -953,6 +962,13 @@ impl Fs for RealFs {
             options.custom_flags(windows::Win32::Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS.0);
         }
         Ok(Arc::new(options.open(path)?))
+    }
+
+    async fn open_read(&self, path: &Path) -> Result<Box<dyn AsyncRead + Send + Unpin>> {
+        let file = smol::fs::File::open(path)
+            .await
+            .with_context(|| format!("opening {path:?} for reading"))?;
+        Ok(Box::new(file))
     }
 
     async fn load(&self, path: &Path) -> Result<String> {

@@ -862,6 +862,11 @@ impl Pane {
         self.is_tab_pinned(self.active_item_index)
     }
 
+    pub fn is_item_pinned(&self, item_id: EntityId) -> bool {
+        self.index_for_item_id(item_id)
+            .is_some_and(|index| self.is_tab_pinned(index))
+    }
+
     pub fn activation_history(&self) -> &[ActivationHistoryEntry] {
         &self.activation_history
     }

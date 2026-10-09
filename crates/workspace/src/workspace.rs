@@ -11800,6 +11800,7 @@ pub fn open_remote_project_with_new_connection(
     delegate: Arc<dyn RemoteClientDelegate>,
     app_state: Arc<AppState>,
     paths: Vec<PathBuf>,
+    scan_depth_override: Option<u32>,
     cx: &mut App,
 ) -> Task<Result<(Option<Entity<Workspace>>, Vec<Option<Box<dyn ItemHandle>>>)>> {
     cx.spawn(async move |cx| {
@@ -11835,6 +11836,14 @@ pub fn open_remote_project_with_new_connection(
                 cx,
             )
         });
+
+        if scan_depth_override.is_some() {
+            cx.update(|cx| {
+                project.update(cx, |project, cx| {
+                    project.set_scan_depth_override(scan_depth_override, cx)
+                })
+            });
+        }
 
         let (workspace, items) = open_remote_project_inner(
             project,

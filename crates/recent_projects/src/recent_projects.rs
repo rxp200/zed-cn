@@ -1,8 +1,9 @@
 mod dev_container_suggest;
 pub mod disconnected_overlay;
 mod remote_connections;
-mod remote_servers;
 mod remote_server_downloads;
+mod remote_servers;
+mod remote_terminal_workspace;
 pub mod sidebar_recent_projects;
 mod ssh_config;
 
@@ -54,7 +55,12 @@ use zed_actions::{OpenDevContainer, OpenRecent, OpenRemote};
 
 actions!(
     recent_projects,
-    [ToggleActionsMenu, RemoveSelected, AddToWorkspace, PredownloadRemoteServer,]
+    [
+        ToggleActionsMenu,
+        RemoveSelected,
+        AddToWorkspace,
+        PredownloadRemoteServer,
+    ]
 );
 
 #[derive(Clone, Debug)]

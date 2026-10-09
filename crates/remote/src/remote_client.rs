@@ -177,6 +177,7 @@ pub const SYSTEM_STATS_CAPABILITY: &str = "system_stats_v1";
 pub const DOCUMENT_CHUNKS_CAPABILITY: &str = "document_chunks_v1";
 pub const MODEL_CHUNKS_CAPABILITY: &str = "model_chunks_v1";
 pub const EPUB_ENTRIES_CAPABILITY: &str = "epub_entries_v1";
+pub const UPLOAD_CHUNKS_CAPABILITY: &str = "upload_chunks_v1";
 pub const PERSISTENT_TERMINALS_CAPABILITY: &str = "persistent_terminals_v1";
 pub const PERSISTENT_TERMINAL_STREAMING_CAPABILITY: &str = "persistent_terminal_streaming_v1";
 
@@ -1454,6 +1455,10 @@ impl RemoteClient {
         self.client.supports_document_chunks.load(SeqCst)
     }
 
+    pub fn supports_upload_chunks(&self) -> bool {
+        self.client.supports_upload_chunks.load(SeqCst)
+    }
+
     pub fn supports_persistent_terminals(&self) -> bool {
         self.client.supports_persistent_terminals.load(SeqCst)
     }
@@ -2662,6 +2667,7 @@ mod tests {
         assert!(!client.supports_document_chunks.load(SeqCst));
         assert!(!client.supports_epub_entries.load(SeqCst));
         assert!(!client.supports_model_chunks.load(SeqCst));
+        assert!(!client.supports_upload_chunks.load(SeqCst));
         for (capabilities, expected) in [
             (Vec::new(), false),
             (vec![DOCUMENT_CHUNKS_CAPABILITY.to_owned()], true),
@@ -2694,6 +2700,23 @@ mod tests {
                 .expect("deliver model capabilities");
             cx.run_until_parked();
             assert_eq!(client.supports_model_chunks.load(SeqCst), expected);
+        }
+        for (capabilities, expected) in [
+            (vec![UPLOAD_CHUNKS_CAPABILITY.to_owned()], true),
+            (
+                vec![
+                    UPLOAD_CHUNKS_CAPABILITY.to_owned(),
+                    EPUB_ENTRIES_CAPABILITY.to_owned(),
+                ],
+                true,
+            ),
+            (Vec::new(), false),
+        ] {
+            incoming_tx
+                .unbounded_send(proto::RemoteStarted { capabilities }.into_envelope(0, None, None))
+                .expect("deliver upload capabilities");
+            cx.run_until_parked();
+            assert_eq!(client.supports_upload_chunks.load(SeqCst), expected);
         }
     }
 
@@ -2977,6 +3000,9 @@ pub trait RemoteConnection: Send + Sync {
     fn default_system_shell(&self) -> String;
     fn has_wsl_interop(&self) -> bool;
 
+    /// Returns the remote home directory, if known.
+    fn home_dir(&self) -> Option<String>;
+
     #[cfg(any(test, feature = "test-support"))]
     fn simulate_disconnect(&self, _: &AsyncApp) {}
 }
@@ -3041,6 +3067,7 @@ pub(crate) struct ChannelClient {
     supports_document_chunks: AtomicBool,
     supports_model_chunks: AtomicBool,
     supports_epub_entries: AtomicBool,
+    supports_upload_chunks: AtomicBool,
     supports_persistent_terminals: AtomicBool,
     supports_persistent_terminal_streaming: AtomicBool,
     session_invalidated: Arc<Signal<String>>,
@@ -3079,6 +3106,7 @@ impl ChannelClient {
             supports_document_chunks: AtomicBool::new(false),
             supports_model_chunks: AtomicBool::new(false),
             supports_epub_entries: AtomicBool::new(false),
+            supports_upload_chunks: AtomicBool::new(false),
             supports_persistent_terminals: AtomicBool::new(false),
             supports_persistent_terminal_streaming: AtomicBool::new(false),
             session_invalidated: Arc::new(Signal::new(cx)),
@@ -3105,6 +3133,7 @@ impl ChannelClient {
                         DOCUMENT_CHUNKS_CAPABILITY.to_string(),
                         MODEL_CHUNKS_CAPABILITY.to_string(),
                         EPUB_ENTRIES_CAPABILITY.to_string(),
+                        UPLOAD_CHUNKS_CAPABILITY.to_string(),
                         PERSISTENT_TERMINALS_CAPABILITY.to_string(),
                         PERSISTENT_TERMINAL_STREAMING_CAPABILITY.to_string(),
                     ],
@@ -3165,6 +3194,13 @@ impl ChannelClient {
                             .capabilities
                             .iter()
                             .any(|capability| capability == EPUB_ENTRIES_CAPABILITY),
+                        SeqCst,
+                    );
+                    this.supports_upload_chunks.store(
+                        started
+                            .capabilities
+                            .iter()
+                            .any(|capability| capability == UPLOAD_CHUNKS_CAPABILITY),
                         SeqCst,
                     );
                     this.supports_model_chunks.store(

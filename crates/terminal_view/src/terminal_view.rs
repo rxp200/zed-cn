@@ -1858,6 +1858,19 @@ fn subscribe_for_terminal_events(
                     cx.emit(ItemEvent::UpdateTab);
                     cx.emit(ItemEvent::UpdateBreadcrumbs);
                 }
+                Event::WorkingDirectoryDetected(path) => {
+                    // Only the terminal the user is actively typing in moves
+                    // the project panel; background terminals reporting their
+                    // cwd (e.g. after a long-running command) must not.
+                    if terminal_view.focus_handle.is_focused(window)
+                        && let Some(project) = terminal_view.project.upgrade()
+                    {
+                        let path = path.clone();
+                        project.update(cx, |_, cx| {
+                            cx.emit(project::Event::RevealPathInProjectPanel(path));
+                        });
+                    }
+                }
                 Event::CloseTerminal => cx.emit(ItemEvent::CloseItem),
                 Event::SelectionsChanged => {
                     window.invalidate_character_coordinates();

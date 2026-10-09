@@ -211,6 +211,10 @@ pub struct WorktreeStore {
     retain_worktrees: bool,
     worktrees: Vec<WorktreeHandle>,
     scanning_enabled: bool,
+    /// Overrides the scan depth sent to the remote host for subsequently
+    /// created worktrees. Terminal workspaces use this to avoid indexing the
+    /// entire remote home directory eagerly.
+    scan_depth_override: Option<u32>,
     #[allow(clippy::type_complexity)]
     loading_worktrees:
         HashMap<Arc<SanitizedPath>, Shared<Task<Result<Entity<Worktree>, Arc<anyhow::Error>>>>>,
@@ -236,6 +240,10 @@ impl EventEmitter<WorktreeStoreEvent> for WorktreeStore {}
 impl WorktreeStore {
     pub fn init(client: &AnyProtoClient) {
         client.add_entity_request_handler(Self::handle_create_project_entry);
+        client.add_entity_request_handler(Self::handle_begin_entry_upload);
+        client.add_entity_request_handler(Self::handle_write_entry_chunk);
+        client.add_entity_request_handler(Self::handle_finish_entry_upload);
+        client.add_entity_request_handler(Self::handle_abort_entry_upload);
         client.add_entity_request_handler(Self::handle_copy_project_entry);
         client.add_entity_request_handler(Self::handle_delete_project_entry);
         client.add_entity_request_handler(Self::handle_trash_project_entry);
@@ -260,6 +268,7 @@ impl WorktreeStore {
             downstream_client: None,
             worktrees: Vec::new(),
             scanning_enabled: true,
+            scan_depth_override: None,
             retain_worktrees,
             initial_scan_complete: watch::channel_with(true),
             state: WorktreeStoreState::Local { fs },
@@ -280,6 +289,7 @@ impl WorktreeStore {
             downstream_client: None,
             worktrees: Vec::new(),
             scanning_enabled: true,
+            scan_depth_override: None,
             retain_worktrees,
             initial_scan_complete: watch::channel_with(true),
             state: WorktreeStoreState::Remote {
@@ -288,6 +298,12 @@ impl WorktreeStore {
                 path_style,
             },
         }
+    }
+
+    /// Overrides the scan depth sent to the remote host for subsequently
+    /// created worktrees. Must be set before the worktree is created.
+    pub fn set_scan_depth_override(&mut self, depth: Option<u32>) {
+        self.scan_depth_override = depth;
     }
 
     pub fn next_worktree_id(&self) -> impl Future<Output = Result<WorktreeId>> + use<> {
@@ -870,6 +886,7 @@ impl WorktreeStore {
         if abs_path.is_empty() {
             abs_path = "~/".to_string();
         }
+        let scan_depth_override = self.scan_depth_override;
 
         cx.spawn(async move |this, cx| {
             let this = this.upgrade().context("Dropped worktree store")?;
@@ -880,6 +897,7 @@ impl WorktreeStore {
                     project_id: REMOTE_SERVER_PROJECT_ID,
                     path: path.to_proto(),
                     visible,
+                    file_scan_depth: scan_depth_override,
                 })
                 .await?;
 
@@ -1298,6 +1316,58 @@ impl WorktreeStore {
                 .context("worktree not found")
         })?;
         Worktree::handle_create_entry(worktree, envelope.payload, cx).await
+    }
+
+    pub async fn handle_begin_entry_upload(
+        this: Entity<Self>,
+        envelope: TypedEnvelope<proto::BeginProjectEntryUpload>,
+        mut cx: AsyncApp,
+    ) -> Result<proto::BeginProjectEntryUploadResponse> {
+        let worktree = this.update(&mut cx, |this, cx| {
+            let worktree_id = WorktreeId::from_proto(envelope.payload.worktree_id);
+            this.worktree_for_id(worktree_id, cx)
+                .context("worktree not found")
+        })?;
+        Worktree::handle_begin_entry_upload(worktree, envelope.payload, cx).await
+    }
+
+    pub async fn handle_write_entry_chunk(
+        this: Entity<Self>,
+        envelope: TypedEnvelope<proto::WriteProjectEntryChunk>,
+        mut cx: AsyncApp,
+    ) -> Result<proto::WriteProjectEntryChunkResponse> {
+        let worktree = this.update(&mut cx, |this, cx| {
+            let worktree_id = WorktreeId::from_proto(envelope.payload.worktree_id);
+            this.worktree_for_id(worktree_id, cx)
+                .context("worktree not found")
+        })?;
+        Worktree::handle_write_entry_chunk(worktree, envelope.payload, cx).await
+    }
+
+    pub async fn handle_finish_entry_upload(
+        this: Entity<Self>,
+        envelope: TypedEnvelope<proto::FinishProjectEntryUpload>,
+        mut cx: AsyncApp,
+    ) -> Result<proto::FinishProjectEntryUploadResponse> {
+        let worktree = this.update(&mut cx, |this, cx| {
+            let worktree_id = WorktreeId::from_proto(envelope.payload.worktree_id);
+            this.worktree_for_id(worktree_id, cx)
+                .context("worktree not found")
+        })?;
+        Worktree::handle_finish_entry_upload(worktree, envelope.payload, cx).await
+    }
+
+    pub async fn handle_abort_entry_upload(
+        this: Entity<Self>,
+        envelope: TypedEnvelope<proto::AbortProjectEntryUpload>,
+        mut cx: AsyncApp,
+    ) -> Result<proto::AbortProjectEntryUploadResponse> {
+        let worktree = this.update(&mut cx, |this, cx| {
+            let worktree_id = WorktreeId::from_proto(envelope.payload.worktree_id);
+            this.worktree_for_id(worktree_id, cx)
+                .context("worktree not found")
+        })?;
+        Worktree::handle_abort_entry_upload(worktree, envelope.payload, cx).await
     }
 
     pub async fn handle_copy_project_entry(

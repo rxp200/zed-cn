@@ -1064,6 +1064,9 @@ enum RemoteMatch {
     RemoteServerSource {
         server: usize,
     },
+    RemoteTerminal {
+        server: usize,
+    },
 }
 
 impl RemoteMatch {
@@ -1218,6 +1221,9 @@ impl RemoteServerPickerDelegate {
                             });
                             if matches!(connection, Connection::Ssh(_)) {
                                 matches.push(RemoteMatch::RemoteServerSource {
+                                    server: server_index,
+                                });
+                                matches.push(RemoteMatch::RemoteTerminal {
                                     server: server_index,
                                 });
                             }
@@ -1687,6 +1693,27 @@ impl PickerDelegate for RemoteServerPickerDelegate {
                     }
                 }
             }
+            RemoteMatch::RemoteTerminal { server } => {
+                let Some(RemoteEntry::Project {
+                    connection: Connection::Ssh(connection),
+                    index,
+                    ..
+                }) = self.state.servers.get(*server)
+                else {
+                    return;
+                };
+                let ServerIndex::Ssh(ssh_index) = *index else {
+                    return;
+                };
+                let connection = connection.clone();
+                remote_server_projects
+                    .update(cx, |this, cx| {
+                        this.open_remote_terminal_workspace(
+                            ssh_index, connection, secondary, window, cx,
+                        );
+                    })
+                    .log_err();
+            }
             RemoteMatch::RemoteServerSource { server } => {
                 let Some(RemoteEntry::Project {
                     connection: Connection::Ssh(connection),
@@ -1799,6 +1826,12 @@ impl PickerDelegate for RemoteServerPickerDelegate {
             RemoteMatch::OpenFolder { .. } => {
                 Some(self.render_action_item(ix, IconName::Plus, "Open Folder", selected))
             }
+            RemoteMatch::RemoteTerminal { .. } => Some(self.render_action_item(
+                ix,
+                IconName::Terminal,
+                i18n::t!("136cbc80612aee9b"),
+                selected,
+            )),
             RemoteMatch::RemoteServerSource { server } => {
                 let Some(RemoteEntry::Project {
                     connection: Connection::Ssh(connection),
@@ -2638,6 +2671,55 @@ impl RemoteServerProjects {
                 cx.prompt(
                     gpui::PromptLevel::Critical,
                     "Failed to connect",
+                    Some(&e.to_string()),
+                    &[i18n::t!("fac2a67ad87807c4")],
+                )
+                .await
+                .ok();
+            }
+        })
+        .detach();
+    }
+
+    fn open_remote_terminal_workspace(
+        &mut self,
+        _index: SshServerIndex,
+        connection: SshConnection,
+        secondary_confirm: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(app_state) = self
+            .workspace
+            .read_with(cx, |workspace, _| workspace.app_state().clone())
+            .log_err()
+        else {
+            return;
+        };
+        let create_new_window = self.create_new_window;
+        cx.emit(DismissEvent);
+
+        let replace_window = match (create_new_window, secondary_confirm) {
+            (true, false) | (false, true) => None,
+            (true, true) | (false, false) => window.window_handle().downcast::<MultiWorkspace>(),
+        };
+
+        cx.spawn_in(window, async move |_, cx| {
+            let result = crate::remote_terminal_workspace::open_remote_terminal_workspace(
+                RemoteConnectionOptions::Ssh(connection.clone().into()),
+                app_state,
+                OpenOptions {
+                    requesting_window: replace_window,
+                    ..OpenOptions::default()
+                },
+                cx,
+            )
+            .await;
+            if let Err(e) = result {
+                log::error!("Failed to open remote terminal workspace: {e:#}");
+                cx.prompt(
+                    gpui::PromptLevel::Critical,
+                    i18n::t!("3e282fc5e171f21e"),
                     Some(&e.to_string()),
                     &[i18n::t!("fac2a67ad87807c4")],
                 )

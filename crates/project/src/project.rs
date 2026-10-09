@@ -543,6 +543,10 @@ pub enum Event {
         server_id: Option<LanguageServerId>,
     },
     RevealInProjectPanel(ProjectEntryId),
+    /// Reveal an absolute host path in the project panel, loading entries on
+    /// demand when they are not scanned yet (e.g. in shallowly scanned
+    /// terminal workspaces).
+    RevealPathInProjectPanel(PathBuf),
     SnippetEdit(BufferId, Vec<(lsp::Range, Snippet)>),
     ExpandedAllForEntry(WorktreeId, ProjectEntryId),
     EntryRenamed {
@@ -2370,6 +2374,14 @@ impl Project {
     }
 
     #[inline]
+    /// Sets the scan-depth override applied to subsequently created remote
+    /// worktrees. Terminal workspaces use this to avoid indexing the entire
+    /// remote home directory eagerly.
+    pub fn set_scan_depth_override(&self, depth: Option<u32>, cx: &mut App) {
+        self.worktree_store
+            .update(cx, |store, _| store.set_scan_depth_override(depth));
+    }
+
     pub fn worktree_store(&self) -> Entity<WorktreeStore> {
         self.worktree_store.clone()
     }
@@ -2419,6 +2431,18 @@ impl Project {
         self.remote_client
             .as_ref()
             .is_some_and(|client| client.read(cx).supports_temporary_files())
+    }
+
+    /// Whether files dropped into this project can be uploaded in chunks. This
+    /// changes wire semantics, so it requires a server that advertised the
+    /// upload capability as well as an explicit Zed CN SSH connection, never
+    /// the application version alone.
+    pub fn supports_remote_chunked_uploads(&self, cx: &App) -> bool {
+        self.remote_client.as_ref().is_some_and(|client| {
+            let client = client.read(cx);
+            client.supports_upload_chunks()
+                && document_server_source_allowed(&client.connection_options())
+        })
     }
 
     pub fn create_temporary_file(

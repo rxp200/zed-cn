@@ -874,6 +874,17 @@ impl HeadlessProject {
             })
             .await?;
 
+        // Terminal workspaces ask for a shallow scan so that opening a large
+        // root (e.g. the user's home directory) does not index it eagerly.
+        // Older clients omit the field and keep the default depth.
+        if let Some(depth) = message.payload.file_scan_depth {
+            this.update(&mut cx, |_, cx| {
+                worktree.update(cx, |worktree, cx| {
+                    worktree.set_scan_depth_override(Some(depth), cx);
+                });
+            });
+        }
+
         let response = this.read_with(&cx, |_, cx| {
             let worktree = worktree.read(cx);
             proto::AddWorktreeResponse {

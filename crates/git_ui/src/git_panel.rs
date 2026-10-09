@@ -584,6 +584,9 @@ struct SerializedGitPanel {
     history_section_collapsed: bool,
     #[serde(default)]
     history_height_fraction: Option<f32>,
+    /// Hiding the inline graph is opt-in, so an absent field keeps it visible.
+    #[serde(default)]
+    history_graph_hidden: bool,
     /// `None` means the user never toggled it, so the setting decides.
     #[serde(default)]
     commit_editor_collapsed: Option<bool>,
@@ -1222,6 +1225,7 @@ pub struct GitPanel {
     history_log_view: HistoryLogView,
     history_branches: Rc<[Branch]>,
     history_graph: Option<GraphData>,
+    history_graph_hidden: bool,
     _commit_message_buffer_subscription: Option<Subscription>,
     _repo_subscriptions: Vec<Subscription>,
     _settings_subscription: Subscription,
@@ -1382,6 +1386,9 @@ impl GitPanel {
             .and_then(|panel| panel.history_height_fraction)
             .unwrap_or(DEFAULT_HISTORY_HEIGHT_FRACTION)
             .clamp(MIN_HISTORY_HEIGHT_FRACTION, MAX_HISTORY_HEIGHT_FRACTION);
+        let history_graph_hidden = serialized_panel
+            .as_ref()
+            .is_some_and(|panel| panel.history_graph_hidden);
         let commit_editor_was_serialized = serialized_panel
             .as_ref()
             .is_some_and(|panel| panel.commit_editor_collapsed.is_some());
@@ -1620,6 +1627,7 @@ impl GitPanel {
                 history_log_view: HistoryLogView::CurrentBranch,
                 history_branches: Rc::from([]),
                 history_graph: None,
+                history_graph_hidden,
                 _commit_message_buffer_subscription: None,
                 _repo_subscriptions: Vec::new(),
                 _settings_subscription,
@@ -2056,6 +2064,7 @@ impl GitPanel {
         let changes_section_collapsed = self.changes_section_collapsed;
         let history_section_collapsed = self.history_section_collapsed;
         let history_height_fraction = Some(self.history_height_fraction);
+        let history_graph_hidden = self.history_graph_hidden;
         let kvp = KeyValueStore::global(cx);
 
         self.pending_serialization = cx.spawn(async move |git_panel, cx| {
@@ -2085,6 +2094,7 @@ impl GitPanel {
                             changes_section_collapsed,
                             history_section_collapsed,
                             history_height_fraction,
+                            history_graph_hidden,
                             commit_editor_collapsed,
                         })?,
                     )
@@ -7524,6 +7534,11 @@ impl GitPanel {
             .active_repository
             .as_ref()
             .and_then(|repo| repo.read(cx).branch.as_ref().map(|b| b.name().to_owned()));
+        let (graph_toggle_icon, graph_toggle_tooltip) = if self.history_graph_hidden {
+            (IconName::EyeOff, i18n::t!("6d8e57b4b0276717"))
+        } else {
+            (IconName::Eye, i18n::t!("ae4f33a0a02fc9a0"))
+        };
 
         h_flex()
             .min_h(Tab::container_height(cx))
@@ -7640,6 +7655,12 @@ impl GitPanel {
                         Tooltip::text(i18n::t!("a8d847f8c42eff4c")),
                     )
                     .anchor(Anchor::TopRight),
+            )
+            .child(
+                IconButton::new("history-section-graph-toggle", graph_toggle_icon)
+                    .icon_size(IconSize::Small)
+                    .tooltip(Tooltip::text(graph_toggle_tooltip))
+                    .on_click(cx.listener(|this, _, _, cx| this.toggle_history_graph(cx))),
             )
             .child(
                 IconButton::new("history-section-graph-button", IconName::GitGraph)
@@ -7850,6 +7871,14 @@ impl GitPanel {
         cx.notify();
     }
 
+    /// Shows or hides the inline commit-history graph. Hidden graphs free the
+    /// horizontal space they would otherwise take from the commit list.
+    fn toggle_history_graph(&mut self, cx: &mut Context<Self>) {
+        self.history_graph_hidden = !self.history_graph_hidden;
+        self.serialize(cx);
+        cx.notify();
+    }
+
     fn fetch_commit_history_entries(&mut self, cx: &mut Context<Self>) {
         let Some(active_repository) = self.active_repository.clone() else {
             return;
@@ -7972,6 +8001,7 @@ impl GitPanel {
         let graph_canvas_scroll_handle = commit_history_scroll_handle.clone();
         let graph_canvas = div()
             .id("history-graph-canvas")
+            .debug_selector(|| "history-graph-canvas".into())
             .h_full()
             .w(graph_width)
             .flex_none()
@@ -8036,7 +8066,7 @@ impl GitPanel {
                 .flex_1()
                 .size_full()
                 .overflow_hidden()
-                .child(graph_canvas)
+                .when(!self.history_graph_hidden, |this| this.child(graph_canvas))
                 .child(
                     v_flex()
                         .flex_1()
@@ -11512,6 +11542,116 @@ mod tests {
             assert_eq!(graph.commits[0].data.sha, sha_c);
             assert_eq!(graph.commits[0].lane, 0);
         });
+    }
+
+    #[gpui::test]
+    async fn test_history_graph_toggle_hides_inline_graph(cx: &mut TestAppContext) {
+        init_test(cx);
+
+        let fs = FakeFs::new(cx.background_executor.clone());
+        fs.insert_tree("/root", json!({ "project": { ".git": {} } }))
+            .await;
+
+        let dot_git = Path::new(path!("/root/project/.git"));
+        let sha: Oid = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".parse().unwrap();
+        fs.set_branch_name(dot_git, Some("main"));
+        fs.with_git_state(dot_git, false, |state| {
+            state.graph_commits = vec![Arc::new(InitialGraphCommitData {
+                sha,
+                parents: SmallVec::new(),
+                ref_names: Vec::new(),
+            })];
+        })
+        .unwrap();
+
+        let project = Project::test(fs, [Path::new(path!("/root/project"))], cx).await;
+        let window_handle =
+            cx.add_window(|window, cx| MultiWorkspace::test_new(project.clone(), window, cx));
+        let workspace = window_handle
+            .read_with(cx, |mw, _| mw.workspace().clone())
+            .unwrap();
+        let cx = &mut VisualTestContext::from_window(window_handle.into(), cx);
+        cx.executor().run_until_parked();
+
+        let panel = workspace.update_in(cx, GitPanel::new);
+        panel.update_in(cx, |panel, window, cx| {
+            panel.activate_history_tab(&ActivateHistoryTab, window, cx);
+        });
+        wait_for_commit_history_to_settle(&panel, cx).await;
+        workspace.update_in(cx, |workspace, window, cx| {
+            workspace.add_panel(panel.clone(), window, cx);
+            workspace.open_panel::<GitPanel>(window, cx);
+        });
+        cx.run_until_parked();
+
+        let draw = |cx: &mut VisualTestContext| {
+            cx.update(|window, cx| {
+                window.refresh();
+                window.draw(cx).clear(cx);
+            });
+        };
+
+        draw(cx);
+        panel.read_with(cx, |panel, _| assert!(!panel.history_graph_hidden));
+        assert!(
+            cx.debug_bounds("history-graph-canvas").is_some(),
+            "the inline graph renders by default"
+        );
+
+        panel.update_in(cx, |panel, _, cx| panel.toggle_history_graph(cx));
+        draw(cx);
+        panel.read_with(cx, |panel, _| assert!(panel.history_graph_hidden));
+        assert!(
+            cx.debug_bounds("history-graph-canvas").is_none(),
+            "toggling the graph off removes its canvas from the layout"
+        );
+
+        panel.update_in(cx, |panel, _, cx| panel.toggle_history_graph(cx));
+        draw(cx);
+        panel.read_with(cx, |panel, _| assert!(!panel.history_graph_hidden));
+        assert!(cx.debug_bounds("history-graph-canvas").is_some());
+    }
+
+    #[gpui::test]
+    async fn test_history_graph_hidden_is_restored(cx: &mut TestAppContext) {
+        init_test(cx);
+
+        let fs = FakeFs::new(cx.background_executor.clone());
+        fs.insert_tree("/root", json!({ "project": { ".git": {} } }))
+            .await;
+        fs.set_branch_name(Path::new(path!("/root/project/.git")), Some("main"));
+
+        let project = Project::test(fs, [Path::new(path!("/root/project"))], cx).await;
+        let window_handle =
+            cx.add_window(|window, cx| MultiWorkspace::test_new(project.clone(), window, cx));
+        let workspace = window_handle
+            .read_with(cx, |mw, _| mw.workspace().clone())
+            .unwrap();
+        let cx = &mut VisualTestContext::from_window(window_handle.into(), cx);
+
+        let panel = workspace.update_in(cx, |workspace, window, cx| {
+            GitPanel::new_with_serialized_panel(
+                workspace,
+                Some(SerializedGitPanel {
+                    history_graph_hidden: true,
+                    ..Default::default()
+                }),
+                window,
+                cx,
+            )
+        });
+        panel.read_with(cx, |panel, _| assert!(panel.history_graph_hidden));
+
+        // Panels serialized before the toggle existed keep the graph visible.
+        let panel = workspace.update_in(cx, |workspace, window, cx| {
+            GitPanel::new_with_serialized_panel(
+                workspace,
+                Some(SerializedGitPanel::default()),
+                window,
+                cx,
+            )
+        });
+        panel.read_with(cx, |panel, _| assert!(!panel.history_graph_hidden));
     }
 
     #[gpui::test]

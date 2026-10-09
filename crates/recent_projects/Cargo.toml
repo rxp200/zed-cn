@@ -46,6 +46,7 @@ remote_connection.workspace = true
 semver.workspace = true
 serde_json.workspace = true
 settings.workspace = true
+terminal_view.workspace = true
 telemetry.workspace = true
 ui.workspace = true
 util.workspace = true
