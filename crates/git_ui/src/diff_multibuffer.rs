@@ -1,6 +1,9 @@
 use crate::{
     conflict_view,
-    diff_explanations::{DiffExplanationController, DiffFileInput, DiffHunkInput},
+    diff_explanations::{
+        DiffExplanationController, DiffExplanationMode, DiffExplanationRefresh, DiffFileInput,
+        DiffHunkInput, render_explanation_controls,
+    },
     git_panel::{GitPanel, GitStatusEntry},
     git_panel_settings::GitPanelSettings,
 };
@@ -159,6 +162,7 @@ impl DiffMultibuffer {
         .detach();
 
         let explanation_controller = cx.new(|_| DiffExplanationController::default());
+        let explanation_subscription = cx.observe(&explanation_controller, |_, _, cx| cx.notify());
         let task = window.spawn(cx, {
             let this = cx.weak_entity();
             async |cx| Self::refresh(this, cx).await
@@ -178,7 +182,10 @@ impl DiffMultibuffer {
             _task: task,
             _subscription: Subscription::join(
                 branch_diff_subscription,
-                Subscription::join(editor_subscription, review_comment_subscription),
+                Subscription::join(
+                    editor_subscription,
+                    Subscription::join(review_comment_subscription, explanation_subscription),
+                ),
             ),
         }
     }
@@ -733,14 +740,14 @@ impl DiffMultibuffer {
                 });
             }
             this.pending_scroll.take();
-            this.schedule_explanations(cx);
+            this.schedule_explanations(DiffExplanationMode::Sync, cx);
             cx.notify();
         })?;
 
         Ok(())
     }
 
-    fn schedule_explanations(&mut self, cx: &mut Context<Self>) {
+    fn schedule_explanations(&mut self, mode: DiffExplanationMode, cx: &mut Context<Self>) {
         let snapshot = self.multibuffer.read(cx).snapshot(cx);
         let mut files = Vec::new();
         for (repo_path, subscription) in &self.buffer_subscriptions {
@@ -807,25 +814,20 @@ impl DiffMultibuffer {
         let editor = self.editor.read(cx).rhs_editor().clone();
         let project = editor.read(cx).project().cloned();
         if let Some(project) = project {
-            DiffExplanationController::schedule(
+            let refresh: DiffExplanationRefresh = Arc::new({
+                let view = cx.entity().downgrade();
+                move |mode, cx| {
+                    view.update(cx, |view, cx| view.schedule_explanations(mode, cx))
+                        .log_err();
+                }
+            });
+            DiffExplanationController::update_from_view(
                 &self.explanation_controller,
                 editor,
                 project,
                 files,
-                Arc::new({
-                    let view = cx.entity().downgrade();
-                    move |cx| {
-                        view.update(cx, |view, cx| {
-                            if view
-                                .explanation_controller
-                                .update(cx, |controller, _| controller.prepare_refresh())
-                            {
-                                view.schedule_explanations(cx);
-                            }
-                        })
-                        .log_err();
-                    }
-                }),
+                mode,
+                refresh,
                 cx,
             );
         }
@@ -1001,15 +1003,20 @@ impl Render for DiffMultibuffer {
         let is_empty = self.multibuffer.read(cx).is_empty();
         let is_loading = self.branch_diff.read(cx).is_tree_base_loading() || !self._task.is_ready();
         let empty_label = self.empty_label.clone();
+        let explanation_controls = if is_empty {
+            None
+        } else {
+            render_explanation_controls(&self.explanation_controller, cx)
+        };
 
         div()
             .track_focus(&self.focus_handle)
             .key_context(if is_empty { "EmptyPane" } else { "GitDiff" })
             .bg(cx.theme().colors().editor_background)
             .flex()
-            .items_center()
-            .justify_center()
             .size_full()
+            .when(is_empty, |el| el.items_center().justify_center())
+            .when(!is_empty, |el| el.flex_col())
             .when(is_empty && is_loading, |el| {
                 let rems = TextSize::Large.rems(cx);
                 el.child(
@@ -1063,7 +1070,14 @@ impl Render for DiffMultibuffer {
                         ),
                 )
             })
-            .when(!is_empty, |el| el.child(self.editor.clone()))
+            .when(!is_empty, |el| {
+                el.child(
+                    v_flex()
+                        .size_full()
+                        .when_some(explanation_controls, |el, controls| el.child(controls))
+                        .child(div().flex_1().min_h_0().child(self.editor.clone())),
+                )
+            })
     }
 }
 

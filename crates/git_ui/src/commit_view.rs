@@ -15,8 +15,8 @@ use git::{
 use gpui::{
     AnyElement, App, AppContext as _, AsyncWindowContext, ClipboardItem, Context, Entity,
     EventEmitter, FocusHandle, Focusable, InteractiveElement, IntoElement, ParentElement,
-    PromptLevel, Render, ScrollHandle, StatefulInteractiveElement as _, Styled, Task, WeakEntity,
-    Window, actions,
+    PromptLevel, Render, ScrollHandle, StatefulInteractiveElement as _, Styled, Subscription, Task,
+    WeakEntity, Window, actions,
 };
 use language::{
     Buffer, Capability, DiskState, File, LanguageRegistry, LineEnding, OffsetRangeExt as _,
@@ -88,6 +88,7 @@ pub struct CommitView {
     is_shallow_boundary: bool,
     file_filter: Option<RepoPath>,
     explanation_controller: Entity<crate::diff_explanations::DiffExplanationController>,
+    _explanation_subscription: Subscription,
     _load_diff_task: Task<Result<()>>,
 }
 
@@ -358,6 +359,7 @@ impl CommitView {
         let commit_sha = Arc::<str>::from(commit.sha.as_ref());
         let explanation_controller =
             cx.new(|_| crate::diff_explanations::DiffExplanationController::default());
+        let explanation_subscription = cx.observe(&explanation_controller, |_, _, cx| cx.notify());
 
         let repository_clone = repository.clone();
         let project_clone = project.clone();
@@ -514,7 +516,7 @@ impl CommitView {
                         });
                     });
                 }
-                this.schedule_explanations(cx);
+                this.schedule_explanations(crate::diff_explanations::DiffExplanationMode::Sync, cx);
             })?;
 
             anyhow::Ok(())
@@ -550,11 +552,16 @@ impl CommitView {
             is_shallow_boundary,
             file_filter,
             explanation_controller,
+            _explanation_subscription: explanation_subscription,
             _load_diff_task: load_diff_task,
         }
     }
 
-    fn schedule_explanations(&mut self, cx: &mut Context<Self>) {
+    fn schedule_explanations(
+        &mut self,
+        mode: crate::diff_explanations::DiffExplanationMode,
+        cx: &mut Context<Self>,
+    ) {
         let snapshot = self.multibuffer.read(cx).snapshot(cx);
         let mut files = Vec::new();
         for (buffer_snapshot, _) in snapshot.buffers_with_paths() {
@@ -609,25 +616,20 @@ impl CommitView {
             });
         }
         files.sort_by(|left, right| left.path.cmp(&right.path));
-        crate::diff_explanations::DiffExplanationController::schedule(
+        let refresh: crate::diff_explanations::DiffExplanationRefresh = Arc::new({
+            let view = cx.entity().downgrade();
+            move |mode, cx| {
+                view.update(cx, |view, cx| view.schedule_explanations(mode, cx))
+                    .log_err();
+            }
+        });
+        crate::diff_explanations::DiffExplanationController::update_from_view(
             &self.explanation_controller,
             self.editor.read(cx).rhs_editor().clone(),
             self.project.clone(),
             files,
-            Arc::new({
-                let view = cx.entity().downgrade();
-                move |cx| {
-                    view.update(cx, |view, cx| {
-                        if view
-                            .explanation_controller
-                            .update(cx, |controller, _| controller.prepare_refresh())
-                        {
-                            view.schedule_explanations(cx);
-                        }
-                    })
-                    .log_err();
-                }
-            }),
+            mode,
+            refresh,
             cx,
         );
     }
@@ -1461,6 +1463,10 @@ impl Item for CommitView {
                     cx,
                 )
             });
+            let explanation_controller =
+                cx.new(|_| crate::diff_explanations::DiffExplanationController::default());
+            let explanation_subscription =
+                cx.observe(&explanation_controller, |_, _, cx| cx.notify());
             Self {
                 editor,
                 message,
@@ -1475,8 +1481,8 @@ impl Item for CommitView {
                 remote: self.remote.clone(),
                 is_shallow_boundary: self.is_shallow_boundary,
                 file_filter: self.file_filter.clone(),
-                explanation_controller: cx
-                    .new(|_| crate::diff_explanations::DiffExplanationController::default()),
+                explanation_controller,
+                _explanation_subscription: explanation_subscription,
                 _load_diff_task: Task::ready(Ok(())),
             }
         })))
@@ -1494,6 +1500,13 @@ impl Render for CommitView {
             .size_full()
             .bg(cx.theme().colors().editor_background)
             .child(self.render_header(window, cx))
+            .when_some(
+                crate::diff_explanations::render_explanation_controls(
+                    &self.explanation_controller,
+                    cx,
+                ),
+                |this, controls| this.child(controls),
+            )
             // The advertised editor focus must remain in the tree even before diff loading completes.
             .when(editor_is_empty, |this| {
                 this.track_focus(&self.editor.focus_handle(cx))

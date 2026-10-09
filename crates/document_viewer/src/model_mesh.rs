@@ -66,6 +66,18 @@ impl ModelMesh {
         Ok(mesh)
     }
 
+    /// Bounding box center and longest box extent, the frame model coordinates are
+    /// normalized into before rendering.
+    pub fn frame(&self) -> (Vertex, f64) {
+        let center: Vertex =
+            std::array::from_fn(|axis| self.minimum[axis] * 0.5 + self.maximum[axis] * 0.5);
+        let radius = sub(self.maximum, self.minimum)
+            .into_iter()
+            .fold(0.0f64, f64::max)
+            .max(1e-20);
+        (center, radius)
+    }
+
     pub fn inspect(&self, cancel: &std::sync::atomic::AtomicBool) -> Option<Topology> {
         let mut vertices = HashMap::<[u64; 3], u32>::new();
         let mut edges = HashMap::<(u32, u32), (u32, i32)>::new();

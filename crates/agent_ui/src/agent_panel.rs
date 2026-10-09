@@ -2263,7 +2263,11 @@ impl AgentPanel {
                 | TerminalEvent::OutputReplaced
                 | TerminalEvent::SelectionsChanged
                 | TerminalEvent::NewNavigationTarget(_)
-                | TerminalEvent::Open(_) => {}
+                | TerminalEvent::Open(_)
+                // The agent terminal's persisted working directory stays the
+                // spawn directory; only `TerminalView` follows a shell-observed
+                // remote cwd, so persisting that path here would break restore.
+                | TerminalEvent::WorkingDirectoryDetected(_) => {}
             },
         );
 
@@ -7019,6 +7023,25 @@ impl AgentPanel {
             cx.emit(TerminalEvent::CloseTerminal);
         });
     }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn emit_test_terminal_working_directory_detected(
+        &mut self,
+        terminal_id: TerminalId,
+        working_directory: PathBuf,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(terminal_entity) = self
+            .terminals
+            .get(&terminal_id)
+            .map(|terminal| terminal.view.read(cx).terminal().clone())
+        else {
+            return;
+        };
+        terminal_entity.update(cx, |_terminal, cx| {
+            cx.emit(TerminalEvent::WorkingDirectoryDetected(working_directory));
+        });
+    }
 }
 
 #[cfg(test)]
@@ -7692,6 +7715,38 @@ mod tests {
                     .into_iter()
                     .any(|terminal| terminal.id == terminal_id),
                 "active terminal metadata should be restored into the loaded panel"
+            );
+        });
+    }
+
+    #[gpui::test]
+    async fn test_working_directory_detected_event_keeps_agent_terminal_spawn_directory(
+        cx: &mut TestAppContext,
+    ) {
+        let (panel, mut cx) = setup_panel(cx).await;
+        let terminal_id = panel
+            .update_in(&mut cx, |panel, window, cx| {
+                panel.insert_test_terminal("Dev Server", true, window, cx)
+            })
+            .expect("test terminal should be inserted");
+
+        panel.update(&mut cx, |panel, cx| {
+            panel.emit_test_terminal_working_directory_detected(
+                terminal_id,
+                PathBuf::from("/remote/workspace"),
+                cx,
+            );
+        });
+        cx.run_until_parked();
+
+        panel.read_with(&cx, |panel, _cx| {
+            let terminal = panel
+                .terminals
+                .get(&terminal_id)
+                .expect("terminal should still exist");
+            assert_eq!(
+                terminal.working_directory, None,
+                "a detected remote cwd must not overwrite the agent terminal's spawn directory"
             );
         });
     }

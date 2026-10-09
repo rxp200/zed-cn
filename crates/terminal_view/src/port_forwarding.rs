@@ -21,8 +21,9 @@ use project::{
 use regex::Regex;
 use remote::{RemoteClient, RemoteConnectionOptions};
 use ui::{
-    Button, ButtonStyle, Color, Headline, HeadlineSize, Icon, IconButton, IconName, IconSize,
-    Label, LabelSize, WithScrollbar, prelude::*,
+    Button, ButtonStyle, Callout, Color, Headline, HeadlineSize, Icon, IconButton, IconName,
+    IconSize, Indicator, Label, LabelSize, Severity, TintColor, ToggleButtonGroup,
+    ToggleButtonGroupStyle, ToggleButtonWithIcon, WithScrollbar, prelude::*,
 };
 use util::{
     ResultExt as _,
@@ -597,18 +598,15 @@ impl PortForwardManager {
                                 "端口归属校验失败：{}",
                                 String::from_utf8_lossy(&output.stderr)
                             );
-                            this.detection_error = Some(
-                                "自动检测失败：请确认远端为 Linux 且已安装 python3，或手动添加端口"
-                                    .into(),
-                            );
+                            this.detection_error = Some(i18n::t!("a5284be7c155b1e4").to_string());
                         }
                         Err(error) => {
                             log::warn!("端口归属校验失败：{error}");
-                            this.detection_error = Some("自动检测连接失败，请手动添加端口".into());
+                            this.detection_error = Some(i18n::t!("2498c6da445bd724").to_string());
                         }
                     }
                 } else {
-                    this.detection_error = Some("自动检测超时，请手动添加端口".into());
+                    this.detection_error = Some(i18n::t!("641fb6fb58d7249d").to_string());
                 }
                 cx.notify();
                 if !this.pending_ports.is_empty() {
@@ -998,6 +996,11 @@ pub struct PortForwardModal {
     scroll_handle: gpui::ScrollHandle,
 }
 
+/// A port is only forwarded when the field holds a non-zero `u16`.
+fn is_valid_port_input(text: &str) -> bool {
+    text.trim().parse::<u16>().is_ok_and(|port| port != 0)
+}
+
 impl PortForwardModal {
     pub fn new(
         manager: Entity<PortForwardManager>,
@@ -1011,6 +1014,11 @@ impl PortForwardModal {
             editor
         });
         cx.observe(&manager, |_, _, cx| cx.notify()).detach();
+        cx.observe(&editor, |this, _, cx| {
+            this.error = None;
+            cx.notify();
+        })
+        .detach();
         Self {
             manager,
             project,
@@ -1023,13 +1031,16 @@ impl PortForwardModal {
 
     fn confirm(&mut self, _: &Confirm, window: &mut Window, cx: &mut Context<Self>) {
         let text = self.editor.read(cx).text(cx).trim().to_string();
+        let port_input_focus = self.editor.focus_handle(cx);
         let Ok(port) = text.parse::<u16>() else {
             self.error = Some(i18n::t!("2d90356ae0befa45").to_string());
+            window.focus(&port_input_focus, cx);
             cx.notify();
             return;
         };
         if port == 0 {
             self.error = Some(i18n::t!("6a0fd55718effcc1").to_string());
+            window.focus(&port_input_focus, cx);
             cx.notify();
             return;
         }
@@ -1039,6 +1050,7 @@ impl PortForwardModal {
         self.editor
             .update(cx, |editor, cx| editor.set_text("", window, cx));
         self.error = None;
+        window.focus(&port_input_focus, cx);
         cx.notify();
     }
 
@@ -1058,11 +1070,16 @@ impl Focusable for PortForwardModal {
 impl Render for PortForwardModal {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let entries = self.manager.read(cx).snapshots();
+        let is_empty = entries.is_empty();
+        let detection_error = self.manager.read(cx).detection_error.clone();
+        let can_add = is_valid_port_input(&self.editor.read(cx).text(cx));
+        let border_color = cx.theme().colors().border;
+        let row_hover_background = cx.theme().colors().element_hover;
         v_flex()
             .key_context("PortForwardModal")
             .on_action(cx.listener(Self::cancel))
             .on_action(cx.listener(Self::confirm))
-            .elevation_2(cx)
+            .elevation_3(cx)
             .w(rems(42.))
             .max_h(window.viewport_size().height * 0.85)
             .overflow_hidden()
@@ -1087,64 +1104,82 @@ impl Render for PortForwardModal {
                     ),
             )
             .child(
-                h_flex()
-                    .flex_shrink_0()
-                    .gap_1()
-                    .child(
-                        Button::new("remote-to-local-direction", i18n::t!("4e156a6242d654b7"))
-                            .style(if self.direction == ForwardDirection::RemoteToLocal {
-                                ButtonStyle::Filled
-                            } else {
-                                ButtonStyle::Subtle
-                            })
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.direction = ForwardDirection::RemoteToLocal;
-                                cx.notify();
-                            })),
-                    )
-                    .child(
-                        Button::new("local-to-remote-direction", i18n::t!("2fe4aee45e505d4a"))
-                            .style(if self.direction == ForwardDirection::LocalToRemote {
-                                ButtonStyle::Filled
-                            } else {
-                                ButtonStyle::Subtle
-                            })
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.direction = ForwardDirection::LocalToRemote;
-                                cx.notify();
-                            })),
-                    ),
-            )
-            .child(
-                h_flex()
+                v_flex()
                     .flex_shrink_0()
                     .gap_2()
-                    .child(div().flex_1().child(self.editor.clone()))
                     .child(
-                        Button::new("add-port-forward", i18n::t!("7a8a11ead50742a2"))
-                            .style(ButtonStyle::Filled)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.confirm(&Confirm, window, cx)
-                            })),
+                        ToggleButtonGroup::single_row(
+                            "port-forward-direction",
+                            [
+                                ToggleButtonWithIcon::new(
+                                    i18n::t!("4e156a6242d654b7"),
+                                    IconName::ArrowDown,
+                                    cx.listener(|this, _, window, cx| {
+                                        this.direction = ForwardDirection::RemoteToLocal;
+                                        window.focus(&this.editor.focus_handle(cx), cx);
+                                        cx.notify();
+                                    }),
+                                ),
+                                ToggleButtonWithIcon::new(
+                                    i18n::t!("2fe4aee45e505d4a"),
+                                    IconName::ArrowUp,
+                                    cx.listener(|this, _, window, cx| {
+                                        this.direction = ForwardDirection::LocalToRemote;
+                                        window.focus(&this.editor.focus_handle(cx), cx);
+                                        cx.notify();
+                                    }),
+                                ),
+                            ],
+                        )
+                        .style(ToggleButtonGroupStyle::Outlined)
+                        .label_size(LabelSize::Default)
+                        .auto_width()
+                        .selected_index(match self.direction {
+                            ForwardDirection::RemoteToLocal => 0,
+                            ForwardDirection::LocalToRemote => 1,
+                        }),
+                    )
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .child(
+                                h_flex()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .px_2()
+                                    .py_1p5()
+                                    .border_1()
+                                    .border_color(border_color)
+                                    .rounded_md()
+                                    .overflow_hidden()
+                                    .child(self.editor.clone()),
+                            )
+                            .child(
+                                Button::new("add-port-forward", i18n::t!("7a8a11ead50742a2"))
+                                    .style(ButtonStyle::Tinted(TintColor::Accent))
+                                    .start_icon(Icon::new(IconName::Plus).size(IconSize::XSmall))
+                                    .disabled(!can_add)
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.confirm(&Confirm, window, cx)
+                                    })),
+                            ),
                     ),
             )
-            .child(
-                Label::new(i18n::t!("df84f1f5154b8fdb"))
-                    .size(LabelSize::XSmall)
-                    .color(Color::Muted),
-            )
-            .when_some(
-                self.manager.read(cx).detection_error.clone(),
-                |this, error| {
-                    this.child(
-                        Label::new(error)
-                            .size(LabelSize::Small)
-                            .color(Color::Warning),
-                    )
-                },
-            )
+            .when_some(detection_error, |this, error| {
+                this.child(
+                    Callout::new()
+                        .severity(Severity::Warning)
+                        .icon(IconName::Warning)
+                        .description(error),
+                )
+            })
             .when_some(self.error.clone(), |this, error| {
-                this.child(Label::new(error).size(LabelSize::Small).color(Color::Error))
+                this.child(
+                    Callout::new()
+                        .severity(Severity::Error)
+                        .icon(IconName::XCircle)
+                        .description(error),
+                )
             })
             .child(
                 div()
@@ -1165,10 +1200,12 @@ impl Render for PortForwardModal {
                             .local_port
                             .map(|port| port.to_string())
                             .unwrap_or_else(|| i18n::t!("17bf181625e8da75").to_string());
-                        let (address, status_color) = match &entry.status {
-                            ForwardStatus::Starting => {
-                                (i18n::t!("43f3dc12a6077835").to_string(), Color::Muted)
-                            }
+                        let (address, status_color, status_dot_color) = match &entry.status {
+                            ForwardStatus::Starting => (
+                                i18n::t!("43f3dc12a6077835").to_string(),
+                                Color::Muted,
+                                Color::Muted,
+                            ),
                             ForwardStatus::RunningUnconfirmed => (
                                 match direction {
                                     ForwardDirection::RemoteToLocal => {
@@ -1183,94 +1220,109 @@ impl Render for PortForwardModal {
                                     }
                                 },
                                 Color::Muted,
+                                Color::Success,
                             ),
-                            ForwardStatus::Failed(error) => {
-                                (i18n::t!("377e359e55ec05ab", error = error), Color::Error)
-                            }
+                            ForwardStatus::Failed(error) => (
+                                i18n::t!("377e359e55ec05ab", error = error),
+                                Color::Error,
+                                Color::Error,
+                            ),
                         };
                         h_flex()
                             .px_2()
                             .py_1p5()
                             .gap_3()
                             .justify_between()
+                            .rounded_md()
+                            .hover(move |style| style.bg(row_hover_background))
                             .child(
-                                v_flex()
-                                    .gap_0p5()
+                                h_flex()
+                                    .min_w_0()
+                                    .gap_2()
+                                    .child(Indicator::dot().color(status_dot_color))
                                     .child(
-                                        Label::new(match direction {
-                                            ForwardDirection::RemoteToLocal => {
-                                                i18n::t!(
-                                                    "22880116ce7d18fe",
-                                                    remote_port = remote_port
-                                                )
-                                            }
-                                            ForwardDirection::LocalToRemote => {
-                                                i18n::t!(
-                                                    "f2e88cffef1ff16e",
-                                                    local_port = local_port
-                                                )
-                                            }
-                                        })
-                                        .size(LabelSize::Small),
-                                    )
-                                    .when(
-                                        matches!(entry.status, ForwardStatus::RunningUnconfirmed),
-                                        |this| {
-                                            this.child(
-                                                Label::new(i18n::t!("c7f7510832ed11ff"))
-                                                    .size(LabelSize::Small)
-                                                    .color(Color::Muted),
-                                            )
-                                        },
-                                    )
-                                    .child(
-                                        if direction == ForwardDirection::RemoteToLocal
-                                            && entry.local_port.is_some()
-                                            && matches!(
-                                                entry.status,
-                                                ForwardStatus::RunningUnconfirmed
-                                            )
-                                        {
-                                            let address_for_click = address.clone();
-                                            div()
-                                                .id((
-                                                    match direction {
-                                                        ForwardDirection::RemoteToLocal => {
-                                                            "remote-forward-address"
-                                                        }
-                                                        ForwardDirection::LocalToRemote => {
-                                                            "reverse-forward-address"
-                                                        }
-                                                    },
-                                                    u64::from(remote_port),
-                                                ))
-                                                .cursor_pointer()
-                                                .tooltip(ui::Tooltip::text(i18n::t!(
-                                                    "f5b68300857567ee"
-                                                )))
-                                                .child(
-                                                    Label::new(address)
-                                                        .size(LabelSize::Small)
-                                                        .color(status_color),
-                                                )
-                                                .on_click(move |event, _, cx| {
-                                                    if event.modifiers().control {
-                                                        cx.open_url(&address_for_click);
-                                                    } else {
-                                                        cx.write_to_clipboard(
-                                                            ClipboardItem::new_string(
-                                                                address_for_click.clone(),
-                                                            ),
-                                                        );
+                                        v_flex()
+                                            .min_w_0()
+                                            .gap_0p5()
+                                            .child(
+                                                Label::new(match direction {
+                                                    ForwardDirection::RemoteToLocal => {
+                                                        i18n::t!(
+                                                            "22880116ce7d18fe",
+                                                            remote_port = remote_port
+                                                        )
+                                                    }
+                                                    ForwardDirection::LocalToRemote => {
+                                                        i18n::t!(
+                                                            "f2e88cffef1ff16e",
+                                                            local_port = local_port
+                                                        )
                                                     }
                                                 })
-                                                .into_any_element()
-                                        } else {
-                                            Label::new(address)
-                                                .size(LabelSize::Small)
-                                                .color(status_color)
-                                                .into_any_element()
-                                        },
+                                                .size(LabelSize::Small),
+                                            )
+                                            .when(
+                                                matches!(
+                                                    entry.status,
+                                                    ForwardStatus::RunningUnconfirmed
+                                                ),
+                                                |this| {
+                                                    this.child(
+                                                        Label::new(i18n::t!("c7f7510832ed11ff"))
+                                                            .size(LabelSize::Small)
+                                                            .color(Color::Muted),
+                                                    )
+                                                },
+                                            )
+                                            .child(
+                                                if direction == ForwardDirection::RemoteToLocal
+                                                    && entry.local_port.is_some()
+                                                    && matches!(
+                                                        entry.status,
+                                                        ForwardStatus::RunningUnconfirmed
+                                                    )
+                                                {
+                                                    let address_for_click = address.clone();
+                                                    div()
+                                                        .id((
+                                                            match direction {
+                                                                ForwardDirection::RemoteToLocal => {
+                                                                    "remote-forward-address"
+                                                                }
+                                                                ForwardDirection::LocalToRemote => {
+                                                                    "reverse-forward-address"
+                                                                }
+                                                            },
+                                                            u64::from(remote_port),
+                                                        ))
+                                                        .cursor_pointer()
+                                                        .tooltip(ui::Tooltip::text(i18n::t!(
+                                                            "f5b68300857567ee"
+                                                        )))
+                                                        .child(
+                                                            Label::new(address)
+                                                                .size(LabelSize::Small)
+                                                                .color(status_color),
+                                                        )
+                                                        .on_click(move |event, _, cx| {
+                                                            if event.modifiers().control {
+                                                                cx.open_url(&address_for_click);
+                                                            } else {
+                                                                cx.write_to_clipboard(
+                                                                    ClipboardItem::new_string(
+                                                                        address_for_click.clone(),
+                                                                    ),
+                                                                );
+                                                            }
+                                                        })
+                                                        .into_any_element()
+                                                } else {
+                                                    Label::new(address)
+                                                        .size(LabelSize::Small)
+                                                        .color(status_color)
+                                                        .into_any_element()
+                                                },
+                                            ),
                                     ),
                             )
                             .child(
@@ -1310,11 +1362,23 @@ impl Render for PortForwardModal {
                     }))
                     .vertical_scrollbar_for(&self.scroll_handle, window, cx),
             )
-            .when(self.manager.read(cx).snapshots().is_empty(), |this| {
+            .when(is_empty, |this| {
                 this.child(
-                    Label::new(i18n::t!("749a035193a5adef"))
-                        .size(LabelSize::Small)
-                        .color(Color::Muted),
+                    v_flex()
+                        .items_center()
+                        .gap_2()
+                        .py_6()
+                        .child(
+                            Icon::new(IconName::ArrowRightLeft)
+                                .size(IconSize::Medium)
+                                .color(Color::Muted),
+                        )
+                        .child(
+                            Label::new(i18n::t!("749a035193a5adef"))
+                                .size(LabelSize::Small)
+                                .color(Color::Muted)
+                                .text_center(),
+                        ),
                 )
             })
     }
@@ -2049,6 +2113,27 @@ mod tests {
     #[test]
     fn ignores_invalid_ports() {
         assert!(detected_ports("localhost:0 localhost:99999").is_empty());
+    }
+
+    #[test]
+    fn port_input_gates_the_add_button() {
+        for (text, expected) in [
+            ("9999", true),
+            (" 8080 ", true),
+            ("65535", true),
+            ("", false),
+            ("0", false),
+            ("65536", false),
+            ("-1", false),
+            ("abc", false),
+            ("3000abc", false),
+        ] {
+            assert_eq!(
+                super::is_valid_port_input(text),
+                expected,
+                "unexpected validity for {text:?}"
+            );
+        }
     }
 
     #[test]
