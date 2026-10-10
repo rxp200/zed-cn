@@ -13,6 +13,7 @@ use gpui::{
 };
 use hayro::hayro_syntax::Pdf;
 use ui::prelude::*;
+#[cfg(not(test))]
 use util::ResultExt as _;
 
 use crate::DocumentItem;
@@ -78,12 +79,14 @@ struct PdfDocumentInfo {
     page_sizes: Vec<(f32, f32)>,
 }
 
+#[cfg_attr(test, allow(dead_code))]
 struct PdfRequest {
     page: usize,
     scale: f32,
     generation: u64,
 }
 
+#[cfg_attr(test, allow(dead_code))]
 enum PdfResponse {
     Initialized(Result<PdfDocumentInfo, SharedString>),
     Rendered {
@@ -130,10 +133,19 @@ impl PdfReader {
     pub fn new(
         item: Entity<DocumentItem>,
         project: Entity<project::Project>,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let (request_tx, response_rx) = spawn_render_worker(item.read(cx).contents.clone());
+
+        // Rendered pages live in the window's sprite atlas as well as in this
+        // cache, so releasing the reader must remove them from the atlas too.
+        cx.on_release_in(window, |reader, window, cx| {
+            for (_, page) in std::mem::take(&mut reader.cache) {
+                cx.drop_image(page.image, Some(window));
+            }
+        })
+        .detach();
 
         let response_task = cx.spawn(async move |this, cx| {
             let mut response_rx = response_rx;
@@ -210,7 +222,7 @@ impl PdfReader {
                     },
                 );
                 self.cache_bytes += bytes;
-                self.evict_cache();
+                self.evict_cache(cx, None);
                 cx.notify();
             }
         }
@@ -329,7 +341,7 @@ impl PdfReader {
 
     /// Requests background rendering for all pages in and around the visible
     /// range whose cached image is missing or at a stale scale.
-    fn ensure_pages_rendered(&mut self) {
+    fn ensure_pages_rendered(&mut self, window: &mut Window, cx: &mut App) {
         let Some(page_sizes) = &self.page_sizes else {
             return;
         };
@@ -369,10 +381,12 @@ impl PdfReader {
                 self.in_flight.remove(&page);
             }
         }
-        self.evict_cache();
+        self.evict_cache(cx, Some(window));
     }
 
-    fn evict_cache(&mut self) {
+    /// Drops cached pages outside the visible range, removing their atlas
+    /// entries so evicting a page actually frees its pixels.
+    fn evict_cache(&mut self, cx: &mut App, mut window: Option<&mut Window>) {
         let visible = self.visible_range();
         let prefetch_start = visible.start.saturating_sub(PREFETCH_PAGES);
         let prefetch_end = visible.end + PREFETCH_PAGES;
@@ -390,6 +404,7 @@ impl PdfReader {
             };
             if let Some(removed) = self.cache.remove(&victim) {
                 self.cache_bytes = self.cache_bytes.saturating_sub(removed.bytes);
+                cx.drop_image(removed.image, window.as_deref_mut());
             }
         }
     }
@@ -693,7 +708,7 @@ impl Element for PdfPagesElement {
             reader.layout_pages();
             reader.clamp_scroll();
             reader.update_current_page();
-            reader.ensure_pages_rendered();
+            reader.ensure_pages_rendered(window, cx);
             reader.visible_frames()
         });
 
@@ -861,15 +876,22 @@ fn spawn_render_worker(
 ) {
     let (request_tx, request_rx) = mpsc::channel::<PdfRequest>();
     let (response_tx, response_rx) = futures::channel::mpsc::unbounded::<PdfResponse>();
+    // Tests must stay deterministic and GPUI's test scheduler rejects work that
+    // wakes tasks from a foreign thread, so they run without the render worker
+    // and install the pages they need through the test hooks instead.
+    #[cfg(not(test))]
     std::thread::Builder::new()
         .name("document-viewer-pdf".into())
         .spawn(move || {
             run_render_worker(data, &request_rx, &response_tx);
         })
         .log_err();
+    #[cfg(test)]
+    drop((data, request_rx, response_tx));
     (request_tx, response_rx)
 }
 
+#[cfg(not(test))]
 fn run_render_worker(
     data: Arc<Vec<u8>>,
     request_rx: &mpsc::Receiver<PdfRequest>,
@@ -941,6 +963,7 @@ fn run_render_worker(
     }
 }
 
+#[cfg(not(test))]
 fn render_and_send<'a>(
     pdf: &'a Pdf,
     render_cache: &hayro::RenderCache<'a>,
@@ -971,6 +994,47 @@ fn render_and_send<'a>(
                 image,
             })
             .is_ok()
+    }
+}
+
+#[cfg(test)]
+impl PdfReader {
+    /// Installs page geometry without waiting for the renderer thread.
+    pub(crate) fn set_page_sizes_for_test(&mut self, page_sizes: Vec<(f32, f32)>) {
+        self.page_sizes = Some(page_sizes);
+        self.did_initial_fit = true;
+    }
+
+    /// Inserts an already-rendered page into the page cache. Overwriting a page
+    /// replaces its bytes, which is fine for tests that count pages, not bytes.
+    pub(crate) fn insert_page_for_test(
+        &mut self,
+        page: usize,
+        image: Arc<RenderImage>,
+        scale: f32,
+        bytes: usize,
+        last_used: u64,
+    ) {
+        self.cache.insert(
+            page,
+            CachedPage {
+                image,
+                scale,
+                bytes,
+                last_used,
+            },
+        );
+        self.cache_bytes += bytes;
+        self.cache_clock = self.cache_clock.max(last_used);
+    }
+
+    /// Runs cache eviction the way a render response does.
+    pub(crate) fn evict_cache_for_test(&mut self, cx: &mut App) {
+        self.evict_cache(cx, None);
+    }
+
+    pub(crate) fn cached_pages_for_test(&self) -> Vec<usize> {
+        self.cache.keys().copied().collect()
     }
 }
 

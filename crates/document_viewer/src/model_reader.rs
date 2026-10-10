@@ -230,6 +230,11 @@ impl ModelReader {
                 file_size,
             )
         };
+        log::info!(
+            "[open-debug] ModelReader::new format={} triangles={}",
+            format,
+            mesh.triangles.len()
+        );
         let mut reader = Self {
             focus: cx.focus_handle(),
             mesh,
@@ -305,6 +310,13 @@ impl ModelReader {
             cut: [246, 196, 150],
         });
         let dimensions = self.dimensions;
+        if self.image.is_none() {
+            log::info!(
+                "[open-debug] ModelReader first render dimensions={:?} triangles={}",
+                dimensions,
+                self.mesh.triangles.len()
+            );
+        }
         let cancel = self.cancel.clone();
         let plane = self.section.enabled.then_some(self.section.plane);
         let cached = self
@@ -1738,6 +1750,7 @@ fn rasterize(
         return None;
     }
     let image = image::RgbaImage::from_raw(width, height, pixels)?;
+    log::info!("[open-debug] ModelReader rasterized {width}x{height}");
     Some(Arc::new(RenderImage::new(smallvec::smallvec![
         image::Frame::new(image)
     ])))

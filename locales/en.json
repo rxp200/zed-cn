@@ -5406,5 +5406,8 @@
   "942087cc2d41e013": "Retry",
   "352e771623dce976": "Generate AI explanations for all changed files",
   "d6e6d3359665a227": "Generate AI explanations for this file",
-  "53794caa6ec56797": "Regenerate AI explanations for this file"
+  "53794caa6ec56797": "Regenerate AI explanations for this file",
+  "49fceb3a4d998915": "Could not open file: {error}",
+  "de0df9167630114a": "Opening file…",
+  "dd6f7f92c4d6e776": "Transferring file…"
 }

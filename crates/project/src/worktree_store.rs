@@ -521,8 +521,14 @@ impl WorktreeStore {
     ) -> Task<Result<(Entity<Worktree>, Arc<RelPath>)>> {
         let abs_path = abs_path.as_ref();
         if let Some((tree, relative_path)) = self.find_worktree(abs_path, cx) {
+            log::info!(
+                "[open-debug] reusing worktree {} for {:?}",
+                tree.read(cx).id(),
+                abs_path
+            );
             Task::ready(Ok((tree, relative_path)))
         } else {
+            log::info!("[open-debug] creating worktree for {:?}", abs_path);
             let worktree = self.create_worktree(abs_path, visible, cx);
             cx.background_spawn(async move { Ok((worktree.await?, RelPath::empty_arc())) })
         }
@@ -793,6 +799,10 @@ impl WorktreeStore {
         cx: &mut Context<Self>,
     ) -> Task<Result<Entity<Worktree>>> {
         let abs_path: Arc<SanitizedPath> = SanitizedPath::new_arc(&abs_path);
+        log::info!(
+            "[open-debug] create_worktree path={:?} visible={visible}",
+            abs_path
+        );
         let is_via_collab = matches!(&self.state, WorktreeStoreState::Remote { upstream_client, .. } if upstream_client.is_via_collab());
         if !self.loading_worktrees.contains_key(&abs_path) {
             let task = match &self.state {

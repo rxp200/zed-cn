@@ -147,6 +147,10 @@ impl ImageView {
         // Start loading the image to render in the background to prevent the view
         // from flickering in most cases.
         let pending_image = image_item.read(cx).image.clone();
+        log::info!(
+            "[open-debug] ImageView::new {:?}",
+            image_item.read(cx).file.path.as_unix_str()
+        );
         let _render_image = pending_image.clone().get_render_image(window, cx);
 
         cx.subscribe(&image_item, Self::on_image_event).detach();

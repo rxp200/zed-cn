@@ -56,8 +56,8 @@ use ui::{
 };
 use util::{ResultExt as _, paths::PathMatcher};
 use workspace::{
-    DeploySearch, ItemNavHistory, NewSearch, Panel, ToolbarItemEvent, ToolbarItemLocation,
-    ToolbarItemView, Workspace, WorkspaceId,
+    DeploySearch, ItemNavHistory, NewSearch, Panel, Save, SaveIntent, ToolbarItemEvent,
+    ToolbarItemLocation, ToolbarItemView, Workspace, WorkspaceId,
     dock::{DockPosition, PanelEvent},
     item::{Item, ItemBufferKind, ItemEvent, ItemHandle, SaveOptions},
     searchable::{Direction, SearchEvent, SearchToken, SearchableItem, SearchableItemHandle},
@@ -481,11 +481,10 @@ impl ProjectSearchPanel {
         };
         let query_seed = deploy_query_seed(workspace, window, cx);
         workspace.open_panel::<ProjectSearchPanel>(window, cx);
-        panel.update(cx, |panel, cx| {
-            let view = panel.ensure_view(window, cx);
-            view.update(cx, |view, cx| {
-                view.apply_deploy_action(action, query_seed, window, cx)
-            });
+        let view = panel.update(cx, |panel, cx| panel.ensure_view(window, cx));
+        view.update(cx, |view, cx| {
+            view.attach_to_workspace(workspace, window, cx);
+            view.apply_deploy_action(action, query_seed, window, cx)
         });
         true
     }
@@ -502,11 +501,10 @@ impl ProjectSearchPanel {
         };
         let query_seed = deploy_query_seed(workspace, window, cx);
         workspace.open_panel::<ProjectSearchPanel>(window, cx);
-        panel.update(cx, |panel, cx| {
-            let view = panel.create_view(window, cx);
-            view.update(cx, |view, cx| {
-                view.apply_deploy_action(&DeploySearch::default(), query_seed, window, cx)
-            });
+        let view = panel.update(cx, |panel, cx| panel.create_view(window, cx));
+        view.update(cx, |view, cx| {
+            view.attach_to_workspace(workspace, window, cx);
+            view.apply_deploy_action(&DeploySearch::default(), query_seed, window, cx)
         });
         true
     }
@@ -524,15 +522,14 @@ impl ProjectSearchPanel {
             return false;
         };
         workspace.open_panel::<ProjectSearchPanel>(window, cx);
-        panel.update(cx, |panel, cx| {
-            let view = panel.create_view(window, cx);
-            view.update(cx, |view, cx| {
-                view.included_files_editor.update(cx, |editor, cx| {
-                    editor.set_text(filter_str.as_str(), window, cx)
-                });
-                view.filters_enabled = true;
-                view.focus_query_editor(window, cx)
+        let view = panel.update(cx, |panel, cx| panel.create_view(window, cx));
+        view.update(cx, |view, cx| {
+            view.attach_to_workspace(workspace, window, cx);
+            view.included_files_editor.update(cx, |editor, cx| {
+                editor.set_text(filter_str.as_str(), window, cx)
             });
+            view.filters_enabled = true;
+            view.focus_query_editor(window, cx)
         });
         true
     }
@@ -561,6 +558,32 @@ impl ProjectSearchPanel {
         if let Some(view) = self.view.as_ref() {
             view.update(cx, f);
         }
+    }
+
+    /// Saves edits made to the excerpts shown in the panel.
+    ///
+    /// The panel is not a pane item, so `workspace::Save` never reaches the
+    /// hosted [`ProjectSearchView`] on its own; the panel forwards it instead.
+    fn save_view(&mut self, save_intent: SaveIntent, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(view) = self.view.clone() else {
+            return;
+        };
+        let project = self.project.clone();
+        let options = match save_intent {
+            SaveIntent::FormatAndSave => SaveOptions {
+                format: true,
+                force_format: true,
+                autosave: false,
+            },
+            SaveIntent::SaveWithoutFormat => SaveOptions {
+                format: false,
+                force_format: false,
+                autosave: false,
+            },
+            _ => SaveOptions::default(),
+        };
+        view.update(cx, |view, cx| view.save(options, project, window, cx))
+            .detach_and_log_err(cx);
     }
 }
 
@@ -1019,6 +1042,9 @@ impl Render for ProjectSearchPanel {
             )
             .on_action(cx.listener(|this, action: &OpenTextFinder, window, cx| {
                 this.with_view(cx, |view, cx| view.open_text_finder(action, window, cx));
+            }))
+            .on_action(cx.listener(|this, action: &Save, window, cx| {
+                this.save_view(action.save_intent.unwrap_or(SaveIntent::Save), window, cx);
             }))
             .capture_action(cx.listener(|this, _: &Tab, window, cx| {
                 this.with_view(cx, |view, cx| {
@@ -1715,6 +1741,21 @@ pub enum ViewEvent {
 impl EventEmitter<ViewEvent> for ProjectSearchView {}
 
 impl ProjectSearchView {
+    /// The panel hosts its view in a dock rather than a pane, so the results
+    /// editor never receives [`Item::added_to_workspace`] on its own. Without a
+    /// workspace the results editor cannot open excerpts, so attach it here.
+    fn attach_to_workspace(
+        &mut self,
+        workspace: &mut Workspace,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.results_editor.read(cx).workspace().is_none() {
+            self.results_editor
+                .update(cx, |editor, cx| editor.added_to_workspace(workspace, window, cx));
+        }
+    }
+
     fn render_compact_results(&self, cx: &mut Context<Self>) -> AnyElement {
         let count = self.entity.read(cx).match_ranges.len();
         uniform_list(
@@ -10459,6 +10500,182 @@ pub mod tests {
                 .and_then(|item| item.downcast::<ProjectSearchView>())
         })
         .expect("Search view expected to appear after new search event trigger")
+    }
+
+    async fn setup_search_panel(
+        files: serde_json::Value,
+        cx: &mut TestAppContext,
+    ) -> (
+        Entity<Workspace>,
+        Entity<ProjectSearchPanel>,
+        VisualTestContext,
+    ) {
+        init_test(cx);
+        let fs = FakeFs::new(cx.background_executor.clone());
+        fs.insert_tree(path!("/dir"), files).await;
+        let project = Project::test(fs, [path!("/dir").as_ref()], cx).await;
+        let window = cx.add_window(|window, cx| MultiWorkspace::test_new(project, window, cx));
+        let workspace = window
+            .read_with(cx, |multi_workspace, _| multi_workspace.workspace().clone())
+            .unwrap();
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        let panel = workspace.update_in(&mut cx, |workspace, window, cx| {
+            let weak_workspace = workspace.weak_handle();
+            let project = workspace.project().clone();
+            let panel = cx.new(|cx| ProjectSearchPanel::new(weak_workspace, project, cx));
+            workspace.add_panel(panel.clone(), window, cx);
+            workspace.focus_panel::<ProjectSearchPanel>(window, cx);
+            panel
+        });
+        (workspace, panel, cx)
+    }
+
+    fn panel_search_view(
+        panel: &Entity<ProjectSearchPanel>,
+        cx: &mut VisualTestContext,
+    ) -> Entity<ProjectSearchView> {
+        cx.read(|cx| panel.read(cx).view.clone())
+            .expect("the search panel should have created its view")
+    }
+
+    fn run_panel_search(
+        view: &Entity<ProjectSearchView>,
+        query: &str,
+        cx: &mut VisualTestContext,
+    ) {
+        view.update_in(cx, |view, window, cx| {
+            view.query_editor
+                .update(cx, |editor, cx| editor.set_text(query, window, cx));
+            view.search(SearchMode::Manual, cx);
+        });
+        cx.run_until_parked();
+        cx.executor().advance_clock(
+            editor::SELECTION_HIGHLIGHT_DEBOUNCE_TIMEOUT + Duration::from_millis(100),
+        );
+        cx.run_until_parked();
+    }
+
+    #[gpui::test]
+    async fn test_search_panel_results_open_the_underlying_file(cx: &mut TestAppContext) {
+        let (workspace, panel, mut cx) = setup_search_panel(
+            json!({
+                "a.txt": "hello world\nhello again\n",
+                "b.txt": "hello there\n",
+            }),
+            cx,
+        )
+        .await;
+
+        workspace.update_in(&mut cx, |workspace, window, cx| {
+            assert!(ProjectSearchPanel::new_search_in_panel(
+                workspace, window, cx
+            ));
+        });
+        let view = panel_search_view(&panel, &mut cx);
+
+        assert!(
+            view.read_with(&cx, |view, cx| view
+                .results_editor
+                .read(cx)
+                .workspace()
+                .is_some()),
+            "the panel's results editor must be attached to the workspace"
+        );
+
+        run_panel_search(&view, "hello", &mut cx);
+
+        let expected_path = view
+            .read_with(&cx, |view, cx| {
+                let range = view.entity.read(cx).match_ranges.first()?.clone();
+                let buffer_id = range.start.buffer_id()?;
+                let buffer = view.results_editor.read(cx).buffer().read(cx).buffer(buffer_id)?;
+                Some(buffer.read(cx).file()?.path().to_string())
+            })
+            .expect("the search should have produced a match with a file");
+
+        view.update_in(&mut cx, |view, window, cx| {
+            let range = view.entity.read(cx).match_ranges[0].clone();
+            let range = view
+                .results_editor
+                .update(cx, |editor, _| editor.range_for_match(&range));
+            view.results_editor.update(cx, |editor, cx| {
+                editor.change_selections(
+                    SelectionEffects::scroll(Autoscroll::fit()),
+                    window,
+                    cx,
+                    |selections| selections.select_ranges([range]),
+                );
+                editor.open_excerpts(&editor::actions::OpenExcerpts, window, cx);
+            });
+        });
+        cx.run_until_parked();
+
+        let opened = cx.read(|cx| {
+            workspace
+                .read(cx)
+                .active_item(cx)
+                .and_then(|item| item.downcast::<Editor>())
+        });
+        let opened = opened.expect("clicking a panel search result should open its file");
+        assert_eq!(
+            cx.read(|cx| opened
+                .read(cx)
+                .buffer()
+                .read(cx)
+                .as_singleton()
+                .and_then(|buffer| buffer.read(cx).file().map(|file| file.path().to_string()))),
+            Some(expected_path)
+        );
+    }
+
+    #[gpui::test]
+    async fn test_search_panel_save_action_persists_edited_results(cx: &mut TestAppContext) {
+        let (workspace, panel, mut cx) =
+            setup_search_panel(json!({ "a.txt": "hello world\n" }), cx).await;
+
+        workspace.update_in(&mut cx, |workspace, window, cx| {
+            assert!(ProjectSearchPanel::new_search_in_panel(
+                workspace, window, cx
+            ));
+        });
+        let view = panel_search_view(&panel, &mut cx);
+        run_panel_search(&view, "hello", &mut cx);
+
+        let buffer = view
+            .update(&mut cx, |view, cx| {
+                let range = view.entity.read(cx).match_ranges[0].clone();
+                let buffer_id = range.start.buffer_id()?;
+                view.results_editor
+                    .read(cx)
+                    .buffer()
+                    .read(cx)
+                    .buffer(buffer_id)
+            })
+            .expect("the match buffer should be excerpted");
+        buffer.update(&mut cx, |buffer, cx| {
+            buffer.edit([(0..0, "XYZ")], None, cx);
+        });
+        assert!(view.read_with(&cx, |view, cx| view.results_editor.read(cx).is_dirty(cx)));
+
+        workspace.update_in(&mut cx, |workspace, window, cx| {
+            workspace.focus_panel::<ProjectSearchPanel>(window, cx);
+        });
+        cx.run_until_parked();
+
+        // The panel hosts the results editor outside of a pane, so
+        // `workspace::Save` only reaches it if the panel forwards the action.
+        cx.dispatch_action(Save { save_intent: None });
+        cx.run_until_parked();
+
+        assert!(
+            !view.read_with(&cx, |view, cx| view.results_editor.read(cx).is_dirty(cx)),
+            "saving from the search panel should persist the edited excerpt"
+        );
+        assert_eq!(
+            cx.read(|cx| buffer.read(cx).text()),
+            "XYZhello world\n",
+            "the panel save should write the edited text to the buffer"
+        );
     }
 
     struct SearchBarTest {

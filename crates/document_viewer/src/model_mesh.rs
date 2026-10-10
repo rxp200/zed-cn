@@ -15,6 +15,10 @@ pub struct ModelMesh {
 
 impl ModelMesh {
     pub fn parse(extension: &str, bytes: &[u8]) -> Result<Self> {
+        log::info!(
+            "[open-debug] ModelMesh::parse extension={extension} bytes={}",
+            bytes.len()
+        );
         let triangles = match extension.to_ascii_lowercase().as_str() {
             "stl" => parse_stl(bytes)?,
             "obj" => parse_obj(std::str::from_utf8(bytes)?)?,
@@ -62,6 +66,11 @@ impl ModelMesh {
         ensure!(
             mesh.area.is_finite() && mesh.signed_volume.is_finite(),
             "model measurements exceed supported range"
+        );
+        log::info!(
+            "[open-debug] ModelMesh::parse done: {} triangles, {} degenerate",
+            mesh.triangles.len(),
+            mesh.degenerate_faces
         );
         Ok(mesh)
     }

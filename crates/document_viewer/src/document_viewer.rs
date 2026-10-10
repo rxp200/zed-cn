@@ -1,9 +1,9 @@
 mod epub_reader;
 mod excel_reader;
-mod pdf_reader;
 mod model_mesh;
 mod model_reader;
 mod model_section;
+mod pdf_reader;
 
 use std::{path::Path, sync::Arc};
 
@@ -12,14 +12,16 @@ use editor::{EditorSettings, items::entry_git_aware_label_color};
 use file_icons::FileIcons;
 use gpui::{
     AnyElement, App, Context, Entity, EventEmitter, FocusHandle, Focusable, Font, SharedString,
-    Task, WeakEntity, Window,
+    Subscription, Task, WeakEntity, Window,
 };
 use language::File as _;
 use project::{Project, ProjectPath, git_store::GitStoreEvent};
 use settings::Settings;
 use theme_settings::ThemeSettings;
 use ui::{Tooltip, prelude::*};
+use util::ResultExt as _;
 use util::paths::PathExt;
+use util::size::format_file_size;
 use workspace::{
     ItemId, ItemSettings, Pane, ToolbarItemLocation, Workspace, WorkspaceId, delete_unloaded_items,
     invalid_item_view::InvalidItemView,
@@ -61,6 +63,27 @@ impl DocumentFormat {
     }
 }
 
+/// How far a previewable document has progressed. It is kept next to the bytes
+/// so an open tab can show transfer progress instead of blocking on the read.
+#[derive(Clone, Debug, PartialEq)]
+enum DocumentLoadState {
+    /// The tab is already open and the bytes are still in transit.
+    Loading {
+        transferred: u64,
+        total: Option<u64>,
+    },
+    Ready,
+    Failed(SharedString),
+}
+
+/// Events emitted by [`DocumentItem`] while it loads.
+pub enum DocumentItemEvent {
+    /// The bytes are available and a reader can be created.
+    Ready,
+    /// The document could not be read.
+    Failed,
+}
+
 /// A project item holding the raw bytes of a previewable binary document.
 ///
 /// `Arc<Vec<u8>>`（而不是 `Arc<[u8]>`）是为了让打开文件时的 `Vec<u8>` 能直接
@@ -70,7 +93,11 @@ pub struct DocumentItem {
     pub contents: Arc<Vec<u8>>,
     pub format: DocumentFormat,
     pub model: Option<Arc<model_mesh::ModelMesh>>,
+    state: DocumentLoadState,
+    load_task: Option<Task<()>>,
 }
+
+impl EventEmitter<DocumentItemEvent> for DocumentItem {}
 
 impl DocumentItem {
     pub fn open(
@@ -84,8 +111,13 @@ impl DocumentItem {
         let Some(format) = DocumentFormat::from_extension(&extension) else {
             return Task::ready(Err(anyhow!("unsupported document format")));
         };
+        log::info!(
+            "[open-debug] DocumentItem::open {:?} format={format:?}",
+            project_path.path.as_unix_str()
+        );
 
-        if let Some(entry) = project.read(cx).entry_for_path(&project_path, cx) {
+        let entry = project.read(cx).entry_for_path(&project_path, cx);
+        if let Some(entry) = &entry {
             if !entry.is_file() {
                 return Task::ready(Err(anyhow!("not a file")));
             }
@@ -96,46 +128,147 @@ impl DocumentItem {
                 )));
             }
         }
+        let Some(worktree) = project
+            .read(cx)
+            .worktree_for_id(project_path.worktree_id, cx)
+        else {
+            return Task::ready(Err(anyhow!("worktree not found")));
+        };
 
+        let file = Arc::new(worktree::File {
+            is_local: worktree.read(cx).is_local(),
+            is_private: entry.as_ref().is_some_and(|entry| entry.is_private),
+            disk_state: entry
+                .as_ref()
+                .and_then(|entry| {
+                    entry.mtime.map(|mtime| language::DiskState::Present {
+                        mtime,
+                        size: entry.size,
+                    })
+                })
+                .unwrap_or(language::DiskState::New),
+            entry_id: entry.as_ref().map(|entry| entry.id),
+            path: project_path.path.clone(),
+            worktree,
+        });
+
+        // EPUB reads only the entries it shows, so it never waits for the whole
+        // file and reports its own progress from `EpubReader`.
         if format == DocumentFormat::Epub {
-            let Some(worktree) = project.read(cx).worktree_for_id(project_path.worktree_id, cx) else {
-                return Task::ready(Err(anyhow!("worktree not found")));
-            };
-            let entry = project.read(cx).entry_for_path(&project_path, cx);
-            let file = Arc::new(worktree::File {
-                is_local: worktree.read(cx).is_local(),
-                is_private: entry.is_some_and(|entry| entry.is_private),
-                disk_state: entry.and_then(|entry| entry.mtime.map(|mtime| language::DiskState::Present { mtime, size: entry.size }))
-                    .unwrap_or(language::DiskState::New),
-                entry_id: entry.map(|entry| entry.id),
-                path: project_path.path,
-                worktree,
-            });
             return Task::ready(Ok(cx.new(|_| Self {
                 file,
                 contents: Arc::new(Vec::new()),
                 format,
                 model: None,
+                state: DocumentLoadState::Ready,
+                load_task: None,
             })));
         }
-        let load = project.update(cx, |project, cx| {
-            project.load_document_file(project_path, cx)
+
+        // Formats that need the whole file ask how the server would transfer it
+        // before opening the tab, so unsupported remote servers keep showing
+        // their existing "cannot preview" notice instead of an empty tab.
+        if let Err(error) = project.read(cx).validate_document_file(&project_path, cx) {
+            return Task::ready(Err(error));
+        }
+
+        let total = entry
+            .as_ref()
+            .map(|entry| entry.size)
+            .filter(|size| *size > 0);
+        let item = cx.new(|_| Self {
+            file,
+            contents: Arc::new(Vec::new()),
+            format,
+            model: None,
+            state: DocumentLoadState::Loading {
+                transferred: 0,
+                total,
+            },
+            load_task: None,
         });
-        cx.spawn(async move |cx| {
-            let LoadedBinaryFile { file, content } = load.await?;
-            let (content, model) = if format == DocumentFormat::Model {
-                cx.background_spawn(async move {
-                    let mesh = model_mesh::ModelMesh::parse(&extension, &content)?;
-                    anyhow::Ok((Vec::new(), Some(Arc::new(mesh))))
-                }).await?
-            } else { (content, None) };
-            Ok(cx.new(|_| DocumentItem {
-                file,
-                contents: Arc::new(content),
-                format,
-                model,
-            }))
-        })
+
+        let progress_item = item.downgrade();
+        let progress: Option<project::DocumentLoadProgress> = Some(Box::new(
+            move |cx: &mut App, transferred: u64, total: u64| {
+                if let Some(item) = progress_item.upgrade() {
+                    item.update(cx, |item, cx| {
+                        item.state = DocumentLoadState::Loading {
+                            transferred,
+                            total: Some(total),
+                        };
+                        cx.notify();
+                    });
+                }
+            },
+        ));
+        let load = project.update(cx, |project, cx| {
+            project.load_document_file(project_path, progress, cx)
+        });
+        let load = match load {
+            Ok(load) => Some(load),
+            Err(error) => {
+                item.update(cx, |item, _| {
+                    item.state = DocumentLoadState::Failed(error.to_string().into());
+                });
+                None
+            }
+        };
+        if let Some(load) = load {
+            item.update(cx, |item, cx| {
+                item.load_task = Some(cx.spawn(async move |this, cx| {
+                    let result = match load.await {
+                        Ok(LoadedBinaryFile { file, content }) => {
+                            if format == DocumentFormat::Model {
+                                let extension = extension.clone();
+                                cx.background_spawn(async move {
+                                    log::info!(
+                                        "[open-debug] parsing model {extension} ({} bytes)",
+                                        content.len()
+                                    );
+                                    let mesh = model_mesh::ModelMesh::parse(&extension, &content)?;
+                                    log::info!(
+                                        "[open-debug] model parsed: {} triangles",
+                                        mesh.triangles.len()
+                                    );
+                                    anyhow::Ok((file, Vec::new(), Some(Arc::new(mesh))))
+                                })
+                                .await
+                            } else {
+                                log::info!(
+                                    "[open-debug] document loaded {:?} ({} bytes)",
+                                    file.path.as_unix_str(),
+                                    content.len()
+                                );
+                                Ok((file, content, None))
+                            }
+                        }
+                        Err(error) => Err(error),
+                    };
+                    this.update(cx, |item, cx| {
+                        let event = match result {
+                            Ok((file, content, model)) => {
+                                item.file = file;
+                                item.contents = Arc::new(content);
+                                item.model = model;
+                                item.state = DocumentLoadState::Ready;
+                                DocumentItemEvent::Ready
+                            }
+                            Err(error) => {
+                                log::warn!("failed to load document preview: {error:#}");
+                                item.state = DocumentLoadState::Failed(error.to_string().into());
+                                DocumentItemEvent::Failed
+                            }
+                        };
+                        cx.notify();
+                        cx.emit(event);
+                    })
+                    .log_err();
+                }));
+            });
+        }
+
+        Task::ready(Ok(item))
     }
 
     pub fn project_path(&self, cx: &App) -> ProjectPath {
@@ -161,6 +294,10 @@ impl project::ProjectItem for DocumentItem {
         cx: &mut App,
     ) -> Option<Task<Result<Entity<Self>>>> {
         DocumentFormat::from_extension(path.path.extension()?)?;
+        log::info!(
+            "[open-debug] DocumentItem::try_open {:?}",
+            path.path.as_unix_str()
+        );
         Some(Self::open(project.clone(), path.clone(), cx))
     }
 
@@ -177,8 +314,10 @@ impl project::ProjectItem for DocumentItem {
     }
 }
 
-/// Which concrete reader a [`DocumentView`] shows.
+/// Which concrete reader a [`DocumentView`] shows. `Loading` covers both a
+/// document whose bytes are still in transit and one that failed to load.
 enum DocumentChild {
+    Loading,
     Pdf(Entity<PdfReader>),
     Epub(Entity<EpubReader>),
     Spreadsheet(Entity<ExcelReader>),
@@ -190,7 +329,9 @@ enum DocumentChild {
 pub struct DocumentView {
     item: Entity<DocumentItem>,
     project: Entity<Project>,
+    focus_handle: FocusHandle,
     child: DocumentChild,
+    _subscriptions: Vec<Subscription>,
 }
 
 pub enum DocumentViewEvent {
@@ -207,18 +348,29 @@ impl DocumentView {
         cx: &mut Context<Self>,
     ) -> Self {
         let format = item.read(cx).format;
-        let child = match format {
-            DocumentFormat::Model => DocumentChild::Model(cx.new(|cx| model_reader::ModelReader::new(item.clone(), window, cx))),
-            DocumentFormat::Pdf => DocumentChild::Pdf(
-                cx.new(|cx| PdfReader::new(item.clone(), project.clone(), window, cx)),
-            ),
-            DocumentFormat::Epub => DocumentChild::Epub(cx.new(|cx| {
-                EpubReader::new(item.clone(), project.clone(), window, cx)
-                    .with_languages(project.read(cx).languages().clone())
-            })),
-            DocumentFormat::Spreadsheet => DocumentChild::Spreadsheet(
-                cx.new(|cx| ExcelReader::new(item.clone(), project.clone(), window, cx)),
-            ),
+        log::info!("[open-debug] DocumentView::new format={format:?}");
+
+        let subscriptions = vec![cx.subscribe_in(
+            &item,
+            window,
+            |this, _item, event, window, cx| match event {
+                DocumentItemEvent::Ready => {
+                    if matches!(this.child, DocumentChild::Loading) {
+                        this.child =
+                            Self::build_child(this.item.clone(), this.project.clone(), window, cx);
+                    }
+                }
+                DocumentItemEvent::Failed => cx.notify(),
+            },
+        )];
+
+        let child = match item.read(cx).state {
+            DocumentLoadState::Ready => {
+                Self::build_child(item.clone(), project.clone(), window, cx)
+            }
+            DocumentLoadState::Loading { .. } | DocumentLoadState::Failed(_) => {
+                DocumentChild::Loading
+            }
         };
 
         let git_store = project.read(cx).git_store().clone();
@@ -232,7 +384,100 @@ impl DocumentView {
         Self {
             item,
             project,
+            focus_handle: cx.focus_handle(),
             child,
+            _subscriptions: subscriptions,
+        }
+    }
+
+    fn build_child(
+        item: Entity<DocumentItem>,
+        project: Entity<Project>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> DocumentChild {
+        match item.read(cx).format {
+            DocumentFormat::Model => {
+                DocumentChild::Model(cx.new(|cx| model_reader::ModelReader::new(item, window, cx)))
+            }
+            DocumentFormat::Pdf => {
+                DocumentChild::Pdf(cx.new(|cx| PdfReader::new(item, project, window, cx)))
+            }
+            DocumentFormat::Epub => DocumentChild::Epub(cx.new(|cx| {
+                EpubReader::new(item, project.clone(), window, cx)
+                    .with_languages(project.read(cx).languages().clone())
+            })),
+            DocumentFormat::Spreadsheet => {
+                DocumentChild::Spreadsheet(cx.new(|cx| ExcelReader::new(item, project, window, cx)))
+            }
+        }
+    }
+
+    /// Renders the state of a document whose bytes are still being read, or the
+    /// error that stopped the read.
+    fn render_pending(&self, cx: &mut Context<Self>) -> AnyElement {
+        let item = self.item.read(cx);
+        let path = item.host_path(cx).display().to_string();
+        match &item.state {
+            DocumentLoadState::Failed(error) => v_flex()
+                .size_full()
+                .gap_2()
+                .items_center()
+                .justify_center()
+                .child(
+                    Label::new(i18n::t!("49fceb3a4d998915", error = error.clone()))
+                        .color(Color::Error),
+                )
+                .child(Label::new(path).color(Color::Muted).single_line())
+                .debug_selector(|| "document-load-error".to_string())
+                .into_any_element(),
+            state => {
+                let (transferred, total) = match state {
+                    DocumentLoadState::Loading { transferred, total } => (*transferred, *total),
+                    _ => (0, None),
+                };
+                let title = if item.file.is_local {
+                    i18n::t!("de0df9167630114a")
+                } else {
+                    i18n::t!("dd6f7f92c4d6e776")
+                };
+                v_flex()
+                    .size_full()
+                    .gap_3()
+                    .items_center()
+                    .justify_center()
+                    .child(ui::SpinnerLabel::new())
+                    .child(Label::new(title).size(LabelSize::Large))
+                    .child(Label::new(path).color(Color::Muted).single_line())
+                    .when_some(total, |element, total| {
+                        element.child(
+                            v_flex()
+                                .items_center()
+                                .gap_1()
+                                .debug_selector(|| "document-load-progress".to_string())
+                                .child(div().w(px(240.)).child(ui::ProgressBar::new(
+                                    "document-load-progress-bar",
+                                    transferred as f32,
+                                    total.max(1) as f32,
+                                    cx,
+                                )))
+                                .child(Label::new(format!(
+                                    "{:.0}%",
+                                    transferred as f64 / total.max(1) as f64 * 100.0
+                                )))
+                                .child(
+                                    Label::new(format!(
+                                        "{} / {}",
+                                        format_file_size(transferred, false),
+                                        format_file_size(total, false)
+                                    ))
+                                    .size(LabelSize::Small)
+                                    .color(Color::Muted),
+                                ),
+                        )
+                    })
+                    .into_any_element()
+            }
         }
     }
 }
@@ -373,6 +618,7 @@ impl EventEmitter<()> for DocumentView {}
 impl Focusable for DocumentView {
     fn focus_handle(&self, cx: &App) -> FocusHandle {
         match &self.child {
+            DocumentChild::Loading => self.focus_handle.clone(),
             DocumentChild::Pdf(reader) => reader.read(cx).focus_handle(cx),
             DocumentChild::Epub(reader) => reader.read(cx).focus_handle(cx),
             DocumentChild::Spreadsheet(reader) => reader.read(cx).focus_handle(cx),
@@ -382,8 +628,9 @@ impl Focusable for DocumentView {
 }
 
 impl gpui::Render for DocumentView {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         match &self.child {
+            DocumentChild::Loading => self.render_pending(cx),
             DocumentChild::Pdf(reader) => reader.clone().into_any_element(),
             DocumentChild::Epub(reader) => reader.clone().into_any_element(),
             DocumentChild::Spreadsheet(reader) => reader.clone().into_any_element(),
@@ -757,8 +1004,11 @@ impl workspace::ToolbarItemView for DocumentToolbarControls {
             }));
             self.document_view = Some(item.downgrade());
             cx.notify();
-            let is_spreadsheet = matches!(item.read(cx).child, DocumentChild::Spreadsheet(_) | DocumentChild::Model(_));
-            return if is_spreadsheet {
+            let hides_toolbar = matches!(
+                item.read(cx).child,
+                DocumentChild::Spreadsheet(_) | DocumentChild::Model(_) | DocumentChild::Loading
+            );
+            return if hides_toolbar {
                 ToolbarItemLocation::Hidden
             } else {
                 ToolbarItemLocation::PrimaryRight
@@ -775,6 +1025,7 @@ impl gpui::Render for DocumentToolbarControls {
             return div().into_any_element();
         };
         let child = match &view.read(cx).child {
+            DocumentChild::Loading => DocumentChild::Loading,
             DocumentChild::Pdf(reader) => DocumentChild::Pdf(reader.clone()),
             DocumentChild::Epub(reader) => DocumentChild::Epub(reader.clone()),
             DocumentChild::Spreadsheet(reader) => DocumentChild::Spreadsheet(reader.clone()),
@@ -783,7 +1034,9 @@ impl gpui::Render for DocumentToolbarControls {
         match &child {
             DocumentChild::Pdf(reader) => Self::render_pdf_controls(reader, cx),
             DocumentChild::Epub(reader) => Self::render_epub_controls(reader, cx),
-            DocumentChild::Spreadsheet(_) | DocumentChild::Model(_) => div().into_any_element(),
+            DocumentChild::Loading | DocumentChild::Spreadsheet(_) | DocumentChild::Model(_) => {
+                div().into_any_element()
+            }
         }
     }
 }
@@ -862,11 +1115,12 @@ mod tests {
         });
     }
 
-    async fn open_test_document(
+    /// Builds a test project containing one previewable document.
+    async fn test_document_project(
         cx: &mut TestAppContext,
         name: &str,
         contents: Vec<u8>,
-    ) -> (Entity<Project>, Entity<DocumentItem>) {
+    ) -> (Entity<Project>, ProjectPath) {
         let fs = FakeFs::new(cx.executor());
         fs.create_dir(Path::new("/root"))
             .await
@@ -883,19 +1137,46 @@ mod tests {
                 .read(cx)
                 .id()
         });
+        (
+            project,
+            ProjectPath {
+                worktree_id,
+                path: rel_path(name).into(),
+            },
+        )
+    }
+
+    /// Builds an image that can be pushed into the window's sprite atlas.
+    fn test_render_image() -> Arc<gpui::RenderImage> {
+        let frame = image::Frame::new(image::ImageBuffer::from_pixel(
+            2,
+            2,
+            image::Rgba([10u8, 20, 30, 255]),
+        ));
+        Arc::new(gpui::RenderImage::new(smallvec::SmallVec::from_elem(
+            frame, 1,
+        )))
+    }
+
+    /// Opens a document and waits for its bytes, which is what most tests want.
+    async fn open_test_document(
+        cx: &mut TestAppContext,
+        name: &str,
+        contents: Vec<u8>,
+    ) -> (Entity<Project>, Entity<DocumentItem>) {
+        let (project, project_path) = test_document_project(cx, name, contents).await;
         let item = cx
-            .update(|cx| {
-                DocumentItem::open(
-                    project.clone(),
-                    ProjectPath {
-                        worktree_id,
-                        path: rel_path(name).into(),
-                    },
-                    cx,
-                )
-            })
+            .update(|cx| DocumentItem::open(project.clone(), project_path, cx))
             .await
             .expect("test document should open");
+        cx.run_until_parked();
+        item.read_with(cx, |item, _| {
+            assert!(
+                matches!(&item.state, DocumentLoadState::Ready),
+                "test document should finish loading, got {:?}",
+                item.state
+            );
+        });
 
         (project, item)
     }
@@ -907,10 +1188,10 @@ mod tests {
             cx,
             "triangle.obj",
             b"v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3".to_vec(),
-        ).await;
-        let (_view, window) = cx.add_window_view(|window, cx| {
-            DocumentView::new(item, project, window, cx)
-        });
+        )
+        .await;
+        let (_view, window) =
+            cx.add_window_view(|window, cx| DocumentView::new(item, project, window, cx));
         window.run_until_parked();
         let bounds = window.debug_bounds("model-viewport").expect("viewport");
         assert!(bounds.size.width > gpui::px(100.0), "{bounds:?}");
@@ -920,8 +1201,12 @@ mod tests {
         assert!(panel.size.height > bounds.size.height);
         let toolbar = window.debug_bounds("model-toolbar").expect("toolbar");
         assert!(toolbar.size.height >= gpui::px(40.0), "{toolbar:?}");
-        let geometry = window.debug_bounds("model-geometry-header").expect("geometry");
-        let topology = window.debug_bounds("model-topology-header").expect("topology");
+        let geometry = window
+            .debug_bounds("model-geometry-header")
+            .expect("geometry");
+        let topology = window
+            .debug_bounds("model-topology-header")
+            .expect("topology");
         assert!(geometry.origin.x > panel.origin.x);
         assert!(topology.origin.y > geometry.origin.y + geometry.size.height);
     }
@@ -976,8 +1261,12 @@ mod tests {
             assert!(item.contents.is_empty());
             Arc::downgrade(item.model.as_ref().expect("mesh"))
         });
-        let (view, window) = cx.add_window_view(|window, cx| DocumentView::new(item.clone(), project.clone(), window, cx));
-        let second = window.update(|window, cx| cx.new(|cx| DocumentView::new(item.clone(), project.clone(), window, cx)));
+        let (view, window) = cx.add_window_view(|window, cx| {
+            DocumentView::new(item.clone(), project.clone(), window, cx)
+        });
+        let second = window.update(|window, cx| {
+            cx.new(|cx| DocumentView::new(item.clone(), project.clone(), window, cx))
+        });
         drop(item);
         drop(second);
         assert!(weak_mesh.upgrade().is_some());
@@ -988,7 +1277,10 @@ mod tests {
         window.run_until_parked();
         let _arena_clear = window.update(|window, cx| window.draw(cx));
         window.run_until_parked();
-        assert!(weak_mesh.upgrade().is_none(), "no retained geometry after last view closes");
+        assert!(
+            weak_mesh.upgrade().is_none(),
+            "no retained geometry after last view closes"
+        );
     }
 
     #[gpui::test]
@@ -1084,7 +1376,10 @@ mod tests {
         )
         .await;
         assert_eq!(cx.read(|cx| item.read(cx).format), DocumentFormat::Epub);
-        assert!(cx.read(|cx| item.read(cx).contents.is_empty()), "opening a tab must not load the book");
+        assert!(
+            cx.read(|cx| item.read(cx).contents.is_empty()),
+            "opening a tab must not load the book"
+        );
 
         let (view, cx) =
             cx.add_window_view(|window, cx| DocumentView::new(item, project, window, cx));
@@ -1105,7 +1400,8 @@ mod tests {
         init_test(cx);
         let (project, item) = open_test_document(cx, "broken.epub", b"not a ZIP".to_vec()).await;
         assert!(cx.read(|cx| item.read(cx).contents.is_empty()));
-        let (view, window_cx) = cx.add_window_view(|window, cx| DocumentView::new(item, project, window, cx));
+        let (view, window_cx) =
+            cx.add_window_view(|window, cx| DocumentView::new(item, project, window, cx));
         view.read_with(window_cx, |view, cx| {
             assert_eq!(view.tab_content_text(0, cx).as_ref(), "broken.epub");
         });
@@ -1119,15 +1415,23 @@ mod tests {
     #[gpui::test(iterations = 20)]
     async fn test_epub_reader_drop_cancels_pending_load(cx: &mut TestAppContext) {
         init_test(cx);
-        let (project, item) = open_test_document(cx, "book.epub", crate::epub_reader::tests::epub_fixture(true)).await;
-        let (view, window_cx) = cx.add_window_view(|window, cx| DocumentView::new(item.clone(), project.clone(), window, cx));
+        let (project, item) = open_test_document(
+            cx,
+            "book.epub",
+            crate::epub_reader::tests::epub_fixture(true),
+        )
+        .await;
+        let (view, window_cx) = cx.add_window_view(|window, cx| {
+            DocumentView::new(item.clone(), project.clone(), window, cx)
+        });
         let reader = view.read_with(window_cx, |view, _| match &view.child {
             DocumentChild::Epub(reader) => reader.clone(),
             _ => panic!("expected EPUB"),
         });
         let weak = reader.downgrade();
         view.update_in(window_cx, |view, window, cx| {
-            view.child = DocumentChild::Epub(cx.new(|cx| EpubReader::new(item, project, window, cx)));
+            view.child =
+                DocumentChild::Epub(cx.new(|cx| EpubReader::new(item, project, window, cx)));
         });
         drop(reader);
         assert!(weak.upgrade().is_none());
@@ -1164,5 +1468,229 @@ mod tests {
             })
             .await;
         assert!(result.is_err());
+    }
+
+    /// Opening a document must hand back an item straight away instead of
+    /// blocking until every byte was read.
+    #[gpui::test(iterations = 8)]
+    async fn test_document_open_reports_loading_before_its_bytes_arrive(cx: &mut TestAppContext) {
+        init_test(cx);
+        let (project, project_path) =
+            test_document_project(cx, "doc.pdf", crate::pdf_reader::tests::minimal_pdf()).await;
+
+        let item = cx
+            .update(|cx| DocumentItem::open(project.clone(), project_path, cx))
+            .await
+            .expect("opening a document must not wait for its bytes");
+        cx.update(|cx| {
+            assert!(
+                matches!(&item.read(cx).state, DocumentLoadState::Loading { .. }),
+                "the item must exist while the bytes are still in transit"
+            );
+        });
+
+        cx.run_until_parked();
+        cx.update(|cx| {
+            let item = item.read(cx);
+            assert!(
+                matches!(&item.state, DocumentLoadState::Ready),
+                "the item must finish loading"
+            );
+            assert!(
+                !item.contents.is_empty(),
+                "the bytes must be kept once read"
+            );
+        });
+    }
+
+    /// The open tab must show how much of the file has been transferred.
+    #[gpui::test]
+    async fn test_document_loading_tab_shows_transfer_progress(cx: &mut TestAppContext) {
+        init_test(cx);
+        let (project, loaded) =
+            open_test_document(cx, "doc.pdf", crate::pdf_reader::tests::minimal_pdf()).await;
+        let file = loaded.read_with(cx, |item, _| item.file.clone());
+        let bytes = crate::pdf_reader::tests::minimal_pdf();
+        let item = cx.new(|_| DocumentItem {
+            file,
+            contents: Arc::new(Vec::new()),
+            format: DocumentFormat::Pdf,
+            model: None,
+            state: DocumentLoadState::Loading {
+                transferred: 5,
+                total: Some(10),
+            },
+            load_task: None,
+        });
+
+        let (view, cx) =
+            cx.add_window_view(|window, cx| DocumentView::new(item.clone(), project, window, cx));
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        view.read_with(&mut *cx, |view, _| {
+            assert!(matches!(view.child, DocumentChild::Loading));
+        });
+        assert!(
+            cx.debug_bounds("document-load-progress").is_some(),
+            "the loading tab must show how much of the file was transferred"
+        );
+
+        item.update(&mut *cx, |item, cx| {
+            item.contents = Arc::new(bytes);
+            item.state = DocumentLoadState::Ready;
+            cx.emit(DocumentItemEvent::Ready);
+        });
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        view.read_with(&mut *cx, |view, _| {
+            assert!(
+                matches!(view.child, DocumentChild::Pdf(_)),
+                "the reader must replace the loading state"
+            );
+        });
+        assert!(
+            cx.debug_bounds("document-load-progress").is_none(),
+            "the progress indicator must disappear once the bytes are read"
+        );
+    }
+
+    /// A failed transfer is reported in the already-open tab rather than
+    /// leaving the progress indicator spinning forever.
+    #[gpui::test]
+    async fn test_document_load_failure_is_reported_in_the_open_tab(cx: &mut TestAppContext) {
+        init_test(cx);
+        let (project, loaded) =
+            open_test_document(cx, "doc.pdf", crate::pdf_reader::tests::minimal_pdf()).await;
+        let file = loaded.read_with(cx, |item, _| item.file.clone());
+        let failed = cx.new(|_| DocumentItem {
+            file,
+            contents: Arc::new(Vec::new()),
+            format: DocumentFormat::Pdf,
+            model: None,
+            state: DocumentLoadState::Failed("connection lost".into()),
+            load_task: None,
+        });
+        let (view, cx) =
+            cx.add_window_view(|window, cx| DocumentView::new(failed, project, window, cx));
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        view.read_with(&mut *cx, |view, _| {
+            assert!(matches!(view.child, DocumentChild::Loading));
+        });
+        assert!(
+            cx.debug_bounds("document-load-error").is_some(),
+            "a failed document must report the error in its tab"
+        );
+        assert!(
+            cx.debug_bounds("document-load-progress").is_none(),
+            "a failed document must not render transfer progress"
+        );
+    }
+
+    /// Rendered pages live in the window's sprite atlas as well as in the page
+    /// cache, so releasing the reader has to drop both.
+    #[gpui::test]
+    async fn test_pdf_pages_leave_the_atlas_when_the_reader_is_released(cx: &mut TestAppContext) {
+        init_test(cx);
+        let (project, item) =
+            open_test_document(cx, "doc.pdf", crate::pdf_reader::tests::minimal_pdf()).await;
+        let (view, cx) =
+            cx.add_window_view(|window, cx| DocumentView::new(item, project, window, cx));
+        let reader = view.read_with(&mut *cx, |view, _| match &view.child {
+            DocumentChild::Pdf(reader) => reader.clone(),
+            _ => panic!("expected a PDF reader"),
+        });
+        let page = test_render_image();
+        reader.update(&mut *cx, |reader, _| {
+            reader.set_page_sizes_for_test(vec![(200.0, 100.0)]);
+            reader.insert_page_for_test(0, page.clone(), 1.0, 1024, 1);
+        });
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        assert!(
+            cx.update(|window, _| window.has_image_atlas_entry(&page)),
+            "a cached page must be uploaded to the sprite atlas when painted"
+        );
+
+        cx.update(|window, cx| {
+            window.replace_root(cx, |_, _| gpui::Empty);
+        });
+        drop(reader);
+        drop(view);
+        cx.cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        assert!(
+            !cx.update(|window, _| window.has_image_atlas_entry(&page)),
+            "closing the tab must drop its rendered pages from the sprite atlas"
+        );
+    }
+
+    /// Evicting a page from the cache must free its atlas entry too, otherwise
+    /// scrolling a large document keeps every page it ever rendered.
+    #[gpui::test]
+    async fn test_evicted_pdf_pages_leave_the_atlas(cx: &mut TestAppContext) {
+        init_test(cx);
+        let (project, item) =
+            open_test_document(cx, "doc.pdf", crate::pdf_reader::tests::minimal_pdf()).await;
+        let evicted = test_render_image();
+        let kept = test_render_image();
+        let (paint_evicted, paint_kept) = (evicted.clone(), kept.clone());
+        let (_view, cx) =
+            cx.add_window_view(move |_window, _cx| PaintImages(vec![paint_evicted, paint_kept]));
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        assert!(cx.update(|window, _| window.has_image_atlas_entry(&evicted)));
+        assert!(cx.update(|window, _| window.has_image_atlas_entry(&kept)));
+
+        let reader = cx.update(|window, cx| cx.new(|cx| PdfReader::new(item, project, window, cx)));
+        let fillers: Vec<Arc<gpui::RenderImage>> = (0..12).map(|_| test_render_image()).collect();
+        reader.update(&mut *cx, {
+            let evicted = evicted.clone();
+            let kept = kept.clone();
+            move |reader, _| {
+                reader.insert_page_for_test(1, evicted, 1.0, 1024, 0);
+                reader.insert_page_for_test(5, kept, 1.0, 1024, 1000);
+                for (index, image) in fillers.into_iter().enumerate() {
+                    let page = index + 2;
+                    reader.insert_page_for_test(page, image, 1.0, 1024, 100 + page as u64);
+                }
+            }
+        });
+        reader.update(&mut *cx, |reader, cx| reader.evict_cache_for_test(cx));
+        let cached = reader.read_with(&mut *cx, |reader, _| reader.cached_pages_for_test());
+        assert!(
+            !cached.contains(&1),
+            "the least recently used page must be evicted"
+        );
+        assert!(cached.contains(&5), "newer pages must stay cached");
+        assert!(
+            !cx.update(|window, _| window.has_image_atlas_entry(&evicted)),
+            "an evicted page must be removed from the sprite atlas"
+        );
+        assert!(
+            cx.update(|window, _| window.has_image_atlas_entry(&kept)),
+            "pages that stay cached must keep their atlas entries"
+        );
+    }
+
+    struct PaintImages(Vec<Arc<gpui::RenderImage>>);
+
+    impl Render for PaintImages {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            v_flex().children(
+                self.0
+                    .iter()
+                    .cloned()
+                    .map(|image| gpui::img(image).w(px(40.)).h(px(40.)))
+                    .collect::<Vec<_>>(),
+            )
+        }
     }
 }
