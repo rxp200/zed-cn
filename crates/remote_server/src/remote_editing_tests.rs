@@ -559,16 +559,22 @@ async fn test_remote_document_loading(cx: &mut TestAppContext, server_cx: &mut T
         );
     }
     for name in ["book.epub", "document.pdf", "sheet.xlsx", "empty.ods"] {
+        let progress = Rc::new(RefCell::new(Vec::new()));
         let loaded = project
             .update(cx, |project, cx| {
+                let progress = progress.clone();
                 project.load_document_file(
                     ProjectPath {
                         worktree_id,
                         path: rel_path(name).into(),
                     },
+                    Some(Box::new(move |_, transferred, total| {
+                        progress.borrow_mut().push((transferred, total));
+                    })),
                     cx,
                 )
             })
+            .expect("remote document support")
             .await
             .expect("load remote document");
         assert!(!loaded.file.is_local);
@@ -581,20 +587,32 @@ async fn test_remote_document_loading(cx: &mut TestAppContext, server_cx: &mut T
             }
         );
         assert_eq!(loaded.file.path.as_unix_str(), name);
+        let progress = progress.borrow();
+        assert!(!progress.is_empty(), "{name} must report transfer progress");
+        assert!(
+            progress.windows(2).all(|pair| pair[0].0 <= pair[1].0),
+            "{name} progress must not go backwards: {progress:?}"
+        );
+        let (transferred, total) = *progress.last().expect("progress");
+        assert_eq!(transferred, loaded.content.len() as u64, "{name}");
+        assert_eq!(transferred, total, "{name}");
     }
     for name in ["missing.epub", "unsupported.txt"] {
-        assert!(
-            project
-                .update(cx, |project, cx| project.load_document_file(
-                    ProjectPath {
-                        worktree_id,
-                        path: rel_path(name).into()
-                    },
-                    cx
-                ))
-                .await
-                .is_err()
-        );
+        let load = project.update(cx, |project, cx| {
+            project.load_document_file(
+                ProjectPath {
+                    worktree_id,
+                    path: rel_path(name).into(),
+                },
+                None,
+                cx,
+            )
+        });
+        // Unsupported extensions are rejected before a tab is opened; files
+        // that vanish are only detected once the transfer starts.
+        if let Ok(load) = load {
+            assert!(load.await.is_err(), "{name} must fail to load");
+        }
     }
 }
 
@@ -619,8 +637,9 @@ async fn test_remote_model_loading(cx: &mut TestAppContext, server_cx: &mut Test
     };
     let loaded = project
         .update(cx, |project, cx| {
-            project.load_document_file(path.clone(), cx)
+            project.load_document_file(path.clone(), None, cx)
         })
+        .expect("model transfer support")
         .await
         .expect("load multi-chunk remote STL");
     assert_eq!(loaded.content, bytes);
@@ -639,9 +658,8 @@ async fn test_remote_model_loading(cx: &mut TestAppContext, server_cx: &mut Test
         cx.run_until_parked();
         let error = project
             .update(cx, |project, cx| {
-                project.load_document_file(path.clone(), cx)
+                project.load_document_file(path.clone(), None, cx)
             })
-            .await
             .expect_err("document support alone must not enable models");
         assert_eq!(error.to_string(), i18n::t!("3eb2f17c6a2710fa"));
     }
@@ -661,7 +679,10 @@ async fn test_remote_model_loading(cx: &mut TestAppContext, server_cx: &mut Test
     .expect("remove model");
     assert!(
         project
-            .update(cx, |project, cx| { project.load_document_file(path, cx) })
+            .update(cx, |project, cx| {
+                project.load_document_file(path, None, cx)
+            })
+            .expect("document support")
             .await
             .is_err()
     );

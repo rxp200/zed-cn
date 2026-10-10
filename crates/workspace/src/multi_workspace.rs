@@ -1091,14 +1091,34 @@ impl MultiWorkspace {
         host: Option<&RemoteConnectionOptions>,
         cx: &App,
     ) -> bool {
+        if Self::workspace_rooted_at_paths(workspace, path_list, host, cx) {
+            return true;
+        }
+
+        let key = workspace.project_group_key(cx);
+        same_remote_connection_identity(key.host().as_ref(), host)
+            && key.path_list().distinct_paths() == path_list.distinct_paths()
+    }
+
+    /// Whether `workspace` is rooted at exactly the given folder paths on the
+    /// given remote host, or the local project when `host` is `None`.
+    ///
+    /// Unlike [`Self::workspace_matches_project`], this never matches a project
+    /// group key: a linked worktree's key points at its main worktree, so using
+    /// it here would reactivate the worktree workspace when the user opens the
+    /// main repo folder instead of opening the requested folder.
+    fn workspace_rooted_at_paths(
+        workspace: &Workspace,
+        path_list: &PathList,
+        host: Option<&RemoteConnectionOptions>,
+        cx: &App,
+    ) -> bool {
         let key = workspace.project_group_key(cx);
         if !same_remote_connection_identity(key.host().as_ref(), host) {
             return false;
         }
 
-        let paths = path_list.distinct_paths();
-        key.path_list().distinct_paths() == paths
-            || PathList::new(&workspace.root_paths(cx)).distinct_paths() == paths
+        PathList::new(&workspace.root_paths(cx)).distinct_paths() == path_list.distinct_paths()
     }
 
     /// Whether `workspace` belongs to the project group identified by `key`.
@@ -1137,7 +1157,13 @@ impl MultiWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Task<Result<Entity<Workspace>>> {
-        if let Some(workspace) = self.workspace_for_paths(&paths, host.as_ref(), cx) {
+        let existing = self.workspace_for_open_request(
+            &paths,
+            host.as_ref(),
+            provisional_project_group_key.is_some(),
+            cx,
+        );
+        if let Some(workspace) = existing {
             self.activate(workspace.clone(), source_workspace, window, cx);
             return Task::ready(Ok(workspace));
         }
@@ -1226,6 +1252,29 @@ impl MultiWorkspace {
         })
     }
 
+    /// Finds an existing workspace for an open request.
+    ///
+    /// The project group key is only consulted when the caller is switching to
+    /// a known project group; otherwise the requested paths must match a
+    /// workspace's folder roots exactly.
+    fn workspace_for_open_request(
+        &self,
+        path_list: &PathList,
+        host: Option<&RemoteConnectionOptions>,
+        uses_project_group: bool,
+        cx: &App,
+    ) -> Option<Entity<Workspace>> {
+        if uses_project_group {
+            return self.workspace_for_paths(path_list, host, cx);
+        }
+
+        self.workspaces()
+            .find(|workspace| {
+                Self::workspace_rooted_at_paths(workspace.read(cx), path_list, host, cx)
+            })
+            .cloned()
+    }
+
     /// Finds an existing workspace in this multi-workspace whose paths match,
     /// or creates a new one (deserializing its saved state from the database).
     /// Never searches other windows or matches workspaces with a superset of
@@ -1240,11 +1289,14 @@ impl MultiWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Task<Result<Entity<Workspace>>> {
-        if let Some(workspace) = self.workspace_for_paths(&path_list, None, cx) {
+        let existing =
+            self.workspace_for_open_request(&path_list, None, project_group.is_some(), cx);
+        if let Some(workspace) = existing {
             self.activate(workspace.clone(), source_workspace, window, cx);
             return Task::ready(Ok(workspace));
         }
 
+        let uses_project_group = project_group.is_some();
         let paths = path_list.paths().to_vec();
         let app_state = self.workspace().read(cx).app_state().clone();
         let requesting_window = window.window_handle().downcast::<MultiWorkspace>();
@@ -1278,7 +1330,12 @@ impl MultiWorkspace {
                 && let Some(workspace) = requesting_window
                     .update(cx, |multi_workspace, window, cx| {
                         multi_workspace
-                            .workspace_for_paths(&effective_path_list, None, cx)
+                            .workspace_for_open_request(
+                                &effective_path_list,
+                                None,
+                                uses_project_group,
+                                cx,
+                            )
                             .inspect(|workspace| {
                                 multi_workspace.activate(
                                     workspace.clone(),

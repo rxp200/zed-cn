@@ -275,6 +275,19 @@ fn document_server_source_allowed(options: &remote::RemoteConnectionOptions) -> 
     }
 }
 
+/// Reports `(bytes transferred, total bytes)` while a previewable document is
+/// being read, so callers can show transfer progress in the open tab.
+pub type DocumentLoadProgress = Box<dyn FnMut(&mut App, u64, u64) + 'static>;
+
+/// Where the bytes of a previewable document are read from.
+enum DocumentLoadRoute {
+    Local(Entity<Worktree>),
+    Remote {
+        worktree: Entity<Worktree>,
+        client: AnyProtoClient,
+    },
+}
+
 fn validate_document_chunk(
     offset: u64,
     expected_size: u64,
@@ -3366,6 +3379,7 @@ impl Project {
         path: ProjectPath,
         cx: &mut Context<Self>,
     ) -> Task<Result<(Option<ProjectEntryId>, Entity<Buffer>)>> {
+        log::info!("[open-debug] opening buffer {:?}", path.path.as_unix_str());
         let task = self.open_buffer(path, cx);
         cx.spawn(async move |_project, cx| {
             let buffer = task.await?;
@@ -3443,28 +3457,23 @@ impl Project {
         cx.spawn(async move |_, _| client.request(request).await)
     }
 
-    pub fn load_document_file(
-        &self,
-        path: ProjectPath,
-        cx: &mut Context<Self>,
-    ) -> Task<Result<worktree::LoadedBinaryFile>> {
-        let Some(limit) = path.path.extension().and_then(document_file_size_limit) else {
-            return Task::ready(Err(anyhow!("unsupported document format")));
-        };
-        let Some(worktree) = self.worktree_for_id(path.worktree_id, cx) else {
-            return Task::ready(Err(anyhow!("worktree not found")));
-        };
+    /// Resolves how a previewable document is read without touching its bytes.
+    ///
+    /// Callers use this before they open a tab so unsupported formats and
+    /// remote servers that cannot transfer documents fail immediately.
+    fn document_load_route(&self, path: &ProjectPath, cx: &App) -> Result<DocumentLoadRoute> {
+        anyhow::ensure!(
+            path.path
+                .extension()
+                .and_then(document_file_size_limit)
+                .is_some(),
+            "unsupported document format"
+        );
+        let worktree = self
+            .worktree_for_id(path.worktree_id, cx)
+            .context("worktree not found")?;
         if worktree.read(cx).is_local() {
-            let load =
-                worktree.update(cx, |worktree, cx| worktree.load_binary_file(&path.path, cx));
-            return cx.spawn(async move |_, _| {
-                let loaded = load.await?;
-                anyhow::ensure!(
-                    loaded.content.len() as u64 <= limit,
-                    "document is too large to preview"
-                );
-                Ok(loaded)
-            });
+            return Ok(DocumentLoadRoute::Local(worktree));
         }
         let is_model = path.path.extension().is_some_and(|extension| {
             matches!(
@@ -3485,10 +3494,54 @@ impl Project {
             } else {
                 i18n::t!("05720b24baa5d61e")
             };
-            return Task::ready(Err(anyhow!(message)));
+            return Err(anyhow!(message));
         };
-        let client = client.read(cx).proto_client();
-        cx.spawn(async move |_, cx| {
+        Ok(DocumentLoadRoute::Remote {
+            worktree,
+            client: client.read(cx).proto_client(),
+        })
+    }
+
+    /// Returns an error when `path` cannot be previewed as a document, without
+    /// reading any bytes.
+    pub fn validate_document_file(&self, path: &ProjectPath, cx: &App) -> Result<()> {
+        self.document_load_route(path, cx).map(|_| ())
+    }
+
+    /// Reads a previewable document, reporting transfer progress when a
+    /// callback is given. Gating errors are returned before any byte is read;
+    /// the returned task only fails on transfer errors.
+    pub fn load_document_file(
+        &self,
+        path: ProjectPath,
+        progress: Option<DocumentLoadProgress>,
+        cx: &mut Context<Self>,
+    ) -> Result<Task<Result<worktree::LoadedBinaryFile>>> {
+        let Some(limit) = path.path.extension().and_then(document_file_size_limit) else {
+            return Err(anyhow!("unsupported document format"));
+        };
+        log::info!(
+            "[open-debug] load_document_file {:?} limit={limit}",
+            path.path.as_unix_str()
+        );
+        let route = self.document_load_route(&path, cx)?;
+        let (worktree, client) = match route {
+            DocumentLoadRoute::Local(worktree) => {
+                let load =
+                    worktree.update(cx, |worktree, cx| worktree.load_binary_file(&path.path, cx));
+                return Ok(cx.spawn(async move |_, _| {
+                    let loaded = load.await?;
+                    anyhow::ensure!(
+                        loaded.content.len() as u64 <= limit,
+                        "document is too large to preview"
+                    );
+                    Ok(loaded)
+                }));
+            }
+            DocumentLoadRoute::Remote { worktree, client } => (worktree, client),
+        };
+        Ok(cx.spawn(async move |_, cx| {
+            let mut progress = progress;
             let mut content = Vec::new();
             let mut file = None;
             let mut expected_size = 0;
@@ -3533,6 +3586,10 @@ impl Project {
                     );
                 }
                 content.extend_from_slice(&response.content);
+                if let Some(progress) = progress.as_mut() {
+                    let transferred = content.len() as u64;
+                    cx.update(|cx| progress(cx, transferred, expected_size));
+                }
                 if content.len() as u64 == expected_size {
                     let mut file = file.context("missing document file")?;
                     if let language::DiskState::Present { size, .. } = &mut file.disk_state {
@@ -3544,7 +3601,7 @@ impl Project {
                     });
                 }
             }
-        })
+        }))
     }
 
     pub fn download_file(

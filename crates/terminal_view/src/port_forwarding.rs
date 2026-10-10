@@ -1108,40 +1108,51 @@ impl Render for PortForwardModal {
                     .flex_shrink_0()
                     .gap_2()
                     .child(
-                        ToggleButtonGroup::single_row(
-                            "port-forward-direction",
-                            [
-                                ToggleButtonWithIcon::new(
-                                    i18n::t!("4e156a6242d654b7"),
-                                    IconName::ArrowDown,
-                                    cx.listener(|this, _, window, cx| {
-                                        this.direction = ForwardDirection::RemoteToLocal;
-                                        window.focus(&this.editor.focus_handle(cx), cx);
-                                        cx.notify();
-                                    }),
+                        // In an `auto_width` group only the group's own box shrinks to its
+                        // content; as a direct child of this column it would still be
+                        // stretched across the whole row.
+                        h_flex()
+                            .self_flex_start()
+                            .debug_selector(|| "port-forward-direction-toggle".into())
+                            .child(
+                                ToggleButtonGroup::single_row(
+                                    "port-forward-direction",
+                                    [
+                                        ToggleButtonWithIcon::new(
+                                            i18n::t!("4e156a6242d654b7"),
+                                            IconName::ArrowDown,
+                                            cx.listener(|this, _, window, cx| {
+                                                this.direction = ForwardDirection::RemoteToLocal;
+                                                window.focus(&this.editor.focus_handle(cx), cx);
+                                                cx.notify();
+                                            }),
+                                        ),
+                                        ToggleButtonWithIcon::new(
+                                            i18n::t!("2fe4aee45e505d4a"),
+                                            IconName::ArrowUp,
+                                            cx.listener(|this, _, window, cx| {
+                                                this.direction = ForwardDirection::LocalToRemote;
+                                                window.focus(&this.editor.focus_handle(cx), cx);
+                                                cx.notify();
+                                            }),
+                                        ),
+                                    ],
+                                )
+                                .style(ToggleButtonGroupStyle::Outlined)
+                                .label_size(LabelSize::Default)
+                                .auto_width()
+                                .selected_index(
+                                    match self.direction {
+                                        ForwardDirection::RemoteToLocal => 0,
+                                        ForwardDirection::LocalToRemote => 1,
+                                    },
                                 ),
-                                ToggleButtonWithIcon::new(
-                                    i18n::t!("2fe4aee45e505d4a"),
-                                    IconName::ArrowUp,
-                                    cx.listener(|this, _, window, cx| {
-                                        this.direction = ForwardDirection::LocalToRemote;
-                                        window.focus(&this.editor.focus_handle(cx), cx);
-                                        cx.notify();
-                                    }),
-                                ),
-                            ],
-                        )
-                        .style(ToggleButtonGroupStyle::Outlined)
-                        .label_size(LabelSize::Default)
-                        .auto_width()
-                        .selected_index(match self.direction {
-                            ForwardDirection::RemoteToLocal => 0,
-                            ForwardDirection::LocalToRemote => 1,
-                        }),
+                            ),
                     )
                     .child(
                         h_flex()
                             .gap_2()
+                            .debug_selector(|| "port-forward-port-input".into())
                             .child(
                                 h_flex()
                                     .flex_1()
@@ -2134,6 +2145,60 @@ mod tests {
                 "unexpected validity for {text:?}"
             );
         }
+    }
+
+    #[gpui::test]
+    async fn direction_toggle_stays_content_sized(cx: &mut gpui::TestAppContext) {
+        use gpui::{AppContext as _, TextRun, VisualTestContext, font, px, size};
+        use project::Project;
+        use std::path::Path;
+        use workspace::AppState;
+
+        let fs = cx.update(AppState::test).fs.as_fake().clone();
+        cx.update(|cx| {
+            theme_settings::init(theme::LoadThemes::JustBase, cx);
+            editor::init(cx);
+        });
+        fs.insert_tree("/project", serde_json::json!({"file": ""}))
+            .await;
+        let project = Project::test(fs, [Path::new("/project")], cx).await;
+        let manager = cx.new(|_| super::PortForwardManager::new());
+        let window = cx.open_window(size(px(900.), px(600.)), move |window, cx| {
+            super::PortForwardModal::new(manager, project, window, cx)
+        });
+        cx.run_until_parked();
+
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        let toggle = visual
+            .debug_bounds("port-forward-direction-toggle")
+            .expect("direction toggle is rendered");
+        let input_row = visual
+            .debug_bounds("port-forward-port-input")
+            .expect("port input row is rendered");
+        assert!(
+            toggle.size.width < input_row.size.width / 2.,
+            "the direction toggle stretched across the modal: {toggle:?} vs {input_row:?}"
+        );
+
+        let (to_remote, remote_to_local) = visual.update(|window, _| {
+            let text_system = window.text_system();
+            let label_width = |label: &str| {
+                let run = TextRun {
+                    len: label.len(),
+                    font: font("Helvetica"),
+                    ..Default::default()
+                };
+                text_system.layout_line(label, px(14.), &[run], None).width
+            };
+            (
+                label_width(i18n::t!("2fe4aee45e505d4a")),
+                label_width(i18n::t!("4e156a6242d654b7")),
+            )
+        });
+        assert_eq!(
+            to_remote, remote_to_local,
+            "the two direction labels must render at the same width, otherwise the segments become asymmetric"
+        );
     }
 
     #[test]

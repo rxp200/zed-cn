@@ -754,6 +754,150 @@ async fn test_find_or_create_workspace_uses_project_group_key_when_paths_are_mis
 }
 
 #[gpui::test]
+async fn test_opening_main_worktree_folder_does_not_reuse_linked_worktree_workspace(
+    cx: &mut TestAppContext,
+) {
+    init_test(cx);
+    let worktree_project = setup_linked_worktree_project(cx).await;
+    let group_key = worktree_project.read_with(cx, |project, cx| project.project_group_key(cx));
+    assert_eq!(
+        group_key.path_list().paths(),
+        &[PathBuf::from("/project")],
+        "the linked worktree's project group key should point at the main worktree"
+    );
+
+    let (multi_workspace, cx) =
+        cx.add_window_view(|window, cx| MultiWorkspace::test_new(worktree_project, window, cx));
+    let worktree_workspace = multi_workspace.read_with(cx, |mw, _cx| mw.workspace().clone());
+
+    // The user opens the main repo folder while only its linked worktree is
+    // open. This is a different folder from the one the current workspace is
+    // rooted at, so it must open as its own workspace instead of silently
+    // re-activating the linked-worktree workspace and leaving the window
+    // showing the previous project.
+    let opened = multi_workspace
+        .update_in(cx, |mw, window, cx| {
+            mw.find_or_create_local_workspace(
+                PathList::new(&[PathBuf::from("/project")]),
+                None,
+                None,
+                OpenMode::Activate,
+                None,
+                window,
+                cx,
+            )
+        })
+        .await
+        .expect("opening the main worktree folder should succeed");
+
+    assert_ne!(
+        opened.entity_id(),
+        worktree_workspace.entity_id(),
+        "opening the main repo folder must not reuse the linked-worktree workspace"
+    );
+    assert_eq!(
+        PathList::new(&opened.read_with(cx, |workspace, cx| workspace.root_paths(cx))),
+        PathList::new(&[PathBuf::from("/project")]),
+        "the opened workspace should be rooted at the requested folder"
+    );
+    multi_workspace.read_with(cx, |mw, _cx| {
+        assert_eq!(
+            mw.workspace().entity_id(),
+            opened.entity_id(),
+            "the newly opened folder should become the active workspace"
+        );
+    });
+}
+
+#[gpui::test]
+async fn test_find_or_create_workspace_for_folder_does_not_reuse_linked_worktree_workspace(
+    cx: &mut TestAppContext,
+) {
+    // The Git worktree picker and other folder-opening callers go through
+    // `find_or_create_workspace` without a provisional project group key.
+    init_test(cx);
+    let worktree_project = setup_linked_worktree_project(cx).await;
+
+    let (multi_workspace, cx) =
+        cx.add_window_view(|window, cx| MultiWorkspace::test_new(worktree_project, window, cx));
+    let worktree_workspace = multi_workspace.read_with(cx, |mw, _cx| mw.workspace().clone());
+
+    let opened = multi_workspace
+        .update_in(cx, |mw, window, cx| {
+            mw.find_or_create_workspace(
+                PathList::new(&[PathBuf::from("/project")]),
+                None,
+                None,
+                |_options, _window, _cx| Task::ready(Ok(None)),
+                None,
+                OpenMode::Activate,
+                None,
+                window,
+                cx,
+            )
+        })
+        .await
+        .expect("opening the main worktree folder should succeed");
+
+    assert_ne!(
+        opened.entity_id(),
+        worktree_workspace.entity_id(),
+        "a folder open request without a project group key must not reuse the linked-worktree workspace"
+    );
+    assert_eq!(
+        PathList::new(&opened.read_with(cx, |workspace, cx| workspace.root_paths(cx))),
+        PathList::new(&[PathBuf::from("/project")]),
+        "the opened workspace should be rooted at the requested folder"
+    );
+}
+
+async fn setup_linked_worktree_project(cx: &mut TestAppContext) -> Entity<Project> {
+    let fs = FakeFs::new(cx.executor());
+    fs.insert_tree(
+        "/project",
+        json!({
+            ".git": {
+                "worktrees": {
+                    "feature-a": {
+                        "commondir": "../../",
+                        "HEAD": "ref: refs/heads/feature-a",
+                    },
+                },
+            },
+            "src": {},
+        }),
+    )
+    .await;
+    fs.insert_tree(
+        "/wt-feature-a",
+        json!({
+            ".git": "gitdir: /project/.git/worktrees/feature-a",
+            "src": {},
+        }),
+    )
+    .await;
+    fs.add_linked_worktree_for_repo(
+        Path::new("/project/.git"),
+        false,
+        git::repository::Worktree {
+            path: PathBuf::from("/wt-feature-a"),
+            ref_name: Some("refs/heads/feature-a".into()),
+            sha: "aaa".into(),
+            is_main: false,
+            is_bare: false,
+        },
+    )
+    .await;
+    cx.update(|cx| <dyn Fs>::set_global(fs.clone(), cx));
+
+    let worktree_project = Project::test(fs.clone(), ["/wt-feature-a".as_ref()], cx).await;
+    worktree_project
+        .update(cx, |project, cx| project.git_scans_complete(cx))
+        .await;
+    worktree_project
+}
+
+#[gpui::test]
 async fn test_remove_fallback_via_find_or_create_skips_removed_workspaces(cx: &mut TestAppContext) {
     init_test(cx);
     let fs = FakeFs::new(cx.executor());

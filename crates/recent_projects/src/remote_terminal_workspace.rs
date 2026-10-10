@@ -9,6 +9,13 @@ use project::trusted_worktrees;
 use remote::RemoteConnectionOptions;
 use workspace::{AppState, MultiWorkspace, OpenOptions, SerializedWorkspaceLocation, Workspace};
 
+/// Remote terminal mode always opens its terminal in the center pane. The regular
+/// `workspace::NewTerminal` action targets the bottom dock unless the active center
+/// pane already shows a terminal, so it must not be used here.
+fn remote_terminal_mode_terminal_action() -> Box<dyn gpui::Action> {
+    workspace::NewCenterTerminal::default().boxed_clone()
+}
+
 /// Opens a remote terminal workspace: a workspace whose primary purpose is
 /// terminal-centric remote access. The workspace is opened with the remote
 /// home directory as its root, and a terminal is automatically created and
@@ -54,7 +61,7 @@ pub async fn open_remote_terminal_workspace(
                             .any(|item| item.act_as::<terminal_view::TerminalView>(cx).is_some())
                     });
                     if !has_terminal {
-                        window.dispatch_action(workspace::NewTerminal::default().boxed_clone(), cx);
+                        window.dispatch_action(remote_terminal_mode_terminal_action(), cx);
                     }
                 });
             })?;
@@ -276,7 +283,7 @@ pub async fn open_remote_terminal_workspace(
                 window.update(cx, |multi_workspace, window, cx| {
                     multi_workspace.activate(workspace.clone(), None, window, cx);
                     workspace.update(cx, |_workspace, cx| {
-                        window.dispatch_action(workspace::NewTerminal::default().boxed_clone(), cx);
+                        window.dispatch_action(remote_terminal_mode_terminal_action(), cx);
                     });
                 })?;
             }
@@ -296,7 +303,7 @@ mod tests {
     use super::*;
     use extension::ExtensionHostProxy;
     use fs::FakeFs;
-    use gpui::{AppContext, TestAppContext};
+    use gpui::{AppContext, Entity, TestAppContext};
     use http_client::BlockedHttpClient;
     use node_runtime::NodeRuntime;
     use remote::RemoteClient;
@@ -309,6 +316,53 @@ mod tests {
         cx: &mut TestAppContext,
         server_cx: &mut TestAppContext,
     ) {
+        let (_window, headless) = open_test_remote_terminal_workspace(cx, server_cx).await;
+
+        // The worktree rooted at the remote home must be scanned shallowly:
+        // top-level entries exist, but deeper directories are not loaded.
+        headless.read_with(server_cx, |headless, cx| {
+            let worktrees: Vec<_> = headless.worktree_store.read(cx).worktrees().collect();
+            assert_eq!(worktrees.len(), 1, "expected exactly the home worktree");
+            let snapshot = worktrees[0].read(cx).snapshot();
+            let code = snapshot
+                .entry_for_path(rel_path("code"))
+                .expect("top-level entry must exist");
+            assert!(
+                code.kind.is_unloaded(),
+                "top-level directories must stay unloaded with scan depth 1"
+            );
+            assert!(
+                snapshot.entry_for_path(rel_path("code/project")).is_none(),
+                "deeper directories must not be scanned eagerly"
+            );
+            assert!(snapshot.entry_for_path(rel_path("README.md")).is_some());
+        });
+    }
+
+    // Remote terminal mode must open the terminal in the center pane, while the
+    // regular `NewTerminal` action keeps targeting the bottom dock. A full UI
+    // assertion is not possible here: a Mock remote connection resolves terminal
+    // creation to a client-side `mock` process that cannot actually spawn, so the
+    // terminal item never materializes. The action actually dispatched is the
+    // observable decision point this regression guards.
+    #[gpui::test]
+    fn test_remote_terminal_mode_dispatches_center_terminal_action() {
+        assert_eq!(
+            remote_terminal_mode_terminal_action().name(),
+            workspace::NewCenterTerminal::default().name(),
+            "remote terminal mode must open the terminal in the center pane"
+        );
+        assert_ne!(
+            remote_terminal_mode_terminal_action().name(),
+            workspace::NewTerminal::default().name(),
+            "remote terminal mode must not use the bottom dock terminal action"
+        );
+    }
+
+    async fn open_test_remote_terminal_workspace(
+        cx: &mut TestAppContext,
+        server_cx: &mut TestAppContext,
+    ) -> (WindowHandle<MultiWorkspace>, Entity<HeadlessProject>) {
         let app_state = init_test(cx);
         let executor = cx.executor();
 
@@ -363,43 +417,22 @@ mod tests {
         drop(connect_guard);
 
         let mut async_cx = cx.to_async();
-        let result = open_remote_terminal_workspace(
+        let window = open_remote_terminal_workspace(
             opts,
             app_state,
             workspace::OpenOptions::default(),
             &mut async_cx,
         )
-        .await;
+        .await
+        .expect("open_remote_terminal_workspace should succeed");
 
         executor.run_until_parked();
         server_cx.executor().run_until_parked();
         executor.run_until_parked();
 
-        assert!(
-            result.is_ok(),
-            "open_remote_terminal_workspace should succeed"
-        );
         assert_eq!(cx.update(|cx| cx.windows().len()), 1);
 
-        // The worktree rooted at the remote home must be scanned shallowly:
-        // top-level entries exist, but deeper directories are not loaded.
-        headless.read_with(server_cx, |headless, cx| {
-            let worktrees: Vec<_> = headless.worktree_store.read(cx).worktrees().collect();
-            assert_eq!(worktrees.len(), 1, "expected exactly the home worktree");
-            let snapshot = worktrees[0].read(cx).snapshot();
-            let code = snapshot
-                .entry_for_path(rel_path("code"))
-                .expect("top-level entry must exist");
-            assert!(
-                code.kind.is_unloaded(),
-                "top-level directories must stay unloaded with scan depth 1"
-            );
-            assert!(
-                snapshot.entry_for_path(rel_path("code/project")).is_none(),
-                "deeper directories must not be scanned eagerly"
-            );
-            assert!(snapshot.entry_for_path(rel_path("README.md")).is_some());
-        });
+        (window, headless)
     }
 
     fn init_test(cx: &mut TestAppContext) -> Arc<AppState> {

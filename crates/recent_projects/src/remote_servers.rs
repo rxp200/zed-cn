@@ -1037,12 +1037,11 @@ enum RemoteMatch {
     ManageSshKeys,
     PredownloadRemoteServer,
     Separator,
-    /// A selectable server row in the default (unfocused) view; confirming it
-    /// opens that server's own view.
+    /// A selectable server row. In the default view it is the only row for a
+    /// server; while searching it stays the only selectable row of its group,
+    /// with `host_positions` carrying the fuzzy highlight, so `↑`/`↓` keep
+    /// switching between servers. Confirming it opens the server's own view.
     Server {
-        server: usize,
-    },
-    ServerHeader {
         server: usize,
         host_positions: Vec<usize>,
     },
@@ -1070,13 +1069,24 @@ enum RemoteMatch {
 }
 
 impl RemoteMatch {
-    fn is_selectable(&self) -> bool {
-        !matches!(
-            self,
-            RemoteMatch::Separator
-                | RemoteMatch::ServerHeader { .. }
-                | RemoteMatch::FocusedServerHeader { .. }
-        )
+    /// Whether the row participates in keyboard selection. While searching,
+    /// every row below a server is a read-only preview of that server's own
+    /// view, so only the server rows themselves can be selected and `↑`/`↓`
+    /// keep switching between servers.
+    fn is_selectable(&self, searching: bool) -> bool {
+        match self {
+            RemoteMatch::Separator | RemoteMatch::FocusedServerHeader { .. } => false,
+            RemoteMatch::Project { .. }
+            | RemoteMatch::OpenFolder { .. }
+            | RemoteMatch::ViewServerOptions { .. }
+            | RemoteMatch::RemoteServerSource { .. }
+            | RemoteMatch::RemoteTerminal { .. }
+                if searching =>
+            {
+                false
+            }
+            _ => true,
+        }
     }
 }
 
@@ -1175,44 +1185,162 @@ impl RemoteServerPickerDelegate {
         }
     }
 
+    /// True while the fuzzy results across every server are shown. In this mode
+    /// only the server rows can be selected; the rows below each server are
+    /// read-only previews.
+    fn is_searching(&self) -> bool {
+        self.focused_server.is_none() && !self.query.trim().is_empty()
+    }
+
+    /// The matching locations of one server while a query is active. `None`
+    /// means no query is active, so the server's full recent list is shown.
+    fn filtered_project_matches(
+        &self,
+        server_index: usize,
+        query: &str,
+    ) -> Option<Vec<(usize, Vec<usize>)>> {
+        if query.is_empty() {
+            return None;
+        }
+        let Some(results) = self.state.filtered_servers.as_ref() else {
+            return Some(Vec::new());
+        };
+        Some(
+            results
+                .iter()
+                .find(|filtered| filtered.server_index == server_index)
+                .map(|filtered| {
+                    filtered
+                        .project_matches
+                        .iter()
+                        .map(|project| (project.project_index, project.path_positions.clone()))
+                        .collect()
+                })
+                .unwrap_or_default(),
+        )
+    }
+
     /// Flattens the current state into the picker's match list. Three layouts
-    /// exist: the focused server's own view (empty query, a server selected),
-    /// the default view with one row per server (empty query), and the fuzzy
-    /// filtered view across all servers and projects (non-empty query; the
-    /// fuzzy filtering itself runs separately, off-thread on the keystroke
-    /// path, see [`Self::update_matches`]).
+    /// exist: a server's own view (a server is focused), the default view with
+    /// one row per server (empty query, no focus), and the fuzzy filtered view
+    /// across all servers (non-empty query, no focus). The last one mirrors the
+    /// content of each server's own view, but only its server row is selectable
+    /// so `↑`/`↓` keep switching between servers and confirming one enters it.
     fn rebuild_matches(&mut self) {
         let has_open_project = self.has_open_project;
         let is_local = self.is_local;
+        let query = self.query.trim().to_string();
+
+        let focused_index = self.focused_server.as_ref().map(|(index, _)| *index);
+        let focused = focused_index.filter(|index| *index < self.state.servers.len());
+        if focused_index.is_some() && focused.is_none() {
+            self.focused_server = None;
+        }
 
         let mut matches = Vec::new();
-        if self.query.trim().is_empty() {
-            let focused_index = self.focused_server.as_ref().map(|(index, _)| *index);
-            let focused = focused_index.filter(|index| *index < self.state.servers.len());
-            if focused_index.is_some() && focused.is_none() {
-                self.focused_server = None;
+        if let Some(server_index) = focused {
+            // A server's own view: Open Folder first, then its recent
+            // locations, then the per-server actions. When the view was entered
+            // from a search, the query stays active and only matching locations
+            // are listed.
+            matches.push(RemoteMatch::FocusedServerHeader {
+                server: server_index,
+            });
+            let project_matches = self.filtered_project_matches(server_index, &query);
+            if let Some(server) = self.state.servers.get(server_index) {
+                match server {
+                    RemoteEntry::Project {
+                        projects,
+                        connection,
+                        ..
+                    } => {
+                        matches.push(RemoteMatch::OpenFolder {
+                            server: server_index,
+                        });
+                        match &project_matches {
+                            Some(project_matches) => {
+                                for (project, positions) in project_matches {
+                                    matches.push(RemoteMatch::Project {
+                                        server: server_index,
+                                        project: *project,
+                                        positions: positions.clone(),
+                                    });
+                                }
+                            }
+                            None => {
+                                for project in 0..projects.len() {
+                                    matches.push(RemoteMatch::Project {
+                                        server: server_index,
+                                        project,
+                                        positions: Vec::new(),
+                                    });
+                                }
+                            }
+                        }
+                        matches.push(RemoteMatch::Separator);
+                        matches.push(RemoteMatch::ViewServerOptions {
+                            server: server_index,
+                        });
+                        if matches!(connection, Connection::Ssh(_)) {
+                            matches.push(RemoteMatch::RemoteServerSource {
+                                server: server_index,
+                            });
+                            matches.push(RemoteMatch::RemoteTerminal {
+                                server: server_index,
+                            });
+                        }
+                    }
+                    RemoteEntry::SshConfig { .. } => {
+                        matches.push(RemoteMatch::OpenFolder {
+                            server: server_index,
+                        });
+                    }
+                }
             }
-            if let Some(server_index) = focused {
-                // The focused server's own view: Open Folder first, then its
-                // recent locations, then the per-server actions.
-                matches.push(RemoteMatch::FocusedServerHeader {
-                    server: server_index,
-                });
-                if let Some(server) = self.state.servers.get(server_index) {
+        } else if query.is_empty() {
+            matches.push(RemoteMatch::AddServer);
+            if has_open_project && is_local {
+                matches.push(RemoteMatch::AddDevContainer);
+            }
+            if cfg!(target_os = "windows") {
+                matches.push(RemoteMatch::AddWsl);
+            }
+            matches.push(RemoteMatch::EditSshConfig);
+            matches.push(RemoteMatch::ManageSshKeys);
+            matches.push(RemoteMatch::PredownloadRemoteServer);
+            if !self.state.servers.is_empty() {
+                matches.push(RemoteMatch::Separator);
+                for server_index in 0..self.state.servers.len() {
+                    matches.push(RemoteMatch::Server {
+                        server: server_index,
+                        host_positions: Vec::new(),
+                    });
+                }
+            }
+        } else {
+            if let Some(results) = &self.state.filtered_servers {
+                for filtered in results {
+                    let server_index = filtered.server_index;
+                    let Some(server) = self.state.servers.get(server_index) else {
+                        continue;
+                    };
+                    if !matches.is_empty() {
+                        matches.push(RemoteMatch::Separator);
+                    }
+                    matches.push(RemoteMatch::Server {
+                        server: server_index,
+                        host_positions: filtered.host_positions.clone(),
+                    });
                     match server {
-                        RemoteEntry::Project {
-                            projects,
-                            connection,
-                            ..
-                        } => {
+                        RemoteEntry::Project { connection, .. } => {
                             matches.push(RemoteMatch::OpenFolder {
                                 server: server_index,
                             });
-                            for (project, _) in projects.iter().enumerate() {
+                            for project in &filtered.project_matches {
                                 matches.push(RemoteMatch::Project {
                                     server: server_index,
-                                    project,
-                                    positions: Vec::new(),
+                                    project: project.project_index,
+                                    positions: project.path_positions.clone(),
                                 });
                             }
                             matches.push(RemoteMatch::Separator);
@@ -1235,154 +1363,35 @@ impl RemoteServerPickerDelegate {
                         }
                     }
                 }
-            } else {
-                matches.push(RemoteMatch::AddServer);
-                if has_open_project && is_local {
-                    matches.push(RemoteMatch::AddDevContainer);
-                }
-                if cfg!(target_os = "windows") {
-                    matches.push(RemoteMatch::AddWsl);
-                }
-                matches.push(RemoteMatch::EditSshConfig);
-                matches.push(RemoteMatch::ManageSshKeys);
-                matches.push(RemoteMatch::PredownloadRemoteServer);
-                if !self.state.servers.is_empty() {
-                    matches.push(RemoteMatch::Separator);
-                    for server_index in 0..self.state.servers.len() {
-                        matches.push(RemoteMatch::Server {
-                            server: server_index,
-                        });
-                    }
-                }
-            }
-        } else {
-            let push_server =
-                |matches: &mut Vec<RemoteMatch>,
-                 server_index: usize,
-                 server: &RemoteEntry,
-                 host_positions: Vec<usize>,
-                 project_matches: Vec<(usize, Vec<usize>)>| {
-                    if !matches.is_empty() {
-                        matches.push(RemoteMatch::Separator);
-                    }
-                    matches.push(RemoteMatch::ServerHeader {
-                        server: server_index,
-                        host_positions,
-                    });
-                    match server {
-                        RemoteEntry::Project { .. } => {
-                            for (project, positions) in project_matches {
-                                matches.push(RemoteMatch::Project {
-                                    server: server_index,
-                                    project,
-                                    positions,
-                                });
-                            }
-                            matches.push(RemoteMatch::OpenFolder {
-                                server: server_index,
-                            });
-                            matches.push(RemoteMatch::ViewServerOptions {
-                                server: server_index,
-                            });
-                            if matches!(
-                                server,
-                                RemoteEntry::Project {
-                                    connection: Connection::Ssh(_),
-                                    ..
-                                }
-                            ) {
-                                matches.push(RemoteMatch::RemoteServerSource {
-                                    server: server_index,
-                                });
-                            }
-                        }
-                        RemoteEntry::SshConfig { .. } => {
-                            matches.push(RemoteMatch::OpenFolder {
-                                server: server_index,
-                            });
-                        }
-                    }
-                };
-
-            if let Some(results) = &self.state.filtered_servers {
-                for filtered in results {
-                    let server_index = filtered.server_index;
-                    let Some(server) = self.state.servers.get(server_index) else {
-                        continue;
-                    };
-                    let project_matches = filtered
-                        .project_matches
-                        .iter()
-                        .map(|pm| (pm.project_index, pm.path_positions.clone()))
-                        .collect();
-                    push_server(
-                        &mut matches,
-                        server_index,
-                        server,
-                        filtered.host_positions.clone(),
-                        project_matches,
-                    );
-                }
             }
         }
 
         self.matches = matches;
-        self.selected_index = self
-            .matches
-            .iter()
-            .position(RemoteMatch::is_selectable)
+        let searching = self.is_searching();
+        // Entering a server from a search keeps the query active, so put the
+        // cursor on the matched location instead of on Open Folder.
+        let matched_location = if focused.is_some() && !query.is_empty() {
+            self.matches
+                .iter()
+                .position(|entry| matches!(entry, RemoteMatch::Project { .. }))
+        } else {
+            None
+        };
+        self.selected_index = matched_location
+            .or_else(|| {
+                self.matches
+                    .iter()
+                    .position(|entry| entry.is_selectable(searching))
+            })
             .unwrap_or(0);
     }
 
-    fn render_server_header(
-        &self,
-        server_index: usize,
-        host_positions: &[usize],
-    ) -> Option<AnyElement> {
-        let server = self.state.servers.get(server_index)?;
-        let connection = server.connection().into_owned();
-        let (main_label, aux_label, is_wsl) = server_labels(&connection);
-        Some(
-            h_flex()
-                .debug_selector(|| format!("remote-server-{}", server.display_host()))
-                .w_full()
-                .pt_1()
-                .px_3()
-                .gap_1()
-                .overflow_hidden()
-                .child(
-                    h_flex()
-                        .gap_1()
-                        .max_w_96()
-                        .overflow_hidden()
-                        .text_ellipsis()
-                        .when(is_wsl, |this| {
-                            this.child(
-                                Label::new("WSL：")
-                                    .size(LabelSize::Small)
-                                    .color(Color::Muted),
-                            )
-                        })
-                        .child(
-                            HighlightedLabel::new(main_label, host_positions.to_vec())
-                                .size(LabelSize::Small)
-                                .color(Color::Muted),
-                        ),
-                )
-                .children(
-                    aux_label
-                        .map(|label| Label::new(label).size(LabelSize::Small).color(Color::Muted)),
-                )
-                .into_any_element(),
-        )
-    }
-
-    /// A selectable server row in the default view; confirming it opens the
-    /// server's own view.
+    /// A selectable server row; confirming it opens the server's own view.
     fn render_server_row(
         &self,
         ix: usize,
         server_index: usize,
+        host_positions: &[usize],
         selected: bool,
     ) -> Option<AnyElement> {
         let server = self.state.servers.get(server_index)?;
@@ -1403,7 +1412,7 @@ impl RemoteServerPickerDelegate {
                         .when(is_wsl, |this| {
                             this.child(Label::new("WSL：").color(Color::Muted))
                         })
-                        .child(Label::new(main_label))
+                        .child(HighlightedLabel::new(main_label, host_positions.to_vec()))
                         .children(aux_label.map(|label| Label::new(label).color(Color::Muted))),
                 )
                 .end_slot(Icon::new(IconName::ChevronRight).color(Color::Muted))
@@ -1524,7 +1533,10 @@ impl PickerDelegate for RemoteServerPickerDelegate {
     }
 
     fn can_select(&self, ix: usize, _window: &mut Window, _cx: &mut Context<Picker<Self>>) -> bool {
-        self.matches.get(ix).is_some_and(RemoteMatch::is_selectable)
+        let searching = self.is_searching();
+        self.matches
+            .get(ix)
+            .is_some_and(|entry| entry.is_selectable(searching))
     }
 
     fn editor_position(&self) -> PickerEditorPosition {
@@ -1555,8 +1567,8 @@ impl PickerDelegate for RemoteServerPickerDelegate {
             return Task::ready(());
         }
 
-        // Searching applies across every server, so leave the per-server view.
-        self.focused_server = None;
+        // A query filters the current scope: the global server list, or the
+        // focused server's own view when one has been entered.
 
         let filter_data = self.state.filter_data.clone();
         let executor = cx.background_executor().clone();
@@ -1585,10 +1597,8 @@ impl PickerDelegate for RemoteServerPickerDelegate {
         };
         let remote_server_projects = self.remote_server_projects.clone();
         match entry {
-            RemoteMatch::Separator
-            | RemoteMatch::ServerHeader { .. }
-            | RemoteMatch::FocusedServerHeader { .. } => {}
-            RemoteMatch::Server { server } => {
+            RemoteMatch::Separator | RemoteMatch::FocusedServerHeader { .. } => {}
+            RemoteMatch::Server { server, .. } => {
                 let server = *server;
                 self.focus_server(server);
                 cx.notify();
@@ -1756,13 +1766,15 @@ impl PickerDelegate for RemoteServerPickerDelegate {
         _window: &mut Window,
         cx: &mut Context<Picker<Self>>,
     ) -> Option<String> {
-        let Some(RemoteMatch::Server { server }) = self.matches.get(self.selected_index) else {
+        let Some(RemoteMatch::Server { server, .. }) = self.matches.get(self.selected_index) else {
             return None;
         };
         let server = *server;
         self.focus_server(server);
         cx.notify();
-        Some(String::new())
+        // Keep the active query when drilling in so a location matched from the
+        // search view stays filtered and highlighted inside the server.
+        Some(self.query.clone())
     }
 
     fn select_parent(
@@ -1788,11 +1800,10 @@ impl PickerDelegate for RemoteServerPickerDelegate {
         let entry = self.matches.get(ix)?;
         match entry {
             RemoteMatch::Separator => Some(div().child(ListSeparator).into_any_element()),
-            RemoteMatch::ServerHeader {
+            RemoteMatch::Server {
                 server,
                 host_positions,
-            } => self.render_server_header(*server, host_positions),
-            RemoteMatch::Server { server } => self.render_server_row(ix, *server, selected),
+            } => self.render_server_row(ix, *server, host_positions, selected),
             RemoteMatch::FocusedServerHeader { server } => {
                 self.render_focused_server_header(*server, cx)
             }
@@ -1868,9 +1879,32 @@ impl PickerDelegate for RemoteServerPickerDelegate {
                     return None;
                 };
                 let project_entry = projects.get(*project)?;
+                let paths = project_entry.project.paths.clone();
+
+                if self.is_searching() {
+                    // A read-only preview of a matched location under its
+                    // server: the highlight is shown but the row can't be
+                    // selected or deleted without entering the server first.
+                    return Some(
+                        ListItem::new(("remote-project-preview", ix))
+                            .inset(true)
+                            .spacing(ui::ListItemSpacing::Sparse)
+                            .start_slot(
+                                Icon::new(IconName::Folder)
+                                    .color(Color::Muted)
+                                    .size(IconSize::Small),
+                            )
+                            .child(
+                                HighlightedLabel::new(paths.join(", "), positions.clone())
+                                    .truncate_start(),
+                            )
+                            .tooltip(Tooltip::text(paths.join("\n")))
+                            .into_any_element(),
+                    );
+                }
+
                 let server_ix = *index;
                 let remote_project = project_entry.project.clone();
-                let paths = remote_project.paths.clone();
                 let remote_server_projects = self.remote_server_projects.clone();
 
                 Some(
@@ -4356,6 +4390,13 @@ mod picker_view_tests {
         }
     }
 
+    /// Applies a query the way a keystroke does: filter, then rebuild.
+    fn search(delegate: &mut RemoteServerPickerDelegate, query: &str) {
+        delegate.query = query.to_string();
+        delegate.state.filter_sync(query);
+        delegate.rebuild_matches();
+    }
+
     #[test]
     fn record_remote_project_is_bounded_and_most_recent_first() {
         let mut projects = Vec::new();
@@ -4417,7 +4458,7 @@ mod picker_view_tests {
             .matches
             .iter()
             .filter_map(|entry| match entry {
-                RemoteMatch::Server { server } => Some(*server),
+                RemoteMatch::Server { server, .. } => Some(*server),
                 _ => None,
             })
             .collect();
@@ -4438,12 +4479,171 @@ mod picker_view_tests {
                 .collect::<Vec<_>>()
         );
         assert!(
-            delegate.matches.iter().all(|entry| entry.is_selectable()
-                || matches!(
-                    entry,
-                    RemoteMatch::Separator | RemoteMatch::FocusedServerHeader { .. }
-                )),
+            delegate
+                .matches
+                .iter()
+                .all(|entry| entry.is_selectable(false)
+                    || matches!(
+                        entry,
+                        RemoteMatch::Separator | RemoteMatch::FocusedServerHeader { .. }
+                    )),
             "only separators are non-selectable in the default view"
+        );
+    }
+
+    #[test]
+    fn search_view_selects_servers_not_previewed_locations() {
+        let entries = vec![
+            ssh_entry(
+                0,
+                "host-a.example",
+                vec![project_entry("/alpha"), project_entry("/beta")],
+            ),
+            ssh_entry(1, "host-b.example", vec![project_entry("/alpha")]),
+        ];
+        let mut delegate = test_delegate(entries);
+        search(&mut delegate, "alpha");
+
+        // A location can belong to several servers; each shows its own group,
+        // but only the server rows themselves are selectable entries.
+        let mut selectable_servers: Vec<usize> = delegate
+            .matches
+            .iter()
+            .filter_map(|entry| match entry {
+                RemoteMatch::Server { server, .. } if entry.is_selectable(true) => Some(*server),
+                _ => None,
+            })
+            .collect();
+        selectable_servers.sort_unstable();
+        assert_eq!(selectable_servers, vec![0, 1]);
+        assert_eq!(
+            delegate
+                .matches
+                .iter()
+                .filter(|entry| entry.is_selectable(true))
+                .count(),
+            selectable_servers.len(),
+            "only the server rows are selectable while searching"
+        );
+        assert_eq!(
+            delegate
+                .matches
+                .iter()
+                .filter(|entry| matches!(entry, RemoteMatch::Project { .. }))
+                .count(),
+            2,
+            "each matching server previews its matched location"
+        );
+        assert!(
+            matches!(
+                delegate.matches.get(delegate.selected_index),
+                Some(RemoteMatch::Server { .. })
+            ),
+            "the initial selection lands on a server, not a previewed location"
+        );
+    }
+
+    #[test]
+    fn search_view_mirrors_the_server_view_content() {
+        let entries = vec![ssh_entry(
+            0,
+            "host-a.example",
+            vec![project_entry("/alpha")],
+        )];
+        let mut delegate = test_delegate(entries);
+        search(&mut delegate, "alpha");
+
+        // The group below a server lists the same entries as the server's own
+        // view: Open Folder, its locations, then the per-server actions.
+        for expected in [
+            "open_folder",
+            "project",
+            "view_server_options",
+            "remote_server_source",
+            "remote_terminal",
+        ] {
+            let found = delegate
+                .matches
+                .iter()
+                .any(|entry| match (expected, entry) {
+                    ("open_folder", RemoteMatch::OpenFolder { .. }) => true,
+                    ("project", RemoteMatch::Project { .. }) => true,
+                    ("view_server_options", RemoteMatch::ViewServerOptions { .. }) => true,
+                    ("remote_server_source", RemoteMatch::RemoteServerSource { .. }) => true,
+                    ("remote_terminal", RemoteMatch::RemoteTerminal { .. }) => true,
+                    _ => false,
+                });
+            assert!(found, "search view is missing {expected}");
+        }
+    }
+
+    #[test]
+    fn search_view_keeps_a_host_only_server_selectable() {
+        let entries = vec![ssh_entry(
+            0,
+            "host-only.example",
+            vec![project_entry("/alpha")],
+        )];
+        let mut delegate = test_delegate(entries);
+        search(&mut delegate, "host-only");
+
+        assert!(
+            matches!(
+                delegate.matches.get(delegate.selected_index),
+                Some(RemoteMatch::Server { server: 0, host_positions }) if !host_positions.is_empty()
+            ),
+            "a host-only match keeps the server row selectable and highlighted"
+        );
+        // The server owns its locations, so they are still previewed below it,
+        // just without any path highlight since only the host matched.
+        assert!(
+            delegate
+                .matches
+                .iter()
+                .filter_map(|entry| match entry {
+                    RemoteMatch::Project { positions, .. } => Some(positions),
+                    _ => None,
+                })
+                .all(|positions| positions.is_empty()),
+            "a host-only match previews locations without path highlights"
+        );
+    }
+
+    #[test]
+    fn drilling_into_a_searched_server_keeps_the_filter() {
+        let entries = vec![ssh_entry(
+            0,
+            "host-a.example",
+            vec![project_entry("/alpha"), project_entry("/beta")],
+        )];
+        let mut delegate = test_delegate(entries);
+        search(&mut delegate, "beta");
+
+        delegate.focus_server(0);
+
+        assert!(matches!(
+            delegate.matches.first(),
+            Some(RemoteMatch::FocusedServerHeader { server: 0 })
+        ));
+        let projects: Vec<usize> = delegate
+            .matches
+            .iter()
+            .filter_map(|entry| match entry {
+                RemoteMatch::Project { project, .. } => Some(*project),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            projects,
+            vec![1],
+            "the drilled-in view keeps the query and lists only matching locations"
+        );
+        assert!(
+            matches!(
+                delegate.matches.get(delegate.selected_index),
+                Some(RemoteMatch::Project { project: 1, .. })
+            ),
+            "the matched location is preselected inside the server"
         );
     }
 
@@ -4601,7 +4801,7 @@ mod drill_in_tests {
                 .delegate
                 .matches
                 .iter()
-                .position(|entry| matches!(entry, RemoteMatch::Server { server: 0 }))
+                .position(|entry| matches!(entry, RemoteMatch::Server { server: 0, .. }))
                 .expect("a selectable row per server");
             picker.delegate.selected_index = server_row;
             picker.delegate.confirm(false, window, cx);
@@ -4624,15 +4824,46 @@ mod drill_in_tests {
             );
         });
 
-        // Typing a query leaves the per-server view and filters globally.
+        // Typing a query keeps filtering the focused server's own view instead
+        // of leaving it, so the hierarchy stays intact.
         picker.update_in(cx, |picker, window, cx| {
             picker.set_query("host-a", window, cx);
         });
         cx.run_until_parked();
         picker.update(cx, |picker, _| {
-            assert!(picker.delegate.focused_server.is_none());
+            assert!(
+                picker.delegate.focused_server.is_some(),
+                "typing keeps filtering the focused server's own view"
+            );
             assert!(picker.delegate.state.filtered_servers.is_some());
+            assert!(
+                picker
+                    .delegate
+                    .matches
+                    .iter()
+                    .any(|entry| matches!(entry, RemoteMatch::FocusedServerHeader { server: 0 })),
+                "the server's own view is still shown"
+            );
         });
+
+        // Stepping back leaves the server's own view but keeps the query, so
+        // the filtered server list is shown again.
+        picker.update_in(cx, |picker, window, cx| {
+            picker.cancel(&menu::Cancel, window, cx);
+        });
+        cx.run_until_parked();
+        picker.update(cx, |picker, _| {
+            assert!(picker.delegate.focused_server.is_none());
+            assert!(
+                picker
+                    .delegate
+                    .matches
+                    .iter()
+                    .any(|entry| matches!(entry, RemoteMatch::Server { server: 0, .. })),
+                "the filtered server list is shown again"
+            );
+        });
+        assert_eq!(dismiss_count.load(Ordering::SeqCst), 0);
 
         // Re-enter the server's view, then step back with Cancel instead of
         // dismissing the modal.
@@ -4645,7 +4876,7 @@ mod drill_in_tests {
                 .delegate
                 .matches
                 .iter()
-                .position(|entry| matches!(entry, RemoteMatch::Server { server: 0 }))
+                .position(|entry| matches!(entry, RemoteMatch::Server { server: 0, .. }))
                 .expect("a selectable row per server");
             picker.delegate.selected_index = server_row;
             picker.delegate.confirm(false, window, cx);
@@ -4663,7 +4894,7 @@ mod drill_in_tests {
                     .delegate
                     .matches
                     .iter()
-                    .any(|entry| matches!(entry, RemoteMatch::Server { server: 0 })),
+                    .any(|entry| matches!(entry, RemoteMatch::Server { server: 0, .. })),
                 "the server list is shown again"
             );
         });

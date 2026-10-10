@@ -1090,6 +1090,13 @@ impl ProjectItemRegistry {
                 let is_local = project.read(cx).is_local();
                 let project_item =
                     <T::Item as project::ProjectItem>::try_open(project, &project_path, cx)?;
+                log::info!(
+                    "[open-debug] project item {} claims {:?}",
+                    std::any::type_name::<T::Item>(),
+                    entry_abs_path
+                        .as_deref()
+                        .unwrap_or(project_path.path.as_std_path())
+                );
                 let project = project.clone();
                 Some(window.spawn(cx, async move |cx| {
                     match project_item.await.with_context(|| {
@@ -1154,12 +1161,14 @@ impl ProjectItemRegistry {
         window: &mut Window,
         cx: &mut App,
     ) -> Task<Result<(Option<ProjectEntryId>, WorkspaceItemBuilder)>> {
+        log::info!("[open-debug] resolving project path {:?}", path.path.as_unix_str());
         let Some(open_project_item) = self
             .build_project_item_for_path_fns
             .iter()
             .rev()
             .find_map(|open_project_item| open_project_item(project, path, window, cx))
         else {
+            log::warn!("[open-debug] no project item handles {:?}", path.path.as_unix_str());
             return Task::ready(Err(anyhow!("cannot open file {:?}", path.path)));
         };
         open_project_item
@@ -4242,6 +4251,8 @@ impl Workspace {
     ) -> Task<Vec<Option<anyhow::Result<Box<dyn ItemHandle>>>>> {
         let fs = self.app_state.fs.clone();
 
+        log::info!("[open-debug] workspace::open_paths {:?}", abs_paths);
+
         let caller_ordered_abs_paths = abs_paths.clone();
 
         // Sort the paths to ensure we add worktrees for parents before their children.
@@ -5321,6 +5332,10 @@ impl Workspace {
 
         let workspace = self.weak_self.clone();
         let project_path = path.into();
+        log::info!(
+            "[open-debug] workspace::open_path_preview {:?}",
+            project_path.path.as_unix_str()
+        );
         let task = self.load_path(project_path.clone(), window, cx);
         window.spawn(cx, async move |cx| {
             let (project_entry_id, build_item) = task.await?;
