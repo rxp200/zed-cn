@@ -235,6 +235,15 @@ fn sftp_put_command(source_path: &str, destination_path: &str) -> String {
     format!("put {source} {destination}\n")
 }
 
+fn forward_spec(local_port: u16, host: &str, remote_port: u16) -> String {
+    format!(
+        "127.0.0.1:{}:{}:{}",
+        local_port,
+        bracket_ipv6(host),
+        remote_port
+    )
+}
+
 fn reverse_forward_spec(remote_port: u16, host: &str, local_port: u16) -> String {
     format!(
         "localhost:{}:{}:{}",
@@ -664,12 +673,7 @@ impl RemoteConnection for SshRemoteConnection {
         args.push("-N".into());
         for (local_port, host, remote_port) in forwards {
             args.push("-L".into());
-            args.push(format!(
-                "127.0.0.1:{}:{}:{}",
-                local_port,
-                bracket_ipv6(&host),
-                remote_port
-            ));
+            args.push(forward_spec(local_port, &host, remote_port));
         }
         args.push(socket.connection_options.ssh_destination());
         Ok(CommandTemplate {
@@ -3663,6 +3667,30 @@ mod tests {
         assert_eq!(
             reverse_forward_spec(4000, "::1", 3000),
             "localhost:4000:[::1]:3000"
+        );
+        assert_eq!(
+            reverse_forward_spec(4000, "192.168.1.3", 7990),
+            "localhost:4000:192.168.1.3:7990"
+        );
+    }
+
+    #[test]
+    fn forward_spec_binds_loopback_and_reaches_any_remote_host() {
+        assert_eq!(
+            forward_spec(7990, "localhost", 7990),
+            "127.0.0.1:7990:localhost:7990"
+        );
+        assert_eq!(
+            forward_spec(7990, "192.168.1.3", 7990),
+            "127.0.0.1:7990:192.168.1.3:7990"
+        );
+        assert_eq!(
+            forward_spec(7990, "fe80::1", 8000),
+            "127.0.0.1:7990:[fe80::1]:8000"
+        );
+        assert_eq!(
+            forward_spec(7990, "[fe80::1]", 8000),
+            "127.0.0.1:7990:[fe80::1]:8000"
         );
     }
 

@@ -60,9 +60,136 @@ pub enum ForwardStatus {
     Failed(String),
 }
 
+/// The endpoint a tunnel connects to.
+///
+/// For [`ForwardDirection::RemoteToLocal`] it is resolved and reached on the
+/// remote host, for [`ForwardDirection::LocalToRemote`] on the local machine.
+/// A `None` host means the loopback address of that machine.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct ForwardTarget {
+    pub host: Option<String>,
+    pub port: u16,
+}
+
+impl ForwardTarget {
+    fn loopback(port: u16) -> Self {
+        Self { host: None, port }
+    }
+
+    /// The host argument expected by `ssh -L` / `ssh -R`.
+    fn connect_host(&self, fallback: &str) -> String {
+        self.host.clone().unwrap_or_else(|| fallback.to_string())
+    }
+
+    /// `host:port` with an explicit loopback host, for user-visible labels.
+    fn connect_label(&self, fallback: &str) -> String {
+        format!(
+            "{}:{}",
+            bracket_ipv6(&self.connect_host(fallback)),
+            self.port
+        )
+    }
+}
+
+impl std::fmt::Display for ForwardTarget {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.host {
+            Some(host) => write!(formatter, "{}:{}", bracket_ipv6(host), self.port),
+            None => write!(formatter, "{}", self.port),
+        }
+    }
+}
+
+fn bracket_ipv6(host: &str) -> String {
+    if host.contains(':') && !host.starts_with('[') {
+        format!("[{}]", host)
+    } else {
+        host.to_string()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ForwardInputError {
+    Empty,
+    InvalidHost,
+    InvalidPort,
+}
+
+fn forward_input_error_message(error: ForwardInputError) -> &'static str {
+    match error {
+        ForwardInputError::Empty => i18n::t!("151ef2000ff5a2a8"),
+        ForwardInputError::InvalidHost => i18n::t!("d7c3cf2d2d8c8134"),
+        ForwardInputError::InvalidPort => i18n::t!("2d90356ae0befa45"),
+    }
+}
+
+/// Parses one line of the manual input field: a bare port, or `host:port`.
+///
+/// The host is resolved by whichever side owns the target, so it is never
+/// resolved here. Loopback and wildcard spellings collapse to the single
+/// "that machine's loopback" form, which keeps them identical to entries
+/// created by automatic detection and the web preview.
+fn parse_forward_input(text: &str) -> Result<ForwardTarget, ForwardInputError> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Err(ForwardInputError::Empty);
+    }
+    let (host, port) = split_host_port(text)?;
+    let port = port
+        .parse::<u16>()
+        .ok()
+        .filter(|port| *port != 0)
+        .ok_or(ForwardInputError::InvalidPort)?;
+    let host = match host {
+        Some(host) => normalize_host(host)?,
+        None => None,
+    };
+    Ok(ForwardTarget { host, port })
+}
+
+fn split_host_port(text: &str) -> Result<(Option<&str>, &str), ForwardInputError> {
+    if let Some(rest) = text.strip_prefix('[') {
+        let (host, rest) = rest.split_once(']').ok_or(ForwardInputError::InvalidHost)?;
+        let port = rest
+            .strip_prefix(':')
+            .ok_or(ForwardInputError::InvalidHost)?;
+        if host.is_empty() {
+            return Err(ForwardInputError::InvalidHost);
+        }
+        return Ok((Some(host), port));
+    }
+    match text.rsplit_once(':') {
+        Some((host, port)) => {
+            // A bare IPv6 address is ambiguous with `host:port`; require brackets.
+            if host.is_empty() || host.contains(':') {
+                return Err(ForwardInputError::InvalidHost);
+            }
+            Ok((Some(host), port))
+        }
+        None => Ok((None, text)),
+    }
+}
+
+fn normalize_host(host: &str) -> Result<Option<String>, ForwardInputError> {
+    let host = host.trim().to_ascii_lowercase();
+    if host.is_empty()
+        || host.len() > 255
+        || !host.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_' | ':' | '%')
+        })
+    {
+        return Err(ForwardInputError::InvalidHost);
+    }
+    Ok((!matches!(
+        host.as_str(),
+        "localhost" | "127.0.0.1" | "::1" | "0.0.0.0" | "::"
+    ))
+    .then_some(host))
+}
+
 struct ForwardEntry {
     direction: ForwardDirection,
-    remote_port: u16,
+    target: ForwardTarget,
     local_port: Option<u16>,
     source: ForwardSource,
     status: ForwardStatus,
@@ -73,7 +200,7 @@ struct ForwardEntry {
 #[derive(Clone)]
 pub struct ForwardSnapshot {
     pub direction: ForwardDirection,
-    pub remote_port: u16,
+    pub target: ForwardTarget,
     pub local_port: Option<u16>,
     pub source: ForwardSource,
     pub status: ForwardStatus,
@@ -322,7 +449,7 @@ async fn yield_diagnostic_drain() {
 }
 
 pub struct PortForwardManager {
-    entries: HashMap<(ForwardDirection, u16), ForwardEntry>,
+    entries: HashMap<(ForwardDirection, ForwardTarget), ForwardEntry>,
     automatically_seen: HashSet<u16>,
     next_generation: u64,
     _tasks: Vec<Task<()>>,
@@ -335,7 +462,8 @@ pub struct PortForwardManager {
     #[cfg(test)]
     probe_launcher: Option<Box<dyn FnMut() -> ForwardChild>>,
     #[cfg(test)]
-    forward_launcher: Option<Box<dyn FnMut(ForwardDirection, u16) -> ForwardChild>>,
+    forward_launcher:
+        Option<Box<dyn FnMut(ForwardDirection, &ForwardTarget, &[String]) -> ForwardChild>>,
 }
 
 impl PortForwardManager {
@@ -375,10 +503,12 @@ impl PortForwardManager {
         let automatic = self
             .entries
             .iter()
-            .filter_map(|(key, entry)| (entry.source == ForwardSource::Automatic).then_some(*key))
+            .filter_map(|(key, entry)| {
+                (entry.source == ForwardSource::Automatic).then_some(key.clone())
+            })
             .collect::<Vec<_>>();
-        for (direction, port) in automatic {
-            self.stop(direction, port, cx);
+        for (direction, target) in automatic {
+            self.stop(direction, &target, cx);
         }
         cx.notify();
     }
@@ -399,7 +529,7 @@ impl PortForwardManager {
             .values()
             .map(|entry| ForwardSnapshot {
                 direction: entry.direction,
-                remote_port: entry.remote_port,
+                target: entry.target.clone(),
                 local_port: entry.local_port,
                 source: entry.source,
                 status: entry.status.clone(),
@@ -408,7 +538,8 @@ impl PortForwardManager {
         snapshots.sort_by_key(|entry| {
             (
                 entry.direction != ForwardDirection::RemoteToLocal,
-                entry.remote_port,
+                entry.target.port,
+                entry.target.host.clone(),
             )
         });
         snapshots
@@ -579,13 +710,14 @@ impl PortForwardManager {
                                 .filter(|port| candidates.contains(port))
                             {
                                 if this.automatically_seen.insert(port)
-                                    && !this
-                                        .entries
-                                        .contains_key(&(ForwardDirection::RemoteToLocal, port))
+                                    && !this.entries.contains_key(&(
+                                        ForwardDirection::RemoteToLocal,
+                                        ForwardTarget::loopback(port),
+                                    ))
                                 {
                                     this.start(
                                         ForwardDirection::RemoteToLocal,
-                                        port,
+                                        ForwardTarget::loopback(port),
                                         ForwardSource::Automatic,
                                         project.clone(),
                                         cx,
@@ -620,22 +752,23 @@ impl PortForwardManager {
     pub fn add_manual(
         &mut self,
         direction: ForwardDirection,
-        port: u16,
+        target: ForwardTarget,
         project: Entity<Project>,
         cx: &mut Context<Self>,
     ) {
-        self.stop(direction, port, cx);
-        self.start(direction, port, ForwardSource::Manual, project, cx);
+        self.stop(direction, &target, cx);
+        self.start(direction, target, ForwardSource::Manual, project, cx);
     }
 
     pub fn add_preview(&mut self, port: u16, project: Entity<Project>, cx: &mut Context<Self>) {
+        let target = ForwardTarget::loopback(port);
         if !self
             .entries
-            .contains_key(&(ForwardDirection::RemoteToLocal, port))
+            .contains_key(&(ForwardDirection::RemoteToLocal, target.clone()))
         {
             self.start(
                 ForwardDirection::RemoteToLocal,
-                port,
+                target,
                 ForwardSource::Preview,
                 project,
                 cx,
@@ -644,29 +777,35 @@ impl PortForwardManager {
     }
 
     pub fn stop_preview(&mut self, port: u16, cx: &mut Context<Self>) {
+        let target = ForwardTarget::loopback(port);
         if self
             .entries
-            .get(&(ForwardDirection::RemoteToLocal, port))
+            .get(&(ForwardDirection::RemoteToLocal, target.clone()))
             .is_some_and(|entry| entry.source == ForwardSource::Preview)
         {
-            self.stop(ForwardDirection::RemoteToLocal, port, cx);
+            self.stop(ForwardDirection::RemoteToLocal, &target, cx);
         }
     }
 
     pub fn available_remote_port(&self) -> Result<u16> {
         for port in 49152..=65535 {
-            if !self
-                .entries
-                .contains_key(&(ForwardDirection::RemoteToLocal, port))
-            {
+            let taken = self.entries.keys().any(|(direction, target)| {
+                *direction == ForwardDirection::RemoteToLocal && target.port == port
+            });
+            if !taken {
                 return Ok(port);
             }
         }
         Err(anyhow!(i18n::t!("c8c1564775a48d41")))
     }
 
-    pub fn stop(&mut self, direction: ForwardDirection, port: u16, cx: &mut Context<Self>) {
-        if let Some(mut entry) = self.entries.remove(&(direction, port))
+    pub fn stop(
+        &mut self,
+        direction: ForwardDirection,
+        target: &ForwardTarget,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(mut entry) = self.entries.remove(&(direction, target.clone()))
             && let Some(cancellation) = entry.cancellation.take()
         {
             cancellation.send(()).ok();
@@ -677,7 +816,7 @@ impl PortForwardManager {
     fn start(
         &mut self,
         direction: ForwardDirection,
-        port: u16,
+        target: ForwardTarget,
         source: ForwardSource,
         project: Entity<Project>,
         cx: &mut Context<Self>,
@@ -703,11 +842,11 @@ impl PortForwardManager {
         let generation = self.next_generation;
         let (cancellation, cancellation_receiver) = oneshot::channel();
         self.entries.insert(
-            (direction, port),
+            (direction, target.clone()),
             ForwardEntry {
                 direction,
-                remote_port: port,
-                local_port: (direction == ForwardDirection::LocalToRemote).then_some(port),
+                target: target.clone(),
+                local_port: (direction == ForwardDirection::LocalToRemote).then_some(target.port),
                 source,
                 status: ForwardStatus::Starting,
                 generation,
@@ -721,7 +860,7 @@ impl PortForwardManager {
                 remote_client,
                 automatic_context,
                 direction,
-                port,
+                target.clone(),
                 cancellation_receiver,
                 manager.clone(),
                 generation,
@@ -731,7 +870,7 @@ impl PortForwardManager {
             if let Err(error) = result {
                 manager
                     .update(cx, |manager, cx| {
-                        if let Some(entry) = manager.entries.get_mut(&(direction, port))
+                        if let Some(entry) = manager.entries.get_mut(&(direction, target))
                             && entry.generation == generation
                         {
                             entry.status = ForwardStatus::Failed(format!("{error:#}"));
@@ -763,7 +902,7 @@ async fn run_forward(
     remote_client: Entity<RemoteClient>,
     automatic_context: Option<AutomaticForwardContext>,
     direction: ForwardDirection,
-    port: u16,
+    target: ForwardTarget,
     cancellation: oneshot::Receiver<()>,
     manager: WeakEntity<PortForwardManager>,
     generation: u64,
@@ -773,9 +912,9 @@ async fn run_forward(
     let mut cancellation = cancellation.fuse();
     let mut next_local_port = match direction {
         ForwardDirection::RemoteToLocal => {
-            available_local_port(Some(port)).or_else(|_| available_local_port(None))?
+            available_local_port(Some(target.port)).or_else(|_| available_local_port(None))?
         }
-        ForwardDirection::LocalToRemote => port,
+        ForwardDirection::LocalToRemote => target.port,
     };
 
     for attempt in 0..5 {
@@ -789,7 +928,7 @@ async fn run_forward(
         if !manager.read_with(cx, |manager, _| {
             manager
                 .entries
-                .get(&(direction, port))
+                .get(&(direction, target.clone()))
                 .is_some_and(|entry| entry.generation == generation)
         })? {
             return Ok(());
@@ -799,11 +938,11 @@ async fn run_forward(
             remote_client.read_with(cx, |client, _| match direction {
                 ForwardDirection::RemoteToLocal => client.build_forward_ports_command(vec![(
                     local_port,
-                    "localhost".to_string(),
-                    port,
+                    target.connect_host("localhost"),
+                    target.port,
                 )]),
                 ForwardDirection::LocalToRemote => client.build_reverse_forward_ports_command(
-                    vec![(port, "127.0.0.1".to_string(), local_port)],
+                    vec![(target.port, target.connect_host("127.0.0.1"), local_port)],
                 ),
             })?;
 
@@ -820,7 +959,7 @@ async fn run_forward(
             manager
                 .forward_launcher
                 .as_mut()
-                .map(|launch| launch(direction, port))
+                .map(|launch| launch(direction, &target, &command_template.args))
         })?;
         #[cfg(not(test))]
         let controlled: Option<ForwardChild> = None;
@@ -839,7 +978,7 @@ async fn run_forward(
             return Ok(());
         }
         manager.update(cx, |manager, cx| {
-            if let Some(entry) = manager.entries.get_mut(&(direction, port))
+            if let Some(entry) = manager.entries.get_mut(&(direction, target.clone()))
                 && entry.generation == generation
             {
                 entry.local_port = Some(local_port);
@@ -886,7 +1025,7 @@ async fn run_forward(
                             attempt + 1,
                             tail.display(&command_template.env);
                             direction = format!("{direction:?}"),
-                            port = port,
+                            port = target.to_string(),
                             error = error
                         )));
                     }
@@ -913,7 +1052,7 @@ async fn run_forward(
                             attempt + 1,
                             tail.display(&command_template.env);
                             direction = format!("{direction:?}"),
-                            port = port,
+                            port = target.to_string(),
                             error = error
                         )));
                     }
@@ -936,12 +1075,12 @@ async fn run_forward(
             tail.display(&command_template.env);
             outcome = outcome,
             direction = format!("{direction:?}"),
-            port = port,
+            port = target.to_string(),
             local_port = local_port
         )));
         if early && exited && attempt < 4 && direction == ForwardDirection::RemoteToLocal {
             manager.update(cx, |manager, cx| {
-                if let Some(entry) = manager.entries.get_mut(&(direction, port))
+                if let Some(entry) = manager.entries.get_mut(&(direction, target.clone()))
                     && entry.generation == generation
                 {
                     entry.status = ForwardStatus::Starting;
@@ -996,11 +1135,6 @@ pub struct PortForwardModal {
     scroll_handle: gpui::ScrollHandle,
 }
 
-/// A port is only forwarded when the field holds a non-zero `u16`.
-fn is_valid_port_input(text: &str) -> bool {
-    text.trim().parse::<u16>().is_ok_and(|port| port != 0)
-}
-
 impl PortForwardModal {
     pub fn new(
         manager: Entity<PortForwardManager>,
@@ -1010,7 +1144,7 @@ impl PortForwardModal {
     ) -> Self {
         let editor = cx.new(|cx| {
             let mut editor = Editor::single_line(window, cx);
-            editor.set_placeholder_text(i18n::t!("2686e64c56c37f98"), window, cx);
+            editor.set_placeholder_text(i18n::t!("7dc7b8c099a1138e"), window, cx);
             editor
         });
         cx.observe(&manager, |_, _, cx| cx.notify()).detach();
@@ -1030,22 +1164,19 @@ impl PortForwardModal {
     }
 
     fn confirm(&mut self, _: &Confirm, window: &mut Window, cx: &mut Context<Self>) {
-        let text = self.editor.read(cx).text(cx).trim().to_string();
+        let text = self.editor.read(cx).text(cx);
         let port_input_focus = self.editor.focus_handle(cx);
-        let Ok(port) = text.parse::<u16>() else {
-            self.error = Some(i18n::t!("2d90356ae0befa45").to_string());
-            window.focus(&port_input_focus, cx);
-            cx.notify();
-            return;
+        let target = match parse_forward_input(&text) {
+            Ok(target) => target,
+            Err(error) => {
+                self.error = Some(forward_input_error_message(error).to_string());
+                window.focus(&port_input_focus, cx);
+                cx.notify();
+                return;
+            }
         };
-        if port == 0 {
-            self.error = Some(i18n::t!("6a0fd55718effcc1").to_string());
-            window.focus(&port_input_focus, cx);
-            cx.notify();
-            return;
-        }
         self.manager.update(cx, |manager, cx| {
-            manager.add_manual(self.direction, port, self.project.clone(), cx)
+            manager.add_manual(self.direction, target, self.project.clone(), cx)
         });
         self.editor
             .update(cx, |editor, cx| editor.set_text("", window, cx));
@@ -1072,7 +1203,7 @@ impl Render for PortForwardModal {
         let entries = self.manager.read(cx).snapshots();
         let is_empty = entries.is_empty();
         let detection_error = self.manager.read(cx).detection_error.clone();
-        let can_add = is_valid_port_input(&self.editor.read(cx).text(cx));
+        let can_add = parse_forward_input(&self.editor.read(cx).text(cx)).is_ok();
         let border_color = cx.theme().colors().border;
         let row_hover_background = cx.theme().colors().element_hover;
         v_flex()
@@ -1201,7 +1332,8 @@ impl Render for PortForwardModal {
                     .track_scroll(&self.scroll_handle)
                     .children(entries.into_iter().map(|entry| {
                         let direction = entry.direction;
-                        let remote_port = entry.remote_port;
+                        let target = entry.target.clone();
+                        let remote_port = target.port;
                         let source = match entry.source {
                             ForwardSource::Automatic => i18n::t!("7eb336e42cb5076b"),
                             ForwardSource::Manual => i18n::t!("962f41ef825b7266"),
@@ -1224,9 +1356,9 @@ impl Render for PortForwardModal {
                                     }
                                     ForwardDirection::LocalToRemote => {
                                         i18n::t!(
-                                            "cc6b6c400b0b2b65",
+                                            "5c4f133bd53fce80",
                                             remote_port = remote_port,
-                                            local_port = local_port
+                                            local_target = target.connect_label("127.0.0.1")
                                         )
                                     }
                                 },
@@ -1260,13 +1392,13 @@ impl Render for PortForwardModal {
                                                     ForwardDirection::RemoteToLocal => {
                                                         i18n::t!(
                                                             "22880116ce7d18fe",
-                                                            remote_port = remote_port
+                                                            remote_port = target.to_string()
                                                         )
                                                     }
                                                     ForwardDirection::LocalToRemote => {
                                                         i18n::t!(
                                                             "f2e88cffef1ff16e",
-                                                            local_port = local_port
+                                                            local_port = target.to_string()
                                                         )
                                                     }
                                                 })
@@ -1295,7 +1427,8 @@ impl Render for PortForwardModal {
                                                 {
                                                     let address_for_click = address.clone();
                                                     div()
-                                                        .id((
+                                                        .id(format!(
+                                                            "{}:{target}",
                                                             match direction {
                                                                 ForwardDirection::RemoteToLocal => {
                                                                     "remote-forward-address"
@@ -1303,8 +1436,7 @@ impl Render for PortForwardModal {
                                                                 ForwardDirection::LocalToRemote => {
                                                                     "reverse-forward-address"
                                                                 }
-                                                            },
-                                                            u64::from(remote_port),
+                                                            }
                                                         ))
                                                         .cursor_pointer()
                                                         .tooltip(ui::Tooltip::text(i18n::t!(
@@ -1346,7 +1478,8 @@ impl Render for PortForwardModal {
                                     )
                                     .child(
                                         IconButton::new(
-                                            (
+                                            format!(
+                                                "{}:{target}",
                                                 match direction {
                                                     ForwardDirection::RemoteToLocal => {
                                                         "stop-remote-port-forward"
@@ -1354,8 +1487,7 @@ impl Render for PortForwardModal {
                                                     ForwardDirection::LocalToRemote => {
                                                         "stop-reverse-port-forward"
                                                     }
-                                                },
-                                                u64::from(remote_port),
+                                                }
                                             ),
                                             IconName::Stop,
                                         )
@@ -1364,7 +1496,7 @@ impl Render for PortForwardModal {
                                             let manager = self.manager.clone();
                                             move |_, _, cx| {
                                                 manager.update(cx, |manager, cx| {
-                                                    manager.stop(direction, remote_port, cx)
+                                                    manager.stop(direction, &target, cx)
                                                 })
                                             }
                                         }),
@@ -1385,7 +1517,7 @@ impl Render for PortForwardModal {
                                 .color(Color::Muted),
                         )
                         .child(
-                            Label::new(i18n::t!("749a035193a5adef"))
+                            Label::new(i18n::t!("c7e2adcd4fbeb8c6"))
                                 .size(LabelSize::Small)
                                 .color(Color::Muted)
                                 .text_center(),
@@ -1414,6 +1546,17 @@ pub fn show_modal(
 #[cfg(test)]
 mod tests {
     use super::detected_ports;
+
+    fn loopback(port: u16) -> super::ForwardTarget {
+        super::ForwardTarget { host: None, port }
+    }
+
+    fn host_target(host: &str, port: u16) -> super::ForwardTarget {
+        super::ForwardTarget {
+            host: Some(host.to_string()),
+            port,
+        }
+    }
 
     struct DiagnosticReader {
         chunks: futures::channel::mpsc::UnboundedReceiver<std::io::Result<Vec<u8>>>,
@@ -1502,7 +1645,7 @@ mod tests {
         let launches = Rc::new(RefCell::new(Vec::new()));
         manager.update(cx, |manager, _| {
             let launches = launches.clone();
-            manager.forward_launcher = Some(Box::new(move |_, _| {
+            manager.forward_launcher = Some(Box::new(move |_, _, _| {
                 let (exit, status) = futures::channel::oneshot::channel();
                 let (sender, chunks) = futures::channel::mpsc::unbounded();
                 let consumed = Rc::new(Cell::new(0));
@@ -1531,7 +1674,7 @@ mod tests {
         manager.update(cx, |manager, cx| {
             manager.start(
                 RemoteToLocal,
-                39001,
+                loopback(39001),
                 ForwardSource::Manual,
                 project.clone(),
                 cx,
@@ -1539,7 +1682,7 @@ mod tests {
         });
         cx.run_until_parked();
         let first_port = manager.read_with(cx, |manager, _| {
-            let entry = &manager.entries[&(RemoteToLocal, 39001)];
+            let entry = &manager.entries[&(RemoteToLocal, loopback(39001))];
             assert_eq!(entry.status, ForwardStatus::RunningUnconfirmed);
             assert_ne!(entry.local_port, Some(0));
             entry.local_port
@@ -1559,7 +1702,7 @@ mod tests {
         cx.run_until_parked();
         manager.read_with(cx, |manager, _| {
             assert_eq!(
-                manager.entries[&(RemoteToLocal, 39001)].status,
+                manager.entries[&(RemoteToLocal, loopback(39001))].status,
                 ForwardStatus::RunningUnconfirmed
             )
         });
@@ -1574,7 +1717,8 @@ mod tests {
             .advance_clock(std::time::Duration::from_millis(250));
         cx.run_until_parked();
         manager.read_with(cx, |manager, _| {
-            let ForwardStatus::Failed(error) = &manager.entries[&(RemoteToLocal, 39001)].status
+            let ForwardStatus::Failed(error) =
+                &manager.entries[&(RemoteToLocal, loopback(39001))].status
             else {
                 panic!("expected late failure")
             };
@@ -1587,7 +1731,7 @@ mod tests {
         assert_eq!(launches.borrow().len(), 1, "late exit must not retry");
         assert!(launches.borrow()[0].3.get() && launches.borrow()[0].4.get());
         manager.update(cx, |manager, cx| {
-            manager.add_manual(RemoteToLocal, 39001, project.clone(), cx)
+            manager.add_manual(RemoteToLocal, loopback(39001), project.clone(), cx)
         });
         cx.run_until_parked();
         // Independent EOF and exit: early exit retries even while EOF is delayed.
@@ -1603,7 +1747,7 @@ mod tests {
         cx.run_until_parked();
         assert_eq!(launches.borrow().len(), 3);
         manager.read_with(cx, |manager, _| {
-            let entry = &manager.entries[&(RemoteToLocal, 39001)];
+            let entry = &manager.entries[&(RemoteToLocal, loopback(39001))];
             assert_eq!(entry.status, ForwardStatus::RunningUnconfirmed);
             assert_ne!(entry.local_port, first_port);
         });
@@ -1613,7 +1757,8 @@ mod tests {
             .unwrap();
         cx.run_until_parked();
         manager.read_with(cx, |manager, _| {
-            let ForwardStatus::Failed(error) = &manager.entries[&(RemoteToLocal, 39001)].status
+            let ForwardStatus::Failed(error) =
+                &manager.entries[&(RemoteToLocal, loopback(39001))].status
             else {
                 panic!("expected read failure")
             };
@@ -1621,7 +1766,7 @@ mod tests {
         });
         assert!(launches.borrow()[2].3.get() && launches.borrow()[2].4.get());
         manager.update(cx, |manager, cx| {
-            manager.add_manual(LocalToRemote, 39002, project.clone(), cx)
+            manager.add_manual(LocalToRemote, loopback(39002), project.clone(), cx)
         });
         cx.run_until_parked();
         launches.borrow_mut()[3]
@@ -1631,18 +1776,24 @@ mod tests {
             .send(Ok(success_status()))
             .unwrap();
         cx.run_until_parked();
-        manager.update(cx, |manager, cx| manager.stop(LocalToRemote, 39002, cx));
+        manager.update(cx, |manager, cx| {
+            manager.stop(LocalToRemote, &loopback(39002), cx)
+        });
         cx.run_until_parked();
         assert!(launches.borrow()[3].3.get() && launches.borrow()[3].4.get());
         cx.executor()
             .advance_clock(std::time::Duration::from_secs(1));
         cx.run_until_parked();
         manager.read_with(cx, |manager, _| {
-            assert!(!manager.entries.contains_key(&(LocalToRemote, 39002)))
+            assert!(
+                !manager
+                    .entries
+                    .contains_key(&(LocalToRemote, loopback(39002)))
+            )
         });
         assert_eq!(launches.borrow().len(), 4, "cancelled grace must not retry");
         manager.update(cx, |manager, cx| {
-            manager.add_manual(LocalToRemote, 39002, project.clone(), cx)
+            manager.add_manual(LocalToRemote, loopback(39002), project.clone(), cx)
         });
         cx.run_until_parked();
         launches.borrow()[4].1.close_channel();
@@ -1660,7 +1811,7 @@ mod tests {
         );
         manager.read_with(cx, |manager, _| {
             assert!(matches!(
-                manager.entries[&(LocalToRemote, 39002)].status,
+                manager.entries[&(LocalToRemote, loopback(39002))].status,
                 ForwardStatus::Failed(_)
             ))
         });
@@ -1821,30 +1972,30 @@ mod tests {
         let forwards = Rc::new(RefCell::new(Vec::new()));
         manager.update(cx, |manager, cx| {
             let forwards = forwards.clone();
-            manager.forward_launcher = Some(Box::new(move |direction, port| {
+            manager.forward_launcher = Some(Box::new(move |direction, target, _args| {
                 let (sender, output) = futures::channel::oneshot::channel();
                 let cancelled = Rc::new(Cell::new(false));
                 forwards
                     .borrow_mut()
-                    .push((direction, port, sender, cancelled.clone()));
+                    .push((direction, target.clone(), sender, cancelled.clone()));
                 super::ForwardChild::Controlled { output, cancelled }
             }));
             manager.start(
                 super::ForwardDirection::RemoteToLocal,
-                3000,
+                loopback(3000),
                 super::ForwardSource::Automatic,
                 project.clone(),
                 cx,
             );
             manager.add_manual(
                 super::ForwardDirection::RemoteToLocal,
-                4000,
+                loopback(4000),
                 project.clone(),
                 cx,
             );
             manager.add_manual(
                 super::ForwardDirection::LocalToRemote,
-                4001,
+                loopback(4001),
                 project.clone(),
                 cx,
             );
@@ -1854,7 +2005,7 @@ mod tests {
         manager.update(cx, |manager, cx| {
             manager.add_manual(
                 super::ForwardDirection::RemoteToLocal,
-                3000,
+                loopback(3000),
                 project.clone(),
                 cx,
             )
@@ -1867,7 +2018,7 @@ mod tests {
         manager.update(cx, |manager, cx| {
             manager.start(
                 super::ForwardDirection::RemoteToLocal,
-                3002,
+                loopback(3002),
                 super::ForwardSource::Automatic,
                 project.clone(),
                 cx,
@@ -2023,10 +2174,13 @@ mod tests {
                 (4000, super::ForwardSource::Manual),
             ] {
                 manager.entries.insert(
-                    (super::ForwardDirection::RemoteToLocal, port),
+                    (
+                        super::ForwardDirection::RemoteToLocal,
+                        super::ForwardTarget::loopback(port),
+                    ),
                     super::ForwardEntry {
                         direction: super::ForwardDirection::RemoteToLocal,
-                        remote_port: port,
+                        target: super::ForwardTarget::loopback(port),
                         local_port: Some(port),
                         source,
                         status: super::ForwardStatus::Starting,
@@ -2127,24 +2281,227 @@ mod tests {
     }
 
     #[test]
-    fn port_input_gates_the_add_button() {
-        for (text, expected) in [
-            ("9999", true),
-            (" 8080 ", true),
-            ("65535", true),
-            ("", false),
-            ("0", false),
-            ("65536", false),
-            ("-1", false),
-            ("abc", false),
-            ("3000abc", false),
+    fn forward_input_accepts_ports_and_hosts() {
+        use super::ForwardInputError;
+        for text in [
+            "7990",
+            " 8080 ",
+            "65535",
+            "192.168.1.3:7990",
+            "HOST.example:7990",
+            "[fe80::1]:7990",
+            "[::1]:7990",
         ] {
-            assert_eq!(
-                super::is_valid_port_input(text),
-                expected,
-                "unexpected validity for {text:?}"
-            );
+            assert!(super::parse_forward_input(text).is_ok(), "{text:?}");
         }
+        for (text, expected) in [
+            (
+                "7990",
+                super::ForwardTarget {
+                    host: None,
+                    port: 7990,
+                },
+            ),
+            (
+                "192.168.1.3:7990",
+                super::ForwardTarget {
+                    host: Some("192.168.1.3".to_string()),
+                    port: 7990,
+                },
+            ),
+            (
+                "HOST.example:7990",
+                super::ForwardTarget {
+                    host: Some("host.example".to_string()),
+                    port: 7990,
+                },
+            ),
+            (
+                "[fe80::1]:7990",
+                super::ForwardTarget {
+                    host: Some("fe80::1".to_string()),
+                    port: 7990,
+                },
+            ),
+            ("localhost:3000", loopback(3000)),
+            ("127.0.0.1:3000", loopback(3000)),
+            ("0.0.0.0:3000", loopback(3000)),
+            ("[::]:3000", loopback(3000)),
+        ] {
+            assert_eq!(super::parse_forward_input(text), Ok(expected), "{text:?}");
+        }
+        for (text, expected) in [
+            ("", ForwardInputError::Empty),
+            ("   ", ForwardInputError::Empty),
+            ("0", ForwardInputError::InvalidPort),
+            ("65536", ForwardInputError::InvalidPort),
+            ("-1", ForwardInputError::InvalidPort),
+            ("abc", ForwardInputError::InvalidPort),
+            ("3000abc", ForwardInputError::InvalidPort),
+            ("192.168.1.3:", ForwardInputError::InvalidPort),
+            ("192.168.1.3", ForwardInputError::InvalidPort),
+            (":7990", ForwardInputError::InvalidHost),
+            ("::1:7990", ForwardInputError::InvalidHost),
+            ("[::1]", ForwardInputError::InvalidHost),
+            ("[]:7990", ForwardInputError::InvalidHost),
+            ("a b:7990", ForwardInputError::InvalidHost),
+            ("host/path:7990", ForwardInputError::InvalidHost),
+            ("http://host:7990", ForwardInputError::InvalidHost),
+        ] {
+            assert_eq!(super::parse_forward_input(text), Err(expected), "{text:?}");
+        }
+    }
+
+    #[test]
+    fn target_labels_bracket_ipv6_and_hide_loopback() {
+        assert_eq!(loopback(7990).to_string(), "7990");
+        assert_eq!(
+            host_target("192.168.1.3", 7990).to_string(),
+            "192.168.1.3:7990"
+        );
+        assert_eq!(host_target("fe80::1", 7990).to_string(), "[fe80::1]:7990");
+        assert_eq!(loopback(7990).connect_label("localhost"), "localhost:7990");
+        assert_eq!(
+            host_target("192.168.1.3", 7990).connect_label("localhost"),
+            "192.168.1.3:7990"
+        );
+        assert_eq!(
+            host_target("fe80::1", 7990).connect_label("127.0.0.1"),
+            "[fe80::1]:7990"
+        );
+    }
+
+    #[gpui::test]
+    async fn host_targets_are_keyed_independently(cx: &mut gpui::TestAppContext) {
+        use super::{ForwardDirection, ForwardDirection::*, ForwardSource, ForwardStatus};
+        use gpui::AppContext as _;
+        use std::{cell::RefCell, rc::Rc};
+        cx.update(|cx| {
+            let settings = settings::SettingsStore::test(cx);
+            cx.set_global(settings);
+        });
+        let fs = project::FakeFs::new(cx.executor());
+        let project = project::Project::test(fs, [], cx).await;
+        let client = remote::RemoteClient::test_connected_ssh(cx).await;
+        project.update(cx, |project, cx| {
+            project.set_remote_client_for_test(client, cx)
+        });
+        let manager = cx.new(|_| super::PortForwardManager::new());
+        let launches: Rc<
+            RefCell<
+                Vec<(
+                    ForwardDirection,
+                    super::ForwardTarget,
+                    Vec<String>,
+                    futures::channel::oneshot::Sender<std::process::Output>,
+                )>,
+            >,
+        > = Rc::new(RefCell::new(Vec::new()));
+        manager.update(cx, |manager, _| {
+            let launches = launches.clone();
+            manager.forward_launcher = Some(Box::new(move |direction, target, args| {
+                let (sender, output) = futures::channel::oneshot::channel();
+                launches
+                    .borrow_mut()
+                    .push((direction, target.clone(), args.to_vec(), sender));
+                super::ForwardChild::Controlled {
+                    output,
+                    cancelled: Rc::new(std::cell::Cell::new(false)),
+                }
+            }));
+        });
+        manager.update(cx, |manager, cx| {
+            manager.add_manual(
+                RemoteToLocal,
+                host_target("192.168.1.3", 7990),
+                project.clone(),
+                cx,
+            );
+            manager.add_manual(
+                RemoteToLocal,
+                host_target("10.0.0.5", 7990),
+                project.clone(),
+                cx,
+            );
+            manager.add_manual(
+                LocalToRemote,
+                host_target("192.168.1.3", 7990),
+                project.clone(),
+                cx,
+            );
+        });
+        cx.run_until_parked();
+        manager.read_with(cx, |manager, _| {
+            assert_eq!(manager.entries.len(), 3);
+            assert!(
+                manager
+                    .entries
+                    .contains_key(&(RemoteToLocal, host_target("192.168.1.3", 7990)))
+            );
+            assert!(
+                manager
+                    .entries
+                    .contains_key(&(RemoteToLocal, host_target("10.0.0.5", 7990)))
+            );
+            assert!(
+                manager
+                    .entries
+                    .contains_key(&(LocalToRemote, host_target("192.168.1.3", 7990)))
+            );
+            assert!(
+                manager
+                    .snapshots()
+                    .iter()
+                    .all(|entry| entry.status == ForwardStatus::RunningUnconfirmed)
+            );
+            assert!(
+                manager
+                    .snapshots()
+                    .iter()
+                    .all(|entry| entry.source == ForwardSource::Manual)
+            );
+        });
+        let args_for = |direction: ForwardDirection, host: &str| {
+            launches
+                .borrow()
+                .iter()
+                .find(|(launch_direction, target, _, _)| {
+                    *launch_direction == direction
+                        && target.host.as_deref() == Some(host)
+                        && target.port == 7990
+                })
+                .map(|(_, _, args, _)| args.clone())
+                .expect("forward was launched")
+        };
+        // The mock transport renders `<local>:<host>:<remote>` for `-L` and
+        // `-R<remote>:<host>:<local>` for `-R`.
+        assert!(
+            args_for(RemoteToLocal, "192.168.1.3")
+                .iter()
+                .any(|arg| arg.contains("192.168.1.3:7990"))
+        );
+        assert!(
+            args_for(RemoteToLocal, "10.0.0.5")
+                .iter()
+                .any(|arg| arg.contains("10.0.0.5:7990"))
+        );
+        assert!(
+            args_for(LocalToRemote, "192.168.1.3")
+                .iter()
+                .any(|arg| arg.contains("192.168.1.3:7990"))
+        );
+        // Re-adding the same host and port replaces the entry instead of forking it.
+        manager.update(cx, |manager, cx| {
+            manager.add_manual(
+                RemoteToLocal,
+                host_target("192.168.1.3", 7990),
+                project.clone(),
+                cx,
+            )
+        });
+        cx.run_until_parked();
+        manager.read_with(cx, |manager, _| assert_eq!(manager.entries.len(), 3));
+        assert_eq!(launches.borrow().len(), 4);
     }
 
     #[gpui::test]

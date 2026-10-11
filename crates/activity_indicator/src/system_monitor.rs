@@ -1025,10 +1025,10 @@ fn port_forwarding_card(entries: &[ForwardSnapshot], cx: &App) -> impl IntoEleme
                 .unwrap_or_else(|| i18n::t!("17bf181625e8da75").into());
             let ports = match entry.direction {
                 ForwardDirection::RemoteToLocal => {
-                    format!("{} → {local_port}", entry.remote_port)
+                    format!("{} → {local_port}", entry.target)
                 }
                 ForwardDirection::LocalToRemote => {
-                    format!("{local_port} → {}", entry.remote_port)
+                    format!("{local_port} → {}", entry.target)
                 }
             };
             let (status, status_color) = match entry.status {
