@@ -255,7 +255,7 @@ async fn wait_for_forward(
         let snapshot = manager.read_with(cx, |manager, _| {
             manager.snapshots().into_iter().find(|entry| {
                 entry.direction == ForwardDirection::RemoteToLocal
-                    && entry.remote_port == remote_port
+                    && entry.target.port == remote_port
                     && entry.source == ForwardSource::Preview
             })
         });
