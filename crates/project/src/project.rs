@@ -8,6 +8,7 @@ pub mod context_server_store;
 pub mod debounced_delay;
 pub mod debugger;
 pub mod epub;
+pub mod file_download;
 pub mod file_transfer;
 pub mod git_store;
 pub mod image_store;
@@ -253,18 +254,18 @@ mod document_loading_tests {
         }
         assert!(document_file_size_limit("txt").is_none());
         let options = remote::SshConnectionOptions::default();
-        assert!(!document_server_source_allowed(
+        assert!(!custom_protocol_source_allowed(
             &remote::RemoteConnectionOptions::Ssh(options.clone())
         ));
         let mut options = options;
         options.remote_server_source = settings::RemoteServerSource::ZedCn;
-        assert!(document_server_source_allowed(
+        assert!(custom_protocol_source_allowed(
             &remote::RemoteConnectionOptions::Ssh(options)
         ));
     }
 }
 
-fn document_server_source_allowed(options: &remote::RemoteConnectionOptions) -> bool {
+fn custom_protocol_source_allowed(options: &remote::RemoteConnectionOptions) -> bool {
     match options {
         remote::RemoteConnectionOptions::Ssh(options) => {
             options.remote_server_source == settings::RemoteServerSource::ZedCn
@@ -2454,7 +2455,19 @@ impl Project {
         self.remote_client.as_ref().is_some_and(|client| {
             let client = client.read(cx);
             client.supports_upload_chunks()
-                && document_server_source_allowed(&client.connection_options())
+                && custom_protocol_source_allowed(&client.connection_options())
+        })
+    }
+
+    /// Whether files downloaded from this project can be pulled in chunks. This
+    /// changes wire semantics, so it requires a server that advertised the
+    /// download capability as well as an explicit Zed CN SSH connection, never
+    /// the application version alone.
+    pub fn supports_remote_chunked_downloads(&self, cx: &App) -> bool {
+        self.remote_client.as_ref().is_some_and(|client| {
+            let client = client.read(cx);
+            client.supports_download_chunks()
+                && custom_protocol_source_allowed(&client.connection_options())
         })
     }
 
@@ -3449,7 +3462,7 @@ impl Project {
         let Some(client) = self.remote_client.as_ref().filter(|client| {
             let client = client.read(cx);
             client.supports_epub_entries()
-                && document_server_source_allowed(&client.connection_options())
+                && custom_protocol_source_allowed(&client.connection_options())
         }) else {
             return Task::ready(Err(anyhow!(i18n::t!("05720b24baa5d61e"))));
         };
@@ -3487,7 +3500,7 @@ impl Project {
                 client.supports_model_chunks()
             } else {
                 client.supports_document_chunks()
-            }) && document_server_source_allowed(&client.connection_options())
+            }) && custom_protocol_source_allowed(&client.connection_options())
         }) else {
             let message = if is_model {
                 i18n::t!("3eb2f17c6a2710fa")
@@ -3636,6 +3649,27 @@ impl Project {
                 cx,
             )
         });
+
+        if self.supports_remote_chunked_downloads(cx) {
+            let executor = cx.background_executor().clone();
+            let task_progress = progress.clone();
+            let task = cx.background_spawn({
+                let path = path.clone();
+                async move {
+                    file_download::download_in_chunks(
+                        &proto_client,
+                        worktree_id,
+                        &path,
+                        &destination_path,
+                        &task_progress,
+                        &executor,
+                    )
+                    .await
+                }
+            });
+            return progress.track(task, cx);
+        }
+
         let (completion, completed) = oneshot::channel();
         // For SSH remote projects, use REMOTE_SERVER_PROJECT_ID instead of remote_id()
         // because SSH projects have client_state: Local but still need to communicate with remote server

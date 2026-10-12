@@ -709,9 +709,10 @@ impl RecentProjects {
         let fs = Some(workspace.app_state().fs.clone());
 
         let create_new_window = create_new_window.unwrap_or_else(|| default_open_in_new_window(cx));
+        let multi_workspace = workspace.multi_workspace().cloned();
 
         workspace.toggle_modal(window, cx, |window, cx| {
-            let delegate = RecentProjectsDelegate::new(
+            let mut delegate = RecentProjectsDelegate::new(
                 weak,
                 create_new_window,
                 focus_handle,
@@ -719,6 +720,7 @@ impl RecentProjects {
                 window_project_groups,
                 ProjectPickerStyle::Modal,
             );
+            delegate.multi_workspace = multi_workspace;
 
             Self::new(delegate, fs, 42., window, cx)
         })
@@ -732,21 +734,22 @@ impl RecentProjects {
         window: &mut Window,
         cx: &mut App,
     ) -> Entity<Self> {
-        let (open_folders, fs) = workspace
+        let (open_folders, fs, multi_workspace) = workspace
             .upgrade()
             .map(|workspace| {
                 let workspace = workspace.read(cx);
                 (
                     get_open_folders(workspace, cx),
                     Some(workspace.app_state().fs.clone()),
+                    workspace.multi_workspace().cloned(),
                 )
             })
-            .unwrap_or_else(|| (Vec::new(), None));
+            .unwrap_or_else(|| (Vec::new(), None, None));
 
         let create_new_window = create_new_window.unwrap_or_else(|| default_open_in_new_window(cx));
 
         cx.new(|cx| {
-            let delegate = RecentProjectsDelegate::new(
+            let mut delegate = RecentProjectsDelegate::new(
                 workspace,
                 create_new_window,
                 focus_handle,
@@ -754,6 +757,7 @@ impl RecentProjects {
                 window_project_groups,
                 ProjectPickerStyle::Popover,
             );
+            delegate.multi_workspace = multi_workspace;
             let list = Self::new(delegate, fs, 20., window, cx);
             list.picker.focus_handle(cx).focus(window, cx);
             list
@@ -862,6 +866,9 @@ impl Render for RecentProjects {
 
 pub struct RecentProjectsDelegate {
     workspace: WeakEntity<Workspace>,
+    /// The window's `MultiWorkspace`, used to read live state (such as remote
+    /// terminal mode) for project groups that are open in this window.
+    multi_workspace: Option<WeakEntity<MultiWorkspace>>,
     open_folders: Vec<OpenFolderEntry>,
     window_project_groups: Vec<ProjectGroupKey>,
     workspaces: Vec<RecentWorkspace>,
@@ -887,6 +894,7 @@ impl RecentProjectsDelegate {
         let render_paths = style == ProjectPickerStyle::Modal;
         Self {
             workspace,
+            multi_workspace: None,
             open_folders,
             window_project_groups,
             workspaces: Vec::new(),
@@ -1384,7 +1392,8 @@ impl PickerDelegate for RecentProjectsDelegate {
                     .map(|p| p.compact().to_string_lossy().to_string())
                     .collect();
                 let tooltip_path: SharedString = ordered_paths.join("\n").into();
-                let icon = icon_for_project_group(key);
+                let icon =
+                    icon_for_project_group(key, self.project_group_remote_terminal_mode(key, cx));
                 let show_icon = self.filtered_entries_include_remote_project();
 
                 let mut path_start_offset = 0;
@@ -1645,10 +1654,13 @@ impl PickerDelegate for RecentProjectsDelegate {
                     )
                     .into_any_element();
 
-                let icon = icon_for_remote_connection(match location {
-                    SerializedWorkspaceLocation::Local => None,
-                    SerializedWorkspaceLocation::Remote(options) => Some(options),
-                });
+                let icon = icon_for_remote_connection_with_mode(
+                    match location {
+                        SerializedWorkspaceLocation::Local => None,
+                        SerializedWorkspaceLocation::Remote(options) => Some(options),
+                    },
+                    workspace.remote_terminal_mode,
+                );
                 let show_icon = self.filtered_entries_include_remote_project();
 
                 Some(
@@ -2014,9 +2026,21 @@ impl PickerDelegate for RecentProjectsDelegate {
     }
 }
 
-fn icon_for_project_group(key: &ProjectGroupKey) -> IconName {
+fn icon_for_project_group(key: &ProjectGroupKey, remote_terminal_mode: bool) -> IconName {
     let host = key.host();
-    icon_for_remote_connection(host.as_ref())
+    icon_for_remote_connection_with_mode(host.as_ref(), remote_terminal_mode)
+}
+
+/// Picks an icon that reflects both the connection kind and whether the
+/// workspace is a remote terminal workspace rather than a regular remote project.
+pub(crate) fn icon_for_remote_connection_with_mode(
+    options: Option<&RemoteConnectionOptions>,
+    remote_terminal_mode: bool,
+) -> IconName {
+    match options {
+        Some(RemoteConnectionOptions::Ssh(_)) if remote_terminal_mode => IconName::RemoteTerminal,
+        options => icon_for_remote_connection(options),
+    }
 }
 
 pub(crate) fn icon_for_remote_connection(options: Option<&RemoteConnectionOptions>) -> IconName {
@@ -2175,6 +2199,7 @@ impl RecentProjectsDelegate {
         let candidate_workspace_id = candidate_workspace.workspace_id;
         let candidate_workspace_location = candidate_workspace.location.clone();
         let candidate_workspace_paths = candidate_workspace.paths.clone();
+        let candidate_remote_terminal_mode = candidate_workspace.remote_terminal_mode;
 
         workspace.update(cx, |workspace, cx| {
             if workspace.database_id() == Some(candidate_workspace_id) {
@@ -2230,8 +2255,24 @@ impl RecentProjectsDelegate {
                     };
                     let paths = candidate_workspace_paths.paths().to_vec();
                     cx.spawn_in(window, async move |_, cx| {
-                        open_remote_project(connection.clone(), paths, app_state, open_options, cx)
+                        if candidate_remote_terminal_mode {
+                            crate::remote_terminal_workspace::open_remote_terminal_workspace(
+                                connection.clone(),
+                                app_state,
+                                open_options,
+                                cx,
+                            )
                             .await
+                        } else {
+                            open_remote_project(
+                                connection.clone(),
+                                paths,
+                                app_state,
+                                open_options,
+                                cx,
+                            )
+                            .await
+                        }
                     })
                     .detach_and_prompt_err(
                         "Failed to open project",
@@ -2471,6 +2512,22 @@ impl RecentProjectsDelegate {
         false
     }
 
+    /// Whether any workspace in this window belongs to `key` and was opened as a
+    /// remote terminal workspace.
+    fn project_group_remote_terminal_mode(&self, key: &ProjectGroupKey, cx: &App) -> bool {
+        let Some(multi_workspace) = self
+            .multi_workspace
+            .as_ref()
+            .and_then(|multi_workspace| multi_workspace.upgrade())
+        else {
+            return false;
+        };
+        multi_workspace.read(cx).workspaces().any(|workspace| {
+            let workspace = workspace.read(cx);
+            workspace.remote_terminal_mode() && workspace.project_group_key(cx) == *key
+        })
+    }
+
     fn is_in_current_window_groups(&self, workspace: &RecentWorkspace) -> bool {
         self.window_project_groups
             .iter()
@@ -2576,6 +2633,7 @@ mod tests {
             location: SerializedWorkspaceLocation::Local,
             paths: paths.clone(),
             identity_paths: paths,
+            remote_terminal_mode: false,
             timestamp: Utc::now(),
         }
     }
@@ -2724,12 +2782,38 @@ mod tests {
         assert!(delegate.entry_is_remote_project(&delegate.filtered_entries[1]));
         assert!(delegate.filtered_entries_include_remote_project());
         assert_eq!(
-            icon_for_project_group(&delegate.window_project_groups[0]),
+            icon_for_project_group(&delegate.window_project_groups[0], false),
             IconName::Screen
         );
         assert_eq!(
-            icon_for_project_group(&delegate.window_project_groups[1]),
+            icon_for_project_group(&delegate.window_project_groups[1], false),
             IconName::Server
+        );
+    }
+
+    #[gpui::test]
+    fn remote_terminal_workspaces_use_a_distinct_icon(cx: &mut TestAppContext) {
+        init_test(cx);
+
+        let ssh_options = RemoteConnectionOptions::Ssh(remote::SshConnectionOptions {
+            host: "example.com".into(),
+            ..Default::default()
+        });
+
+        assert_eq!(
+            icon_for_remote_connection_with_mode(Some(&ssh_options), false),
+            IconName::Server,
+            "a regular remote project keeps the server icon"
+        );
+        assert_eq!(
+            icon_for_remote_connection_with_mode(Some(&ssh_options), true),
+            IconName::RemoteTerminal,
+            "a remote terminal workspace gets its own icon"
+        );
+        assert_eq!(
+            icon_for_remote_connection_with_mode(None, true),
+            IconName::Screen,
+            "local workspaces are unaffected"
         );
     }
 
@@ -2762,6 +2846,7 @@ mod tests {
             location: SerializedWorkspaceLocation::Local,
             paths: paths.clone(),
             identity_paths: paths.clone(),
+            remote_terminal_mode: false,
             timestamp: Utc::now(),
         };
         let remote_workspace = RecentWorkspace {
@@ -2771,6 +2856,7 @@ mod tests {
             )),
             paths: paths.clone(),
             identity_paths: paths,
+            remote_terminal_mode: false,
             timestamp: Utc::now(),
         };
 

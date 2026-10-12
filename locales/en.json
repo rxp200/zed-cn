@@ -5410,5 +5410,8 @@
   "53794caa6ec56797": "Regenerate AI explanations for this file",
   "49fceb3a4d998915": "Could not open file: {error}",
   "de0df9167630114a": "Opening file…",
-  "dd6f7f92c4d6e776": "Transferring file…"
+  "dd6f7f92c4d6e776": "Transferring file…",
+  "1d731895289f313b": "The remote file changed while it was being downloaded",
+  "0973a57b0db888f7": "The remote server returned invalid download data",
+  "6b0acd8bbf4d83b5": "The remote file is too large to download"
 }

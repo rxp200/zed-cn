@@ -444,6 +444,13 @@ impl Project {
                         )
                 })
             });
+            // Only a remote shell's directory is meaningful for the cwd
+            // observer; local terminals resolve their own process cwd.
+            let remote_working_directory = if is_via_remote {
+                path.as_ref().map(|path| PathBuf::from(path.as_ref()))
+            } else {
+                None
+            };
             let builder = if let Some(remote_client) = persistent_remote {
                 // The Remote Server is launched over a non-PTY SSH session, so its own
                 // environment carries no terminal type; without these variables the
@@ -497,8 +504,9 @@ impl Project {
                     streaming,
                     cx.background_executor(),
                 )
+                .remote_working_directory(remote_working_directory)
             } else {
-                project
+                let builder = project
                     .update(cx, move |_, cx| {
                         let (shell, env) = match remote_client {
                             Some(remote_client) => {
@@ -510,28 +518,31 @@ impl Project {
                                         Some((program, args))
                                     }
                                 };
-                                create_remote_shell(spawn_command, env, path, remote_client, cx)?
+                                create_remote_shell(spawn_command, env, path.clone(), remote_client, cx)?
                             }
                             None => (settings.shell, env),
                         };
-                        anyhow::Ok(TerminalBuilder::new(
-                            local_path.map(|path| path.to_path_buf()),
-                            TerminalMode::interactive(),
-                            shell,
-                            env,
-                            settings.cursor_shape,
-                            settings.alternate_scroll,
-                            settings.max_scroll_history_lines,
-                            settings.path_hyperlink_regexes,
-                            Duration::from_millis(settings.path_hyperlink_timeout_ms),
-                            is_via_remote,
-                            cx.entity_id().as_u64(),
-                            cx,
-                            activation_script,
-                            path_style,
-                        ))
+                        anyhow::Ok(
+                            TerminalBuilder::new(
+                                local_path.map(|path| path.to_path_buf()),
+                                TerminalMode::interactive(),
+                                shell,
+                                env,
+                                settings.cursor_shape,
+                                settings.alternate_scroll,
+                                settings.max_scroll_history_lines,
+                                settings.path_hyperlink_regexes,
+                                Duration::from_millis(settings.path_hyperlink_timeout_ms),
+                                is_via_remote,
+                                cx.entity_id().as_u64(),
+                                cx,
+                                activation_script,
+                                path_style,
+                            ),
+                        )
                     })??
-                    .await?
+                    .await?;
+                builder.remote_working_directory(remote_working_directory)
             };
             project.update(cx, move |this, cx| {
                 let terminal_handle = cx.new(|cx| builder.subscribe(cx));

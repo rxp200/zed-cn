@@ -1161,14 +1161,20 @@ impl ProjectItemRegistry {
         window: &mut Window,
         cx: &mut App,
     ) -> Task<Result<(Option<ProjectEntryId>, WorkspaceItemBuilder)>> {
-        log::info!("[open-debug] resolving project path {:?}", path.path.as_unix_str());
+        log::info!(
+            "[open-debug] resolving project path {:?}",
+            path.path.as_unix_str()
+        );
         let Some(open_project_item) = self
             .build_project_item_for_path_fns
             .iter()
             .rev()
             .find_map(|open_project_item| open_project_item(project, path, window, cx))
         else {
-            log::warn!("[open-debug] no project item handles {:?}", path.path.as_unix_str());
+            log::warn!(
+                "[open-debug] no project item handles {:?}",
+                path.path.as_unix_str()
+            );
             return Task::ready(Err(anyhow!("cannot open file {:?}", path.path)));
         };
         open_project_item
@@ -1655,6 +1661,10 @@ pub struct Workspace {
     pane_history_timestamp: Arc<AtomicUsize>,
     bounds: Bounds<Pixels>,
     pub centered_layout: bool,
+    /// Set when this workspace was opened as a remote terminal workspace: a
+    /// terminal-centric remote session rather than a regular remote project.
+    /// Persisted so recent-project UIs can distinguish the two.
+    remote_terminal_mode: bool,
     bounds_save_task_queued: Option<Task<()>>,
     on_prompt_for_new_path: Option<PromptForNewPath>,
     on_prompt_for_open_path: Option<PromptForOpenPath>,
@@ -2182,6 +2192,7 @@ impl Workspace {
             // This data will be incorrect, but it will be overwritten by the time it needs to be used.
             bounds: Default::default(),
             centered_layout: false,
+            remote_terminal_mode: false,
             bounds_save_task_queued: None,
             on_prompt_for_new_path: None,
             on_prompt_for_open_path: None,
@@ -8018,6 +8029,7 @@ impl Workspace {
                     display: Default::default(),
                     docks,
                     centered_layout: self.centered_layout,
+                    remote_terminal_mode: self.remote_terminal_mode,
                     session_id: self.session_id.clone(),
                     bookmarks,
                     breakpoints,
@@ -8849,6 +8861,30 @@ impl Workspace {
             .detach_and_log_err(cx);
         }
         cx.notify();
+    }
+
+    /// Marks this workspace as a remote terminal workspace (or clears the mark)
+    /// and persists it so recent-project UIs can distinguish terminal sessions
+    /// from regular remote projects.
+    pub fn set_remote_terminal_mode(&mut self, remote_terminal_mode: bool, cx: &mut Context<Self>) {
+        if self.remote_terminal_mode == remote_terminal_mode {
+            return;
+        }
+        self.remote_terminal_mode = remote_terminal_mode;
+        if let Some(database_id) = self.database_id() {
+            let db = WorkspaceDb::global(cx);
+            cx.background_spawn(async move {
+                db.set_remote_terminal_mode(database_id, remote_terminal_mode)
+                    .await
+            })
+            .detach_and_log_err(cx);
+        }
+        cx.notify();
+    }
+
+    /// Whether this workspace was opened as a remote terminal workspace.
+    pub fn remote_terminal_mode(&self) -> bool {
+        self.remote_terminal_mode
     }
 
     pub fn clear_bookmarks(&mut self, _: &ClearBookmarks, _: &mut Window, cx: &mut Context<Self>) {
@@ -11952,6 +11988,7 @@ async fn open_remote_project_inner(
 
             if let Some(ref serialized) = serialized_workspace {
                 workspace.centered_layout = serialized.centered_layout;
+                workspace.remote_terminal_mode = serialized.remote_terminal_mode;
             }
 
             workspace

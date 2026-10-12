@@ -4311,6 +4311,241 @@ async fn test_chunked_upload_rejects_invalid_chunks(
 }
 
 #[gpui::test]
+async fn test_chunked_download_streams_large_remote_file(
+    cx: &mut TestAppContext,
+    server_cx: &mut TestAppContext,
+) {
+    // The destination is a real local file, so the blocking thread pool wakes
+    // this task from another thread.
+    cx.executor().allow_parking();
+    let remote_fs = FakeFs::new(server_cx.executor());
+    remote_fs
+        .insert_tree(
+            path!("/code"),
+            json!({
+                "project1": {
+                    ".git": {},
+                },
+            }),
+        )
+        .await;
+
+    let (project, _) = init_test(&remote_fs, cx, server_cx).await;
+    let (worktree, _) = project
+        .update(cx, |project, cx| {
+            project.find_or_create_worktree(path!("/code/project1"), true, cx)
+        })
+        .await
+        .unwrap();
+    cx.run_until_parked();
+
+    assert!(
+        project.read_with(cx, |project, cx| project
+            .supports_remote_chunked_downloads(cx)),
+        "the mock server advertises the chunked download capability"
+    );
+
+    // Larger than one idle-sized chunk, so the download cannot complete with a
+    // single request.
+    let expected_content = "0123456789abcdef".repeat(96 * 1024);
+    remote_fs
+        .insert_file(
+            path!("/code/project1/large.bin"),
+            expected_content.clone().into_bytes(),
+        )
+        .await;
+
+    let destination_dir = tempfile::tempdir().expect("temporary directory");
+    let destination = destination_dir.path().join("nested/large.bin");
+    let worktree_id = worktree.read_with(cx, |worktree, _| worktree.id());
+    let download = project.update(cx, |project, cx| {
+        project.download_file(
+            worktree_id,
+            rel_path("large.bin").into(),
+            destination.clone(),
+            cx,
+        )
+    });
+    download.await.expect("chunked download");
+    cx.run_until_parked();
+
+    assert_eq!(
+        std::fs::read(&destination).expect("downloaded file"),
+        expected_content.as_bytes()
+    );
+    let leftovers: Vec<_> = std::fs::read_dir(destination.parent().unwrap())
+        .expect("destination directory")
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .contains("zed-download-")
+        })
+        .collect();
+    assert!(
+        leftovers.is_empty(),
+        "the staging file must be renamed away, found {leftovers:?}"
+    );
+}
+
+#[gpui::test]
+async fn test_chunked_download_rejects_invalid_requests(
+    cx: &mut TestAppContext,
+    server_cx: &mut TestAppContext,
+) {
+    let remote_fs = FakeFs::new(server_cx.executor());
+    remote_fs
+        .insert_tree(
+            path!("/code"),
+            json!({
+                "project1": {
+                    ".git": {},
+                    "subdir": {},
+                },
+            }),
+        )
+        .await;
+
+    let (project, _) = init_test(&remote_fs, cx, server_cx).await;
+    let (worktree, _) = project
+        .update(cx, |project, cx| {
+            project.find_or_create_worktree(path!("/code/project1"), true, cx)
+        })
+        .await
+        .unwrap();
+    cx.run_until_parked();
+    let client = project.read_with(cx, |project, cx| {
+        project
+            .remote_client()
+            .expect("remote client")
+            .read(cx)
+            .proto_client()
+    });
+    let worktree_id = worktree.read_with(cx, |worktree, _| worktree.id().to_proto());
+    remote_fs
+        .insert_file(path!("/code/project1/data.bin"), b"0123456789".to_vec())
+        .await;
+
+    let chunk = |path: &str, offset: u64, max_bytes: u32| proto::DownloadFileChunk {
+        worktree_id,
+        path: path.to_owned(),
+        offset,
+        expected_size: 0,
+        expected_mtime: None,
+        max_bytes,
+    };
+
+    assert!(
+        client.request(chunk("subdir", 0, 0)).await.is_err(),
+        "directories cannot be downloaded"
+    );
+    assert!(
+        client.request(chunk("missing.bin", 0, 0)).await.is_err(),
+        "missing files are rejected"
+    );
+    assert!(
+        client.request(chunk("data.bin", 11, 0)).await.is_err(),
+        "an offset past the end of the file is rejected"
+    );
+
+    let limited = client
+        .request(chunk("data.bin", 0, 4))
+        .await
+        .expect("bounded chunk");
+    assert_eq!(limited.content, b"0123");
+    assert_eq!(limited.total_size, 10);
+
+    let first = client
+        .request(chunk("data.bin", 0, 0))
+        .await
+        .expect("whole file");
+    assert_eq!(first.content, b"0123456789");
+    assert_eq!(first.total_size, 10);
+    let mtime = first.file.as_ref().expect("file metadata").mtime;
+
+    remote_fs
+        .insert_file(path!("/code/project1/data.bin"), b"changed".to_vec())
+        .await;
+    let mut changed = chunk("data.bin", 1, 0);
+    changed.expected_size = 10;
+    changed.expected_mtime = mtime;
+    assert!(
+        client.request(changed).await.is_err(),
+        "a file that changed mid-download must not produce a mixed snapshot"
+    );
+}
+
+#[gpui::test]
+async fn test_download_falls_back_without_the_chunk_capability(
+    cx: &mut TestAppContext,
+    server_cx: &mut TestAppContext,
+) {
+    // The legacy path writes a real local file through the blocking thread pool.
+    cx.executor().allow_parking();
+    let remote_fs = FakeFs::new(server_cx.executor());
+    remote_fs
+        .insert_tree(
+            path!("/code"),
+            json!({
+                "project1": {
+                    ".git": {},
+                },
+            }),
+        )
+        .await;
+
+    let (project, headless) = init_test(&remote_fs, cx, server_cx).await;
+    let (worktree, _) = project
+        .update(cx, |project, cx| {
+            project.find_or_create_worktree(path!("/code/project1"), true, cx)
+        })
+        .await
+        .unwrap();
+    cx.run_until_parked();
+
+    headless
+        .update(server_cx, |headless, _| {
+            headless.session.send(proto::RemoteStarted {
+                capabilities: Vec::new(),
+            })
+        })
+        .expect("advertise an older server");
+    cx.run_until_parked();
+    assert!(
+        !project.read_with(cx, |project, cx| project
+            .supports_remote_chunked_downloads(cx)),
+        "an older server must keep the legacy download path"
+    );
+
+    let expected_content = "legacy download payload".repeat(4096);
+    remote_fs
+        .insert_file(
+            path!("/code/project1/legacy.bin"),
+            expected_content.clone().into_bytes(),
+        )
+        .await;
+
+    let destination_dir = tempfile::tempdir().expect("temporary directory");
+    let destination = destination_dir.path().join("legacy.bin");
+    let worktree_id = worktree.read_with(cx, |worktree, _| worktree.id());
+    let download = project.update(cx, |project, cx| {
+        project.download_file(
+            worktree_id,
+            rel_path("legacy.bin").into(),
+            destination.clone(),
+            cx,
+        )
+    });
+    download.await.expect("legacy download");
+    cx.run_until_parked();
+    assert_eq!(
+        std::fs::read(&destination).expect("downloaded file"),
+        expected_content.as_bytes()
+    );
+}
+
+#[gpui::test]
 async fn test_remote_root_repo_common_dir(cx: &mut TestAppContext, server_cx: &mut TestAppContext) {
     let fs = FakeFs::new(server_cx.executor());
     fs.insert_tree(

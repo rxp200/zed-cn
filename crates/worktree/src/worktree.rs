@@ -3047,7 +3047,7 @@ impl RemoteWorktree {
                 progress(FileTransferProgress::TotalEntries(requests.len()));
             }
             let mut copied_entry_ids = Vec::new();
-            let mut pacer = rpc::network_pacing::UploadPacer::new();
+            let mut pacer = rpc::network_pacing::TransferPacer::new();
             for (path, source, is_directory) in requests {
                 if let Some(progress) = &progress {
                     progress(FileTransferProgress::Started(path.clone()));
@@ -3162,7 +3162,7 @@ async fn upload_entry_in_chunks(
     total_size: u64,
     progress: &Option<FileTransferObserver>,
     executor: &BackgroundExecutor,
-    pacer: &mut rpc::network_pacing::UploadPacer,
+    pacer: &mut rpc::network_pacing::TransferPacer,
 ) -> Result<Option<proto::Entry>> {
     let upload_id = rand::random::<u64>() | 1;
     client

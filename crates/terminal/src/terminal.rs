@@ -1184,6 +1184,15 @@ impl TerminalBuilder {
         builder
     }
 
+    /// Seeds the working directory the remote shell was started in, so a
+    /// relative `cd` can be resolved before the shell reports its location.
+    pub fn remote_working_directory(mut self, directory: Option<PathBuf>) -> Self {
+        self.terminal
+            .cwd_observer
+            .set_initial_working_directory(directory);
+        self
+    }
+
     pub fn new(
         working_directory: Option<PathBuf>,
         mode: TerminalMode,
@@ -1947,9 +1956,11 @@ struct CopyTemplate {
 /// Observes a remote terminal's input and output byte streams to recover the
 /// shell's working directory without shell-side integration scripts.
 ///
-/// Two sources are recognized:
+/// Three sources are recognized:
 /// - OSC 7 (`ESC ] 7 ; file://host/path ST`) reports, emitted by shells that
 ///   support them (e.g. fish by default, many distro bash setups).
+/// - A simple `cd <path>` typed by the user, resolved against the last known
+///   working directory; this is the only source that reacts to `cd` itself.
 /// - The output of an explicit `pwd` typed by the user: when the tracked
 ///   input line is exactly `pwd` (optionally with `-L`/`-P`), the first
 ///   absolute-path line in the following output is treated as the answer.
@@ -1959,11 +1970,18 @@ struct CopyTemplate {
 struct CwdObserver {
     enabled: bool,
     scan: CwdScanState,
-    /// Current input line as typed by the user, used to detect `pwd`.
-    input_line: String,
+    /// Current input line bytes as typed by the user, used to detect `pwd`
+    /// and `cd`. Bytes rather than a string so a multi-byte character can be
+    /// decoded only once the line is submitted.
+    input_line: Vec<u8>,
     /// Set when the user just submitted `pwd`; the next absolute-path output
     /// line is the answer.
     pwd_capture: Option<PwdCapture>,
+    /// Resolved `cd` target waiting to be reported on the next output write.
+    pending_cd_target: Option<PathBuf>,
+    /// Most recent working directory either seeded from the spawn directory or
+    /// detected from the shell, used as the base for relative `cd` targets.
+    known_cwd: Option<PathBuf>,
 }
 
 #[derive(Default)]
@@ -1999,14 +2017,25 @@ impl CwdObserver {
         Self {
             enabled,
             scan: CwdScanState::Ground,
-            input_line: String::new(),
+            input_line: Vec::new(),
             pwd_capture: None,
+            pending_cd_target: None,
+            known_cwd: None,
         }
     }
 
-    /// Tracks user input so an explicit `pwd` can be recognized. Line editing
-    /// keys beyond backspace (arrows, control sequences) invalidate the tracked
-    /// line, because we cannot model the shell's line editor reliably.
+    /// Seeds the directory the shell was started in. Only used until the shell
+    /// reports a directory of its own.
+    fn set_initial_working_directory(&mut self, directory: Option<PathBuf>) {
+        if self.known_cwd.is_none() {
+            self.known_cwd = directory;
+        }
+    }
+
+    /// Tracks user input so an explicit `pwd` or a simple `cd` can be
+    /// recognized. Line editing keys beyond backspace (arrows, control
+    /// sequences) invalidate the tracked line, because we cannot model the
+    /// shell's line editor reliably.
     fn observe_input(&mut self, input: &[u8]) {
         if !self.enabled {
             return;
@@ -2014,17 +2043,29 @@ impl CwdObserver {
         for &byte in input {
             match byte {
                 b'\r' | b'\n' => {
-                    let line = self.input_line.trim();
-                    if matches!(line, "pwd" | "pwd -L" | "pwd -P" | "pwd -LP" | "pwd -PL") {
+                    let line = String::from_utf8_lossy(&self.input_line).trim().to_string();
+                    if matches!(
+                        line.as_str(),
+                        "pwd" | "pwd -L" | "pwd -P" | "pwd -LP" | "pwd -PL"
+                    ) {
                         self.pwd_capture = Some(PwdCapture {
                             line: Vec::new(),
                             lines_seen: 0,
                         });
+                    } else if let Some(target) = cd_target(&line, self.known_cwd.as_deref()) {
+                        self.pending_cd_target = Some(target);
                     }
                     self.input_line.clear();
                 }
                 0x7f | 0x08 => {
+                    // Drop the whole trailing character so the buffer stays
+                    // valid UTF-8 even when a multi-byte character is erased.
                     self.input_line.pop();
+                    while !self.input_line.is_empty()
+                        && std::str::from_utf8(&self.input_line).is_err()
+                    {
+                        self.input_line.pop();
+                    }
                 }
                 // Ctrl-C / Ctrl-U / Ctrl-L and any escape sequence make the
                 // tracked line unreliable.
@@ -2032,11 +2073,12 @@ impl CwdObserver {
                     self.input_line.clear();
                     if byte == 0x03 {
                         self.pwd_capture = None;
+                        self.pending_cd_target = None;
                     }
                 }
-                0x20..=0x7e => {
+                0x20..=0x7e | 0x80..=0xff => {
                     if self.input_line.len() < MAX_INPUT_LINE_LEN {
-                        self.input_line.push(byte as char);
+                        self.input_line.push(byte);
                     }
                 }
                 _ => {}
@@ -2045,12 +2087,12 @@ impl CwdObserver {
     }
 
     /// Scans output bytes, returning a newly detected working directory when
-    /// an OSC 7 report or a `pwd` answer carries one.
+    /// a pending `cd` target, an OSC 7 report or a `pwd` answer carries one.
     fn observe_output(&mut self, bytes: &[u8]) -> Option<PathBuf> {
         if !self.enabled {
             return None;
         }
-        let mut detected = None;
+        let mut detected = self.pending_cd_target.take();
         for &byte in bytes {
             let osc = match std::mem::take(&mut self.scan) {
                 CwdScanState::Ground => match byte {
@@ -2061,7 +2103,9 @@ impl CwdObserver {
                         }
                         Some(CwdScanState::Ground)
                     }
-                    0x20..=0x7e => {
+                    // Printable ASCII plus every non-ASCII byte, so paths
+                    // containing multi-byte UTF-8 (e.g. Chinese) survive.
+                    0x20..=0x7e | 0x80..=0xff => {
                         if let Some(capture) = &mut self.pwd_capture {
                             if capture.line.len() < MAX_PWD_LINE_LEN {
                                 capture.line.push(byte);
@@ -2113,6 +2157,9 @@ impl CwdObserver {
                 self.scan = scan;
             }
         }
+        if let Some(path) = &detected {
+            self.known_cwd = Some(path.clone());
+        }
         detected
     }
 
@@ -2147,6 +2194,89 @@ impl CwdObserver {
             Some(PathBuf::from(path))
         } else {
             None
+        }
+    }
+}
+
+/// Recognizes a simple `cd <path>` command line and resolves the target
+/// against the last known working directory.
+///
+/// Only literal paths are handled: `~`, `$VAR`, globs, options, multiple
+/// commands and unmatched quotes are ignored instead of guessed, because a
+/// wrong guess would move the project panel to an unrelated directory. A
+/// relative target needs a known base directory, which is the seeded spawn
+/// directory or the last directory the shell reported.
+fn cd_target(line: &str, base: Option<&Path>) -> Option<PathBuf> {
+    let rest = line.strip_prefix("cd")?;
+    let rest = rest.strip_prefix(' ').or_else(|| rest.strip_prefix('\t'))?;
+    let argument = rest.trim();
+    if argument.is_empty() || argument.starts_with('-') {
+        // Bare `cd` goes to $HOME, which is unknown on the remote host.
+        return None;
+    }
+    let (argument, quoted) = strip_cd_quotes(argument)?;
+    if argument.is_empty() {
+        return None;
+    }
+    if !quoted && argument.contains(' ') {
+        // Unquoted whitespace means several arguments, which `cd` rejects.
+        return None;
+    }
+    if argument.contains(CD_UNSUPPORTED) {
+        return None;
+    }
+    let combined = if argument.starts_with('/') {
+        argument.to_string()
+    } else {
+        let base = base?.to_str()?;
+        if !base.starts_with('/') {
+            return None;
+        }
+        format!("{base}/{argument}")
+    };
+    let mut segments = Vec::new();
+    for segment in combined.split('/') {
+        match segment {
+            "" | "." => {}
+            ".." => {
+                segments.pop();
+            }
+            other => segments.push(other),
+        }
+    }
+    if segments.is_empty() {
+        return None;
+    }
+    Some(PathBuf::from(format!("/{}", segments.join("/"))))
+}
+
+/// Characters that make a `cd` argument depend on shell evaluation we cannot
+/// reproduce on the client.
+const CD_UNSUPPORTED: &[char] = &[
+    '~', '$', '`', '\\', '*', '?', '[', ']', '{', '}', '!', '|', '&', ';', '>', '<', '(', ')', '#',
+    '"', '\'', '\t',
+];
+
+/// Strips a single pair of surrounding quotes. Returns the argument and
+/// whether it was quoted; `None` for unmatched or embedded quotes.
+fn strip_cd_quotes(argument: &str) -> Option<(&str, bool)> {
+    let bytes = argument.as_bytes();
+    match bytes.first() {
+        Some(&quote @ (b'"' | b'\'')) => {
+            if bytes.len() < 2 || bytes[bytes.len() - 1] != quote {
+                return None;
+            }
+            let inner = &argument[1..argument.len() - 1];
+            if inner.as_bytes().contains(&quote) {
+                return None;
+            }
+            Some((inner, true))
+        }
+        _ => {
+            if argument.contains(['"', '\'']) {
+                return None;
+            }
+            Some((argument, false))
         }
     }
 }
@@ -6145,6 +6275,171 @@ mod tests {
         assert_eq!(observer.observe_output(b"/home/user\r\n"), None);
     }
 
+    #[test]
+    fn test_cwd_observer_detects_non_ascii_pwd_output() {
+        // Regression: multi-byte UTF-8 bytes used to be dropped, so a Chinese
+        // path was captured as its ASCII-only prefix (or an invalid path).
+        let mut observer = CwdObserver::new(true);
+        observer.observe_input(b"pwd\r");
+        assert_eq!(
+            observer.observe_output("pwd\r\n/home/user/项目\r\n$ ".as_bytes()),
+            Some(PathBuf::from("/home/user/项目"))
+        );
+
+        let mut observer = CwdObserver::new(true);
+        observer.observe_input(b"pwd\r");
+        assert_eq!(
+            observer.observe_output("/home/用户/项目\r\n".as_bytes()),
+            Some(PathBuf::from("/home/用户/项目"))
+        );
+
+        let mut observer = CwdObserver::new(true);
+        observer.observe_input(b"pwd\r");
+        assert_eq!(
+            observer.observe_output("pwd\r\n/home/user/文档 资料\r\n$ ".as_bytes()),
+            Some(PathBuf::from("/home/user/文档 资料"))
+        );
+
+        // A relative `cd` still resolves against the non-ASCII directory.
+        observer.observe_input(b"cd sub\r");
+        assert_eq!(
+            observer.observe_output(b""),
+            Some(PathBuf::from("/home/user/文档 资料/sub"))
+        );
+    }
+
+    #[test]
+    fn test_cwd_observer_detects_osc7_non_ascii_path() {
+        let mut observer = CwdObserver::new(true);
+        assert_eq!(
+            observer.observe_output("\x1b]7;file://host/home/user/项目\x07".as_bytes()),
+            Some(PathBuf::from("/home/user/项目"))
+        );
+        // Percent-encoded UTF-8, as produced by terminals that encode OSC 7.
+        assert_eq!(
+            observer.observe_output(
+                b"\x1b]7;file://host/home/%E7%94%A8%E6%88%B7/%E9%A1%B9%E7%9B%AE\x07"
+            ),
+            Some(PathBuf::from("/home/用户/项目"))
+        );
+    }
+
+    #[test]
+    fn test_cwd_observer_resolves_cd_targets() {
+        let mut observer = CwdObserver::new(true);
+
+        // Absolute target: no base directory needed.
+        observer.observe_input(b"cd /srv/data\r");
+        assert_eq!(
+            observer.observe_output(b""),
+            Some(PathBuf::from("/srv/data"))
+        );
+
+        // Relative targets resolve against the last known directory.
+        observer.observe_input(b"cd sub\r");
+        assert_eq!(
+            observer.observe_output(b""),
+            Some(PathBuf::from("/srv/data/sub"))
+        );
+
+        observer.observe_input(b"cd ../other\r");
+        assert_eq!(
+            observer.observe_output(b""),
+            Some(PathBuf::from("/srv/data/other"))
+        );
+
+        observer.observe_input(b"cd ./nested/../../final/\r");
+        assert_eq!(
+            observer.observe_output(b""),
+            Some(PathBuf::from("/srv/data/final"))
+        );
+    }
+
+    #[test]
+    fn test_cwd_observer_seeded_directory_resolves_relative_cd() {
+        let mut observer = CwdObserver::new(true);
+        observer.set_initial_working_directory(Some(PathBuf::from("/home/user/project")));
+        observer.observe_input(b"cd src\r");
+        assert_eq!(
+            observer.observe_output(b""),
+            Some(PathBuf::from("/home/user/project/src"))
+        );
+
+        // A shell-reported directory replaces the seeded one.
+        observer.observe_input(b"pwd\r");
+        assert_eq!(
+            observer.observe_output(b"/opt/work\r\n"),
+            Some(PathBuf::from("/opt/work"))
+        );
+        observer.observe_input(b"cd src\r");
+        assert_eq!(
+            observer.observe_output(b""),
+            Some(PathBuf::from("/opt/work/src"))
+        );
+    }
+
+    #[test]
+    fn test_cwd_observer_resolves_quoted_cd_argument() {
+        let mut observer = CwdObserver::new(true);
+        observer.set_initial_working_directory(Some(PathBuf::from("/home/user")));
+        observer.observe_input(b"cd \"my dir/sub\"\r");
+        assert_eq!(
+            observer.observe_output(b""),
+            Some(PathBuf::from("/home/user/my dir/sub"))
+        );
+    }
+
+    #[test]
+    fn test_cwd_observer_tracks_non_ascii_cd_input() {
+        let mut observer = CwdObserver::new(true);
+        observer.set_initial_working_directory(Some(PathBuf::from("/home/user")));
+        observer.observe_input("cd 文档\r".as_bytes());
+        assert_eq!(
+            observer.observe_output(b""),
+            Some(PathBuf::from("/home/user/文档"))
+        );
+
+        // Erasing one multi-byte character keeps the tracked line valid UTF-8.
+        let mut observer = CwdObserver::new(true);
+        observer.set_initial_working_directory(Some(PathBuf::from("/home/user")));
+        observer.observe_input("cd 文档\x7f\r".as_bytes());
+        assert_eq!(
+            observer.observe_output(b""),
+            Some(PathBuf::from("/home/user/文"))
+        );
+    }
+
+    #[test]
+    fn test_cwd_observer_ignores_unresolvable_cd() {
+        let mut observer = CwdObserver::new(true);
+
+        // Relative target without any known directory.
+        observer.observe_input(b"cd sub\r");
+        assert_eq!(observer.observe_output(b""), None);
+
+        observer.set_initial_working_directory(Some(PathBuf::from("/home/user")));
+        for line in [
+            "cd",
+            "cd ~",
+            "cd ~/project",
+            "cd $HOME",
+            "cd -",
+            "cd -P /srv",
+            "cd a b",
+            "cd a; rm -rf /",
+            "cd a && ls",
+            "cd *.rs",
+            "cd 'unclosed",
+            "cd \"mixed'",
+            "cdrom /srv",
+            "echo cd /srv",
+            "sudo cd /srv",
+        ] {
+            observer.observe_input(format!("{line}\r").as_bytes());
+            assert_eq!(observer.observe_output(b""), None, "line: {line}");
+        }
+    }
+
     #[gpui::test]
     async fn test_remote_terminal_emits_detected_working_directory(cx: &mut TestAppContext) {
         cx.update(|cx| {
@@ -6226,6 +6521,38 @@ mod tests {
             Some(PathBuf::from("/home/user/other"))
         );
         assert_eq!(events.lock().len(), 2);
+
+        // A relative `cd` resolves against the last reported directory.
+        terminal.update(cx, |terminal, cx| {
+            terminal.input("cd sub\r".to_string().into_bytes());
+            terminal.write_raw_output(b"cd sub\r\n$ ", cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            terminal.read_with(cx, |terminal, _| {
+                terminal
+                    .detected_remote_working_directory()
+                    .map(Path::to_path_buf)
+            }),
+            Some(PathBuf::from("/home/user/other/sub"))
+        );
+        assert_eq!(events.lock().len(), 3);
+
+        // An absolute `cd` does not need a known base directory.
+        terminal.update(cx, |terminal, cx| {
+            terminal.input("cd /srv/data\r".to_string().into_bytes());
+            terminal.write_raw_output(b"cd /srv/data\r\n$ ", cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            terminal.read_with(cx, |terminal, _| {
+                terminal
+                    .detected_remote_working_directory()
+                    .map(Path::to_path_buf)
+            }),
+            Some(PathBuf::from("/srv/data"))
+        );
+        assert_eq!(events.lock().len(), 4);
     }
 
     mod hyperlinks {

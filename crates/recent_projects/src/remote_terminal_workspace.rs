@@ -53,6 +53,7 @@ pub async fn open_remote_terminal_workspace(
                 window.activate_window();
                 multi_workspace.activate(existing_workspace.clone(), None, window, cx);
                 existing_workspace.update(cx, |workspace, cx| {
+                    workspace.set_remote_terminal_mode(true, cx);
                     // If there's already a terminal in the center pane, focus it.
                     // Otherwise, create a new one.
                     let has_terminal = workspace.panes().iter().any(|pane| {
@@ -282,7 +283,8 @@ pub async fn open_remote_terminal_workspace(
                 // Open a terminal in the center pane and focus it.
                 window.update(cx, |multi_workspace, window, cx| {
                     multi_workspace.activate(workspace.clone(), None, window, cx);
-                    workspace.update(cx, |_workspace, cx| {
+                    workspace.update(cx, |workspace, cx| {
+                        workspace.set_remote_terminal_mode(true, cx);
                         window.dispatch_action(remote_terminal_mode_terminal_action(), cx);
                     });
                 })?;
