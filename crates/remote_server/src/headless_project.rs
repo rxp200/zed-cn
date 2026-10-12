@@ -511,6 +511,7 @@ impl HeadlessProject {
         session.add_request_handler(cx.weak_entity(), Self::handle_create_temporary_file);
         session.add_request_handler(cx.weak_entity(), Self::handle_get_system_stats);
         session.add_request_handler(cx.weak_entity(), Self::handle_read_document_chunk);
+        session.add_request_handler(cx.weak_entity(), Self::handle_read_download_chunk);
         session.add_request_handler(cx.weak_entity(), Self::handle_read_epub_entry);
         session.add_request_handler(cx.weak_entity(), Self::handle_create_persistent_terminal);
         session.add_request_handler(cx.weak_entity(), Self::handle_persistent_terminal_input);
@@ -1186,6 +1187,84 @@ impl HeadlessProject {
             metadata.len
         );
         Ok(proto::ReadDocumentChunkResponse {
+            file: Some(file),
+            content,
+            total_size: metadata.len,
+        })
+    }
+
+    /// Serves one bounded chunk of a downloadable file.
+    ///
+    /// The client pulls chunks in order and only asks for the next one after
+    /// writing the previous response, so a download never queues a whole file
+    /// ahead of terminal output on the shared connection. The file size and
+    /// modification time are re-checked around every read so a file that
+    /// changes mid-download fails instead of producing a mixed snapshot.
+    pub async fn handle_read_download_chunk(
+        this: Entity<Self>,
+        message: TypedEnvelope<proto::DownloadFileChunk>,
+        cx: AsyncApp,
+    ) -> Result<proto::DownloadFileChunkResponse> {
+        use std::io::{Read as _, Seek as _};
+        let request = message.payload;
+        let path = RelPath::from_unix_str(&request.path)?;
+        let (worktree, fs) = this.read_with(&cx, |this, cx| {
+            let worktree = this
+                .worktree_store
+                .read(cx)
+                .worktree_for_id(WorktreeId::from_proto(request.worktree_id), cx);
+            (worktree, this.fs.clone())
+        });
+        let worktree = worktree.context("worktree not found")?;
+        let abs_path = worktree.read_with(&cx, |worktree, _| worktree.absolutize(&path));
+        let metadata = fs.metadata(&abs_path).await?.context("file not found")?;
+        anyhow::ensure!(!metadata.is_dir && !metadata.is_fifo, "not a regular file");
+        anyhow::ensure!(
+            metadata.len <= project::file_download::MAX_DOWNLOAD_FILE_BYTES,
+            "file is too large to download"
+        );
+        anyhow::ensure!(request.offset <= metadata.len, "offset is invalid");
+        let mtime: proto::Timestamp = metadata.mtime.into();
+        if request.offset > 0 {
+            anyhow::ensure!(
+                request.expected_size == metadata.len && request.expected_mtime == Some(mtime),
+                "file changed while downloading"
+            );
+        }
+        let max_chunk = if request.max_bytes == 0 {
+            project::file_download::MAX_DOWNLOAD_CHUNK_BYTES
+        } else {
+            (request.max_bytes as usize).min(project::file_download::MAX_DOWNLOAD_CHUNK_BYTES)
+        };
+        let length = (metadata.len - request.offset).min(max_chunk as u64) as usize;
+        let mut handle = fs.open_sync(&abs_path).await?;
+        let content = cx
+            .background_spawn(async move {
+                handle.seek(std::io::SeekFrom::Start(request.offset))?;
+                let mut content = vec![0; length];
+                handle.read_exact(&mut content)?;
+                anyhow::Ok(content)
+            })
+            .await?;
+        let after = fs
+            .metadata(&abs_path)
+            .await?
+            .context("file removed while downloading")?;
+        anyhow::ensure!(
+            after.len == metadata.len && after.mtime == metadata.mtime,
+            "file changed while downloading"
+        );
+        let file = worktree.read_with(&cx, |worktree, _| proto::File {
+            worktree_id: request.worktree_id,
+            entry_id: worktree
+                .entry_for_path(&path)
+                .map(|entry| entry.id.to_proto()),
+            path: request.path.clone(),
+            mtime: Some(mtime),
+            is_deleted: false,
+            is_historic: false,
+        });
+        Ok(proto::DownloadFileChunkResponse {
             file: Some(file),
             content,
             total_size: metadata.len,

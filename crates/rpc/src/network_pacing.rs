@@ -1,10 +1,12 @@
-//! Client-side pacing for bulk remote uploads.
+//! Client-side pacing for bulk remote transfers.
 //!
-//! Large remote file uploads share one connection with interactive traffic
+//! Large remote file transfers share one connection with interactive traffic
 //! (terminal input, buffer edits, LSP requests). Sending a whole file as a
 //! single message blocks every other message until it has been written, so
 //! uploads are split into bounded chunks by the caller and the delay between
-//! chunks is chosen here.
+//! chunks is chosen here. Downloads reuse the same pacer: the client pulls one
+//! bounded chunk per request and pauses between requests, so the server never
+//! queues a whole file ahead of terminal output.
 //!
 //! Two signals drive the choice:
 //!
@@ -91,9 +93,10 @@ pub fn reset_interactive_activity() {
     LAST_INTERACTIVE_ACTIVITY_MILLIS.store(u64::MAX, Ordering::Relaxed);
 }
 
-/// Whether a payload represents interactive work rather than bulk upload data
-/// or background polling. Keeping polls out matters: the activity indicator
-/// polls system statistics periodically and must not keep uploads throttled.
+/// Whether a payload represents interactive work rather than bulk transfer
+/// data or background polling. Keeping polls out matters: the activity
+/// indicator polls system statistics periodically and must not keep transfers
+/// throttled.
 pub fn is_interactive_payload(payload: &Option<proto::envelope::Payload>) -> bool {
     !matches!(
         payload,
@@ -111,26 +114,28 @@ pub fn is_interactive_payload(payload: &Option<proto::envelope::Payload>) -> boo
                 | proto::envelope::Payload::FinishProjectEntryUploadResponse(_)
                 | proto::envelope::Payload::AbortProjectEntryUpload(_)
                 | proto::envelope::Payload::AbortProjectEntryUploadResponse(_)
+                | proto::envelope::Payload::DownloadFileChunk(_)
+                | proto::envelope::Payload::DownloadFileChunkResponse(_)
         )
     )
 }
 
-/// How the next upload chunk should be sent.
+/// How the next bulk transfer chunk should be sent.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct UploadChunkPlan {
+pub struct TransferChunkPlan {
     pub chunk_size: usize,
     pub delay: Duration,
 }
 
-/// Chooses chunk sizes and inter-chunk delays for one remote upload.
+/// Chooses chunk sizes and inter-chunk delays for one remote bulk transfer.
 #[derive(Default)]
-pub struct UploadPacer {
+pub struct TransferPacer {
     fastest_round_trip: Option<Duration>,
     last_round_trip: Option<Duration>,
     observed_round_trips: usize,
 }
 
-impl UploadPacer {
+impl TransferPacer {
     pub fn new() -> Self {
         Self::default()
     }
@@ -149,11 +154,11 @@ impl UploadPacer {
 
     /// Plans the next chunk, given how long ago the client last sent
     /// interactive traffic.
-    pub fn plan_next_chunk(&self, idle: Option<Duration>) -> UploadChunkPlan {
+    pub fn plan_next_chunk(&self, idle: Option<Duration>) -> TransferChunkPlan {
         let congested = self.congestion_level();
         let busy = idle.is_some_and(|idle| idle < INTERACTIVE_IDLE_GRACE);
         if !busy && congested == 0 {
-            return UploadChunkPlan {
+            return TransferChunkPlan {
                 chunk_size: IDLE_CHUNK_SIZE,
                 delay: Duration::ZERO,
             };
@@ -167,13 +172,13 @@ impl UploadPacer {
         };
         let round_trip = self.last_round_trip.unwrap_or(ASSUMED_ROUND_TRIP);
 
-        UploadChunkPlan {
+        TransferChunkPlan {
             chunk_size: BUSY_CHUNK_SIZE,
             delay: round_trip.saturating_mul(divisor).min(MAX_CHUNK_DELAY),
         }
     }
 
-    /// Delay to apply before starting the next entry of a directory upload.
+    /// Delay to apply before starting the next entry of a directory transfer.
     /// Small files are sent as whole messages, so the only way to pace them is
     /// to pause between entries.
     pub fn entry_delay(&self, idle: Option<Duration>) -> Duration {
@@ -212,7 +217,7 @@ mod tests {
 
     #[test]
     fn an_idle_connection_uses_large_chunks_without_delay() {
-        let pacer = UploadPacer::new();
+        let pacer = TransferPacer::new();
         let plan = pacer.plan_next_chunk(None);
         assert_eq!(plan.chunk_size, IDLE_CHUNK_SIZE);
         assert_eq!(plan.delay, Duration::ZERO);
@@ -221,7 +226,7 @@ mod tests {
 
     #[test]
     fn recent_activity_halves_or_quarters_the_duty_cycle() {
-        let mut pacer = UploadPacer::new();
+        let mut pacer = TransferPacer::new();
         pacer.observe_round_trip(millis(100));
         pacer.observe_round_trip(millis(100));
 
@@ -237,7 +242,7 @@ mod tests {
 
     #[test]
     fn congestion_slows_an_otherwise_idle_upload() {
-        let mut pacer = UploadPacer::new();
+        let mut pacer = TransferPacer::new();
         pacer.observe_round_trip(millis(100));
         pacer.observe_round_trip(millis(100));
         assert_eq!(pacer.plan_next_chunk(None).chunk_size, IDLE_CHUNK_SIZE);
@@ -255,7 +260,7 @@ mod tests {
 
     #[test]
     fn a_single_slow_first_round_trip_does_not_report_congestion() {
-        let mut pacer = UploadPacer::new();
+        let mut pacer = TransferPacer::new();
         pacer.observe_round_trip(millis(900));
         assert_eq!(pacer.plan_next_chunk(None).chunk_size, IDLE_CHUNK_SIZE);
     }
@@ -289,6 +294,16 @@ mod tests {
                 upload_id: 1,
                 offset: 0,
                 content: Vec::new(),
+            })
+        )));
+        assert!(!is_interactive_payload(&Some(
+            proto::envelope::Payload::DownloadFileChunk(proto::DownloadFileChunk {
+                worktree_id: 0,
+                path: String::new(),
+                offset: 0,
+                expected_size: 0,
+                expected_mtime: None,
+                max_bytes: 0,
             })
         )));
     }

@@ -550,7 +550,9 @@ message Envelope {
     FinishProjectEntryUpload finish_project_entry_upload = 518;
     FinishProjectEntryUploadResponse finish_project_entry_upload_response = 519;
     AbortProjectEntryUpload abort_project_entry_upload = 520;
-    AbortProjectEntryUploadResponse abort_project_entry_upload_response = 521; // current max
+    AbortProjectEntryUploadResponse abort_project_entry_upload_response = 521;
+    DownloadFileChunk download_file_chunk = 522;
+    DownloadFileChunkResponse download_file_chunk_response = 523; // current max
   }
 
   reserved 87 to 88;

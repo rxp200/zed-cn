@@ -221,6 +221,7 @@ pub enum IconName {
     Reader,
     RefreshTitle,
     Regex,
+    RemoteTerminal,
     ReplNeutral,
     Replace,
     ReplaceAll,
