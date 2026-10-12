@@ -2471,6 +2471,18 @@ impl Project {
         })
     }
 
+    /// Whether a git network operation running on this project's remote server
+    /// can be cancelled from the client. This changes wire semantics, so it
+    /// requires a server that advertised the cancellation capability as well as
+    /// an explicit Zed CN SSH connection, never the application version alone.
+    pub fn supports_remote_git_cancellation(&self, cx: &App) -> bool {
+        self.remote_client.as_ref().is_some_and(|client| {
+            let client = client.read(cx);
+            client.supports_git_operation_cancellation()
+                && custom_protocol_source_allowed(&client.connection_options())
+        })
+    }
+
     pub fn create_temporary_file(
         &self,
         suggested_name: String,

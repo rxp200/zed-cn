@@ -179,6 +179,7 @@ pub const MODEL_CHUNKS_CAPABILITY: &str = "model_chunks_v1";
 pub const EPUB_ENTRIES_CAPABILITY: &str = "epub_entries_v1";
 pub const UPLOAD_CHUNKS_CAPABILITY: &str = "upload_chunks_v1";
 pub const DOWNLOAD_CHUNKS_CAPABILITY: &str = "download_chunks_v1";
+pub const GIT_OPERATION_CANCELLATION_CAPABILITY: &str = "git_operation_cancellation_v1";
 pub const PERSISTENT_TERMINALS_CAPABILITY: &str = "persistent_terminals_v1";
 pub const PERSISTENT_TERMINAL_STREAMING_CAPABILITY: &str = "persistent_terminal_streaming_v1";
 
@@ -1464,6 +1465,10 @@ impl RemoteClient {
         self.client.supports_download_chunks.load(SeqCst)
     }
 
+    pub fn supports_git_operation_cancellation(&self) -> bool {
+        self.client.supports_git_operation_cancellation.load(SeqCst)
+    }
+
     pub fn supports_persistent_terminals(&self) -> bool {
         self.client.supports_persistent_terminals.load(SeqCst)
     }
@@ -2674,6 +2679,7 @@ mod tests {
         assert!(!client.supports_model_chunks.load(SeqCst));
         assert!(!client.supports_upload_chunks.load(SeqCst));
         assert!(!client.supports_download_chunks.load(SeqCst));
+        assert!(!client.supports_git_operation_cancellation.load(SeqCst));
         for (capabilities, expected) in [
             (Vec::new(), false),
             (vec![DOCUMENT_CHUNKS_CAPABILITY.to_owned()], true),
@@ -2740,6 +2746,26 @@ mod tests {
                 .expect("deliver download capabilities");
             cx.run_until_parked();
             assert_eq!(client.supports_download_chunks.load(SeqCst), expected);
+        }
+        for (capabilities, expected) in [
+            (vec![GIT_OPERATION_CANCELLATION_CAPABILITY.to_owned()], true),
+            (
+                vec![
+                    GIT_OPERATION_CANCELLATION_CAPABILITY.to_owned(),
+                    DOWNLOAD_CHUNKS_CAPABILITY.to_owned(),
+                ],
+                true,
+            ),
+            (Vec::new(), false),
+        ] {
+            incoming_tx
+                .unbounded_send(proto::RemoteStarted { capabilities }.into_envelope(0, None, None))
+                .expect("deliver git operation cancellation capabilities");
+            cx.run_until_parked();
+            assert_eq!(
+                client.supports_git_operation_cancellation.load(SeqCst),
+                expected
+            );
         }
     }
 
@@ -3092,6 +3118,7 @@ pub(crate) struct ChannelClient {
     supports_epub_entries: AtomicBool,
     supports_upload_chunks: AtomicBool,
     supports_download_chunks: AtomicBool,
+    supports_git_operation_cancellation: AtomicBool,
     supports_persistent_terminals: AtomicBool,
     supports_persistent_terminal_streaming: AtomicBool,
     session_invalidated: Arc<Signal<String>>,
@@ -3132,6 +3159,7 @@ impl ChannelClient {
             supports_epub_entries: AtomicBool::new(false),
             supports_upload_chunks: AtomicBool::new(false),
             supports_download_chunks: AtomicBool::new(false),
+            supports_git_operation_cancellation: AtomicBool::new(false),
             supports_persistent_terminals: AtomicBool::new(false),
             supports_persistent_terminal_streaming: AtomicBool::new(false),
             session_invalidated: Arc::new(Signal::new(cx)),
@@ -3160,6 +3188,7 @@ impl ChannelClient {
                         EPUB_ENTRIES_CAPABILITY.to_string(),
                         UPLOAD_CHUNKS_CAPABILITY.to_string(),
                         DOWNLOAD_CHUNKS_CAPABILITY.to_string(),
+                        GIT_OPERATION_CANCELLATION_CAPABILITY.to_string(),
                         PERSISTENT_TERMINALS_CAPABILITY.to_string(),
                         PERSISTENT_TERMINAL_STREAMING_CAPABILITY.to_string(),
                     ],
@@ -3234,6 +3263,13 @@ impl ChannelClient {
                             .capabilities
                             .iter()
                             .any(|capability| capability == DOWNLOAD_CHUNKS_CAPABILITY),
+                        SeqCst,
+                    );
+                    this.supports_git_operation_cancellation.store(
+                        started
+                            .capabilities
+                            .iter()
+                            .any(|capability| capability == GIT_OPERATION_CANCELLATION_CAPABILITY),
                         SeqCst,
                     );
                     this.supports_model_chunks.store(

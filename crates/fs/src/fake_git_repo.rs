@@ -15,8 +15,8 @@ use git::{
         AUTHOR_SEARCH_QUERY_PREFIX, AskPassDelegate, Branch, CommitData, CommitDataReader,
         CommitDetails, CommitOptions, CreateWorktreeTarget, FetchOptions,
         FileHistoryChangedFileSets, GRAPH_CHUNK_SIZE, GitRepository, GitRepositoryCheckpoint,
-        InitialGraphCommitData, LogOrder, LogSource, PushOptions, RefEdit, Remote, RepoPath,
-        ResetMode, SearchCommitArgs, Worktree, commit_hash_search_query,
+        InitialGraphCommitData, LogOrder, LogSource, OperationCancellation, PushOptions, RefEdit,
+        Remote, RepoPath, ResetMode, SearchCommitArgs, Worktree, commit_hash_search_query,
     },
     stash::GitStash,
     status::{
@@ -1262,6 +1262,7 @@ impl GitRepository for FakeGitRepository {
         _options: Option<PushOptions>,
         _askpass: AskPassDelegate,
         _env: Arc<HashMap<String, String>>,
+        _cancellation: OperationCancellation,
         _cx: AsyncApp,
     ) -> BoxFuture<'_, Result<git::repository::RemoteCommandOutput>> {
         unimplemented!()
@@ -1274,6 +1275,7 @@ impl GitRepository for FakeGitRepository {
         _rebase: bool,
         _askpass: AskPassDelegate,
         _env: Arc<HashMap<String, String>>,
+        _cancellation: OperationCancellation,
         _cx: AsyncApp,
     ) -> BoxFuture<'_, Result<git::repository::RemoteCommandOutput>> {
         unimplemented!()
@@ -1284,6 +1286,7 @@ impl GitRepository for FakeGitRepository {
         _fetch_options: FetchOptions,
         _askpass: AskPassDelegate,
         _env: Arc<HashMap<String, String>>,
+        _cancellation: OperationCancellation,
         _cx: AsyncApp,
     ) -> BoxFuture<'_, Result<git::repository::RemoteCommandOutput>> {
         unimplemented!()

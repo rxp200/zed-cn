@@ -41,9 +41,10 @@ use git::{
         AUTHOR_SEARCH_QUERY_PREFIX, Branch, BranchesScanResult, CommitData, CommitDetails,
         CommitFileStatus, CommitOptions, CreateWorktreeTarget, DiffStatType, DiffType,
         FetchOptions, FileHistoryChangedFileSets, GitCommitTemplate, GitRepository,
-        GitRepositoryCheckpoint, InitialGraphCommitData, LogOrder, LogSource, PushOptions, Remote,
-        RemoteCommandOutput, RepoPath, ResetMode, SearchCommitArgs, UpstreamTrackingStatus,
-        Worktree as GitWorktree, delete_branch_flag, is_binary_content,
+        GitRepositoryCheckpoint, InitialGraphCommitData, LogOrder, LogSource,
+        OperationCancellation, PushOptions, Remote, RemoteCommandOutput, RepoPath, ResetMode,
+        SearchCommitArgs, UpstreamTrackingStatus, Worktree as GitWorktree, delete_branch_flag,
+        is_binary_content,
     },
     stash::{GitStash, StashEntry},
     status::{
@@ -648,12 +649,15 @@ pub struct RepositorySnapshot {
     pub linked_worktrees: Arc<[GitWorktree]>,
 }
 
-type JobId = u64;
+pub type JobId = u64;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct JobInfo {
+    pub id: JobId,
     pub start: Instant,
     pub message: SharedString,
+    /// Whether this job can be aborted with [`Repository::cancel_job`].
+    pub cancellable: bool,
 }
 
 struct CommitDataHandler {
@@ -714,6 +718,7 @@ pub struct Repository {
     job_sender: mpsc::UnboundedSender<GitJob>,
     _worker_task: Task<()>,
     active_jobs: HashMap<JobId, JobInfo>,
+    job_cancellations: HashMap<JobId, OperationCancellation>,
     job_debug_queue: job_debug_queue::GitJobDebugQueue,
     pending_ops: SumTree<PendingOps>,
     job_id: JobId,
@@ -1066,6 +1071,7 @@ impl GitStore {
         client.add_entity_request_handler(Self::handle_remove_remote);
         client.add_entity_request_handler(Self::handle_delete_branch);
         client.add_entity_request_handler(Self::handle_git_init);
+        client.add_entity_request_handler(Self::handle_cancel_git_operation);
         client.add_entity_request_handler(Self::handle_push);
         client.add_entity_request_handler(Self::handle_pull);
         client.add_entity_request_handler(Self::handle_fetch);
@@ -3637,6 +3643,19 @@ impl GitStore {
         })
     }
 
+    async fn handle_cancel_git_operation(
+        this: Entity<Self>,
+        envelope: TypedEnvelope<proto::CancelGitOperation>,
+        mut cx: AsyncApp,
+    ) -> Result<proto::Ack> {
+        let repository_id = RepositoryId::from_proto(envelope.payload.repository_id);
+        let repository_handle = Self::repository_for_request(&this, repository_id, &mut cx)?;
+        repository_handle.update(&mut cx, |repository, cx| {
+            repository.cancel_active_git_jobs(cx);
+        });
+        Ok(proto::Ack {})
+    }
+
     async fn handle_stage(
         this: Entity<Self>,
         envelope: TypedEnvelope<proto::Stage>,
@@ -6066,6 +6085,21 @@ impl BufferGitState {
     }
 }
 
+/// Tells the remote server to abort the git network operation it is running
+/// for this repository. Only called for servers that advertised the capability.
+fn cancel_remote_git_operation(
+    client: &AnyProtoClient,
+    project_id: u64,
+    repository_id: RepositoryId,
+) {
+    client
+        .send(proto::CancelGitOperation {
+            project_id,
+            repository_id: repository_id.to_proto(),
+        })
+        .log_err();
+}
+
 fn make_remote_delegate(
     this: Entity<GitStore>,
     project_id: u64,
@@ -6579,6 +6613,7 @@ impl Repository {
         self.job_sender.close_channel();
         self._worker_task = Task::ready(());
         self.active_jobs.clear();
+        self.job_cancellations.clear();
         self.job_debug_queue
             .mark_unfinished_complete(job_debug_queue::CompletedJobStatus::Skipped);
         cx.notify();
@@ -6650,6 +6685,7 @@ impl Repository {
             job_sender: mpsc::unbounded().0,
             job_id: 0,
             active_jobs: Default::default(),
+            job_cancellations: Default::default(),
             job_debug_queue: job_debug_queue::GitJobDebugQueue::new(),
             initial_graph_data: Default::default(),
             commit_data: Default::default(),
@@ -6701,6 +6737,7 @@ impl Repository {
             askpass_delegates: Default::default(),
             latest_askpass_id: 0,
             active_jobs: Default::default(),
+            job_cancellations: Default::default(),
             job_debug_queue: job_debug_queue::GitJobDebugQueue::new(),
             job_id: 0,
             initial_graph_data: Default::default(),
@@ -6742,6 +6779,7 @@ impl Repository {
         let _ = self.send_keyed_job(
             "reload_buffer_diff_bases",
             Some(GitJobKey::ReloadBufferDiffBases),
+            None,
             None,
             |state, mut cx| async move {
                 let RepositoryState::Local(LocalRepositoryState { backend, .. }) = state else {
@@ -6936,7 +6974,7 @@ impl Repository {
         Fut: Future<Output = R> + 'static,
         R: Send + 'static,
     {
-        self.send_keyed_job(description, None, status, job)
+        self.send_keyed_job(description, None, status, None, job)
     }
 
     fn send_keyed_job<F, Fut, R>(
@@ -6944,6 +6982,7 @@ impl Repository {
         description: &'static str,
         key: Option<GitJobKey>,
         status: Option<SharedString>,
+        cancellation: Option<OperationCancellation>,
         job: F,
     ) -> oneshot::Receiver<R>
     where
@@ -6954,6 +6993,11 @@ impl Repository {
         let (result_tx, result_rx) = futures::channel::oneshot::channel();
         let job_id = post_inc(&mut self.job_id);
         let this = self.this.clone();
+
+        let cancellable = cancellation.is_some();
+        if let Some(cancellation) = cancellation.as_ref() {
+            self.job_cancellations.insert(job_id, cancellation.clone());
+        }
 
         let key_label = key.as_ref().map(format_job_key);
         self.job_debug_queue.add(job_id, description, key_label);
@@ -6971,8 +7015,10 @@ impl Repository {
                                 this.active_jobs.insert(
                                     job_id,
                                     JobInfo {
+                                        id: job_id,
                                         start: Instant::now(),
                                         message: s,
+                                        cancellable,
                                     },
                                 );
                             }
@@ -6988,6 +7034,7 @@ impl Repository {
                                 job_debug_queue::CompletedJobStatus::Finished,
                             );
                             this.active_jobs.remove(&job_id);
+                            this.job_cancellations.remove(&job_id);
                             cx.notify();
                         })
                         .ok();
@@ -8238,6 +8285,7 @@ impl Repository {
                         "stage_or_unstage_entries",
                         Some(job_key),
                         Some(status.into()),
+                        None,
                         move |git_repo, mut cx| async move {
                             let hunk_staging_operation_counts = weak_this
                                 .update(&mut cx, |this, cx| {
@@ -8911,6 +8959,7 @@ impl Repository {
         let askpass_delegates = self.askpass_delegates.clone();
         let askpass_id = util::post_inc(&mut self.latest_askpass_id);
         let id = self.id;
+        let cancellation = self.new_operation_cancellation(cx);
 
         let updates_tx = self
             .git_store()
@@ -8922,9 +8971,12 @@ impl Repository {
             });
 
         let this = cx.weak_entity();
-        self.send_job(
+        let job_cancellation = cancellation.clone();
+        self.send_keyed_job(
             "fetch",
+            None,
             Some("git fetch".into()),
+            cancellation,
             move |git_repo, mut cx| async move {
                 match git_repo {
                     RepositoryState::Local(LocalRepositoryState {
@@ -8933,7 +8985,13 @@ impl Repository {
                         ..
                     }) => {
                         let result = backend
-                            .fetch(fetch_options, askpass, environment, cx.clone())
+                            .fetch(
+                                fetch_options,
+                                askpass,
+                                environment,
+                                job_cancellation.unwrap_or_default(),
+                                cx.clone(),
+                            )
                             .await;
                         if result.is_ok() {
                             Self::refresh_branch_list(&this, backend, updates_tx, &mut cx).await?;
@@ -8944,15 +9002,27 @@ impl Repository {
                         let _askpass_operation =
                             RemoteAskPassOperation::new(askpass_id, askpass, askpass_delegates);
 
-                        let response = client
-                            .request(proto::Fetch {
-                                project_id: project_id.0,
-                                repository_id: id.to_proto(),
-                                askpass_id,
-                                remote: fetch_options.to_proto(),
-                                unshallow: fetch_options == FetchOptions::Unshallow,
-                            })
-                            .await?;
+                        let request = Box::pin(client.request(proto::Fetch {
+                            project_id: project_id.0,
+                            repository_id: id.to_proto(),
+                            askpass_id,
+                            remote: fetch_options.to_proto(),
+                            unshallow: fetch_options == FetchOptions::Unshallow,
+                        }));
+                        let response = if let Some(cancellation) = job_cancellation {
+                            let cancelled = cancellation.cancelled();
+                            futures::select_biased! {
+                                _ = cancelled.fuse() => {
+                                    cancel_remote_git_operation(&client, project_id.0, id);
+                                    return Err(anyhow!(
+                                        git::repository::REMOTE_CANCELLED_BY_USER
+                                    ));
+                                }
+                                response = request.fuse() => response?,
+                            }
+                        } else {
+                            request.await?
+                        };
 
                         Ok(RemoteCommandOutput {
                             stdout: response.stdout,
@@ -8994,9 +9064,13 @@ impl Repository {
             });
 
         let this = cx.weak_entity();
-        self.send_job(
+        let cancellation = self.new_operation_cancellation(cx);
+        let job_cancellation = cancellation.clone();
+        self.send_keyed_job(
             "push",
+            None,
             Some(format!("git push {} {} {}:{}", args, remote, branch, remote_branch).into()),
+            cancellation,
             move |git_repo, mut cx| async move {
                 match git_repo {
                     RepositoryState::Local(LocalRepositoryState {
@@ -9012,6 +9086,7 @@ impl Repository {
                                 options,
                                 askpass,
                                 environment.clone(),
+                                job_cancellation.unwrap_or_default(),
                                 cx.clone(),
                             )
                             .await;
@@ -9024,23 +9099,32 @@ impl Repository {
                     RepositoryState::Remote(RemoteRepositoryState { project_id, client }) => {
                         let _askpass_operation =
                             RemoteAskPassOperation::new(askpass_id, askpass, askpass_delegates);
-                        let response = client
-                            .request(proto::Push {
-                                project_id: project_id.0,
-                                repository_id: id.to_proto(),
-                                askpass_id,
-                                branch_name: branch.to_string(),
-                                remote_branch_name: remote_branch.to_string(),
-                                remote_name: remote.to_string(),
-                                options: options.map(|options| match options {
-                                    PushOptions::Force => proto::push::PushOptions::Force,
-                                    PushOptions::SetUpstream => {
-                                        proto::push::PushOptions::SetUpstream
-                                    }
+                        let request = Box::pin(client.request(proto::Push {
+                            project_id: project_id.0,
+                            repository_id: id.to_proto(),
+                            askpass_id,
+                            branch_name: branch.to_string(),
+                            remote_branch_name: remote_branch.to_string(),
+                            remote_name: remote.to_string(),
+                            options: options.map(|options| match options {
+                                PushOptions::Force => proto::push::PushOptions::Force,
+                                PushOptions::SetUpstream => proto::push::PushOptions::SetUpstream,
+                            } as i32),
+                        }));
+                        let response = if let Some(cancellation) = job_cancellation {
+                            let cancelled = cancellation.cancelled();
+                            futures::select_biased! {
+                                _ = cancelled.fuse() => {
+                                    cancel_remote_git_operation(&client, project_id.0, id);
+                                    return Err(anyhow!(
+                                        git::repository::REMOTE_CANCELLED_BY_USER
+                                    ));
                                 }
-                                    as i32),
-                            })
-                            .await?;
+                                response = request.fuse() => response?,
+                            }
+                        } else {
+                            request.await?
+                        };
 
                         Ok(RemoteCommandOutput {
                             stdout: response.stdout,
@@ -9058,7 +9142,7 @@ impl Repository {
         remote: SharedString,
         rebase: bool,
         askpass: AskPassDelegate,
-        _cx: &mut App,
+        cx: &mut App,
     ) -> oneshot::Receiver<Result<RemoteCommandOutput>> {
         let askpass_delegates = self.askpass_delegates.clone();
         let askpass_id = util::post_inc(&mut self.latest_askpass_id);
@@ -9073,9 +9157,13 @@ impl Repository {
             status.push_str(&format!(" {}", b));
         }
 
-        self.send_job(
+        let cancellation = self.new_operation_cancellation(cx);
+        let job_cancellation = cancellation.clone();
+        self.send_keyed_job(
             "pull",
+            None,
             Some(status.into()),
+            cancellation,
             move |git_repo, cx| async move {
                 match git_repo {
                     RepositoryState::Local(LocalRepositoryState {
@@ -9090,6 +9178,7 @@ impl Repository {
                                 rebase,
                                 askpass,
                                 environment.clone(),
+                                job_cancellation.unwrap_or_default(),
                                 cx,
                             )
                             .await
@@ -9097,16 +9186,28 @@ impl Repository {
                     RepositoryState::Remote(RemoteRepositoryState { project_id, client }) => {
                         let _askpass_operation =
                             RemoteAskPassOperation::new(askpass_id, askpass, askpass_delegates);
-                        let response = client
-                            .request(proto::Pull {
-                                project_id: project_id.0,
-                                repository_id: id.to_proto(),
-                                askpass_id,
-                                rebase,
-                                branch_name: branch.as_ref().map(|b| b.to_string()),
-                                remote_name: remote.to_string(),
-                            })
-                            .await?;
+                        let request = Box::pin(client.request(proto::Pull {
+                            project_id: project_id.0,
+                            repository_id: id.to_proto(),
+                            askpass_id,
+                            rebase,
+                            branch_name: branch.as_ref().map(|b| b.to_string()),
+                            remote_name: remote.to_string(),
+                        }));
+                        let response = if let Some(cancellation) = job_cancellation {
+                            let cancelled = cancellation.cancelled();
+                            futures::select_biased! {
+                                _ = cancelled.fuse() => {
+                                    cancel_remote_git_operation(&client, project_id.0, id);
+                                    return Err(anyhow!(
+                                        git::repository::REMOTE_CANCELLED_BY_USER
+                                    ));
+                                }
+                                response = request.fuse() => response?,
+                            }
+                        } else {
+                            request.await?
+                        };
 
                         Ok(RemoteCommandOutput {
                             stdout: response.stdout,
@@ -9134,6 +9235,7 @@ impl Repository {
         self.send_keyed_job(
             "spawn_set_index_text_job",
             Some(GitJobKey::WriteIndex(vec![path.clone()])),
+            None,
             None,
             move |git_repo, mut cx| async move {
                 log::debug!(
@@ -10341,6 +10443,7 @@ impl Repository {
             "schedule_scan",
             Some(GitJobKey::ReloadGitState),
             None,
+            None,
             |state, mut cx| async move {
                 log::debug!("run scheduled git status scan");
 
@@ -10402,6 +10505,7 @@ impl Repository {
                                 skipped_job_id,
                                 job_debug_queue::CompletedJobStatus::Skipped,
                             );
+                            repo.job_cancellations.remove(&skipped_job_id);
                         })
                         .ok();
                         continue;
@@ -10445,6 +10549,7 @@ impl Repository {
                                     skipped_job_id,
                                     job_debug_queue::CompletedJobStatus::Skipped,
                                 );
+                                repo.job_cancellations.remove(&skipped_job_id);
                             })
                             .ok();
                             continue;
@@ -10675,6 +10780,7 @@ impl Repository {
             "paths_changed",
             Some(GitJobKey::RefreshStatuses),
             None,
+            None,
             |state, mut cx| async move {
                 let (prev_snapshot, changed_paths) = this.update(&mut cx, |this, _| {
                     (
@@ -10810,6 +10916,79 @@ impl Repository {
     /// currently running git command and when it started
     pub fn current_job(&self) -> Option<JobInfo> {
         self.active_jobs.values().next().cloned()
+    }
+
+    /// Asks the given job to abort. Jobs that were not started as cancellable
+    /// are ignored.
+    pub fn cancel_job(&mut self, job_id: JobId, cx: &mut Context<Self>) {
+        if let Some(cancellation) = self.job_cancellations.get(&job_id) {
+            cancellation.cancel();
+            cx.notify();
+        }
+    }
+
+    /// Aborts every cancellable job for this repository. Used by the remote
+    /// server when a client cancels a git network operation.
+    pub fn cancel_active_git_jobs(&mut self, cx: &mut Context<Self>) {
+        let cancellations = self.job_cancellations.values().cloned().collect::<Vec<_>>();
+        for cancellation in &cancellations {
+            cancellation.cancel();
+        }
+        if !cancellations.is_empty() {
+            cx.notify();
+        }
+    }
+
+    /// Whether the remote server this repository lives on understands the
+    /// customized cancellation request. Wire semantics change, so this needs
+    /// both an advertised capability and an explicit Zed CN connection.
+    fn remote_git_cancellation_supported(&self, cx: &App) -> bool {
+        self.git_store()
+            .and_then(|git_store| git_store.read(cx).project.clone())
+            .and_then(|project| project.upgrade())
+            .is_some_and(|project| project.read(cx).supports_remote_git_cancellation(cx))
+    }
+
+    fn is_remote_repository(&self, cx: &App) -> bool {
+        self.git_store().is_some_and(|git_store| {
+            matches!(git_store.read(cx).state, GitStoreState::Remote { .. })
+        })
+    }
+
+    /// Creates the cancellation handle for a network operation, or `None` when
+    /// the operation cannot actually be aborted. Remote repositories only
+    /// become cancellable once the server advertised support, so that a cancel
+    /// request is never sent to an official or older server.
+    fn new_operation_cancellation(&self, cx: &App) -> Option<OperationCancellation> {
+        if self.is_remote_repository(cx) {
+            self.remote_git_cancellation_supported(cx)
+                .then(OperationCancellation::new)
+        } else {
+            Some(OperationCancellation::new())
+        }
+    }
+
+    /// Sends a cancellable job used by tests to exercise the cancellation
+    /// plumbing without a real git remote.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn send_test_cancellable_job(
+        &mut self,
+        status: SharedString,
+    ) -> oneshot::Receiver<Result<()>> {
+        let cancellation = OperationCancellation::new();
+        let job_cancellation = cancellation.clone();
+        self.send_keyed_job(
+            "test_cancellable_job",
+            None,
+            Some(status),
+            Some(cancellation),
+            move |_state, _cx| async move {
+                match job_cancellation.cancelled().await {
+                    Ok(()) | Err(_) => {}
+                }
+                Err(anyhow!(git::repository::REMOTE_CANCELLED_BY_USER))
+            },
+        )
     }
 
     pub fn job_debug_queue(&self) -> &job_debug_queue::GitJobDebugQueue {
@@ -11643,6 +11822,45 @@ mod tests {
             "another@example.com",
             false
         ));
+    }
+
+    #[gpui::test]
+    async fn test_cancel_git_job_aborts_it(cx: &mut TestAppContext) {
+        use util::path;
+
+        init_test(cx);
+        let project_root = Path::new(path!("/project"));
+        let fs = FakeFs::new(cx.executor());
+        fs.insert_tree(project_root, json!({ ".git": {} })).await;
+        let project = Project::test(fs, [project_root], cx).await;
+        let repository =
+            project.read_with(cx, |project, cx| project.active_repository(cx).unwrap());
+
+        let result = repository.update(cx, |repository, _cx| {
+            repository.send_test_cancellable_job("git fetch".into())
+        });
+        cx.run_until_parked();
+
+        let job = repository
+            .read_with(cx, |repository, _| repository.current_job())
+            .expect("job is running");
+        assert!(job.cancellable);
+        assert_eq!(job.message.as_ref(), "git fetch");
+
+        repository.update(cx, |repository, cx| repository.cancel_job(job.id, cx));
+        cx.run_until_parked();
+
+        let error = result
+            .await
+            .expect("job finished")
+            .expect_err("job cancelled");
+        assert_eq!(error.to_string(), git::repository::REMOTE_CANCELLED_BY_USER);
+        assert!(
+            repository
+                .read_with(cx, |repository, _| repository.current_job())
+                .is_none(),
+            "cancelled job is no longer reported as running"
+        );
     }
 
     #[gpui::test]

@@ -46,6 +46,59 @@ pub use askpass::{AskPassDelegate, AskPassResult, AskPassSession};
 
 pub const REMOTE_CANCELLED_BY_USER: &str = "Operation cancelled by user";
 
+/// Handle used to cancel an in-flight git network operation (fetch, pull, push).
+///
+/// Cancelling interrupts the running `git` process, which is killed when its
+/// future is dropped, and makes the operation fail with
+/// [`REMOTE_CANCELLED_BY_USER`]. The handle is cheap to clone so the UI can hold
+/// one while the operation runs.
+#[derive(Clone, Default)]
+pub struct OperationCancellation {
+    inner: Arc<OperationCancellationInner>,
+}
+
+#[derive(Default)]
+struct OperationCancellationInner {
+    cancelled: AtomicBool,
+    waiter: Mutex<Option<oneshot::Sender<()>>>,
+}
+
+impl OperationCancellation {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.inner
+            .cancelled
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    pub fn cancel(&self) {
+        self.inner
+            .cancelled
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let waiter = self.inner.waiter.lock().take();
+        if let Some(waiter) = waiter {
+            waiter.send(()).ok();
+        }
+    }
+
+    /// Returns a future that resolves once the operation is cancelled.
+    ///
+    /// Registering more than one listener at a time is not supported; a second
+    /// listener replaces the first and resolves the first one immediately.
+    pub fn cancelled(&self) -> oneshot::Receiver<()> {
+        let (sender, receiver) = oneshot::channel();
+        if self.is_cancelled() {
+            drop(sender);
+        } else {
+            *self.inner.waiter.lock() = Some(sender);
+        }
+        receiver
+    }
+}
+
 /// Format string used in graph log to get initial data for the git graph
 /// %H - Full commit hash
 /// %P - Parent hashes
@@ -1020,6 +1073,7 @@ pub trait GitRepository: Send + Sync {
         options: Option<PushOptions>,
         askpass: AskPassDelegate,
         env: Arc<HashMap<String, String>>,
+        cancellation: OperationCancellation,
         // This method takes an AsyncApp to ensure it's invoked on the main thread,
         // otherwise git-credentials-manager won't work.
         cx: AsyncApp,
@@ -1032,6 +1086,7 @@ pub trait GitRepository: Send + Sync {
         rebase: bool,
         askpass: AskPassDelegate,
         env: Arc<HashMap<String, String>>,
+        cancellation: OperationCancellation,
         // This method takes an AsyncApp to ensure it's invoked on the main thread,
         // otherwise git-credentials-manager won't work.
         cx: AsyncApp,
@@ -1042,6 +1097,7 @@ pub trait GitRepository: Send + Sync {
         fetch_options: FetchOptions,
         askpass: AskPassDelegate,
         env: Arc<HashMap<String, String>>,
+        cancellation: OperationCancellation,
         // This method takes an AsyncApp to ensure it's invoked on the main thread,
         // otherwise git-credentials-manager won't work.
         cx: AsyncApp,
@@ -2799,7 +2855,7 @@ impl GitRepository for RealGitRepository {
                 cmd.arg("--author").arg(&format!("{name} <{email}>"));
             }
 
-            run_git_command(env, ask_pass, cmd, executor).await?;
+            run_git_command(env, ask_pass, cmd, executor, &OperationCancellation::new()).await?;
 
             Ok(())
         }
@@ -2837,6 +2893,7 @@ impl GitRepository for RealGitRepository {
         options: Option<PushOptions>,
         ask_pass: AskPassDelegate,
         env: Arc<HashMap<String, String>>,
+        cancellation: OperationCancellation,
         cx: AsyncApp,
     ) -> BoxFuture<'_, Result<RemoteCommandOutput>> {
         let working_directory = self.command_directory();
@@ -2868,7 +2925,7 @@ impl GitRepository for RealGitRepository {
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped());
 
-            run_git_command(env, ask_pass, command, executor).await
+            run_git_command(env, ask_pass, command, executor, &cancellation).await
         }
         .boxed()
     }
@@ -2880,6 +2937,7 @@ impl GitRepository for RealGitRepository {
         rebase: bool,
         ask_pass: AskPassDelegate,
         env: Arc<HashMap<String, String>>,
+        cancellation: OperationCancellation,
         cx: AsyncApp,
     ) -> BoxFuture<'_, Result<RemoteCommandOutput>> {
         let working_directory = self.command_directory();
@@ -2911,7 +2969,7 @@ impl GitRepository for RealGitRepository {
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped());
 
-            run_git_command(env, ask_pass, command, executor).await
+            run_git_command(env, ask_pass, command, executor, &cancellation).await
         }
         .boxed()
     }
@@ -2921,6 +2979,7 @@ impl GitRepository for RealGitRepository {
         fetch_options: FetchOptions,
         ask_pass: AskPassDelegate,
         env: Arc<HashMap<String, String>>,
+        cancellation: OperationCancellation,
         cx: AsyncApp,
     ) -> BoxFuture<'_, Result<RemoteCommandOutput>> {
         let working_directory = self.command_directory();
@@ -2946,7 +3005,7 @@ impl GitRepository for RealGitRepository {
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped());
 
-            run_git_command(env, ask_pass, command, executor).await
+            run_git_command(env, ask_pass, command, executor, &cancellation).await
         }
         .boxed()
     }
@@ -4066,10 +4125,21 @@ async fn run_git_command(
     ask_pass: AskPassDelegate,
     mut command: util::command::Command,
     executor: BackgroundExecutor,
+    cancellation: &OperationCancellation,
 ) -> Result<RemoteCommandOutput> {
+    if cancellation.is_cancelled() {
+        return Err(anyhow!(REMOTE_CANCELLED_BY_USER));
+    }
+    // Cancellation drops the future that owns the child, so the git process
+    // must be killed when that happens instead of being left running.
+    command.kill_on_drop(true);
+    let cancelled = cancellation.cancelled();
     if env.contains_key("GIT_ASKPASS") {
         let git_process = command.spawn()?;
-        let output = git_process.output().await?;
+        let output = select_biased! {
+            _ = cancelled.fuse() => return Err(anyhow!(REMOTE_CANCELLED_BY_USER)),
+            output = git_process.output().fuse() => output?,
+        };
         anyhow::ensure!(
             output.status.success(),
             "{}",
@@ -4099,15 +4169,17 @@ async fn run_git_command(
         command.env("ZED_ASKPASS_SOCKET", ask_pass.socket_path());
         let git_process = command.spawn()?;
 
-        run_askpass_command(ask_pass, git_process).await
+        run_askpass_command(ask_pass, git_process, cancelled).await
     }
 }
 
 async fn run_askpass_command(
     mut ask_pass: AskPassSession,
     git_process: util::command::Child,
+    cancelled: oneshot::Receiver<()>,
 ) -> anyhow::Result<RemoteCommandOutput> {
     select_biased! {
+        _ = cancelled.fuse() => Err(anyhow!(REMOTE_CANCELLED_BY_USER))?,
         // Git can legitimately run long without prompting (e.g. large fetches,
         // hooks), so completion is determined by the process itself.
         result = ask_pass.run(None).fuse() => {
@@ -4324,6 +4396,33 @@ mod tests {
 
     use super::*;
     use gpui::TestAppContext;
+
+    #[test]
+    fn operation_cancellation_resolves_registered_waiter() {
+        let cancellation = OperationCancellation::new();
+        assert!(!cancellation.is_cancelled());
+
+        let mut waiter = cancellation.cancelled();
+        assert!((&mut waiter).now_or_never().is_none());
+
+        cancellation.cancel();
+        assert!(cancellation.is_cancelled());
+        assert!(matches!((&mut waiter).now_or_never(), Some(Ok(()))));
+
+        // Cancelling again is harmless.
+        cancellation.cancel();
+    }
+
+    #[test]
+    fn operation_cancellation_resolves_late_waiter_immediately() {
+        let cancellation = OperationCancellation::new();
+        cancellation.cancel();
+
+        assert!(matches!(
+            cancellation.cancelled().now_or_never(),
+            Some(Err(_))
+        ));
+    }
 
     #[test]
     fn test_create_ref_requires_ref_to_not_exist() {
