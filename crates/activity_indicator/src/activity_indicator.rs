@@ -15,7 +15,7 @@ use language::{
 };
 use project::{
     LanguageServerProgress, LspStoreEvent, ProgressToken, Project, ProjectEnvironmentEvent,
-    git_store::{GitStoreEvent, Repository},
+    git_store::{GitStoreEvent, JobInfo, Repository},
 };
 use smallvec::SmallVec;
 use std::{
@@ -390,6 +390,13 @@ impl ActivityIndicator {
 
     fn pending_environment_error<'a>(&'a self, cx: &'a App) -> Option<&'a String> {
         self.project.read(cx).peek_environment_error(cx)
+    }
+
+    /// The git command currently running in the active repository, if any.
+    fn active_git_job(&self, cx: &App) -> Option<(Entity<Repository>, JobInfo)> {
+        let repository = self.project.read(cx).active_repository(cx)?;
+        let job = repository.read(cx).current_job()?;
+        Some((repository, job))
     }
 
     fn update_deferred_scan_status(&mut self, cx: &mut Context<Self>) {
@@ -915,6 +922,72 @@ impl Render for ActivityIndicator {
 
                                     menu = menu.label(title);
                                 }
+                            }
+
+                            if let Some((repository, job)) = strong_this.read(cx).active_git_job(cx)
+                                && job.cancellable
+                            {
+                                has_cancellable_work = true;
+                                let activity_indicator = activity_indicator.clone();
+                                let job_id = job.id;
+                                let message = job.message;
+                                let cancel_label = i18n::t!("2cd0f3be8738a86c");
+                                menu = menu.custom_entry(
+                                    {
+                                        let repository = repository.clone();
+                                        let activity_indicator = activity_indicator.clone();
+                                        move |_, _| {
+                                            h_flex()
+                                                .w_full()
+                                                .justify_between()
+                                                .gap_2()
+                                                .child(Label::new(message.clone()).truncate())
+                                                .child(
+                                                    Button::new(
+                                                        "cancel-git-operation",
+                                                        cancel_label,
+                                                    )
+                                                    .label_size(LabelSize::Small)
+                                                    .style(ButtonStyle::Subtle)
+                                                    .color(Color::Muted)
+                                                    .on_click({
+                                                        let repository = repository.clone();
+                                                        let activity_indicator =
+                                                            activity_indicator.clone();
+                                                        move |_, _, cx| {
+                                                            repository.update(
+                                                                cx,
+                                                                |repository, cx| {
+                                                                    repository
+                                                                        .cancel_job(job_id, cx)
+                                                                },
+                                                            );
+                                                            activity_indicator
+                                                                .update(cx, |indicator, cx| {
+                                                                    indicator
+                                                                        .context_menu_handle
+                                                                        .hide(cx)
+                                                                })
+                                                                .ok();
+                                                        }
+                                                    }),
+                                                )
+                                                .into_any_element()
+                                        }
+                                    },
+                                    {
+                                        move |_, cx| {
+                                            repository.update(cx, |repository, cx| {
+                                                repository.cancel_job(job_id, cx)
+                                            });
+                                            activity_indicator
+                                                .update(cx, |indicator, cx| {
+                                                    indicator.context_menu_handle.hide(cx)
+                                                })
+                                                .ok();
+                                        }
+                                    },
+                                );
                             }
                             menu
                         });
