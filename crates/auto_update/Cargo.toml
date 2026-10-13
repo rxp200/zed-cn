@@ -12,9 +12,13 @@ workspace = true
 path = "src/auto_update.rs"
 doctest = false
 
+[features]
+test-support = []
+
 [dependencies]
 i18n.workspace = true
 anyhow.workspace = true
+async-lock.workspace = true
 client.workspace = true
 db.workspace = true
 futures-lite.workspace = true

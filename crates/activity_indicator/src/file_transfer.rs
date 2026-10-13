@@ -1,3 +1,4 @@
+use auto_update::remote_server_downloads::{RemoteServerDownload, RemoteServerDownloads};
 use gpui::{
     Anchor, DismissEvent, Entity, EventEmitter, FocusHandle, Focusable, Subscription, Task,
 };
@@ -6,38 +7,70 @@ use std::time::Duration;
 use ui::{PopoverMenu, Tooltip, prelude::*};
 use workspace::{StatusItemView, Workspace, item::ItemHandle};
 
+const FINISHED_VISIBLE_DURATION: Duration = Duration::from_secs(5);
+
 pub struct FileTransferIndicator {
     transfers: Entity<FileTransfers>,
+    server_downloads: Entity<RemoteServerDownloads>,
     _subscription: Subscription,
+    _server_subscription: Subscription,
     _hide_task: Option<Task<()>>,
 }
 impl FileTransferIndicator {
     pub fn new(workspace: &Workspace, cx: &mut App) -> Entity<Self> {
+        RemoteServerDownloads::ensure_global(cx);
         let transfers = project::file_transfer::store(workspace.project(), cx);
+        let server_downloads = RemoteServerDownloads::global(cx);
         cx.new(|cx| {
-            let subscription = cx.observe(&transfers, |this: &mut Self, transfers, cx| {
+            let subscription = cx.observe(&transfers, |this: &mut Self, _, cx| {
+                this.schedule_hide(cx);
                 cx.notify();
-                if let Some(delay) = transfers
-                    .read(cx)
-                    .entries()
-                    .iter()
-                    .filter(|entry| !entry.error)
-                    .filter_map(|entry| entry.finished)
-                    .filter_map(|finished| Duration::from_secs(5).checked_sub(finished.elapsed()))
-                    .max()
-                {
-                    this._hide_task = Some(cx.spawn(async move |this, cx| {
-                        cx.background_executor().timer(delay).await;
-                        this.update(cx, |_, cx| cx.notify()).ok();
-                    }));
-                }
+            });
+            let server_subscription = cx.observe(&server_downloads, |this: &mut Self, _, cx| {
+                this.schedule_hide(cx);
+                cx.notify();
             });
             Self {
                 transfers,
+                server_downloads,
                 _subscription: subscription,
+                _server_subscription: server_subscription,
                 _hide_task: None,
             }
         })
+    }
+
+    /// Keeps the bar mounted long enough to re-render once a finished transfer
+    /// or download falls out of its retention window.
+    fn schedule_hide(&mut self, cx: &mut Context<Self>) {
+        let file_delay = self
+            .transfers
+            .read(cx)
+            .entries()
+            .iter()
+            .filter(|entry| !entry.error)
+            .filter_map(|entry| entry.finished)
+            .filter_map(|finished| FINISHED_VISIBLE_DURATION.checked_sub(finished.elapsed()))
+            .max();
+        let server_delay = self
+            .server_downloads
+            .read(cx)
+            .entries()
+            .iter()
+            .filter(|entry| !entry.error)
+            .filter_map(|entry| entry.finished)
+            .filter_map(|finished| FINISHED_VISIBLE_DURATION.checked_sub(finished.elapsed()))
+            .max();
+        let delay = match (file_delay, server_delay) {
+            (Some(file), Some(server)) => Some(file.max(server)),
+            (file, server) => file.or(server),
+        };
+        if let Some(delay) = delay {
+            self._hide_task = Some(cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(delay).await;
+                this.update(cx, |_, cx| cx.notify()).ok();
+            }));
+        }
     }
 }
 fn format_bytes(bytes: u64) -> String {
@@ -66,73 +99,117 @@ fn summary(entry: &Transfer) -> String {
         entry.status
     )
 }
+
+fn server_summary(entry: &RemoteServerDownload) -> String {
+    format!(
+        "{} {} · {}",
+        i18n::t!("68d0a2e10bc6df49"),
+        entry.key.platform.label,
+        entry.status
+    )
+}
+
+fn is_file_transfer_visible(entry: &Transfer) -> bool {
+    entry.error
+        || entry
+            .finished
+            .is_none_or(|finished| finished.elapsed() < FINISHED_VISIBLE_DURATION)
+}
 impl Render for FileTransferIndicator {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let entries = self.transfers.read(cx).entries();
-        let visible: Vec<_> = entries
-            .iter()
-            .filter(|entry| {
-                entry.error
-                    || entry
-                        .finished
-                        .is_none_or(|finished| finished.elapsed() < Duration::from_secs(5))
-            })
+        let visible_files: Vec<Transfer> = self
+            .transfers
+            .read(cx)
+            .entries()
+            .into_iter()
+            .filter(is_file_transfer_visible)
+            .collect();
+        let visible_servers: Vec<RemoteServerDownload> = self
+            .server_downloads
+            .read(cx)
+            .entries()
+            .into_iter()
+            .filter(RemoteServerDownload::is_visible)
             .collect();
         let transfers = self.transfers.clone();
-        h_flex().when(!visible.is_empty(), |element| {
-            let active = visible
-                .iter()
-                .filter(|entry| entry.finished.is_none())
-                .count();
-            let label = if visible.len() == 1 {
-                visible
-                    .first()
-                    .map(|entry| summary(entry))
-                    .unwrap_or_default()
-            } else {
-                let uploads = visible
+        let server_downloads = self.server_downloads.clone();
+        h_flex().when(
+            !visible_files.is_empty() || !visible_servers.is_empty(),
+            |element| {
+                let active = visible_files
                     .iter()
-                    .filter(|entry| {
-                        entry.finished.is_none() && entry.direction == TransferDirection::Upload
-                    })
-                    .count();
-                let downloads = visible
-                    .iter()
-                    .filter(|entry| {
-                        entry.finished.is_none() && entry.direction == TransferDirection::Download
-                    })
-                    .count();
-                let copies = active - uploads - downloads;
-                let failures = visible.iter().filter(|entry| entry.error).count();
-                if active == 0 && failures == 0 {
-                    i18n::t!("8a5e582c9cb452e8").into()
+                    .filter(|entry| entry.finished.is_none())
+                    .count()
+                    + visible_servers
+                        .iter()
+                        .filter(|entry| entry.is_active())
+                        .count();
+                let label = if visible_files.len() + visible_servers.len() == 1 {
+                    if let Some(entry) = visible_files.first() {
+                        summary(entry)
+                    } else {
+                        visible_servers
+                            .first()
+                            .map(server_summary)
+                            .unwrap_or_default()
+                    }
                 } else {
-                    i18n::t!(
-                        "69c9f552db697af6",
-                        uploads = uploads,
-                        downloads = downloads,
-                        copies = copies,
-                        failures = failures
-                    )
-                }
-            };
-            element.child(
-                PopoverMenu::new("file-transfers")
-                    .anchor(Anchor::BottomLeft)
-                    .trigger(
-                        Button::new(
-                            "file-transfers-trigger",
-                            util::truncate_and_trailoff(&label, 55),
+                    let uploads = visible_files
+                        .iter()
+                        .filter(|entry| {
+                            entry.finished.is_none() && entry.direction == TransferDirection::Upload
+                        })
+                        .count();
+                    let downloads = visible_files
+                        .iter()
+                        .filter(|entry| {
+                            entry.finished.is_none()
+                                && entry.direction == TransferDirection::Download
+                        })
+                        .count()
+                        + visible_servers
+                            .iter()
+                            .filter(|entry| entry.is_active())
+                            .count();
+                    let copies = active - uploads - downloads;
+                    let failures = visible_files.iter().filter(|entry| entry.error).count()
+                        + visible_servers.iter().filter(|entry| entry.error).count();
+                    if active == 0 && failures == 0 {
+                        i18n::t!("8a5e582c9cb452e8").into()
+                    } else {
+                        i18n::t!(
+                            "69c9f552db697af6",
+                            uploads = uploads,
+                            downloads = downloads,
+                            copies = copies,
+                            failures = failures
                         )
-                        .label_size(LabelSize::Small)
-                        .loading(active > 0)
-                        .tooltip(Tooltip::text(label)),
-                    )
-                    .menu(move |_, cx| {
-                        Some(cx.new(|cx| TransferDetails::new(transfers.clone(), cx)))
-                    }),
-            )
-        })
+                    }
+                };
+                element.child(
+                    PopoverMenu::new("file-transfers")
+                        .anchor(Anchor::BottomLeft)
+                        .trigger(
+                            Button::new(
+                                "file-transfers-trigger",
+                                util::truncate_and_trailoff(&label, 55),
+                            )
+                            .label_size(LabelSize::Small)
+                            .loading(active > 0)
+                            .tooltip(Tooltip::text(label)),
+                        )
+                        .menu(move |_, cx| {
+                            Some(cx.new(|cx| {
+                                TransferDetails::new(
+                                    transfers.clone(),
+                                    server_downloads.clone(),
+                                    cx,
+                                )
+                            }))
+                        }),
+                )
+            },
+        )
     }
 }
 impl StatusItemView for FileTransferIndicator {
@@ -149,16 +226,25 @@ impl StatusItemView for FileTransferIndicator {
 }
 struct TransferDetails {
     transfers: Entity<FileTransfers>,
+    server_downloads: Entity<RemoteServerDownloads>,
     focus: FocusHandle,
     _subscription: Subscription,
+    _server_subscription: Subscription,
 }
 impl TransferDetails {
-    fn new(transfers: Entity<FileTransfers>, cx: &mut Context<Self>) -> Self {
+    fn new(
+        transfers: Entity<FileTransfers>,
+        server_downloads: Entity<RemoteServerDownloads>,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let subscription = cx.observe(&transfers, |_, _, cx| cx.notify());
+        let server_subscription = cx.observe(&server_downloads, |_, _, cx| cx.notify());
         Self {
             transfers,
+            server_downloads,
             focus: cx.focus_handle(),
             _subscription: subscription,
+            _server_subscription: server_subscription,
         }
     }
 }
@@ -171,6 +257,13 @@ impl Focusable for TransferDetails {
 impl Render for TransferDetails {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let entries = self.transfers.read(cx).entries();
+        let server_entries: Vec<RemoteServerDownload> = self
+            .server_downloads
+            .read(cx)
+            .entries()
+            .into_iter()
+            .filter(RemoteServerDownload::is_visible)
+            .collect();
         v_flex()
             .id("transfer-details")
             .track_focus(&self.focus)
@@ -191,7 +284,9 @@ impl Render for TransferDetails {
                         Button::new("clear-finished-transfers", i18n::t!("6b14dd8a6a1c12ce"))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.transfers
-                                    .update(cx, |transfers, cx| transfers.clear_finished(cx))
+                                    .update(cx, |transfers, cx| transfers.clear_finished(cx));
+                                this.server_downloads
+                                    .update(cx, |store, cx| store.clear_finished(cx));
                             })),
                     ),
             )
@@ -265,6 +360,48 @@ impl Render for TransferDetails {
                         .size(LabelSize::Small)
                         .color(Color::Muted),
                     )
+            }))
+            .when(!server_entries.is_empty(), |element| {
+                element.child(
+                    Label::new(i18n::t!("0fd69732f0855eac"))
+                        .size(LabelSize::Small)
+                        .color(Color::Muted),
+                )
+            })
+            .children(server_entries.into_iter().map(|entry| {
+                let id = entry.id;
+                let active = entry.is_active();
+                v_flex()
+                    .min_w_0()
+                    .gap_1()
+                    .child(Label::new(server_summary(&entry)).color(if entry.error {
+                        Color::Error
+                    } else {
+                        Color::Default
+                    }))
+                    .when_some(entry.percentage(), |element, percentage| {
+                        element.child(ui::ProgressBar::new(
+                            ("server-download-progress", id),
+                            percentage * 100.,
+                            100.,
+                            cx,
+                        ))
+                    })
+                    .when(active, |element| {
+                        element.child(
+                            Button::new(
+                                ("cancel-server-download", id),
+                                i18n::t!("c0c05b34c0b1ed98"),
+                            )
+                            .label_size(LabelSize::Small)
+                            .on_click(cx.listener(
+                                move |this, _, _, cx| {
+                                    this.server_downloads
+                                        .update(cx, |store, cx| store.cancel(id, cx));
+                                },
+                            )),
+                        )
+                    })
             }))
     }
 }

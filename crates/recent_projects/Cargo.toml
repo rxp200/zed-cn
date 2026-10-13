@@ -59,6 +59,7 @@ indoc.workspace = true
 windows-registry.workspace = true
 
 [dev-dependencies]
+auto_update = { workspace = true, features = ["test-support"] }
 editor = { workspace = true, features = ["test-support"] }
 extension.workspace = true
 fs.workspace = true
