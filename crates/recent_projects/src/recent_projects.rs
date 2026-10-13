@@ -291,6 +291,7 @@ pub(crate) fn default_open_in_new_window(cx: &App) -> bool {
 }
 
 pub fn init(cx: &mut App) {
+    auto_update::remote_server_downloads::RemoteServerDownloads::ensure_global(cx);
     cx.on_action(|_: &PredownloadRemoteServer, cx| {
         with_active_or_new_workspace(cx, |workspace, window, cx| {
             remote_server_downloads::open(workspace, window, cx);

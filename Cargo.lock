@@ -1419,6 +1419,7 @@ name = "auto_update"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-lock",
  "client",
  "clock",
  "ctor",

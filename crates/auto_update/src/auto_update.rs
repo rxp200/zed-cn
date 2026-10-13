@@ -32,6 +32,8 @@ use std::{
 use util::{ResultExt as _, command::new_command};
 use workspace::Workspace;
 
+pub mod remote_server_downloads;
+
 const SHOULD_SHOW_UPDATE_NOTIFICATION_KEY: &str = "auto-updater-should-show-updated-notification";
 
 #[derive(Debug)]
@@ -369,6 +371,7 @@ struct GlobalAutoUpdate(Option<Entity<AutoUpdater>>);
 impl Global for GlobalAutoUpdate {}
 
 pub fn init(client: Arc<Client>, cx: &mut App) {
+    remote_server_downloads::RemoteServerDownloads::ensure_global(cx);
     cx.observe_new(|workspace: &mut Workspace, _window, _cx| {
         workspace.register_action(|_, action, window, cx| check(action, window, cx));
 

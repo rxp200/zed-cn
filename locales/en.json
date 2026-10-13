@@ -5413,5 +5413,7 @@
   "dd6f7f92c4d6e776": "Transferring file…",
   "1d731895289f313b": "The remote file changed while it was being downloaded",
   "0973a57b0db888f7": "The remote server returned invalid download data",
-  "6b0acd8bbf4d83b5": "The remote file is too large to download"
+  "6b0acd8bbf4d83b5": "The remote file is too large to download",
+  "68d0a2e10bc6df49": "Remote server",
+  "0fd69732f0855eac": "Remote server downloads"
 }
