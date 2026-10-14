@@ -5,7 +5,7 @@ use rpc::proto;
 use std::{
     collections::VecDeque,
     io::{Read as _, Write as _},
-    sync::{Arc, Mutex},
+    sync::{Arc, Condvar, Mutex, Weak},
 };
 use uuid::Uuid;
 
@@ -23,6 +23,18 @@ const STREAM_CHUNK_BYTES: u64 = 64 * 1024;
 /// scrollback, so a slow network cannot grow memory without bound.
 const STREAM_WINDOW_BYTES: u64 = 1024 * 1024;
 
+/// Bounds pending input per terminal while its foreground program is not
+/// reading. Input is queued instead of written from the request handler so a
+/// single full PTY buffer cannot block the RPC response forever. Once the
+/// backlog is full the client is told to retry rather than losing input or
+/// wedging the terminal. The capacity matches the largest accepted single
+/// request so an accepted batch can always be queued once the queue is empty,
+/// which guarantees the retry makes progress.
+const INPUT_BACKLOG_CAPACITY_BYTES: usize = MAX_INPUT_BYTES;
+
+/// Recoverable input error returned when the backlog is full.
+const INPUT_BACKLOG_FULL_ERROR: &str = "persistent terminal input backlog is full";
+
 pub struct PersistentTerminalManager {
     instance_id: String,
     state: Mutex<ManagerState>,
@@ -36,9 +48,73 @@ struct ManagerState {
 
 struct PersistentTerminal {
     master: Mutex<Box<dyn MasterPty + Send>>,
-    writer: Mutex<Box<dyn std::io::Write + Send>>,
+    input: Arc<InputQueue>,
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
     state: Mutex<TerminalState>,
+}
+
+/// Ordered, byte-bounded input queue drained by a dedicated writer thread.
+///
+/// The RPC handler only enqueues, so a program that stops reading stdin fills
+/// the queue instead of blocking the response. A blocking `write_all` in the
+/// handler would leave the client's input pipeline permanently unanswered.
+struct InputQueue {
+    state: Mutex<InputQueueState>,
+    available: Condvar,
+}
+
+#[derive(Default)]
+struct InputQueueState {
+    items: VecDeque<Vec<u8>>,
+    queued_bytes: usize,
+    closed: bool,
+}
+
+impl InputQueue {
+    fn new() -> Self {
+        Self {
+            state: Mutex::new(InputQueueState::default()),
+            available: Condvar::new(),
+        }
+    }
+
+    fn enqueue(&self, data: Vec<u8>) -> Result<()> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| anyhow!("persistent terminal input queue is unavailable"))?;
+        anyhow::ensure!(
+            state.queued_bytes + data.len() <= INPUT_BACKLOG_CAPACITY_BYTES,
+            INPUT_BACKLOG_FULL_ERROR
+        );
+        state.queued_bytes += data.len();
+        state.items.push_back(data);
+        self.available.notify_one();
+        Ok(())
+    }
+
+    fn recv(&self) -> Option<Vec<u8>> {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        loop {
+            if let Some(data) = state.items.pop_front() {
+                state.queued_bytes -= data.len();
+                return Some(data);
+            }
+            if state.closed {
+                return None;
+            }
+            state = self
+                .available
+                .wait(state)
+                .unwrap_or_else(|error| error.into_inner());
+        }
+    }
+
+    fn close(&self) {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        state.closed = true;
+        self.available.notify_all();
+    }
 }
 
 #[derive(Default)]
@@ -128,11 +204,19 @@ impl PersistentTerminalManager {
         let writer = pair.master.take_writer()?;
         let terminal = Arc::new(PersistentTerminal {
             master: Mutex::new(pair.master),
-            writer: Mutex::new(writer),
+            input: Arc::new(InputQueue::new()),
             killer: Mutex::new(killer),
             state: Mutex::new(TerminalState::default()),
         });
 
+        {
+            let terminal = Arc::downgrade(&terminal);
+            std::thread::Builder::new()
+                .name("persistent-terminal-input".into())
+                .spawn(move || {
+                    write_terminal_input(terminal, writer);
+                })?;
+        }
         {
             let terminal = terminal.clone();
             std::thread::Builder::new()
@@ -190,33 +274,26 @@ impl PersistentTerminalManager {
             "terminal input exceeds 1 MiB"
         );
         let terminal = self.terminal(&request.server_instance_id, &request.terminal_id)?;
-        let mut writer = terminal
-            .writer
-            .lock()
-            .map_err(|_| anyhow!("persistent terminal writer is unavailable"))?;
-        {
-            let state = terminal
-                .state
-                .lock()
-                .map_err(|_| anyhow!("persistent terminal state is unavailable"))?;
-            if request.sequence <= state.last_input_sequence {
-                return Ok(());
-            }
-            anyhow::ensure!(
-                request.sequence == state.last_input_sequence + 1,
-                "terminal input sequence gap: expected {}, received {} (terminal {})",
-                state.last_input_sequence + 1,
-                request.sequence,
-                request.terminal_id
-            );
-            anyhow::ensure!(!state.exited, "persistent terminal has exited");
-        }
-        writer.write_all(&request.data)?;
-        terminal
+        let mut state = terminal
             .state
             .lock()
-            .map_err(|_| anyhow!("persistent terminal state is unavailable"))?
-            .last_input_sequence = request.sequence;
+            .map_err(|_| anyhow!("persistent terminal state is unavailable"))?;
+        if request.sequence <= state.last_input_sequence {
+            return Ok(());
+        }
+        anyhow::ensure!(
+            request.sequence == state.last_input_sequence + 1,
+            "terminal input sequence gap: expected {}, received {} (terminal {})",
+            state.last_input_sequence + 1,
+            request.sequence,
+            request.terminal_id
+        );
+        anyhow::ensure!(!state.exited, "persistent terminal has exited");
+        // Queue in sequence order and acknowledge before the PTY write finishes.
+        // The sequence is only advanced once the data is accepted, so a rejected
+        // batch can be retried without creating a gap.
+        terminal.input.enqueue(request.data)?;
+        state.last_input_sequence = request.sequence;
         Ok(())
     }
 
@@ -411,6 +488,7 @@ impl PersistentTerminalManager {
                 subscription.kick.try_send(()).ok();
             }
         }
+        terminal.input.close();
         terminal
             .killer
             .lock()
@@ -460,6 +538,45 @@ impl PersistentTerminal {
     }
 }
 
+impl Drop for PersistentTerminal {
+    fn drop(&mut self) {
+        // Wake the writer thread so it can exit once the terminal is gone.
+        self.input.close();
+    }
+}
+
+/// Drains queued terminal input into the PTY on a dedicated thread.
+///
+/// The PTY input buffer is finite, so a program that stops reading stdin makes
+/// `write_all` block. Keeping that block off the request handler is what lets
+/// the server keep acknowledging input (and reporting a full backlog) instead
+/// of leaving the client's input pipeline unanswered forever.
+fn write_terminal_input(
+    terminal: Weak<PersistentTerminal>,
+    mut writer: Box<dyn std::io::Write + Send>,
+) {
+    let Some(terminal_handle) = terminal.upgrade() else {
+        return;
+    };
+    let input = terminal_handle.input.clone();
+    drop(terminal_handle);
+
+    while let Some(data) = input.recv() {
+        if let Err(error) = writer.write_all(&data) {
+            log::warn!("persistent terminal input write failed: {error:#}");
+            if let Some(terminal) = terminal.upgrade() {
+                if let Ok(mut state) = terminal.state.lock() {
+                    state.exited = true;
+                    if let Some(subscription) = &state.subscription {
+                        subscription.kick.try_send(()).ok();
+                    }
+                }
+            }
+            break;
+        }
+    }
+}
+
 fn pty_size(rows: u32, columns: u32, pixel_width: u32, pixel_height: u32) -> Result<PtySize> {
     let rows = u16::try_from(rows).context("terminal row count is too large")?;
     let cols = u16::try_from(columns).context("terminal column count is too large")?;
@@ -484,7 +601,7 @@ mod tests {
                     .expect("open PTY")
                     .master,
             ),
-            writer: Mutex::new(Box::new(std::io::sink())),
+            input: Arc::new(InputQueue::new()),
             killer: Mutex::new(Box::new(TestKiller)),
             state: Mutex::new(TerminalState::default()),
         });
@@ -659,7 +776,7 @@ mod tests {
                     .expect("open PTY")
                     .master,
             ),
-            writer: Mutex::new(Box::new(std::io::sink())),
+            input: Arc::new(InputQueue::new()),
             killer: Mutex::new(Box::new(TestKiller)),
             state: Mutex::new(TerminalState::default()),
         });
@@ -735,6 +852,103 @@ mod tests {
                 .to_string()
                 .contains("persistent terminal not found")
         );
+    }
+
+    #[test]
+    fn input_to_non_reading_program_does_not_block_the_ack() {
+        let manager = Arc::new(PersistentTerminalManager::new());
+        let created = manager
+            .create(proto::CreatePersistentTerminal {
+                creation_id: "blocking-input".to_string(),
+                program: "sh".to_string(),
+                args: vec![
+                    "-c".to_string(),
+                    "stty -icanon -echo; sleep 1000".to_string(),
+                ],
+                env: std::collections::HashMap::new(),
+                working_directory: None,
+                rows: 24,
+                columns: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("create terminal");
+
+        let manager_for_thread = manager.clone();
+        let terminal_id = created.terminal_id.clone();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let result = manager_for_thread.input(proto::PersistentTerminalInput {
+                server_instance_id: manager_for_thread.instance_id.clone(),
+                terminal_id,
+                sequence: 1,
+                // The largest batch the client can coalesce, written to a raw-mode
+                // program that is not reading stdin. The old handler blocked here.
+                data: vec![b'a'; 64 * 1024],
+            });
+            done_tx.send(result.is_ok()).ok();
+        });
+
+        assert!(
+            done_rx
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .expect("input must not block the request on a program that is not reading stdin"),
+            "input must not fail on a program that is not reading stdin"
+        );
+        manager
+            .close(&created.server_instance_id, &created.terminal_id)
+            .expect("close terminal");
+    }
+
+    #[test]
+    fn input_queue_is_byte_bounded() {
+        let queue = InputQueue::new();
+        queue
+            .enqueue(vec![b'a'; INPUT_BACKLOG_CAPACITY_BYTES])
+            .expect("fill the backlog");
+        let error = queue.enqueue(vec![b'b']).expect_err("backlog is bounded");
+        assert!(error.to_string().contains(INPUT_BACKLOG_FULL_ERROR));
+        assert_eq!(
+            queue.recv().map(|data| data.len()),
+            Some(INPUT_BACKLOG_CAPACITY_BYTES)
+        );
+        queue.enqueue(vec![b'c']).expect("space freed");
+        assert_eq!(queue.recv(), Some(vec![b'c']));
+        queue.close();
+        assert_eq!(queue.recv(), None);
+    }
+
+    #[test]
+    fn input_backlog_full_is_retryable_without_advancing_sequence() {
+        let (manager, terminal_id) = manager_with_terminal(b"output");
+        let input = |sequence, length| proto::PersistentTerminalInput {
+            server_instance_id: manager.instance_id.clone(),
+            terminal_id: terminal_id.clone(),
+            sequence,
+            data: vec![b'a'; length],
+        };
+
+        manager
+            .input(input(1, INPUT_BACKLOG_CAPACITY_BYTES))
+            .expect("first batch fills the backlog");
+        let error = manager
+            .input(input(2, 1))
+            .expect_err("full backlog is rejected, not blocked");
+        assert!(error.to_string().contains(INPUT_BACKLOG_FULL_ERROR));
+
+        let terminal = manager
+            .terminal(&manager.instance_id, &terminal_id)
+            .expect("terminal");
+        assert_eq!(
+            terminal.state.lock().expect("state").last_input_sequence,
+            1,
+            "a rejected batch must not advance the input sequence"
+        );
+
+        // Once the writer drains the backlog, the same sequence is accepted.
+        assert!(terminal.input.recv().is_some());
+        manager.input(input(2, 1)).expect("retry after drain");
+        assert_eq!(terminal.state.lock().expect("state").last_input_sequence, 2);
     }
 
     #[test]

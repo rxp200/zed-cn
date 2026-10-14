@@ -2658,6 +2658,59 @@ mod tests {
     }
 
     #[gpui::test]
+    async fn in_flight_buffered_request_resolves_after_reconnect(cx: &mut TestAppContext) {
+        let (_incoming_tx, incoming_rx) = mpsc::unbounded::<Envelope>();
+        let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded::<Envelope>();
+        let client =
+            cx.update(|cx| ChannelClient::new(incoming_rx, outgoing_tx, cx, "test-client", false));
+
+        let startup = outgoing_rx.next().await.expect("startup envelope");
+        assert!(matches!(
+            startup.payload,
+            Some(proto::envelope::Payload::RemoteStarted(_))
+        ));
+
+        let request = client.request(proto::Ping {});
+        futures::pin_mut!(request);
+
+        let sent = outgoing_rx.next().await.expect("request envelope");
+        assert!(matches!(
+            sent.payload,
+            Some(proto::envelope::Payload::Ping(_))
+        ));
+        let request_id = sent.id;
+
+        let (new_incoming_tx, new_incoming_rx) = mpsc::unbounded::<Envelope>();
+        let (new_outgoing_tx, mut new_outgoing_rx) = mpsc::unbounded::<Envelope>();
+        client.reconnect(new_incoming_rx, new_outgoing_tx, &cx.to_async());
+
+        let resync = cx.background_executor.spawn({
+            let client = client.clone();
+            async move { client.resync(RECONNECT_SYNC_TIMEOUT).await }
+        });
+
+        let replayed_request_id = loop {
+            let message = new_outgoing_rx.next().await.expect("replayed envelope");
+            match message.payload {
+                Some(proto::envelope::Payload::FlushBufferedMessages(_)) => {
+                    new_incoming_tx
+                        .unbounded_send(proto::Ack {}.into_envelope(1, Some(message.id), None))
+                        .unwrap();
+                }
+                Some(proto::envelope::Payload::Ping(_)) => break message.id,
+                _ => {}
+            }
+        };
+        assert_eq!(replayed_request_id, request_id);
+        new_incoming_tx
+            .unbounded_send(proto::Ack {}.into_envelope(2, Some(request_id), None))
+            .unwrap();
+
+        resync.await.expect("resync");
+        request.await.expect("request resolves after reconnect");
+    }
+
+    #[gpui::test]
     async fn reconnect_sync_timeout_releases_request(cx: &mut TestAppContext) {
         let (_incoming_tx, incoming_rx) = mpsc::unbounded();
         let (outgoing_tx, _outgoing_rx) = mpsc::unbounded();

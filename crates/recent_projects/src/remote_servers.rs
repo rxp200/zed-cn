@@ -1090,6 +1090,21 @@ impl RemoteMatch {
     }
 }
 
+/// A picker row resolved to the settings entry its per-server actions operate
+/// on. A host that only exists in the SSH config file has no entry yet, so it
+/// carries its host name and is saved before the action runs; otherwise
+/// choosing a Remote Server source or viewing server options would have no
+/// entry to persist against.
+enum PickerServer {
+    Saved {
+        index: ServerIndex,
+        connection: Connection,
+    },
+    UnsavedSshConfig {
+        host: SharedString,
+    },
+}
+
 struct RemoteServerPickerDelegate {
     remote_server_projects: WeakEntity<RemoteServerProjects>,
     state: DefaultState,
@@ -1173,6 +1188,23 @@ impl RemoteServerPickerDelegate {
             self.focused_server = Some((server, identity));
             self.rebuild_matches();
         }
+    }
+
+    /// Resolves a picker row to the settings identity its per-server actions
+    /// need, reporting an SSH-config-only host that still has to be saved.
+    fn picker_server(&self, server: usize) -> Option<PickerServer> {
+        let server_entry = self.state.servers.get(server)?;
+        Some(match server_entry {
+            RemoteEntry::Project {
+                index, connection, ..
+            } => PickerServer::Saved {
+                index: *index,
+                connection: connection.clone(),
+            },
+            RemoteEntry::SshConfig { host } => {
+                PickerServer::UnsavedSshConfig { host: host.clone() }
+            }
+        })
     }
 
     /// Leaves the per-server view, returning `true` when it was active.
@@ -1294,6 +1326,16 @@ impl RemoteServerPickerDelegate {
                         matches.push(RemoteMatch::OpenFolder {
                             server: server_index,
                         });
+                        matches.push(RemoteMatch::Separator);
+                        matches.push(RemoteMatch::ViewServerOptions {
+                            server: server_index,
+                        });
+                        matches.push(RemoteMatch::RemoteServerSource {
+                            server: server_index,
+                        });
+                        matches.push(RemoteMatch::RemoteTerminal {
+                            server: server_index,
+                        });
                     }
                 }
             }
@@ -1358,6 +1400,16 @@ impl RemoteServerPickerDelegate {
                         }
                         RemoteEntry::SshConfig { .. } => {
                             matches.push(RemoteMatch::OpenFolder {
+                                server: server_index,
+                            });
+                            matches.push(RemoteMatch::Separator);
+                            matches.push(RemoteMatch::ViewServerOptions {
+                                server: server_index,
+                            });
+                            matches.push(RemoteMatch::RemoteServerSource {
+                                server: server_index,
+                            });
+                            matches.push(RemoteMatch::RemoteTerminal {
                                 server: server_index,
                             });
                         }
@@ -1704,20 +1756,17 @@ impl PickerDelegate for RemoteServerPickerDelegate {
                 }
             }
             RemoteMatch::RemoteTerminal { server } => {
-                let Some(RemoteEntry::Project {
-                    connection: Connection::Ssh(connection),
-                    index,
-                    ..
-                }) = self.state.servers.get(*server)
-                else {
+                let Some(picker_server) = self.picker_server(*server) else {
                     return;
                 };
-                let ServerIndex::Ssh(ssh_index) = *index else {
-                    return;
-                };
-                let connection = connection.clone();
                 remote_server_projects
                     .update(cx, |this, cx| {
+                        let (index, connection) = this.save_picker_server(picker_server, cx);
+                        let (ServerIndex::Ssh(ssh_index), Connection::Ssh(connection)) =
+                            (index, connection)
+                        else {
+                            return;
+                        };
                         this.open_remote_terminal_workspace(
                             ssh_index, connection, secondary, window, cx,
                         );
@@ -1725,33 +1774,26 @@ impl PickerDelegate for RemoteServerPickerDelegate {
                     .log_err();
             }
             RemoteMatch::RemoteServerSource { server } => {
-                let Some(RemoteEntry::Project {
-                    connection: Connection::Ssh(connection),
-                    index,
-                    ..
-                }) = self.state.servers.get(*server)
-                else {
+                let Some(picker_server) = self.picker_server(*server) else {
                     return;
                 };
-                let connection = connection.clone();
-                let index = *index;
                 remote_server_projects
                     .update(cx, |this, cx| {
+                        let (index, connection) = this.save_picker_server(picker_server, cx);
+                        let Connection::Ssh(connection) = connection else {
+                            return;
+                        };
                         this.choose_remote_server_source(index, connection, window, cx);
                     })
                     .log_err();
             }
             RemoteMatch::ViewServerOptions { server } => {
-                let Some(RemoteEntry::Project {
-                    connection, index, ..
-                }) = self.state.servers.get(*server)
-                else {
+                let Some(picker_server) = self.picker_server(*server) else {
                     return;
                 };
-                let connection = connection.clone();
-                let index = *index;
                 remote_server_projects
                     .update(cx, |this, cx| {
+                        let (index, connection) = this.save_picker_server(picker_server, cx);
                         this.view_server_options((index, connection.into()), window, cx);
                     })
                     .ok();
@@ -1834,9 +1876,12 @@ impl PickerDelegate for RemoteServerPickerDelegate {
                 i18n::t!("deb79a677604de8b"),
                 selected,
             )),
-            RemoteMatch::OpenFolder { .. } => {
-                Some(self.render_action_item(ix, IconName::Plus, "Open Folder", selected))
-            }
+            RemoteMatch::OpenFolder { .. } => Some(self.render_action_item(
+                ix,
+                IconName::Plus,
+                i18n::t!("68b3f4bff6de90ae"),
+                selected,
+            )),
             RemoteMatch::RemoteTerminal { .. } => Some(self.render_action_item(
                 ix,
                 IconName::Terminal,
@@ -1863,7 +1908,7 @@ impl PickerDelegate for RemoteServerPickerDelegate {
             RemoteMatch::ViewServerOptions { .. } => Some(self.render_action_item(
                 ix,
                 IconName::Settings,
-                "View Server Options",
+                i18n::t!("a441806afc2c82d7"),
                 selected,
             )),
             RemoteMatch::Project {
@@ -3842,6 +3887,26 @@ impl RemoteServerProjects {
         .detach_and_prompt_err(i18n::t!("1f90e2131dc4784b"), window, cx, |_, _, _| None);
     }
 
+    /// Settings identity of a picker row, saving an SSH-config-only host first
+    /// so its per-server actions have an entry to read and write.
+    fn save_picker_server(
+        &mut self,
+        picker_server: PickerServer,
+        cx: &mut Context<'_, Self>,
+    ) -> (ServerIndex, Connection) {
+        match picker_server {
+            PickerServer::Saved { index, connection } => (index, connection),
+            PickerServer::UnsavedSshConfig { host } => {
+                let connection = Connection::Ssh(SshConnection {
+                    host: host.to_string(),
+                    ..SshConnection::default()
+                });
+                let index = self.create_host_from_ssh_config(&host, cx);
+                (index.into(), connection)
+            }
+        }
+    }
+
     fn create_host_from_ssh_config(
         &mut self,
         ssh_config_host: &SharedString,
@@ -3852,6 +3917,7 @@ impl RemoteServerProjects {
         self.add_ssh_server(
             SshConnectionOptions {
                 host: ssh_config_host.to_string().into(),
+                remote_server_source: remote::default_remote_server_source(cx),
                 ..SshConnectionOptions::default()
             },
             cx,
@@ -4302,6 +4368,16 @@ mod tests {
     ) {
         let app_state = init_test(cx);
         let fs: Arc<dyn Fs> = app_state.fs.clone();
+        cx.update(|cx| {
+            release_channel::init_test(
+                semver::Version::new(1, 25, 0),
+                release_channel::ReleaseChannel::Stable,
+                cx,
+            );
+            cx.set_global(release_channel::CustomReleaseTag(
+                "zed-cn-v1.25.0-r1".to_owned(),
+            ));
+        });
 
         cx.update(|cx| {
             update_settings_file(fs.clone(), cx, |settings, _| {
@@ -4331,10 +4407,13 @@ mod tests {
         });
         cx.run_until_parked();
 
-        let connections = cx.update(|_, cx| {
-            RemoteSettings::get_global(cx)
-                .ssh_connections()
-                .collect::<Vec<_>>()
+        let (connections, default_source) = cx.update(|_, cx| {
+            (
+                RemoteSettings::get_global(cx)
+                    .ssh_connections()
+                    .collect::<Vec<_>>(),
+                remote::default_remote_server_source(cx),
+            )
         });
 
         assert_eq!(connections.len(), 2);
@@ -4347,6 +4426,76 @@ mod tests {
 
         assert_eq!(connections[0].projects.len(), 1);
         assert!(connections[new_index.0].projects.is_empty());
+        assert_eq!(
+            default_source,
+            settings::RemoteServerSource::ZedCn,
+            "the test client embeds a custom release tag"
+        );
+        assert_eq!(
+            connections[new_index.0].remote_server_source,
+            Some(settings::RemoteServerSource::ZedCn),
+            "an implicitly added SSH-config host follows the resolved default source"
+        );
+    }
+
+    #[gpui::test]
+    async fn test_save_picker_server_reuses_a_saved_host_and_saves_an_ssh_config_host(
+        cx: &mut TestAppContext,
+    ) {
+        let app_state = init_test(cx);
+        let fs: Arc<dyn Fs> = app_state.fs.clone();
+
+        let project = Project::test(fs.clone(), [], cx).await;
+        let (workspace, cx) =
+            cx.add_window_view(|window, cx| Workspace::test_new(project, window, cx));
+        let modal = workspace.update_in(cx, |_workspace, window, cx| {
+            let weak = cx.weak_entity();
+            cx.new(|cx| RemoteServerProjects::new(false, fs.clone(), window, weak, cx))
+        });
+
+        let saved_connection = Connection::Ssh(SshConnection {
+            host: "host-a.example".to_string(),
+            ..Default::default()
+        });
+        let (index, connection) = modal.update(cx, |modal, cx| {
+            modal.save_picker_server(
+                PickerServer::Saved {
+                    index: ServerIndex::Ssh(SshServerIndex(0)),
+                    connection: saved_connection.clone(),
+                },
+                cx,
+            )
+        });
+        assert_eq!(index, ServerIndex::Ssh(SshServerIndex(0)));
+        assert!(connection == saved_connection);
+
+        let (index, connection) = modal.update(cx, |modal, cx| {
+            modal.save_picker_server(
+                PickerServer::UnsavedSshConfig {
+                    host: SharedString::from("host-b.example"),
+                },
+                cx,
+            )
+        });
+        cx.run_until_parked();
+
+        assert_eq!(index, ServerIndex::Ssh(SshServerIndex(0)));
+        assert!(
+            matches!(connection, Connection::Ssh(ref connection) if connection.host == "host-b.example"),
+            "an SSH-config host is saved and returned as a saved connection"
+        );
+
+        let (connections, default_source) = cx.update(|_, cx| {
+            (
+                RemoteSettings::get_global(cx)
+                    .ssh_connections()
+                    .collect::<Vec<_>>(),
+                remote::default_remote_server_source(cx),
+            )
+        });
+        assert_eq!(connections.len(), 1);
+        assert_eq!(connections[0].host, "host-b.example");
+        assert_eq!(connections[0].remote_server_source, Some(default_source));
     }
 }
 
@@ -4695,7 +4844,7 @@ mod picker_view_tests {
     }
 
     #[test]
-    fn focused_view_for_ssh_config_host_only_offers_open_folder() {
+    fn focused_view_for_ssh_config_host_offers_the_same_actions_as_a_saved_host() {
         let mut delegate = test_delegate(vec![RemoteEntry::SshConfig {
             host: SharedString::from("host-b.example"),
         }]);
@@ -4709,7 +4858,65 @@ mod picker_view_tests {
             delegate.matches.get(1),
             Some(RemoteMatch::OpenFolder { server: 0 })
         ));
-        assert_eq!(delegate.matches.len(), 2);
+        assert!(matches!(
+            delegate.matches.get(2),
+            Some(RemoteMatch::Separator)
+        ));
+        assert!(matches!(
+            delegate.matches.get(3),
+            Some(RemoteMatch::ViewServerOptions { server: 0 })
+        ));
+        assert!(matches!(
+            delegate.matches.get(4),
+            Some(RemoteMatch::RemoteServerSource { server: 0 })
+        ));
+        assert!(matches!(
+            delegate.matches.get(5),
+            Some(RemoteMatch::RemoteTerminal { server: 0 })
+        ));
+        assert_eq!(delegate.matches.len(), 6);
+    }
+
+    #[test]
+    fn search_view_previews_ssh_config_host_actions_without_selecting_them() {
+        let mut delegate = test_delegate(vec![RemoteEntry::SshConfig {
+            host: SharedString::from("host-b.example"),
+        }]);
+        search(&mut delegate, "host-b");
+
+        assert!(matches!(
+            delegate.matches.first(),
+            Some(RemoteMatch::Server { server: 0, .. })
+        ));
+        assert!(matches!(
+            delegate.matches.get(1),
+            Some(RemoteMatch::OpenFolder { server: 0 })
+        ));
+        assert!(matches!(
+            delegate.matches.get(2),
+            Some(RemoteMatch::Separator)
+        ));
+        assert!(matches!(
+            delegate.matches.get(3),
+            Some(RemoteMatch::ViewServerOptions { server: 0 })
+        ));
+        assert!(matches!(
+            delegate.matches.get(4),
+            Some(RemoteMatch::RemoteServerSource { server: 0 })
+        ));
+        assert!(matches!(
+            delegate.matches.get(5),
+            Some(RemoteMatch::RemoteTerminal { server: 0 })
+        ));
+        assert_eq!(delegate.matches.len(), 6);
+        assert!(
+            delegate
+                .matches
+                .iter()
+                .skip(1)
+                .all(|entry| !entry.is_selectable(true)),
+            "the actions stay read-only previews while searching"
+        );
     }
 
     #[test]
