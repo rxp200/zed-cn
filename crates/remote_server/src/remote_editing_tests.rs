@@ -7192,3 +7192,147 @@ fn build_project(ssh: Entity<RemoteClient>, cx: &mut TestAppContext) -> Entity<P
 
     cx.update(|cx| Project::remote(ssh, client, node, user_store, languages, fs, false, cx))
 }
+
+#[gpui::test]
+async fn test_persistent_terminal_input_resumes_after_reconnect(
+    cx: &mut TestAppContext,
+    server_cx: &mut TestAppContext,
+) {
+    use rpc::AnyProtoClient;
+    use std::time::Duration as StdDuration;
+    use terminal::{
+        TerminalBuilder, TerminalMode,
+        terminal_settings::{AlternateScroll, CursorShape},
+    };
+
+    // The persistent terminal owns real OS threads (PTY reader and child wait),
+    // so the test scheduler must permit those threads to wake GPUI tasks.
+    cx.executor().allow_parking();
+
+    let fs = FakeFs::new(server_cx.executor());
+    fs.insert_tree(
+        path!("/code"),
+        json!({
+            "project1": {
+                ".git": {},
+                "README.md": "# project 1",
+            },
+        }),
+    )
+    .await;
+    let (project, _headless) = init_test(&fs, cx, server_cx).await;
+
+    let remote_client = cx.read(|cx| project.read(cx).remote_client().unwrap());
+    let proto_client = cx.read(|cx| remote_client.read(cx).proto_client());
+
+    let created = proto_client
+        .request(proto::CreatePersistentTerminal {
+            creation_id: "reconnect-input".to_string(),
+            program: "cat".to_string(),
+            args: Vec::new(),
+            env: std::collections::HashMap::new(),
+            working_directory: None,
+            rows: 24,
+            columns: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .await
+        .expect("create persistent terminal");
+    let server_instance_id = created.server_instance_id.clone();
+    let terminal_id = created.terminal_id.clone();
+
+    let terminal = cx.new(|cx| {
+        TerminalBuilder::new_remote(
+            TerminalMode::interactive(),
+            task::Shell::Program("cat".to_string()),
+            CursorShape::default(),
+            AlternateScroll::On,
+            None,
+            Vec::new(),
+            StdDuration::from_millis(0),
+            0,
+            PathStyle::local(),
+            proto_client.clone(),
+            server_instance_id.clone(),
+            terminal_id.clone(),
+            true,
+            cx.background_executor(),
+        )
+        .subscribe(cx)
+    });
+
+    async fn read_all(
+        proto_client: &AnyProtoClient,
+        server_instance_id: &str,
+        terminal_id: &str,
+    ) -> Vec<u8> {
+        proto_client
+            .request(proto::ReadPersistentTerminal {
+                server_instance_id: server_instance_id.to_string(),
+                terminal_id: terminal_id.to_string(),
+                offset: 0,
+                max_bytes: 256 * 1024,
+            })
+            .await
+            .expect("read persistent terminal")
+            .data
+    }
+
+    terminal.update(cx, |terminal, _| terminal.input(b"first-ok\r".to_vec()));
+    let mut saw_first = false;
+    for _ in 0..50 {
+        cx.run_until_parked();
+        if String::from_utf8_lossy(
+            &read_all(&proto_client, &server_instance_id, &terminal_id).await,
+        )
+        .contains("first-ok")
+        {
+            saw_first = true;
+            break;
+        }
+        std::thread::sleep(StdDuration::from_millis(20));
+    }
+    assert!(saw_first, "input must reach the remote terminal");
+
+    remote_client
+        .update(cx, |client, cx| client.simulate_disconnect(cx))
+        .detach();
+    for _ in 0..20 {
+        terminal.update(cx, |terminal, _| terminal.input(b"buffered-".to_vec()));
+    }
+
+    for _ in 0..100 {
+        cx.run_until_parked();
+        if remote_client.read_with(cx, |client, _| client.connection_state())
+            == ConnectionState::Connected
+        {
+            break;
+        }
+        std::thread::sleep(StdDuration::from_millis(20));
+    }
+    assert_eq!(
+        remote_client.read_with(cx, |client, _| client.connection_state()),
+        ConnectionState::Connected,
+        "the mock transport should reconnect"
+    );
+
+    terminal.update(cx, |terminal, _| terminal.input(b"second-ok\r".to_vec()));
+    let mut saw_second = false;
+    for _ in 0..100 {
+        cx.run_until_parked();
+        if String::from_utf8_lossy(
+            &read_all(&proto_client, &server_instance_id, &terminal_id).await,
+        )
+        .contains("second-ok")
+        {
+            saw_second = true;
+            break;
+        }
+        std::thread::sleep(StdDuration::from_millis(20));
+    }
+    assert!(
+        saw_second,
+        "input must resume after the remote connection reconnects"
+    );
+}

@@ -900,6 +900,13 @@ pub const MAX_SCROLL_HISTORY_LINES: usize = 100_000;
 /// Upper bound for merging queued remote-terminal keystrokes into a single
 /// input message. Well under the server's 1 MiB input limit.
 const MAX_COALESCED_INPUT_BYTES: usize = 64 * 1024;
+/// Error the server returns when its per-terminal input backlog is full because
+/// the remote program is not reading stdin. The batch is not recorded, so the
+/// client retries the same sequence until the program drains the backlog.
+const PERSISTENT_TERMINAL_INPUT_BACKLOG_FULL: &str = "persistent terminal input backlog is full";
+/// Delay between retries of a batch the server rejected because its input
+/// backlog was full.
+const INPUT_BACKLOG_RETRY_INTERVAL: Duration = Duration::from_millis(200);
 /// How much streamed remote-terminal output the client applies before
 /// reporting a new credit offset to the server.
 const OUTPUT_CREDIT_GRANULARITY_BYTES: u64 = 256 * 1024;
@@ -1176,6 +1183,7 @@ impl TerminalBuilder {
             terminal_id,
             streaming,
             input_tx,
+            input_backpressure_warned: std::cell::Cell::new(false),
             input_task: None,
             output_task: None,
             failed: false,
@@ -1536,12 +1544,14 @@ impl TerminalBuilder {
                 let client = client.clone();
                 let server_instance_id = server_instance_id.clone();
                 let terminal_id = terminal_id.clone();
+                let executor = cx.background_executor().clone();
                 async move |terminal, cx| {
                     if let Err(error) = send_persistent_terminal_input(
                         client,
                         server_instance_id,
                         terminal_id,
                         input_rx,
+                        executor,
                     )
                     .await
                     {
@@ -1588,6 +1598,11 @@ impl TerminalBuilder {
                                 let mut last_credit_offset = offset;
                                 let mut made_progress = false;
                                 'stream: loop {
+                                    if terminal.read_with(cx, |terminal, _| {
+                                        matches!(&terminal.terminal_type, TerminalType::Remote(remote) if remote.failed)
+                                    })? {
+                                        return Ok(());
+                                    }
                                     let Some(frame) = frames.next().await else {
                                         consecutive_stream_failures += 1;
                                         break 'stream;
@@ -1825,6 +1840,7 @@ async fn send_persistent_terminal_input(
     server_instance_id: String,
     terminal_id: String,
     input_rx: Receiver<Vec<u8>>,
+    executor: BackgroundExecutor,
 ) -> Result<()> {
     let mut sequence = 1;
     while let Ok(first) = input_rx.recv().await {
@@ -1838,14 +1854,30 @@ async fn send_persistent_terminal_input(
         // Ordered transport does not order the server's background PTY writes.
         // Keep one batch in flight; replay of an unacknowledged batch is deduplicated
         // by the server, while typing during the round trip is coalesced here.
-        client
-            .request(proto::PersistentTerminalInput {
-                server_instance_id: server_instance_id.clone(),
-                terminal_id: terminal_id.clone(),
-                sequence,
-                data,
-            })
-            .await?;
+        loop {
+            let result = client
+                .request(proto::PersistentTerminalInput {
+                    server_instance_id: server_instance_id.clone(),
+                    terminal_id: terminal_id.clone(),
+                    sequence,
+                    data: data.clone(),
+                })
+                .await;
+            match result {
+                Ok(_) => break,
+                Err(error) if persistent_terminal_input_backlog_is_full(&error) => {
+                    // The remote program is not reading stdin, so the server's
+                    // backlog is full. It did not record this sequence, so retry
+                    // the same batch once the program drains the backlog instead
+                    // of permanently disabling terminal input.
+                    log::debug!(
+                        "persistent terminal input waiting for remote backlog space: {error:#}"
+                    );
+                    executor.timer(INPUT_BACKLOG_RETRY_INTERVAL).await;
+                }
+                Err(error) => return Err(error),
+            }
+        }
         sequence += 1;
     }
     Ok(())
@@ -1864,12 +1896,21 @@ fn persistent_terminal_is_unavailable(error: &anyhow::Error) -> bool {
         })
 }
 
+fn persistent_terminal_input_backlog_is_full(error: &anyhow::Error) -> bool {
+    error
+        .downcast_ref::<proto::RpcError>()
+        .is_some_and(|error| error.raw_message() == PERSISTENT_TERMINAL_INPUT_BACKLOG_FULL)
+}
+
 struct RemoteTerminal {
     client: AnyProtoClient,
     server_instance_id: String,
     terminal_id: String,
     streaming: bool,
     input_tx: Sender<Vec<u8>>,
+    /// Set after a failed input send so a persistently full queue warns once
+    /// instead of once per keystroke.
+    input_backpressure_warned: std::cell::Cell<bool>,
     input_task: Option<Task<()>>,
     output_task: Option<Task<Result<()>>>,
     failed: bool,
@@ -2955,11 +2996,21 @@ impl Terminal {
                 }
                 pty_tx.notify(input);
             }
-            TerminalType::Remote(remote) => {
-                if remote.input_tx.try_send(input.into_owned()).is_err() {
-                    log::warn!("persistent terminal input queue is unavailable");
+            TerminalType::Remote(remote) => match remote.input_tx.try_send(input.into_owned()) {
+                Ok(()) => remote.input_backpressure_warned.set(false),
+                Err(async_channel::TrySendError::Full(_)) => {
+                    if !remote.input_backpressure_warned.replace(true) {
+                        log::warn!(
+                            "persistent terminal input queue is full; waiting for the remote program to read input"
+                        );
+                    }
                 }
-            }
+                Err(async_channel::TrySendError::Closed(_)) => {
+                    if !remote.input_backpressure_warned.replace(true) {
+                        log::warn!("persistent terminal input queue is closed");
+                    }
+                }
+            },
             TerminalType::Pty { .. } | TerminalType::DisplayOnly => {}
         }
     }
@@ -7841,6 +7892,7 @@ mod tests {
             "server".into(),
             "terminal".into(),
             input_rx,
+            cx.background_executor.clone(),
         ));
         input_tx.send(b"a".to_vec()).await.expect("input");
         let (first, ack) = requests_rx.recv().await.expect("first batch");
@@ -7874,6 +7926,7 @@ mod tests {
             "server".into(),
             "terminal".into(),
             input_rx,
+            cx.background_executor.clone(),
         ));
         input_tx.send(b"a".to_vec()).await.expect("input");
         let (_, ack) = requests_rx.recv().await.expect("first batch");
@@ -7882,6 +7935,97 @@ mod tests {
         assert!(task.await.is_err());
         assert!(requests_rx.try_recv().is_err());
         assert!(input_tx.is_closed());
+    }
+
+    struct BacklogTestClient {
+        handler_set: Mutex<ProtoMessageHandlerSet>,
+        rejections: std::sync::atomic::AtomicUsize,
+        delivered: Sender<proto::PersistentTerminalInput>,
+    }
+
+    impl ProtoClient for BacklogTestClient {
+        fn request(
+            &self,
+            envelope: proto::Envelope,
+            request_type: &'static str,
+        ) -> futures::future::BoxFuture<'static, Result<proto::Envelope>> {
+            let Some(proto::envelope::Payload::PersistentTerminalInput(input)) = envelope.payload
+            else {
+                return async move { anyhow::bail!("unexpected {request_type}") }.boxed();
+            };
+            if self
+                .rejections
+                .fetch_sub(1, std::sync::atomic::Ordering::SeqCst)
+                > 0
+            {
+                let error = proto::RpcError::from_proto(
+                    &proto::Error {
+                        message: PERSISTENT_TERMINAL_INPUT_BACKLOG_FULL.into(),
+                        ..Default::default()
+                    },
+                    "PersistentTerminalInput",
+                );
+                return async move { Err(error) }.boxed();
+            }
+            let result = self.delivered.try_send(input);
+            async move {
+                result.map_err(|error| anyhow::anyhow!("{error}"))?;
+                Ok(proto::Ack {}.into_envelope(0, None, None))
+            }
+            .boxed()
+        }
+        fn send(&self, _: proto::Envelope, _: &'static str) -> Result<()> {
+            Ok(())
+        }
+        fn send_response(&self, _: proto::Envelope, _: &'static str) -> Result<()> {
+            Ok(())
+        }
+        fn message_handler_set(&self) -> &Mutex<ProtoMessageHandlerSet> {
+            &self.handler_set
+        }
+        fn is_via_collab(&self) -> bool {
+            false
+        }
+        fn has_wsl_interop(&self) -> bool {
+            false
+        }
+    }
+
+    #[gpui::test(iterations = 20)]
+    async fn persistent_terminal_input_retries_while_remote_backlog_is_full(
+        cx: &mut TestAppContext,
+    ) {
+        let (delivered_tx, delivered_rx) = async_channel::bounded(10);
+        let client = AnyProtoClient::new(Arc::new(BacklogTestClient {
+            handler_set: Mutex::new(ProtoMessageHandlerSet::default()),
+            rejections: std::sync::atomic::AtomicUsize::new(2),
+            delivered: delivered_tx,
+        }));
+        let (input_tx, input_rx) = async_channel::bounded(256);
+        let task = cx.background_executor.spawn(send_persistent_terminal_input(
+            client,
+            "server".into(),
+            "terminal".into(),
+            input_rx,
+            cx.background_executor.clone(),
+        ));
+        input_tx.send(b"a".to_vec()).await.expect("input");
+
+        // Two rejected attempts, then a successful retry of the same sequence.
+        for _ in 0..6 {
+            cx.run_until_parked();
+            cx.background_executor
+                .advance_clock(INPUT_BACKLOG_RETRY_INTERVAL * 2);
+        }
+        cx.run_until_parked();
+
+        let delivered = delivered_rx.recv().await.expect("retried batch");
+        assert_eq!(delivered.sequence, 1);
+        assert_eq!(delivered.data, b"a");
+
+        input_tx.close();
+        task.await
+            .expect("input completes after the backlog drains");
     }
 
     struct PollTestClient {
@@ -8033,6 +8177,16 @@ mod tests {
             "ReadPersistentTerminal",
         );
         assert!(!persistent_terminal_is_unavailable(&error));
+
+        let backlog_error = proto::RpcError::from_proto(
+            &proto::Error {
+                message: PERSISTENT_TERMINAL_INPUT_BACKLOG_FULL.into(),
+                ..Default::default()
+            },
+            "PersistentTerminalInput",
+        );
+        assert!(persistent_terminal_input_backlog_is_full(&backlog_error));
+        assert!(!persistent_terminal_is_unavailable(&backlog_error));
     }
 
     struct TestProtoClient {

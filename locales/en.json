@@ -5415,5 +5415,7 @@
   "0973a57b0db888f7": "The remote server returned invalid download data",
   "6b0acd8bbf4d83b5": "The remote file is too large to download",
   "68d0a2e10bc6df49": "Remote server",
-  "0fd69732f0855eac": "Remote server downloads"
+  "0fd69732f0855eac": "Remote server downloads",
+  "68b3f4bff6de90ae": "Open Folder",
+  "a441806afc2c82d7": "View Server Options"
 }
