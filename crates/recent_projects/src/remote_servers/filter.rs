@@ -10,6 +10,11 @@
 //! project, if any) it represents. This snapshot is reused for every
 //! keystroke; we only rebuild it when the set of servers changes.
 //!
+//! Candidates opt into pinyin-initial matching, so a Chinese host or nickname
+//! such as `测试主机` is also reachable by typing `cszj`. The shared matcher
+//! maps those highlight positions back onto the original Chinese bytes, which
+//! keeps the existing host/path position math below valid.
+//!
 //! On each query, `fuzzy_nucleo::match_strings[_async]` returns matches sorted
 //! by score. [`build_filter_results`] regroups those matches by server (a
 //! server with N projects can contribute up to N matches) and folds each
@@ -89,7 +94,10 @@ impl FilterData {
                             display_host_byte_len,
                             match_host_byte_len,
                         });
-                        candidates.push(StringMatchCandidate::new(candidates.len(), combined));
+                        candidates.push(StringMatchCandidate::new_with_pinyin(
+                            candidates.len(),
+                            combined,
+                        ));
                     }
                 }
                 RemoteEntry::Project { .. } | RemoteEntry::SshConfig { .. } => {
@@ -99,7 +107,10 @@ impl FilterData {
                         display_host_byte_len,
                         match_host_byte_len,
                     });
-                    candidates.push(StringMatchCandidate::new(candidates.len(), search_host));
+                    candidates.push(StringMatchCandidate::new_with_pinyin(
+                        candidates.len(),
+                        search_host,
+                    ));
                 }
             }
         }
@@ -456,6 +467,80 @@ mod tests {
                 "path positions {:?} must be valid char boundaries in {:?}",
                 proj.path_positions,
                 path,
+            );
+        });
+    }
+
+    #[test]
+    fn test_filter_matches_pinyin_initials_of_chinese_host() {
+        with_filter_data(&[mock("dev-测试主机", &[])], |servers, data| {
+            let results = run_sync(data, "cszj");
+
+            assert_eq!(results.len(), 1);
+            assert_eq!(results[0].server_index, 0);
+            let host = servers[0].host;
+            assert!(
+                !results[0].host_positions.is_empty(),
+                "pinyin initials should highlight the displayed host",
+            );
+            assert!(
+                results[0]
+                    .host_positions
+                    .iter()
+                    .all(|&p| p < host.len() && host.is_char_boundary(p)),
+                "host positions {:?} must be valid char boundaries in {:?}",
+                results[0].host_positions,
+                host,
+            );
+        });
+    }
+
+    #[test]
+    fn test_filter_matches_pinyin_initials_of_host_with_projects() {
+        with_filter_data(&[mock("测试主机", &["/srv/app"])], |servers, data| {
+            let results = run_sync(data, "cszj");
+
+            assert_eq!(results.len(), 1);
+            assert_eq!(results[0].server_index, 0);
+            let host = servers[0].host;
+            assert!(
+                results[0]
+                    .host_positions
+                    .iter()
+                    .all(|&p| p < host.len() && host.is_char_boundary(p)),
+                "host positions {:?} must be valid char boundaries in {:?}",
+                results[0].host_positions,
+                host,
+            );
+            assert_eq!(
+                results[0].project_matches.len(),
+                1,
+                "matching the host should include every project",
+            );
+            assert_eq!(results[0].project_matches[0].project_index, 0);
+        });
+    }
+
+    #[test]
+    fn test_filter_matches_pinyin_initials_of_nickname() {
+        let servers = [mock_with_nickname("10.0.0.5", "测试主机", &["/srv/app"])];
+        with_filter_data(&servers, |servers, data| {
+            let nickname = servers[0].nickname.expect("server has a nickname");
+            let results = run_sync(data, "cszj");
+
+            assert_eq!(results.len(), 1);
+            assert!(
+                !results[0].host_positions.is_empty(),
+                "pinyin initials of the nickname should highlight it",
+            );
+            assert!(
+                results[0]
+                    .host_positions
+                    .iter()
+                    .all(|&p| p < nickname.len() && nickname.is_char_boundary(p)),
+                "host positions {:?} must stay within the displayed nickname {:?}",
+                results[0].host_positions,
+                nickname,
             );
         });
     }

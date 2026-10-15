@@ -16,6 +16,7 @@ path = "src/repl.rs"
 doctest = false
 
 [dependencies]
+i18n.workspace = true
 anyhow.workspace = true
 async-dispatcher.workspace = true
 async-task.workspace = true

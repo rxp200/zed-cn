@@ -1,3 +1,5 @@
+// Modified by the Zed CN project, 2026. See MODIFICATIONS.md.
+
 use std::{
     cell::RefCell,
     env,
@@ -831,7 +833,7 @@ impl Platform for LinuxPlatform {
                         ashpd::desktop::file_chooser::SaveFileRequest::default()
                             .identifier(identifier.await)
                             .modal(true)
-                            .title("Save File")
+                            .title(i18n::t!("4d8dc23ed6e1e690"))
                             .current_folder(directory)
                             .expect("pathbuf should not be nul terminated");
 

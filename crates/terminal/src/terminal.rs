@@ -16,6 +16,7 @@ use futures::{
 };
 
 use alacritty_terminal::grid::Dimensions as _;
+use alacritty_terminal::term::Osc52;
 use itertools::Itertools as _;
 use mappings::mouse::{
     alt_scroll, grid_point, grid_point_and_side, mouse_button_report, mouse_moved_report,
@@ -26,6 +27,7 @@ use async_channel::{Receiver, Sender};
 use collections::{HashMap, VecDeque};
 use futures::StreamExt;
 use pty_info::{ProcessIdGetter, PtyProcessInfo};
+use rpc::{AnyProtoClient, proto};
 use serde::{Deserialize, Serialize};
 use settings::Settings;
 use task::{HideStrategy, Shell, ShellKind, SpawnInTerminal};
@@ -64,14 +66,14 @@ use crate::alacritty::current_child_signal_mask;
 use crate::alacritty::{
     AlacrittyCell, AlacrittyGridIterator, AlacrittyHyperlink, AlacrittySearch, AlacrittyTerm,
     AlacrittyTermConfig, AlacrittyTermLock, HyperlinkMatch, PtySender, RegexSearches,
-    append_text_to_term, apply_config, clear_saved_screen, content_text, display_offset,
-    display_only_term_config, find_from_terminal_point, full_content_range, last_non_empty_lines,
-    make_content, new_term, open_pty, pty_options, pty_term_config, resize, screen_lines,
-    scroll_display, scroll_to_point, search_matches, selection_text, set_default_cursor_style,
-    set_selection as set_term_selection, shrink_to_used, spawn_event_loop,
-    toggle_vi_mode as toggle_term_vi_mode, total_lines, update_selection as update_term_selection,
-    update_selection_to_vi_cursor, update_vi_cursor_for_scroll, used_lines, vi_goto_point,
-    vi_motion,
+    append_text_to_term, apply_config, clear_saved_screen, clone_active_grid, content_text,
+    display_offset, display_only_term_config, find_from_terminal_point, full_content_range,
+    last_non_empty_lines, make_content, new_term, open_pty, pty_options, pty_term_config, resize,
+    screen_lines, scroll_display, scroll_to_point, search_matches, selection_text,
+    set_default_cursor_style, set_selection as set_term_selection, shrink_to_used,
+    spawn_event_loop, toggle_vi_mode as toggle_term_vi_mode, total_lines,
+    update_selection as update_term_selection, update_selection_to_vi_cursor,
+    update_vi_cursor_for_scroll, used_lines, vi_goto_point, vi_motion,
 };
 use crate::mappings::colors::to_vte_rgb;
 use crate::mappings::keys::to_esc_str;
@@ -652,7 +654,8 @@ const DEBUG_CELL_WIDTH: Pixels = px(5.);
 const DEBUG_LINE_HEIGHT: Pixels = px(5.);
 
 /// Inserts Zed-specific environment variables for terminal sessions.
-/// Used by both local terminals and remote terminals (via SSH).
+/// Used by local terminals, remote terminals (via SSH) and Remote Server-hosted
+/// terminals, whose PTY is spawned without a terminal type from the server process.
 pub fn insert_zed_terminal_env(
     env: &mut HashMap<String, String>,
     version: &impl std::fmt::Display,
@@ -677,6 +680,9 @@ pub enum Event {
     SelectionsChanged,
     NewNavigationTarget(Option<MaybeNavigationTarget>),
     Open(MaybeNavigationTarget),
+    /// The remote shell's working directory was detected from the terminal
+    /// stream (OSC 7 or the output of an explicit `pwd`).
+    WorkingDirectoryDetected(PathBuf),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -890,6 +896,23 @@ impl Display for TerminalError {
 // https://github.com/alacritty/alacritty/blob/cb3a79dbf6472740daca8440d5166c1d4af5029e/extra/man/alacritty.5.scd?plain=1#L207-L213
 const DEFAULT_SCROLL_HISTORY_LINES: usize = 10_000;
 pub const MAX_SCROLL_HISTORY_LINES: usize = 100_000;
+
+/// Upper bound for merging queued remote-terminal keystrokes into a single
+/// input message. Well under the server's 1 MiB input limit.
+const MAX_COALESCED_INPUT_BYTES: usize = 64 * 1024;
+/// Error the server returns when its per-terminal input backlog is full because
+/// the remote program is not reading stdin. The batch is not recorded, so the
+/// client retries the same sequence until the program drains the backlog.
+const PERSISTENT_TERMINAL_INPUT_BACKLOG_FULL: &str = "persistent terminal input backlog is full";
+/// Delay between retries of a batch the server rejected because its input
+/// backlog was full.
+const INPUT_BACKLOG_RETRY_INTERVAL: Duration = Duration::from_millis(200);
+/// How much streamed remote-terminal output the client applies before
+/// reporting a new credit offset to the server.
+const OUTPUT_CREDIT_GRANULARITY_BYTES: u64 = 256 * 1024;
+/// Consecutive output-stream failures tolerated before falling back to
+/// polling for the rest of the terminal's lifetime.
+const MAX_STREAM_FAILURES: u32 = 3;
 static NEXT_INIT_COMMAND_STARTUP_MARKER_ID: AtomicU64 = AtomicU64::new(1);
 
 const INIT_COMMAND_STARTUP_MARKER_PREFIX: &str = "__zed_init_command_ready_";
@@ -978,6 +1001,7 @@ impl TerminalMode {
 pub struct TerminalBuilder {
     terminal: Terminal,
     events_rx: UnboundedReceiver<PtyEvent>,
+    remote_input_rx: Option<Receiver<Vec<u8>>>,
 }
 
 impl TerminalBuilder {
@@ -1078,6 +1102,9 @@ impl TerminalBuilder {
             path_style,
             cwd_history: Vec::new(),
             pending_cwd_boundary: None,
+            remote_detected_cwd: None,
+            cwd_observer: CwdObserver::new(false),
+            last_output_at: None,
             #[cfg(any(test, feature = "test-support"))]
             input_log: Vec::new(),
             #[cfg(test)]
@@ -1089,7 +1116,89 @@ impl TerminalBuilder {
         TerminalBuilder {
             terminal,
             events_rx,
+            remote_input_rx: None,
         }
+    }
+
+    pub fn new_remote(
+        mode: TerminalMode,
+        shell: Shell,
+        cursor_shape: SettingsCursorShape,
+        alternate_scroll: AlternateScroll,
+        max_scroll_history_lines: Option<usize>,
+        path_hyperlink_regexes: Vec<String>,
+        path_hyperlink_timeout: Duration,
+        window_id: u64,
+        path_style: PathStyle,
+        client: AnyProtoClient,
+        server_instance_id: String,
+        terminal_id: String,
+        streaming: bool,
+        background_executor: &BackgroundExecutor,
+    ) -> TerminalBuilder {
+        let mut builder = Self::new_display_only(
+            cursor_shape,
+            alternate_scroll,
+            max_scroll_history_lines,
+            window_id,
+            background_executor,
+            path_style,
+        );
+        let (task, completion_tx) = match mode.0 {
+            TerminalModeKind::Interactive => (None, None),
+            TerminalModeKind::InteractiveWithCompletion(completion_tx) => {
+                (None, Some(completion_tx))
+            }
+            TerminalModeKind::Task {
+                state,
+                completion_tx,
+            } => (Some(state), Some(completion_tx)),
+        };
+        builder.terminal.task = task;
+        builder.terminal.completion_tx = completion_tx;
+        builder.terminal.is_remote_terminal = true;
+        builder.terminal.cwd_observer = CwdObserver::new(true);
+        // A remote terminal renders a real interactive PTY stream, so programs on the
+        // remote host (e.g. agents or editors copying via OSC 52) must be able to
+        // reach the client clipboard. Pure display-only terminals keep OSC 52 disabled.
+        builder.terminal.term_config.osc52 = Osc52::OnlyCopy;
+        let config = builder.terminal.term_config.clone();
+        apply_config(&builder.terminal.term, &config);
+        builder.terminal.hyperlink_regex_searches =
+            RegexSearches::new(&path_hyperlink_regexes, path_hyperlink_timeout);
+        builder.terminal.template = CopyTemplate {
+            shell,
+            env: HashMap::default(),
+            cursor_shape,
+            alternate_scroll,
+            max_scroll_history_lines,
+            path_hyperlink_regexes,
+            path_hyperlink_timeout,
+            window_id,
+        };
+        let (input_tx, input_rx) = async_channel::bounded(256);
+        builder.terminal.terminal_type = TerminalType::Remote(RemoteTerminal {
+            client,
+            server_instance_id,
+            terminal_id,
+            streaming,
+            input_tx,
+            input_backpressure_warned: std::cell::Cell::new(false),
+            input_task: None,
+            output_task: None,
+            failed: false,
+        });
+        builder.remote_input_rx = Some(input_rx);
+        builder
+    }
+
+    /// Seeds the working directory the remote shell was started in, so a
+    /// relative `cd` can be resolved before the shell reports its location.
+    pub fn remote_working_directory(mut self, directory: Option<PathBuf>) -> Self {
+        self.terminal
+            .cwd_observer
+            .set_initial_working_directory(directory);
+        self
     }
 
     pub fn new(
@@ -1380,6 +1489,9 @@ impl TerminalBuilder {
                         .unwrap_or_default()
                 },
                 pending_cwd_boundary: None,
+                remote_detected_cwd: None,
+                cwd_observer: CwdObserver::new(is_remote_terminal),
+                last_output_at: None,
                 #[cfg(any(test, feature = "test-support"))]
                 input_log: Vec::new(),
                 #[cfg(test)]
@@ -1412,12 +1524,215 @@ impl TerminalBuilder {
             Ok(TerminalBuilder {
                 terminal,
                 events_rx,
+                remote_input_rx: None,
             })
         };
         cx.background_spawn(fut)
     }
 
     pub fn subscribe(mut self, cx: &Context<Terminal>) -> Terminal {
+        if let TerminalType::Remote(remote) = &self.terminal.terminal_type {
+            let client = remote.client.clone();
+            let server_instance_id = remote.server_instance_id.clone();
+            let terminal_id = remote.terminal_id.clone();
+            let streaming = remote.streaming;
+            let input_rx = self
+                .remote_input_rx
+                .take()
+                .expect("remote terminals have an input receiver");
+            let input_task = cx.spawn({
+                let client = client.clone();
+                let server_instance_id = server_instance_id.clone();
+                let terminal_id = terminal_id.clone();
+                let executor = cx.background_executor().clone();
+                async move |terminal, cx| {
+                    if let Err(error) = send_persistent_terminal_input(
+                        client,
+                        server_instance_id,
+                        terminal_id,
+                        input_rx,
+                        executor,
+                    )
+                    .await
+                    {
+                        terminal
+                            .update(cx, |terminal, cx| {
+                                terminal.fail_remote_terminal(&error, cx);
+                            })
+                            .log_err();
+                    }
+                }
+            });
+            let output_task = cx.spawn(async move |terminal, cx| {
+                let mut offset = 0;
+                let mut use_streaming = streaming;
+                let mut consecutive_stream_failures = 0;
+                loop {
+                    if terminal.read_with(cx, |terminal, _| {
+                        matches!(&terminal.terminal_type, TerminalType::Remote(remote) if remote.failed)
+                    })? {
+                        return Ok(());
+                    }
+                    if use_streaming {
+                        let frames = client
+                            .request_stream(proto::SubscribePersistentTerminal {
+                                server_instance_id: server_instance_id.clone(),
+                                terminal_id: terminal_id.clone(),
+                                offset,
+                            })
+                            .await;
+                        match frames {
+                            Err(error) => {
+                                if persistent_terminal_is_unavailable(&error) {
+                                    terminal.update(cx, |terminal, cx| {
+                                        terminal.fail_remote_terminal(&error, cx);
+                                    })?;
+                                    return Ok(());
+                                }
+                                log::debug!(
+                                    "persistent terminal output stream unavailable, falling back to polling: {error:#}"
+                                );
+                                use_streaming = false;
+                            }
+                            Ok(mut frames) => {
+                                let mut last_credit_offset = offset;
+                                let mut made_progress = false;
+                                'stream: loop {
+                                    if terminal.read_with(cx, |terminal, _| {
+                                        matches!(&terminal.terminal_type, TerminalType::Remote(remote) if remote.failed)
+                                    })? {
+                                        return Ok(());
+                                    }
+                                    let Some(frame) = frames.next().await else {
+                                        consecutive_stream_failures += 1;
+                                        break 'stream;
+                                    };
+                                    let frame = match frame {
+                                        Ok(frame) => frame,
+                                        Err(error) => {
+                                            if persistent_terminal_is_unavailable(&error) {
+                                                terminal.update(cx, |terminal, cx| {
+                                                    terminal.fail_remote_terminal(&error, cx);
+                                                })?;
+                                                return Ok(());
+                                            }
+                                            log::debug!(
+                                                "persistent terminal output stream interrupted: {error:#}"
+                                            );
+                                            consecutive_stream_failures += 1;
+                                            break 'stream;
+                                        }
+                                    };
+                                    if frame.offset > offset && !frame.history_truncated {
+                                        // Missed bytes: resubscribe from the expected offset.
+                                        consecutive_stream_failures += 1;
+                                        break 'stream;
+                                    }
+                                    let skip = (offset.saturating_sub(frame.offset) as usize)
+                                        .min(frame.data.len());
+                                    let frame_end = frame.offset + frame.data.len() as u64;
+                                    let history_truncated = frame.history_truncated;
+                                    let exited = frame.exited;
+                                    let exit_code = frame.exit_code;
+                                    terminal.update(cx, |terminal, cx| {
+                                        if history_truncated {
+                                            terminal.clear_for_init_command(cx);
+                                        }
+                                        if skip < frame.data.len() {
+                                            terminal.write_raw_output(&frame.data[skip..], cx);
+                                        }
+                                        if exited && terminal.child_exited.is_none() {
+                                            terminal.register_task_finished(
+                                                exit_code.map(exit_status_from_code),
+                                                cx,
+                                            );
+                                        }
+                                    })?;
+                                    offset = offset.max(frame_end);
+                                    made_progress = true;
+                                    if offset - last_credit_offset
+                                        >= OUTPUT_CREDIT_GRANULARITY_BYTES
+                                    {
+                                        last_credit_offset = offset;
+                                        client.send(proto::PersistentTerminalOutputCredit {
+                                            server_instance_id: server_instance_id.clone(),
+                                            terminal_id: terminal_id.clone(),
+                                            offset,
+                                        })?;
+                                    }
+                                    if exited {
+                                        return anyhow::Ok(());
+                                    }
+                                }
+                                if made_progress {
+                                    consecutive_stream_failures = 0;
+                                }
+                                if consecutive_stream_failures >= MAX_STREAM_FAILURES {
+                                    log::warn!(
+                                        "persistent terminal output stream failed repeatedly, falling back to polling"
+                                    );
+                                    use_streaming = false;
+                                } else {
+                                    cx.background_executor()
+                                        .timer(Duration::from_millis(200))
+                                        .await;
+                                }
+                            }
+                        }
+                    } else {
+                        let response = client
+                            .request(proto::ReadPersistentTerminal {
+                                server_instance_id: server_instance_id.clone(),
+                                terminal_id: terminal_id.clone(),
+                                offset,
+                                max_bytes: 256 * 1024,
+                            })
+                            .await;
+                        match response {
+                            Ok(response) => {
+                                offset = response.next_offset;
+                                let exited = response.exited;
+                                terminal.update(cx, |terminal, cx| {
+                                    if response.history_truncated {
+                                        terminal.clear_for_init_command(cx);
+                                    }
+                                    if !response.data.is_empty() {
+                                        terminal.write_raw_output(&response.data, cx);
+                                    }
+                                    if exited && terminal.child_exited.is_none() {
+                                        terminal.register_task_finished(
+                                            response.exit_code.map(exit_status_from_code),
+                                            cx,
+                                        );
+                                    }
+                                })?;
+                                if exited {
+                                    break;
+                                }
+                            }
+                            Err(error) => {
+                                if persistent_terminal_is_unavailable(&error) {
+                                    terminal.update(cx, |terminal, cx| {
+                                        terminal.fail_remote_terminal(&error, cx);
+                                    })?;
+                                    break;
+                                }
+                                log::debug!("persistent terminal poll paused: {error:#}");
+                            }
+                        }
+                        cx.background_executor()
+                            .timer(Duration::from_millis(50))
+                            .await;
+                    }
+                }
+                anyhow::Ok(())
+            });
+            if let TerminalType::Remote(remote) = &mut self.terminal.terminal_type {
+                remote.input_task = Some(input_task);
+                remote.output_task = Some(output_task);
+            }
+        }
+
         //Event loop
         self.terminal.event_loop_task = cx.spawn(async move |terminal, cx| {
             while let Some(event) = self.events_rx.next().await {
@@ -1516,7 +1831,89 @@ enum TerminalType {
         resources: PtyResources,
         info: Arc<PtyProcessInfo>,
     },
+    Remote(RemoteTerminal),
     DisplayOnly,
+}
+
+async fn send_persistent_terminal_input(
+    client: AnyProtoClient,
+    server_instance_id: String,
+    terminal_id: String,
+    input_rx: Receiver<Vec<u8>>,
+    executor: BackgroundExecutor,
+) -> Result<()> {
+    let mut sequence = 1;
+    while let Ok(first) = input_rx.recv().await {
+        let mut data = first;
+        while data.len() < MAX_COALESCED_INPUT_BYTES {
+            match input_rx.try_recv() {
+                Ok(more) => data.extend_from_slice(&more),
+                Err(_) => break,
+            }
+        }
+        // Ordered transport does not order the server's background PTY writes.
+        // Keep one batch in flight; replay of an unacknowledged batch is deduplicated
+        // by the server, while typing during the round trip is coalesced here.
+        loop {
+            let result = client
+                .request(proto::PersistentTerminalInput {
+                    server_instance_id: server_instance_id.clone(),
+                    terminal_id: terminal_id.clone(),
+                    sequence,
+                    data: data.clone(),
+                })
+                .await;
+            match result {
+                Ok(_) => break,
+                Err(error) if persistent_terminal_input_backlog_is_full(&error) => {
+                    // The remote program is not reading stdin, so the server's
+                    // backlog is full. It did not record this sequence, so retry
+                    // the same batch once the program drains the backlog instead
+                    // of permanently disabling terminal input.
+                    log::debug!(
+                        "persistent terminal input waiting for remote backlog space: {error:#}"
+                    );
+                    executor.timer(INPUT_BACKLOG_RETRY_INTERVAL).await;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        sequence += 1;
+    }
+    Ok(())
+}
+
+fn persistent_terminal_is_unavailable(error: &anyhow::Error) -> bool {
+    error
+        .downcast_ref::<proto::RpcError>()
+        .is_some_and(|error| {
+            matches!(
+                error.raw_message(),
+                "persistent terminal not found"
+                    | "persistent terminal belongs to another server instance"
+                    | "persistent terminal has exited"
+            )
+        })
+}
+
+fn persistent_terminal_input_backlog_is_full(error: &anyhow::Error) -> bool {
+    error
+        .downcast_ref::<proto::RpcError>()
+        .is_some_and(|error| error.raw_message() == PERSISTENT_TERMINAL_INPUT_BACKLOG_FULL)
+}
+
+struct RemoteTerminal {
+    client: AnyProtoClient,
+    server_instance_id: String,
+    terminal_id: String,
+    streaming: bool,
+    input_tx: Sender<Vec<u8>>,
+    /// Set after a failed input send so a persistently full queue warns once
+    /// instead of once per keystroke.
+    input_backpressure_warned: std::cell::Cell<bool>,
+    input_task: Option<Task<()>>,
+    output_task: Option<Task<Result<()>>>,
+    failed: bool,
 }
 
 pub struct Terminal {
@@ -1565,6 +1962,12 @@ pub struct Terminal {
     path_style: PathStyle,
     cwd_history: Vec<CwdHistoryEntry>,
     pending_cwd_boundary: Option<i32>,
+    /// Working directory detected from the remote shell's output stream
+    /// (OSC 7 reports or the output of an explicit `pwd`), used to follow the
+    /// remote shell's location in the project panel.
+    remote_detected_cwd: Option<PathBuf>,
+    cwd_observer: CwdObserver,
+    last_output_at: Option<Instant>,
     #[cfg(any(test, feature = "test-support"))]
     input_log: Vec<Vec<u8>>,
     #[cfg(test)]
@@ -1589,6 +1992,334 @@ struct CopyTemplate {
     path_hyperlink_regexes: Vec<String>,
     path_hyperlink_timeout: Duration,
     window_id: u64,
+}
+
+/// Observes a remote terminal's input and output byte streams to recover the
+/// shell's working directory without shell-side integration scripts.
+///
+/// Three sources are recognized:
+/// - OSC 7 (`ESC ] 7 ; file://host/path ST`) reports, emitted by shells that
+///   support them (e.g. fish by default, many distro bash setups).
+/// - A simple `cd <path>` typed by the user, resolved against the last known
+///   working directory; this is the only source that reacts to `cd` itself.
+/// - The output of an explicit `pwd` typed by the user: when the tracked
+///   input line is exactly `pwd` (optionally with `-L`/`-P`), the first
+///   absolute-path line in the following output is treated as the answer.
+///
+/// The observer never removes bytes from the stream; it only watches. All
+/// buffers are bounded so hostile or noisy output cannot grow state.
+struct CwdObserver {
+    enabled: bool,
+    scan: CwdScanState,
+    /// Current input line bytes as typed by the user, used to detect `pwd`
+    /// and `cd`. Bytes rather than a string so a multi-byte character can be
+    /// decoded only once the line is submitted.
+    input_line: Vec<u8>,
+    /// Set when the user just submitted `pwd`; the next absolute-path output
+    /// line is the answer.
+    pwd_capture: Option<PwdCapture>,
+    /// Resolved `cd` target waiting to be reported on the next output write.
+    pending_cd_target: Option<PathBuf>,
+    /// Most recent working directory either seeded from the spawn directory or
+    /// detected from the shell, used as the base for relative `cd` targets.
+    known_cwd: Option<PathBuf>,
+}
+
+#[derive(Default)]
+enum CwdScanState {
+    #[default]
+    Ground,
+    /// Saw ESC, expecting `[` (CSI, skipped) or `]` (OSC, captured).
+    Esc,
+    /// Inside a CSI sequence; skip until a final byte.
+    Csi,
+    /// Inside an OSC sequence, accumulating its content.
+    Osc(Vec<u8>),
+    /// Saw ESC inside an OSC sequence; a following `\` terminates it (ST).
+    OscEsc(Vec<u8>),
+}
+
+struct PwdCapture {
+    /// Current output line (printable bytes only).
+    line: Vec<u8>,
+    /// Lines seen since the capture started.
+    lines_seen: usize,
+}
+
+/// Bounds for the observer buffers: longer sequences or more output mean the
+/// observation is abandoned rather than grown.
+const MAX_OSC_LEN: usize = 4096;
+const MAX_INPUT_LINE_LEN: usize = 512;
+const MAX_PWD_LINE_LEN: usize = 4096;
+const MAX_PWD_CAPTURE_LINES: usize = 64;
+
+impl CwdObserver {
+    fn new(enabled: bool) -> Self {
+        Self {
+            enabled,
+            scan: CwdScanState::Ground,
+            input_line: Vec::new(),
+            pwd_capture: None,
+            pending_cd_target: None,
+            known_cwd: None,
+        }
+    }
+
+    /// Seeds the directory the shell was started in. Only used until the shell
+    /// reports a directory of its own.
+    fn set_initial_working_directory(&mut self, directory: Option<PathBuf>) {
+        if self.known_cwd.is_none() {
+            self.known_cwd = directory;
+        }
+    }
+
+    /// Tracks user input so an explicit `pwd` or a simple `cd` can be
+    /// recognized. Line editing keys beyond backspace (arrows, control
+    /// sequences) invalidate the tracked line, because we cannot model the
+    /// shell's line editor reliably.
+    fn observe_input(&mut self, input: &[u8]) {
+        if !self.enabled {
+            return;
+        }
+        for &byte in input {
+            match byte {
+                b'\r' | b'\n' => {
+                    let line = String::from_utf8_lossy(&self.input_line).trim().to_string();
+                    if matches!(
+                        line.as_str(),
+                        "pwd" | "pwd -L" | "pwd -P" | "pwd -LP" | "pwd -PL"
+                    ) {
+                        self.pwd_capture = Some(PwdCapture {
+                            line: Vec::new(),
+                            lines_seen: 0,
+                        });
+                    } else if let Some(target) = cd_target(&line, self.known_cwd.as_deref()) {
+                        self.pending_cd_target = Some(target);
+                    }
+                    self.input_line.clear();
+                }
+                0x7f | 0x08 => {
+                    // Drop the whole trailing character so the buffer stays
+                    // valid UTF-8 even when a multi-byte character is erased.
+                    self.input_line.pop();
+                    while !self.input_line.is_empty()
+                        && std::str::from_utf8(&self.input_line).is_err()
+                    {
+                        self.input_line.pop();
+                    }
+                }
+                // Ctrl-C / Ctrl-U / Ctrl-L and any escape sequence make the
+                // tracked line unreliable.
+                0x03 | 0x15 | 0x0c | 0x1b => {
+                    self.input_line.clear();
+                    if byte == 0x03 {
+                        self.pwd_capture = None;
+                        self.pending_cd_target = None;
+                    }
+                }
+                0x20..=0x7e | 0x80..=0xff => {
+                    if self.input_line.len() < MAX_INPUT_LINE_LEN {
+                        self.input_line.push(byte);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Scans output bytes, returning a newly detected working directory when
+    /// a pending `cd` target, an OSC 7 report or a `pwd` answer carries one.
+    fn observe_output(&mut self, bytes: &[u8]) -> Option<PathBuf> {
+        if !self.enabled {
+            return None;
+        }
+        let mut detected = self.pending_cd_target.take();
+        for &byte in bytes {
+            let osc = match std::mem::take(&mut self.scan) {
+                CwdScanState::Ground => match byte {
+                    0x1b => Some(CwdScanState::Esc),
+                    b'\n' => {
+                        if let Some(path) = self.finish_pwd_line() {
+                            detected = Some(path);
+                        }
+                        Some(CwdScanState::Ground)
+                    }
+                    // Printable ASCII plus every non-ASCII byte, so paths
+                    // containing multi-byte UTF-8 (e.g. Chinese) survive.
+                    0x20..=0x7e | 0x80..=0xff => {
+                        if let Some(capture) = &mut self.pwd_capture {
+                            if capture.line.len() < MAX_PWD_LINE_LEN {
+                                capture.line.push(byte);
+                            }
+                        }
+                        Some(CwdScanState::Ground)
+                    }
+                    _ => Some(CwdScanState::Ground),
+                },
+                CwdScanState::Esc => Some(match byte {
+                    b'[' => CwdScanState::Csi,
+                    b']' => CwdScanState::Osc(Vec::new()),
+                    _ => CwdScanState::Ground,
+                }),
+                CwdScanState::Csi => {
+                    if (0x40..=0x7e).contains(&byte) {
+                        Some(CwdScanState::Ground)
+                    } else {
+                        Some(CwdScanState::Csi)
+                    }
+                }
+                CwdScanState::Osc(mut content) => match byte {
+                    0x07 => {
+                        if let Some(path) = Self::parse_osc7(&content) {
+                            detected = Some(path);
+                        }
+                        Some(CwdScanState::Ground)
+                    }
+                    0x1b => Some(CwdScanState::OscEsc(content)),
+                    _ => {
+                        if content.len() < MAX_OSC_LEN {
+                            content.push(byte);
+                            Some(CwdScanState::Osc(content))
+                        } else {
+                            Some(CwdScanState::Ground)
+                        }
+                    }
+                },
+                CwdScanState::OscEsc(content) => {
+                    if byte == b'\\' {
+                        if let Some(path) = Self::parse_osc7(&content) {
+                            detected = Some(path);
+                        }
+                    }
+                    Some(CwdScanState::Ground)
+                }
+            };
+            if let Some(scan) = osc {
+                self.scan = scan;
+            }
+        }
+        if let Some(path) = &detected {
+            self.known_cwd = Some(path.clone());
+        }
+        detected
+    }
+
+    fn finish_pwd_line(&mut self) -> Option<PathBuf> {
+        let capture = self.pwd_capture.as_mut()?;
+        capture.lines_seen += 1;
+        let line = std::mem::take(&mut capture.line);
+        if capture.lines_seen > MAX_PWD_CAPTURE_LINES {
+            self.pwd_capture = None;
+            return None;
+        }
+        let line = String::from_utf8_lossy(&line).trim().to_string();
+        if line.len() > 1 && line.starts_with('/') && !line.contains('\0') {
+            self.pwd_capture = None;
+            return Some(PathBuf::from(line));
+        }
+        None
+    }
+
+    /// Parses an OSC 7 payload of the form `7;file://host/path`. The host is
+    /// not verified: for remote terminals the path is interpreted on the
+    /// remote host regardless.
+    fn parse_osc7(content: &[u8]) -> Option<PathBuf> {
+        let content = std::str::from_utf8(content).ok()?;
+        let uri = content.strip_prefix("7;")?;
+        let rest = uri.strip_prefix("file://")?;
+        let path_start = rest.find('/')?;
+        let encoded_path = &rest[path_start..];
+        let decoded = urlencoding::decode(encoded_path).ok()?;
+        let path = decoded.trim();
+        if path.len() > 1 && path.starts_with('/') {
+            Some(PathBuf::from(path))
+        } else {
+            None
+        }
+    }
+}
+
+/// Recognizes a simple `cd <path>` command line and resolves the target
+/// against the last known working directory.
+///
+/// Only literal paths are handled: `~`, `$VAR`, globs, options, multiple
+/// commands and unmatched quotes are ignored instead of guessed, because a
+/// wrong guess would move the project panel to an unrelated directory. A
+/// relative target needs a known base directory, which is the seeded spawn
+/// directory or the last directory the shell reported.
+fn cd_target(line: &str, base: Option<&Path>) -> Option<PathBuf> {
+    let rest = line.strip_prefix("cd")?;
+    let rest = rest.strip_prefix(' ').or_else(|| rest.strip_prefix('\t'))?;
+    let argument = rest.trim();
+    if argument.is_empty() || argument.starts_with('-') {
+        // Bare `cd` goes to $HOME, which is unknown on the remote host.
+        return None;
+    }
+    let (argument, quoted) = strip_cd_quotes(argument)?;
+    if argument.is_empty() {
+        return None;
+    }
+    if !quoted && argument.contains(' ') {
+        // Unquoted whitespace means several arguments, which `cd` rejects.
+        return None;
+    }
+    if argument.contains(CD_UNSUPPORTED) {
+        return None;
+    }
+    let combined = if argument.starts_with('/') {
+        argument.to_string()
+    } else {
+        let base = base?.to_str()?;
+        if !base.starts_with('/') {
+            return None;
+        }
+        format!("{base}/{argument}")
+    };
+    let mut segments = Vec::new();
+    for segment in combined.split('/') {
+        match segment {
+            "" | "." => {}
+            ".." => {
+                segments.pop();
+            }
+            other => segments.push(other),
+        }
+    }
+    if segments.is_empty() {
+        return None;
+    }
+    Some(PathBuf::from(format!("/{}", segments.join("/"))))
+}
+
+/// Characters that make a `cd` argument depend on shell evaluation we cannot
+/// reproduce on the client.
+const CD_UNSUPPORTED: &[char] = &[
+    '~', '$', '`', '\\', '*', '?', '[', ']', '{', '}', '!', '|', '&', ';', '>', '<', '(', ')', '#',
+    '"', '\'', '\t',
+];
+
+/// Strips a single pair of surrounding quotes. Returns the argument and
+/// whether it was quoted; `None` for unmatched or embedded quotes.
+fn strip_cd_quotes(argument: &str) -> Option<(&str, bool)> {
+    let bytes = argument.as_bytes();
+    match bytes.first() {
+        Some(&quote @ (b'"' | b'\'')) => {
+            if bytes.len() < 2 || bytes[bytes.len() - 1] != quote {
+                return None;
+            }
+            let inner = &argument[1..argument.len() - 1];
+            if inner.as_bytes().contains(&quote) {
+                return None;
+            }
+            Some((inner, true))
+        }
+        _ => {
+            if argument.contains(['"', '\'']) {
+                return None;
+            }
+            Some((argument, false))
+        }
+    }
 }
 
 /// Runtime state for a task-backed terminal.
@@ -1635,6 +2366,8 @@ const FIND_HYPERLINK_THROTTLE: Duration = Duration::from_millis(100);
 /// from starting a selection and, with `copy_on_select` enabled, clobbering the
 /// clipboard. Mirrors the drag threshold used by gpui's `div` element.
 const SELECTION_DRAG_THRESHOLD: f64 = 2.0;
+
+const TITLE_MAX_CHARS: usize = 25;
 
 impl Terminal {
     fn process_pty_event(&mut self, event: PtyEvent, cx: &mut Context<Self>) {
@@ -1699,6 +2432,7 @@ impl Terminal {
                 //NOOP, Handled in render
             }
             TerminalBackendEvent::Wakeup => {
+                self.note_program_output();
                 self.detect_init_command_startup_marker();
                 cx.emit(Event::Wakeup);
 
@@ -1746,12 +2480,24 @@ impl Terminal {
                     self.last_content.terminal_bounds.num_columns() != new_bounds.num_columns();
                 self.last_content.terminal_bounds = new_bounds;
 
-                if let TerminalType::Pty {
-                    resources: PtyResources::Active(pty_tx),
-                    ..
-                } = &self.terminal_type
-                {
-                    pty_tx.resize(new_bounds);
+                match &self.terminal_type {
+                    TerminalType::Pty {
+                        resources: PtyResources::Active(pty_tx),
+                        ..
+                    } => pty_tx.resize(new_bounds),
+                    TerminalType::Remote(remote) => {
+                        self.background_executor
+                            .spawn(remote.client.request(proto::ResizePersistentTerminal {
+                                server_instance_id: remote.server_instance_id.clone(),
+                                terminal_id: remote.terminal_id.clone(),
+                                rows: new_bounds.num_lines().try_into().unwrap_or(u32::MAX),
+                                columns: new_bounds.num_columns().try_into().unwrap_or(u32::MAX),
+                                pixel_width: new_bounds.cell_width.as_f32().max(0.0) as u32,
+                                pixel_height: new_bounds.line_height.as_f32().max(0.0) as u32,
+                            }))
+                            .detach();
+                    }
+                    TerminalType::Pty { .. } | TerminalType::DisplayOnly => {}
                 }
 
                 resize(term, new_bounds);
@@ -1994,13 +2740,41 @@ impl Terminal {
 
     /// Terminal byte streams already contain their control sequences and must not be normalized.
     pub fn write_raw_output(&mut self, bytes: &[u8], cx: &mut Context<Self>) {
+        if self.is_remote_terminal
+            && let Some(cwd) = self.cwd_observer.observe_output(bytes)
+        {
+            self.record_detected_cwd(cwd, cx);
+        }
         let mut term = self.term.lock();
         self.output_processor
             .get_or_insert_with(Processor::<StdSyncHandler>::new)
             .advance(&mut *term, bytes);
         drop(term);
+        self.note_program_output();
         self.detect_init_command_startup_marker();
         cx.emit(Event::Wakeup);
+    }
+
+    /// Records a working directory detected from the remote shell's output
+    /// stream and notifies subscribers (e.g. the project panel) so they can
+    /// follow the shell's location. Duplicate and root-only reports are
+    /// ignored.
+    fn record_detected_cwd(&mut self, cwd: PathBuf, cx: &mut Context<Self>) {
+        if !self.is_remote_terminal {
+            return;
+        }
+        if self.remote_detected_cwd.as_deref() == Some(cwd.as_path()) {
+            return;
+        }
+        self.remote_detected_cwd = Some(cwd.clone());
+        cx.emit(Event::WorkingDirectoryDetected(cwd));
+    }
+
+    /// The working directory detected from the remote shell's output stream,
+    /// if any. Unlike [`Self::working_directory`], which is client-side only,
+    /// this reflects the shell running on the remote host.
+    pub fn detected_remote_working_directory(&self) -> Option<&Path> {
+        self.remote_detected_cwd.as_deref()
     }
 
     /// Replaces all display-only output while retaining the terminal entity and its dimensions.
@@ -2060,6 +2834,16 @@ impl Terminal {
 
     pub fn total_lines(&self) -> usize {
         total_lines(&self.term.lock_unfair())
+    }
+
+    /// Timestamp of the most recent output produced by the program running in the
+    /// terminal, on the testable executor clock. `None` before any output arrived.
+    pub fn last_output_activity(&self) -> Option<Instant> {
+        self.last_output_at
+    }
+
+    fn note_program_output(&mut self) {
+        self.last_output_at = Some(self.background_executor.now());
     }
 
     pub fn viewport_lines(&self) -> usize {
@@ -2198,25 +2982,48 @@ impl Terminal {
         let input = input.into();
         #[cfg(any(test, feature = "test-support"))]
         self.pty_write_log.borrow_mut().push(input.to_vec());
-        if let TerminalType::Pty {
-            resources: PtyResources::Active(pty_tx),
-            ..
-        } = &self.terminal_type
-        {
-            if log::log_enabled!(log::Level::Debug) {
-                if let Ok(str) = str::from_utf8(&input) {
-                    log::debug!("Writing to PTY: {:?}", str);
-                } else {
-                    log::debug!("Writing to PTY: {:?}", input);
+        match &self.terminal_type {
+            TerminalType::Pty {
+                resources: PtyResources::Active(pty_tx),
+                ..
+            } => {
+                if log::log_enabled!(log::Level::Debug) {
+                    if let Ok(str) = str::from_utf8(&input) {
+                        log::debug!("Writing to PTY: {:?}", str);
+                    } else {
+                        log::debug!("Writing to PTY: {:?}", input);
+                    }
                 }
+                pty_tx.notify(input);
             }
-            pty_tx.notify(input);
+            TerminalType::Remote(remote) => match remote.input_tx.try_send(input.into_owned()) {
+                Ok(()) => remote.input_backpressure_warned.set(false),
+                Err(async_channel::TrySendError::Full(_)) => {
+                    if !remote.input_backpressure_warned.replace(true) {
+                        log::warn!(
+                            "persistent terminal input queue is full; waiting for the remote program to read input"
+                        );
+                    }
+                }
+                Err(async_channel::TrySendError::Closed(_)) => {
+                    if !remote.input_backpressure_warned.replace(true) {
+                        log::warn!("persistent terminal input queue is closed");
+                    }
+                }
+            },
+            TerminalType::Pty { .. } | TerminalType::DisplayOnly => {}
         }
     }
 
     pub fn input(&mut self, input: impl Into<Cow<'static, [u8]>>) {
         self.keyboard_input_sent = true;
         self.complete_init_command_startup_handshake();
+        let input = input.into();
+        // Fullscreen programs (vim, top, ...) have their own line handling; a
+        // tracked `pwd` there would be meaningless.
+        if self.is_remote_terminal && !self.last_content.mode.contains(Modes::ALT_SCREEN) {
+            self.cwd_observer.observe_input(&input);
+        }
         self.write_input(input);
     }
 
@@ -2290,7 +3097,10 @@ impl Terminal {
     }
 
     pub fn is_pty(&self) -> bool {
-        matches!(self.terminal_type, TerminalType::Pty { .. })
+        matches!(
+            self.terminal_type,
+            TerminalType::Pty { .. } | TerminalType::Remote(_)
+        )
     }
 
     pub fn write_init_command_after_startup(
@@ -2525,6 +3335,16 @@ impl Terminal {
     pub fn get_content(&self) -> String {
         let term = self.term.lock_unfair();
         content_text(&term)
+    }
+
+    pub fn is_remote_terminal(&self) -> bool {
+        self.is_remote_terminal
+    }
+
+    /// Whether this terminal's shell runs inside a Remote Server process rather
+    /// than as a client-side local or `ssh` child process.
+    pub fn is_server_hosted(&self) -> bool {
+        matches!(self.terminal_type, TerminalType::Remote(_))
     }
 
     pub fn last_n_non_empty_lines(&self, n: usize) -> Vec<String> {
@@ -2992,7 +3812,7 @@ impl Terminal {
                 .read()
                 .as_ref()
                 .and_then(|process| foreground_process_command_from_argv(&process.argv)),
-            TerminalType::DisplayOnly => None,
+            TerminalType::Remote(_) | TerminalType::DisplayOnly => None,
         }
     }
 
@@ -3009,7 +3829,7 @@ impl Terminal {
                 .read()
                 .as_ref()
                 .map(|process| process.cwd.clone()),
-            TerminalType::DisplayOnly => None,
+            TerminalType::Remote(_) | TerminalType::DisplayOnly => None,
         }
     }
 
@@ -3064,12 +3884,31 @@ impl Terminal {
         history_size.saturating_add(line)
     }
 
+    /// Title shown for this terminal outside the terminal itself, such as a tab.
+    ///
+    /// Prefers the title reported by the program running in the terminal, which is
+    /// the same text as the terminal breadcrumb, so it follows program-driven title
+    /// changes. Task terminals and terminals whose program reports no title keep the
+    /// task/shell/process label from [`Self::title`].
+    pub fn display_title(&self, truncate: bool) -> String {
+        if self.task.is_none() {
+            let program_title = self.breadcrumb_text.trim();
+            if !program_title.is_empty() {
+                return if truncate {
+                    truncate_and_trailoff(program_title, TITLE_MAX_CHARS)
+                } else {
+                    program_title.to_string()
+                };
+            }
+        }
+        self.title(truncate)
+    }
+
     pub fn title(&self, truncate: bool) -> String {
-        const MAX_CHARS: usize = 25;
         match &self.task {
             Some(task_state) => {
                 if truncate {
-                    truncate_and_trailoff(&task_state.spawned_task.label, MAX_CHARS)
+                    truncate_and_trailoff(&task_state.spawned_task.label, TITLE_MAX_CHARS)
                 } else {
                     task_state.spawned_task.full_label.clone()
                 }
@@ -3102,8 +3941,8 @@ impl Terminal {
                             );
                             let (process_file, process_name) = if truncate {
                                 (
-                                    truncate_and_trailoff(&process_file, MAX_CHARS),
-                                    truncate_and_trailoff(&process_name, MAX_CHARS),
+                                    truncate_and_trailoff(&process_file, TITLE_MAX_CHARS),
+                                    truncate_and_trailoff(&process_name, TITLE_MAX_CHARS),
                                 )
                             } else {
                                 (process_file, process_name)
@@ -3111,7 +3950,7 @@ impl Terminal {
                             format!("{process_file} — {process_name}")
                         })
                         .unwrap_or_else(|| "Terminal".to_string()),
-                    TerminalType::DisplayOnly => "Terminal".to_string(),
+                    TerminalType::Remote(_) | TerminalType::DisplayOnly => "Terminal".to_string(),
                 }),
         }
     }
@@ -3127,6 +3966,14 @@ impl Terminal {
                     // Then kill the shell itself so that the terminal exits properly
                     // and wait_for_completed_task can complete
                     info.kill_child_process();
+                }
+                TerminalType::Remote(remote) => {
+                    self.background_executor
+                        .spawn(remote.client.request(proto::ClosePersistentTerminal {
+                            server_instance_id: remote.server_instance_id.clone(),
+                            terminal_id: remote.terminal_id.clone(),
+                        }))
+                        .detach();
                 }
                 TerminalType::DisplayOnly => {
                     // Non-PTY task terminals own their subprocess directly.
@@ -3183,14 +4030,14 @@ impl Terminal {
     pub fn pid(&self) -> Option<sysinfo::Pid> {
         match &self.terminal_type {
             TerminalType::Pty { info, .. } => info.pid(),
-            TerminalType::DisplayOnly => None,
+            TerminalType::Remote(_) | TerminalType::DisplayOnly => None,
         }
     }
 
     pub fn pid_getter(&self) -> Option<&ProcessIdGetter> {
         match &self.terminal_type {
             TerminalType::Pty { info, .. } => Some(info.pid_getter()),
-            TerminalType::DisplayOnly => None,
+            TerminalType::Remote(_) | TerminalType::DisplayOnly => None,
         }
     }
 
@@ -3208,6 +4055,20 @@ impl Terminal {
             }
         }
         Task::ready(None)
+    }
+
+    fn fail_remote_terminal(&mut self, error: &anyhow::Error, cx: &mut Context<Self>) {
+        log::error!("persistent terminal unavailable: {error:#}");
+        if let TerminalType::Remote(remote) = &mut self.terminal_type {
+            if remote.failed {
+                return;
+            }
+            remote.failed = true;
+            remote.input_tx.close();
+        }
+        let message = i18n::t!("e9068449f2994cdc", error = format!("{error:#}"));
+        self.write_raw_output(format!("\r\n{message}\r\n").as_bytes(), cx);
+        cx.notify();
     }
 
     fn register_task_finished(
@@ -3286,6 +4147,28 @@ impl Terminal {
 
     pub fn vi_mode_enabled(&self) -> bool {
         self.vi_mode_enabled
+    }
+
+    pub fn frozen_snapshot_builder(&self, cx: &App) -> TerminalBuilder {
+        let bounds = self.last_content.terminal_bounds;
+        let history_lines = self.total_lines().saturating_sub(self.viewport_lines());
+        let mut builder = TerminalBuilder::new_display_only_with_bounds(
+            self.template.cursor_shape,
+            self.template.alternate_scroll,
+            Some(history_lines),
+            self.template.window_id,
+            cx.background_executor(),
+            self.path_style,
+            bounds,
+        );
+        clone_active_grid(&self.term, &builder.terminal.term);
+        builder.terminal.last_content = make_content(
+            &builder.terminal.term.lock_unfair(),
+            &builder.terminal.last_content,
+        );
+        builder.terminal.title_override =
+            Some(i18n::t_args!("e5b6b8bc67e69536", self.display_title(false)));
+        builder
     }
 
     pub fn clone_builder(&self, cx: &App, cwd: Option<PathBuf>) -> Task<Result<TerminalBuilder>> {
@@ -3493,7 +4376,27 @@ impl Drop for Terminal {
         if let Some(subprocess) = self.subprocess.take() {
             subprocess.kill();
         }
+        if let TerminalType::Remote(remote) = &self.terminal_type {
+            self.background_executor
+                .spawn(remote.client.request(proto::ClosePersistentTerminal {
+                    server_instance_id: remote.server_instance_id.clone(),
+                    terminal_id: remote.terminal_id.clone(),
+                }))
+                .detach();
+        }
         self.release_pty_resources();
+    }
+}
+
+fn exit_status_from_code(code: i32) -> ExitStatus {
+    #[cfg(unix)]
+    {
+        ExitStatus::from_raw(code << 8)
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::ExitStatusExt as _;
+        ExitStatus::from_raw(code as u32)
     }
 }
 
@@ -3684,7 +4587,45 @@ mod tests {
     };
     use parking_lot::Mutex;
     use rand::{Rng, distr, rngs::StdRng};
+    use rpc::proto::EnvelopedMessage;
+    use rpc::{ProtoClient, ProtoMessageHandlerSet};
     use task::{Shell, ShellBuilder};
+
+    #[gpui::test]
+    fn frozen_snapshot_copies_scrollback_and_stops_following_source(cx: &mut TestAppContext) {
+        let source = cx.new(|cx| {
+            let mut terminal = TerminalBuilder::new_display_only_with_bounds(
+                SettingsCursorShape::Block,
+                AlternateScroll::On,
+                Some(100),
+                0,
+                cx.background_executor(),
+                PathStyle::local(),
+                TerminalBounds::new(
+                    px(16.),
+                    px(8.),
+                    bounds(point(px(0.), px(0.)), size(px(640.), px(48.))),
+                ),
+            )
+            .subscribe(cx);
+            terminal.write_output(b"one\ntwo\nthree\nfour\nfive\n", cx);
+            terminal
+        });
+
+        let frozen = cx.new(|cx| source.read(cx).frozen_snapshot_builder(cx).subscribe(cx));
+        cx.read(|cx| {
+            assert_eq!(frozen.read(cx).get_content(), source.read(cx).get_content());
+            assert!(frozen.read(cx).total_lines() > frozen.read(cx).viewport_lines());
+        });
+
+        source.update(cx, |terminal, cx| {
+            terminal.write_output(b"six\n", cx);
+        });
+        cx.read(|cx| {
+            assert!(!frozen.read(cx).get_content().contains("six"));
+            assert!(frozen.read(cx).title(false).starts_with("[冻结]"));
+        });
+    }
 
     #[test]
     fn test_init_command_startup_marker_commands_do_not_contain_marker() {
@@ -5242,6 +6183,429 @@ mod tests {
         }
     }
 
+    /// A remote terminal renders a real interactive PTY stream, so OSC 52 copy
+    /// sequences from programs on the remote host must reach the client clipboard.
+    #[gpui::test]
+    async fn test_remote_terminal_applies_osc52_to_client_clipboard(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            let settings_store = settings::SettingsStore::test(cx);
+            cx.set_global(settings_store);
+            cx.write_to_clipboard(ClipboardItem::new_string("original".to_string()));
+        });
+
+        let terminal = cx.new(|cx| {
+            TerminalBuilder::new_remote(
+                TerminalMode::interactive(),
+                Shell::Program("bash".into()),
+                SettingsCursorShape::default(),
+                AlternateScroll::On,
+                None,
+                Vec::new(),
+                Duration::ZERO,
+                0,
+                PathStyle::local(),
+                AnyProtoClient::new(Arc::new(TestProtoClient {
+                    handler_set: Mutex::new(ProtoMessageHandlerSet::default()),
+                })),
+                "server".into(),
+                "terminal".into(),
+                false,
+                cx.background_executor(),
+            )
+            .subscribe(cx)
+        });
+
+        terminal.update(cx, |terminal, cx| {
+            terminal.write_raw_output(b"\x1b]52;c;b3ZlcndyaXR0ZW4=\x07", cx);
+        });
+        cx.run_until_parked();
+
+        let clipboard_text = cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text()));
+        assert_eq!(clipboard_text.as_deref(), Some("overwritten"));
+    }
+
+    #[test]
+    fn test_cwd_observer_detects_osc7() {
+        let mut observer = CwdObserver::new(true);
+        assert_eq!(
+            observer.observe_output(b"\x1b]7;file://host/home/user/projects\x07"),
+            Some(PathBuf::from("/home/user/projects"))
+        );
+        // Same directory again is still returned; deduplication happens in the Terminal.
+        assert_eq!(
+            observer.observe_output(b"\x1b]7;file://host/home/user/projects\x1b\\"),
+            Some(PathBuf::from("/home/user/projects"))
+        );
+        // Percent-decoding.
+        assert_eq!(
+            observer.observe_output(b"\x1b]7;file://host/home/user/my%20dir\x07"),
+            Some(PathBuf::from("/home/user/my dir"))
+        );
+    }
+
+    #[test]
+    fn test_cwd_observer_detects_osc7_split_across_writes() {
+        let mut observer = CwdObserver::new(true);
+        assert_eq!(
+            observer.observe_output(b"output \x1b]7;file://host/ho"),
+            None
+        );
+        assert_eq!(
+            observer.observe_output(b"me/user/code\x07more output"),
+            Some(PathBuf::from("/home/user/code"))
+        );
+    }
+
+    #[test]
+    fn test_cwd_observer_ignores_unrelated_osc_and_missing_host_path() {
+        let mut observer = CwdObserver::new(true);
+        assert_eq!(observer.observe_output(b"\x1b]52;c;AAAA\x07"), None);
+        assert_eq!(observer.observe_output(b"\x1b]0;title\x07"), None);
+        assert_eq!(observer.observe_output(b"\x1b]7;http://host/x\x07"), None);
+        assert_eq!(observer.observe_output(b"\x1b]7;file://host\x07"), None);
+        assert_eq!(observer.observe_output(b"\x1b]7;file:///\x07"), None);
+    }
+
+    #[test]
+    fn test_cwd_observer_detects_pwd_output() {
+        let mut observer = CwdObserver::new(true);
+        observer.observe_input(b"pwd\r");
+        // Echoed command and prompt with color codes; the first absolute-path
+        // line is the answer.
+        assert_eq!(
+            observer.observe_output(b"pwd\r\n/home/user/code\r\n\x1b[32m$\x1b[0m "),
+            Some(PathBuf::from("/home/user/code"))
+        );
+    }
+
+    #[test]
+    fn test_cwd_observer_pwd_variants_and_editing() {
+        let mut observer = CwdObserver::new(true);
+        observer.observe_input(b"pwX\x7fd -P\r");
+        assert_eq!(
+            observer.observe_output(b"\r\n/srv/data\r\n"),
+            Some(PathBuf::from("/srv/data"))
+        );
+
+        // `echo pwd` must not arm the capture.
+        observer.observe_input(b"echo pwd\r");
+        assert_eq!(observer.observe_output(b"/etc\r\n"), None);
+
+        // Ctrl-C clears the tracked line.
+        observer.observe_input(b"pwd\x03\r");
+        assert_eq!(observer.observe_output(b"/etc\r\n"), None);
+    }
+
+    #[test]
+    fn test_cwd_observer_ignores_paths_without_pwd() {
+        let mut observer = CwdObserver::new(true);
+        assert_eq!(observer.observe_output(b"total 4\r\n/home/user\r\n"), None);
+        observer.observe_input(b"ls /home/user\r");
+        assert_eq!(observer.observe_output(b"/home/user\r\n"), None);
+    }
+
+    #[test]
+    fn test_cwd_observer_pwd_capture_gives_up_after_many_lines() {
+        let mut observer = CwdObserver::new(true);
+        observer.observe_input(b"pwd\r");
+        for _ in 0..100 {
+            assert_eq!(observer.observe_output(b"some output\r\n"), None);
+        }
+        // The capture is disarmed; a later path line is not picked up.
+        assert_eq!(observer.observe_output(b"/late/path\r\n"), None);
+    }
+
+    #[test]
+    fn test_cwd_observer_disabled_for_local_terminals() {
+        let mut observer = CwdObserver::new(false);
+        assert_eq!(
+            observer.observe_output(b"\x1b]7;file://host/home/user\x07"),
+            None
+        );
+        observer.observe_input(b"pwd\r");
+        assert_eq!(observer.observe_output(b"/home/user\r\n"), None);
+    }
+
+    #[test]
+    fn test_cwd_observer_detects_non_ascii_pwd_output() {
+        // Regression: multi-byte UTF-8 bytes used to be dropped, so a Chinese
+        // path was captured as its ASCII-only prefix (or an invalid path).
+        let mut observer = CwdObserver::new(true);
+        observer.observe_input(b"pwd\r");
+        assert_eq!(
+            observer.observe_output("pwd\r\n/home/user/项目\r\n$ ".as_bytes()),
+            Some(PathBuf::from("/home/user/项目"))
+        );
+
+        let mut observer = CwdObserver::new(true);
+        observer.observe_input(b"pwd\r");
+        assert_eq!(
+            observer.observe_output("/home/用户/项目\r\n".as_bytes()),
+            Some(PathBuf::from("/home/用户/项目"))
+        );
+
+        let mut observer = CwdObserver::new(true);
+        observer.observe_input(b"pwd\r");
+        assert_eq!(
+            observer.observe_output("pwd\r\n/home/user/文档 资料\r\n$ ".as_bytes()),
+            Some(PathBuf::from("/home/user/文档 资料"))
+        );
+
+        // A relative `cd` still resolves against the non-ASCII directory.
+        observer.observe_input(b"cd sub\r");
+        assert_eq!(
+            observer.observe_output(b""),
+            Some(PathBuf::from("/home/user/文档 资料/sub"))
+        );
+    }
+
+    #[test]
+    fn test_cwd_observer_detects_osc7_non_ascii_path() {
+        let mut observer = CwdObserver::new(true);
+        assert_eq!(
+            observer.observe_output("\x1b]7;file://host/home/user/项目\x07".as_bytes()),
+            Some(PathBuf::from("/home/user/项目"))
+        );
+        // Percent-encoded UTF-8, as produced by terminals that encode OSC 7.
+        assert_eq!(
+            observer.observe_output(
+                b"\x1b]7;file://host/home/%E7%94%A8%E6%88%B7/%E9%A1%B9%E7%9B%AE\x07"
+            ),
+            Some(PathBuf::from("/home/用户/项目"))
+        );
+    }
+
+    #[test]
+    fn test_cwd_observer_resolves_cd_targets() {
+        let mut observer = CwdObserver::new(true);
+
+        // Absolute target: no base directory needed.
+        observer.observe_input(b"cd /srv/data\r");
+        assert_eq!(
+            observer.observe_output(b""),
+            Some(PathBuf::from("/srv/data"))
+        );
+
+        // Relative targets resolve against the last known directory.
+        observer.observe_input(b"cd sub\r");
+        assert_eq!(
+            observer.observe_output(b""),
+            Some(PathBuf::from("/srv/data/sub"))
+        );
+
+        observer.observe_input(b"cd ../other\r");
+        assert_eq!(
+            observer.observe_output(b""),
+            Some(PathBuf::from("/srv/data/other"))
+        );
+
+        observer.observe_input(b"cd ./nested/../../final/\r");
+        assert_eq!(
+            observer.observe_output(b""),
+            Some(PathBuf::from("/srv/data/final"))
+        );
+    }
+
+    #[test]
+    fn test_cwd_observer_seeded_directory_resolves_relative_cd() {
+        let mut observer = CwdObserver::new(true);
+        observer.set_initial_working_directory(Some(PathBuf::from("/home/user/project")));
+        observer.observe_input(b"cd src\r");
+        assert_eq!(
+            observer.observe_output(b""),
+            Some(PathBuf::from("/home/user/project/src"))
+        );
+
+        // A shell-reported directory replaces the seeded one.
+        observer.observe_input(b"pwd\r");
+        assert_eq!(
+            observer.observe_output(b"/opt/work\r\n"),
+            Some(PathBuf::from("/opt/work"))
+        );
+        observer.observe_input(b"cd src\r");
+        assert_eq!(
+            observer.observe_output(b""),
+            Some(PathBuf::from("/opt/work/src"))
+        );
+    }
+
+    #[test]
+    fn test_cwd_observer_resolves_quoted_cd_argument() {
+        let mut observer = CwdObserver::new(true);
+        observer.set_initial_working_directory(Some(PathBuf::from("/home/user")));
+        observer.observe_input(b"cd \"my dir/sub\"\r");
+        assert_eq!(
+            observer.observe_output(b""),
+            Some(PathBuf::from("/home/user/my dir/sub"))
+        );
+    }
+
+    #[test]
+    fn test_cwd_observer_tracks_non_ascii_cd_input() {
+        let mut observer = CwdObserver::new(true);
+        observer.set_initial_working_directory(Some(PathBuf::from("/home/user")));
+        observer.observe_input("cd 文档\r".as_bytes());
+        assert_eq!(
+            observer.observe_output(b""),
+            Some(PathBuf::from("/home/user/文档"))
+        );
+
+        // Erasing one multi-byte character keeps the tracked line valid UTF-8.
+        let mut observer = CwdObserver::new(true);
+        observer.set_initial_working_directory(Some(PathBuf::from("/home/user")));
+        observer.observe_input("cd 文档\x7f\r".as_bytes());
+        assert_eq!(
+            observer.observe_output(b""),
+            Some(PathBuf::from("/home/user/文"))
+        );
+    }
+
+    #[test]
+    fn test_cwd_observer_ignores_unresolvable_cd() {
+        let mut observer = CwdObserver::new(true);
+
+        // Relative target without any known directory.
+        observer.observe_input(b"cd sub\r");
+        assert_eq!(observer.observe_output(b""), None);
+
+        observer.set_initial_working_directory(Some(PathBuf::from("/home/user")));
+        for line in [
+            "cd",
+            "cd ~",
+            "cd ~/project",
+            "cd $HOME",
+            "cd -",
+            "cd -P /srv",
+            "cd a b",
+            "cd a; rm -rf /",
+            "cd a && ls",
+            "cd *.rs",
+            "cd 'unclosed",
+            "cd \"mixed'",
+            "cdrom /srv",
+            "echo cd /srv",
+            "sudo cd /srv",
+        ] {
+            observer.observe_input(format!("{line}\r").as_bytes());
+            assert_eq!(observer.observe_output(b""), None, "line: {line}");
+        }
+    }
+
+    #[gpui::test]
+    async fn test_remote_terminal_emits_detected_working_directory(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            let settings_store = settings::SettingsStore::test(cx);
+            cx.set_global(settings_store);
+        });
+
+        let terminal = cx.new(|cx| {
+            TerminalBuilder::new_remote(
+                TerminalMode::interactive(),
+                Shell::Program("bash".into()),
+                SettingsCursorShape::default(),
+                AlternateScroll::On,
+                None,
+                Vec::new(),
+                Duration::ZERO,
+                0,
+                PathStyle::local(),
+                AnyProtoClient::new(Arc::new(TestProtoClient {
+                    handler_set: Mutex::new(ProtoMessageHandlerSet::default()),
+                })),
+                "server".into(),
+                "terminal".into(),
+                false,
+                cx.background_executor(),
+            )
+            .subscribe(cx)
+        });
+
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let _subscription = terminal.update(cx, |_, cx| {
+            cx.subscribe(&cx.entity(), {
+                let events = events.clone();
+                move |_, _, event: &Event, _| {
+                    if let Event::WorkingDirectoryDetected(path) = event {
+                        events.lock().push(path.clone());
+                    }
+                }
+            })
+        });
+
+        terminal.update(cx, |terminal, cx| {
+            terminal.write_raw_output(b"\x1b]7;file://host/home/user/projects\x07", cx);
+        });
+        cx.run_until_parked();
+
+        assert_eq!(
+            terminal.read_with(cx, |terminal, _| {
+                terminal
+                    .detected_remote_working_directory()
+                    .map(Path::to_path_buf)
+            }),
+            Some(PathBuf::from("/home/user/projects"))
+        );
+        assert_eq!(
+            events.lock().as_slice(),
+            &[PathBuf::from("/home/user/projects")]
+        );
+
+        // A repeated report of the same directory does not re-emit.
+        terminal.update(cx, |terminal, cx| {
+            terminal.write_raw_output(b"\x1b]7;file://host/home/user/projects\x07", cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(events.lock().len(), 1);
+
+        // pwd fallback.
+        terminal.update(cx, |terminal, cx| {
+            terminal.input("pwd\r".to_string().into_bytes());
+            terminal.write_raw_output(b"pwd\r\n/home/user/other\r\n$ ", cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            terminal.read_with(cx, |terminal, _| {
+                terminal
+                    .detected_remote_working_directory()
+                    .map(Path::to_path_buf)
+            }),
+            Some(PathBuf::from("/home/user/other"))
+        );
+        assert_eq!(events.lock().len(), 2);
+
+        // A relative `cd` resolves against the last reported directory.
+        terminal.update(cx, |terminal, cx| {
+            terminal.input("cd sub\r".to_string().into_bytes());
+            terminal.write_raw_output(b"cd sub\r\n$ ", cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            terminal.read_with(cx, |terminal, _| {
+                terminal
+                    .detected_remote_working_directory()
+                    .map(Path::to_path_buf)
+            }),
+            Some(PathBuf::from("/home/user/other/sub"))
+        );
+        assert_eq!(events.lock().len(), 3);
+
+        // An absolute `cd` does not need a known base directory.
+        terminal.update(cx, |terminal, cx| {
+            terminal.input("cd /srv/data\r".to_string().into_bytes());
+            terminal.write_raw_output(b"cd /srv/data\r\n$ ", cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            terminal.read_with(cx, |terminal, _| {
+                terminal
+                    .detected_remote_working_directory()
+                    .map(Path::to_path_buf)
+            }),
+            Some(PathBuf::from("/srv/data"))
+        );
+        assert_eq!(events.lock().len(), 4);
+    }
+
     mod hyperlinks {
         use super::{
             init_terminal_test, init_terminal_test_with_window, left_mouse_down_at,
@@ -6098,6 +7462,7 @@ mod tests {
                 info.pid_getter().fallback_pid(),
                 info.current.read().is_some()
             ),
+            TerminalType::Remote(_) => "remote".to_string(),
             TerminalType::DisplayOnly => "display-only".to_string(),
         });
         panic!(
@@ -6468,5 +7833,428 @@ mod tests {
 
         assert!(terminal.cwd_history.is_empty());
         assert_eq!(terminal.pending_cwd_boundary, None);
+    }
+
+    struct InputTestClient {
+        handler_set: Mutex<ProtoMessageHandlerSet>,
+        requests: Sender<(
+            proto::PersistentTerminalInput,
+            futures::channel::oneshot::Sender<()>,
+        )>,
+    }
+
+    impl ProtoClient for InputTestClient {
+        fn request(
+            &self,
+            envelope: proto::Envelope,
+            request_type: &'static str,
+        ) -> futures::future::BoxFuture<'static, Result<proto::Envelope>> {
+            let Some(proto::envelope::Payload::PersistentTerminalInput(input)) = envelope.payload
+            else {
+                return async move { anyhow::bail!("unexpected {request_type}") }.boxed();
+            };
+            let (ack_tx, ack_rx) = futures::channel::oneshot::channel();
+            let result = self.requests.try_send((input, ack_tx));
+            async move {
+                result.map_err(|error| anyhow::anyhow!("{error}"))?;
+                ack_rx.await?;
+                Ok(proto::Ack {}.into_envelope(0, None, None))
+            }
+            .boxed()
+        }
+        fn send(&self, _: proto::Envelope, _: &'static str) -> Result<()> {
+            anyhow::bail!("input must wait for acknowledgment")
+        }
+        fn send_response(&self, _: proto::Envelope, _: &'static str) -> Result<()> {
+            Ok(())
+        }
+        fn message_handler_set(&self) -> &Mutex<ProtoMessageHandlerSet> {
+            &self.handler_set
+        }
+        fn is_via_collab(&self) -> bool {
+            false
+        }
+        fn has_wsl_interop(&self) -> bool {
+            false
+        }
+    }
+
+    #[gpui::test(iterations = 20)]
+    async fn persistent_terminal_input_waits_for_ack_and_coalesces(cx: &mut TestAppContext) {
+        let (requests_tx, requests_rx) = async_channel::bounded(10);
+        let client = AnyProtoClient::new(Arc::new(InputTestClient {
+            handler_set: Mutex::new(ProtoMessageHandlerSet::default()),
+            requests: requests_tx,
+        }));
+        let (input_tx, input_rx) = async_channel::bounded(256);
+        let task = cx.background_executor.spawn(send_persistent_terminal_input(
+            client,
+            "server".into(),
+            "terminal".into(),
+            input_rx,
+            cx.background_executor.clone(),
+        ));
+        input_tx.send(b"a".to_vec()).await.expect("input");
+        let (first, ack) = requests_rx.recv().await.expect("first batch");
+        assert_eq!(first.sequence, 1);
+        assert_eq!(first.data, b"a");
+        input_tx.send(b"b".to_vec()).await.expect("input");
+        input_tx.send(b"c".to_vec()).await.expect("input");
+        cx.run_until_parked();
+        assert!(requests_rx.try_recv().is_err());
+        ack.send(()).expect("ack");
+        let (second, ack) = requests_rx.recv().await.expect("second batch");
+        assert_eq!(second.sequence, 2);
+        assert_eq!(second.data, b"bc");
+        input_tx.close();
+        ack.send(()).expect("ack");
+        task.await.expect("input completes");
+    }
+
+    #[gpui::test(iterations = 20)]
+    async fn persistent_terminal_input_failure_does_not_send_later_batches(
+        cx: &mut TestAppContext,
+    ) {
+        let (requests_tx, requests_rx) = async_channel::bounded(10);
+        let client = AnyProtoClient::new(Arc::new(InputTestClient {
+            handler_set: Mutex::new(ProtoMessageHandlerSet::default()),
+            requests: requests_tx,
+        }));
+        let (input_tx, input_rx) = async_channel::bounded(256);
+        let task = cx.background_executor.spawn(send_persistent_terminal_input(
+            client,
+            "server".into(),
+            "terminal".into(),
+            input_rx,
+            cx.background_executor.clone(),
+        ));
+        input_tx.send(b"a".to_vec()).await.expect("input");
+        let (_, ack) = requests_rx.recv().await.expect("first batch");
+        input_tx.send(b"b".to_vec()).await.expect("input");
+        drop(ack);
+        assert!(task.await.is_err());
+        assert!(requests_rx.try_recv().is_err());
+        assert!(input_tx.is_closed());
+    }
+
+    struct BacklogTestClient {
+        handler_set: Mutex<ProtoMessageHandlerSet>,
+        rejections: std::sync::atomic::AtomicUsize,
+        delivered: Sender<proto::PersistentTerminalInput>,
+    }
+
+    impl ProtoClient for BacklogTestClient {
+        fn request(
+            &self,
+            envelope: proto::Envelope,
+            request_type: &'static str,
+        ) -> futures::future::BoxFuture<'static, Result<proto::Envelope>> {
+            let Some(proto::envelope::Payload::PersistentTerminalInput(input)) = envelope.payload
+            else {
+                return async move { anyhow::bail!("unexpected {request_type}") }.boxed();
+            };
+            if self
+                .rejections
+                .fetch_sub(1, std::sync::atomic::Ordering::SeqCst)
+                > 0
+            {
+                let error = proto::RpcError::from_proto(
+                    &proto::Error {
+                        message: PERSISTENT_TERMINAL_INPUT_BACKLOG_FULL.into(),
+                        ..Default::default()
+                    },
+                    "PersistentTerminalInput",
+                );
+                return async move { Err(error) }.boxed();
+            }
+            let result = self.delivered.try_send(input);
+            async move {
+                result.map_err(|error| anyhow::anyhow!("{error}"))?;
+                Ok(proto::Ack {}.into_envelope(0, None, None))
+            }
+            .boxed()
+        }
+        fn send(&self, _: proto::Envelope, _: &'static str) -> Result<()> {
+            Ok(())
+        }
+        fn send_response(&self, _: proto::Envelope, _: &'static str) -> Result<()> {
+            Ok(())
+        }
+        fn message_handler_set(&self) -> &Mutex<ProtoMessageHandlerSet> {
+            &self.handler_set
+        }
+        fn is_via_collab(&self) -> bool {
+            false
+        }
+        fn has_wsl_interop(&self) -> bool {
+            false
+        }
+    }
+
+    #[gpui::test(iterations = 20)]
+    async fn persistent_terminal_input_retries_while_remote_backlog_is_full(
+        cx: &mut TestAppContext,
+    ) {
+        let (delivered_tx, delivered_rx) = async_channel::bounded(10);
+        let client = AnyProtoClient::new(Arc::new(BacklogTestClient {
+            handler_set: Mutex::new(ProtoMessageHandlerSet::default()),
+            rejections: std::sync::atomic::AtomicUsize::new(2),
+            delivered: delivered_tx,
+        }));
+        let (input_tx, input_rx) = async_channel::bounded(256);
+        let task = cx.background_executor.spawn(send_persistent_terminal_input(
+            client,
+            "server".into(),
+            "terminal".into(),
+            input_rx,
+            cx.background_executor.clone(),
+        ));
+        input_tx.send(b"a".to_vec()).await.expect("input");
+
+        // Two rejected attempts, then a successful retry of the same sequence.
+        for _ in 0..6 {
+            cx.run_until_parked();
+            cx.background_executor
+                .advance_clock(INPUT_BACKLOG_RETRY_INTERVAL * 2);
+        }
+        cx.run_until_parked();
+
+        let delivered = delivered_rx.recv().await.expect("retried batch");
+        assert_eq!(delivered.sequence, 1);
+        assert_eq!(delivered.data, b"a");
+
+        input_tx.close();
+        task.await
+            .expect("input completes after the backlog drains");
+    }
+
+    struct PollTestClient {
+        handler_set: Mutex<ProtoMessageHandlerSet>,
+        reads: std::sync::atomic::AtomicUsize,
+        missing: bool,
+    }
+
+    impl ProtoClient for PollTestClient {
+        fn request(
+            &self,
+            envelope: proto::Envelope,
+            _: &'static str,
+        ) -> futures::future::BoxFuture<'static, Result<proto::Envelope>> {
+            if matches!(
+                envelope.payload,
+                Some(proto::envelope::Payload::ReadPersistentTerminal(_))
+            ) {
+                self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let message = if self.missing {
+                    "persistent terminal not found"
+                } else {
+                    "temporary error"
+                };
+                async move {
+                    Err(proto::RpcError::from_proto(
+                        &proto::Error {
+                            message: message.into(),
+                            ..Default::default()
+                        },
+                        "ReadPersistentTerminal",
+                    ))
+                }
+                .boxed()
+            } else {
+                async { Ok(proto::Ack {}.into_envelope(0, None, None)) }.boxed()
+            }
+        }
+        fn send(&self, _: proto::Envelope, _: &'static str) -> Result<()> {
+            Ok(())
+        }
+        fn send_response(&self, _: proto::Envelope, _: &'static str) -> Result<()> {
+            Ok(())
+        }
+        fn message_handler_set(&self) -> &Mutex<ProtoMessageHandlerSet> {
+            &self.handler_set
+        }
+        fn is_via_collab(&self) -> bool {
+            false
+        }
+        fn has_wsl_interop(&self) -> bool {
+            false
+        }
+    }
+
+    fn polling_terminal(client: Arc<PollTestClient>, cx: &mut TestAppContext) -> Entity<Terminal> {
+        cx.new(|cx| {
+            TerminalBuilder::new_remote(
+                TerminalMode::interactive(),
+                Shell::Program("bash".into()),
+                SettingsCursorShape::default(),
+                AlternateScroll::On,
+                None,
+                Vec::new(),
+                Duration::ZERO,
+                0,
+                PathStyle::local(),
+                AnyProtoClient::new(client),
+                "server".into(),
+                "terminal".into(),
+                false,
+                cx.background_executor(),
+            )
+            .subscribe(cx)
+        })
+    }
+
+    #[gpui::test(iterations = 20)]
+    fn persistent_terminal_missing_stops_polling_and_disables_input(cx: &mut TestAppContext) {
+        let client = Arc::new(PollTestClient {
+            handler_set: Mutex::new(ProtoMessageHandlerSet::default()),
+            reads: Default::default(),
+            missing: true,
+        });
+        let terminal = polling_terminal(client.clone(), cx);
+        cx.run_until_parked();
+        cx.background_executor.advance_clock(Duration::from_secs(1));
+        cx.run_until_parked();
+        assert_eq!(client.reads.load(std::sync::atomic::Ordering::SeqCst), 1);
+        terminal.read_with(cx, |terminal, _| {
+            let TerminalType::Remote(remote) = &terminal.terminal_type else {
+                panic!("remote terminal")
+            };
+            assert!(remote.failed);
+            assert!(remote.input_tx.is_closed());
+        });
+    }
+
+    #[gpui::test(iterations = 20)]
+    fn persistent_terminal_drop_cancels_polling_but_transient_errors_retry(
+        cx: &mut TestAppContext,
+    ) {
+        let client = Arc::new(PollTestClient {
+            handler_set: Mutex::new(ProtoMessageHandlerSet::default()),
+            reads: Default::default(),
+            missing: false,
+        });
+        let terminal = polling_terminal(client.clone(), cx);
+        cx.run_until_parked();
+        cx.background_executor
+            .advance_clock(Duration::from_millis(50));
+        cx.run_until_parked();
+        assert!(client.reads.load(std::sync::atomic::Ordering::SeqCst) >= 2);
+        drop(terminal);
+        cx.run_until_parked();
+        let reads = client.reads.load(std::sync::atomic::Ordering::SeqCst);
+        cx.background_executor.advance_clock(Duration::from_secs(1));
+        cx.run_until_parked();
+        assert_eq!(
+            client.reads.load(std::sync::atomic::Ordering::SeqCst),
+            reads
+        );
+    }
+
+    #[test]
+    fn persistent_terminal_unavailability_excludes_transient_errors() {
+        for message in [
+            "persistent terminal not found",
+            "persistent terminal belongs to another server instance",
+            "persistent terminal has exited",
+        ] {
+            let error = proto::RpcError::from_proto(
+                &proto::Error {
+                    message: message.into(),
+                    ..Default::default()
+                },
+                "ReadPersistentTerminal",
+            );
+            assert!(persistent_terminal_is_unavailable(&error));
+        }
+        assert!(!persistent_terminal_is_unavailable(&anyhow::anyhow!(
+            "connection lost"
+        )));
+        let error = proto::RpcError::from_proto(
+            &proto::Error {
+                message: "permission denied".into(),
+                ..Default::default()
+            },
+            "ReadPersistentTerminal",
+        );
+        assert!(!persistent_terminal_is_unavailable(&error));
+
+        let backlog_error = proto::RpcError::from_proto(
+            &proto::Error {
+                message: PERSISTENT_TERMINAL_INPUT_BACKLOG_FULL.into(),
+                ..Default::default()
+            },
+            "PersistentTerminalInput",
+        );
+        assert!(persistent_terminal_input_backlog_is_full(&backlog_error));
+        assert!(!persistent_terminal_is_unavailable(&backlog_error));
+    }
+
+    struct TestProtoClient {
+        handler_set: Mutex<ProtoMessageHandlerSet>,
+    }
+
+    impl ProtoClient for TestProtoClient {
+        fn request(
+            &self,
+            _: proto::Envelope,
+            request_type: &'static str,
+        ) -> futures::future::BoxFuture<'static, Result<proto::Envelope>> {
+            async move { anyhow::bail!("unexpected {request_type} request in test") }.boxed()
+        }
+
+        fn send(&self, _: proto::Envelope, _: &'static str) -> Result<()> {
+            Ok(())
+        }
+
+        fn send_response(&self, _: proto::Envelope, _: &'static str) -> Result<()> {
+            Ok(())
+        }
+
+        fn message_handler_set(&self) -> &Mutex<ProtoMessageHandlerSet> {
+            &self.handler_set
+        }
+
+        fn is_via_collab(&self) -> bool {
+            false
+        }
+
+        fn has_wsl_interop(&self) -> bool {
+            false
+        }
+    }
+
+    #[gpui::test]
+    fn server_hosted_terminal_is_distinguished_from_client_side_terminals(cx: &mut TestAppContext) {
+        let hosted = TerminalBuilder::new_remote(
+            TerminalMode::interactive(),
+            Shell::Program("bash".to_string()),
+            SettingsCursorShape::default(),
+            AlternateScroll::On,
+            None,
+            Vec::new(),
+            Duration::from_millis(0),
+            0,
+            PathStyle::local(),
+            AnyProtoClient::new(Arc::new(TestProtoClient {
+                handler_set: Mutex::new(ProtoMessageHandlerSet::default()),
+            })),
+            "server".to_string(),
+            "terminal".to_string(),
+            false,
+            &cx.background_executor,
+        );
+        assert!(hosted.terminal.is_server_hosted());
+        assert!(hosted.terminal.is_remote_terminal());
+
+        let display_only = TerminalBuilder::new_display_only(
+            SettingsCursorShape::default(),
+            AlternateScroll::On,
+            None,
+            0,
+            &cx.background_executor,
+            PathStyle::local(),
+        );
+        assert!(!display_only.terminal.is_server_hosted());
+        assert!(!display_only.terminal.is_remote_terminal());
     }
 }

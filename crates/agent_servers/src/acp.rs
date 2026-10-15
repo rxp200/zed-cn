@@ -962,7 +962,7 @@ impl AcpConnection {
             let meta = acp_v2::Meta::from_iter([("terminal-auth".to_string(), value)]);
             vec![acp_v2::AuthMethod::Agent(
                 acp_v2::AuthMethodAgent::new(GEMINI_TERMINAL_AUTH_METHOD_ID, "Login")
-                    .description("Login with your Google or Vertex AI account")
+                    .description(i18n::t!("0f3a722c52ddb7d9"))
                     .meta(meta),
             )]
         } else {

@@ -35,12 +35,18 @@ impl Editor {
         }
         let task = cx.background_spawn({
             let buffer_snapshot = buffer_snapshot.clone();
-            async move { buffer_snapshot.innermost_enclosing_bracket_ranges(head..tail, None) }
+            async move {
+                buffer_snapshot
+                    .enclosing_bracket_matches(head..tail)
+                    .and_then(|pairs| {
+                        pairs.min_by_key(|(open, close, _, _)| close.end.0 - open.start.0)
+                    })
+            }
         });
         self.refresh_matching_bracket_highlights_task = cx.spawn({
             let buffer_snapshot = buffer_snapshot.clone();
             async move |this, cx| {
-                let bracket_ranges = task.await;
+                let enclosing_pair = task.await;
                 let current_ranges = this
                     .read_with(cx, |editor, cx| {
                         editor
@@ -51,26 +57,31 @@ impl Editor {
                     })
                     .ok()
                     .flatten();
-                let new_ranges = bracket_ranges.map(|(opening_range, closing_range)| {
-                    vec![
-                        opening_range.to_anchors(&buffer_snapshot),
-                        closing_range.to_anchors(&buffer_snapshot),
-                    ]
-                });
+                let new_ranges = enclosing_pair
+                    .as_ref()
+                    .map(|(open_range, close_range, _, _)| {
+                        vec![
+                            open_range.clone().to_anchors(&buffer_snapshot),
+                            close_range.clone().to_anchors(&buffer_snapshot),
+                        ]
+                    });
 
                 if current_ranges != new_ranges {
                     this.update(cx, |editor, cx| {
                         editor.clear_highlights(HighlightKey::MatchingBracket, cx);
                         if let Some(new_ranges) = new_ranges {
+                            let background_color = editor
+                                .active_scope_background(&enclosing_pair, cx)
+                                .unwrap_or_else(|| {
+                                    cx.theme()
+                                        .colors()
+                                        .editor_document_highlight_bracket_background
+                                });
                             editor.highlight_text(
                                 HighlightKey::MatchingBracket,
                                 new_ranges,
                                 HighlightStyle {
-                                    background_color: Some(
-                                        cx.theme()
-                                            .colors()
-                                            .editor_document_highlight_bracket_background,
-                                    ),
+                                    background_color: Some(background_color),
                                     ..Default::default()
                                 },
                                 cx,

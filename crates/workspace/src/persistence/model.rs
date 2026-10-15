@@ -140,6 +140,9 @@ pub(crate) struct SerializedWorkspace {
     pub(crate) center_group: SerializedPaneGroup,
     pub(crate) window_bounds: Option<SerializedWindowBounds>,
     pub(crate) centered_layout: bool,
+    /// Whether this workspace was opened as a remote terminal workspace
+    /// (a terminal-centric remote session) rather than a regular remote project.
+    pub(crate) remote_terminal_mode: bool,
     pub(crate) display: Option<Uuid>,
     pub(crate) docks: DockStructure,
     pub(crate) session_id: Option<String>,

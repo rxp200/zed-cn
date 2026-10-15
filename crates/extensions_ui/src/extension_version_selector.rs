@@ -236,7 +236,7 @@ impl PickerDelegate for ExtensionVersionSelectorDelegate {
                     h_flex()
                         .gap_2()
                         .when(!is_version_compatible, |this| {
-                            this.child(Label::new("Incompatible").color(Color::Muted))
+                            this.child(Label::new(i18n::t!("4ae9eb28741faa5f")).color(Color::Muted))
                         })
                         .child(
                             Label::new(

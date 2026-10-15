@@ -463,7 +463,7 @@ impl RenderOnce for DiffStyleControls {
                 IconButton::new("diff-style-unified", IconName::DiffUnified)
                     .icon_size(IconSize::Small)
                     .toggle_state(diff_view_style == DiffViewStyle::Unified)
-                    .tooltip(Tooltip::text("Unified"))
+                    .tooltip(Tooltip::text(i18n::t!("a1108b489091bd20")))
                     .on_click({
                         let splittable_editor = self.splittable_editor.clone();
                         move |_, window, cx| {
@@ -782,6 +782,12 @@ impl SplittableEditor {
                     }
                 }
 
+                EditorEvent::BufferFoldToggled { .. } => {
+                    this.rhs_editor.update(cx, |editor, cx| {
+                        editor.inlay_hint_visibility_changed(cx);
+                    });
+                    cx.emit(event.clone());
+                }
                 EditorEvent::OpenExcerptsRequested {
                     selections_by_buffer,
                     split,
@@ -859,6 +865,9 @@ impl SplittableEditor {
 
         rhs_display_map.update(cx, |dm, cx| {
             dm.set_companion(Some((lhs_display_map, companion.clone())), cx);
+        });
+        self.rhs_editor.update(cx, |editor, cx| {
+            editor.inlay_hint_visibility_changed(cx);
         });
 
         let lhs = self.lhs.as_ref().unwrap();
@@ -1175,6 +1184,7 @@ impl SplittableEditor {
             rhs.display_map.update(cx, |dm, cx| {
                 dm.set_companion(None, cx);
             });
+            rhs.inlay_hint_visibility_changed(cx);
         });
         cx.notify();
     }

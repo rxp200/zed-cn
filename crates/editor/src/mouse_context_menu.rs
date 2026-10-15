@@ -232,42 +232,57 @@ pub fn deploy_context_menu(
             .and_then(|buffer| buffer.read(cx).language())
             .is_some_and(|language| language.name().as_ref() == "Markdown");
 
-        let is_svg = editor
-            .buffer()
-            .read(cx)
-            .as_singleton()
-            .and_then(|buffer| buffer.read(cx).file())
-            .is_some_and(|file| {
-                std::path::Path::new(file.file_name(cx))
-                    .extension()
-                    .is_some_and(|ext| ext.eq_ignore_ascii_case("svg"))
-            });
+        let file_extension_is = |expected: &str| {
+            editor
+                .buffer()
+                .read(cx)
+                .as_singleton()
+                .and_then(|buffer| buffer.read(cx).file())
+                .is_some_and(|file| {
+                    std::path::Path::new(file.file_name(cx))
+                        .extension()
+                        .is_some_and(|extension| extension.eq_ignore_ascii_case(expected))
+                })
+        };
+        let is_svg = file_extension_is("svg");
+        let is_html = file_extension_is("html") || file_extension_is("htm");
 
         ui::ContextMenu::build(window, cx, |menu, _window, _cx| {
             let builder = menu
                 .on_blur_subscription(Subscription::new(|| {}))
                 .when(run_to_cursor, |builder| {
-                    builder.action("Run to Cursor", Box::new(RunToCursor))
+                    builder.action(i18n::t!("c063a8b1c7d9d98f"), Box::new(RunToCursor))
                 })
                 .when(evaluate_selection && has_selections, |builder| {
-                    builder.action("Evaluate Selection", Box::new(EvaluateSelectedText))
+                    builder.action(i18n::t!("fcf7f2c960d35bc4"), Box::new(EvaluateSelectedText))
                 })
                 .when(
                     run_to_cursor || (evaluate_selection && has_selections),
                     |builder| builder.separator(),
                 )
-                .action("Go to Definition", Box::new(GoToDefinition::default()))
-                .action("Go to Declaration", Box::new(GoToDeclaration::default()))
+                .action(i18n::t!("d5126604310b6036"), Box::new(crate::RunCode))
+                .action(i18n::t!("e8af0181d228f519"), Box::new(crate::RunFile))
+                .action(i18n::t!("4b5f35508fe11c7e"), Box::new(crate::RunSelection))
+                .action(i18n::t!("c6455ca0810e1431"), Box::new(crate::StopCode))
+                .separator()
                 .action(
-                    "Go to Type Definition",
+                    i18n::t!("8e5ccbf336d8d04e"),
+                    Box::new(GoToDefinition::default()),
+                )
+                .action(
+                    i18n::t!("6c9dbe92f1429674"),
+                    Box::new(GoToDeclaration::default()),
+                )
+                .action(
+                    i18n::t!("7bb5e29bec31f254"),
                     Box::new(GoToTypeDefinition::default()),
                 )
                 .action(
-                    "Go to Implementation",
+                    i18n::t!("5258ee00f2f2783f"),
                     Box::new(GoToImplementation::default()),
                 )
                 .action(
-                    "Find All References",
+                    i18n::t!("48efab5e6cb10205"),
                     Box::new(FindAllReferences::default()),
                 )
                 .action(
@@ -279,26 +294,30 @@ pub fn deploy_context_menu(
                     Box::new(zed_actions::ShowOutgoingCalls),
                 )
                 .separator()
-                .action("Rename Symbol", Box::new(Rename))
-                .action("Format Buffer", Box::new(Format))
+                .action(i18n::t!("5ad7e7a94ef6ab49"), Box::new(Rename))
+                .action(i18n::t!("ee963bc4fb7931dc"), Box::new(Format))
                 .when(format_selections, |cx| {
-                    cx.action("Format Selections", Box::new(FormatSelections))
+                    cx.action(i18n::t!("c1f59c66e2a4f39f"), Box::new(FormatSelections))
                 })
                 .action(
-                    "Show Code Actions",
+                    i18n::t!("25525feb1c2e60c1"),
                     Box::new(ToggleCodeActions {
                         deployed_from: None,
                         quick_launch: false,
                     }),
                 )
                 .when(!disable_ai && has_selections, |this| {
-                    this.action("Add to Agent Thread", Box::new(AddSelectionToThread))
+                    this.action(
+                        i18n::t!("baaf32ae3ed7595e"),
+                        Box::new(crate::DeepExplainSelection),
+                    )
+                    .action(i18n::t!("967125d0b2614641"), Box::new(AddSelectionToThread))
                 })
                 .separator()
-                .action("Cut", Box::new(Cut))
-                .action("Copy", Box::new(Copy))
-                .action("Copy and Trim", Box::new(CopyAndTrim))
-                .action("Paste", Box::new(Paste))
+                .action(i18n::t!("410a8e8a6bf253ac"), Box::new(Cut))
+                .action(i18n::t!("63d90d977348ab1f"), Box::new(Copy))
+                .action(i18n::t!("3dcafd5ecb9eab87"), Box::new(CopyAndTrim))
+                .action(i18n::t!("33517926747180e6"), Box::new(Paste))
                 .separator()
                 .action_disabled_when(
                     !has_reveal_target,
@@ -306,24 +325,30 @@ pub fn deploy_context_menu(
                     Box::new(RevealInFileManager),
                 )
                 .when(is_markdown, |builder| {
-                    builder.action("Open Markdown Preview", Box::new(OpenMarkdownPreview))
+                    builder.action(i18n::t!("ca5c3eff9a1731b6"), Box::new(OpenMarkdownPreview))
                 })
                 .when(is_svg, |builder| {
-                    builder.action("Open SVG Preview", Box::new(OpenSvgPreview))
+                    builder.action(i18n::t!("a84fbd8ff752f148"), Box::new(OpenSvgPreview))
+                })
+                .when(is_html, |builder| {
+                    builder.action(
+                        i18n::t!("a4ee2aac68093b23"),
+                        Box::new(zed_actions::preview::web::OpenPreview),
+                    )
                 })
                 .action_disabled_when(
                     !has_reveal_target,
-                    "Open in Terminal",
+                    i18n::t!("a04c3bc562c5f568"),
                     Box::new(OpenInTerminal),
                 )
                 .action_disabled_when(
                     !has_git_repo,
-                    "Copy Permalink to Line",
+                    i18n::t!("dc6e209683b5f98c"),
                     Box::new(CopyPermalinkToLine),
                 )
                 .action_disabled_when(
                     !has_git_repo,
-                    "View File History",
+                    i18n::t!("9a676f737e6757e4"),
                     Box::new(git::FileHistory),
                 );
             match focus {
@@ -458,6 +483,6 @@ mod tests {
         });
         cx.run_until_parked();
 
-        assert!(cx.debug_bounds("MENU_ITEM-Copy").is_some());
+        assert!(cx.debug_bounds("MENU_ITEM-复制").is_some());
     }
 }

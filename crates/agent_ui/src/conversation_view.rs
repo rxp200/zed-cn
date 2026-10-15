@@ -1881,11 +1881,11 @@ impl ConversationView {
                 self.load_subagent_session(subagent_session_id.clone(), session_id, window, cx)
             }
             AcpThreadEvent::ToolAuthorizationRequested(_) => {
-                self.notify_with_sound("Waiting for tool confirmation", IconName::Info, window, cx);
+                self.notify_with_sound(i18n::t!("29b33f77613120ce"), IconName::Info, window, cx);
             }
             AcpThreadEvent::ToolAuthorizationReceived(_) => {}
             AcpThreadEvent::ElicitationRequested(_) => {
-                self.notify_with_sound("Waiting for input", IconName::Info, window, cx);
+                self.notify_with_sound(i18n::t!("6569c6e69886e855"), IconName::Info, window, cx);
             }
             AcpThreadEvent::ElicitationResponded(_) => {}
             AcpThreadEvent::Retry(retry) => {
@@ -2036,7 +2036,7 @@ impl ConversationView {
                 }
                 if !is_subagent {
                     self.notify_with_sound(
-                        "Agent stopped due to an error",
+                        i18n::t!("6b68562077a92c45"),
                         IconName::Warning,
                         window,
                         cx,
@@ -2577,7 +2577,7 @@ impl ConversationView {
         if pending_auth_method.is_some() {
             return Callout::new()
                 .icon(IconName::Info)
-                .title(format!("Authenticating to {}…", agent_display_name))
+                .title(i18n::t_args!("45a9ecfc66ab709d", agent_display_name))
                 .actions_slot(
                     Icon::new(IconName::ArrowCircle)
                         .size(IconSize::Small)
@@ -2590,7 +2590,7 @@ impl ConversationView {
 
         Callout::new()
             .icon(IconName::Info)
-            .title(format!("Authenticate to {}", agent_display_name))
+            .title(i18n::t_args!("13708ca5e12c364f", agent_display_name))
             .when(auth_methods.len() == 1, |this| {
                 this.actions_slot(auth_buttons())
             })
@@ -2600,7 +2600,7 @@ impl ConversationView {
                     .map(|this| {
                         if show_fallback_description {
                             this.child(
-                                Label::new("Choose one of the following authentication options:")
+                                Label::new(i18n::t!("2c7182794491f261"))
                                     .size(LabelSize::Small)
                                     .color(Color::Muted),
                             )
@@ -2995,23 +2995,23 @@ impl ConversationView {
             } => {
                 return self.render_unsupported(path, current_version, minimum_version, window, cx);
             }
-            LoadError::FailedToInstall(msg) => ("Failed to Install", msg.to_string()),
+            LoadError::FailedToInstall(msg) => (i18n::t!("a8581cc00ff3c62e"), msg.to_string()),
             LoadError::Exited { status, stderr } => {
-                let mut message = format!("Server exited with status {status}");
+                let mut message = i18n::t!("5fa27e827c846df0", status = status);
                 if let Some(stderr) = stderr {
                     message.push_str("\n");
                     message.push_str(stderr);
                 };
-                ("Failed to Launch", message)
+                (i18n::t!("0cf642cf998c86ac"), message)
             }
-            LoadError::Other(msg) => ("Failed to Launch", msg.to_string()),
+            LoadError::Other(msg) => (i18n::t!("0cf642cf998c86ac"), msg.to_string()),
         };
 
         let action_slot = h_flex()
             .gap_1()
             .child(
-                Button::new("retry-agent-launch", "Retry")
-                    .tooltip(Tooltip::text("Try to restart the agent"))
+                Button::new("retry-agent-launch", i18n::t!("b8784c8dd5636ff2"))
+                    .tooltip(Tooltip::text(i18n::t!("37b29e44753344ff")))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.retry_connection(window, cx);
                     })),
@@ -3505,7 +3505,7 @@ impl ConversationView {
     fn create_copy_button(&self, message: impl Into<String>) -> impl IntoElement {
         let message = message.into();
 
-        CopyButton::new("copy-error-message", message).tooltip_label("Copy Error Message")
+        CopyButton::new("copy-error-message", message).tooltip_label(i18n::t!("143d86829e02b32a"))
     }
 
     pub(crate) fn reauthenticate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -3935,15 +3935,15 @@ impl AgentCodeSpanResolver {
 fn plan_summary_label(stats: &acp_thread::PlanStats<'_>, entry_count: usize) -> String {
     if stats.pending == 0 {
         if stats.cancelled == 0 {
-            "All Done"
+            i18n::t!("15d4dca37bc2c68d")
         } else if stats.completed == 0 {
-            "Cancelled"
+            i18n::t!("a37778f17c5f3ee5")
         } else {
-            "Finished"
+            i18n::t!("7804f7a79a9eee32")
         }
         .to_owned()
     } else if stats.completed == 0 {
-        format!("{entry_count} Tasks")
+        i18n::t_args!("434d7ae6ca23339c", entry_count)
     } else {
         format!("{}/{entry_count}", stats.completed)
     }

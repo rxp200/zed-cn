@@ -21,6 +21,7 @@ test-support = [
 ]
 
 [dependencies]
+i18n.workspace = true
 anyhow.workspace = true
 copilot.workspace = true
 copilot_chat.workspace = true

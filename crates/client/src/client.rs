@@ -1580,7 +1580,10 @@ impl Client {
             .build_zed_cloud_url("/internal/users/impersonate")?;
         let request = Request::post(url.as_str())
             .header("Content-Type", "application/json")
-            .header("Authorization", format!("Bearer {api_token}"))
+            .header(
+                "Authorization",
+                i18n::t!("02b6d3f24f41b83b", api_token = api_token),
+            )
             .body(
                 serde_json::to_string(&ImpersonateUserBody {
                     github_login: login,

@@ -3263,6 +3263,11 @@ impl Image {
 
     /// Convert the clipboard image to an `ImageData` object.
     pub fn to_image_data(&self, svg_renderer: SvgRenderer) -> Result<Arc<RenderImage>> {
+        log::info!(
+            "[open-debug] decoding image format={:?} bytes={}",
+            self.format,
+            self.bytes.len()
+        );
         let frames = match self.format {
             ImageFormat::Gif => {
                 let decoder = GifDecoder::new(Cursor::new(&self.bytes))?;

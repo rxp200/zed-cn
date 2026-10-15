@@ -3,7 +3,10 @@ use std::io::Write;
 use crate::{
     RemoteArch, RemoteOs, RemotePlatform,
     json_log::LogRecord,
-    protocol::{MESSAGE_LEN_SIZE, message_len_from_buffer, read_message_with_len, write_message},
+    protocol::{
+        MESSAGE_LEN_SIZE, message_len_from_buffer, read_message_with_len,
+        write_message_with_progress,
+    },
 };
 use anyhow::{Context as _, Result};
 use futures::{
@@ -11,7 +14,9 @@ use futures::{
     channel::mpsc::{Sender, UnboundedReceiver, UnboundedSender},
 };
 use gpui::{AppContext as _, AsyncApp, Task};
+use release_channel::ReleaseChannel;
 use rpc::proto::Envelope;
+use semver::Version;
 use util::command::Child;
 
 pub mod docker;
@@ -19,6 +24,19 @@ pub mod docker;
 pub mod mock;
 pub mod ssh;
 pub mod wsl;
+
+fn remote_server_version(release_channel: ReleaseChannel, version: &Version) -> String {
+    match release_channel {
+        ReleaseChannel::Dev => "build".to_string(),
+        ReleaseChannel::Nightly => version.to_string(),
+        ReleaseChannel::Stable | ReleaseChannel::Preview => {
+            let mut version = version.clone();
+            version.pre = semver::Prerelease::EMPTY;
+            version.build = semver::BuildMetadata::EMPTY;
+            version.to_string()
+        }
+    }
+}
 
 /// Parses the output of `uname -sm` to determine the remote platform.
 /// Takes the last line to skip possible shell initialization output.
@@ -125,10 +143,31 @@ fn parse_shell(output: &str, fallback_shell: &str) -> String {
     }
 }
 
+const HOME_DIR_PROGRAM: &str = "/bin/sh";
+const HOME_DIR_ARGS: [&str; 2] = [
+    "-c",
+    "printf ZED_HOME_BEGIN; echo; pwd; printf ZED_HOME_END",
+];
+
+fn parse_home_dir(output: &str) -> Option<String> {
+    let (_, output) = output.split_once("ZED_HOME_BEGIN")?;
+    let (home_dir, _) = output.rsplit_once("ZED_HOME_END")?;
+    let line_ending = if home_dir.starts_with("\r\n") {
+        "\r\n"
+    } else {
+        "\n"
+    };
+    let home_dir = home_dir
+        .strip_prefix(line_ending)?
+        .strip_suffix(line_ending)?;
+    (home_dir.starts_with('/') && !home_dir.contains('\u{FFFD}')).then(|| home_dir.to_owned())
+}
+
 fn handle_rpc_messages_over_child_process_stdio(
     mut remote_proxy_process: Child,
     incoming_tx: UnboundedSender<Envelope>,
     mut outgoing_rx: UnboundedReceiver<Envelope>,
+    outgoing_progress: crate::protocol::OutgoingProgress,
     mut connection_activity_tx: Sender<()>,
     cx: &AsyncApp,
 ) -> Task<Result<i32>> {
@@ -143,7 +182,9 @@ fn handle_rpc_messages_over_child_process_stdio(
 
     let stdin_task = cx.background_spawn(async move {
         while let Some(outgoing) = outgoing_rx.next().await {
-            write_message(&mut child_stdin, &mut stdin_buffer, outgoing).await?;
+            let progress = outgoing_progress.lock().get(&outgoing.id).cloned();
+            write_message_with_progress(&mut child_stdin, &mut stdin_buffer, outgoing, progress)
+                .await?;
         }
         anyhow::Ok(())
     });
@@ -528,6 +569,29 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_remote_server_version() {
+        let version = Version::parse("1.13.1+stable.35fda0ced3").unwrap();
+        assert_eq!(
+            remote_server_version(ReleaseChannel::Stable, &version),
+            "1.13.1"
+        );
+
+        let version = Version::parse("1.14.0-pre.2+preview.35fda0ced3").unwrap();
+        assert_eq!(
+            remote_server_version(ReleaseChannel::Preview, &version),
+            "1.14.0"
+        );
+        assert_eq!(
+            remote_server_version(ReleaseChannel::Nightly, &version),
+            version.to_string()
+        );
+        assert_eq!(
+            remote_server_version(ReleaseChannel::Dev, &version),
+            "build"
+        );
+    }
+
+    #[test]
     fn test_parse_platform() {
         let result = parse_platform("Linux x86_64\n").unwrap();
         assert_eq!(result.os, RemoteOs::Linux);
@@ -631,5 +695,107 @@ mod tests {
         );
         assert_eq!(parse_shell("", "sh"), "sh");
         assert_eq!(parse_shell("\n", "sh"), "sh");
+    }
+
+    #[test]
+    fn test_parse_home_dir() {
+        assert_eq!(
+            parse_home_dir("ZED_HOME_BEGIN\n/home/user\nZED_HOME_END"),
+            Some(String::from("/home/user"))
+        );
+        assert_eq!(
+            parse_home_dir(
+                "some shell init output\r\nZED_HOME_BEGIN\r\n/home/user\r\nZED_HOME_END\r\n"
+            ),
+            Some(String::from("/home/user"))
+        );
+        assert_eq!(
+            parse_home_dir("ZED_HOME_BEGIN\n/home/user\r\nZED_HOME_END"),
+            Some(String::from("/home/user\r"))
+        );
+        assert_eq!(
+            parse_home_dir("ZED_HOME_BEGIN\r\n/home/user\r\r\nZED_HOME_END"),
+            Some(String::from("/home/user\r"))
+        );
+        assert_eq!(
+            parse_home_dir("ZED_HOME_BEGIN\n/home/user \nZED_HOME_END"),
+            Some(String::from("/home/user "))
+        );
+        assert_eq!(
+            parse_home_dir("ZED_HOME_BEGIN\n/home/user\n\nZED_HOME_END"),
+            Some(String::from("/home/user\n"))
+        );
+        assert_eq!(
+            parse_home_dir("ZED_HOME_BEGIN\n/home/ZED_HOME_BEGIN/user\nZED_HOME_END"),
+            Some(String::from("/home/ZED_HOME_BEGIN/user"))
+        );
+        assert_eq!(
+            parse_home_dir("ZED_HOME_BEGIN\n/home/ZED_HOME_END/user\nZED_HOME_END"),
+            Some(String::from("/home/ZED_HOME_END/user"))
+        );
+        assert_eq!(
+            parse_home_dir("ZED_HOME_BEGIN\n/ZED_HOME_ENDZED_HOME_BEGIN\nZED_HOME_END\n"),
+            Some(String::from("/ZED_HOME_ENDZED_HOME_BEGIN"))
+        );
+        assert_eq!(parse_home_dir(""), None);
+        assert_eq!(parse_home_dir("/home/user\n"), None);
+        assert_eq!(
+            parse_home_dir("ZED_HOME_BEGIN/home/user\nZED_HOME_END"),
+            None
+        );
+        assert_eq!(
+            parse_home_dir("ZED_HOME_BEGIN\n/home/userZED_HOME_END"),
+            None
+        );
+        assert_eq!(
+            parse_home_dir("ZED_HOME_BEGIN\nrelative/output\nZED_HOME_END"),
+            None
+        );
+        assert_eq!(
+            parse_home_dir(&format!(
+                "ZED_HOME_BEGIN\n{}\nZED_HOME_END",
+                String::from_utf8_lossy(b"/home/user-\xff")
+            )),
+            None
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_home_dir_probe_without_path_lookup() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        for home_name in [
+            "ZED_HOME_BEGIN/ZED_HOME_END dir",
+            "carriage return\r",
+            "trailing\n",
+        ] {
+            let home = temp_dir.path().join(home_name);
+            std::fs::create_dir_all(&home).unwrap();
+            let mut args = vec![
+                String::from("-c"),
+                String::from("cd; exec \"$0\" \"$@\""),
+                String::from(HOME_DIR_PROGRAM),
+            ];
+            args.extend(HOME_DIR_ARGS.map(str::to_owned));
+            let output = smol::block_on(
+                smol::process::Command::new("/bin/sh")
+                    .args(args)
+                    .env_clear()
+                    .env("HOME", &home)
+                    .env("PATH", "/nonexistent")
+                    .output(),
+            )
+            .unwrap();
+            assert!(
+                output.status.success(),
+                "{home_name:?}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(
+                parse_home_dir(&String::from_utf8(output.stdout).unwrap()),
+                Some(home.display().to_string()),
+                "{home_name:?}"
+            );
+        }
     }
 }

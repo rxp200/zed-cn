@@ -248,7 +248,7 @@ impl Render for ActiveToolchain {
                         });
                     }
                 }))
-                .tooltip(Tooltip::text(format!("Select {}", self.term))),
+                .tooltip(Tooltip::text(i18n::t_args!("19ad9d68dc7f5258", self.term))),
         )
     }
 }

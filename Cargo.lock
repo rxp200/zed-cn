@@ -102,6 +102,7 @@ dependencies = [
  "futures 0.3.34",
  "gpui",
  "http_proxy",
+ "i18n",
  "image",
  "indoc",
  "itertools 0.14.0",
@@ -141,6 +142,7 @@ dependencies = [
  "agent_ui",
  "collections",
  "gpui",
+ "i18n",
  "language",
  "markdown",
  "project",
@@ -191,12 +193,19 @@ dependencies = [
  "fs",
  "futures 0.3.34",
  "gpui",
+ "i18n",
  "language",
+ "libc",
+ "notifications",
  "project",
  "proto",
+ "remote",
  "smallvec",
+ "sysinfo 0.39.6",
+ "terminal_view",
  "ui",
  "util",
+ "windows 0.62.2",
  "workspace",
 ]
 
@@ -278,6 +287,7 @@ dependencies = [
  "html_to_markdown",
  "http_client",
  "http_proxy",
+ "i18n",
  "indoc",
  "itertools 0.14.0",
  "language",
@@ -312,7 +322,7 @@ dependencies = [
  "text",
  "theme",
  "theme_settings",
- "thiserror 2.0.17",
+ "thiserror 2.0.21",
  "ui",
  "unindent",
  "url",
@@ -395,6 +405,7 @@ dependencies = [
  "gpui",
  "gpui_tokio",
  "http_client",
+ "i18n",
  "indoc",
  "language_model",
  "log",
@@ -408,7 +419,7 @@ dependencies = [
  "task",
  "tempfile",
  "terminal",
- "thiserror 2.0.17",
+ "thiserror 2.0.21",
  "ui",
  "util",
  "uuid",
@@ -449,6 +460,7 @@ dependencies = [
  "fs",
  "futures 0.3.34",
  "gpui",
+ "i18n",
  "paths",
  "serde",
  "serde_json",
@@ -499,6 +511,7 @@ dependencies = [
  "heapless",
  "html_to_markdown",
  "http_client",
+ "i18n",
  "idna",
  "image",
  "indoc",
@@ -593,6 +606,7 @@ dependencies = [
  "cloud_api_types",
  "component",
  "gpui",
+ "i18n",
  "language_model",
  "smallvec",
  "telemetry",
@@ -603,7 +617,6 @@ dependencies = [
 [[package]]
 name = "alacritty_terminal"
 version = "0.26.1-dev"
-source = "git+https://github.com/zed-industries/alacritty?rev=4c129667ce56611becdc82de6e28218c80e2e88f#4c129667ce56611becdc82de6e28218c80e2e88f"
 dependencies = [
  "base64 0.22.1",
  "bitflags 2.13.1",
@@ -618,6 +631,7 @@ dependencies = [
  "rustix",
  "rustix-openpty",
  "serde",
+ "serde_json",
  "signal-hook",
  "unicode-width 0.2.2",
  "vte",
@@ -649,6 +663,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "alloc-no-stdlib"
+version = "2.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cc7bb162ec39d46ab1ca8c77bf72e890535becd1751bb45f64c597edb4c8c6b3"
+
+[[package]]
+name = "alloc-stdlib"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0e76a019e91224d279006ff972f1e984179a6e9feb050adba6ce8274aef23195"
+dependencies = [
+ "alloc-no-stdlib",
+]
+
+[[package]]
 name = "alloca"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -665,9 +694,9 @@ checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
 name = "alsa"
-version = "0.10.0"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7c88dbbce13b232b26250e1e2e6ac18b6a891a646b8148285036ebce260ac5c3"
+checksum = "812947049edcd670a82cd5c73c3661d2e58468577ba8489de58e1a73c04cbd5d"
 dependencies = [
  "alsa-sys",
  "bitflags 2.13.1",
@@ -677,9 +706,9 @@ dependencies = [
 
 [[package]]
 name = "alsa-sys"
-version = "0.3.1"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "db8fee663d06c4e303404ef5f40488a53e062f89ba8bfed81f42325aafad1527"
+checksum = "ad7569085a265dd3f607ebecce7458eaab2132a84393534c95b18dcbc3f31e04"
 dependencies = [
  "libc",
  "pkg-config",
@@ -788,13 +817,14 @@ dependencies = [
  "collections",
  "futures 0.3.34",
  "http_client",
+ "i18n",
  "language_model_core",
  "log",
  "schemars 1.0.4",
  "serde",
  "serde_json",
  "strum 0.28.0",
- "thiserror 2.0.17",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -1269,7 +1299,7 @@ dependencies = [
  "crc32fast",
  "futures-lite 2.6.1",
  "pin-project",
- "thiserror 2.0.17",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -1292,6 +1322,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f28d99ec8bfea296261ca1af174f24225171fea9664ba9003cbebee704810528"
 dependencies = [
  "num-traits",
+]
+
+[[package]]
+name = "atoi_simd"
+version = "0.18.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f3cdb3708a128e559a30fb830e8a77a5022ee6902806925c216658652b452a44"
+dependencies = [
+ "debug_unsafe",
+ "rustversion",
 ]
 
 [[package]]
@@ -1351,13 +1391,14 @@ dependencies = [
  "collections",
  "cpal",
  "crossbeam-queue",
+ "futures 0.3.34",
  "gpui",
  "libwebrtc",
  "log",
  "parking_lot",
  "rodio",
  "settings",
- "thiserror 2.0.17",
+ "thiserror 2.0.21",
  "util",
 ]
 
@@ -1378,6 +1419,7 @@ name = "auto_update"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-lock",
  "client",
  "clock",
  "ctor",
@@ -1386,6 +1428,7 @@ dependencies = [
  "futures-lite 2.6.1",
  "gpui",
  "http_client",
+ "i18n",
  "log",
  "parking_lot",
  "paths",
@@ -1394,6 +1437,7 @@ dependencies = [
  "serde",
  "serde_json",
  "settings",
+ "sha2",
  "smol",
  "tempfile",
  "util",
@@ -1425,6 +1469,7 @@ dependencies = [
  "db",
  "editor",
  "gpui",
+ "i18n",
  "markdown_preview",
  "project",
  "release_channel",
@@ -1461,7 +1506,7 @@ dependencies = [
  "num-traits",
  "pastey",
  "rayon",
- "thiserror 2.0.17",
+ "thiserror 2.0.21",
  "v_frame",
  "y4m",
 ]
@@ -2103,7 +2148,7 @@ dependencies = [
  "serde",
  "serde_json",
  "strum 0.28.0",
- "thiserror 2.0.17",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -2118,6 +2163,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "criterion",
+ "i18n",
  "libc",
  "perf-event2",
 ]
@@ -2372,6 +2418,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "brotli"
+version = "8.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5cc91aac060a7a1e25823bdccbfb6af1875b88f17c6daac97894eed8207166b3"
+dependencies = [
+ "alloc-no-stdlib",
+ "alloc-stdlib",
+ "brotli-decompressor",
+]
+
+[[package]]
+name = "brotli-decompressor"
+version = "5.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3a32acac15fe1967bc3986b2a6347dffc965602354ea6f450ad07e8bfd253583"
+dependencies = [
+ "alloc-no-stdlib",
+ "alloc-stdlib",
+]
+
+[[package]]
 name = "brush-parser"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2381,7 +2448,7 @@ dependencies = [
  "cached",
  "indenter",
  "peg",
- "thiserror 2.0.17",
+ "thiserror 2.0.21",
  "tracing",
  "utf8-chars",
 ]
@@ -2458,9 +2525,9 @@ checksum = "175812e0be2bccb6abe50bb8d566126198344f707e304f45c648fd8f2cc0365e"
 
 [[package]]
 name = "bytemuck"
-version = "1.24.0"
+version = "1.25.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1fbdf580320f38b612e485521afda1ee26d10cc9884efaaa750d383e13e3c5f4"
+checksum = "95832e849adfb21180ccb6826a99da14e5d266ae5c2e668e1602cf234f153797"
 dependencies = [
  "bytemuck_derive",
 ]
@@ -2560,7 +2627,7 @@ dependencies = [
  "cached_proc_macro_types",
  "hashbrown 0.15.5",
  "once_cell",
- "thiserror 2.0.17",
+ "thiserror 2.0.21",
  "web-time",
 ]
 
@@ -2581,6 +2648,24 @@ name = "cached_proc_macro_types"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ade8366b8bd5ba243f0a58f036cc0ca8a2f069cff1a2351ef1cac6b083e16fc0"
+
+[[package]]
+name = "calamine"
+version = "0.36.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5fa68281b1a76b54a62156474adb06bb380a67e07dd60656e3217152b42183f3"
+dependencies = [
+ "atoi_simd",
+ "byteorder",
+ "chrono",
+ "codepage",
+ "encoding_rs",
+ "fast-float2",
+ "log",
+ "quick-xml 0.41.0",
+ "serde",
+ "zip 8.6.0",
+]
 
 [[package]]
 name = "call"
@@ -2616,6 +2701,7 @@ dependencies = [
  "futures 0.3.34",
  "fuzzy",
  "gpui",
+ "i18n",
  "language",
  "log",
  "lsp",
@@ -2730,7 +2816,7 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
- "thiserror 2.0.17",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -2818,6 +2904,12 @@ name = "cfg-if"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
+
+[[package]]
+name = "cfg_aliases"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fd16c4719339c4530435d38e511904438d07cce7950afa3718a84ac36c10e89e"
 
 [[package]]
 name = "cfg_aliases"
@@ -3060,6 +3152,7 @@ dependencies = [
  "gpui_tokio",
  "http_client",
  "http_client_tls",
+ "i18n",
  "log",
  "objc2-foundation 0.3.2",
  "parking_lot",
@@ -3081,7 +3174,7 @@ dependencies = [
  "telemetry",
  "telemetry_events",
  "text",
- "thiserror 2.0.17",
+ "thiserror 2.0.21",
  "time",
  "tiny_http",
  "tokio",
@@ -3119,7 +3212,7 @@ dependencies = [
  "parking_lot",
  "serde",
  "serde_json",
- "thiserror 2.0.17",
+ "thiserror 2.0.21",
  "tokio-rustls",
  "yawc",
 ]
@@ -3166,7 +3259,7 @@ version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0fa961b519f0b462e3a3b4a34b64d119eeaca1d59af726fe450bbba07a9fc0a1"
 dependencies = [
- "thiserror 2.0.17",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -3227,6 +3320,15 @@ dependencies = [
  "core-graphics-types 0.2.0",
  "libc",
  "objc",
+]
+
+[[package]]
+name = "codepage"
+version = "0.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bdff162541cd8b79de82e2edcc7eff3a8c2a6dc3d75152636028f96d93de3b26"
+dependencies = [
+ "encoding_rs",
 ]
 
 [[package]]
@@ -3372,6 +3474,7 @@ dependencies = [
  "futures 0.3.34",
  "fuzzy",
  "gpui",
+ "i18n",
  "livekit_client",
  "menu",
  "notifications",
@@ -3404,6 +3507,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "color"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2ec7c5eb7a16992b1904d76c517d170ab353b0e0b3d5a0c81a8a0cd1037893cf"
+dependencies = [
+ "bytemuck",
+]
+
+[[package]]
 name = "color_quant"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3431,8 +3543,8 @@ version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f849b92c694fe237ecd8fafd1ba0df7ae0d45c1df6daeb7f68ed4220d51640bd"
 dependencies = [
- "nix",
- "thiserror 2.0.17",
+ "nix 0.30.1",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -3447,6 +3559,7 @@ dependencies = [
  "fuzzy_nucleo",
  "go_to_line",
  "gpui",
+ "i18n",
  "language",
  "log",
  "menu",
@@ -3522,6 +3635,7 @@ dependencies = [
  "fs",
  "gpui",
  "gpui_platform",
+ "i18n",
  "language",
  "log",
  "node_runtime",
@@ -3750,6 +3864,7 @@ dependencies = [
  "copilot",
  "copilot_chat",
  "gpui",
+ "i18n",
  "language",
  "log",
  "lsp",
@@ -3929,11 +4044,11 @@ dependencies = [
 
 [[package]]
 name = "coreaudio-rs"
-version = "0.13.0"
+version = "0.14.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1aae284fbaf7d27aa0e292f7677dfbe26503b0d555026f702940805a630eac17"
+checksum = "7d5d7dca3ebcf65a035582c9ad4385371a9d9ee6537474d2a278f4e1e475bb58"
 dependencies = [
- "bitflags 1.3.2",
+ "bitflags 2.13.1",
  "libc",
  "objc2-audio-toolbox",
  "objc2-core-audio",
@@ -3976,17 +4091,17 @@ dependencies = [
 
 [[package]]
 name = "cpal"
-version = "0.17.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5b1f9c7312f19fc2fa12fd7acaf38de54e8320ba10d1a02dcbe21038def51ccb"
+version = "0.18.2"
+source = "git+https://github.com/RustAudio/cpal?rev=e1612d5d98152f8dc2a62e1b51ef7cbf4f7f26b7#e1612d5d98152f8dc2a62e1b51ef7cbf4f7f26b7"
 dependencies = [
  "alsa",
- "coreaudio-rs 0.13.0",
+ "block2 0.6.2",
+ "coreaudio-rs 0.14.2",
  "dasp_sample",
- "jni 0.21.1",
+ "jni 0.22.4",
  "js-sys",
  "libc",
- "mach2 0.5.0",
+ "mach2",
  "ndk",
  "ndk-context",
  "num-derive",
@@ -3998,10 +4113,9 @@ dependencies = [
  "objc2-core-audio-types",
  "objc2-core-foundation",
  "objc2-foundation 0.3.2",
- "wasm-bindgen",
- "wasm-bindgen-futures",
  "web-sys",
  "windows 0.62.2",
+ "windows-core 0.62.2",
 ]
 
 [[package]]
@@ -4185,7 +4299,7 @@ checksum = "3748e166981fa3ba9dc54ff950ad0ed5ca4aab4b73eae21d9f539659fe806e28"
 dependencies = [
  "cfg-if",
  "libc",
- "mach2 0.6.0",
+ "mach2",
 ]
 
 [[package]]
@@ -4197,7 +4311,7 @@ dependencies = [
  "cfg-if",
  "crash-context",
  "libc",
- "mach2 0.6.0",
+ "mach2",
  "parking_lot",
 ]
 
@@ -4209,7 +4323,7 @@ dependencies = [
  "crash-handler",
  "libc",
  "log",
- "mach2 0.6.0",
+ "mach2",
  "minidumper",
  "parking_lot",
  "serde",
@@ -4430,7 +4544,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "881c5d0a13b2f1498e2306e82cbada78390e152d4b1378fb28a84f4dcd0dc4f3"
 dependencies = [
  "dispatch",
- "nix",
+ "nix 0.30.1",
  "windows-sys 0.61.2",
 ]
 
@@ -4559,6 +4673,7 @@ dependencies = [
  "futures 0.3.34",
  "gpui",
  "http_client",
+ "i18n",
  "language",
  "log",
  "node_runtime",
@@ -4764,6 +4879,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "debug_unsafe"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7eed2c4702fa172d1ce21078faa7c5203e69f5394d48cc436d25928394a867a2"
+
+[[package]]
 name = "debugger_tools"
 version = "0.1.0"
 dependencies = [
@@ -4772,6 +4893,7 @@ dependencies = [
  "editor",
  "futures 0.3.34",
  "gpui",
+ "i18n",
  "project",
  "serde_json",
  "settings",
@@ -4799,6 +4921,7 @@ dependencies = [
  "fuzzy",
  "gpui",
  "hex",
+ "i18n",
  "indoc",
  "itertools 0.14.0",
  "language",
@@ -4813,6 +4936,7 @@ dependencies = [
  "project",
  "rpc",
  "schemars 1.0.4",
+ "search",
  "serde",
  "serde_json",
  "serde_json_lenient",
@@ -4950,6 +5074,7 @@ dependencies = [
  "gpui",
  "http 1.3.1",
  "http_client",
+ "i18n",
  "indoc",
  "log",
  "menu",
@@ -4981,6 +5106,7 @@ dependencies = [
  "editor",
  "futures-lite 2.6.1",
  "gpui",
+ "i18n",
  "indoc",
  "itertools 0.14.0",
  "language",
@@ -5127,6 +5253,43 @@ dependencies = [
 ]
 
 [[package]]
+name = "document_viewer"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-lock",
+ "calamine",
+ "chrono",
+ "db",
+ "editor",
+ "file_icons",
+ "fs",
+ "futures 0.3.34",
+ "gpui",
+ "hayro",
+ "i18n",
+ "image",
+ "language",
+ "log",
+ "markdown",
+ "project",
+ "quick-xml 0.41.0",
+ "rpc",
+ "serde_json",
+ "settings",
+ "smallvec",
+ "tabular_data_preview",
+ "theme",
+ "theme_settings",
+ "ui",
+ "usvg",
+ "util",
+ "workspace",
+ "worktree",
+ "zip 0.6.6",
+]
+
+[[package]]
 name = "documented"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5134,7 +5297,7 @@ checksum = "c278cf01d971a2ce2e4a97f2af1c13706e111c2c05636a88f93520b61c75b3cb"
 dependencies = [
  "documented-macros",
  "phf 0.13.1",
- "thiserror 2.0.17",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -5282,6 +5445,7 @@ dependencies = [
  "git",
  "gpui",
  "heapless",
+ "i18n",
  "indoc",
  "itertools 0.14.0",
  "language",
@@ -5309,7 +5473,7 @@ dependencies = [
  "telemetry",
  "telemetry_events",
  "text",
- "thiserror 2.0.17",
+ "thiserror 2.0.21",
  "toml 0.9.8",
  "ui",
  "util",
@@ -5349,6 +5513,7 @@ dependencies = [
  "gpui_platform",
  "gpui_tokio",
  "http_client",
+ "i18n",
  "indoc",
  "language",
  "language_extension",
@@ -5456,6 +5621,7 @@ dependencies = [
  "fs",
  "futures 0.3.34",
  "gpui",
+ "i18n",
  "indoc",
  "language",
  "markdown",
@@ -5501,10 +5667,12 @@ dependencies = [
  "fuzzy",
  "git",
  "gpui",
+ "i18n",
  "indoc",
  "itertools 0.14.0",
  "language",
  "language_detection",
+ "language_model",
  "languages",
  "linkify",
  "log",
@@ -5514,6 +5682,7 @@ dependencies = [
  "multi_buffer",
  "ordered-float 5.5.0",
  "parking_lot",
+ "paths",
  "pretty_assertions",
  "project",
  "proptest",
@@ -5528,6 +5697,7 @@ dependencies = [
  "serde",
  "serde_json",
  "settings",
+ "sha2",
  "smallvec",
  "snippet",
  "sum_tree",
@@ -5536,6 +5706,7 @@ dependencies = [
  "text",
  "theme",
  "theme_settings",
+ "tree-sitter",
  "tree-sitter-bash",
  "tree-sitter-c",
  "tree-sitter-go",
@@ -5890,6 +6061,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "gpui",
+ "i18n",
  "net",
  "serde",
  "serde_json",
@@ -6086,7 +6258,7 @@ dependencies = [
  "snippet_provider",
  "task",
  "theme_settings",
- "thiserror 2.0.17",
+ "thiserror 2.0.21",
  "tokio",
  "toml 0.9.8",
  "tree-sitter",
@@ -6151,6 +6323,7 @@ dependencies = [
 name = "extension_suggest"
 version = "0.1.0"
 dependencies = [
+ "i18n",
  "path",
 ]
 
@@ -6173,6 +6346,7 @@ dependencies = [
  "git",
  "gpui",
  "http_client",
+ "i18n",
  "language",
  "log",
  "markdown",
@@ -6211,6 +6385,12 @@ dependencies = [
  "regex-automata",
  "regex-syntax",
 ]
+
+[[package]]
+name = "fast-float2"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c6e8948ce679d00a02a94739ea185595dca7118ed04feb991127e443bd3d761f"
 
 [[package]]
 name = "fast-srgb8"
@@ -6298,6 +6478,7 @@ dependencies = [
  "client",
  "extension_host",
  "gpui",
+ "i18n",
  "system_specs",
  "urlencoding",
  "util",
@@ -6409,6 +6590,7 @@ checksum = "b375d6465b98090a5f25b1c7703f3859783755aa9a80433b36e0379a3ec2f369"
 dependencies = [
  "crc32fast",
  "miniz_oxide",
+ "zlib-rs",
 ]
 
 [[package]]
@@ -6491,9 +6673,9 @@ dependencies = [
 
 [[package]]
 name = "font-types"
-version = "0.11.0"
+version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b1e4d2d0cf79d38430cc9dc9aadec84774bff2e1ba30ae2bf6c16cfce9385a23"
+checksum = "5b38ad915f6dadd993ced50848a8291a543bd41ca62bc10740d5e64e2ab4cfd7"
 dependencies = [
  "bytemuck",
 ]
@@ -6617,6 +6799,7 @@ dependencies = [
  "futures 0.3.34",
  "git",
  "gpui",
+ "i18n",
  "ignore",
  "is_executable",
  "libc",
@@ -6635,7 +6818,7 @@ dependencies = [
  "telemetry",
  "tempfile",
  "text",
- "thiserror 2.0.17",
+ "thiserror 2.0.21",
  "trash",
  "unicode-normalization",
  "util",
@@ -6841,6 +7024,7 @@ dependencies = [
  "gpui_util",
  "log",
  "path",
+ "pinyin",
 ]
 
 [[package]]
@@ -7054,7 +7238,7 @@ dependencies = [
  "sum_tree",
  "tempfile",
  "text",
- "thiserror 2.0.17",
+ "thiserror 2.0.21",
  "time",
  "url",
  "urlencoding",
@@ -7110,6 +7294,7 @@ dependencies = [
  "git",
  "git_ui_core",
  "gpui",
+ "i18n",
  "indoc",
  "itertools 0.14.0",
  "language",
@@ -7169,6 +7354,7 @@ dependencies = [
  "fuzzy",
  "git",
  "gpui",
+ "i18n",
  "language",
  "log",
  "menu",
@@ -7250,6 +7436,23 @@ checksum = "2d95e1a3a19ae464a7286e14af9a90683c64d70c02532d88d87ce95056af3e6c"
 dependencies = [
  "libc",
  "system-deps",
+]
+
+[[package]]
+name = "glifo"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d99fc21d493812643aae86d53b7bbd02f376434a90317e8a790bc209fdd6605e"
+dependencies = [
+ "bytemuck",
+ "foldhash 0.2.0",
+ "hashbrown 0.17.1",
+ "log",
+ "peniko",
+ "png 0.18.1",
+ "skrifa 0.42.1",
+ "smallvec",
+ "vello_common 0.0.9",
 ]
 
 [[package]]
@@ -7372,7 +7575,7 @@ dependencies = [
  "hashbrown 0.16.1",
  "log",
  "presser",
- "thiserror 2.0.17",
+ "thiserror 2.0.21",
  "windows 0.62.2",
 ]
 
@@ -7426,6 +7629,7 @@ dependencies = [
  "hdrhistogram",
  "heapless",
  "http_client",
+ "i18n",
  "image",
  "inventory",
  "itertools 0.14.0",
@@ -7462,7 +7666,7 @@ dependencies = [
  "strum 0.28.0",
  "sum_tree",
  "taffy",
- "thiserror 2.0.17",
+ "thiserror 2.0.21",
  "ttf-parser",
  "unicode-segmentation",
  "url",
@@ -7497,7 +7701,7 @@ dependencies = [
  "image",
  "libc",
  "log",
- "mach2 0.6.0",
+ "mach2",
  "metal",
  "objc2 0.6.3",
  "objc2-foundation 0.3.2",
@@ -7524,6 +7728,7 @@ dependencies = [
  "gpui_util",
  "gpui_wgpu",
  "http_client",
+ "i18n",
  "libc",
  "log",
  "notify-rust",
@@ -7781,6 +7986,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "guillotiere"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6b17e70c989c36bad147b27a58d148c0741c51448aa5653436547323e524d0ab"
+dependencies = [
+ "euclid",
+]
+
+[[package]]
 name = "guppy"
 version = "0.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7992,6 +8206,96 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7382cf6263419f2d8df38c55d7da83da5c18aef87fc7a7fc1fb1e344edfe14c1"
 dependencies = [
  "hashbrown 0.15.5",
+]
+
+[[package]]
+name = "hayro"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c4caa128ab87fd48ffb7490617cf93f77f606820dffbc9fd9ef6ab0ed077f56d"
+dependencies = [
+ "bytemuck",
+ "hayro-interpret",
+ "image",
+ "kurbo",
+ "pic-scale",
+ "vello_cpu",
+]
+
+[[package]]
+name = "hayro-ccitt"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9f4d0e94ddd48749f06bbe4e5389fb9799a0c45bcaf00495042076ef05e3241a"
+
+[[package]]
+name = "hayro-cmap"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "24d285dc30731c8485de5fa732fbdf2b3affdf01e4da7c2135022ca6fa664bf6"
+dependencies = [
+ "brotli",
+ "hayro-postscript",
+]
+
+[[package]]
+name = "hayro-interpret"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f2613d0406898995042d0794c4245b2f2fba1246490c8ac593769bba6551129d"
+dependencies = [
+ "bitflags 2.13.1",
+ "hayro-cmap",
+ "hayro-syntax",
+ "kurbo",
+ "moxcms",
+ "phf 0.13.1",
+ "rustc-hash 2.1.1",
+ "siphasher 1.0.1",
+ "skrifa 0.42.1",
+ "smallvec",
+ "yoke",
+]
+
+[[package]]
+name = "hayro-jbig2"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "69374b3668dd45aeb3d3145cda68f2c7b4f223aaa2511e67d076f1c7d741388d"
+dependencies = [
+ "fearless_simd",
+ "hayro-ccitt",
+]
+
+[[package]]
+name = "hayro-jpeg2000"
+version = "0.3.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c75ab947623ef4ccaa7acf0579edf7cbb5a73838e3839a7be73335e522f433a1"
+dependencies = [
+ "fearless_simd",
+]
+
+[[package]]
+name = "hayro-postscript"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "885c5ef0654933139a9b9546fc2c69e18d37f38aa2520f079092b1be18f1fcaa"
+
+[[package]]
+name = "hayro-syntax"
+version = "0.7.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0edeafd70aa2db743de8ede8637d07ec87db05efe69cde371d03f1b185fcef27"
+dependencies = [
+ "flate2",
+ "hayro-ccitt",
+ "hayro-jbig2",
+ "hayro-jpeg2000",
+ "memchr",
+ "rustc-hash 2.1.1",
+ "smallvec",
+ "zune-jpeg",
 ]
 
 [[package]]
@@ -8283,7 +8587,7 @@ dependencies = [
  "log",
  "percent-encoding",
  "proxyvars",
- "thiserror 2.0.17",
+ "thiserror 2.0.21",
  "url",
 ]
 
@@ -8421,6 +8725,13 @@ dependencies = [
  "tokio",
  "tower-service",
  "tracing",
+]
+
+[[package]]
+name = "i18n"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
 ]
 
 [[package]]
@@ -8652,7 +8963,7 @@ dependencies = [
  "image-webp",
  "moxcms",
  "num-traits",
- "png 0.18.0",
+ "png 0.18.1",
  "qoi",
  "ravif",
  "rayon",
@@ -8681,6 +8992,7 @@ dependencies = [
  "file_icons",
  "fs",
  "gpui",
+ "i18n",
  "language",
  "log",
  "menu",
@@ -8846,6 +9158,7 @@ dependencies = [
  "futures 0.3.34",
  "fuzzy",
  "gpui",
+ "i18n",
  "language",
  "paths",
  "project",
@@ -8868,6 +9181,7 @@ dependencies = [
  "anyhow",
  "client",
  "gpui",
+ "i18n",
  "log",
  "release_channel",
  "smol",
@@ -9128,7 +9442,7 @@ dependencies = [
  "jni-sys 0.4.1",
  "log",
  "simd_cesu8",
- "thiserror 2.0.17",
+ "thiserror 2.0.21",
  "walkdir",
  "windows-link 0.2.1",
 ]
@@ -9322,7 +9636,7 @@ dependencies = [
  "futures 0.3.34",
  "serde",
  "serde_json",
- "thiserror 2.0.17",
+ "thiserror 2.0.21",
  "uuid",
 ]
 
@@ -9357,6 +9671,7 @@ dependencies = [
  "fs",
  "fuzzy",
  "gpui",
+ "i18n",
  "itertools 0.14.0",
  "json_schema_store",
  "language",
@@ -9467,6 +9782,7 @@ dependencies = [
  "gpui",
  "grammars",
  "http_client",
+ "i18n",
  "imara-diff",
  "indoc",
  "itertools 0.14.0",
@@ -9586,7 +9902,7 @@ dependencies = [
  "log",
  "parking_lot",
  "serde_json",
- "thiserror 2.0.17",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -9607,7 +9923,7 @@ dependencies = [
  "serde",
  "serde_json",
  "strum 0.28.0",
- "thiserror 2.0.17",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -9645,6 +9961,7 @@ dependencies = [
  "gpui",
  "gpui_tokio",
  "http_client",
+ "i18n",
  "language_model",
  "language_models_cloud",
  "llama_cpp",
@@ -9686,6 +10003,7 @@ dependencies = [
  "google_ai",
  "gpui",
  "http_client",
+ "i18n",
  "language_model",
  "log",
  "open_ai",
@@ -9693,7 +10011,7 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
- "thiserror 2.0.17",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -9703,6 +10021,7 @@ dependencies = [
  "db",
  "editor",
  "gpui",
+ "i18n",
  "project",
  "ui",
  "workspace",
@@ -9717,6 +10036,7 @@ dependencies = [
  "file_icons",
  "fuzzy",
  "gpui",
+ "i18n",
  "language",
  "open_path_prompt",
  "picker",
@@ -9740,6 +10060,7 @@ dependencies = [
  "editor",
  "futures 0.3.34",
  "gpui",
+ "i18n",
  "itertools 0.14.0",
  "language",
  "lsp",
@@ -9780,6 +10101,7 @@ dependencies = [
  "gpui",
  "grammars",
  "http_client",
+ "i18n",
  "itertools 0.14.0",
  "json_schema_store",
  "language",
@@ -10001,6 +10323,7 @@ version = "0.1.0"
 dependencies = [
  "editor",
  "gpui",
+ "i18n",
  "language",
  "picker",
  "project",
@@ -10173,6 +10496,7 @@ dependencies = [
  "gpui_platform",
  "gpui_tokio",
  "http_client_tls",
+ "i18n",
  "image",
  "libwebrtc",
  "livekit",
@@ -10203,6 +10527,7 @@ dependencies = [
  "anyhow",
  "futures 0.3.34",
  "http_client",
+ "i18n",
  "language_model_core",
  "schemars 1.0.4",
  "serde",
@@ -10335,7 +10660,7 @@ dependencies = [
  "mime",
  "precomputed-hash",
  "selectors",
- "thiserror 2.0.17",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -10421,6 +10746,7 @@ dependencies = [
  "futures 0.3.34",
  "fuzzy",
  "gpui",
+ "i18n",
  "language",
  "log",
  "lsp",
@@ -10445,6 +10771,7 @@ dependencies = [
  "file_icons",
  "fuzzy",
  "gpui",
+ "i18n",
  "indoc",
  "language",
  "log",
@@ -10539,15 +10866,6 @@ dependencies = [
 
 [[package]]
 name = "mach2"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6a1b95cd5421ec55b445b5ae102f5ea0e768de1f82bd3001e11f426c269c3aea"
-dependencies = [
- "libc",
-]
-
-[[package]]
-name = "mach2"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dae608c151f68243f2b000364e1f7b186d9c29845f7d2d85bd31b9ad77ad552b"
@@ -10570,7 +10888,7 @@ dependencies = [
  "indexmap 2.14.0",
  "libm",
  "rustc-hash 2.1.1",
- "thiserror 2.0.17",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -10592,6 +10910,7 @@ dependencies = [
  "gpui",
  "gpui_platform",
  "html5ever",
+ "i18n",
  "image",
  "indoc",
  "language",
@@ -10622,6 +10941,7 @@ dependencies = [
  "editor",
  "fs",
  "gpui",
+ "i18n",
  "language",
  "log",
  "markdown",
@@ -10815,7 +11135,7 @@ dependencies = [
  "merman-core",
  "merman-render",
  "serde_json",
- "thiserror 2.0.17",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -10835,7 +11155,7 @@ dependencies = [
  "ryu-js",
  "serde",
  "serde_json",
- "thiserror 2.0.17",
+ "thiserror 2.0.21",
  "unicode-general-category",
  "url",
 ]
@@ -10866,7 +11186,7 @@ dependencies = [
  "serde",
  "serde_json",
  "svgtypes",
- "thiserror 2.0.17",
+ "thiserror 2.0.21",
  "unicode-linebreak",
  "unicode-segmentation",
  "unicode-width 0.2.2",
@@ -10989,7 +11309,7 @@ dependencies = [
  "goblin",
  "libc",
  "log",
- "mach2 0.6.0",
+ "mach2",
  "memmap2",
  "minidump-common",
  "process-backend",
@@ -10997,7 +11317,7 @@ dependencies = [
  "scroll",
  "serde",
  "serde_json",
- "thiserror 2.0.17",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -11014,7 +11334,7 @@ dependencies = [
  "parking_lot",
  "polling",
  "scroll",
- "thiserror 2.0.17",
+ "thiserror 2.0.21",
  "uds",
 ]
 
@@ -11030,6 +11350,7 @@ version = "0.1.0"
 dependencies = [
  "command_palette_hooks",
  "gpui",
+ "i18n",
  "rpc",
  "serde_json",
  "settings",
@@ -11172,7 +11493,7 @@ dependencies = [
  "bit-set 0.9.1",
  "bitflags 2.13.1",
  "cfg-if",
- "cfg_aliases",
+ "cfg_aliases 0.2.1",
  "codespan-reporting",
  "half",
  "hashbrown 0.16.1",
@@ -11184,7 +11505,7 @@ dependencies = [
  "once_cell",
  "rustc-hash 1.1.0",
  "spirv",
- "thiserror 2.0.17",
+ "thiserror 2.0.21",
  "unicode-ident",
 ]
 
@@ -11282,13 +11603,25 @@ checksum = "650eef8c711430f1a879fdd01d4745a7deea475becfb90269c06775983bbf086"
 
 [[package]]
 name = "nix"
+version = "0.28.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ab2156c4fce2f8df6c499cc1c763e4394b7482525bf2a9701c9d79d215f519e4"
+dependencies = [
+ "bitflags 2.13.1",
+ "cfg-if",
+ "cfg_aliases 0.1.1",
+ "libc",
+]
+
+[[package]]
+name = "nix"
 version = "0.30.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "74523f3a35e05aba87a1d978330aef40f67b0304ac79c1c00b294c9830543db6"
 dependencies = [
  "bitflags 2.13.1",
  "cfg-if",
- "cfg_aliases",
+ "cfg_aliases 0.2.1",
  "libc",
  "memoffset",
 ]
@@ -11321,7 +11654,7 @@ dependencies = [
  "serde_json",
  "smol",
  "tempfile",
- "thiserror 2.0.17",
+ "thiserror 2.0.21",
  "util",
  "watch",
  "which",
@@ -11371,6 +11704,7 @@ dependencies = [
  "component",
  "futures-lite 2.6.1",
  "gpui",
+ "i18n",
  "rpc",
  "sum_tree",
  "time",
@@ -11741,6 +12075,7 @@ version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13a380031deed8e99db00065c45937da434ca987c034e13b87e4441f9e4090be"
 dependencies = [
+ "bitflags 2.13.1",
  "objc2 0.6.3",
  "objc2-foundation 0.3.2",
 ]
@@ -12074,6 +12409,7 @@ dependencies = [
  "anyhow",
  "futures 0.3.34",
  "http_client",
+ "i18n",
  "schemars 1.0.4",
  "serde",
  "serde_json",
@@ -12094,6 +12430,7 @@ dependencies = [
  "fs",
  "fuzzy",
  "gpui",
+ "i18n",
  "menu",
  "notifications",
  "picker",
@@ -12192,7 +12529,7 @@ dependencies = [
  "serde",
  "serde_json",
  "strum 0.28.0",
- "thiserror 2.0.17",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -12204,6 +12541,7 @@ dependencies = [
  "futures 0.3.34",
  "fuzzy",
  "gpui",
+ "i18n",
  "picker",
  "project",
  "serde",
@@ -12229,7 +12567,7 @@ dependencies = [
  "serde",
  "serde_json",
  "settings",
- "thiserror 2.0.17",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -12243,6 +12581,7 @@ dependencies = [
  "gpui",
  "gpui_util",
  "http_client",
+ "i18n",
  "language_model",
  "log",
  "oauth_callback_server",
@@ -12264,6 +12603,7 @@ dependencies = [
  "futures 0.3.34",
  "google_ai",
  "http_client",
+ "i18n",
  "language_model_core",
  "schemars 1.0.4",
  "serde",
@@ -12434,6 +12774,7 @@ dependencies = [
  "fuzzy",
  "git",
  "gpui",
+ "i18n",
  "language",
  "log",
  "lsp",
@@ -12731,6 +13072,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "88b39c9bfcfc231068454382784bb460aae594343fb030d46e9f50a645418412"
 dependencies = [
  "base64ct",
+]
+
+[[package]]
+name = "peniko"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "839c8299360d2e998bdb106dc0a6cd71dcc5f4df51df1b620361bf50e283cca6"
+dependencies = [
+ "bytemuck",
+ "color",
+ "kurbo",
+ "linebender_resource_handle",
+ "smallvec",
 ]
 
 [[package]]
@@ -13369,6 +13723,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "pic-scale"
+version = "0.7.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6edb0ff645d35accaec252de081d55984a0d6c952cb1e5dc2b9afa7c78f07288"
+dependencies = [
+ "num-traits",
+ "pxfm",
+]
+
+[[package]]
 name = "picker"
 version = "0.1.0"
 dependencies = [
@@ -13376,6 +13740,7 @@ dependencies = [
  "db",
  "editor",
  "gpui",
+ "i18n",
  "language",
  "menu",
  "project",
@@ -13445,6 +13810,12 @@ name = "pin-utils"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8b870d8c151b6f2fb93e84a13146138f05d02ed11c7e7c54f8826aaaf7c9f184"
+
+[[package]]
+name = "pinyin"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e225f595052d9c46045755be4b8d7950b6d9f3c33e0c0b74ba58f11bbfa8c64b"
 
 [[package]]
 name = "piper"
@@ -13572,9 +13943,9 @@ dependencies = [
 
 [[package]]
 name = "png"
-version = "0.18.0"
+version = "0.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "97baced388464909d42d89643fe4361939af9b7ce7a31ee32a168f832a70f2a0"
+checksum = "60769b8b31b2a9f263dae2776c37b1b28ae246943cf719eb6946a1db05128a61"
 dependencies = [
  "bitflags 2.13.1",
  "crc32fast",
@@ -13640,6 +14011,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8a2f0d8d040d7848a709caf78912debcc3f33ee4b3cac47d73d1e1069e83507"
 dependencies = [
  "portable-atomic",
+]
+
+[[package]]
+name = "portable-pty"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b4a596a2b3d2752d94f51fac2d4a96737b8705dddd311a32b9af47211f08671e"
+dependencies = [
+ "anyhow",
+ "bitflags 1.3.2",
+ "downcast-rs",
+ "filedescriptor",
+ "lazy_static",
+ "libc",
+ "log",
+ "nix 0.28.0",
+ "serial2",
+ "shared_library",
+ "shell-words",
+ "winapi",
+ "winreg 0.10.1",
 ]
 
 [[package]]
@@ -13834,7 +14226,7 @@ dependencies = [
  "log",
  "process-reader",
  "serde",
- "thiserror 2.0.17",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -13908,6 +14300,7 @@ dependencies = [
  "globset",
  "gpui",
  "http_client",
+ "i18n",
  "image",
  "indexmap 2.14.0",
  "itertools 0.14.0",
@@ -13950,12 +14343,14 @@ dependencies = [
  "unindent",
  "url",
  "util",
+ "uuid",
  "watch",
  "wax",
  "which",
  "worktree",
  "zed_credentials_provider",
  "zeroize",
+ "zip 0.6.6",
  "zlog",
  "ztracing",
 ]
@@ -13999,6 +14394,7 @@ dependencies = [
  "git_ui",
  "git_ui_core",
  "gpui",
+ "i18n",
  "itertools 0.14.0",
  "language",
  "log",
@@ -14062,7 +14458,7 @@ dependencies = [
  "memchr",
  "parking_lot",
  "protobuf",
- "thiserror 2.0.17",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -14240,7 +14636,7 @@ dependencies = [
  "prost-reflect",
  "prost-types",
  "protox-parse",
- "thiserror 2.0.17",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -14252,7 +14648,7 @@ dependencies = [
  "logos 0.15.1",
  "miette",
  "prost-types",
- "thiserror 2.0.17",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -14265,7 +14661,7 @@ dependencies = [
  "percent-encoding",
  "piper",
  "proptest",
- "thiserror 2.0.17",
+ "thiserror 2.0.21",
  "tokio",
  "url",
 ]
@@ -14406,6 +14802,7 @@ version = "0.41.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e660451e55124f798a69a5af3f49ccfbefbd41910eefd25caf2393e1f3473ec1"
 dependencies = [
+ "encoding_rs",
  "memchr",
 ]
 
@@ -14416,14 +14813,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b9e20a958963c291dc322d98411f541009df2ced7b5a4f2bd52337638cfccf20"
 dependencies = [
  "bytes 1.11.1",
- "cfg_aliases",
+ "cfg_aliases 0.2.1",
  "pin-project-lite",
  "quinn-proto",
  "quinn-udp",
  "rustc-hash 2.1.1",
  "rustls",
  "socket2 0.6.5",
- "thiserror 2.0.17",
+ "thiserror 2.0.21",
  "tokio",
  "tracing",
  "web-time",
@@ -14445,7 +14842,7 @@ dependencies = [
  "rustls",
  "rustls-pki-types",
  "slab",
- "thiserror 2.0.17",
+ "thiserror 2.0.21",
  "tinyvec",
  "tracing",
  "web-time",
@@ -14457,7 +14854,7 @@ version = "0.5.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "addec6a0dcad8a8d96a771f815f0eaf55f9d1805756410b39f5fa81332574cbd"
 dependencies = [
- "cfg_aliases",
+ "cfg_aliases 0.2.1",
  "libc",
  "once_cell",
  "socket2 0.6.5",
@@ -14681,7 +15078,7 @@ dependencies = [
  "rand 0.9.4",
  "rand_chacha 0.9.0",
  "simd_helpers",
- "thiserror 2.0.17",
+ "thiserror 2.0.21",
  "v_frame",
  "wasm-bindgen",
 ]
@@ -14766,7 +15163,17 @@ checksum = "7b634fabf032fab15307ffd272149b622260f55974d9fad689292a5d33df02e5"
 dependencies = [
  "bytemuck",
  "core_maths",
- "font-types 0.11.0",
+ "font-types 0.11.3",
+]
+
+[[package]]
+name = "read-fonts"
+version = "0.39.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c4ed38b89c2c77ff968c524145ad65fb010f38af5c7a224b53b81d47ac2daa81"
+dependencies = [
+ "bytemuck",
+ "font-types 0.11.3",
 ]
 
 [[package]]
@@ -14775,6 +15182,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "askpass",
+ "auto_update",
  "chrono",
  "db",
  "dev_container",
@@ -14786,6 +15194,7 @@ dependencies = [
  "fuzzy_nucleo",
  "gpui",
  "http_client",
+ "i18n",
  "indoc",
  "language",
  "log",
@@ -14804,7 +15213,9 @@ dependencies = [
  "semver",
  "serde_json",
  "settings",
+ "smol",
  "telemetry",
+ "terminal_view",
  "ui",
  "util",
  "windows-registry 0.6.1",
@@ -14839,7 +15250,7 @@ checksum = "a4e608c6638b9c18977b00b475ac1f28d14e84b27d8d42f70e0bf1e3dec127ac"
 dependencies = [
  "getrandom 0.2.16",
  "libredox",
- "thiserror 2.0.17",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -14950,12 +15361,15 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "askpass",
+ "async-compression",
  "async-trait",
  "base64 0.22.1",
+ "chrono",
  "collections",
  "fs",
  "futures 0.3.34",
  "gpui",
+ "i18n",
  "log",
  "parking_lot",
  "paths",
@@ -14965,14 +15379,18 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
+ "settings",
  "settings_content",
+ "sha2",
  "smol",
  "telemetry",
  "tempfile",
- "thiserror 2.0.17",
+ "thiserror 2.0.21",
  "urlencoding",
  "util",
+ "uuid",
  "which",
+ "windows 0.62.2",
 ]
 
 [[package]]
@@ -14985,6 +15403,7 @@ dependencies = [
  "editor",
  "futures 0.3.34",
  "gpui",
+ "i18n",
  "log",
  "markdown",
  "menu",
@@ -15007,9 +15426,11 @@ dependencies = [
  "action_log",
  "agent",
  "agent-client-protocol",
+ "agent_servers",
  "anyhow",
  "askpass",
  "async-channel 2.5.0",
+ "async-lock",
  "clap",
  "client",
  "clock",
@@ -15029,17 +15450,20 @@ dependencies = [
  "gpui_platform",
  "gpui_tokio",
  "http_client",
+ "i18n",
  "image",
  "json_schema_store",
  "language",
  "language_extension",
  "language_model",
  "languages",
+ "libc",
  "log",
  "lsp",
  "net",
  "node_runtime",
  "paths",
+ "portable-pty",
  "pretty_assertions",
  "project",
  "proto",
@@ -15061,7 +15485,7 @@ dependencies = [
  "terminal",
  "theme",
  "theme_settings",
- "thiserror 2.0.17",
+ "thiserror 2.0.21",
  "toml_edit 0.22.27",
  "unindent",
  "util",
@@ -15070,6 +15494,7 @@ dependencies = [
  "windows 0.62.2",
  "workspace",
  "worktree",
+ "zip 0.6.6",
  "zlog",
 ]
 
@@ -15099,6 +15524,7 @@ dependencies = [
  "gpui",
  "html_to_markdown",
  "http_client",
+ "i18n",
  "image",
  "indoc",
  "jupyter-protocol",
@@ -15311,8 +15737,8 @@ dependencies = [
 
 [[package]]
 name = "rodio"
-version = "0.21.1"
-source = "git+https://github.com/RustAudio/rodio?rev=e50e726ddd0292f6ef9de0dda6b90af4ed1fb66a#e50e726ddd0292f6ef9de0dda6b90af4ed1fb66a"
+version = "0.22.2"
+source = "git+https://github.com/RustAudio/rodio?rev=3ee9745862279ce1d18db593155016e7ce024aeb#3ee9745862279ce1d18db593155016e7ce024aeb"
 dependencies = [
  "cpal",
  "dasp_sample",
@@ -15320,7 +15746,7 @@ dependencies = [
  "num-rational",
  "rtrb",
  "symphonia",
- "thiserror 2.0.17",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -15462,7 +15888,7 @@ dependencies = [
  "serde_json",
  "shellexpand",
  "smol",
- "thiserror 2.0.17",
+ "thiserror 2.0.21",
  "uuid",
  "zeromq",
 ]
@@ -15743,7 +16169,7 @@ dependencies = [
  "http_proxy",
  "libc",
  "log",
- "nix",
+ "nix 0.30.1",
  "seccompiler",
  "serde",
  "serde_json",
@@ -15937,7 +16363,7 @@ dependencies = [
  "serde_json",
  "sqlx",
  "strum 0.26.3",
- "thiserror 2.0.17",
+ "thiserror 2.0.21",
  "time",
  "tracing",
  "url",
@@ -16006,6 +16432,7 @@ dependencies = [
  "fs",
  "futures 0.3.34",
  "gpui",
+ "i18n",
  "itertools 0.14.0",
  "language",
  "log",
@@ -16329,6 +16756,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "serial2"
+version = "0.2.38"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b16809bc35793b19ce4e0c53924bc0dce3937f15487997cfdaed936004180730"
+dependencies = [
+ "cfg-if",
+ "libc",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "servo_arc"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -16358,6 +16796,7 @@ dependencies = [
  "fs",
  "futures 0.3.34",
  "gpui",
+ "i18n",
  "indoc",
  "inventory",
  "log",
@@ -16448,6 +16887,7 @@ dependencies = [
  "agent",
  "agent_settings",
  "agent_skills",
+ "anthropic",
  "anyhow",
  "audio",
  "client",
@@ -16472,10 +16912,12 @@ dependencies = [
  "heck 0.5.0",
  "http_client",
  "http_proxy",
+ "i18n",
  "itertools 0.14.0",
  "language",
  "language_model",
  "language_models",
+ "lmstudio",
  "log",
  "menu",
  "paths",
@@ -16555,6 +16997,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "shared_library"
+version = "0.1.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a9e7e0f2bfae24d8a5b5a66c5b257a83c7412304311512a0c054cd5e619da11"
+dependencies = [
+ "lazy_static",
+ "libc",
+]
+
+[[package]]
 name = "shell-words"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -16618,6 +17070,7 @@ dependencies = [
  "git_ui_core",
  "gpui",
  "http_client",
+ "i18n",
  "itertools 0.14.0",
  "language",
  "language_model",
@@ -16732,7 +17185,7 @@ checksum = "297f631f50729c8c99b84667867963997ec0b50f32b2a7dbcab828ef0541e8bb"
 dependencies = [
  "num-bigint",
  "num-traits",
- "thiserror 2.0.17",
+ "thiserror 2.0.21",
  "time",
 ]
 
@@ -16786,6 +17239,16 @@ checksum = "7fbdfe3d2475fbd7ddd1f3e5cf8288a30eb3e5f95832829570cd88115a7434ac"
 dependencies = [
  "bytemuck",
  "read-fonts 0.37.0",
+]
+
+[[package]]
+name = "skrifa"
+version = "0.42.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0c34617370ae968efb7161bb2beb517d9084659aae19e24b89e3db25b46e4564"
+dependencies = [
+ "bytemuck",
+ "read-fonts 0.39.2",
 ]
 
 [[package]]
@@ -17071,7 +17534,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "smallvec",
- "thiserror 2.0.17",
+ "thiserror 2.0.21",
  "time",
  "tokio",
  "tokio-stream",
@@ -17157,7 +17620,7 @@ dependencies = [
  "smallvec",
  "sqlx-core",
  "stringprep",
- "thiserror 2.0.17",
+ "thiserror 2.0.21",
  "time",
  "tracing",
  "uuid",
@@ -17197,7 +17660,7 @@ dependencies = [
  "smallvec",
  "sqlx-core",
  "stringprep",
- "thiserror 2.0.17",
+ "thiserror 2.0.21",
  "time",
  "tracing",
  "uuid",
@@ -17224,7 +17687,7 @@ dependencies = [
  "serde",
  "serde_urlencoded",
  "sqlx-core",
- "thiserror 2.0.17",
+ "thiserror 2.0.21",
  "time",
  "tracing",
  "url",
@@ -17495,6 +17958,7 @@ version = "0.1.0"
 dependencies = [
  "file_icons",
  "gpui",
+ "i18n",
  "language",
  "multi_buffer",
  "ui",
@@ -17775,6 +18239,7 @@ dependencies = [
  "editor",
  "fuzzy_nucleo",
  "gpui",
+ "i18n",
  "menu",
  "picker",
  "project",
@@ -17798,6 +18263,7 @@ dependencies = [
  "editor",
  "fuzzy",
  "gpui",
+ "i18n",
  "indexmap 2.14.0",
  "log",
  "picker",
@@ -17892,6 +18358,7 @@ dependencies = [
  "file_icons",
  "fuzzy",
  "gpui",
+ "i18n",
  "itertools 0.14.0",
  "language",
  "menu",
@@ -17915,7 +18382,7 @@ version = "0.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9ed071c670382e85fc2f48ae706492d8c338f4f89bf72520d32f8abfe880aade"
 dependencies = [
- "thiserror 2.0.17",
+ "thiserror 2.0.21",
  "windows 0.61.3",
  "windows-version",
 ]
@@ -17980,6 +18447,7 @@ dependencies = [
  "futures 0.3.34",
  "futures-lite 2.6.1",
  "gpui",
+ "i18n",
  "itertools 0.14.0",
  "libc",
  "log",
@@ -17988,6 +18456,7 @@ dependencies = [
  "rand 0.9.4",
  "regex",
  "release_channel",
+ "rpc",
  "schemars 1.0.4",
  "serde",
  "settings",
@@ -17995,7 +18464,7 @@ dependencies = [
  "task",
  "theme",
  "theme_settings",
- "thiserror 2.0.17",
+ "thiserror 2.0.21",
  "url",
  "urlencoding",
  "util",
@@ -18027,6 +18496,7 @@ dependencies = [
  "editor",
  "futures 0.3.34",
  "gpui",
+ "i18n",
  "itertools 0.14.0",
  "language",
  "log",
@@ -18050,6 +18520,7 @@ dependencies = [
  "theme_settings",
  "ui",
  "util",
+ "uuid",
  "workspace",
  "zed_actions",
 ]
@@ -18083,6 +18554,7 @@ dependencies = [
  "anyhow",
  "collections",
  "gpui",
+ "i18n",
  "palette",
  "parking_lot",
  "refineable",
@@ -18092,7 +18564,7 @@ dependencies = [
  "serde_json_lenient",
  "strum 0.28.0",
  "syntax_theme",
- "thiserror 2.0.17",
+ "thiserror 2.0.21",
  "uuid",
 ]
 
@@ -18137,6 +18609,7 @@ dependencies = [
  "fs",
  "fuzzy",
  "gpui",
+ "i18n",
  "log",
  "picker",
  "project",
@@ -18182,11 +18655,11 @@ dependencies = [
 
 [[package]]
 name = "thiserror"
-version = "2.0.17"
+version = "2.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f63587ca0f12b72a0600bcba1d40081f830876000bb46dd2337a3051618f4fc8"
+checksum = "09e52cb86a36cede5cb101bf8908837b3e4c6e5e59fe7fd85c23fb56200d189e"
 dependencies = [
- "thiserror-impl 2.0.17",
+ "thiserror-impl 2.0.21",
 ]
 
 [[package]]
@@ -18202,13 +18675,13 @@ dependencies = [
 
 [[package]]
 name = "thiserror-impl"
-version = "2.0.17"
+version = "2.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3ff15c8ecd7de3849db632e14d18d2571fa09dfc5ed93479bc4485c7a517c913"
+checksum = "fe5197923287db20a58125f0bc85c062f7f2c892de97b18c356f9efb14b28524"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.117",
+ "syn 3.0.3",
 ]
 
 [[package]]
@@ -18379,6 +18852,7 @@ dependencies = [
  "fs",
  "git_ui_core",
  "gpui",
+ "i18n",
  "icons",
  "livekit_client",
  "platform_title_bar",
@@ -18636,6 +19110,7 @@ dependencies = [
  "futures 0.3.34",
  "fuzzy",
  "gpui",
+ "i18n",
  "language",
  "menu",
  "open_path_prompt",
@@ -19149,9 +19624,15 @@ dependencies = [
  "rustls",
  "rustls-pki-types",
  "sha1",
- "thiserror 2.0.17",
+ "thiserror 2.0.21",
  "utf-8",
 ]
+
+[[package]]
+name = "typed-path"
+version = "0.12.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8e28f89b80c87b8fb0cf04ab448d5dd0dd0ade2f8891bae878de66a75a28600e"
 
 [[package]]
 name = "typeid"
@@ -19201,6 +19682,7 @@ dependencies = [
  "gpui",
  "gpui_macros",
  "gpui_util",
+ "i18n",
  "icons",
  "itertools 0.14.0",
  "log",
@@ -19222,6 +19704,7 @@ version = "0.1.0"
 dependencies = [
  "component",
  "gpui",
+ "i18n",
  "ui",
 ]
 
@@ -19474,8 +19957,8 @@ dependencies = [
  "itertools 0.14.0",
  "libc",
  "log",
- "mach2 0.6.0",
- "nix",
+ "mach2",
+ "nix 0.30.1",
  "path",
  "percent-encoding",
  "rand 0.9.4",
@@ -19588,6 +20071,53 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
 
 [[package]]
+name = "vello_common"
+version = "0.0.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3361bff7f7d82c0c496b92048db83846691f0e844cc28dee92b1c824291b55ee"
+dependencies = [
+ "bytemuck",
+ "fearless_simd",
+ "guillotiere",
+ "hashbrown 0.17.1",
+ "log",
+ "peniko",
+ "png 0.18.1",
+ "smallvec",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "vello_common"
+version = "0.0.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "19d672facaa2d697285a786cd9d44d614cd2ce54cdc022504bf339f8fff3b750"
+dependencies = [
+ "bytemuck",
+ "fearless_simd",
+ "guillotiere",
+ "hashbrown 0.17.1",
+ "log",
+ "peniko",
+ "png 0.18.1",
+ "smallvec",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "vello_cpu"
+version = "0.0.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6d8ded630e8316bb94a55881256506d1f3b9947b5f66db8a7d32ca7ba02decd0"
+dependencies = [
+ "bytemuck",
+ "glifo",
+ "hashbrown 0.17.1",
+ "png 0.18.1",
+ "vello_common 0.0.8",
+]
+
+[[package]]
 name = "version-compare"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -19616,6 +20146,7 @@ dependencies = [
  "fuzzy",
  "git_ui",
  "gpui",
+ "i18n",
  "indoc",
  "itertools 0.14.0",
  "language",
@@ -20025,7 +20556,7 @@ dependencies = [
  "futures 0.3.34",
  "libc",
  "log",
- "mach2 0.6.0",
+ "mach2",
  "memfd",
  "object 0.39.1",
  "once_cell",
@@ -20156,7 +20687,7 @@ dependencies = [
  "pulley-interpreter",
  "smallvec",
  "target-lexicon",
- "thiserror 2.0.17",
+ "thiserror 2.0.21",
  "wasmparser 0.254.0",
  "wasmtime-environ",
  "wasmtime-internal-core",
@@ -20250,7 +20781,7 @@ dependencies = [
  "futures 0.3.34",
  "rand 0.10.2",
  "rustix",
- "thiserror 2.0.17",
+ "thiserror 2.0.21",
  "tokio",
  "tracing",
  "url",
@@ -20295,7 +20826,7 @@ dependencies = [
  "nom 7.1.3",
  "pori",
  "regex",
- "thiserror 2.0.17",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -20431,6 +20962,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "web_preview"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "editor",
+ "gpui",
+ "i18n",
+ "log",
+ "percent-encoding",
+ "project",
+ "remote",
+ "task",
+ "tasks_ui",
+ "tempfile",
+ "terminal_view",
+ "util",
+ "workspace",
+ "zed_actions",
+]
+
+[[package]]
 name = "web_search"
 version = "0.1.0"
 dependencies = [
@@ -20452,6 +21004,7 @@ dependencies = [
  "futures 0.3.34",
  "gpui",
  "http_client",
+ "i18n",
  "language_model",
  "serde_json",
  "web_search",
@@ -20509,7 +21062,7 @@ dependencies = [
  "reqwest 0.12.24",
  "scratch",
  "semver",
- "zip",
+ "zip 0.6.6",
 ]
 
 [[package]]
@@ -20528,7 +21081,7 @@ dependencies = [
  "bitflags 2.13.1",
  "bytemuck",
  "cfg-if",
- "cfg_aliases",
+ "cfg_aliases 0.2.1",
  "document-features",
  "hashbrown 0.16.1",
  "js-sys",
@@ -20559,7 +21112,7 @@ dependencies = [
  "bit-vec 0.9.1",
  "bitflags 2.13.1",
  "bytemuck",
- "cfg_aliases",
+ "cfg_aliases 0.2.1",
  "document-features",
  "hashbrown 0.16.1",
  "indexmap 2.14.0",
@@ -20572,7 +21125,7 @@ dependencies = [
  "raw-window-handle",
  "rustc-hash 1.1.0",
  "smallvec",
- "thiserror 2.0.17",
+ "thiserror 2.0.21",
  "wgpu-core-deps-apple",
  "wgpu-core-deps-emscripten",
  "wgpu-core-deps-wasm",
@@ -20632,7 +21185,7 @@ dependencies = [
  "block2 0.6.2",
  "bytemuck",
  "cfg-if",
- "cfg_aliases",
+ "cfg_aliases 0.2.1",
  "glow",
  "glutin_wgl_sys",
  "gpu-allocator",
@@ -20661,7 +21214,7 @@ dependencies = [
  "raw-window-metal",
  "renderdoc-sys",
  "smallvec",
- "thiserror 2.0.17",
+ "thiserror 2.0.21",
  "wasm-bindgen",
  "wayland-sys",
  "web-sys",
@@ -20712,6 +21265,7 @@ dependencies = [
  "collections",
  "command_palette",
  "gpui",
+ "i18n",
  "settings",
  "theme",
  "theme_settings",
@@ -20838,7 +21392,7 @@ dependencies = [
  "ctrlc",
  "parking_lot",
  "rayon",
- "thiserror 2.0.17",
+ "thiserror 2.0.21",
  "windows 0.61.3",
  "windows-future 0.2.1",
 ]
@@ -21512,6 +22066,15 @@ dependencies = [
 
 [[package]]
 name = "winreg"
+version = "0.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "80d0f4e272c85def139476380b12f9ac60926689dd2e01d4923222f40580869d"
+dependencies = [
+ "winapi",
+]
+
+[[package]]
+name = "winreg"
 version = "0.50.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "524e57b2c537c0f9b1e69f1965311ec12182b4122e45035b1508cd24d2adadb1"
@@ -21904,6 +22467,7 @@ dependencies = [
  "git",
  "gpui",
  "http_client",
+ "i18n",
  "itertools 0.14.0",
  "language",
  "log",
@@ -21957,6 +22521,7 @@ dependencies = [
  "fuzzy",
  "git",
  "gpui",
+ "i18n",
  "ignore",
  "language",
  "log",
@@ -22188,7 +22753,7 @@ dependencies = [
  "serde_yaml",
  "strum 0.28.0",
  "tempfile",
- "thiserror 2.0.17",
+ "thiserror 2.0.21",
  "tokio",
  "toml 0.9.8",
  "toml_edit 0.22.27",
@@ -22246,7 +22811,7 @@ dependencies = [
  "rand 0.8.6",
  "send_wrapper",
  "sha1",
- "thiserror 2.0.17",
+ "thiserror 2.0.21",
  "tokio",
  "tokio-rustls",
  "tokio-util",
@@ -22440,6 +23005,7 @@ dependencies = [
  "debugger_ui",
  "dev_container",
  "diagnostics",
+ "document_viewer",
  "edit_prediction",
  "edit_prediction_ui",
  "editor",
@@ -22464,6 +23030,7 @@ dependencies = [
  "gpui_tokio",
  "hang_telemetry",
  "http_client",
+ "i18n",
  "image",
  "image_viewer",
  "input_latency_ui",
@@ -22491,7 +23058,7 @@ dependencies = [
  "migrator",
  "mimalloc",
  "miniprofiler_ui",
- "nix",
+ "nix 0.30.1",
  "node_runtime",
  "notifications",
  "onboarding",
@@ -22558,6 +23125,7 @@ dependencies = [
  "vim",
  "vim_mode_setting",
  "watch",
+ "web_preview",
  "web_search",
  "web_search_providers",
  "which_key",
@@ -22927,6 +23495,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "zip"
+version = "8.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2d04a6b5381502aa6087c94c669499eb1602eb9c5e8198e534de571f7154809b"
+dependencies = [
+ "crc32fast",
+ "flate2",
+ "indexmap 2.14.0",
+ "memchr",
+ "typed-path",
+ "zopfli",
+]
+
+[[package]]
+name = "zlib-rs"
+version = "0.5.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "40990edd51aae2c2b6907af74ffb635029d5788228222c4bb811e9351c0caad3"
+
+[[package]]
 name = "zlog"
 version = "0.1.0"
 dependencies = [
@@ -22952,6 +23540,18 @@ name = "zmij"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
+
+[[package]]
+name = "zopfli"
+version = "0.8.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f05cd8797d63865425ff89b5c4a48804f35ba0ce8d125800027ad6017d2b5249"
+dependencies = [
+ "bumpalo",
+ "crc32fast",
+ "log",
+ "simd-adler32",
+]
 
 [[package]]
 name = "zstd"

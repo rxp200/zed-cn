@@ -1,8 +1,11 @@
 # Zed Docs
 
+> [!IMPORTANT]
+> These docs are inherited from the official [Zed](https://github.com/zed-industries/zed) project. Zed CN is an unofficial community fork and does not publish or operate `zed.dev`; references to Zed Industries, official accounts, cloud services, billing, privacy policies, support channels, and deployment infrastructure describe upstream services unless a page explicitly says otherwise.
+
 Welcome to Zed's documentation.
 
-This is built on push to `main` and published automatically to [https://zed.dev/docs](https://zed.dev/docs).
+In the upstream repository, these docs are built on push to `main` and published to [https://zed.dev/docs](https://zed.dev/docs). This Zed CN repository does not deploy that site.
 
 To preview the docs locally you will need to install [mdBook](https://rust-lang.github.io/mdBook/) (`cargo install mdbook@0.4.40`), generate the action metadata, and then serve:
 

@@ -489,6 +489,11 @@ message Pull {
   bool rebase = 7;
 }
 
+message CancelGitOperation {
+  uint64 project_id = 1;
+  uint64 repository_id = 2;
+}
+
 message RemoteMessageResponse {
   string stdout = 1;
   string stderr = 2;

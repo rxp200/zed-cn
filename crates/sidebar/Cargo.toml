@@ -30,6 +30,7 @@ feature_flags.workspace = true
 fs.workspace = true
 git.workspace = true
 gpui.workspace = true
+i18n.workspace = true
 itertools.workspace = true
 language_model.workspace = true
 log.workspace = true

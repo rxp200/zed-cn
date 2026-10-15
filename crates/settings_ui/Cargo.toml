@@ -17,9 +17,11 @@ default = []
 test-support = []
 
 [dependencies]
+i18n.workspace = true
 agent.workspace = true
 agent_settings.workspace = true
 agent_skills.workspace = true
+anthropic.workspace = true
 anyhow.workspace = true
 audio.workspace = true
 client.workspace = true
@@ -47,7 +49,9 @@ http_proxy.workspace = true
 itertools.workspace = true
 language.workspace = true
 language_model.workspace = true
+language_models.workspace = true
 log.workspace = true
+lmstudio.workspace = true
 menu.workspace = true
 paths.workspace = true
 picker.workspace = true

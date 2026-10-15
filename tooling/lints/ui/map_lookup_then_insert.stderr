@@ -356,4 +356,3 @@ LL | |     }
    = note: the inserted key is an owned copy of the looked-up key; a rewrite that passes the key by value up front would make that copy on hits as well as misses
 
 error: aborting due to 28 previous errors
-

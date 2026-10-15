@@ -8,7 +8,7 @@ use gpui::{
 };
 pub use project::ProjectGroupKey;
 use project::{DisableAiSettings, Project};
-use remote::RemoteConnectionOptions;
+use remote::{RemoteConnectionOptions, same_remote_connection_identity};
 use settings::Settings;
 pub use settings::SidebarSide;
 use std::cell::Cell;
@@ -864,7 +864,7 @@ impl MultiWorkspace {
     ) -> Option<Entity<Workspace>> {
         self.held
             .iter()
-            .filter(|held| held.workspace.read(cx).project_group_key(cx) == *key)
+            .filter(|held| Self::workspace_belongs_to_group(held.workspace.read(cx), key, cx))
             .filter_map(|held| Some((held.activated_at?, &held.workspace)))
             .max_by_key(|(activated_at, _)| *activated_at)
             .map(|(_, workspace)| workspace.clone())
@@ -1056,7 +1056,12 @@ impl MultiWorkspace {
         })
     }
 
-    /// Finds an existing workspace whose root paths and host exactly match.
+    /// Finds an existing workspace that describes the given project.
+    ///
+    /// Workspaces are matched by their stable remote host identity and by
+    /// either their folder roots or their main worktree paths, so a linked
+    /// worktree workspace or a connection whose runtime-only options changed is
+    /// reused instead of being opened as a second workspace.
     pub fn workspace_for_paths(
         &self,
         path_list: &PathList,
@@ -1064,16 +1069,62 @@ impl MultiWorkspace {
         cx: &App,
     ) -> Option<Entity<Workspace>> {
         for workspace in self.workspaces() {
-            let root_paths = PathList::new(&workspace.read(cx).root_paths(cx));
-            let key = workspace.read(cx).project_group_key(cx);
-            let host_matches = key.host().as_ref() == host;
-            let paths_match = root_paths == *path_list;
-            if host_matches && paths_match {
+            if Self::workspace_matches_project(workspace.read(cx), path_list, host, cx) {
                 return Some(workspace.clone());
             }
         }
 
         None
+    }
+
+    /// Whether `workspace` describes the project identified by `path_list` on
+    /// the given remote host, or the local project when `host` is `None`.
+    ///
+    /// Project-group paths are main worktree paths while a workspace reports its
+    /// folder roots, which differ for linked worktrees; a live connection also
+    /// carries runtime-only options that can drift from the persisted ones, so
+    /// hosts are compared by their stable identity and either path list may
+    /// match.
+    fn workspace_matches_project(
+        workspace: &Workspace,
+        path_list: &PathList,
+        host: Option<&RemoteConnectionOptions>,
+        cx: &App,
+    ) -> bool {
+        if Self::workspace_rooted_at_paths(workspace, path_list, host, cx) {
+            return true;
+        }
+
+        let key = workspace.project_group_key(cx);
+        same_remote_connection_identity(key.host().as_ref(), host)
+            && key.path_list().distinct_paths() == path_list.distinct_paths()
+    }
+
+    /// Whether `workspace` is rooted at exactly the given folder paths on the
+    /// given remote host, or the local project when `host` is `None`.
+    ///
+    /// Unlike [`Self::workspace_matches_project`], this never matches a project
+    /// group key: a linked worktree's key points at its main worktree, so using
+    /// it here would reactivate the worktree workspace when the user opens the
+    /// main repo folder instead of opening the requested folder.
+    fn workspace_rooted_at_paths(
+        workspace: &Workspace,
+        path_list: &PathList,
+        host: Option<&RemoteConnectionOptions>,
+        cx: &App,
+    ) -> bool {
+        let key = workspace.project_group_key(cx);
+        if !same_remote_connection_identity(key.host().as_ref(), host) {
+            return false;
+        }
+
+        PathList::new(&workspace.root_paths(cx)).distinct_paths() == path_list.distinct_paths()
+    }
+
+    /// Whether `workspace` belongs to the project group identified by `key`.
+    fn workspace_belongs_to_group(workspace: &Workspace, key: &ProjectGroupKey, cx: &App) -> bool {
+        let host = key.host();
+        Self::workspace_matches_project(workspace, key.path_list(), host.as_ref(), cx)
     }
 
     /// Finds an existing workspace whose paths match, or creates a new one.
@@ -1106,7 +1157,13 @@ impl MultiWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Task<Result<Entity<Workspace>>> {
-        if let Some(workspace) = self.workspace_for_paths(&paths, host.as_ref(), cx) {
+        let existing = self.workspace_for_open_request(
+            &paths,
+            host.as_ref(),
+            provisional_project_group_key.is_some(),
+            cx,
+        );
+        if let Some(workspace) = existing {
             self.activate(workspace.clone(), source_workspace, window, cx);
             return Task::ready(Ok(workspace));
         }
@@ -1195,6 +1252,29 @@ impl MultiWorkspace {
         })
     }
 
+    /// Finds an existing workspace for an open request.
+    ///
+    /// The project group key is only consulted when the caller is switching to
+    /// a known project group; otherwise the requested paths must match a
+    /// workspace's folder roots exactly.
+    fn workspace_for_open_request(
+        &self,
+        path_list: &PathList,
+        host: Option<&RemoteConnectionOptions>,
+        uses_project_group: bool,
+        cx: &App,
+    ) -> Option<Entity<Workspace>> {
+        if uses_project_group {
+            return self.workspace_for_paths(path_list, host, cx);
+        }
+
+        self.workspaces()
+            .find(|workspace| {
+                Self::workspace_rooted_at_paths(workspace.read(cx), path_list, host, cx)
+            })
+            .cloned()
+    }
+
     /// Finds an existing workspace in this multi-workspace whose paths match,
     /// or creates a new one (deserializing its saved state from the database).
     /// Never searches other windows or matches workspaces with a superset of
@@ -1209,11 +1289,14 @@ impl MultiWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Task<Result<Entity<Workspace>>> {
-        if let Some(workspace) = self.workspace_for_paths(&path_list, None, cx) {
+        let existing =
+            self.workspace_for_open_request(&path_list, None, project_group.is_some(), cx);
+        if let Some(workspace) = existing {
             self.activate(workspace.clone(), source_workspace, window, cx);
             return Task::ready(Ok(workspace));
         }
 
+        let uses_project_group = project_group.is_some();
         let paths = path_list.paths().to_vec();
         let app_state = self.workspace().read(cx).app_state().clone();
         let requesting_window = window.window_handle().downcast::<MultiWorkspace>();
@@ -1247,7 +1330,12 @@ impl MultiWorkspace {
                 && let Some(workspace) = requesting_window
                     .update(cx, |multi_workspace, window, cx| {
                         multi_workspace
-                            .workspace_for_paths(&effective_path_list, None, cx)
+                            .workspace_for_open_request(
+                                &effective_path_list,
+                                None,
+                                uses_project_group,
+                                cx,
+                            )
                             .inspect(|workspace| {
                                 multi_workspace.activate(
                                     workspace.clone(),
@@ -1300,7 +1388,7 @@ impl MultiWorkspace {
         let index = self.hold(workspace, window, cx);
         self.pin(index, key, cx);
         telemetry::event!(
-            "Workspace Added",
+            "工作区已添加",
             workspace_count = self.held.iter().filter(|held| held.pinned).count()
         );
         cx.notify();

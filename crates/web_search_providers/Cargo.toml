@@ -14,6 +14,7 @@ test = false
 doctest = false
 
 [dependencies]
+i18n.workspace = true
 anyhow.workspace = true
 client.workspace = true
 cloud_api_client.workspace = true

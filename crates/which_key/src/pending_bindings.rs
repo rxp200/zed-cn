@@ -614,7 +614,12 @@ mod tests {
                 .map(|row| row.action_name.as_ref())
                 .collect::<Vec<_>>();
             action_names.sort();
-            assert_eq!(action_names, vec!["zed: open keymap", "zed: open settings"]);
+            let mut expected = vec![
+                command_palette::humanize_action_name("zed::OpenKeymap"),
+                command_palette::humanize_action_name("zed::OpenSettings"),
+            ];
+            expected.sort();
+            assert_eq!(action_names, expected);
             assert!(rows.iter().all(|row| !row.is_group));
         }
     }
@@ -637,7 +642,10 @@ mod tests {
         assert_eq!(keys, vec![vec!["É"], vec!["é"]]);
         for row in rows {
             assert_eq!(text_for_keybinding_keystrokes(&row.keystrokes, cx), "É");
-            assert_eq!(row.action_name.as_ref(), "zed: open settings");
+            assert_eq!(
+                row.action_name.as_ref(),
+                command_palette::humanize_action_name("zed::OpenSettings")
+            );
             assert!(!row.is_group);
         }
     }
@@ -668,11 +676,19 @@ mod tests {
                 ))
                 .collect::<Vec<_>>(),
             vec![
-                (parse_keystrokes("cmd-o"), "workspace: open", false),
-                (parse_keystrokes("cmd-s"), "zed: open keymap", false),
+                (
+                    parse_keystrokes("cmd-o"),
+                    command_palette::humanize_action_name("workspace::Open").as_str(),
+                    false
+                ),
+                (
+                    parse_keystrokes("cmd-s"),
+                    command_palette::humanize_action_name("zed::OpenKeymap").as_str(),
+                    false
+                ),
                 (
                     parse_keystrokes("cmd-o cmd-p"),
-                    "workspace: reopen last picker",
+                    command_palette::humanize_action_name("workspace::ReopenLastPicker").as_str(),
                     false
                 ),
                 (parse_keystrokes("z"), "+2 keybinds", true),

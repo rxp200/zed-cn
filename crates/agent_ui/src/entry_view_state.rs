@@ -985,7 +985,7 @@ mod tests {
                             )),
                             acp_v2::ElicitationSchema::new().string("name", true),
                         ),
-                        "Provide a name",
+                        "提供名称",
                     ),
                     cx,
                 )

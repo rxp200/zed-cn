@@ -499,14 +499,17 @@ impl MessageEditor {
                 let has_selection = editor.has_non_empty_selection(&editor.display_snapshot(cx));
 
                 Some(ContextMenu::build(window, cx, |menu, _, _| {
-                    menu.action("Cut", Box::new(editor::actions::Cut))
+                    menu.action(i18n::t!("410a8e8a6bf253ac"), Box::new(editor::actions::Cut))
                         .action_disabled_when(
                             !has_selection,
-                            "Copy",
+                            i18n::t!("63d90d977348ab1f"),
                             Box::new(editor::actions::Copy),
                         )
-                        .action("Paste", Box::new(editor::actions::Paste))
-                        .action("Paste as Plain Text", Box::new(PasteRaw))
+                        .action(
+                            i18n::t!("33517926747180e6"),
+                            Box::new(editor::actions::Paste),
+                        )
+                        .action(i18n::t!("293151e2a232bc87"), Box::new(PasteRaw))
                 }))
             });
 
@@ -674,6 +677,7 @@ impl MessageEditor {
                 padding_left: false,
                 padding_right: false,
                 tooltip: None,
+                text_edits: None,
                 resolve_state: project::ResolveState::Resolved,
             },
         ))
@@ -3531,7 +3535,7 @@ mod tests {
         language_registry.add(plain_text_language);
 
         let mut fake_language_servers = language_registry.register_fake_lsp(
-            "Plain Text",
+            "纯文本",
             language::FakeLspAdapter {
                 capabilities: lsp::ServerCapabilities {
                     workspace_symbol_provider: Some(lsp::OneOf::Left(true)),

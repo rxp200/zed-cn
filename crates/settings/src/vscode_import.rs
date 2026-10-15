@@ -185,6 +185,7 @@ impl VsCodeSettings {
             agent_servers: None,
             audio: None,
             auto_update: None,
+            update_channel: None,
             base_keymap: Some(BaseKeymapContent::VSCode),
             calls: None,
             collaboration_panel: None,
@@ -212,6 +213,7 @@ impl VsCodeSettings {
             image_viewer: None,
             markdown_preview: None,
             journal: None,
+            language: None,
             language_models: None,
             line_indicator_format: None,
             log: None,
@@ -238,6 +240,8 @@ impl VsCodeSettings {
             terminal: self.terminal_settings_content(),
             theme: Box::new(self.theme_settings_content()),
             title_bar: None,
+            hover_translation: None,
+            code_explanations: None,
             vim: None,
             vim_mode: None,
             workspace: self.workspace_settings_content(),
@@ -343,6 +347,18 @@ impl VsCodeSettings {
             completion_menu_item_kind: None,
             diff_view_style: None,
             minimum_split_diff_width: None,
+            rainbow_brackets: skip_default(RainbowBracketsSettingsContent {
+                color_mode: self
+                    .read_bool("editor.bracketPairColorization.independentColorPoolPerBracketType")
+                    .map(|independent| {
+                        if independent {
+                            BracketColorMode::Independent
+                        } else {
+                            BracketColorMode::Consecutive
+                        }
+                    }),
+                ..Default::default()
+            }),
         }
     }
 

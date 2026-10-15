@@ -160,63 +160,66 @@ impl SectionEntry {
     }
 }
 
-const CONTENT: (Section<4>, Section<3>) = (
-    Section {
-        title: "Get Started",
-        entries: [
-            SectionEntry {
-                icon: IconName::Plus,
-                title: "New File",
-                action: &NewFile,
-                visibility_guard: SectionVisibility::Always,
-            },
-            SectionEntry {
-                icon: IconName::FolderOpen,
-                title: "Open Project",
-                action: &Open::DEFAULT,
-                visibility_guard: SectionVisibility::Always,
-            },
-            SectionEntry {
-                icon: IconName::CloudDownload,
-                title: "Clone Repository",
-                action: &GitClone,
-                visibility_guard: SectionVisibility::Always,
-            },
-            SectionEntry {
-                icon: IconName::ListCollapse,
-                title: "Open Command Palette",
-                action: &command_palette::Toggle,
-                visibility_guard: SectionVisibility::Always,
-            },
-        ],
-    },
-    Section {
-        title: "Configure",
-        entries: [
-            SectionEntry {
-                icon: IconName::Settings,
-                title: "Open Settings",
-                action: &OpenSettings,
-                visibility_guard: SectionVisibility::Always,
-            },
-            SectionEntry {
-                icon: IconName::Keyboard,
-                title: "Customize Keymaps",
-                action: &OpenKeymap,
-                visibility_guard: SectionVisibility::Always,
-            },
-            SectionEntry {
-                icon: IconName::Blocks,
-                title: "Explore Extensions",
-                action: &Extensions {
-                    category_filter: None,
-                    id: None,
+/// 首页内容。文案在运行时翻译，因此每次渲染时构造（仅一个小数组，开销可忽略）。
+fn content() -> (Section<4>, Section<3>) {
+    (
+        Section {
+            title: i18n::t!("983f311018642b0a"),
+            entries: [
+                SectionEntry {
+                    icon: IconName::Plus,
+                    title: i18n::t!("d23b5dc621538f6e"),
+                    action: &NewFile,
+                    visibility_guard: SectionVisibility::Always,
                 },
-                visibility_guard: SectionVisibility::Always,
-            },
-        ],
-    },
-);
+                SectionEntry {
+                    icon: IconName::FolderOpen,
+                    title: i18n::t!("c565a6aa55bd3ccf"),
+                    action: &Open::DEFAULT,
+                    visibility_guard: SectionVisibility::Always,
+                },
+                SectionEntry {
+                    icon: IconName::CloudDownload,
+                    title: i18n::t!("e678e4f97fea48f2"),
+                    action: &GitClone,
+                    visibility_guard: SectionVisibility::Always,
+                },
+                SectionEntry {
+                    icon: IconName::ListCollapse,
+                    title: i18n::t!("58109680a1e144f6"),
+                    action: &command_palette::Toggle,
+                    visibility_guard: SectionVisibility::Always,
+                },
+            ],
+        },
+        Section {
+            title: "Configure",
+            entries: [
+                SectionEntry {
+                    icon: IconName::Settings,
+                    title: i18n::t!("3f940108cb1ecd9c"),
+                    action: &OpenSettings,
+                    visibility_guard: SectionVisibility::Always,
+                },
+                SectionEntry {
+                    icon: IconName::Keyboard,
+                    title: i18n::t!("441ec0eb377bc6e1"),
+                    action: &OpenKeymap,
+                    visibility_guard: SectionVisibility::Always,
+                },
+                SectionEntry {
+                    icon: IconName::Blocks,
+                    title: i18n::t!("3503e61e8befab33"),
+                    action: &Extensions {
+                        category_filter: None,
+                        id: None,
+                    },
+                    visibility_guard: SectionVisibility::Always,
+                },
+            ],
+        },
+    )
+}
 
 struct Section<const COLS: usize> {
     title: &'static str,
@@ -351,7 +354,7 @@ impl WelcomePage {
                             .color(Color::Muted)
                             .size(IconSize::Small),
                     )
-                    .child(Label::new("Collaborate with Agents")),
+                    .child(Label::new(i18n::t!("f1a8096bf21d9a28"))),
             )
             .child(
                 Label::new(description)
@@ -360,7 +363,7 @@ impl WelcomePage {
                     .mb_2(),
             )
             .child(
-                Button::new("open-agent", "Open Agent Panel")
+                Button::new("open-agent", i18n::t!("dd3de5c3e0b51b0a"))
                     .full_width()
                     .tab_index(tab_index as isize)
                     .style(ButtonStyle::Outlined)
@@ -381,7 +384,7 @@ impl WelcomePage {
     ) -> impl IntoElement {
         v_flex()
             .w_full()
-            .child(SectionHeader::new("Recent Projects"))
+            .child(SectionHeader::new(i18n::t!("8944df7f36b5fddd")))
             .children(recent_projects)
     }
 
@@ -413,7 +416,7 @@ impl WelcomePage {
 
 impl Render for WelcomePage {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let (first_section, second_section) = CONTENT;
+        let (first_section, second_section) = content();
         let first_section_entries = first_section.entries.len();
         let mut next_tab_index = first_section_entries + second_section.entries.len();
 
@@ -480,7 +483,7 @@ impl Render for WelcomePage {
                             .child(Vector::square(VectorName::ZedLogo, rems_from_px(45_f32)))
                             .child(
                                 v_flex().child(Headline::new(welcome_label)).child(
-                                    Label::new("The editor for what's next")
+                                    Label::new(i18n::t!("ed09def8a1841f9e"))
                                         .size(LabelSize::Small)
                                         .color(Color::Muted)
                                         .italic(),
@@ -497,7 +500,7 @@ impl Render for WelcomePage {
                     .when(!self.fallback_to_recent_projects, |this| {
                         this.child(
                             v_flex().gap_4().child(Divider::horizontal()).child(
-                                Button::new("welcome-exit", "Return to Onboarding")
+                                Button::new("welcome-exit", i18n::t!("b756b2f1fa18f403"))
                                     .tab_index(next_tab_index as isize)
                                     .full_width()
                                     .label_size(LabelSize::XSmall)

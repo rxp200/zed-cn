@@ -12,6 +12,7 @@ use task::{RevealTarget, TaskContext, TaskId, TaskTemplate, TaskVariables, Varia
 use tree_sitter::{Query, StreamingIterator as _};
 use workspace::Workspace;
 
+mod code_runner;
 mod modal;
 
 pub use modal::{Rerun, ShowAttachModal, Spawn, TaskOverrides, TasksModal};
@@ -103,6 +104,9 @@ pub fn init(cx: &mut App) {
         |workspace: &mut Workspace, _: Option<&mut Window>, _: &mut Context<Workspace>| {
             workspace
                 .register_action(spawn_task_or_modal)
+                .register_action(code_runner::run_file)
+                .register_action(code_runner::run_code)
+                .register_action(code_runner::run_selection)
                 .register_action(move |workspace, action: &modal::Rerun, window, cx| {
                     if let Some((task_source_kind, mut last_scheduled_task)) = workspace
                         .project()

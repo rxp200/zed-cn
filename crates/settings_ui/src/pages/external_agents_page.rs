@@ -48,9 +48,9 @@ pub(crate) fn render_external_agents_page(
         .pb_16()
         .track_scroll(scroll_handle)
         .overflow_y_scroll()
-        .child(Label::new("External Agents"))
+        .child(Label::new(i18n::t!("8dc040d2283eab03")))
         .child(
-            Label::new("Agents connected through the Agent Client Protocol.")
+            Label::new(i18n::t!("46a9a6c226b59837"))
                 .size(LabelSize::Small)
                 .color(Color::Muted),
         )
@@ -117,7 +117,7 @@ fn render_empty_state(cx: &App) -> AnyElement {
         .border_color(cx.theme().colors().border.opacity(0.6))
         .rounded_sm()
         .child(
-            Label::new("No external agents added yet. Click \"Add Agent\" to get started.")
+            Label::new(i18n::t!("75542ceed1582f35"))
                 .color(Color::Muted)
                 .size(LabelSize::Small),
         )
@@ -133,7 +133,7 @@ fn render_no_project_state(cx: &App) -> AnyElement {
         .border_color(cx.theme().colors().border.opacity(0.6))
         .rounded_sm()
         .child(
-            Label::new("No active project found. Open a workspace to manage external agents.")
+            Label::new(i18n::t!("f1da6ddfed6381bb"))
                 .color(Color::Muted)
                 .size(LabelSize::Small),
         )
@@ -182,7 +182,7 @@ fn render_agent(
             .icon_size(IconSize::Small)
             .size(ButtonSize::Medium)
             .tab_index(0isize)
-            .tooltip(Tooltip::text("Configure Agent"))
+            .tooltip(Tooltip::text(i18n::t!("202a0f6e0434231a")))
             .on_click(cx.listener({
                 let id = id.clone();
                 move |this, _event, window, cx| {
@@ -194,8 +194,8 @@ fn render_agent(
     });
 
     let remove_tooltip = match source {
-        ExternalAgentSource::Registry => "Remove Registry Agent",
-        ExternalAgentSource::Custom => "Remove Custom Agent",
+        ExternalAgentSource::Registry => i18n::t!("ee09f599252af16e"),
+        ExternalAgentSource::Custom => i18n::t!("c03bc88bbfbd84ad"),
     };
 
     let remove_button = IconButton::new(format!("uninstall-{}", id_string), IconName::Trash)
@@ -267,7 +267,7 @@ pub(crate) fn render_add_agent_popover(
 
     let popover = PopoverMenu::new("add-agent-server-popover")
         .trigger(
-            Button::new("add-agent", "Add Agent")
+            Button::new("add-agent", i18n::t!("44aef27a52137928"))
                 .style(ButtonStyle::Outlined)
                 .track_focus(&focus_handle)
                 .start_icon(
@@ -281,7 +281,7 @@ pub(crate) fn render_add_agent_popover(
         .menu(move |window, cx| {
             let settings_window = settings_window.clone();
             Some(ContextMenu::build(window, cx, move |menu, _window, _cx| {
-                menu.entry("Install from Registry", None, move |_window, cx| {
+                menu.entry(i18n::t!("d57dd2838a4c92dd"), None, move |_window, cx| {
                     if let Some(original_window) = original_window {
                         cx.activate(true);
                         original_window
@@ -292,7 +292,7 @@ pub(crate) fn render_add_agent_popover(
                             .log_err();
                     }
                 })
-                .entry("Add Custom Agent", None, move |window, cx| {
+                .entry(i18n::t!("48d908b181f4edc9"), None, move |window, cx| {
                     settings_window
                         .update(cx, |this, cx| {
                             open_custom_agent_form(this, None, window, cx);
@@ -300,9 +300,9 @@ pub(crate) fn render_add_agent_popover(
                         .log_err();
                 })
                 .separator()
-                .header("Learn More")
+                .header(i18n::t!("ca66c2da6f5bf825"))
                 .item(
-                    ContextMenuEntry::new("ACP Docs")
+                    ContextMenuEntry::new(i18n::t!("b867937c90f69300"))
                         .icon(IconName::ArrowUpRight)
                         .icon_color(Color::Muted)
                         .icon_position(IconPosition::End)
@@ -403,9 +403,24 @@ impl CustomAgentForm {
 
         Self {
             original_id,
-            name: new_input("my-agent", name_initial.as_deref(), window, cx),
-            command: new_input("/path/to/agent", command_initial.as_deref(), window, cx),
-            args: new_input("--flag value", args_initial.as_deref(), window, cx),
+            name: new_input(
+                i18n::t!("5115212ce717245e"),
+                name_initial.as_deref(),
+                window,
+                cx,
+            ),
+            command: new_input(
+                i18n::t!("f14f96ca013c930f"),
+                command_initial.as_deref(),
+                window,
+                cx,
+            ),
+            args: new_input(
+                i18n::t!("a42f31488bc1fefe"),
+                args_initial.as_deref(),
+                window,
+                cx,
+            ),
             env,
             default_mode,
             default_config_options,
@@ -451,8 +466,8 @@ fn new_kv_row(
     cx: &mut Context<SettingsWindow>,
 ) -> KeyValueRow {
     KeyValueRow {
-        key: new_input("Key", key, window, cx),
-        value: new_input("Value", value, window, cx),
+        key: new_input(i18n::t!("721b00cbfa23cc25"), key, window, cx),
+        value: new_input(i18n::t!("cda1d55c5231b853"), value, window, cx),
     }
 }
 
@@ -467,14 +482,14 @@ pub(crate) fn open_custom_agent_form(
     settings_window.custom_agent_form = Some(CustomAgentForm::new(existing, window, cx));
 
     let title = if is_edit {
-        "Configure External Agent"
+        i18n::t!("757508807c2ec842")
     } else {
-        "Add Custom Agent"
+        i18n::t!("48d908b181f4edc9")
     };
 
     settings_window.push_dynamic_sub_page(
         title,
-        "Agent Configuration",
+        i18n::t!("9c2a11d4e1c407b6"),
         Some("agent_servers"),
         false,
         render_custom_agent_form_page,
@@ -500,8 +515,8 @@ fn render_custom_agent_form_page(
         .child(
             crate::render_settings_item_layout(
                 settings_window,
-                "Agent Name",
-                "Required. A unique name used to identify this agent.",
+                i18n::t!("57d006926d5de10b"),
+                i18n::t!("bea79d09bbeeb106"),
                 input_box(&form.name, cx).into_any_element(),
                 None,
                 None,
@@ -514,8 +529,8 @@ fn render_custom_agent_form_page(
         .child(
             crate::render_settings_item_layout(
                 settings_window,
-                "Command",
-                "Required. Path to the executable that launches the agent.",
+                i18n::t!("928f87d4507bf9a0"),
+                i18n::t!("a63b7c28183ec21c"),
                 input_box(&form.command, cx).into_any_element(),
                 None,
                 None,
@@ -528,8 +543,8 @@ fn render_custom_agent_form_page(
         .child(
             crate::render_settings_item_layout(
                 settings_window,
-                "Arguments",
-                "Space-separated arguments passed to the command.",
+                i18n::t!("9634fb0832be624f"),
+                i18n::t!("77af0caee4d08add"),
                 input_box(&form.args, cx).into_any_element(),
                 None,
                 None,
@@ -597,7 +612,7 @@ fn render_env_section(
                             .icon_size(IconSize::Small)
                             .icon_color(Color::Muted)
                             .tab_index(0isize)
-                            .tooltip(Tooltip::text("Remove"))
+                            .tooltip(Tooltip::text(i18n::t!("6135d4159e892541")))
                             .on_click(cx.listener(move |this, _, _window, cx| {
                                 if let Some(form) = this.custom_agent_form.as_mut()
                                     && ix < form.env.len()
@@ -610,7 +625,7 @@ fn render_env_section(
             )
         }))
         .child(
-            Button::new("custom-agent-env-add", "Add")
+            Button::new("custom-agent-env-add", i18n::t!("7a8a11ead50742a2"))
                 .style(ButtonStyle::Outlined)
                 .label_size(LabelSize::Small)
                 .tab_index(0isize)
@@ -635,8 +650,8 @@ fn render_env_section(
 
     crate::render_settings_item_layout(
         settings_window,
-        "Environment Variables",
-        "Environment variables provided to the agent process.",
+        i18n::t!("ae27b474ea4d6ee6"),
+        i18n::t!("4a9700a94ab386e8"),
         control,
         None,
         None,
@@ -681,7 +696,7 @@ fn render_form_actions(
                 .border_1()
                 .border_color(cancel_border)
                 .child(
-                    Button::new("custom-agent-form-cancel", "Cancel")
+                    Button::new("custom-agent-form-cancel", i18n::t!("2cd0f3be8738a86c"))
                         .style(ButtonStyle::Subtle)
                         .track_focus(&cancel_handle)
                         .on_click(cx.listener(|this, _, window, cx| {
@@ -696,7 +711,7 @@ fn render_form_actions(
                 .border_1()
                 .border_color(save_border)
                 .child(
-                    Button::new("custom-agent-form-save", "Save")
+                    Button::new("custom-agent-form-save", i18n::t!("a3030bf8f16dc63c"))
                         .style(ButtonStyle::Filled)
                         .track_focus(&save_handle)
                         .on_click(cx.listener(|this, _, window, cx| {
@@ -752,7 +767,7 @@ fn save_custom_agent_form(
         });
     if collides_with_other_agent {
         if let Some(form) = settings_window.custom_agent_form.as_mut() {
-            form.error = Some(format!("An agent named \"{}\" already exists.", id.0).into());
+            form.error = Some(i18n::t_args!("fdc8f152db63ca87", id.0).into());
         }
         cx.notify();
         return;
@@ -814,12 +829,12 @@ fn build_settings_from_values(
 ) -> Result<(AgentId, Option<AgentId>, CustomAgentServerSettings), SharedString> {
     let name = values.name.trim().to_string();
     if name.is_empty() {
-        return Err("Agent name is required.".into());
+        return Err(i18n::t!("882ed3dbac6f82fc").into());
     }
 
     let command = values.command.trim().to_string();
     if command.is_empty() {
-        return Err("Command is required.".into());
+        return Err(i18n::t!("fbf58ea48615fb33").into());
     }
 
     let args = values
@@ -863,7 +878,7 @@ fn collect_kv(
             continue;
         }
         if map.contains_key(&key) {
-            return Err(format!("Duplicate {label} \"{key}\".").into());
+            return Err(i18n::t!("fbb9133c3c463cce", label = label, key = key).into());
         }
         map.insert(key, value.clone());
     }
@@ -1058,7 +1073,7 @@ mod tests {
         values.name = "   ".into();
         assert_eq!(
             build_settings_from_values(values).unwrap_err().as_ref(),
-            "Agent name is required."
+            "Agent 名称是必填项。"
         );
     }
 
@@ -1068,7 +1083,7 @@ mod tests {
         values.command = "   ".into();
         assert_eq!(
             build_settings_from_values(values).unwrap_err().as_ref(),
-            "Command is required."
+            "命令是必填项。"
         );
     }
 
@@ -1078,7 +1093,7 @@ mod tests {
         values.env = vec![("FOO".into(), "1".into()), ("FOO".into(), "2".into())];
         assert_eq!(
             build_settings_from_values(values).unwrap_err().as_ref(),
-            "Duplicate environment variable \"FOO\"."
+            "重复的environment variable「FOO」。"
         );
     }
 

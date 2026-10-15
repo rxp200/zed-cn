@@ -7,6 +7,7 @@ enum IndicatorKind {
     Dot,
     Bar,
     Icon(AnyIcon),
+    Custom(AnyElement),
 }
 
 #[derive(IntoElement, RegisterComponent)]
@@ -43,6 +44,23 @@ impl Indicator {
         }
     }
 
+    pub fn custom(element: impl IntoElement) -> Self {
+        Self {
+            kind: IndicatorKind::Custom(element.into_any_element()),
+            border_color: None,
+            color: Color::Default,
+        }
+    }
+
+    /// Whether this indicator carries caller-provided content.
+    ///
+    /// A custom indicator is laid out at its content's intrinsic size (a count
+    /// badge, for instance), while dot, bar and icon indicators keep the fixed
+    /// badge square.
+    pub(crate) fn is_custom(&self) -> bool {
+        matches!(self.kind, IndicatorKind::Custom(_))
+    }
+
     pub fn color(mut self, color: Color) -> Self {
         self.color = color;
         self
@@ -70,6 +88,7 @@ impl RenderOnce for Indicator {
         match self.kind {
             IndicatorKind::Icon(icon) => container
                 .child(icon.map(|icon| icon.custom_size(rems_from_px(8_f32)).color(self.color))),
+            IndicatorKind::Custom(element) => container.child(element),
             IndicatorKind::Dot => container
                 .w_1p5()
                 .h_1p5()

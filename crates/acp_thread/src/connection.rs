@@ -1362,7 +1362,7 @@ mod test_support {
             Self {
                 selected_model: Arc::new(Mutex::new(AgentModelInfo {
                     id: AgentModelId::new("visual-test-model"),
-                    name: "Visual Test Model".into(),
+                    name: i18n::t!("43eba56e1a74de5e").into(),
                     description: Some("A stub model for visual testing".into()),
                     icon: Some(AgentModelIcon::Named(ui::IconName::ZedAssistant)),
                     is_latest: false,

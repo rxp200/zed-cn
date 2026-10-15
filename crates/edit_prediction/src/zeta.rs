@@ -35,7 +35,7 @@ use zeta_prompt::{
 };
 
 use crate::open_ai_compatible::{
-    load_open_ai_compatible_api_key_if_needed, send_custom_server_request,
+    FimRequestPrompt, load_open_ai_compatible_api_key_if_needed, send_custom_server_request,
 };
 
 pub(crate) fn request_prediction_with_zeta(
@@ -278,7 +278,7 @@ pub(crate) fn request_prediction_with_zeta(
                             let (response_text, request_id) = send_custom_server_request(
                                 provider,
                                 custom_settings,
-                                prompt,
+                                FimRequestPrompt::Completion(prompt),
                                 max_tokens,
                                 stop_tokens,
                                 open_ai_compatible_api_key.clone(),
@@ -306,7 +306,7 @@ pub(crate) fn request_prediction_with_zeta(
                             let (response_text, request_id) = send_custom_server_request(
                                 provider,
                                 custom_settings,
-                                prompt,
+                                FimRequestPrompt::Completion(prompt),
                                 max_tokens,
                                 stop_tokens_for_format(zeta_format)
                                     .iter()
@@ -672,7 +672,10 @@ fn handle_api_response<T>(
                             ErrorSeverity::Critical
                         }
                         fn primary_action(&self) -> ErrorAction {
-                            ErrorAction::link("Update Zed", "https://zed.dev/releases")
+                            ErrorAction::link(
+                                i18n::t!("30c3a0164c1ce38c"),
+                                "https://zed.dev/releases",
+                            )
                         }
                     }
 

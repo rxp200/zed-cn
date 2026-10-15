@@ -16,6 +16,7 @@ doctest = false
 neovim = ["nvim-rs", "async-compat", "async-trait", "tokio"]
 
 [dependencies]
+i18n.workspace = true
 anyhow.workspace = true
 async-compat = { workspace = true, "optional" = true }
 async-trait = { workspace = true, "optional" = true }

@@ -433,7 +433,7 @@ pub mod perf {
             operation: &str,
             error: std::io::Error,
         ) -> anyhow::Error {
-            anyhow!("Linux {} counter {operation} failed: {error}", event.name())
+            anyhow!(i18n::t_mix!("e3f2ca74b04f7199"; event.name(); operation = operation, error = error))
         }
 
         pub(super) fn snapshot(&self) -> Snapshot {
@@ -823,6 +823,27 @@ pub mod darwin {
             self.value(end).saturating_sub(self.value(start)) as f64
         }
     }
+
+    /// 当前进程的常驻内存，取自 `RUSAGE_INFO_V4` 的 `ri_resident_size`。
+    pub(super) fn resident_memory_bytes() -> Option<u64> {
+        let mut buffer = RusageInfoV4Buffer([0; RUSAGE_INFO_V4_SIZE]);
+        // SAFETY: the buffer is the flavor's full size and aligned for its
+        // `u64` fields; the kernel fills it on success.
+        let status = unsafe {
+            proc_pid_rusage(
+                std::process::id() as libc::c_int,
+                RUSAGE_INFO_V4,
+                &mut buffer,
+            )
+        };
+        if status != 0 {
+            return None;
+        }
+        // SAFETY: the buffer is at least as large and as aligned as the prefix
+        // struct, and every field is a plain integer.
+        let info = unsafe { &*(buffer.0.as_ptr() as *const RusageInfoV4Prefix) };
+        Some(info.ri_resident_size)
+    }
 }
 
 /// Fallback backend for platforms without a hardware-counter source.
@@ -990,6 +1011,43 @@ impl Measurement for ResourceCounter {
 
     fn formatter(&self) -> &dyn ValueFormatter {
         &self.formatter
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Process resident memory
+// ---------------------------------------------------------------------------
+
+/// 当前进程的常驻内存（resident set size），单位字节；平台不支持时返回
+/// `None`。
+///
+/// 常驻内存是一个“水平值”，描述进程当前有多大，而不是一次迭代增加了多少，
+/// 所以它不适合作为 Criterion 的每次迭代指标，只适合在报告里打印快照，或者
+/// 由基准在准备好夹具后手动对比。Linux 读 `/proc/self/statm`，macOS 读
+/// `proc_pid_rusage` 的 `ri_resident_size`，其余平台返回 `None`。
+///
+/// Windows 的 DirectX/GPU 私有字节不在这个数字里；Windows 上的启动内存请看
+/// 应用内系统监控面板的「Zed 进程内存」。
+pub fn resident_memory_bytes() -> Option<u64> {
+    #[cfg(target_os = "linux")]
+    {
+        // `/proc/self/statm` 的第二个字段是常驻页数。
+        let statm = std::fs::read_to_string("/proc/self/statm").ok()?;
+        let resident_pages: u64 = statm.split_whitespace().nth(1)?.parse().ok()?;
+        // SAFETY: `sysconf` only reads the process's configured page size.
+        let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+        if page_size <= 0 {
+            return None;
+        }
+        Some(resident_pages.saturating_mul(page_size as u64))
+    }
+    #[cfg(target_os = "macos")]
+    {
+        darwin::resident_memory_bytes()
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        None
     }
 }
 
@@ -1972,6 +2030,14 @@ mod tests {
 
     #[global_allocator]
     static ALLOCATOR: CountingAllocator = CountingAllocator::new(std::alloc::System);
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn resident_memory_is_readable_and_plausible() {
+        let bytes = resident_memory_bytes().expect("Linux 与 macOS 应该能读到常驻内存");
+        // 一个正在跑测试的 Rust 进程不可能小于 1 MiB。
+        assert!(bytes > 1024 * 1024, "常驻内存看起来不合理：{bytes} 字节");
+    }
 
     #[test]
     fn counting_allocator_counts_allocations_bytes_and_frees() {

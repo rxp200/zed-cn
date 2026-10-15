@@ -13,6 +13,7 @@ path = "src/extension_suggest.rs"
 doctest = false
 
 [dependencies]
+i18n.workspace = true
 path.workspace = true
 
 [dev-dependencies]

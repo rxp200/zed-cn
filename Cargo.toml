@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/acp_thread",
     "crates/acp_tools",
+    "crates/alacritty_terminal",
     "crates/action_log",
     "crates/activity_indicator",
     "crates/agent",
@@ -56,6 +57,7 @@ members = [
     "crates/dev_container",
     "crates/diagnostics",
     "crates/docs_preprocessor",
+    "crates/document_viewer",
     "crates/edit_prediction",
     "crates/edit_prediction_cli",
     "crates/edit_prediction_context",
@@ -111,6 +113,7 @@ members = [
     "crates/http_client_tls",
     "crates/http_proxy",
     "crates/icons",
+    "crates/i18n",
     "crates/image_viewer",
     "crates/input_latency_ui",
     "crates/inspector_ui",
@@ -232,6 +235,7 @@ members = [
     "crates/vim",
     "crates/vim_mode_setting",
     "crates/watch",
+    "crates/web_preview",
     "crates/web_search",
     "crates/web_search_providers",
     "crates/which_key",
@@ -365,6 +369,7 @@ git_ui_core = { path = "crates/git_ui_core" }
 go_to_line = { path = "crates/go_to_line" }
 google_ai = { path = "crates/google_ai" }
 gpui = { path = "crates/gpui", default-features = false }
+hayro = "0.7"
 gpui_apple = { path = "crates/gpui_apple" }
 gpui_linux = { path = "crates/gpui_linux", default-features = false }
 gpui_macos = { path = "crates/gpui_macos", default-features = false }
@@ -386,6 +391,7 @@ icons = { path = "crates/icons" }
 image_viewer = { path = "crates/image_viewer" }
 input_latency_ui = { path = "crates/input_latency_ui" }
 inspector_ui = { path = "crates/inspector_ui" }
+i18n = { path = "crates/i18n" }
 install_cli = { path = "crates/install_cli" }
 journal = { path = "crates/journal" }
 json_schema_store = { path = "crates/json_schema_store" }
@@ -452,7 +458,7 @@ remote_connection = { path = "crates/remote_connection" }
 remote_server = { path = "crates/remote_server" }
 repl = { path = "crates/repl" }
 reqwest_client = { path = "crates/reqwest_client" }
-rodio = { git = "https://github.com/RustAudio/rodio", rev = "e50e726ddd0292f6ef9de0dda6b90af4ed1fb66a", default-features = false, features = ["wav", "playback", "wav_output", "recording"] }
+rodio = { git = "https://github.com/RustAudio/rodio", rev = "3ee9745862279ce1d18db593155016e7ce024aeb", default-features = false, features = ["wav", "playback", "wav_output", "recording"] }
 rope = { path = "crates/rope" }
 rpc = { path = "crates/rpc" }
 sandbox = { path = "crates/sandbox" }
@@ -502,6 +508,7 @@ util_macros = { path = "crates/util_macros" }
 vim = { path = "crates/vim" }
 vim_mode_setting = { path = "crates/vim_mode_setting" }
 watch = { path = "crates/watch" }
+web_preview = { path = "crates/web_preview" }
 web_search = { path = "crates/web_search" }
 web_search_providers = { path = "crates/web_search_providers" }
 which_key = { path = "crates/which_key" }
@@ -529,7 +536,7 @@ accesskit_unix = "0.22"
 accesskit_windows = "0.34"
 agent-client-protocol = { version = "=2.2.0", features = ["unstable", "unstable_protocol_v2"] }
 aho-corasick = "1.1"
-alacritty_terminal = { git = "https://github.com/zed-industries/alacritty", rev = "4c129667ce56611becdc82de6e28218c80e2e88f" }
+alacritty_terminal = { path = "crates/alacritty_terminal" }
 any_vec = "0.14"
 anyhow = "1.0.86"
 arc-swap = "1.9.0"
@@ -583,6 +590,7 @@ block2 = "0.6"
 brush-parser = "0.3"
 bytemuck = "1"
 bytes = "1.0"
+calamine = { version = "0.36", features = ["dates"] }
 cargo_metadata = "0.23"
 cargo_toml = "0.21"
 cbindgen = { version = "0.28.0", default-features = false }
@@ -604,7 +612,7 @@ core-services = "1"
 core-text = "21"
 core-video = { version = "0.5", default-features = false, features = ["link"] }
 coreaudio-rs = { version = "0.12", default-features = false }
-cpal = "0.17"
+cpal = { git = "https://github.com/RustAudio/cpal", rev = "e1612d5d98152f8dc2a62e1b51ef7cbf4f7f26b7" }
 crash-handler = "0.8"
 criterion = { version = "0.8.2", features = ["html_reports"] }
 perf-event = { package = "perf-event2", version = "0.7.4" }
@@ -617,6 +625,7 @@ dialoguer = { version = "0.12", default-features = false }
 diffy = "0.4.2"
 dirs = "6.0"
 dispatch2 = { version = "0.3", default-features = false, features = ["std"] }
+document_viewer = { path = "crates/document_viewer" }
 documented = "0.10"
 dotenvy = "0.15.0"
 dunce = "1.0"
@@ -790,7 +799,9 @@ pet-fs = { git = "https://github.com/zed-industries/python-environment-tools.git
 pet-poetry = { git = "https://github.com/zed-industries/python-environment-tools.git", rev = "5aad7164bfc2a58977b103c8ef8fdd7302ed2e9f" }
 pet-reporter = { git = "https://github.com/zed-industries/python-environment-tools.git", rev = "5aad7164bfc2a58977b103c8ef8fdd7302ed2e9f" }
 pet-virtualenv = { git = "https://github.com/zed-industries/python-environment-tools.git", rev = "5aad7164bfc2a58977b103c8ef8fdd7302ed2e9f" }
+pinyin = { version = "0.11.0", default-features = false, features = ["heteronym", "plain"] }
 piper = "0.2"
+portable-pty = "0.9.0"
 plist = "1.3"
 postage = { version = "0.5", default-features = false }
 pretty_assertions = { version = "1.3.0", features = ["unstable"] }
@@ -958,6 +969,7 @@ xkbcommon = { version = "0.8", default-features = false }
 yaml-rust2 = { version = "0.8", default-features = false }
 yawc = { version = "0.4", default-features = false }
 zeroize = "1.8"
+zip = { version = "0.6", default-features = false, features = ["deflate"] }
 zstd = { version = "0.13", default-features = false, features = ["legacy", "arrays"] }
 
 [workspace.dependencies.windows]
@@ -981,6 +993,7 @@ features = [
 ]
 
 [patch.crates-io]
+cpal = { git = "https://github.com/RustAudio/cpal", rev = "e1612d5d98152f8dc2a62e1b51ef7cbf4f7f26b7" }
 # Unify `tree_sitter_language::LanguageFn` between crates.io grammar crates and
 # the git tree-sitter above; two instances of the crate would make grammar
 # constants type-incompatible with `tree_sitter::Language`.

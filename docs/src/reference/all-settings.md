@@ -5648,7 +5648,7 @@ Available variables:
   "project_panel": {
     "button": true,
     "default_width": 240,
-    "dock": "right",
+    "dock": "left",
     "entry_spacing": "comfortable",
     "file_icons": true,
     "folder_indicator": "icon",
@@ -5684,7 +5684,7 @@ Available variables:
 
 - Description: Control the position of the dock
 - Setting: `dock`
-- Default: `right`
+- Default: `left`
 
 **Options**
 

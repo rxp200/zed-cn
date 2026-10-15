@@ -68,7 +68,7 @@ fn show_etw_status_notification(cx: &mut App, status: Result<StatusMessage>) {
                 let output_path = output_path.clone();
                 cx.new(|cx| {
                     MessageNotification::new(message, cx)
-                        .primary_message("Show in File Manager")
+                        .primary_message(i18n::t!("d276044dad968742"))
                         .primary_on_click(move |_window, cx| {
                             cx.reveal_path(&output_path);
                             cx.emit(DismissEvent);

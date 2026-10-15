@@ -36361,17 +36361,17 @@ fn test_gutter_button_tooltip_renders_modifier_transitions(cx: &mut TestAppConte
         assert!(!meta.contains("-click to add a breakpoint"), "got: {meta}");
     };
 
-    assert_render("Set Breakpoint");
+    assert_render(&i18n::t!("587c60ff7b52bd83"));
 
     cx.simulate_modifiers_change(Modifiers::secondary_key());
     tooltip.update_in(cx, |_, _window, cx| cx.notify());
     cx.run_until_parked();
-    assert_render("Set Bookmark");
+    assert_render(&i18n::t!("d6042b9049c7853b"));
 
     cx.simulate_modifiers_change(Modifiers::none());
     tooltip.update_in(cx, |_, _window, cx| cx.notify());
     cx.run_until_parked();
-    assert_render("Set Breakpoint");
+    assert_render(&i18n::t!("587c60ff7b52bd83"));
 }
 
 #[gpui::test]
@@ -49870,6 +49870,54 @@ async fn test_lsp_show_document_external(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+async fn test_lsp_show_document_rejects_path_outside_project(cx: &mut TestAppContext) {
+    init_test(cx, |_| {});
+    let cx = EditorLspTestContext::new_rust(lsp::ServerCapabilities::default(), cx).await;
+
+    let target_path = path!("/outside/untrusted.rs");
+    let response = cx
+        .lsp
+        .server
+        .request::<lsp::request::ShowDocument>(
+            lsp::ShowDocumentParams {
+                uri: lsp::Uri::from_file_path(target_path).unwrap(),
+                external: None,
+                take_focus: None,
+                selection: None,
+            },
+            DEFAULT_LSP_REQUEST_TIMEOUT,
+        )
+        .await
+        .into_response()
+        .expect("show document request should not error");
+    assert_eq!(response, lsp::ShowDocumentResult { success: false });
+}
+
+#[gpui::test]
+async fn test_lsp_show_document_rejects_unsafe_external_uri(cx: &mut TestAppContext) {
+    init_test(cx, |_| {});
+    let cx = EditorLspTestContext::new_rust(lsp::ServerCapabilities::default(), cx).await;
+
+    let response = cx
+        .lsp
+        .server
+        .request::<lsp::request::ShowDocument>(
+            lsp::ShowDocumentParams {
+                uri: "file:///tmp/untrusted".parse::<lsp::Uri>().unwrap(),
+                external: Some(true),
+                take_focus: None,
+                selection: None,
+            },
+            DEFAULT_LSP_REQUEST_TIMEOUT,
+        )
+        .await
+        .into_response()
+        .expect("show document request should not error");
+    assert_eq!(response, lsp::ShowDocumentResult { success: false });
+    assert_eq!(cx.opened_url(), None);
+}
+
+#[gpui::test]
 async fn test_lsp_show_document_without_take_focus(cx: &mut TestAppContext) {
     init_test(cx, |_| {});
     let mut cx = EditorLspTestContext::new_rust(lsp::ServerCapabilities::default(), cx).await;
@@ -50444,4 +50492,80 @@ async fn test_soft_wrap_indent_updated_on_file_move_between_directories(
         .update(cx, |editor, window, cx| editor.snapshot(window, cx))
         .unwrap();
     assert_eq!(snapshot.soft_wrap_indent(DisplayRow(0)), Some(0));
+}
+
+#[gpui::test]
+async fn test_expand_and_undo_bracket_selection(cx: &mut TestAppContext) {
+    init_test(cx, |_| {});
+
+    let language = Arc::new(
+        Language::new(
+            LanguageConfig::default(),
+            Some(tree_sitter_rust::LANGUAGE.into()),
+        )
+        .with_brackets_query(indoc! {r#"
+            ("(" @open ")" @close)
+            ("{" @open "}" @close)
+        "#})
+        .unwrap(),
+    );
+
+    let text = "fn main() {\n    let a = (1, 2);\n}\n";
+    let buffer = cx.new(|cx| Buffer::local(text, cx).with_language(language, cx));
+    let buffer = cx.new(|cx| MultiBuffer::singleton(buffer, cx));
+    let (editor, cx) = cx.add_window_view(|window, cx| build_editor(buffer, window, cx));
+
+    editor
+        .condition::<crate::EditorEvent>(cx, |editor, cx| !editor.buffer.read(cx).is_parsing(cx))
+        .await;
+
+    editor.update_in(cx, |editor, window, cx| {
+        editor.change_selections(SelectionEffects::no_scroll(), window, cx, |s| {
+            s.select_display_ranges([
+                DisplayPoint::new(DisplayRow(1), 14)..DisplayPoint::new(DisplayRow(1), 14)
+            ]);
+        });
+        editor.expand_bracket_selection(&ExpandBracketSelection, window, cx);
+    });
+    editor.update(cx, |editor, cx| {
+        assert_text_with_selections(
+            editor,
+            indoc! {r#"
+                fn main() {
+                    let a = («1, 2ˇ»);
+                }
+            "#},
+            cx,
+        );
+    });
+
+    editor.update_in(cx, |editor, window, cx| {
+        editor.expand_bracket_selection(&ExpandBracketSelection, window, cx);
+    });
+    editor.update(cx, |editor, cx| {
+        assert_text_with_selections(
+            editor,
+            indoc! {r#"
+                fn main() {«
+                    let a = (1, 2);
+                ˇ»}
+            "#},
+            cx,
+        );
+    });
+
+    editor.update_in(cx, |editor, window, cx| {
+        editor.undo_bracket_selection(&UndoBracketSelection, window, cx);
+    });
+    editor.update(cx, |editor, cx| {
+        assert_text_with_selections(
+            editor,
+            indoc! {r#"
+                fn main() {
+                    let a = («1, 2ˇ»);
+                }
+            "#},
+            cx,
+        );
+    });
 }

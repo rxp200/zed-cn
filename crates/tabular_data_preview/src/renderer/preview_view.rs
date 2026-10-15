@@ -51,10 +51,10 @@ impl Render for TableView {
                                         h_flex()
                                             .gap_2()
                                             .child(SpinnerLabel::new())
-                                            .child("Loading…"),
+                                            .child(i18n::t!("21bd738e0d7191a7")),
                                     )
                                 })
-                                .when(!is_loading, |div| div.child("No data to display")),
+                                .when(!is_loading, |div| div.child(i18n::t!("1c77a8adce30a16e"))),
                         )
                         .into_any_element()
                 } else {

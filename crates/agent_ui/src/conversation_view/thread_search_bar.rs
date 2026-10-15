@@ -169,7 +169,7 @@ impl ThreadSearchBar {
     ) -> Self {
         let query_editor = cx.new(|cx| {
             let mut editor = Editor::single_line(window, cx);
-            editor.set_placeholder_text("Search this thread…", window, cx);
+            editor.set_placeholder_text(i18n::t!("b47b067241d25794"), window, cx);
             editor
         });
         let editor_subscription = cx.subscribe_in(
@@ -841,7 +841,7 @@ impl Render for ThreadSearchBar {
                         "thread-search-prev",
                         IconName::ChevronLeft,
                         !has_matches,
-                        "Previous Match",
+                        i18n::t!("dbb65ea867d3828d"),
                         &SelectPreviousThreadMatch,
                         focus_handle.clone(),
                     ))
@@ -849,7 +849,7 @@ impl Render for ThreadSearchBar {
                         "thread-search-next",
                         IconName::ChevronRight,
                         !has_matches,
-                        "Next Match",
+                        i18n::t!("ca824c5947e097c4"),
                         &SelectNextThreadMatch,
                         focus_handle.clone(),
                     ))
@@ -864,7 +864,7 @@ impl Render for ThreadSearchBar {
                         "thread-search-dismiss",
                         IconName::Close,
                         false,
-                        "Close Search",
+                        i18n::t!("ab008ef18dac8f83"),
                         &DismissThreadSearch,
                         focus_handle,
                     )),

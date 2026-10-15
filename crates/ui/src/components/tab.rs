@@ -109,7 +109,7 @@ impl ParentElement for Tab {
 impl RenderOnce for Tab {
     #[allow(refining_impl_trait)]
     fn render(self, _: &mut Window, cx: &mut App) -> Stateful<Div> {
-        let (text_color, tab_bg, _tab_hover_bg, _tab_active_bg) = match self.selected {
+        let (text_color, tab_bg, tab_hover_bg, _tab_active_bg) = match self.selected {
             false => (
                 cx.theme().colors().text_muted,
                 cx.theme().colors().tab_inactive_background,
@@ -145,22 +145,30 @@ impl RenderOnce for Tab {
             .h(Tab::container_height(cx))
             .bg(tab_bg)
             .border_color(cx.theme().colors().border)
+            // The selected tab reads as a rounded card resting on the tab bar, and a
+            // hovered tab previews that same shape. Its own vertical borders are
+            // omitted so the rounded corners are not sliced by the separators next
+            // to it, which also removes exactly those two separators.
+            .when(self.selected, |this| this.rounded_t_md())
+            .when(!self.selected, |this| {
+                this.hover(move |style| style.bg(tab_hover_bg).rounded_t_md())
+            })
             .map(|this| match self.position {
                 TabPosition::First => {
                     if self.selected {
-                        this.pl_px().border_r_1().pb_px()
+                        this.pl_px().pb_px()
                     } else {
                         this.pl_px().pr_px().border_b_1()
                     }
                 }
                 TabPosition::Last => {
                     if self.selected {
-                        this.border_l_1().border_r_1().pb_px()
+                        this.pb_px()
                     } else {
                         this.pl_px().border_b_1().border_r_1()
                     }
                 }
-                TabPosition::Middle(Ordering::Equal) => this.border_l_1().border_r_1().pb_px(),
+                TabPosition::Middle(Ordering::Equal) => this.pb_px(),
                 TabPosition::Middle(Ordering::Less) => this.border_l_1().pr_px().border_b_1(),
                 TabPosition::Middle(Ordering::Greater) => this.border_r_1().pl_px().border_b_1(),
             })
