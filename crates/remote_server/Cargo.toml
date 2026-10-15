@@ -70,6 +70,7 @@ settings.workspace = true
 shellexpand.workspace = true
 smol.workspace = true
 sysinfo = { workspace = true, features = ["disk", "network"] }
+system_specs.workspace = true
 task.workspace = true
 telemetry.workspace = true
 terminal.workspace = true

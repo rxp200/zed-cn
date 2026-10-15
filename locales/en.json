@@ -5417,5 +5417,16 @@
   "68d0a2e10bc6df49": "Remote server",
   "0fd69732f0855eac": "Remote server downloads",
   "68b3f4bff6de90ae": "Open Folder",
-  "a441806afc2c82d7": "View Server Options"
+  "a441806afc2c82d7": "View Server Options",
+  "3732e264dfa95cae": "Temperature",
+  "0296a21ab10211c8": "GPU",
+  "2e10281b39c0b319": "Vendor",
+  "88551f88fbf65b26": "VRAM",
+  "9746ae777abb6dbf": "Utilization",
+  "8d72392edabe856e": "Driver",
+  "1e7098fe0f6eaae2": "Storage",
+  "0c8c71a8c428263d": "Motherboard",
+  "615b2738075d6ad5": "Network",
+  "5e756f7184f37e1b": "Other",
+  "d009d9c02e81f5c9": "No temperature sensors detected"
 }

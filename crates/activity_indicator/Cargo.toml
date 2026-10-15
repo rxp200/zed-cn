@@ -31,6 +31,7 @@ remote.workspace = true
 proto.workspace = true
 smallvec.workspace = true
 sysinfo = { workspace = true, features = ["disk", "network"] }
+system_specs.workspace = true
 terminal_view.workspace = true
 ui.workspace = true
 util.workspace = true
