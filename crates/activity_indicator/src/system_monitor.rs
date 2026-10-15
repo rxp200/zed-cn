@@ -8,6 +8,7 @@ use proto::GetSystemStatsResponse;
 use remote::RemoteClient;
 use std::{collections::VecDeque, time::Duration};
 use sysinfo::{Disks, Networks, ProcessRefreshKind, ProcessesToUpdate, System};
+use system_specs::hardware::{GpuReading, HardwareSampler, TemperatureReading, TemperatureSource};
 use terminal_view::port_forwarding::{
     ForwardDirection, ForwardSnapshot, ForwardSource, ForwardStatus, PortForwardManager,
 };
@@ -46,6 +47,10 @@ pub struct SystemStats {
     pub process_count: u32,
     pub load_average: [f64; 3],
     pub local_ip_addresses: Vec<String>,
+    /// 当前项目所在主机上报的温度传感器读数。
+    pub temperatures: Vec<TemperatureReading>,
+    /// 当前项目所在主机识别到的显卡。
+    pub gpus: Vec<GpuReading>,
 }
 
 impl From<GetSystemStatsResponse> for SystemStats {
@@ -72,6 +77,28 @@ impl From<GetSystemStatsResponse> for SystemStats {
                 stats.load_average_fifteen,
             ],
             local_ip_addresses: stats.local_ip_addresses,
+            temperatures: stats
+                .temperatures
+                .into_iter()
+                .map(|temperature| TemperatureReading {
+                    label: temperature.label,
+                    source: TemperatureSource::from_wire_name(&temperature.source),
+                    celsius: temperature.celsius,
+                })
+                .collect(),
+            gpus: stats
+                .gpus
+                .into_iter()
+                .map(|gpu| GpuReading {
+                    name: gpu.name,
+                    vendor: gpu.vendor,
+                    driver_version: gpu.driver_version,
+                    memory_total_bytes: gpu.memory_total_bytes,
+                    memory_used_bytes: gpu.memory_used_bytes,
+                    utilization_percent: gpu.utilization_percent,
+                    temperature_celsius: gpu.temperature_celsius,
+                })
+                .collect(),
         }
     }
 }
@@ -88,6 +115,7 @@ struct LocalSampler {
     system: System,
     disks: Disks,
     networks: Networks,
+    hardware: HardwareSampler,
     last_sample: std::time::Instant,
 }
 
@@ -105,6 +133,7 @@ impl LocalSampler {
             system,
             disks: Disks::new_with_refreshed_list(),
             networks: Networks::new_with_refreshed_list(),
+            hardware: HardwareSampler::new(),
             last_sample: std::time::Instant::now(),
         }
     }
@@ -135,6 +164,7 @@ impl LocalSampler {
                     .iter()
                     .map(move |network| (name.as_str(), network.addr))
             }));
+        let hardware = self.hardware.sample();
 
         SystemStats {
             hostname: System::host_name().unwrap_or_else(|| i18n::t!("8a94c4a1cdbd821e").into()),
@@ -164,6 +194,8 @@ impl LocalSampler {
                 .into_iter()
                 .map(|address| address.to_string())
                 .collect(),
+            temperatures: hardware.temperatures,
+            gpus: hardware.gpus,
         }
     }
 }
@@ -466,6 +498,18 @@ impl SystemMonitorData {
                     i18n::t!("2b1548cd60511f35"),
                     stats.process_count.to_string(),
                 ))
+                .when(!stats.temperatures.is_empty(), |element| {
+                    element.child(metric_line(
+                        i18n::t!("3732e264dfa95cae"),
+                        temperature_summary(&stats.temperatures),
+                    ))
+                })
+                .when_some(stats.gpus.first(), |element, gpu| {
+                    element.child(metric_line(
+                        i18n::t!("0296a21ab10211c8"),
+                        shortened(&gpu_summary(gpu), 30),
+                    ))
+                })
                 .child(metric_line(
                     i18n::t!("385df7f41e0df22c"),
                     format!(
@@ -739,6 +783,13 @@ impl Render for SystemMonitorPanel {
                         ),
                         cx,
                     ))
+                    .children(stats.gpus.iter().map(|gpu| gpu_card(gpu, cx)))
+                    // 远端服务端可能只是还没有上报温度，此时不显示空状态，
+                    // 避免把「服务端不支持」误报成「这台机器没有传感器」。
+                    .when(
+                        !stats.temperatures.is_empty() || monitor.remote_name.is_none(),
+                        |element| element.child(temperature_card(&stats.temperatures, cx)),
+                    )
                     .child(resource_card(
                         i18n::t!("7d8f8c37ec7885bc"),
                         IconName::DatabaseZap,
@@ -820,6 +871,215 @@ fn usage_color(percent: f32, cx: &App) -> Hsla {
         status.warning
     } else {
         status.info
+    }
+}
+
+/// 温度用比占用率更低的阈值：桌面 CPU 长期高于 85°C 才算危险。
+fn temperature_color(celsius: f32) -> Color {
+    if celsius >= 85. {
+        Color::Error
+    } else if celsius >= 70. {
+        Color::Warning
+    } else {
+        Color::Success
+    }
+}
+
+/// 传感器所属部件的界面名称。原始传感器名另外作为副标题展示。
+fn temperature_source_label(source: TemperatureSource) -> &'static str {
+    match source {
+        TemperatureSource::Cpu => "CPU",
+        TemperatureSource::Gpu => "GPU",
+        TemperatureSource::Storage => i18n::t!("1e7098fe0f6eaae2"),
+        TemperatureSource::Board => i18n::t!("0c8c71a8c428263d"),
+        TemperatureSource::Network => i18n::t!("615b2738075d6ad5"),
+        TemperatureSource::Other => i18n::t!("5e756f7184f37e1b"),
+    }
+}
+
+fn temperature_card(temperatures: &[TemperatureReading], cx: &App) -> impl IntoElement {
+    card(cx)
+        .child(
+            h_flex()
+                .w_full()
+                .min_w_0()
+                .gap_1p5()
+                .child(
+                    Icon::new(IconName::Flame)
+                        .size(IconSize::Small)
+                        .color(Color::Accent),
+                )
+                .child(Label::new(i18n::t!("3732e264dfa95cae"))),
+        )
+        .when(temperatures.is_empty(), |element| {
+            element.child(
+                Label::new(i18n::t!("d009d9c02e81f5c9"))
+                    .size(LabelSize::Small)
+                    .color(Color::Muted),
+            )
+        })
+        .children(
+            temperatures
+                .iter()
+                .map(|reading| temperature_row(reading, cx)),
+        )
+}
+
+fn temperature_row(reading: &TemperatureReading, cx: &App) -> impl IntoElement {
+    let color = temperature_color(reading.celsius);
+    v_flex()
+        .w_full()
+        .min_w_0()
+        .gap_0p5()
+        .child(
+            h_flex()
+                .w_full()
+                .min_w_0()
+                .justify_between()
+                .gap_2()
+                .child(
+                    h_flex()
+                        .min_w_0()
+                        .gap_1p5()
+                        .child(
+                            div()
+                                .size(px(6.))
+                                .rounded_full()
+                                .bg(color.color(cx))
+                                .flex_none(),
+                        )
+                        .child(Label::new(temperature_source_label(reading.source)).truncate()),
+                )
+                .child(
+                    Label::new(format!("{:.1} °C", reading.celsius))
+                        .size(LabelSize::Small)
+                        .color(color)
+                        .flex_none(),
+                ),
+        )
+        .child(
+            Label::new(reading.label.clone())
+                .size(LabelSize::XSmall)
+                .color(Color::Muted)
+                .truncate(),
+        )
+}
+
+fn gpu_card(gpu: &GpuReading, cx: &App) -> impl IntoElement {
+    let vendor_is_redundant = gpu.vendor.is_empty()
+        || gpu
+            .name
+            .to_ascii_lowercase()
+            .contains(&gpu.vendor.to_ascii_lowercase());
+    card(cx)
+        .child(
+            h_flex()
+                .w_full()
+                .min_w_0()
+                .gap_1p5()
+                .child(
+                    Icon::new(IconName::Blocks)
+                        .size(IconSize::Small)
+                        .color(Color::Accent),
+                )
+                .child(Label::new(i18n::t!("0296a21ab10211c8"))),
+        )
+        .child(
+            h_flex()
+                .w_full()
+                .min_w_0()
+                .justify_between()
+                .gap_2()
+                .child(
+                    Label::new(gpu.name.clone())
+                        .weight(FontWeight::MEDIUM)
+                        .truncate(),
+                )
+                .when_some(gpu.temperature_celsius, |element, celsius| {
+                    element.child(
+                        Label::new(format!("{celsius:.0} °C"))
+                            .size(LabelSize::Small)
+                            .color(temperature_color(celsius))
+                            .flex_none(),
+                    )
+                }),
+        )
+        .when(!vendor_is_redundant, |element| {
+            element.child(metric_line(
+                i18n::t!("2e10281b39c0b319"),
+                gpu.vendor.clone(),
+            ))
+        })
+        .when_some(gpu.memory_total_bytes, |element, total| {
+            let used = gpu.memory_used_bytes.unwrap_or(0).min(total);
+            element.child(resource_meter_row(
+                i18n::t!("88551f88fbf65b26"),
+                format!("{} / {}", format_bytes(used), format_bytes(total)),
+                percentage(used, total),
+                cx,
+            ))
+        })
+        .when_some(gpu.utilization_percent, |element, percent| {
+            element.child(resource_meter_row(
+                i18n::t!("9746ae777abb6dbf"),
+                format!("{percent:.0}%"),
+                percent,
+                cx,
+            ))
+        })
+        .when_some(gpu.driver_version.clone(), |element, version| {
+            element.child(metric_line(i18n::t!("8d72392edabe856e"), version))
+        })
+}
+
+fn resource_meter_row(
+    label: &'static str,
+    value: String,
+    percent: f32,
+    cx: &App,
+) -> impl IntoElement {
+    v_flex()
+        .w_full()
+        .min_w_0()
+        .gap_1()
+        .child(metric_line(label, value))
+        .child(ProgressBar::new(label, percent, 100., cx).fg_color(usage_color(percent, cx)))
+}
+
+fn temperature_summary(temperatures: &[TemperatureReading]) -> String {
+    temperatures
+        .iter()
+        .take(3)
+        .map(|reading| {
+            format!(
+                "{} {:.0}°C",
+                temperature_source_label(reading.source),
+                reading.celsius
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("  ")
+}
+
+fn gpu_summary(gpu: &GpuReading) -> String {
+    let mut summary = gpu.name.clone();
+    if let Some(percent) = gpu.utilization_percent {
+        summary.push_str(&format!(" · {percent:.0}%"));
+    }
+    if let Some(celsius) = gpu.temperature_celsius {
+        summary.push_str(&format!(" · {celsius:.0}°C"));
+    }
+    summary
+}
+
+/// 工具提示一行放不下完整名称，按字符截断以免切断多字节字符。
+fn shortened(text: &str, max_chars: usize) -> String {
+    let mut chars = text.chars();
+    let shortened: String = chars.by_ref().take(max_chars).collect();
+    if chars.next().is_some() {
+        format!("{shortened}…")
+    } else {
+        shortened
     }
 }
 
@@ -1335,12 +1595,79 @@ mod tests {
             load_average_fifteen: 0.125,
             sampled_at_unix_seconds: 60,
             local_ip_addresses: vec!["192.168.1.10".into(), "fe80::1".into()],
+            temperatures: vec![proto::SystemTemperature {
+                label: "coretemp Package id 0".into(),
+                source: "cpu".into(),
+                celsius: 66.5,
+            }],
+            gpus: vec![proto::SystemGpuReading {
+                name: "NVIDIA GeForce RTX 4090".into(),
+                vendor: "NVIDIA".into(),
+                driver_version: Some("550.120".into()),
+                memory_total_bytes: Some(24 * 1024 * 1024 * 1024),
+                memory_used_bytes: Some(1024 * 1024 * 1024),
+                utilization_percent: Some(12.),
+                temperature_celsius: Some(45.),
+            }],
         });
         assert_eq!(stats.hostname, "dev-host");
         assert_eq!(stats.cpu_core_usage_percent, [25., 50.]);
         assert_eq!(stats.load_average, [0.5, 0.25, 0.125]);
         assert_eq!(stats.network_transmitted_bytes_per_second, 40);
         assert_eq!(stats.local_ip_addresses, ["192.168.1.10", "fe80::1"]);
+        assert_eq!(stats.temperatures.len(), 1);
+        assert_eq!(stats.temperatures[0].source, TemperatureSource::Cpu);
+        assert_eq!(stats.temperatures[0].celsius, 66.5);
+        assert_eq!(stats.gpus.len(), 1);
+        assert_eq!(stats.gpus[0].name, "NVIDIA GeForce RTX 4090");
+        assert_eq!(stats.gpus[0].temperature_celsius, Some(45.));
+    }
+
+    #[test]
+    fn maps_unknown_temperature_sources_to_other() {
+        let stats = SystemStats::from(GetSystemStatsResponse {
+            temperatures: vec![proto::SystemTemperature {
+                label: "future sensor".into(),
+                source: "future-source".into(),
+                celsius: 40.,
+            }],
+            ..Default::default()
+        });
+        assert_eq!(stats.temperatures[0].source, TemperatureSource::Other);
+    }
+
+    #[test]
+    fn summarizes_temperatures_and_gpus_for_the_tooltip() {
+        let temperatures = [
+            TemperatureReading {
+                label: "coretemp Package id 0".into(),
+                source: TemperatureSource::Cpu,
+                celsius: 66.4,
+            },
+            TemperatureReading {
+                label: "amdgpu edge".into(),
+                source: TemperatureSource::Gpu,
+                celsius: 55.2,
+            },
+        ];
+        assert_eq!(temperature_summary(&temperatures), "CPU 66°C  GPU 55°C");
+
+        let gpu = GpuReading {
+            name: "NVIDIA GeForce RTX 4090".into(),
+            vendor: "NVIDIA".into(),
+            utilization_percent: Some(12.4),
+            temperature_celsius: Some(45.6),
+            ..Default::default()
+        };
+        assert_eq!(gpu_summary(&gpu), "NVIDIA GeForce RTX 4090 · 12% · 46°C");
+    }
+
+    #[test]
+    fn shortens_long_names_on_character_boundaries() {
+        assert_eq!(shortened("short", 10), "short");
+        assert_eq!(shortened("abcdefghij", 4), "abcd…");
+        // 不能切坏多字节字符。
+        assert_eq!(shortened("显卡名称很长", 3), "显卡名…");
     }
 
     #[test]

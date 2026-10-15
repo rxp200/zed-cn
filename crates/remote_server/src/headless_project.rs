@@ -52,6 +52,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use sysinfo::{Disks, Networks, ProcessRefreshKind, RefreshKind, System, UpdateKind};
+use system_specs::hardware::HardwareSampler;
 use terminal::terminal_settings::TerminalSettings;
 use util::{ResultExt, paths::PathStyle, rel_path::RelPath};
 use worktree::Worktree;
@@ -62,6 +63,7 @@ struct SystemStatsSampler {
     system: System,
     disks: Disks,
     networks: Networks,
+    hardware: HardwareSampler,
     last_sample: Instant,
 }
 
@@ -79,6 +81,7 @@ impl SystemStatsSampler {
             system,
             disks: Disks::new_with_refreshed_list(),
             networks: Networks::new_with_refreshed_list(),
+            hardware: HardwareSampler::new(),
             last_sample: Instant::now(),
         }
     }
@@ -107,6 +110,7 @@ impl SystemStatsSampler {
                     .iter()
                     .map(move |network| (name.as_str(), network.addr))
             }));
+        let hardware = self.hardware.sample();
 
         proto::GetSystemStatsResponse {
             hostname: System::host_name().unwrap_or_else(|| i18n::t!("26c953ee7077ba21").into()),
@@ -137,6 +141,28 @@ impl SystemStatsSampler {
             local_ip_addresses: local_ip_addresses
                 .into_iter()
                 .map(|address| address.to_string())
+                .collect(),
+            temperatures: hardware
+                .temperatures
+                .into_iter()
+                .map(|reading| proto::SystemTemperature {
+                    label: reading.label,
+                    source: reading.source.wire_name().to_string(),
+                    celsius: reading.celsius,
+                })
+                .collect(),
+            gpus: hardware
+                .gpus
+                .into_iter()
+                .map(|gpu| proto::SystemGpuReading {
+                    name: gpu.name,
+                    vendor: gpu.vendor,
+                    driver_version: gpu.driver_version,
+                    memory_total_bytes: gpu.memory_total_bytes,
+                    memory_used_bytes: gpu.memory_used_bytes,
+                    utilization_percent: gpu.utilization_percent,
+                    temperature_celsius: gpu.temperature_celsius,
+                })
                 .collect(),
             sampled_at_unix_seconds: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -2150,5 +2176,13 @@ mod tests {
         assert!(stats.memory_total_bytes > 0, "总内存应大于 0");
         assert!(stats.memory_used_bytes <= stats.memory_total_bytes);
         assert!(!stats.hostname.is_empty(), "主机名不应为空");
+        for temperature in &stats.temperatures {
+            assert!(!temperature.label.is_empty());
+            assert!(temperature.celsius.is_finite());
+            assert!((0.0..=150.0).contains(&temperature.celsius));
+        }
+        for gpu in &stats.gpus {
+            assert!(!gpu.name.is_empty());
+        }
     }
 }

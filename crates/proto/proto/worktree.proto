@@ -189,6 +189,27 @@ message ReadEpubEntryResponse {
 
 message GetSystemStats {}
 
+// A single temperature sensor reading. `source` is a stable cross-process component
+// identifier (cpu/gpu/storage/board/network/other); unknown values fall back to other
+// on the receiving side.
+message SystemTemperature {
+  string label = 1;
+  string source = 2;
+  float celsius = 3;
+}
+
+// A single GPU reading. A missing optional field means the current platform or driver
+// does not expose that piece of data.
+message SystemGpuReading {
+  string name = 1;
+  string vendor = 2;
+  optional string driver_version = 3;
+  optional uint64 memory_total_bytes = 4;
+  optional uint64 memory_used_bytes = 5;
+  optional float utilization_percent = 6;
+  optional float temperature_celsius = 7;
+}
+
 message GetSystemStatsResponse {
   string hostname = 1;
   string os_name = 2;
@@ -210,6 +231,8 @@ message GetSystemStatsResponse {
   double load_average_fifteen = 18;
   int64 sampled_at_unix_seconds = 19;
   repeated string local_ip_addresses = 20;
+  repeated SystemTemperature temperatures = 21;
+  repeated SystemGpuReading gpus = 22;
 }
 
 message CreatePersistentTerminal {
