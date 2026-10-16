@@ -9,6 +9,7 @@ pub struct TreeViewItem {
     id: ElementId,
     group_name: Option<SharedString>,
     label: SharedString,
+    icon: Option<IconName>,
     highlight_ranges: Vec<Range<usize>>,
     expanded: bool,
     selected: bool,
@@ -31,6 +32,7 @@ impl TreeViewItem {
             id: id.into(),
             group_name: None,
             label: label.into(),
+            icon: None,
             highlight_ranges: Vec::new(),
             expanded: false,
             selected: false,
@@ -46,6 +48,11 @@ impl TreeViewItem {
             tab_index: None,
             focus_handle: None,
         }
+    }
+
+    pub fn icon(mut self, icon: IconName) -> Self {
+        self.icon = Some(icon);
+        self
     }
 
     pub fn highlight_ranges(mut self, highlight_ranges: Vec<Range<usize>>) -> Self {
@@ -210,6 +217,17 @@ impl RenderOnce for TreeViewItem {
                                     .opened_icon(IconName::ChevronDown)
                                     .closed_icon(IconName::ChevronRight),
                             )
+                            .when_some(self.icon, |this, icon| {
+                                this.child(
+                                    Icon::new(icon)
+                                        .size(IconSize::Small)
+                                        .color(if self.selected {
+                                            Color::Accent
+                                        } else {
+                                            Color::Muted
+                                        }),
+                                )
+                            })
                             .child(render_label())
                         } else {
                             this.child(indentation_line).child(

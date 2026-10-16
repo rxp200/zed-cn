@@ -2,10 +2,11 @@ use agent_skills::{Skill, SkillIndex, SkillSource, encode_skill_share_link};
 use fs::RemoveOptions;
 use gpui::{App, ClipboardItem, PromptLevel, ScrollHandle, SharedString, prelude::*};
 
-use ui::{Divider, Tooltip, prelude::*};
+use ui::{Tooltip, prelude::*};
 use util::ResultExt as _;
 use util::paths::PathExt as _;
 
+use crate::components::settings_card;
 use crate::pages::SkillCreatorOpenMode;
 use crate::{SettingsUiFile, SettingsWindow};
 
@@ -89,21 +90,11 @@ pub(crate) fn render_skills_setup_page(
             } else {
                 this.track_scroll(scroll_handle)
                     .overflow_y_scroll()
-                    .children(skills.iter().enumerate().flat_map(|(i, skill)| {
-                        let mut elements: Vec<AnyElement> =
-                            vec![render_skill_row(skill, settings_window, cx)];
-
-                        if i + 1 < skills.len() {
-                            elements.push(
-                                div()
-                                    .px_8()
-                                    .child(Divider::horizontal().flex_grow_1())
-                                    .into_any_element(),
-                            );
-                        }
-
-                        elements
-                    }))
+                    .child(div().px_8().child(settings_card(cx).children(
+                        skills.iter().enumerate().map(|(index, skill)| {
+                            render_skill_row(skill, index == 0, settings_window, cx)
+                        }),
+                    )))
             }
         })
         .into_any_element()
@@ -111,6 +102,7 @@ pub(crate) fn render_skills_setup_page(
 
 fn render_skill_row(
     skill: &Skill,
+    first: bool,
     settings_window: &SettingsWindow,
     cx: &mut Context<SettingsWindow>,
 ) -> AnyElement {
@@ -136,7 +128,6 @@ fn render_skill_row(
     let group = format!("group-{}", skill.name);
 
     let title = h_flex()
-        .ml(rems_from_px(-22.0_f32))
         .gap_1()
         .child({
             let share_skill_file_path = skill.skill_file_path.clone();
@@ -199,8 +190,12 @@ fn render_skill_row(
         .w_full()
         .justify_between()
         .py_3()
-        .px_8()
+        .px_4()
         .gap_4()
+        .when(!first, |this| {
+            this.border_t_1()
+                .border_color(cx.theme().colors().border_variant)
+        })
         .child(
             v_flex().gap_0p5().min_w_0().flex_1().child(title).child(
                 Label::new(skill.description.clone())

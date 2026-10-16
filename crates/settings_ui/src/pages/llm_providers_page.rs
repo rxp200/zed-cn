@@ -22,13 +22,13 @@ use settings::{
     OpenAiCompatibleModelCapabilities, OpenAiCompatibleSettingsContent, OpenAiReasoningEffort,
 };
 use ui::{
-    ButtonLink, Checkbox, ConfiguredApiCard, ContextMenu, Divider, DividerColor, DropdownMenu,
-    DropdownStyle, IconPosition, PopoverMenu, ToggleState, prelude::*,
+    ButtonLink, Checkbox, ConfiguredApiCard, ContextMenu, Divider, DropdownMenu, DropdownStyle,
+    IconPosition, PopoverMenu, ToggleState, prelude::*,
 };
 use util::ResultExt as _;
 
 use crate::SettingsWindow;
-use crate::components::SettingsInputField;
+use crate::components::{SettingsInputField, settings_card};
 
 pub(crate) fn render_llm_providers_page(
     settings_window: &SettingsWindow,
@@ -38,26 +38,99 @@ pub(crate) fn render_llm_providers_page(
 ) -> AnyElement {
     let providers = LanguageModelRegistry::read_global(cx).visible_providers();
 
-    v_flex()
+    let selected = settings_window
+        .configuring_provider
+        .as_ref()
+        .and_then(|id| providers.iter().find(|provider| provider.id() == *id))
+        .or_else(|| providers.first());
+
+    h_flex()
         .id("llm-providers-page")
         .size_full()
-        .px_8()
-        .pb_16()
-        .track_scroll(scroll_handle)
-        .overflow_y_scroll()
+        .items_start()
         .child(
-            Label::new(i18n::t!("6b011be6687aeb70"))
-                .size(LabelSize::Small)
-                .color(Color::Muted),
+            v_flex()
+                .id("provider-navigation")
+                .w_56()
+                .h_full()
+                .flex_shrink_0()
+                .p_3()
+                .gap_1()
+                .border_r_1()
+                .border_color(cx.theme().colors().border_variant)
+                .overflow_y_scroll()
+                .children(providers.iter().map(|provider| {
+                    let id = provider.id();
+                    let active = selected.is_some_and(|selected| selected.id() == id);
+                    let icon = match provider.icon() {
+                        IconOrSvg::Svg(path) => Icon::from_external_svg(path),
+                        IconOrSvg::Icon(name) => Icon::new(name),
+                    };
+                    Button::new(format!("provider-{}", id.0), provider.name().0)
+                        .disabled(
+                            settings_window
+                                .llm_provider_form
+                                .as_ref()
+                                .is_some_and(|form| form.is_saving),
+                        )
+                        .full_width()
+                        .start_icon(icon.size(IconSize::Small))
+                        .style(if active {
+                            ButtonStyle::Tinted(ui::TintColor::Accent)
+                        } else {
+                            ButtonStyle::Subtle
+                        })
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            if compatible_provider(&id.0, cx).is_some() {
+                                this.configuring_provider = Some(id.clone());
+                                open_existing_llm_provider_form(
+                                    this,
+                                    id.clone(),
+                                    false,
+                                    window,
+                                    cx,
+                                );
+                            } else {
+                                this.configuring_provider = Some(id.clone());
+                                cx.notify();
+                            }
+                        }))
+                })),
         )
-        .children(
-            providers
-                .iter()
-                .enumerate()
-                .map(|(index, provider)| {
-                    render_provider_section(settings_window, provider, index == 0, window, cx)
-                })
-                .collect::<Vec<_>>(),
+        .child(
+            v_flex()
+                .id("provider-details")
+                .flex_1()
+                .min_w_0()
+                .h_full()
+                .px_6()
+                .pb_8()
+                .track_scroll(scroll_handle)
+                .overflow_y_scroll()
+                .when_some(selected, |this, provider| {
+                    if settings_window
+                        .llm_provider_form
+                        .as_ref()
+                        .is_some_and(|form| {
+                            form.editing_name.as_deref() == Some(provider.id().0.as_ref())
+                        })
+                    {
+                        this.child(render_llm_provider_form_page(
+                            settings_window,
+                            &ScrollHandle::new(),
+                            window,
+                            cx,
+                        ))
+                    } else {
+                        this.child(render_provider_section(
+                            settings_window,
+                            provider,
+                            true,
+                            window,
+                            cx,
+                        ))
+                    }
+                }),
         )
         .into_any_element()
 }
@@ -182,7 +255,24 @@ fn render_provider_section(
             )
         }
         Some(ProviderSettingsView::SubPage(settings)) => {
-            render_subpage_item(provider, settings.description, cx)
+            if compatible_provider(&provider_id.0, cx).is_some() {
+                let id = provider_id.clone();
+                cx.defer_in(window, move |this, window, cx| {
+                    if this.llm_provider_form.is_none() {
+                        open_existing_llm_provider_form(this, id, false, window, cx);
+                    }
+                });
+                render_subpage_item(provider, settings.description, cx)
+            } else {
+                get_or_create_configuration_view(
+                    settings_window,
+                    &provider_id,
+                    settings.create_view,
+                    window,
+                    cx,
+                )
+                .into_any_element()
+            }
         }
         None => div().into_any_element(),
     };
@@ -190,37 +280,36 @@ fn render_provider_section(
     v_flex()
         .min_w_0()
         .map(|s| if is_first { s.pt_4() } else { s.pt_8() })
-        .gap_1p5()
-        .child(render_provider_header(provider_name, provider.icon(), cx))
-        .child(body)
+        .child(
+            settings_card(cx)
+                .child(
+                    h_flex()
+                        .px_4()
+                        .py_3()
+                        .gap_2()
+                        .items_center()
+                        .child(render_provider_header_icon(provider.icon()))
+                        .child(Label::new(provider_name)),
+                )
+                .child(
+                    div()
+                        .px_4()
+                        .py_3()
+                        .border_t_1()
+                        .border_color(cx.theme().colors().border_variant)
+                        .child(body),
+                ),
+        )
         .into_any_element()
 }
 
-/// An icon + name header with a faded divider, mirroring `SettingsSectionHeader`
-/// but able to render providers' external SVG icons.
-fn render_provider_header(
-    provider_name: SharedString,
-    icon: IconOrSvg,
-    cx: &mut Context<SettingsWindow>,
-) -> impl IntoElement {
+/// 提供商图标（支持外部 SVG），用于卡片头部。
+fn render_provider_header_icon(icon: IconOrSvg) -> Icon {
     let icon = match icon {
         IconOrSvg::Svg(path) => Icon::from_external_svg(path),
         IconOrSvg::Icon(name) => Icon::new(name),
-    }
-    .color(Color::Muted);
-
-    v_flex()
-        .w_full()
-        .gap_1p5()
-        .child(
-            h_flex().gap_1p5().child(icon).child(
-                Label::new(provider_name)
-                    .size(LabelSize::Small)
-                    .color(Color::Muted)
-                    .buffer_font(cx),
-            ),
-        )
-        .child(Divider::horizontal().color(DividerColor::BorderFaded))
+    };
+    icon.color(Color::Muted)
 }
 
 fn render_api_key_providers_item(
@@ -450,6 +539,10 @@ fn open_provider_configuration(
     window: &mut Window,
     cx: &mut Context<SettingsWindow>,
 ) {
+    if compatible_provider(&provider_id.0, cx).is_some() {
+        open_existing_llm_provider_form(settings_window, provider_id, true, window, cx);
+        return;
+    }
     let title = LanguageModelRegistry::read_global(cx)
         .provider(&provider_id)
         .map(|provider| provider.name().0)
@@ -525,6 +618,7 @@ fn render_provider_config_sub_page(
                                 open_existing_llm_provider_form(
                                     this,
                                     provider_id.clone(),
+                                    true,
                                     window,
                                     cx,
                                 );
@@ -557,6 +651,7 @@ fn compatible_provider(id: &str, cx: &App) -> Option<(CompatibleProviderKind, St
 fn open_existing_llm_provider_form(
     settings_window: &mut SettingsWindow,
     provider_id: LanguageModelProviderId,
+    push_page: bool,
     window: &mut Window,
     cx: &mut Context<SettingsWindow>,
 ) {
@@ -595,6 +690,10 @@ fn open_existing_llm_provider_form(
     settings_window.llm_provider_form = Some(LlmProviderForm::for_existing(
         kind, id, &api_url, models, window, cx,
     ));
+    cx.notify();
+    if !push_page {
+        return;
+    }
     settings_window.push_dynamic_sub_page(
         i18n::t!("0449faac00f2038c", id = id),
         i18n::t!("e3ce49ba838f9dbd"),
@@ -1099,6 +1198,14 @@ fn render_models_section(
         )
 }
 
+fn discovery_api_key(entered: &str, saved: Option<String>) -> Option<String> {
+    if entered.trim().is_empty() {
+        saved.filter(|key| !key.is_empty())
+    } else {
+        Some(entered.trim().to_string())
+    }
+}
+
 fn fetch_llm_provider_models(
     settings_window: &mut SettingsWindow,
     window: &mut Window,
@@ -1114,8 +1221,18 @@ fn fetch_llm_provider_models(
     let form_id = form.id;
     let kind = form.kind;
     let api_url = form.api_url.read(cx).text(cx);
-    let api_key = form.api_key.read(cx).text(cx);
-    if api_url.trim().is_empty() || api_key.trim().is_empty() {
+    let entered_key = form.api_key.read(cx).text(cx);
+    let saved_key = form
+        .editing_name
+        .as_ref()
+        .filter(|_| form.original_api_url.as_deref() == Some(api_url.trim()))
+        .and_then(|name| {
+            LanguageModelRegistry::read_global(cx)
+                .provider(&LanguageModelProviderId(name.clone().into()))
+                .and_then(|provider| provider.configuration_api_key(api_url.trim(), cx))
+        });
+    let api_key = discovery_api_key(&entered_key, saved_key);
+    if api_url.trim().is_empty() || api_key.is_none() {
         form.error = Some(i18n::t!("676790accedbfb32").into());
         cx.notify();
         return;
@@ -1127,8 +1244,27 @@ fn fetch_llm_provider_models(
     cx.notify();
 
     let api_url = api_url.trim().trim_end_matches('/').to_string();
-    let api_key = api_key.trim().to_string();
+    let Some(api_key) = api_key else {
+        return;
+    };
     let http_client = cx.http_client();
+    let settings = AllLanguageModelSettings::get_global(cx);
+    let extra_headers = form
+        .editing_name
+        .as_ref()
+        .map(|name| match kind {
+            CompatibleProviderKind::OpenAi => settings
+                .openai_compatible
+                .get(name.as_str())
+                .map(|provider| provider.custom_headers.clone())
+                .unwrap_or_default(),
+            CompatibleProviderKind::Anthropic => settings
+                .anthropic_compatible
+                .get(name.as_str())
+                .map(|provider| provider.custom_headers.clone())
+                .unwrap_or_default(),
+        })
+        .unwrap_or_default();
     cx.spawn_in(window, async move |this, cx| {
         let result = match kind {
             CompatibleProviderKind::OpenAi => lmstudio::get_models(
@@ -1136,7 +1272,7 @@ fn fetch_llm_provider_models(
                 &api_url,
                 Some(&api_key),
                 None,
-                &Default::default(),
+                &extra_headers,
             )
             .await
             .context(i18n::t!("ecefdf3d55ecebcf"))
@@ -1159,28 +1295,25 @@ fn fetch_llm_provider_models(
                     })
                     .collect::<Vec<_>>()
             }),
-            CompatibleProviderKind::Anthropic => anthropic::list_models(
-                http_client.as_ref(),
-                &api_url,
-                &api_key,
-                &Default::default(),
-            )
-            .await
-            .map_err(|error| anyhow::anyhow!("{error:?}"))
-            .context(i18n::t!("d183ee00dc4aef1f"))
-            .map(|models| {
-                models
-                    .into_iter()
-                    .map(|model| DiscoveredModel {
-                        name: model.id,
-                        max_tokens: model.max_input_tokens,
-                        max_output_tokens: model.max_output_tokens,
-                        supports_tools: true,
-                        supports_images: model.supports_images,
-                        supports_thinking: model.supports_thinking,
+            CompatibleProviderKind::Anthropic => {
+                anthropic::list_models(http_client.as_ref(), &api_url, &api_key, &extra_headers)
+                    .await
+                    .map_err(|error| anyhow::anyhow!("{error:?}"))
+                    .context(i18n::t!("d183ee00dc4aef1f"))
+                    .map(|models| {
+                        models
+                            .into_iter()
+                            .map(|model| DiscoveredModel {
+                                name: model.id,
+                                max_tokens: model.max_input_tokens,
+                                max_output_tokens: model.max_output_tokens,
+                                supports_tools: true,
+                                supports_images: model.supports_images,
+                                supports_thinking: model.supports_thinking,
+                            })
+                            .collect::<Vec<_>>()
                     })
-                    .collect::<Vec<_>>()
-            }),
+            }
         };
 
         this.update_in(cx, |this, window, cx| {
@@ -1191,6 +1324,10 @@ fn fetch_llm_provider_models(
                 return;
             }
             form.is_fetching_models = false;
+            if form.api_url.read(cx).text(cx).trim().trim_end_matches('/') != api_url {
+                cx.notify();
+                return;
+            }
             match result {
                 Ok(models) if models.is_empty() => {
                     form.error = Some(i18n::t!("c7b3d64add4ec35e").into());
@@ -1518,12 +1655,16 @@ fn render_form_actions(is_saving: bool, cx: &mut Context<SettingsWindow>) -> imp
             Button::new("llm-provider-form-cancel", i18n::t!("2cd0f3be8738a86c"))
                 .disabled(is_saving)
                 .on_click(cx.listener(|this, _, window, cx| {
-                    this.pop_sub_page(window, cx);
+                    this.llm_provider_form = None;
+                    if !this.sub_page_stack.is_empty() {
+                        this.pop_sub_page(window, cx);
+                    }
+                    cx.notify();
                 })),
         )
         .child(
             Button::new("llm-provider-form-save", i18n::t!("ab65008428009126"))
-                .style(ButtonStyle::Filled)
+                .style(ButtonStyle::Tinted(ui::TintColor::Accent))
                 .disabled(is_saving)
                 .on_click(cx.listener(|this, _, window, cx| {
                     save_llm_provider_form(this, window, cx);
@@ -1689,7 +1830,10 @@ fn save_llm_provider_form(
                         .is_some_and(|form| Some(form.id) == form_id)
                     {
                         this.llm_provider_form = None;
-                        this.pop_sub_page(window, cx);
+                        if !this.sub_page_stack.is_empty() {
+                            this.pop_sub_page(window, cx);
+                        }
+                        cx.notify();
                     }
                 })
             })??;
@@ -1919,6 +2063,20 @@ mod tests {
     use settings::SettingsStore;
 
     use super::*;
+
+    #[test]
+    fn discovery_reuses_saved_key_and_prioritizes_explicit_replacement() {
+        assert_eq!(
+            discovery_api_key("", Some("saved-key".into())).as_deref(),
+            Some("saved-key")
+        );
+        assert_eq!(
+            discovery_api_key("  new-key  ", Some("saved-key".into())).as_deref(),
+            Some("new-key")
+        );
+        assert_eq!(discovery_api_key("  ", None), None);
+        assert_eq!(discovery_api_key("", Some(String::new())), None);
+    }
 
     #[test]
     fn editing_credential_policy_requires_new_key_only_for_new_url() {

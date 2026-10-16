@@ -14,12 +14,15 @@ use settings::{
 };
 use ui::{
     AiSettingItem, AiSettingItemSource, AiSettingItemStatus, ContextMenu, ContextMenuEntry,
-    Divider, PopoverMenu, Tooltip, prelude::*,
+    PopoverMenu, Tooltip, prelude::*,
 };
 use util::ResultExt as _;
 use workspace::{MultiWorkspace, Workspace, create_and_open_local_file};
 
-use crate::SettingsWindow;
+use crate::{
+    SettingsWindow,
+    components::{settings_card, settings_card_row},
+};
 
 pub(crate) fn render_external_agents_page(
     settings_window: &SettingsWindow,
@@ -141,14 +144,17 @@ fn render_no_project_state(cx: &App) -> AnyElement {
 }
 
 fn render_agent_list(agents: Vec<AgentRow>, cx: &mut Context<SettingsWindow>) -> AnyElement {
-    v_flex()
-        .w_full()
-        .gap_1()
-        .children(itertools::intersperse_with(
-            agents.into_iter().map(|(id, icon, display_name, source)| {
-                render_agent(id, icon, display_name, source, cx).into_any_element()
-            }),
-            || Divider::horizontal().into_any_element(),
+    settings_card(cx)
+        .children(agents.into_iter().enumerate().map(
+            |(index, (id, icon, display_name, source))| {
+                settings_card_row(index == 0, cx).py_0().child(render_agent(
+                    id,
+                    icon,
+                    display_name,
+                    source,
+                    cx,
+                ))
+            },
         ))
         .into_any_element()
 }

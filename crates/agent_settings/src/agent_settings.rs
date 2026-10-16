@@ -52,7 +52,7 @@ impl PanelLayout {
         project_panel_dock: Some(DockSide::Right),
         outline_panel_dock: Some(DockSide::Right),
         collaboration_panel_dock: Some(DockPosition::Right),
-        git_panel_dock: Some(DockPosition::Right),
+        git_panel_dock: Some(DockPosition::Bottom),
     };
 
     const EDITOR: Self = Self {
@@ -60,7 +60,7 @@ impl PanelLayout {
         project_panel_dock: Some(DockSide::Left),
         outline_panel_dock: Some(DockSide::Left),
         collaboration_panel_dock: Some(DockPosition::Left),
-        git_panel_dock: Some(DockPosition::Left),
+        git_panel_dock: Some(DockPosition::Bottom),
     };
 
     pub fn is_agent_layout(&self) -> bool {
@@ -2246,7 +2246,7 @@ mod tests {
                 user_layout.collaboration_panel_dock,
                 Some(DockPosition::Left)
             );
-            assert_eq!(user_layout.git_panel_dock, Some(DockPosition::Left));
+            assert_eq!(user_layout.git_panel_dock, Some(DockPosition::Bottom));
 
             // Even though defaults are now agent, the backfilled user settings
             // keep everything in the editor layout. The user's experience

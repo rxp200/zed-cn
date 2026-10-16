@@ -1,5 +1,8 @@
 pub use crate::commit_context_menu::{CopyCommitSha, CopyCommitTag, OpenCommitView};
 use crate::{
+    branch_tree::{
+        BranchTreeNode, BranchTreeRowKind, build_branch_tree, flatten_branch_tree, leaf_name,
+    },
     commit_context_menu::{
         CUSTOM_GIT_COMMANDS_DOCS_SLUG, CommitContextMenuData, CommitContextMenuSource,
         commit_context_menu, git_context_menu_tasks, git_task_context,
@@ -8,14 +11,14 @@ use crate::{
     commit_view::CommitView,
     git_status_icon,
 };
-use collections::{BTreeMap, HashMap, IndexSet};
+use collections::{BTreeMap, HashMap, HashSet, IndexSet};
 use editor::Editor;
 use file_icons::FileIcons;
 use git::{
     BuildCommitPermalinkParams, GitHostingProviderRegistry, GitRemote, Oid, ParsedGitRemote,
     parse_git_remote_url,
     repository::{
-        AUTHOR_SEARCH_QUERY_PREFIX, InitialGraphCommitData, LogOrder, LogSource, RepoPath,
+        AUTHOR_SEARCH_QUERY_PREFIX, Branch, InitialGraphCommitData, LogOrder, LogSource, RepoPath,
         SearchCommitArgs,
     },
     status::{FileStatus, StatusCode, TrackedStatus},
@@ -24,7 +27,7 @@ use gpui::{
     Action, Anchor, AnyElement, App, Bounds, ClickEvent, ClipboardItem, DefiniteLength,
     DismissEvent, DragMoveEvent, ElementId, Empty, Entity, EventEmitter, FocusHandle, Focusable,
     Hsla, MouseButton, MouseDownEvent, PathBuilder, Pixels, Point, ScrollHandle, ScrollStrategy,
-    ScrollWheelEvent, SharedString, Subscription, Task, TextRun, TextStyleRefinement,
+    ScrollWheelEvent, SharedString, Stateful, Subscription, Task, TextRun, TextStyleRefinement,
     UniformListScrollHandle, WeakEntity, Window, actions, anchored, deferred, point, prelude::*,
     px, uniform_list,
 };
@@ -58,11 +61,11 @@ use time::{OffsetDateTime, UtcOffset, format_description::BorrowedFormatItem};
 use ui::{
     Chip, ColumnWidthConfig, CommonAnimationExt as _, ContextMenu, ContextMenuEntry, DiffStat,
     Disclosure, Divider, HeaderResizeInfo, HighlightedLabel, IndentGuideColors, ListItem,
-    ListItemSpacing, RedistributableColumnsState, ScrollableHandle, Switch, SwitchLabelPosition,
-    Table, TableInteractionState, TableRenderContext, TableResizeBehavior, Tooltip, WithScrollbar,
-    bind_redistributable_columns, prelude::*, redistribute_hidden_fractions,
-    redistribute_hidden_widths, render_redistributable_columns_resize_handles, render_table_header,
-    table_row::TableRow,
+    ListItemSpacing, ListSubHeader, RedistributableColumnsState, ScrollableHandle, Switch,
+    SwitchLabelPosition, Table, TableInteractionState, TableRenderContext, TableResizeBehavior,
+    Tooltip, WithScrollbar, bind_redistributable_columns, prelude::*,
+    redistribute_hidden_fractions, redistribute_hidden_widths,
+    render_redistributable_columns_resize_handles, render_table_header, table_row::TableRow,
 };
 use util::{ResultExt, debug_panic};
 use workspace::{
@@ -1517,6 +1520,9 @@ pub struct GitGraph {
     changed_files_expanded_dirs: HashMap<RepoPath, bool>,
     pending_select_sha: Option<Oid>,
     nav_history: Option<ItemNavHistory>,
+    sidebar_visible: bool,
+    sidebar_branches: Vec<Branch>,
+    sidebar_collapsed_folders: HashSet<SharedString>,
 }
 
 impl GitGraph {
@@ -1817,9 +1823,13 @@ impl GitGraph {
             changed_files_expanded_dirs: HashMap::default(),
             pending_select_sha: None,
             nav_history: None,
+            sidebar_visible: true,
+            sidebar_branches: Vec::new(),
+            sidebar_collapsed_folders: HashSet::default(),
         };
 
         this.fetch_initial_graph_data(cx);
+        this.refresh_sidebar_branches(cx);
         this
     }
 
@@ -1900,6 +1910,7 @@ impl GitGraph {
                 self.invalidate_state(cx);
             }
             RepositoryEvent::HeadChanged | RepositoryEvent::BranchListChanged => {
+                self.refresh_sidebar_branches(cx);
                 // Only invalidate if we scanned atleast once,
                 // meaning we are not inside the initial repo loading state
                 // NOTE: this fixes an loading performance regression
@@ -2757,7 +2768,221 @@ impl GitGraph {
         {
             self.repo_id = repo_id;
             self.invalidate_state(cx);
+            self.refresh_sidebar_branches(cx);
         }
+    }
+
+    fn refresh_sidebar_branches(&mut self, cx: &mut Context<Self>) {
+        self.sidebar_branches = self
+            .get_repository(cx)
+            .map(|repository| repository.read(cx).branch_list.to_vec())
+            .unwrap_or_default();
+        cx.notify();
+    }
+
+    fn set_sidebar_log_source(&mut self, log_source: LogSource, cx: &mut Context<Self>) {
+        if self.log_source == log_source {
+            return;
+        }
+        self.log_source = log_source;
+        self.pending_select_sha = None;
+        self.selected_entry_idx = None;
+        self.selected_commit_diff = None;
+        self.selected_commit_diff_stats = None;
+        self.selected_commit_message = None;
+        self._commit_diff_task = None;
+        self._selected_commit_message_task = None;
+        self.changed_files_expanded_dirs.clear();
+        self.invalidate_state(cx);
+        self.fetch_initial_graph_data(cx);
+    }
+
+    fn sidebar_row(
+        &self,
+        id: impl Into<ElementId>,
+        depth: usize,
+        cx: &mut Context<Self>,
+        content: AnyElement,
+        on_click: impl Fn(&mut Self, &mut Context<Self>) + 'static,
+    ) -> Stateful<Div> {
+        let colors = cx.theme().colors();
+        div()
+            .id(id)
+            .cursor_pointer()
+            .rounded_md()
+            .py_0p5()
+            .pr_1()
+            .pl(rems(0.25 + 0.75 * depth as f32))
+            .hover(|style| style.bg(colors.ghost_element_hover))
+            .child(content)
+            .on_click(cx.listener(move |this, _, _, cx| on_click(this, cx)))
+    }
+
+    fn render_sidebar_tree(
+        &self,
+        id_prefix: &'static str,
+        tree: &BranchTreeNode,
+        branches: &[Branch],
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
+        let mut rows = Vec::new();
+        for row in flatten_branch_tree(tree, &self.sidebar_collapsed_folders) {
+            match row.kind {
+                BranchTreeRowKind::Folder {
+                    name,
+                    path,
+                    expanded,
+                } => {
+                    let folder_path = path.clone();
+                    rows.push(
+                        self.sidebar_row(
+                            SharedString::from(format!("{id_prefix}:folder:{path}")),
+                            row.depth,
+                            cx,
+                            h_flex()
+                                .gap_1p5()
+                                .min_w_0()
+                                .child(
+                                    Icon::new(if expanded {
+                                        IconName::ChevronDown
+                                    } else {
+                                        IconName::ChevronRight
+                                    })
+                                    .color(Color::Muted)
+                                    .size(IconSize::Small),
+                                )
+                                .child(
+                                    Icon::new(IconName::Folder)
+                                        .color(Color::Muted)
+                                        .size(IconSize::Small),
+                                )
+                                .child(Label::new(name).single_line().truncate())
+                                .into_any_element(),
+                            move |this, cx| {
+                                if !this.sidebar_collapsed_folders.remove(&folder_path) {
+                                    this.sidebar_collapsed_folders.insert(folder_path.clone());
+                                }
+                                cx.notify();
+                            },
+                        )
+                        .into_any_element(),
+                    );
+                }
+                BranchTreeRowKind::Leaf { branch_index } => {
+                    let Some(branch) = branches.get(branch_index).cloned() else {
+                        continue;
+                    };
+                    let is_current_source = matches!(
+                        &self.log_source,
+                        LogSource::Branch(name) if name == &branch.ref_name
+                    );
+                    let label = SharedString::from(leaf_name(branch.name()));
+                    let is_head = branch.is_head;
+                    let full_name = SharedString::from(branch.name().to_string());
+                    let ref_name = branch.ref_name.clone();
+                    let selected_background = cx.theme().colors().ghost_element_selected;
+                    rows.push(
+                        self.sidebar_row(
+                            SharedString::from(format!("{id_prefix}:branch:{ref_name}")),
+                            row.depth,
+                            cx,
+                            h_flex()
+                                .gap_1p5()
+                                .min_w_0()
+                                .child(
+                                    Icon::new(IconName::GitBranch)
+                                        .color(if is_head { Color::Accent } else { Color::Muted })
+                                        .size(IconSize::Small),
+                                )
+                                .child(
+                                    Label::new(label)
+                                        .single_line()
+                                        .truncate()
+                                        .when(is_head, |this| this.color(Color::Accent)),
+                                )
+                                .into_any_element(),
+                            move |this, cx| {
+                                this.set_sidebar_log_source(
+                                    LogSource::Branch(ref_name.clone()),
+                                    cx,
+                                );
+                            },
+                        )
+                        .when(is_current_source, |this| this.bg(selected_background))
+                        .tooltip(Tooltip::text(full_name))
+                        .into_any_element(),
+                    );
+                }
+            }
+        }
+        rows
+    }
+
+    fn render_branch_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let border_variant = cx.theme().colors().border_variant;
+        let selected_background = cx.theme().colors().ghost_element_selected;
+        let local_branches: Vec<Branch> = self
+            .sidebar_branches
+            .iter()
+            .filter(|branch| !branch.is_remote())
+            .cloned()
+            .collect();
+        let remote_branches: Vec<Branch> = self
+            .sidebar_branches
+            .iter()
+            .filter(|branch| branch.is_remote())
+            .cloned()
+            .collect();
+        let local_tree = build_branch_tree(&local_branches);
+        let remote_tree = build_branch_tree(&remote_branches);
+        let all_commits_selected = matches!(self.log_source, LogSource::All);
+        let all_commits_row = self
+            .sidebar_row(
+                "git-graph-sidebar-all-commits",
+                0,
+                cx,
+                h_flex()
+                    .gap_1p5()
+                    .min_w_0()
+                    .child(
+                        Icon::new(IconName::GitGraph)
+                            .color(Color::Muted)
+                            .size(IconSize::Small),
+                    )
+                    .child(
+                        Label::new(i18n::t!("bce74369f872a7eb"))
+                            .single_line()
+                            .truncate(),
+                    )
+                    .into_any_element(),
+                |this, cx| this.set_sidebar_log_source(LogSource::All, cx),
+            )
+            .when(all_commits_selected, |this| this.bg(selected_background));
+
+        v_flex()
+            .w(rems(14.))
+            .h_full()
+            .flex_shrink_0()
+            .border_r_1()
+            .border_color(border_variant)
+            .child(
+                v_flex()
+                    .id("git-graph-branch-sidebar")
+                    .flex_1()
+                    .overflow_y_scroll()
+                    .p_1()
+                    .gap_0p5()
+                    .child(all_commits_row)
+                    .child(ListSubHeader::new(i18n::t!("bf4ad761840fcd0a")))
+                    .children(self.render_sidebar_tree("local", &local_tree, &local_branches, cx))
+                    .child(ListSubHeader::new(i18n::t!("7ba00927dde9122f")))
+                    .children(self.render_sidebar_tree(
+                        "remote",
+                        &remote_tree,
+                        &remote_branches,
+                        cx,
+                    )),
+            )
     }
 
     pub fn select_commit_by_sha(&mut self, sha: impl TryInto<Oid>, cx: &mut Context<Self>) {
@@ -3152,6 +3377,16 @@ impl GitGraph {
             .gap_1p5()
             .border_b_1()
             .border_color(color.border_variant)
+            .child(
+                IconButton::new("git-graph-toggle-branch-sidebar", IconName::ListTree)
+                    .shape(ui::IconButtonShape::Square)
+                    .toggle_state(self.sidebar_visible)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.sidebar_visible = !this.sidebar_visible;
+                        cx.notify();
+                    }))
+                    .tooltip(Tooltip::text(i18n::t!("ee19963ae15d8584"))),
+            )
             .child(
                 h_flex()
                     .h_8()
@@ -5221,7 +5456,15 @@ impl Render for GitGraph {
                 v_flex()
                     .size_full()
                     .child(self.render_search_bar(cx))
-                    .child(div().flex_1().child(content)),
+                    .child(
+                        h_flex()
+                            .flex_1()
+                            .min_h_0()
+                            .when(self.sidebar_visible, |this| {
+                                this.child(self.render_branch_sidebar(cx))
+                            })
+                            .child(div().flex_1().min_w_0().h_full().child(content)),
+                    ),
             )
             .children(self.context_menu.as_ref().map(|context_menu| {
                 deferred(
@@ -6741,6 +6984,20 @@ mod tests {
                 window,
                 cx,
             )
+        });
+        cx.run_until_parked();
+
+        git_graph.update(cx, |graph, cx| {
+            let expected = first_repository.read(cx).branch_list.len();
+            assert_eq!(graph.sidebar_branches.len(), expected);
+            graph.set_sidebar_log_source(LogSource::Branch("refs/heads/main".into()), cx);
+            assert_eq!(
+                graph.log_source,
+                LogSource::Branch("refs/heads/main".into())
+            );
+            assert!(graph.selected_entry_idx.is_none());
+            assert!(graph.selected_commit_diff.is_none());
+            graph.set_sidebar_log_source(LogSource::All, cx);
         });
         cx.run_until_parked();
 

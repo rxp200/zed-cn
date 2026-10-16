@@ -997,6 +997,7 @@ impl VsCodeSettings {
             scroll_multiplier: None,
             toolbar: None,
             show_count_badge: None,
+            notify_on_long_task_finish: None,
             flexible: None,
         })
     }

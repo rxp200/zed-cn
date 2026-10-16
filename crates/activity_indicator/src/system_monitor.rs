@@ -11,6 +11,7 @@ use sysinfo::{Disks, Networks, ProcessRefreshKind, ProcessesToUpdate, System};
 use system_specs::hardware::{GpuReading, HardwareSampler, TemperatureReading, TemperatureSource};
 use terminal_view::port_forwarding::{
     ForwardDirection, ForwardSnapshot, ForwardSource, ForwardStatus, PortForwardManager,
+    stop_forward_button,
 };
 use ui::{ProgressBar, prelude::*};
 use workspace::{
@@ -828,9 +829,14 @@ impl Render for SystemMonitorPanel {
                         cx,
                     ))
             })
-            .when(!forwarded_ports.is_empty(), |element| {
-                element.child(port_forwarding_card(&forwarded_ports, cx))
-            })
+            .when_some(
+                self.port_forward_manager
+                    .clone()
+                    .filter(|_| !forwarded_ports.is_empty()),
+                |element, manager| {
+                    element.child(port_forwarding_card(&forwarded_ports, &manager, cx))
+                },
+            )
             .when(stats.is_none(), |element| {
                 element.child(
                     card(cx).child(
@@ -1255,7 +1261,11 @@ fn resource_card(
         .child(ProgressBar::new(title, percent, 100., cx).fg_color(usage_color(percent, cx)))
 }
 
-fn port_forwarding_card(entries: &[ForwardSnapshot], cx: &App) -> impl IntoElement {
+fn port_forwarding_card(
+    entries: &[ForwardSnapshot],
+    manager: &Entity<PortForwardManager>,
+    cx: &App,
+) -> impl IntoElement {
     card(cx)
         .child(
             h_flex()
@@ -1296,30 +1306,43 @@ fn port_forwarding_card(entries: &[ForwardSnapshot], cx: &App) -> impl IntoEleme
                 ForwardStatus::RunningUnconfirmed => (i18n::t!("1f0eb99b7ed094be"), Color::Success),
                 ForwardStatus::Failed(_) => (i18n::t!("28384d7afd2e4fa6"), Color::Error),
             };
-            v_flex()
+            h_flex()
                 .w_full()
                 .min_w_0()
-                .gap_0p5()
+                .items_center()
+                .gap_2()
                 .child(
-                    h_flex()
-                        .w_full()
+                    v_flex()
+                        .flex_1()
                         .min_w_0()
-                        .justify_between()
-                        .gap_2()
+                        .gap_0p5()
                         .child(
-                            Label::new(format!("{direction} · {source}"))
-                                .size(LabelSize::XSmall)
-                                .color(Color::Muted)
-                                .truncate(),
+                            h_flex()
+                                .w_full()
+                                .min_w_0()
+                                .justify_between()
+                                .gap_2()
+                                .child(
+                                    Label::new(format!("{direction} · {source}"))
+                                        .size(LabelSize::XSmall)
+                                        .color(Color::Muted)
+                                        .truncate(),
+                                )
+                                .child(
+                                    Label::new(status)
+                                        .size(LabelSize::XSmall)
+                                        .color(status_color)
+                                        .flex_none(),
+                                ),
                         )
-                        .child(
-                            Label::new(status)
-                                .size(LabelSize::XSmall)
-                                .color(status_color)
-                                .flex_none(),
-                        ),
+                        .child(Label::new(ports).size(LabelSize::Small).truncate()),
                 )
-                .child(Label::new(ports).size(LabelSize::Small).truncate())
+                .child(stop_forward_button(
+                    entry,
+                    manager,
+                    IconSize::Small,
+                    ButtonSize::Compact,
+                ))
         }))
 }
 
@@ -1714,5 +1737,60 @@ mod tests {
         use std::net::IpAddr;
         let addresses = ranked_local_ip_addresses([("docker0", IpAddr::from([172, 17, 0, 1]))]);
         assert_eq!(addresses, [IpAddr::from([172, 17, 0, 1])]);
+    }
+
+    #[gpui::test]
+    async fn port_forwarding_card_offers_a_stop_button(cx: &mut gpui::TestAppContext) {
+        use gpui::{AppContext as _, IntoElement, Modifiers, VisualTestContext, px, size};
+        use settings::SettingsStore;
+        use std::cell::Cell;
+        use std::rc::Rc;
+        use terminal_view::port_forwarding::ForwardTarget;
+
+        struct PortForwardingCardHarness {
+            entries: Vec<ForwardSnapshot>,
+            manager: Entity<PortForwardManager>,
+        }
+
+        impl Render for PortForwardingCardHarness {
+            fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+                port_forwarding_card(&self.entries, &self.manager, cx)
+            }
+        }
+
+        cx.update(|cx| {
+            let store = SettingsStore::test(cx);
+            cx.set_global(store);
+            theme_settings::init(theme::LoadThemes::JustBase, cx);
+        });
+
+        let manager = cx.new(|_| PortForwardManager::new());
+        let notified = Rc::new(Cell::new(false));
+        cx.update(|cx| {
+            let notified = notified.clone();
+            cx.observe(&manager, move |_, _| notified.set(true))
+                .detach();
+        });
+
+        let entries = vec![ForwardSnapshot {
+            direction: ForwardDirection::RemoteToLocal,
+            target: ForwardTarget {
+                host: Some("192.168.1.3".to_string()),
+                port: 7990,
+            },
+            local_port: Some(7990),
+            source: ForwardSource::Manual,
+            status: ForwardStatus::RunningUnconfirmed,
+        }];
+        let window = cx.open_window(size(px(320.), px(160.)), move |_, _| {
+            PortForwardingCardHarness { entries, manager }
+        });
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        let stop = visual
+            .debug_bounds("ICON-Stop")
+            .expect("端口转发卡片应当渲染停止按钮");
+        visual.simulate_click(stop.center(), Modifiers::default());
+        visual.run_until_parked();
+        assert!(notified.get(), "点击卡片上的停止按钮应当停止对应的端口转发");
     }
 }

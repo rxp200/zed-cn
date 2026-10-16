@@ -226,6 +226,9 @@ pub fn document_file_size_limit(extension: &str) -> Option<u64> {
         "pdf" | "epub" => Some(512 * 1024 * 1024),
         "xlsx" | "xlsm" | "xlsb" => Some(256 * 1024 * 1024),
         "xls" | "ods" => Some(64 * 1024 * 1024),
+        // ASCII DXF is a verbose text format, so even a large drawing stays
+        // well under this cap.
+        "dxf" => Some(64 * 1024 * 1024),
         _ => None,
     }
 }
@@ -249,7 +252,7 @@ mod document_loading_tests {
 
     #[test]
     fn document_formats_and_server_source() {
-        for extension in ["pdf", "EPUB", "xlsx", "xlsm", "xlsb", "xls", "ods"] {
+        for extension in ["pdf", "EPUB", "xlsx", "xlsm", "xlsb", "xls", "ods", "DXF"] {
             assert!(document_file_size_limit(extension).is_some());
         }
         assert!(document_file_size_limit("txt").is_none());
@@ -3506,16 +3509,24 @@ impl Project {
                 "stl" | "obj" | "ply"
             )
         });
+        let is_cad = path
+            .path
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("dxf"));
         let Some(client) = self.remote_client.as_ref().filter(|client| {
             let client = client.read(cx);
             (if is_model {
                 client.supports_model_chunks()
+            } else if is_cad {
+                client.supports_cad_documents()
             } else {
                 client.supports_document_chunks()
             }) && custom_protocol_source_allowed(&client.connection_options())
         }) else {
             let message = if is_model {
                 i18n::t!("3eb2f17c6a2710fa")
+            } else if is_cad {
+                i18n::t!("86eb01ea60817189")
             } else {
                 i18n::t!("05720b24baa5d61e")
             };

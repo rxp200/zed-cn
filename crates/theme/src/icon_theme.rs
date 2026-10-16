@@ -95,6 +95,9 @@ const FILE_SUFFIXES_BY_ICON_KEY: &[(&str, &[&str])] = &[
     ("bicep", &["bicep"]),
     ("bun", &["lockb"]),
     ("c", &["c", "h"]),
+    // Only the format this fork can preview is associated, so an unsupported
+    // DWG does not look like a previewable drawing.
+    ("cad", &["dxf"]),
     ("cairo", &["cairo"]),
     ("code", &["handlebars", "metadata", "rkt", "scm"]),
     ("coffeescript", &["coffee"]),
@@ -413,6 +416,7 @@ const FILE_ICONS: &[(&str, &str)] = &[
     ("bicep", "icons/file_icons/file.svg"),
     ("bun", "icons/file_icons/bun.svg"),
     ("c", "icons/file_icons/c.svg"),
+    ("cad", "icons/file_icons/cad.svg"),
     ("cairo", "icons/file_icons/cairo.svg"),
     ("code", "icons/file_icons/code.svg"),
     ("coffeescript", "icons/file_icons/coffeescript.svg"),

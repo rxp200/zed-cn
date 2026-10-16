@@ -28,6 +28,9 @@ use workspace::notifications::DetachAndPromptErr;
 use workspace::{ModalView, Workspace};
 
 use crate::branch_picker;
+use crate::branch_tree::{BranchTreeRowKind, build_branch_tree, flatten_branch_tree, leaf_name};
+use crate::commit_modal::{CommitModal, ForceMode};
+use crate::git_panel::GitPanel;
 use git_ui_core::notifications::show_error_toast;
 
 actions!(
@@ -551,6 +554,10 @@ enum Entry {
         branch: Branch,
         positions: Vec<usize>,
     },
+    Folder {
+        name: SharedString,
+        path: SharedString,
+    },
     NewUrl {
         url: String,
     },
@@ -574,6 +581,7 @@ impl Entry {
     fn name(&self) -> &str {
         match self {
             Entry::Branch { branch, .. } => branch.name(),
+            Entry::Folder { name, .. } => name.as_str(),
             Entry::NewUrl { url, .. } => url.as_str(),
             Entry::NewBranch { name, .. } => name.as_str(),
             Entry::NewRemoteName { name, .. } => name.as_str(),
@@ -622,6 +630,97 @@ impl BranchFilter {
 struct GlobalBranchFilter(BranchFilter);
 
 impl Global for GlobalBranchFilter {}
+
+/// IDEA 风格分区：最近 / 本地 / 远程。`None` 用于过滤搜索时的扁平列表。
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+enum PickerSection {
+    #[default]
+    None,
+    Recent,
+    Local,
+    Remote,
+}
+
+impl PickerSection {
+    fn label(self) -> &'static str {
+        match self {
+            Self::None => "",
+            Self::Recent => i18n::t!("997a5e6e513f2a90"),
+            Self::Local => i18n::t!("bf4ad761840fcd0a"),
+            Self::Remote => i18n::t!("7ba00927dde9122f"),
+        }
+    }
+}
+
+/// 与 `matches` 对齐的行信息：所属分区、树内缩进深度与树内叶子展示名。
+#[derive(Clone, Debug, Default)]
+struct BranchRowInfo {
+    section: PickerSection,
+    depth: usize,
+    leaf: Option<SharedString>,
+}
+
+struct GlobalCollapsedBranchFolders(HashSet<SharedString>);
+
+impl Global for GlobalCollapsedBranchFolders {}
+
+/// 分支选择器顶部的 IDEA 风格操作行。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BranchQuickAction {
+    UpdateProject,
+    Commit,
+    Push,
+    NewBranch,
+}
+
+impl BranchQuickAction {
+    fn id(self) -> &'static str {
+        match self {
+            Self::UpdateProject => "git-action-update-project",
+            Self::Commit => "git-action-commit",
+            Self::Push => "git-action-push",
+            Self::NewBranch => "git-action-new-branch",
+        }
+    }
+
+    fn icon(self) -> IconName {
+        match self {
+            Self::UpdateProject => IconName::ArrowDown,
+            Self::Commit => IconName::Check,
+            Self::Push => IconName::ArrowUp,
+            Self::NewBranch => IconName::GitBranchPlus,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::UpdateProject => i18n::t!("52fa975e7803aadb"),
+            Self::Commit => i18n::t!("980524898a774b59"),
+            Self::Push => i18n::t!("bc21134242c539da"),
+            Self::NewBranch => i18n::t!("15b739a58e6e5432"),
+        }
+    }
+}
+
+struct GlobalRecentBranches(Vec<SharedString>);
+
+impl Global for GlobalRecentBranches {}
+
+const MAX_RECENT_BRANCHES: usize = 8;
+
+fn recent_branches(cx: &App) -> Vec<SharedString> {
+    cx.try_global::<GlobalRecentBranches>()
+        .map(|recents| recents.0.clone())
+        .unwrap_or_default()
+}
+
+fn push_recent_branch(name: SharedString, cx: &mut App) {
+    let mut recents = recent_branches(cx);
+    recents.retain(|recent| recent != &name);
+    recents.insert(0, name);
+    recents.truncate(MAX_RECENT_BRANCHES);
+    cx.set_global(GlobalRecentBranches(recents));
+}
 
 fn branch_filter_menu(
     branch_filter: BranchFilter,
@@ -676,6 +775,8 @@ pub struct BranchListDelegate {
     show_footer: bool,
     hovered_delete_index: Option<usize>,
     remote_provider_icons: HashMap<String, IconName>,
+    row_info: Vec<BranchRowInfo>,
+    collapsed_folders: HashSet<SharedString>,
 }
 
 enum BranchSelectionBehavior {
@@ -998,6 +1099,18 @@ impl BranchListDelegate {
         let branch_filter = cx
             .try_global::<GlobalBranchFilter>()
             .map_or(BranchFilter::All, |filter| filter.0);
+        let collapsed_folders = cx
+            .try_global::<GlobalCollapsedBranchFolders>()
+            .map(|collapsed| collapsed.0.clone())
+            .unwrap_or_default();
+        if !branch_selection_behavior.is_select_only() {
+            if let Some(current_branch) = repo
+                .as_ref()
+                .and_then(|repo| repo.read(cx).branch.as_ref().map(|branch| branch.name()))
+            {
+                push_recent_branch(current_branch.to_string().into(), cx);
+            }
+        }
 
         Self {
             workspace,
@@ -1019,6 +1132,8 @@ impl BranchListDelegate {
             show_footer: false,
             hovered_delete_index: None,
             remote_provider_icons: HashMap::default(),
+            row_info: Vec::new(),
+            collapsed_folders,
         }
     }
 
@@ -1049,6 +1164,116 @@ impl BranchListDelegate {
 
     fn is_force_delete_hovering_index(&self, index: usize) -> bool {
         self.modifiers.alt && self.hovered_delete_index == Some(index)
+    }
+
+    /// IDEA 风格分区标题：仅在树形浏览（非搜索）时有值，返回（标题，是否带上分隔线）。
+    fn tree_section_header(&self, ix: usize) -> Option<(&'static str, bool)> {
+        let info = self.row_info.get(ix)?;
+        if info.section == PickerSection::None {
+            return None;
+        }
+        let starts_section = ix == 0
+            || self
+                .row_info
+                .get(ix - 1)
+                .is_none_or(|previous| previous.section != info.section);
+        starts_section.then(|| (info.section.label(), ix != 0))
+    }
+
+    /// 关闭选择器，然后在工作区上执行 Git 操作。
+    fn close_and_run(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Picker<Self>>,
+        operation: impl FnOnce(&mut Workspace, &mut Window, &mut Context<Workspace>) + 'static,
+    ) {
+        let workspace = self.workspace.clone();
+        cx.defer_in(window, move |picker, window, cx| {
+            picker.cancel(&Default::default(), window, cx);
+            workspace
+                .update(cx, |workspace, cx| {
+                    operation(workspace, window, cx);
+                })
+                .log_err();
+        });
+    }
+
+    fn quick_action_row(
+        &self,
+        action: BranchQuickAction,
+        cx: &mut Context<Picker<Self>>,
+    ) -> ListItem {
+        ListItem::new(action.id())
+            .inset(true)
+            .spacing(ListItemSpacing::Sparse)
+            .child(
+                h_flex()
+                    .w_full()
+                    .min_w_0()
+                    .gap_2p5()
+                    .child(
+                        Icon::new(action.icon())
+                            .color(Color::Muted)
+                            .size(IconSize::Small),
+                    )
+                    .child(Label::new(action.label()).single_line()),
+            )
+            .on_click(cx.listener(move |picker, _, window, cx| match action {
+                BranchQuickAction::UpdateProject => {
+                    picker
+                        .delegate
+                        .close_and_run(window, cx, |workspace, window, cx| {
+                            if let Some(panel) = workspace.panel::<GitPanel>(cx) {
+                                panel.update(cx, |panel, cx| panel.pull(false, window, cx));
+                            }
+                        });
+                }
+                BranchQuickAction::Commit => {
+                    picker
+                        .delegate
+                        .close_and_run(window, cx, |workspace, window, cx| {
+                            CommitModal::toggle(workspace, Some(ForceMode::Commit), window, cx);
+                        });
+                }
+                BranchQuickAction::Push => {
+                    picker
+                        .delegate
+                        .close_and_run(window, cx, |workspace, window, cx| {
+                            if let Some(panel) = workspace.panel::<GitPanel>(cx) {
+                                panel.update(cx, |panel, cx| panel.push(false, false, window, cx));
+                            }
+                        });
+                }
+                BranchQuickAction::NewBranch => {
+                    picker.delegate.state = PickerState::NewBranch;
+                    picker.refresh_placeholder(window, cx);
+                    let focus_handle = picker.focus_handle(cx);
+                    focus_handle.focus(window, cx);
+                    cx.notify();
+                }
+            }))
+    }
+
+    fn render_action_rows(&self, cx: &mut Context<Picker<Self>>) -> Option<AnyElement> {
+        if self.is_select_only()
+            || !matches!(self.state, PickerState::List)
+            || !self.last_query.is_empty()
+        {
+            return None;
+        }
+        Some(
+            v_flex()
+                .w_full()
+                .pt_1p5()
+                .pb_1()
+                .border_b_1()
+                .border_color(cx.theme().colors().border_variant)
+                .child(self.quick_action_row(BranchQuickAction::UpdateProject, cx))
+                .child(self.quick_action_row(BranchQuickAction::Commit, cx))
+                .child(self.quick_action_row(BranchQuickAction::Push, cx))
+                .child(self.quick_action_row(BranchQuickAction::NewBranch, cx))
+                .into_any_element(),
+        )
     }
 
     fn create_branch(
@@ -1246,9 +1471,8 @@ impl PickerDelegate for BranchListDelegate {
 
     fn placeholder_text(&self, _window: &mut Window, _cx: &mut App) -> Arc<str> {
         match self.state {
-            PickerState::List | PickerState::NewRemote | PickerState::NewBranch => {
-                "Switch or type to create a branch…"
-            }
+            PickerState::List | PickerState::NewRemote => "Switch or type to create a branch…",
+            PickerState::NewBranch => i18n::t!("8973c3bb97c426d3"),
             PickerState::CreateRemote(_) => "Enter a name for this remote…",
         }
         .into()
@@ -1359,22 +1583,29 @@ impl PickerDelegate for BranchListDelegate {
     fn render_header(
         &self,
         _window: &mut Window,
-        _cx: &mut Context<Picker<Self>>,
+        cx: &mut Context<Picker<Self>>,
     ) -> Option<AnyElement> {
-        if self.branch_filter == BranchFilter::All
-            || !self
+        let action_rows = self.render_action_rows(cx);
+        let filter_header = (self.branch_filter != BranchFilter::All
+            && self
                 .matches
                 .first()
-                .is_some_and(|entry| entry.as_branch().is_some())
-        {
-            return None;
-        }
-
-        Some(
+                .is_some_and(|entry| entry.as_branch().is_some()))
+        .then(|| {
             div()
                 .pt_1p5()
                 .mb_neg_0p5()
                 .child(ListSubHeader::new(self.branch_filter.label()).inset(true))
+                .into_any_element()
+        });
+        if action_rows.is_none() && filter_header.is_none() {
+            return None;
+        }
+        Some(
+            v_flex()
+                .w_full()
+                .children(action_rows)
+                .children(filter_header)
                 .into_any_element(),
         )
     }
@@ -1417,6 +1648,9 @@ impl PickerDelegate for BranchListDelegate {
         });
 
         let branch_filter = self.branch_filter;
+        let collapsed_folders = self.collapsed_folders.clone();
+        let is_select_only = self.is_select_only();
+        let recents = recent_branches(cx);
         cx.spawn_in(window, async move |picker, cx| {
             let branch_matches_filter = |branch: &Branch| match branch_filter {
                 BranchFilter::All => true,
@@ -1424,17 +1658,93 @@ impl PickerDelegate for BranchListDelegate {
                 BranchFilter::Remote => branch.is_remote(),
             };
 
+            let mut row_info: Vec<BranchRowInfo> = Vec::new();
             let mut matches: Vec<Entry> = if query.is_empty() {
-                let mut matches: Vec<Entry> = all_branches
-                    .iter()
-                    .filter(|branch| branch_matches_filter(branch))
-                    .map(|branch| Entry::Branch {
-                        branch: branch.clone(),
-                        positions: Vec::new(),
-                    })
-                    .collect();
+                let mut matches: Vec<Entry> = Vec::new();
 
-                sort_branch_entries(&mut matches, branch_selection_context.as_ref());
+                if !is_select_only && branch_filter == BranchFilter::All {
+                    for recent in recents.iter() {
+                        let Some(branch) = all_branches
+                            .iter()
+                            .find(|branch| !branch.is_remote() && branch.name() == recent.as_ref())
+                        else {
+                            continue;
+                        };
+                        matches.push(Entry::Branch {
+                            branch: branch.clone(),
+                            positions: Vec::new(),
+                        });
+                        row_info.push(BranchRowInfo {
+                            section: PickerSection::Recent,
+                            depth: 0,
+                            leaf: None,
+                        });
+                    }
+                }
+
+                let push_tree =
+                    |section: PickerSection,
+                     section_branches: Vec<Branch>,
+                     matches: &mut Vec<Entry>,
+                     row_info: &mut Vec<BranchRowInfo>| {
+                        let tree = build_branch_tree(&section_branches);
+                        for row in flatten_branch_tree(&tree, &collapsed_folders) {
+                            match row.kind {
+                                BranchTreeRowKind::Folder { name, path, .. } => {
+                                    matches.push(Entry::Folder { name, path });
+                                    row_info.push(BranchRowInfo {
+                                        section,
+                                        depth: row.depth,
+                                        leaf: None,
+                                    });
+                                }
+                                BranchTreeRowKind::Leaf { branch_index } => {
+                                    let Some(branch) = section_branches.get(branch_index).cloned()
+                                    else {
+                                        continue;
+                                    };
+                                    let leaf = (row.depth > 0 || branch.name().contains('/'))
+                                        .then(|| SharedString::from(leaf_name(branch.name())));
+                                    matches.push(Entry::Branch {
+                                        branch,
+                                        positions: Vec::new(),
+                                    });
+                                    row_info.push(BranchRowInfo {
+                                        section,
+                                        depth: row.depth,
+                                        leaf,
+                                    });
+                                }
+                            }
+                        }
+                    };
+
+                if branch_filter != BranchFilter::Remote {
+                    let local_branches: Vec<Branch> = all_branches
+                        .iter()
+                        .filter(|branch| !branch.is_remote())
+                        .cloned()
+                        .collect();
+                    push_tree(
+                        PickerSection::Local,
+                        local_branches,
+                        &mut matches,
+                        &mut row_info,
+                    );
+                }
+                if branch_filter != BranchFilter::Local {
+                    let remote_branches: Vec<Branch> = all_branches
+                        .iter()
+                        .filter(|branch| branch.is_remote())
+                        .cloned()
+                        .collect();
+                    push_tree(
+                        PickerSection::Remote,
+                        remote_branches,
+                        &mut matches,
+                        &mut row_info,
+                    );
+                }
 
                 matches
             } else {
@@ -1465,6 +1775,7 @@ impl PickerDelegate for BranchListDelegate {
                 .collect();
 
                 sort_branch_entries(&mut matches, branch_selection_context.as_ref());
+                row_info = vec![BranchRowInfo::default(); matches.len()];
 
                 matches
             };
@@ -1477,9 +1788,11 @@ impl PickerDelegate for BranchListDelegate {
                                 name: query.clone(),
                                 url: url.clone(),
                             }];
+                            picker.delegate.row_info = vec![BranchRowInfo::default()];
                             picker.delegate.selected_index = 0;
                         } else {
                             picker.delegate.matches = Vec::new();
+                            picker.delegate.row_info = Vec::new();
                             picker.delegate.selected_index = 0;
                         }
                         picker.delegate.last_query = query;
@@ -1509,11 +1822,13 @@ impl PickerDelegate for BranchListDelegate {
                             PickerState::List
                         };
                         matches.push(entry);
+                        row_info.push(BranchRowInfo::default());
                     } else {
                         picker.delegate.state = PickerState::List;
                     }
                     let delegate = &mut picker.delegate;
                     delegate.matches = matches;
+                    delegate.row_info = row_info;
                     if delegate.matches.is_empty() {
                         delegate.selected_index = 0;
                     } else if let Some(ref_name) = delegate.restore_selected_branch.take() {
@@ -1543,6 +1858,18 @@ impl PickerDelegate for BranchListDelegate {
         };
 
         match entry {
+            Entry::Folder { path, .. } => {
+                let path = path.clone();
+                if !self.collapsed_folders.remove(&path) {
+                    self.collapsed_folders.insert(path);
+                }
+                cx.set_global(GlobalCollapsedBranchFolders(self.collapsed_folders.clone()));
+                cx.defer_in(window, |picker, window, cx| {
+                    picker.refresh(window, cx);
+                });
+                cx.notify();
+                return;
+            }
             Entry::Branch { branch, .. } => {
                 if let BranchSelectionBehavior::Select { on_select, .. } =
                     &self.branch_selection_behavior
@@ -1570,10 +1897,22 @@ impl PickerDelegate for BranchListDelegate {
                     return;
                 };
 
+                // 签出远程分支时会创建去掉远程名前缀的本地分支
+                let checked_out_name = if branch.is_remote() {
+                    branch
+                        .name()
+                        .split_once('/')
+                        .map(|(_, rest)| rest)
+                        .unwrap_or(branch.name())
+                } else {
+                    branch.name()
+                };
+                let checked_out_name = SharedString::from(checked_out_name.to_string());
                 let branch = branch.clone();
                 cx.spawn(async move |_, cx| {
                     repo.update(cx, |repo, _| repo.change_branch(branch.name().to_string()))
                         .await??;
+                    cx.update(|cx| push_recent_branch(checked_out_name, cx));
 
                     anyhow::Ok(())
                 })
@@ -1628,6 +1967,54 @@ impl PickerDelegate for BranchListDelegate {
         cx: &mut Context<Picker<Self>>,
     ) -> Option<Self::ListItem> {
         let entry = &self.matches.get(ix)?;
+        let row_info = self.row_info.get(ix);
+
+        if let Entry::Folder { name, path } = entry {
+            let expanded = !self.collapsed_folders.contains(path);
+            let depth = row_info.map(|info| info.depth).unwrap_or(0);
+            let section_header = self.tree_section_header(ix);
+            let list_item = ListItem::new(format!("vcs-menu-{ix}"))
+                .inset(true)
+                .spacing(ListItemSpacing::Sparse)
+                .toggle_state(selected)
+                .child(
+                    h_flex()
+                        .w_full()
+                        .min_w_0()
+                        .gap_1p5()
+                        .when(depth > 0, |this| this.pl(rems(0.75 * depth as f32)))
+                        .child(
+                            Icon::new(if expanded {
+                                IconName::ChevronDown
+                            } else {
+                                IconName::ChevronRight
+                            })
+                            .color(Color::Muted)
+                            .size(IconSize::Small),
+                        )
+                        .child(
+                            Icon::new(IconName::Folder)
+                                .color(Color::Muted)
+                                .size(IconSize::Small),
+                        )
+                        .child(Label::new(name.clone()).single_line().truncate()),
+                );
+            return Some(
+                v_flex()
+                    .w_full()
+                    .when_some(section_header, |this, (header, show_divider)| {
+                        this.pt_1p5()
+                            .when(show_divider, |this| {
+                                this.mt_1()
+                                    .border_t_1()
+                                    .border_color(cx.theme().colors().border_variant)
+                            })
+                            .child(ListSubHeader::new(header).inset(true))
+                    })
+                    .child(list_item)
+                    .into_any_element(),
+            );
+        }
 
         let (commit_time, absolute_time, author_name, subject) = entry
             .as_branch()
@@ -1676,6 +2063,7 @@ impl PickerDelegate for BranchListDelegate {
             Entry::NewUrl { .. } | Entry::NewBranch { .. } | Entry::NewRemoteName { .. } => {
                 IconName::Plus
             }
+            Entry::Folder { .. } => IconName::Folder,
             Entry::Branch { branch, .. } => {
                 if is_checked_branch {
                     IconName::Check
@@ -1707,11 +2095,19 @@ impl PickerDelegate for BranchListDelegate {
                     .into_any_element()
             }
             Entry::Branch { branch, positions } => {
-                HighlightedLabel::new(branch.name().to_string(), positions.clone())
+                let title = row_info
+                    .and_then(|info| info.leaf.clone())
+                    .map(|leaf| leaf.to_string())
+                    .unwrap_or_else(|| branch.name().to_string());
+                HighlightedLabel::new(title, positions.clone())
                     .single_line()
                     .truncate()
                     .into_any_element()
             }
+            Entry::Folder { name, .. } => Label::new(name.clone())
+                .single_line()
+                .truncate()
+                .into_any_element(),
         };
 
         let focus_handle = self.focus_handle.clone();
@@ -1782,6 +2178,7 @@ impl PickerDelegate for BranchListDelegate {
                 .into_any_element()
         });
 
+        let tree_depth = row_info.map(|info| info.depth).unwrap_or(0);
         let list_item = ListItem::new(format!("vcs-menu-{ix}"))
             .inset(true)
             .spacing(ListItemSpacing::Sparse)
@@ -1792,6 +2189,9 @@ impl PickerDelegate for BranchListDelegate {
                     .min_w_0()
                     .gap_2p5()
                     .flex_grow_1()
+                    .when(tree_depth > 0, |this| {
+                        this.pl(rems(0.75 * tree_depth as f32))
+                    })
                     .child(
                         Icon::new(entry_icon)
                             .color(if is_checked_branch {
@@ -1813,6 +2213,7 @@ impl PickerDelegate for BranchListDelegate {
                                     Entry::NewRemoteName { url, .. } => {
                                         format!("Based off {url}")
                                     }
+                                    Entry::Folder { .. } => String::new(),
                                     Entry::NewBranch { .. } => {
                                         if let Some(current_branch) =
                                             self.repo.as_ref().and_then(|repo| {
@@ -1927,7 +2328,10 @@ impl PickerDelegate for BranchListDelegate {
                     ),
             )
             .when(
-                !self.is_select_only() && !is_new_items && !is_head_branch,
+                !self.is_select_only()
+                    && !is_new_items
+                    && !is_head_branch
+                    && entry.as_branch().is_some(),
                 |this| {
                     this.end_slot(deleted_branch_icon(ix))
                         .show_end_slot_on_hover()
@@ -1945,24 +2349,26 @@ impl PickerDelegate for BranchListDelegate {
                 },
             );
 
-        let section_header = (self.branch_filter == BranchFilter::All)
-            .then(|| entry.as_branch())
-            .flatten()
-            .and_then(|branch| {
-                let starts_section = ix == 0
-                    || self.matches[ix - 1]
-                        .as_branch()
-                        .is_none_or(|previous_branch| {
-                            previous_branch.is_remote() != branch.is_remote()
-                        });
-                starts_section.then(|| {
-                    if branch.is_remote() {
-                        (i18n::t!("8eac349b6e6f9d9c"), ix != 0)
-                    } else {
-                        (i18n::t!("2912673e9f34f966"), false)
-                    }
+        let section_header = self.tree_section_header(ix).or_else(|| {
+            (!self.last_query.is_empty() && self.branch_filter == BranchFilter::All)
+                .then(|| entry.as_branch())
+                .flatten()
+                .and_then(|branch| {
+                    let starts_section = ix == 0
+                        || self.matches[ix - 1]
+                            .as_branch()
+                            .is_none_or(|previous_branch| {
+                                previous_branch.is_remote() != branch.is_remote()
+                            });
+                    starts_section.then(|| {
+                        if branch.is_remote() {
+                            (i18n::t!("8eac349b6e6f9d9c"), ix != 0)
+                        } else {
+                            (i18n::t!("2912673e9f34f966"), false)
+                        }
+                    })
                 })
-            });
+        });
 
         Some(
             v_flex()
@@ -2216,6 +2622,15 @@ mod tests {
             create_test_branch("feature-ui", false, None, Some(800)),
             create_test_branch("develop", false, None, Some(700)),
         ]
+    }
+
+    /// 树形浏览中 matches 会混入文件夹行，断言行内容时只看分支条目。
+    fn branch_entry_names(delegate: &BranchListDelegate) -> Vec<&str> {
+        delegate
+            .matches
+            .iter()
+            .filter_map(|entry| entry.as_branch().map(Branch::name))
+            .collect()
     }
 
     #[test]
@@ -2514,6 +2929,189 @@ mod tests {
     }
 
     #[gpui::test]
+    async fn test_empty_query_builds_folder_tree(cx: &mut TestAppContext) {
+        init_test(cx);
+
+        let branches = vec![
+            create_test_branch("main", true, None, Some(1000)),
+            create_test_branch("dev/demo", false, None, Some(900)),
+            create_test_branch("dev/shared/workflow", false, None, Some(800)),
+            create_test_branch("master", false, Some("origin"), Some(700)),
+            create_test_branch("dev/demo-ui", false, Some("origin"), Some(600)),
+        ];
+
+        let (branch_list, mut ctx) = init_branch_list_test(None, branches, cx).await;
+        let cx = &mut ctx;
+        update_branch_list_matches_with_empty_query(&branch_list, cx).await;
+
+        branch_list.update(cx, |branch_list, cx| {
+            branch_list.picker.update(cx, |picker, _cx| {
+                let delegate = &picker.delegate;
+                let names = delegate.matches.iter().map(Entry::name).collect::<Vec<_>>();
+                assert_eq!(
+                    names,
+                    vec![
+                        "dev",
+                        "shared",
+                        "dev/shared/workflow",
+                        "dev/demo",
+                        "main",
+                        "origin",
+                        "dev",
+                        "origin/dev/demo-ui",
+                        "origin/master",
+                    ]
+                );
+                let folder_count = delegate
+                    .matches
+                    .iter()
+                    .filter(|entry| matches!(entry, Entry::Folder { .. }))
+                    .count();
+                assert_eq!(folder_count, 4);
+
+                // 树内叶子展示最后一段，根层级展示全名
+                assert_eq!(
+                    delegate.row_info[2].leaf.as_deref(),
+                    Some("workflow"),
+                    "nested leaf shows only its last segment"
+                );
+                assert_eq!(delegate.row_info[3].leaf.as_deref(), Some("demo"));
+                assert_eq!(delegate.row_info[4].leaf, None);
+
+                // 分区：本地在前，远程在后
+                assert!(
+                    delegate
+                        .row_info
+                        .iter()
+                        .take(5)
+                        .all(|info| info.section == PickerSection::Local)
+                );
+                assert!(
+                    delegate
+                        .row_info
+                        .iter()
+                        .skip(5)
+                        .all(|info| info.section == PickerSection::Remote)
+                );
+                assert_eq!(
+                    delegate.tree_section_header(0).map(|(label, _)| label),
+                    Some(i18n::t!("bf4ad761840fcd0a"))
+                );
+                assert_eq!(
+                    delegate.tree_section_header(5).map(|(label, _)| label),
+                    Some(i18n::t!("7ba00927dde9122f"))
+                );
+                assert_eq!(delegate.tree_section_header(1), None);
+            })
+        });
+    }
+
+    #[gpui::test]
+    async fn test_confirm_folder_toggles_collapse(cx: &mut TestAppContext) {
+        init_test(cx);
+
+        let branches = vec![
+            create_test_branch("main", true, None, Some(1000)),
+            create_test_branch("dev/demo", false, None, Some(900)),
+            create_test_branch("dev/shared/workflow", false, None, Some(800)),
+        ];
+
+        let (branch_list, mut ctx) = init_branch_list_test(None, branches, cx).await;
+        let cx = &mut ctx;
+        update_branch_list_matches_with_empty_query(&branch_list, cx).await;
+
+        let expanded_len = branch_list.update(cx, |branch_list, cx| {
+            branch_list.picker.read(cx).delegate.matches.len()
+        });
+        assert_eq!(expanded_len, 5);
+
+        // 折叠 dev 文件夹
+        branch_list.update_in(cx, |branch_list, window, cx| {
+            branch_list.picker.update(cx, |picker, cx| {
+                picker.delegate.selected_index = 0;
+                picker.delegate.confirm(false, window, cx);
+            })
+        });
+        cx.run_until_parked();
+
+        branch_list.update(cx, |branch_list, cx| {
+            branch_list.picker.update(cx, |picker, _cx| {
+                let names = picker
+                    .delegate
+                    .matches
+                    .iter()
+                    .map(Entry::name)
+                    .collect::<Vec<_>>();
+                assert_eq!(names, vec!["dev", "main"]);
+                assert!(picker.delegate.collapsed_folders.contains("dev"));
+            })
+        });
+
+        // 再次确认重新展开
+        branch_list.update_in(cx, |branch_list, window, cx| {
+            branch_list.picker.update(cx, |picker, cx| {
+                picker.delegate.selected_index = 0;
+                picker.delegate.confirm(false, window, cx);
+            })
+        });
+        cx.run_until_parked();
+
+        branch_list.update(cx, |branch_list, cx| {
+            let matches = &branch_list.picker.read(cx).delegate.matches;
+            assert_eq!(matches.len(), expanded_len);
+        });
+    }
+
+    #[gpui::test]
+    async fn test_recent_branches_section(cx: &mut TestAppContext) {
+        init_test(cx);
+
+        let branches = vec![
+            create_test_branch("main", true, None, Some(1000)),
+            create_test_branch("feature-ui", false, None, Some(900)),
+        ];
+
+        let (branch_list, mut ctx) = init_branch_list_test(None, branches, cx).await;
+        let cx = &mut ctx;
+        branch_list.update(cx, |_, cx| push_recent_branch("feature-ui".into(), cx));
+        update_branch_list_matches_with_empty_query(&branch_list, cx).await;
+
+        branch_list.update(cx, |branch_list, cx| {
+            branch_list.picker.update(cx, |picker, _cx| {
+                let delegate = &picker.delegate;
+                assert_eq!(delegate.matches[0].name(), "feature-ui");
+                assert_eq!(delegate.row_info[0].section, PickerSection::Recent);
+                assert_eq!(delegate.row_info[1].section, PickerSection::Local);
+                // 最近分支仍会出现在本地分区中
+                assert_eq!(branch_entry_names(delegate).len(), 3);
+            })
+        });
+
+        // 过滤搜索时退回到扁平列表，不出现分区
+        branch_list
+            .update_in(cx, |branch_list, window, cx| {
+                branch_list.picker.update(cx, |picker, cx| {
+                    picker
+                        .delegate
+                        .update_matches("feature".to_string(), window, cx)
+                })
+            })
+            .await;
+        cx.run_until_parked();
+        branch_list.update(cx, |branch_list, cx| {
+            branch_list.picker.update(cx, |picker, _cx| {
+                assert!(
+                    picker
+                        .delegate
+                        .row_info
+                        .iter()
+                        .all(|info| info.section == PickerSection::None)
+                );
+            })
+        });
+    }
+
+    #[gpui::test]
     async fn test_delete_branch(cx: &mut TestAppContext) {
         init_test(cx);
         let (_project, repository) = init_fake_repository(cx).await;
@@ -2578,13 +3176,10 @@ mod tests {
 
         branch_list.update(cx, move |branch_list, cx| {
             branch_list.picker.update(cx, move |picker, _cx| {
-                assert_eq!(picker.delegate.matches.len(), 3);
-                let branches = picker
-                    .delegate
-                    .matches
-                    .iter()
-                    .map(|be| be.name())
+                let branches = branch_entry_names(&picker.delegate)
+                    .into_iter()
                     .collect::<HashSet<_>>();
+                assert_eq!(branches.len(), 3);
                 assert_eq!(branches, expected_branches);
             })
         });
@@ -2865,7 +3460,7 @@ mod tests {
         // Check matches, it should match all existing branches and no option to create new branch
         let branch_to_delete = branch_list.update_in(cx, |branch_list, window, cx| {
             branch_list.picker.update(cx, |picker, cx| {
-                assert_eq!(picker.delegate.matches.len(), 4);
+                assert_eq!(branch_entry_names(&picker.delegate).len(), 4);
                 let branch_to_delete = picker.delegate.matches.get(1).unwrap().name().to_string();
                 picker.delegate.delete_at(1, false, window, cx);
                 branch_to_delete
@@ -2906,13 +3501,10 @@ mod tests {
         // Check matches, it should match one less branch than before
         branch_list.update(cx, move |branch_list, cx| {
             branch_list.picker.update(cx, move |picker, _cx| {
-                assert_eq!(picker.delegate.matches.len(), 3);
-                let branches = picker
-                    .delegate
-                    .matches
-                    .iter()
-                    .map(|be| be.name())
+                let branches = branch_entry_names(&picker.delegate)
+                    .into_iter()
                     .collect::<HashSet<_>>();
+                assert_eq!(branches.len(), 3);
                 assert_eq!(branches, expected_branches);
             })
         });
@@ -2936,13 +3528,10 @@ mod tests {
 
         branch_list.update(cx, |branch_list, cx| {
             branch_list.picker.update(cx, |picker, _cx| {
-                assert_eq!(picker.delegate.matches.len(), 4);
+                assert_eq!(branch_entry_names(&picker.delegate).len(), 4);
 
-                let branches = picker
-                    .delegate
-                    .matches
-                    .iter()
-                    .map(|be| be.name())
+                let branches = branch_entry_names(&picker.delegate)
+                    .into_iter()
                     .collect::<HashSet<_>>();
                 assert_eq!(
                     branches,
@@ -2951,16 +3540,12 @@ mod tests {
                         .collect::<HashSet<_>>()
                 );
 
-                // Locals should be listed before remotes.
-                let ordered = picker
-                    .delegate
-                    .matches
-                    .iter()
-                    .map(|be| be.name())
-                    .collect::<Vec<_>>();
+                // Locals should be listed before remotes; remote branches are
+                // grouped into per-remote folders.
+                let ordered = branch_entry_names(&picker.delegate);
                 assert_eq!(
                     ordered,
-                    vec!["feature-ui", "develop", "origin/main", "fork/feature-auth"]
+                    vec!["feature-ui", "develop", "fork/feature-auth", "origin/main"]
                 );
 
                 // Verify the last entry is NOT the "create new branch" option
@@ -2997,13 +3582,10 @@ mod tests {
 
         branch_list.update(cx, |branch_list, cx| {
             branch_list.picker.update(cx, |picker, _cx| {
-                assert_eq!(picker.delegate.matches.len(), 2);
-                let branches = picker
-                    .delegate
-                    .matches
-                    .iter()
-                    .map(|be| be.name())
+                let branches = branch_entry_names(&picker.delegate)
+                    .into_iter()
                     .collect::<HashSet<_>>();
+                assert_eq!(branches.len(), 2);
                 assert_eq!(
                     branches,
                     ["origin/main", "fork/feature-auth"]
@@ -3151,11 +3733,8 @@ mod tests {
         update_branch_list_matches_with_empty_query(&select_list, cx).await;
         select_list.update(cx, |branch_list, cx| {
             branch_list.picker.update(cx, |picker, _cx| {
-                let names = picker
-                    .delegate
-                    .matches
-                    .iter()
-                    .map(Entry::name)
+                let names = branch_entry_names(&picker.delegate)
+                    .into_iter()
                     .collect::<HashSet<_>>();
                 assert_eq!(
                     names,

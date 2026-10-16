@@ -1,3 +1,6 @@
+mod cad_dxf;
+mod cad_reader;
+mod cad_scene;
 mod epub_reader;
 mod excel_reader;
 mod model_mesh;
@@ -29,6 +32,10 @@ use workspace::{
 };
 use worktree::LoadedBinaryFile;
 
+use editor::Editor;
+
+use crate::cad_reader::CadReader;
+use crate::cad_scene::CadScene;
 use crate::epub_reader::EpubReader;
 use crate::excel_reader::ExcelReader;
 use crate::pdf_reader::PdfReader;
@@ -41,6 +48,7 @@ pub enum DocumentFormat {
     Epub,
     Spreadsheet,
     Model,
+    Cad,
 }
 
 impl DocumentFormat {
@@ -50,6 +58,7 @@ impl DocumentFormat {
             "pdf" => Some(Self::Pdf),
             "epub" => Some(Self::Epub),
             "xlsx" | "xlsm" | "xls" | "xlsb" | "ods" => Some(Self::Spreadsheet),
+            "dxf" => Some(Self::Cad),
             _ => None,
         }
     }
@@ -93,6 +102,8 @@ pub struct DocumentItem {
     pub contents: Arc<Vec<u8>>,
     pub format: DocumentFormat,
     pub model: Option<Arc<model_mesh::ModelMesh>>,
+    /// Flattened drawing geometry, which replaces the raw bytes once parsed.
+    pub cad: Option<Arc<CadScene>>,
     state: DocumentLoadState,
     load_task: Option<Task<()>>,
 }
@@ -160,6 +171,7 @@ impl DocumentItem {
                 contents: Arc::new(Vec::new()),
                 format,
                 model: None,
+                cad: None,
                 state: DocumentLoadState::Ready,
                 load_task: None,
             })));
@@ -181,6 +193,7 @@ impl DocumentItem {
             contents: Arc::new(Vec::new()),
             format,
             model: None,
+            cad: None,
             state: DocumentLoadState::Loading {
                 transferred: 0,
                 total,
@@ -231,7 +244,27 @@ impl DocumentItem {
                                         "[open-debug] model parsed: {} triangles",
                                         mesh.triangles.len()
                                     );
-                                    anyhow::Ok((file, Vec::new(), Some(Arc::new(mesh))))
+                                    anyhow::Ok((file, Vec::new(), Some(Arc::new(mesh)), None))
+                                })
+                                .await
+                            } else if format == DocumentFormat::Cad {
+                                // The drawing only needs its bytes until it has
+                                // been flattened into the render scene, which is
+                                // smaller than the file and drops everything the
+                                // reader cannot draw.
+                                cx.background_spawn(async move {
+                                    log::info!(
+                                        "[open-debug] parsing drawing ({} bytes)",
+                                        content.len()
+                                    );
+                                    let scene = cad_dxf::parse(&content)?;
+                                    log::info!(
+                                        "[open-debug] drawing parsed: {} paths, {} fills, {} texts",
+                                        scene.paths.len(),
+                                        scene.fills.len(),
+                                        scene.texts.len()
+                                    );
+                                    anyhow::Ok((file, Vec::new(), None, Some(Arc::new(scene))))
                                 })
                                 .await
                             } else {
@@ -240,17 +273,18 @@ impl DocumentItem {
                                     file.path.as_unix_str(),
                                     content.len()
                                 );
-                                Ok((file, content, None))
+                                Ok((file, content, None, None))
                             }
                         }
                         Err(error) => Err(error),
                     };
                     this.update(cx, |item, cx| {
                         let event = match result {
-                            Ok((file, content, model)) => {
+                            Ok((file, content, model, cad)) => {
                                 item.file = file;
                                 item.contents = Arc::new(content);
                                 item.model = model;
+                                item.cad = cad;
                                 item.state = DocumentLoadState::Ready;
                                 DocumentItemEvent::Ready
                             }
@@ -322,6 +356,7 @@ enum DocumentChild {
     Epub(Entity<EpubReader>),
     Spreadsheet(Entity<ExcelReader>),
     Model(Entity<model_reader::ModelReader>),
+    Cad(Entity<CadReader>),
 }
 
 /// Workspace item that renders a binary document (PDF, EPUB or spreadsheet)
@@ -409,6 +444,9 @@ impl DocumentView {
             })),
             DocumentFormat::Spreadsheet => {
                 DocumentChild::Spreadsheet(cx.new(|cx| ExcelReader::new(item, project, window, cx)))
+            }
+            DocumentFormat::Cad => {
+                DocumentChild::Cad(cx.new(|cx| CadReader::new(item, window, cx)))
             }
         }
     }
@@ -623,6 +661,7 @@ impl Focusable for DocumentView {
             DocumentChild::Epub(reader) => reader.read(cx).focus_handle(cx),
             DocumentChild::Spreadsheet(reader) => reader.read(cx).focus_handle(cx),
             DocumentChild::Model(reader) => reader.read(cx).focus_handle(cx),
+            DocumentChild::Cad(reader) => reader.read(cx).focus_handle(cx),
         }
     }
 }
@@ -635,6 +674,7 @@ impl gpui::Render for DocumentView {
             DocumentChild::Epub(reader) => reader.clone().into_any_element(),
             DocumentChild::Spreadsheet(reader) => reader.clone().into_any_element(),
             DocumentChild::Model(reader) => reader.clone().into_any_element(),
+            DocumentChild::Cad(reader) => reader.clone().into_any_element(),
         }
     }
 }
@@ -1006,7 +1046,10 @@ impl workspace::ToolbarItemView for DocumentToolbarControls {
             cx.notify();
             let hides_toolbar = matches!(
                 item.read(cx).child,
-                DocumentChild::Spreadsheet(_) | DocumentChild::Model(_) | DocumentChild::Loading
+                DocumentChild::Spreadsheet(_)
+                    | DocumentChild::Model(_)
+                    | DocumentChild::Cad(_)
+                    | DocumentChild::Loading
             );
             return if hides_toolbar {
                 ToolbarItemLocation::Hidden
@@ -1030,13 +1073,15 @@ impl gpui::Render for DocumentToolbarControls {
             DocumentChild::Epub(reader) => DocumentChild::Epub(reader.clone()),
             DocumentChild::Spreadsheet(reader) => DocumentChild::Spreadsheet(reader.clone()),
             DocumentChild::Model(reader) => DocumentChild::Model(reader.clone()),
+            DocumentChild::Cad(reader) => DocumentChild::Cad(reader.clone()),
         };
         match &child {
             DocumentChild::Pdf(reader) => Self::render_pdf_controls(reader, cx),
             DocumentChild::Epub(reader) => Self::render_epub_controls(reader, cx),
-            DocumentChild::Loading | DocumentChild::Spreadsheet(_) | DocumentChild::Model(_) => {
-                div().into_any_element()
-            }
+            DocumentChild::Loading
+            | DocumentChild::Spreadsheet(_)
+            | DocumentChild::Model(_)
+            | DocumentChild::Cad(_) => div().into_any_element(),
         }
     }
 }
@@ -1044,6 +1089,34 @@ impl gpui::Render for DocumentToolbarControls {
 pub fn init(cx: &mut App) {
     workspace::register_project_item::<DocumentView>(cx);
     workspace::register_serializable_item::<DocumentView>(cx);
+    // The pane handle is only available inside the workspace, so opening a
+    // drawing in a text editor is a workspace action rather than a button that
+    // builds the editor itself.
+    cx.observe_new(|workspace: &mut Workspace, _window, _| {
+        workspace.register_action(|workspace, _: &cad_reader::OpenAsText, window, cx| {
+            let Some(view) = workspace
+                .active_item(cx)
+                .and_then(|item| item.act_as::<DocumentView>(cx))
+            else {
+                return;
+            };
+            let (project, path) = view.read_with(cx, |view, cx| {
+                (view.project.clone(), view.item.read(cx).project_path(cx))
+            });
+            let pane = workspace.active_pane().clone();
+            let load = project.update(cx, |project, cx| project.open_buffer(path, cx));
+            cx.spawn_in(window, async move |_, cx| {
+                let buffer = load.await?;
+                pane.update_in(cx, |pane, window, cx| {
+                    let editor = cx.new(|cx| Editor::for_buffer(buffer, Some(project), window, cx));
+                    pane.add_item(Box::new(editor), true, true, None, window, cx);
+                })?;
+                anyhow::Ok(())
+            })
+            .detach_and_log_err(cx);
+        });
+    })
+    .detach();
 }
 
 mod persistence {
@@ -1179,6 +1252,69 @@ mod tests {
         });
 
         (project, item)
+    }
+
+    #[gpui::test]
+    async fn test_open_dxf_document_and_release_its_bytes(cx: &mut TestAppContext) {
+        init_test(cx);
+        let bytes =
+            crate::cad_dxf::minimal_dxf("0\nLINE\n8\nWALLS\n10\n0.0\n20\n0.0\n11\n10.0\n21\n5.0\n");
+        let (project, item) = open_test_document(cx, "plan.dxf", bytes).await;
+        item.read_with(cx, |item, _| {
+            assert_eq!(item.format, DocumentFormat::Cad);
+            assert!(
+                item.contents.is_empty(),
+                "the parsed drawing must not keep the file bytes resident"
+            );
+            let scene = item.cad.as_ref().expect("drawing scene");
+            assert_eq!(scene.paths.len(), 1);
+            assert_eq!(
+                scene.layers.last().expect("walls layer").name.as_ref(),
+                "WALLS"
+            );
+        });
+        let (view, window) =
+            cx.add_window_view(|window, cx| DocumentView::new(item, project, window, cx));
+        window.run_until_parked();
+        view.read_with(&mut *window, |view, _| {
+            assert!(matches!(view.child, DocumentChild::Cad(_)));
+        });
+        let viewport = window.debug_bounds("cad-viewport").expect("cad viewport");
+        assert!(viewport.size.width > gpui::px(100.0), "{viewport:?}");
+        assert!(viewport.size.height > gpui::px(60.0), "{viewport:?}");
+        assert!(window.debug_bounds("cad-toolbar").is_some());
+        assert!(window.debug_bounds("cad-status").is_some());
+    }
+
+    #[gpui::test]
+    async fn test_dxf_is_claimed_but_dwg_is_not(cx: &mut TestAppContext) {
+        init_test(cx);
+        let (project, path) = test_document_project(cx, "plan.dwg", b"AC1032".to_vec()).await;
+        assert!(
+            cx.update(|cx| {
+                <DocumentItem as project::ProjectItem>::try_open(&project, &path, cx)
+            })
+            .is_none(),
+            "DWG must not be claimed by the drawing viewer"
+        );
+
+        // A DWG that was renamed to .dxf explains itself instead of failing
+        // silently inside the parsing stage.
+        let (project, project_path) =
+            test_document_project(cx, "renamed.dxf", b"AC1032\x00\x00\x00\x00".to_vec()).await;
+        let item = cx
+            .update(|cx| DocumentItem::open(project, project_path, cx))
+            .await
+            .expect("the tab opens first");
+        cx.run_until_parked();
+        item.read_with(cx, |item, _| {
+            assert!(
+                matches!(&item.state, DocumentLoadState::Failed(message)
+                    if message.contains(&i18n::t!("4a57c500c76df00e"))),
+                "expected the DWG explanation, got {:?}",
+                item.state
+            );
+        });
     }
 
     #[gpui::test]
@@ -1338,6 +1474,15 @@ mod tests {
         assert_eq!(
             DocumentFormat::from_extension("ods"),
             Some(DocumentFormat::Spreadsheet)
+        );
+        assert_eq!(
+            DocumentFormat::from_extension("DXF"),
+            Some(DocumentFormat::Cad)
+        );
+        assert_eq!(
+            DocumentFormat::from_extension("dwg"),
+            None,
+            "DWG is not previewable and must not be claimed"
         );
         assert_eq!(DocumentFormat::from_extension("txt"), None);
     }
@@ -1516,6 +1661,7 @@ mod tests {
             contents: Arc::new(Vec::new()),
             format: DocumentFormat::Pdf,
             model: None,
+            cad: None,
             state: DocumentLoadState::Loading {
                 transferred: 5,
                 total: Some(10),
@@ -1569,6 +1715,7 @@ mod tests {
             contents: Arc::new(Vec::new()),
             format: DocumentFormat::Pdf,
             model: None,
+            cad: None,
             state: DocumentLoadState::Failed("connection lost".into()),
             load_task: None,
         });

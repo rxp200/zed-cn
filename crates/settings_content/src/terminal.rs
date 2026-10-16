@@ -232,6 +232,11 @@ pub struct TerminalSettingsContent {
     ///
     /// Default: false
     pub show_count_badge: Option<bool>,
+    /// Whether to show an always-on-top popup when a terminal task that ran for
+    /// more than a minute finishes while you are focused elsewhere.
+    ///
+    /// Default: true
+    pub notify_on_long_task_finish: Option<bool>,
     /// What to do when the `BEL` character (`\a`) is printed to terminal.
     ///
     /// Default: "system"
@@ -245,7 +250,7 @@ crate::fallible_options::flattened_deserialize!(TerminalSettingsContent {
         cursor_shape, blinking, alternate_scroll, option_as_meta, copy_on_select,
         keep_selection_on_copy, open_links_in_mouse_mode, button, dock, starts_open, flexible,
         default_width, default_height, max_scroll_history_lines, scroll_multiplier, toolbar,
-        scrollbar, minimum_contrast, show_count_badge, bell,
+        scrollbar, minimum_contrast, show_count_badge, notify_on_long_task_finish, bell,
     },
     defaults: {},
 });

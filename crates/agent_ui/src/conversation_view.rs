@@ -91,7 +91,6 @@ use crate::message_editor::{InputAttempt, MessageEditor, MessageEditorEvent};
 use crate::profile_selector::{ProfileProvider, ProfileSelector};
 
 use crate::thread_metadata_store::{ThreadId, ThreadMetadataStore};
-use crate::ui::{AgentNotification, AgentNotificationEvent};
 use crate::{
     Agent, AgentDiffPane, AgentInitialContent, AgentPanel, AgentPanelEvent, AllowAlways, AllowOnce,
     AuthorizeToolCall, ClearMessageQueue, CycleFavoriteModels, CycleModeSelector,
@@ -102,6 +101,9 @@ use crate::{
     ScrollOutputToTop, SendImmediately, SendNextQueuedMessage, ToggleFastMode,
     ToggleProfileSelector, ToggleSteerFirstQueuedMessage, ToggleThinkingEffortMenu,
     ToggleThinkingMode, UndoLastReject,
+};
+use notifications::{
+    PopupNotification as AgentNotification, PopupNotificationEvent as AgentNotificationEvent,
 };
 
 const STOPWATCH_THRESHOLD: Duration = Duration::from_secs(30);

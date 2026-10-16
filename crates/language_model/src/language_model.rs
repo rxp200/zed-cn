@@ -554,6 +554,11 @@ pub trait LanguageModelProvider: LanguageModelClient {
     fn authenticate(&self, cx: &mut App) -> Task<Result<(), AuthenticateError>>;
     fn settings_view(&self, cx: &mut App) -> Option<ProviderSettingsView>;
 
+    /// Returns saved credentials only for the exact endpoint being configured.
+    fn configuration_api_key(&self, _api_url: &str, _cx: &App) -> Option<String> {
+        None
+    }
+
     fn set_api_key(&self, _key: Option<String>, _cx: &mut App) -> Task<Result<()>> {
         Task::ready(Ok(()))
     }

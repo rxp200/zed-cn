@@ -177,6 +177,7 @@ pub const SYSTEM_STATS_CAPABILITY: &str = "system_stats_v1";
 pub const DOCUMENT_CHUNKS_CAPABILITY: &str = "document_chunks_v1";
 pub const MODEL_CHUNKS_CAPABILITY: &str = "model_chunks_v1";
 pub const EPUB_ENTRIES_CAPABILITY: &str = "epub_entries_v1";
+pub const CAD_DOCUMENTS_CAPABILITY: &str = "cad_documents_v1";
 pub const UPLOAD_CHUNKS_CAPABILITY: &str = "upload_chunks_v1";
 pub const DOWNLOAD_CHUNKS_CAPABILITY: &str = "download_chunks_v1";
 pub const GIT_OPERATION_CANCELLATION_CAPABILITY: &str = "git_operation_cancellation_v1";
@@ -1457,6 +1458,10 @@ impl RemoteClient {
         self.client.supports_document_chunks.load(SeqCst)
     }
 
+    pub fn supports_cad_documents(&self) -> bool {
+        self.client.supports_cad_documents.load(SeqCst)
+    }
+
     pub fn supports_upload_chunks(&self) -> bool {
         self.client.supports_upload_chunks.load(SeqCst)
     }
@@ -2730,6 +2735,7 @@ mod tests {
         assert!(!client.supports_document_chunks.load(SeqCst));
         assert!(!client.supports_epub_entries.load(SeqCst));
         assert!(!client.supports_model_chunks.load(SeqCst));
+        assert!(!client.supports_cad_documents.load(SeqCst));
         assert!(!client.supports_upload_chunks.load(SeqCst));
         assert!(!client.supports_download_chunks.load(SeqCst));
         assert!(!client.supports_git_operation_cancellation.load(SeqCst));
@@ -2765,6 +2771,17 @@ mod tests {
                 .expect("deliver model capabilities");
             cx.run_until_parked();
             assert_eq!(client.supports_model_chunks.load(SeqCst), expected);
+        }
+        for (capabilities, expected) in [
+            (vec![CAD_DOCUMENTS_CAPABILITY.to_owned()], true),
+            (vec![DOCUMENT_CHUNKS_CAPABILITY.to_owned()], false),
+            (Vec::new(), false),
+        ] {
+            incoming_tx
+                .unbounded_send(proto::RemoteStarted { capabilities }.into_envelope(0, None, None))
+                .expect("deliver CAD capabilities");
+            cx.run_until_parked();
+            assert_eq!(client.supports_cad_documents.load(SeqCst), expected);
         }
         for (capabilities, expected) in [
             (vec![UPLOAD_CHUNKS_CAPABILITY.to_owned()], true),
@@ -3168,6 +3185,7 @@ pub(crate) struct ChannelClient {
     supports_system_stats: AtomicBool,
     supports_document_chunks: AtomicBool,
     supports_model_chunks: AtomicBool,
+    supports_cad_documents: AtomicBool,
     supports_epub_entries: AtomicBool,
     supports_upload_chunks: AtomicBool,
     supports_download_chunks: AtomicBool,
@@ -3209,6 +3227,7 @@ impl ChannelClient {
             supports_system_stats: AtomicBool::new(false),
             supports_document_chunks: AtomicBool::new(false),
             supports_model_chunks: AtomicBool::new(false),
+            supports_cad_documents: AtomicBool::new(false),
             supports_epub_entries: AtomicBool::new(false),
             supports_upload_chunks: AtomicBool::new(false),
             supports_download_chunks: AtomicBool::new(false),
@@ -3238,6 +3257,7 @@ impl ChannelClient {
                         SYSTEM_STATS_CAPABILITY.to_string(),
                         DOCUMENT_CHUNKS_CAPABILITY.to_string(),
                         MODEL_CHUNKS_CAPABILITY.to_string(),
+                        CAD_DOCUMENTS_CAPABILITY.to_string(),
                         EPUB_ENTRIES_CAPABILITY.to_string(),
                         UPLOAD_CHUNKS_CAPABILITY.to_string(),
                         DOWNLOAD_CHUNKS_CAPABILITY.to_string(),
@@ -3337,6 +3357,13 @@ impl ChannelClient {
                             .capabilities
                             .iter()
                             .any(|capability| capability == DOCUMENT_CHUNKS_CAPABILITY),
+                        SeqCst,
+                    );
+                    this.supports_cad_documents.store(
+                        started
+                            .capabilities
+                            .iter()
+                            .any(|capability| capability == CAD_DOCUMENTS_CAPABILITY),
                         SeqCst,
                     );
                     this.supports_persistent_terminals.store(

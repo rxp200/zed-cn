@@ -1749,6 +1749,12 @@ fn rasterize(
     {
         return None;
     }
+    // The rasterizer works in RGBA, while GPUI's `RenderImage` stores BGRA, so
+    // the red and blue channels are swapped once on the way out. Rendering in
+    // one order and converting here keeps the shading math readable.
+    for pixel in pixels.chunks_exact_mut(4) {
+        pixel.swap(0, 2);
+    }
     let image = image::RgbaImage::from_raw(width, height, pixels)?;
     log::info!("[open-debug] ModelReader rasterized {width}x{height}");
     Some(Arc::new(RenderImage::new(smallvec::smallvec![
@@ -2122,7 +2128,15 @@ mod tests {
             .count()
     }
 
+    /// A frame's red and blue channels, which is how `RenderImage` stores them.
+    fn bgra(color: [u8; 3]) -> [u8; 3] {
+        [color[2], color[1], color[0]]
+    }
+
+    /// Counts pixels of the given sRGB color, comparing in the frame's own
+    /// channel order so the assertion stays about the drawn color.
     fn count_color(image: &Arc<RenderImage>, color: [u8; 3]) -> usize {
+        let color = bgra(color);
         image
             .as_bytes(0)
             .expect("pixels")
@@ -2223,12 +2237,25 @@ mod tests {
         assert!(opaque_pixels(&wireframe) < opaque_pixels(&solid));
         // Solid+edges keeps the fill and adds darker edge pixels.
         assert_eq!(opaque_pixels(&edges), opaque_pixels(&solid));
+        let edge = bgra(test_style().edge);
         assert!(
             edges
                 .as_bytes(0)
                 .expect("pixels")
                 .chunks_exact(4)
-                .any(|pixel| pixel[..3] == test_style().edge)
+                .any(|pixel| pixel[..3] == edge),
+            "solid+edges must stroke with the edge color"
+        );
+        // The frame is BGRA, and the edge color's red and blue channels differ,
+        // so a frame that was never swapped cannot pass both checks.
+        assert_ne!(test_style().edge[0], test_style().edge[2]);
+        assert!(
+            !edges
+                .as_bytes(0)
+                .expect("pixels")
+                .chunks_exact(4)
+                .any(|pixel| pixel[..3] == test_style().edge),
+            "frame channels must not be left in render order"
         );
     }
 

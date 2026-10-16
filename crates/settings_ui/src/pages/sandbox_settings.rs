@@ -4,11 +4,11 @@ use agent_settings::AgentSettings;
 use gpui::{ReadGlobal as _, ScrollHandle, prelude::*};
 use http_proxy::HostPattern;
 use settings::{Settings as _, SettingsStore};
-use ui::{Banner, Divider, Severity, SwitchField, ToggleState, Tooltip, prelude::*};
+use ui::{Banner, Severity, SwitchField, ToggleState, Tooltip, prelude::*};
 use util::ResultExt as _;
 
 use crate::SettingsWindow;
-use crate::components::{SettingsInputField, SettingsSectionHeader};
+use crate::components::{SettingsInputField, SettingsSectionHeader, settings_card};
 
 const DOMAINS_DESCRIPTION: &str = "Each entry is an exact domain (github.com) or a leading-*. subdomain wildcard (*.npmjs.org). IP addresses and local domains are not allowed.";
 
@@ -112,6 +112,7 @@ pub(crate) fn render_sandbox_settings_page(
             v_flex()
                 .gap_4()
                 .child(SettingsSectionHeader::new(i18n::t!("97b31b5d63f57e51")).no_padding(true))
+                .child(settings_card(cx).child(v_flex().p_4().gap_4()
                 .child(
                     SwitchField::new(
                         "sandbox-allow-all-hosts",
@@ -133,14 +134,13 @@ pub(crate) fn render_sandbox_settings_page(
                     host_rows,
                     add_host_input,
                     empty_border,
-                )),
+                )))),
         )
-
-        .child(Divider::horizontal())
         .child(
             v_flex()
                 .gap_4()
                 .child(SettingsSectionHeader::new(i18n::t!("47b6174788b64db5")).no_padding(true))
+                .child(settings_card(cx).child(v_flex().p_4().gap_4()
                 .child(
                     SwitchField::new(
                         "sandbox-allow-fs-write-all",
@@ -162,13 +162,13 @@ pub(crate) fn render_sandbox_settings_page(
                     path_rows,
                     add_path_input,
                     empty_border,
-                )),
+                )))),
         )
-        .child(Divider::horizontal())
         .child(
             v_flex()
                 .gap_4()
                 .child(SettingsSectionHeader::new(i18n::t!("a739f24a9fd8a5d9")).no_padding(true))
+                .child(settings_card(cx).child(v_flex().p_4().gap_4()
                 .child(
                     SwitchField::new(
                         "sandbox-warn-confusable-unicode",
@@ -198,7 +198,7 @@ pub(crate) fn render_sandbox_settings_page(
                         },
                     )
                     .tab_index(0),
-                ),
+                ))),
         )
         )
         .into_any_element()

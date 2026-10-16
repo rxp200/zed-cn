@@ -21,8 +21,8 @@ use project::{
 use regex::Regex;
 use remote::{RemoteClient, RemoteConnectionOptions};
 use ui::{
-    Button, ButtonStyle, Callout, Color, Headline, HeadlineSize, Icon, IconButton, IconName,
-    IconSize, Indicator, Label, LabelSize, Severity, TintColor, ToggleButtonGroup,
+    Button, ButtonSize, ButtonStyle, Callout, Color, Headline, HeadlineSize, Icon, IconButton,
+    IconName, IconSize, Indicator, Label, LabelSize, Severity, TintColor, ToggleButtonGroup,
     ToggleButtonGroupStyle, ToggleButtonWithIcon, WithScrollbar, prelude::*,
 };
 use util::{
@@ -1126,6 +1126,39 @@ pub fn detected_ports(output: &str) -> Vec<u16> {
     ports
 }
 
+/// The control that closes one port forward.
+///
+/// The port forwarding modal and the system monitor's forwarding card both
+/// build their stop button here, so a tunnel is closed through the same
+/// affordance from either surface. The card asks for a smaller button because
+/// its rows are denser than the modal's list.
+pub fn stop_forward_button(
+    entry: &ForwardSnapshot,
+    manager: &Entity<PortForwardManager>,
+    icon_size: IconSize,
+    button_size: ButtonSize,
+) -> impl IntoElement {
+    let direction = entry.direction;
+    let target = entry.target.clone();
+    let manager = manager.clone();
+    IconButton::new(
+        format!(
+            "{}:{target}",
+            match direction {
+                ForwardDirection::RemoteToLocal => "stop-remote-port-forward",
+                ForwardDirection::LocalToRemote => "stop-reverse-port-forward",
+            }
+        ),
+        IconName::Stop,
+    )
+    .icon_size(icon_size)
+    .size(button_size)
+    .tooltip(ui::Tooltip::text(i18n::t!("d961583cc6bfa37f")))
+    .on_click(move |_, _, cx| {
+        manager.update(cx, |manager, cx| manager.stop(direction, &target, cx))
+    })
+}
+
 pub struct PortForwardModal {
     manager: Entity<PortForwardManager>,
     project: Entity<Project>,
@@ -1476,31 +1509,12 @@ impl Render for PortForwardModal {
                                             .size(LabelSize::XSmall)
                                             .color(Color::Muted),
                                     )
-                                    .child(
-                                        IconButton::new(
-                                            format!(
-                                                "{}:{target}",
-                                                match direction {
-                                                    ForwardDirection::RemoteToLocal => {
-                                                        "stop-remote-port-forward"
-                                                    }
-                                                    ForwardDirection::LocalToRemote => {
-                                                        "stop-reverse-port-forward"
-                                                    }
-                                                }
-                                            ),
-                                            IconName::Stop,
-                                        )
-                                        .tooltip(ui::Tooltip::text(i18n::t!("d961583cc6bfa37f")))
-                                        .on_click({
-                                            let manager = self.manager.clone();
-                                            move |_, _, cx| {
-                                                manager.update(cx, |manager, cx| {
-                                                    manager.stop(direction, &target, cx)
-                                                })
-                                            }
-                                        }),
-                                    ),
+                                    .child(stop_forward_button(
+                                        &entry,
+                                        &self.manager,
+                                        IconSize::Medium,
+                                        ButtonSize::Default,
+                                    )),
                             )
                     }))
                     .vertical_scrollbar_for(&self.scroll_handle, window, cx),
@@ -2555,6 +2569,80 @@ mod tests {
         assert_eq!(
             to_remote, remote_to_local,
             "the two direction labels must render at the same width, otherwise the segments become asymmetric"
+        );
+    }
+
+    #[gpui::test]
+    async fn shared_stop_button_closes_the_forward(cx: &mut gpui::TestAppContext) {
+        use super::{
+            ForwardDirection::*, ForwardEntry, ForwardSnapshot, ForwardSource, ForwardStatus,
+            PortForwardManager, stop_forward_button,
+        };
+        use gpui::{
+            AppContext as _, Context, Entity, IntoElement, Modifiers, Render, VisualTestContext,
+            Window, px, size,
+        };
+        use settings::SettingsStore;
+
+        struct StopButtonHarness {
+            manager: Entity<PortForwardManager>,
+            entry: ForwardSnapshot,
+        }
+
+        impl Render for StopButtonHarness {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                stop_forward_button(
+                    &self.entry,
+                    &self.manager,
+                    super::IconSize::Medium,
+                    super::ButtonSize::Default,
+                )
+            }
+        }
+
+        cx.update(|cx| {
+            let store = SettingsStore::test(cx);
+            cx.set_global(store);
+            theme_settings::init(theme::LoadThemes::JustBase, cx);
+        });
+
+        let manager = cx.new(|_| PortForwardManager::new());
+        let target = host_target("192.168.1.3", 7990);
+        manager.update(cx, |manager, _| {
+            manager.entries.insert(
+                (RemoteToLocal, target.clone()),
+                ForwardEntry {
+                    direction: RemoteToLocal,
+                    target,
+                    local_port: Some(7990),
+                    source: ForwardSource::Manual,
+                    status: ForwardStatus::RunningUnconfirmed,
+                    generation: 1,
+                    cancellation: None,
+                },
+            );
+        });
+        let entry = manager.read_with(cx, |manager, _| {
+            manager
+                .snapshots()
+                .into_iter()
+                .next()
+                .expect("the seeded forward is listed")
+        });
+        let window_manager = manager.clone();
+        let window = cx.open_window(size(px(320.), px(120.)), move |_, _| StopButtonHarness {
+            manager: window_manager,
+            entry,
+        });
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        let stop = visual
+            .debug_bounds("ICON-Stop")
+            .expect("the shared stop button is rendered");
+        visual.simulate_click(stop.center(), Modifiers::default());
+        visual.run_until_parked();
+        assert!(
+            visual.update(|_, cx| manager.read(cx).snapshots().is_empty()),
+            "clicking the stop button must remove the forward"
         );
     }
 
