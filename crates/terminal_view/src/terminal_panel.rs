@@ -963,6 +963,24 @@ impl TerminalPanel {
         })
     }
 
+    /// Activates the tab holding `terminal_view` in this panel's pane group.
+    /// Returns whether the terminal was found.
+    pub fn activate_terminal(
+        &self,
+        terminal_view: &Entity<TerminalView>,
+        focus: bool,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> bool {
+        for pane in self.center.panes() {
+            if let Some(item_index) = pane.read(cx).index_for_item(terminal_view) {
+                self.activate_terminal_view(pane, item_index, focus, window, cx);
+                return true;
+            }
+        }
+        false
+    }
+
     pub fn add_center_terminal(
         workspace: &mut Workspace,
         window: &mut Window,

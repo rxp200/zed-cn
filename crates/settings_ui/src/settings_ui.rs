@@ -13,7 +13,7 @@ use gpui::{
     Entity, FocusHandle, Focusable, Global, KeyContext, ListState, ReadGlobal as _, Role,
     ScrollHandle, Stateful, Subscription, Task, TitlebarOptions, UniformListScrollHandle,
     WeakEntity, Window, WindowBounds, WindowHandle, WindowOptions, actions, container_query, div,
-    list, point, prelude::*, px, uniform_list,
+    list, point, prelude::*, px, rems, uniform_list,
 };
 
 use language::Buffer;
@@ -39,7 +39,7 @@ use std::{
 };
 use theme_settings::ThemeSettings;
 use ui::{
-    Banner, ContextMenu, Divider, DropdownMenu, DropdownStyle, HighlightedLabel, IconButtonShape,
+    Banner, ContextMenu, DropdownMenu, DropdownStyle, HighlightedLabel, IconButtonShape,
     KeyBinding, KeybindingHint, PopoverMenu, Scrollbars, Switch, Tooltip, TreeViewItem,
     WithScrollbar, prelude::*,
 };
@@ -1097,6 +1097,28 @@ struct NavBarEntry {
     focus_handle: FocusHandle,
 }
 
+/// 侧栏导航中页面所属的分组，分组标题显示在每组第一个页面之上。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SettingsNavGroup {
+    General,
+    Workspace,
+    Tools,
+    Ai,
+    System,
+}
+
+impl SettingsNavGroup {
+    fn title(self) -> &'static str {
+        match self {
+            SettingsNavGroup::General => i18n::t!("40fae00b7c6d8ac0"),
+            SettingsNavGroup::Workspace => i18n::t!("37979829426b0cdb"),
+            SettingsNavGroup::Tools => i18n::t!("5ca6730d44152201"),
+            SettingsNavGroup::Ai => i18n::t!("09217f84a1e23708"),
+            SettingsNavGroup::System => i18n::t!("5b50d7c4b5950dc5"),
+        }
+    }
+}
+
 struct SettingsPage {
     title: &'static str,
     items: Box<[SettingsPageItem]>,
@@ -1143,21 +1165,29 @@ impl SettingsPageItem {
         &self,
         settings_window: &SettingsWindow,
         item_index: usize,
-        bottom_border: bool,
-        extra_bottom_padding: bool,
+        carded: bool,
+        card_top: bool,
+        card_bottom: bool,
         window: &mut Window,
         cx: &mut Context<SettingsWindow>,
     ) -> AnyElement {
         let file = settings_window.current_file.clone();
         let search_query = settings_window.search_bar.read(cx).text(cx);
 
-        let apply_padding = |element: Stateful<Div>| -> Stateful<Div> {
-            let element = element.pt_4();
-            if extra_bottom_padding {
-                element.pb_10()
-            } else {
-                element.pb_4()
-            }
+        let apply_padding = |element: Stateful<Div>| -> Stateful<Div> { element.py_3() };
+
+        // 同一小节内的条目共享一张卡片：小节标题是卡片头部，
+        // 条目行用卡片的上边框作为分隔线，小节末尾封闭卡片。
+        let card_container = |cx: &mut Context<SettingsWindow>| -> Div {
+            div().w_full().when(carded, |this| {
+                this.bg(cx.theme().colors().surface_background)
+                    .border_l_1()
+                    .border_r_1()
+                    .border_t_1()
+                    .border_color(cx.theme().colors().border_variant)
+                    .when(card_top, |this| this.rounded_t_md())
+                    .when(card_bottom, |this| this.rounded_b_md().border_b_1())
+            })
         };
 
         let mut render_setting_item_inner =
@@ -1219,11 +1249,14 @@ impl SettingsPageItem {
             };
 
         match self {
-            SettingsPageItem::SectionHeader(header) => {
-                SettingsSectionHeader::new(SharedString::new_static(header))
-                    .highlight_ranges(search_highlight_ranges(header, &search_query))
-                    .into_any_element()
-            }
+            SettingsPageItem::SectionHeader(header) => v_flex()
+                .when(carded, |this| this.px_8().pt_4())
+                .child(
+                    SettingsSectionHeader::new(SharedString::new_static(header))
+                        .highlight_ranges(search_highlight_ranges(header, &search_query))
+                        .carded(carded, card_bottom),
+                )
+                .into_any_element(),
             SettingsPageItem::SettingItem(setting_item) => {
                 let (field_with_padding, _) =
                     render_setting_item_inner(setting_item, true, false, cx);
@@ -1231,97 +1264,121 @@ impl SettingsPageItem {
                 v_flex()
                     .group("setting-item")
                     .px_8()
-                    .child(field_with_padding)
-                    .when(bottom_border, |this| this.child(Divider::horizontal()))
+                    .child(
+                        card_container(cx).child(
+                            div()
+                                .when(carded, |this| this.px_4())
+                                .child(field_with_padding),
+                        ),
+                    )
                     .into_any_element()
             }
-            SettingsPageItem::SubPageLink(sub_page_link) => v_flex()
-                .group("setting-item")
-                .px_8()
-                .child(
-                    h_flex()
-                        .id(sub_page_link.title.clone())
-                        .w_full()
-                        .min_w_0()
-                        .justify_between()
-                        .map(apply_padding)
-                        .child(
-                            v_flex()
-                                .relative()
-                                .w_full()
-                                .max_w_1_2()
-                                .child(render_search_highlighted_label(
-                                    sub_page_link.title.clone(),
-                                    &search_query,
-                                    None,
-                                    None,
-                                    false,
-                                ))
-                                .when_some(
-                                    sub_page_link.description.as_ref(),
-                                    |this, description| {
-                                        this.child(render_search_highlighted_label(
-                                            description.clone(),
-                                            &search_query,
-                                            Some(LabelSize::Small),
-                                            Some(Color::Muted),
-                                            false,
-                                        ))
-                                    },
-                                ),
-                        )
-                        .child(
-                            Button::new(
-                                ("sub-page".into(), sub_page_link.title.clone()),
-                                "Configure",
-                            )
-                            .aria_label(format!("Configure {}", sub_page_link.title))
-                            .tab_index(0_isize)
-                            .end_icon(
-                                Icon::new(IconName::ChevronRight)
-                                    .size(IconSize::Small)
-                                    .color(Color::Muted),
-                            )
-                            .style(ButtonStyle::OutlinedGhost)
-                            .size(ButtonSize::Medium)
-                            .on_click({
-                                let sub_page_link = sub_page_link.clone();
-                                cx.listener(move |this, _, window, cx| {
-                                    let header_text = this
-                                        .sub_page_stack
-                                        .last()
-                                        .map(|sub_page| sub_page.link.title.clone())
-                                        .or_else(|| {
-                                            this.current_page()
-                                                .items
-                                                .iter()
-                                                .take(item_index)
-                                                .rev()
-                                                .find_map(|item| {
-                                                    item.header_text().map(SharedString::new_static)
-                                                })
-                                        });
-
-                                    let Some(header) = header_text else {
-                                        unreachable!(
-                                            "All items always have a section header above them"
+            SettingsPageItem::SubPageLink(sub_page_link) => {
+                // 整行可点击的子页面入口：图标 + 标题/描述 + 右侧箭头。
+                v_flex()
+                    .group("setting-item")
+                    .px_8()
+                    .child(
+                        card_container(cx)
+                            .overflow_hidden()
+                            .child(
+                                h_flex()
+                                    .id(sub_page_link.title.clone())
+                                    .w_full()
+                                    .min_w_0()
+                                    .gap_3()
+                                    .items_center()
+                                    .map(apply_padding)
+                                    .when(carded, |this| this.px_4())
+                                    .cursor_pointer()
+                                    .hover(|this| {
+                                        this.bg(cx.theme().colors().element_hover)
+                                    })
+                                    .child(
+                                        h_flex()
+                                            .w_8()
+                                            .h_8()
+                                            .flex_none()
+                                            .justify_center()
+                                            .rounded_md()
+                                            .bg(cx.theme().colors().editor_background)
+                                            .border_1()
+                                            .border_color(cx.theme().colors().border)
+                                            .child(
+                                                Icon::new(sub_page_link.icon)
+                                                    .size(IconSize::Small)
+                                                    .color(Color::Accent),
+                                            ),
+                                    )
+                                    .child(
+                                        v_flex()
+                                            .relative()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .child(render_search_highlighted_label(
+                                                sub_page_link.title.clone(),
+                                                &search_query,
+                                                None,
+                                                None,
+                                                false,
+                                            ))
+                                            .when_some(
+                                                sub_page_link.description.as_ref(),
+                                                |this, description| {
+                                                    this.child(render_search_highlighted_label(
+                                                        description.clone(),
+                                                        &search_query,
+                                                        Some(LabelSize::Small),
+                                                        Some(Color::Muted),
+                                                        false,
+                                                    ))
+                                                },
+                                            ),
+                                    )
+                                    .child(
+                                        IconButton::new(
+                                            ("sub-page".into(), sub_page_link.title.clone()),
+                                            IconName::ChevronRight,
                                         )
-                                    };
-
-                                    this.push_sub_page(sub_page_link.clone(), header, window, cx)
-                                })
-                            }),
-                        )
-                        .child(render_settings_item_link(
-                            sub_page_link.title.clone(),
-                            sub_page_link.json_path,
-                            false,
-                            settings_window,
-                            cx,
-                        )),
-                )
-                .when(bottom_border, |this| this.child(Divider::horizontal()))
-                .into_any_element(),
+                                        .icon_color(Color::Muted)
+                                        .icon_size(IconSize::Small)
+                                        .shape(IconButtonShape::Square)
+                                        .aria_label(format!("Configure {}", sub_page_link.title))
+                                        .tab_index(0_isize)
+                                        .on_click({
+                                            let sub_page_link = sub_page_link.clone();
+                                            cx.listener(move |this, _, window, cx| {
+                                                this.open_sub_page_link(
+                                                    item_index,
+                                                    sub_page_link.clone(),
+                                                    window,
+                                                    cx,
+                                                )
+                                            })
+                                        }),
+                                    )
+                                    .on_click({
+                                        let sub_page_link = sub_page_link.clone();
+                                        cx.listener(move |this, _, window, cx| {
+                                            this.open_sub_page_link(
+                                                item_index,
+                                                sub_page_link.clone(),
+                                                window,
+                                                cx,
+                                            )
+                                        })
+                                    })
+                                    .child(render_settings_item_link(
+                                        sub_page_link.title.clone(),
+                                        sub_page_link.json_path,
+                                        false,
+                                        settings_window,
+                                        cx,
+                                    )),
+                            ),
+                    )
+                    .into_any_element()
+            }
             SettingsPageItem::DynamicItem(DynamicItem {
                 discriminant: discriminant_setting_item,
                 pick_discriminant,
@@ -1338,17 +1395,12 @@ impl SettingsPageItem {
                 let has_sub_fields =
                     rendered_ok && discriminant.is_some_and(|d| !fields[d].is_empty());
 
-                let mut content = v_flex()
-                    .id("dynamic-item")
-                    .child(
-                        div()
-                            .group("setting-item")
-                            .px_8()
-                            .child(discriminant_element.when(has_sub_fields, |this| this.pb_4())),
-                    )
-                    .when(!has_sub_fields && bottom_border, |this| {
-                        this.child(h_flex().px_8().child(Divider::horizontal()))
-                    });
+                let mut card = card_container(cx).child(
+                    div()
+                        .group("setting-item")
+                        .when(carded, |this| this.px_4())
+                        .child(discriminant_element.when(has_sub_fields, |this| this.pb_1())),
+                );
 
                 if rendered_ok {
                     let discriminant =
@@ -1356,39 +1408,44 @@ impl SettingsPageItem {
                     let sub_fields = &fields[discriminant];
                     let sub_field_count = sub_fields.len();
 
-                    for (index, field) in sub_fields.iter().enumerate() {
-                        let is_last_sub_field = index == sub_field_count - 1;
+                    for field in sub_fields.iter() {
                         let (raw_field, _) = render_setting_item_inner(field, false, true, cx);
 
-                        content = content.child(
+                        card = card.child(
                             raw_field
                                 .group("setting-sub-item")
-                                .mx_8()
+                                .when(carded, |this| this.mx_4())
                                 .p_4()
                                 .border_t_1()
-                                .when(is_last_sub_field, |this| this.border_b_1())
-                                .when(is_last_sub_field && extra_bottom_padding, |this| {
-                                    this.mb_8()
-                                })
                                 .border_dashed()
                                 .border_color(cx.theme().colors().border_variant)
                                 .bg(cx.theme().colors().element_background.opacity(0.2)),
                         );
                     }
+
+                    if carded && sub_field_count > 0 {
+                        card = card.child(div().h_3());
+                    }
                 }
 
-                return content.into_any_element();
+                return v_flex()
+                    .id("dynamic-item")
+                    .px_8()
+                    .child(card)
+                    .into_any_element();
             }
             SettingsPageItem::ActionLink(action_link) => v_flex()
                 .group("setting-item")
                 .px_8()
                 .child(
-                    h_flex()
-                        .id(action_link.title.clone())
-                        .w_full()
-                        .min_w_0()
-                        .justify_between()
-                        .map(apply_padding)
+                    card_container(cx).child(
+                        h_flex()
+                            .id(action_link.title.clone())
+                            .w_full()
+                            .min_w_0()
+                            .justify_between()
+                            .when(carded, |this| this.px_4())
+                            .map(apply_padding)
                         .child(
                             v_flex()
                                 .relative()
@@ -1434,8 +1491,8 @@ impl SettingsPageItem {
                                 })
                             }),
                         ),
+                    ),
                 )
-                .when(bottom_border, |this| this.child(Divider::horizontal()))
                 .into_any_element(),
         }
     }
@@ -1566,6 +1623,15 @@ fn render_settings_item_layout(
                                     .color(Color::Muted)
                                     .size(LabelSize::Small),
                             )
+                        })
+                        .when(settings_window.sub_page_stack.is_empty(), |this| {
+                            this.child(render_settings_item_link(
+                                title,
+                                json_path,
+                                sub_field,
+                                settings_window,
+                                cx,
+                            ))
                         }),
                 )
                 .child(render_search_highlighted_label(
@@ -1577,15 +1643,6 @@ fn render_settings_item_layout(
                 )),
         )
         .child(control)
-        .when(settings_window.sub_page_stack.is_empty(), |this| {
-            this.child(render_settings_item_link(
-                description,
-                json_path,
-                sub_field,
-                settings_window,
-                cx,
-            ))
-        })
 }
 
 fn render_settings_item(
@@ -1669,16 +1726,14 @@ fn render_settings_item_link(
         (IconName::Link, Color::Muted)
     };
 
+    // 悬停条目时内联显示在标题行，不再绝对定位到条目左侧
+    // （卡片化布局后左侧没有足够的空白容纳它）。
     div()
-        .absolute()
-        .top(rems_from_px(18_f32))
         .map(|this| {
             if sub_field {
                 this.visible_on_hover("setting-sub-item")
-                    .left(rems_from_px(-8.5_f32))
             } else {
                 this.visible_on_hover("setting-item")
-                    .left(rems_from_px(-22.0_f32))
             }
         })
         .child(
@@ -1790,6 +1845,7 @@ enum SubPageType {
 #[derive(Clone)]
 struct SubPageLink {
     title: SharedString,
+    icon: IconName,
     r#type: SubPageType,
     description: Option<SharedString>,
     search_aliases: &'static [&'static str],
@@ -2987,7 +3043,6 @@ impl SettingsWindow {
                 }
             })
             .unwrap_or(OVERFLOW_LIMIT);
-        let edit_in_json_id = SharedString::new(format!("edit-in-json-{}", selected_file_ix));
 
         h_flex()
             .id("settings-ui-files-header")
@@ -3069,19 +3124,6 @@ impl SettingsWindow {
                             })
                     }),
             )
-            .child(
-                Button::new(edit_in_json_id, i18n::t!("d467612e914e9ddf"))
-                    .tab_index(0_isize)
-                    .style(ButtonStyle::OutlinedGhost)
-                    .tooltip(Tooltip::for_action_title_in(
-                        "Edit in settings.json",
-                        &OpenCurrentFile,
-                        &self.focus_handle,
-                    ))
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.open_current_settings_file(window, cx);
-                    })),
-            )
     }
 
     pub(crate) fn display_name(&self, file: &SettingsUiFile) -> Option<String> {
@@ -3130,6 +3172,93 @@ impl SettingsWindow {
     //     }
     // }
 
+    /// 打开子页面入口：找到条目所属小节标题并压入子页面栈。
+    fn open_sub_page_link(
+        &mut self,
+        item_index: usize,
+        sub_page_link: SubPageLink,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let header_text = self
+            .sub_page_stack
+            .last()
+            .map(|sub_page| sub_page.link.title.clone())
+            .or_else(|| {
+                self.current_page()
+                    .items
+                    .iter()
+                    .take(item_index)
+                    .rev()
+                    .find_map(|item| item.header_text().map(SharedString::new_static))
+            });
+
+        let Some(header) = header_text else {
+            unreachable!("All items always have a section header above them")
+        };
+
+        self.push_sub_page(sub_page_link, header, window, cx)
+    }
+
+    /// 顶部横栏：全局搜索框与「在 settings.json 中编辑」按钮。
+    /// 搜索从侧栏移到这里，侧栏空间全部留给导航。
+    fn render_topbar(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<SettingsWindow>,
+    ) -> impl IntoElement {
+        let show_json_button = self
+            .sub_page_stack
+            .last()
+            .map(|sub_page| sub_page.link.in_json)
+            .unwrap_or(true);
+
+        h_flex()
+            .id("settings-ui-topbar")
+            .w_full()
+            .py_2()
+            .px_3()
+            .gap_3()
+            .items_center()
+            .flex_none()
+            .justify_between()
+            .border_b_1()
+            .border_color(cx.theme().colors().border)
+            .bg(cx.theme().colors().panel_background)
+            // macOS 红绿灯按钮悬浮在窗口左上角，避开
+            .when(cfg!(target_os = "macos"), |this| this.pl(px(72.)))
+            .child(
+                h_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .gap_3()
+                    .items_center()
+                    .child(Label::new(i18n::t!("df3d58c7d84b85f2")))
+                    .child(
+                        div()
+                            .w_full()
+                            .max_w(rems(35.))
+                            .child(self.render_search(window, cx)),
+                    ),
+            )
+            .when(show_json_button, |this| {
+                this.child(
+                    Button::new("edit-in-json-topbar", i18n::t!("d467612e914e9ddf"))
+                        .tab_index(0_isize)
+                        .style(ButtonStyle::OutlinedGhost)
+                        .start_icon(Icon::new(IconName::Pencil).size(IconSize::Small))
+                        .tooltip(Tooltip::for_action_title_in(
+                            "Edit in settings.json",
+                            &OpenCurrentFile,
+                            &self.focus_handle,
+                        ))
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.open_current_settings_file(window, cx);
+                        })),
+                )
+            })
+    }
+
     fn render_search(
         &self,
         window: &mut Window,
@@ -3150,7 +3279,6 @@ impl SettingsWindow {
             .pl_1p5()
             .pr_0p5()
             .h_7()
-            .mb_3()
             .gap_1p5()
             .rounded_sm()
             .bg(cx.theme().colors().editor_background)
@@ -3169,6 +3297,15 @@ impl SettingsWindow {
                         })),
                 )
             })
+    }
+
+    /// 页面在侧栏导航中的分组与图标；仅内置页面有元数据，
+    /// 测试构造的页面回退到默认分组。
+    fn nav_meta(page_index: usize) -> (SettingsNavGroup, IconName) {
+        page_data::nav_metadata()
+            .get(page_index)
+            .copied()
+            .unwrap_or((SettingsNavGroup::General, IconName::Settings))
     }
 
     fn render_nav(
@@ -3320,12 +3457,10 @@ impl SettingsWindow {
             .w(SIDEBAR_WIDTH)
             .h_full()
             .p_2p5()
-            .when(cfg!(target_os = "macos"), |this| this.pt_10())
             .flex_none()
             .border_r_1()
             .border_color(cx.theme().colors().border)
             .bg(cx.theme().colors().panel_background)
-            .child(self.render_search(window, cx))
             .child(
                 v_flex()
                     .id("settings-ui-nav")
@@ -3345,17 +3480,38 @@ impl SettingsWindow {
                                     .skip(range.start.saturating_sub(1))
                                     .take(range.len())
                                     .map(|(entry_index, entry)| {
-                                        TreeViewItem::new(
+                                        let selected =
+                                            this.is_navbar_entry_selected(entry_index);
+                                        let (nav_group, nav_icon) =
+                                            Self::nav_meta(entry.page_index);
+
+                                        // 每组第一个可见的根条目上方显示分组标题
+                                        let show_group_label = entry.is_root && {
+                                            let previous_root_group = this
+                                                .visible_navbar_entries()
+                                                .take_while(|(index, _)| {
+                                                    *index != entry_index
+                                                })
+                                                .filter(|(_, entry)| entry.is_root)
+                                                .last()
+                                                .map(|(_, entry)| {
+                                                    Self::nav_meta(entry.page_index).0
+                                                });
+                                            previous_root_group != Some(nav_group)
+                                        };
+
+                                        let tree_item = TreeViewItem::new(
                                             ("settings-ui-navbar-entry", entry_index),
                                             entry.title,
                                         )
+                                        .when(entry.is_root, |item| item.icon(nav_icon))
                                         .highlight_ranges(search_highlight_ranges(
                                             entry.title,
                                             &this.search_bar.read(cx).text(cx),
                                         ))
                                         .track_focus(&entry.focus_handle)
                                         .root_item(entry.is_root)
-                                        .toggle_state(this.is_navbar_entry_selected(entry_index))
+                                        .toggle_state(selected)
                                         .when(entry.is_root, |item| {
                                             item.expanded(entry.expanded || this.has_query)
                                                 .on_toggle(cx.listener(
@@ -3398,7 +3554,43 @@ impl SettingsWindow {
                                                     cx,
                                                 );
                                             })
-                                        })
+                                        });
+
+                                        v_flex()
+                                            .when(show_group_label, |this| {
+                                                this.child(
+                                                    div()
+                                                        .pt_3()
+                                                        .pb_1()
+                                                        .px_2()
+                                                        .child(
+                                                            Label::new(nav_group.title())
+                                                                .size(LabelSize::XSmall)
+                                                                .color(Color::Disabled),
+                                                        ),
+                                                )
+                                            })
+                                            .child(
+                                                div()
+                                                    .relative()
+                                                    .when(selected && entry.is_root, |this| {
+                                                        this.child(
+                                                            div()
+                                                                .absolute()
+                                                                .left(px(2.))
+                                                                .top(px(6.))
+                                                                .bottom(px(6.))
+                                                                .w(px(2.5))
+                                                                .rounded_full()
+                                                                .bg(
+                                                                    cx.theme()
+                                                                        .colors()
+                                                                        .text_accent,
+                                                                ),
+                                                        )
+                                                    })
+                                                    .child(tree_item),
+                                            )
                                     })
                                     .collect()
                             }),
@@ -3724,20 +3916,13 @@ impl SettingsWindow {
         if has_no_results {
             page_content = page_content.child(self.render_no_results(cx))
         } else {
-            let last_non_header_index = self
-                .visible_page_items()
-                .filter_map(|(index, item)| {
-                    (!matches!(item, SettingsPageItem::SectionHeader(_))).then_some(index)
-                })
-                .last();
-
             let root_nav_label = self
                 .navbar_entries
                 .iter()
                 .find(|entry| entry.is_root && entry.page_index == self.current_page_index())
                 .map(|entry| entry.title);
 
-            let render_item = cx.processor(move |settings_window, index, window, cx| {
+            let render_item = cx.processor(move |settings_window, index: usize, window, cx| {
                 if index == 0 {
                     return div()
                         .px_8()
@@ -3750,23 +3935,38 @@ impl SettingsWindow {
                         .into_any_element();
                 }
 
-                let mut visible_items = settings_window.visible_page_items();
-                let Some((actual_item_index, item)) = visible_items.nth(index - 1) else {
+                let page_index = settings_window.current_page_index();
+                let visible_items: Vec<(usize, &SettingsPageItem)> =
+                    settings_window.visible_page_items().collect();
+                let Some(&(actual_item_index, item)) = visible_items.get(index - 1) else {
                     return div()
                         .h(settings_window.bottom_spacer_height)
                         .into_any_element();
                 };
 
-                let next_is_header = visible_items
-                    .next()
-                    .map(|(_, item)| matches!(item, SettingsPageItem::SectionHeader(_)))
-                    .unwrap_or(false);
+                let page_items = &settings_window.pages[page_index].items;
+                // 条目所属小节由完整列表中最近的上一小节标题决定，
+                // 这样即使搜索过滤掉了标题，条目仍能正确封闭卡片。
+                let section_of = |item_index: usize| -> usize {
+                    (0..=item_index)
+                        .rev()
+                        .find(|&i| {
+                            matches!(page_items[i], SettingsPageItem::SectionHeader(_))
+                        })
+                        .unwrap_or(usize::MAX)
+                };
+                let section = section_of(actual_item_index);
+                let previous_section = index
+                    .checked_sub(2)
+                    .and_then(|previous| visible_items.get(previous))
+                    .map(|&(item_index, _)| section_of(item_index));
+                let next_section = visible_items
+                    .get(index)
+                    .map(|&(item_index, _)| section_of(item_index));
 
-                let is_last = Some(actual_item_index) == last_non_header_index;
-                let is_last_in_section = next_is_header || is_last;
-
-                let bottom_border = !is_last_in_section;
-                let extra_bottom_padding = is_last_in_section;
+                let card_top = matches!(item, SettingsPageItem::SectionHeader(_))
+                    || previous_section != Some(section);
+                let card_bottom = next_section != Some(section);
 
                 let item_focus_handle = settings_window.content_handles[current_page_index]
                     [actual_item_index]
@@ -3780,8 +3980,9 @@ impl SettingsWindow {
                     .child(item.render(
                         settings_window,
                         actual_item_index,
-                        bottom_border,
-                        extra_bottom_padding,
+                        true,
+                        card_top,
+                        card_bottom,
                         window,
                         cx,
                     ))
@@ -3884,18 +4085,20 @@ impl SettingsWindow {
         if has_no_results {
             page_content.child(self.render_no_results(cx))
         } else {
-            let last_non_header_index = items
-                .iter()
-                .enumerate()
-                .rev()
-                .find(|(_, (_, item))| !matches!(item, SettingsPageItem::SectionHeader(_)))
-                .map(|(index, _)| index);
-
             let root_nav_label = self
                 .navbar_entries
                 .iter()
                 .find(|entry| entry.is_root && entry.page_index == self.current_page_index())
                 .map(|entry| entry.title);
+
+            // 小节归属按传入条目序列中最近的上一小节标题计算；
+            // 没有标题的条目各自独占一张卡片。
+            let section_of = |position: usize| -> usize {
+                (0..=position)
+                    .rev()
+                    .find(|&i| matches!(items[i].1, SettingsPageItem::SectionHeader(_)))
+                    .unwrap_or(usize::MAX)
+            };
 
             page_content
                 .when(self.sub_page_stack.is_empty(), |this| {
@@ -3903,26 +4106,26 @@ impl SettingsWindow {
                         this.child(Label::new(title).size(LabelSize::Large).mt_2().mb_3())
                     })
                 })
-                .children(items.clone().into_iter().enumerate().map(
+                .children(items.iter().enumerate().map(
                     |(index, (actual_item_index, item))| {
-                        let is_last_item = Some(index) == last_non_header_index;
-                        let next_is_header = items.get(index + 1).is_some_and(|(_, next_item)| {
-                            matches!(next_item, SettingsPageItem::SectionHeader(_))
-                        });
-                        let bottom_border = !is_inline_section && !next_is_header && !is_last_item;
+                        let section = section_of(index);
+                        let previous_section = index.checked_sub(1).map(section_of);
+                        let next_section = (index + 1 < items.len()).then(|| section_of(index + 1));
 
-                        let extra_bottom_padding =
-                            !is_inline_section && (next_is_header || is_last_item);
+                        let card_top = matches!(item, SettingsPageItem::SectionHeader(_))
+                            || previous_section != Some(section);
+                        let card_bottom = next_section != Some(section);
 
                         v_flex()
                             .w_full()
                             .min_w_0()
-                            .id(("settings-page-item", actual_item_index))
+                            .id(("settings-page-item", *actual_item_index))
                             .child(item.render(
                                 self,
-                                actual_item_index,
-                                bottom_border,
-                                extra_bottom_padding,
+                                *actual_item_index,
+                                !is_inline_section,
+                                card_top,
+                                card_bottom,
                                 window,
                                 cx,
                             ))
@@ -3969,21 +4172,6 @@ impl SettingsWindow {
                 .child(
                     div()
                         .flex_shrink_0()
-                        .when(current_sub_page.link.in_json, |this| {
-                            this.child(
-                                Button::new("open-in-settings-file", i18n::t!("d467612e914e9ddf"))
-                                    .tab_index(0_isize)
-                                    .style(ButtonStyle::OutlinedGhost)
-                                    .tooltip(Tooltip::for_action_title_in(
-                                        "Edit in settings.json",
-                                        &OpenCurrentFile,
-                                        &self.focus_handle,
-                                    ))
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.open_current_settings_file(window, cx);
-                                    })),
-                            )
-                        })
                         .when(is_llm_providers_page, |this| {
                             this.child(pages::render_add_llm_provider_popover(self, window, cx))
                         })
@@ -4497,6 +4685,7 @@ impl SettingsWindow {
         self.regex_validation_error = None;
         let sub_page_link = SubPageLink {
             title: title.into(),
+            icon: IconName::Settings,
             r#type: SubPageType::default(),
             description: None,
             search_aliases: &[],
@@ -4555,6 +4744,7 @@ impl SettingsWindow {
 
         let sub_page_link = SubPageLink {
             title: i18n::t!("04bcc5bd9b5e543d").into(),
+            icon: IconName::Pencil,
             r#type: SubPageType::SkillCreator,
             description: None,
             search_aliases: &[],
@@ -4831,7 +5021,7 @@ impl Render for SettingsWindow {
                             window.focus_prev(cx);
                         })
                         .flex()
-                        .flex_row()
+                        .flex_col()
                         .flex_1()
                         .min_h_0()
                         .font(ui_font)
@@ -4840,8 +5030,18 @@ impl Render for SettingsWindow {
                         .when(!cfg!(target_os = "macos"), |this| {
                             this.border_t_1().border_color(cx.theme().colors().border)
                         })
-                        .child(self.render_nav(window, cx))
-                        .child(self.render_page(window, cx)),
+                        .child(self.render_topbar(window, cx))
+                        .child(
+                            // 不能用 h_flex()：它的 items_center 会让页面内容收缩成
+                            // min-content 高度并垂直居中，列表拿不到高度。
+                            div()
+                                .flex()
+                                .flex_row()
+                                .flex_1()
+                                .min_h_0()
+                                .child(self.render_nav(window, cx))
+                                .child(self.render_page(window, cx)),
+                        ),
                 ),
             window,
             cx,
@@ -6515,6 +6715,59 @@ pub mod test {
     }
 
     #[gpui::test]
+    fn nav_metadata_covers_all_builtin_pages(cx: &mut gpui::TestAppContext) {
+        // 侧栏分组/图标表与内置页面按顺序一一对应；
+        // 在 settings_data 中增删页面或调整顺序时必须同步更新 nav_metadata。
+        cx.update(|cx| {
+            register_settings(cx);
+            let app_state = AppState::test(cx);
+            AppState::set_global(app_state, cx);
+            let pages = page_data::settings_data(cx);
+            assert_eq!(pages.len(), page_data::nav_metadata().len());
+        });
+    }
+
+    #[gpui::test]
+    fn sub_page_link_opens_sub_page_with_section_header(cx: &mut gpui::TestAppContext) {
+        // 子页面入口行（整行与箭头按钮共用同一逻辑）必须压入正确的子页面与小节标题。
+        let (settings_window, cx) = cx.add_window_view(|window, cx| {
+            register_settings(cx);
+            let link = SubPageLink {
+                title: "Providers".into(),
+                icon: IconName::Server,
+                r#type: SubPageType::Other,
+                description: None,
+                search_aliases: &[],
+                json_path: None,
+                in_json: false,
+                files: USER,
+                render: |_, _, _, _| gpui::Empty.into_any_element(),
+            };
+            settings_window_with_items(
+                vec![
+                    SettingsPageItem::SectionHeader("Agent"),
+                    SettingsPageItem::SubPageLink(link),
+                ],
+                window,
+                cx,
+            )
+        });
+        cx.run_until_parked();
+        settings_window.update_in(cx, |settings_window, window, cx| {
+            let link = match &settings_window.pages[0].items[1] {
+                SettingsPageItem::SubPageLink(link) => link.clone(),
+                _ => panic!("expected sub page link"),
+            };
+            settings_window.open_sub_page_link(1, link, window, cx);
+        });
+        settings_window.read_with(cx, |settings_window, _| {
+            let sub_page = settings_window.sub_page_stack.last().unwrap();
+            assert_eq!(sub_page.link.title.as_ref(), "Providers");
+            assert_eq!(sub_page.section_header.as_ref(), "Agent");
+        });
+    }
+
+    #[gpui::test]
     fn navbar_selection_follows_content_scroll(cx: &mut gpui::TestAppContext) {
         let window = cx.add_empty_window();
         window.update(|window, cx| {
@@ -6571,6 +6824,7 @@ pub mod test {
             settings_window.sub_page_stack.push(SubPage::new(
                 SubPageLink {
                     title: "Details".into(),
+                    icon: IconName::Settings,
                     r#type: SubPageType::Other,
                     description: None,
                     search_aliases: &[],

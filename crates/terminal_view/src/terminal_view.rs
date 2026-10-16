@@ -1,6 +1,7 @@
 mod persistence;
 pub mod port_forwarding;
 pub mod terminal_element;
+mod terminal_notification;
 pub mod terminal_panel;
 mod terminal_path_like_target;
 pub mod terminal_scrollbar;
@@ -32,7 +33,7 @@ use std::{
     path::{Path, PathBuf},
     rc::Rc,
     sync::Arc,
-    time::{Duration, SystemTime},
+    time::{Duration, Instant, SystemTime},
 };
 use task::TaskId;
 use terminal::{
@@ -43,6 +44,9 @@ use terminal::{
     terminal_settings::{CursorShape, TerminalSettings},
 };
 use terminal_element::TerminalElement;
+use terminal_notification::{
+    LongTaskFinished, LongTaskNotification, LongTaskTracker, TerminalNotificationStack,
+};
 use terminal_panel::TerminalPanel;
 use terminal_path_like_target::{hover_path_like_target, open_path_like_target};
 use terminal_scrollbar::TerminalScrollHandle;
@@ -189,6 +193,7 @@ pub struct FreezeTerminalToNewWindow;
 
 pub fn init(cx: &mut App) {
     terminal_panel::init(cx);
+    TerminalNotificationStack::init(cx);
 
     register_serializable_item::<TerminalView>(cx);
 
@@ -249,6 +254,8 @@ pub struct TerminalView {
     _subscriptions: Vec<Subscription>,
     _terminal_subscriptions: Vec<Subscription>,
     terminal_activity: TerminalActivity,
+    /// Tracks the current busy period or task run for long-task notifications.
+    long_task_tracker: LongTaskTracker,
     _activity_monitor: Task<()>,
 }
 
@@ -264,6 +271,23 @@ enum TerminalActivity {
 /// How long a terminal may stay without program output before the tab indicator
 /// reports the idle (yellow) state.
 const TERMINAL_ACTIVITY_IDLE_DELAY: Duration = Duration::from_secs(3);
+
+/// Formats how long a finished task ran, reusing the wording the system monitor
+/// uses for how long a machine has been running.
+fn format_task_duration(duration: Duration) -> SharedString {
+    let total_seconds = duration.as_secs();
+    let hours = total_seconds / 3_600;
+    let minutes = (total_seconds % 3_600) / 60;
+    if hours > 0 {
+        SharedString::from(i18n::t!(
+            "2bfeae000bf3a9b4",
+            hours = hours,
+            minutes = minutes
+        ))
+    } else {
+        SharedString::from(i18n::t!("44a2145e240e5994", minutes = minutes))
+    }
+}
 
 #[derive(Default, Clone)]
 pub enum TerminalMode {
@@ -597,8 +621,8 @@ impl TerminalView {
                     .timer(TERMINAL_ACTIVITY_IDLE_DELAY)
                     .await;
                 let still_alive = terminal_view
-                    .update_in(cx, |terminal_view, _window, cx| {
-                        terminal_view.refresh_terminal_activity(cx);
+                    .update_in(cx, |terminal_view, window, cx| {
+                        terminal_view.refresh_terminal_activity(window, cx);
                     })
                     .is_ok();
                 if !still_alive {
@@ -606,6 +630,12 @@ impl TerminalView {
                 }
             }
         });
+
+        let long_task_tracker = if terminal.read(cx).task().is_some() {
+            LongTaskTracker::for_task(cx.background_executor().now())
+        } else {
+            LongTaskTracker::default()
+        };
 
         Self {
             terminal,
@@ -637,6 +667,7 @@ impl TerminalView {
             _subscriptions: subscriptions,
             _terminal_subscriptions: terminal_subscriptions,
             terminal_activity: TerminalActivity::Idle,
+            long_task_tracker,
             _activity_monitor: activity_monitor,
         }
     }
@@ -676,21 +707,106 @@ impl TerminalView {
     }
 
     /// Recomputes the tab activity indicator from the terminal's last program
-    /// output timestamp and repaints the tab when it changes.
-    fn refresh_terminal_activity(&mut self, cx: &mut Context<Self>) {
-        let activity = match self.terminal.read(cx).last_output_activity() {
-            Some(at)
-                if cx.background_executor().now().duration_since(at)
-                    < TERMINAL_ACTIVITY_IDLE_DELAY =>
-            {
-                TerminalActivity::Active
-            }
-            _ => TerminalActivity::Idle,
+    /// output timestamp, repaints the tab when it changes, and notifies about a
+    /// long-running task that has just finished while the terminal was unfocused.
+    fn refresh_terminal_activity(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let now = cx.background_executor().now();
+        let (last_output, task_status) = {
+            let terminal = self.terminal.read(cx);
+            (
+                terminal.last_output_activity(),
+                terminal.task().map(|task| task.status),
+            )
+        };
+
+        let activity = if last_output
+            .is_some_and(|at| now.duration_since(at) < TERMINAL_ACTIVITY_IDLE_DELAY)
+        {
+            TerminalActivity::Active
+        } else {
+            TerminalActivity::Idle
         };
         if activity != self.terminal_activity {
             self.terminal_activity = activity;
             cx.notify();
         }
+
+        if self.read_only {
+            return;
+        }
+
+        if let Some((outcome, started_at)) =
+            self.long_task_tracker
+                .observe(now, last_output, task_status)
+        {
+            self.notify_long_task_finished(outcome, started_at, window, cx);
+        }
+    }
+
+    /// Shows the always-on-top popup that reports a long-running terminal task
+    /// which finished while the user was looking at something else.
+    fn notify_long_task_finished(
+        &mut self,
+        outcome: LongTaskFinished,
+        started_at: Instant,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !TerminalSettings::get_global(cx).notify_on_long_task_finish {
+            return;
+        }
+        if window.is_window_active() && self.focus_handle.is_focused(window) {
+            return;
+        }
+        let Some(workspace) = self.workspace.upgrade() else {
+            return;
+        };
+
+        let duration = cx.background_executor().now().duration_since(started_at);
+        let (title, icon, icon_color) = match outcome {
+            LongTaskFinished::Task { success: true } => (
+                i18n::t!("724e7ddd9b4223ba"),
+                IconName::Check,
+                Color::Success,
+            ),
+            LongTaskFinished::Task { success: false } => (
+                i18n::t!("2a8f3aaf4986107c"),
+                IconName::XCircle,
+                Color::Error,
+            ),
+            LongTaskFinished::Idle => (
+                i18n::t!("52a6a68fdf38acda"),
+                IconName::Terminal,
+                Color::Muted,
+            ),
+        };
+        let project_name = self.project.upgrade().and_then(|project| {
+            project
+                .read(cx)
+                .visible_worktrees(cx)
+                .next()
+                .map(|worktree| SharedString::from(worktree.read(cx).root_name_str().to_string()))
+        });
+
+        let terminal_view = cx.entity();
+        let source_window = window.window_handle();
+        let stack = TerminalNotificationStack::global(cx);
+        stack.update(cx, |stack, cx| {
+            stack.push(
+                LongTaskNotification {
+                    title: SharedString::from(title),
+                    caption: format_task_duration(duration),
+                    project_name,
+                    icon,
+                    icon_color,
+                },
+                terminal_view,
+                workspace.downgrade(),
+                source_window,
+                window,
+                cx,
+            );
+        });
     }
 
     /// Fixes the view's input policy at construction, without restricting producer output
@@ -1746,7 +1862,7 @@ fn subscribe_for_terminal_events(
                         }
                     }
                     cx.notify();
-                    terminal_view.refresh_terminal_activity(cx);
+                    terminal_view.refresh_terminal_activity(window, cx);
                     window.invalidate_character_coordinates();
                     cx.emit(Event::Wakeup);
                     cx.emit(ItemEvent::UpdateTab);
@@ -1964,6 +2080,11 @@ impl TerminalView {
         if should_blink {
             self.blink_manager.update(cx, BlinkManager::enable);
         }
+
+        let terminal_id = cx.entity_id();
+        TerminalNotificationStack::global(cx).update(cx, |stack, cx| {
+            stack.dismiss_for_terminal(terminal_id, cx);
+        });
 
         window.invalidate_character_coordinates();
         cx.notify();
@@ -3033,6 +3154,191 @@ mod tests {
         });
 
         cx.run_until_parked();
+    }
+
+    /// Simulates a terminal that keeps producing output for `seconds`.
+    fn run_terminal_for(terminal: &Entity<Terminal>, seconds: u64, cx: &mut TestAppContext) {
+        for _ in 0..seconds / 3 {
+            terminal.update(cx, |terminal, cx| {
+                terminal.write_output(b"working\n", cx);
+            });
+            cx.executor().advance_clock(Duration::from_secs(3));
+            cx.run_until_parked();
+        }
+    }
+
+    /// Simulates the silent gap that ends a busy period.
+    fn finish_terminal_task(cx: &mut TestAppContext) {
+        cx.executor().advance_clock(Duration::from_secs(6));
+        cx.run_until_parked();
+    }
+
+    fn terminal_notification_count(cx: &TestAppContext) -> usize {
+        cx.windows()
+            .iter()
+            .filter(|window| {
+                window
+                    .downcast::<notifications::PopupNotification>()
+                    .is_some()
+            })
+            .count()
+    }
+
+    #[gpui::test]
+    async fn terminal_long_task_notification_follows_unfocused_completion(cx: &mut TestAppContext) {
+        let (project, _workspace, window_handle) = init_test_with_window(cx).await;
+        cx.update(|cx| release_channel::init(semver::Version::new(0, 0, 0), cx));
+        // The user is looking at something else while the task runs.
+        let mut cx = VisualTestContext::from_window(window_handle.into(), cx);
+        cx.deactivate_window();
+        let (_pane, terminal, _terminal_view) =
+            add_display_only_terminal(&project, window_handle, false, false, &mut cx);
+
+        run_terminal_for(&terminal, 66, &mut cx);
+        assert_eq!(
+            terminal_notification_count(&cx),
+            0,
+            "a terminal that is still producing output must not notify"
+        );
+
+        finish_terminal_task(&mut cx);
+        assert_eq!(
+            terminal_notification_count(&cx),
+            1,
+            "a long terminal task must notify when it stops producing output"
+        );
+    }
+
+    #[gpui::test]
+    async fn terminal_short_task_does_not_notify(cx: &mut TestAppContext) {
+        let (project, _workspace, window_handle) = init_test_with_window(cx).await;
+        cx.update(|cx| release_channel::init(semver::Version::new(0, 0, 0), cx));
+        let mut cx = VisualTestContext::from_window(window_handle.into(), cx);
+        cx.deactivate_window();
+        let (_pane, terminal, _terminal_view) =
+            add_display_only_terminal(&project, window_handle, false, false, &mut cx);
+
+        run_terminal_for(&terminal, 30, &mut cx);
+        finish_terminal_task(&mut cx);
+
+        assert_eq!(
+            terminal_notification_count(&cx),
+            0,
+            "a task shorter than a minute must not notify"
+        );
+    }
+
+    #[gpui::test]
+    async fn terminal_long_task_notification_is_skipped_while_focused(cx: &mut TestAppContext) {
+        let (project, _workspace, window_handle) = init_test_with_window(cx).await;
+        cx.update(|cx| release_channel::init(semver::Version::new(0, 0, 0), cx));
+        let mut cx = VisualTestContext::from_window(window_handle.into(), cx);
+        let (_pane, terminal, _terminal_view) =
+            add_display_only_terminal(&project, window_handle, true, false, &mut cx);
+
+        run_terminal_for(&terminal, 66, &mut cx);
+        finish_terminal_task(&mut cx);
+
+        assert_eq!(
+            terminal_notification_count(&cx),
+            0,
+            "a focused terminal must not pop up a notification"
+        );
+    }
+
+    #[gpui::test]
+    async fn terminal_notification_is_dismissed_when_terminal_is_focused(cx: &mut TestAppContext) {
+        let (project, workspace, window_handle) = init_test_with_window(cx).await;
+        cx.update(|cx| release_channel::init(semver::Version::new(0, 0, 0), cx));
+        let mut cx = VisualTestContext::from_window(window_handle.into(), cx);
+        cx.deactivate_window();
+        let (_pane, terminal, terminal_view) =
+            add_display_only_terminal(&project, window_handle, false, false, &mut cx);
+
+        run_terminal_for(&terminal, 66, &mut cx);
+        finish_terminal_task(&mut cx);
+        assert_eq!(terminal_notification_count(&cx), 1);
+
+        // Bring another terminal to the front, then come back to this one.
+        add_display_only_terminal(&project, window_handle, true, false, &mut cx);
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        cx.run_until_parked();
+        window_handle
+            .update(&mut cx, |_, window, cx| {
+                window.activate_window();
+                workspace.update(cx, |workspace, cx| {
+                    assert!(
+                        workspace.activate_item(&terminal_view, true, true, window, cx),
+                        "the terminal should still be open"
+                    );
+                });
+            })
+            .unwrap();
+        cx.run_until_parked();
+        // Focus listeners only run while a frame is being drawn.
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        cx.run_until_parked();
+
+        assert_eq!(
+            terminal_notification_count(&cx),
+            0,
+            "returning to the terminal must dismiss its notification"
+        );
+    }
+
+    #[gpui::test]
+    async fn terminal_notification_respects_the_setting(cx: &mut TestAppContext) {
+        let (project, _workspace, window_handle) = init_test_with_window(cx).await;
+        cx.update(|cx| release_channel::init(semver::Version::new(0, 0, 0), cx));
+        cx.update(|cx| {
+            SettingsStore::update_global(cx, |store, cx| {
+                store.update_user_settings(cx, |settings| {
+                    settings
+                        .terminal
+                        .get_or_insert_default()
+                        .notify_on_long_task_finish = Some(false);
+                });
+            });
+        });
+        let mut cx = VisualTestContext::from_window(window_handle.into(), cx);
+        cx.deactivate_window();
+        let (_pane, terminal, _terminal_view) =
+            add_display_only_terminal(&project, window_handle, false, false, &mut cx);
+
+        run_terminal_for(&terminal, 66, &mut cx);
+        finish_terminal_task(&mut cx);
+
+        assert_eq!(
+            terminal_notification_count(&cx),
+            0,
+            "the setting must be able to disable long-task notifications"
+        );
+    }
+
+    #[gpui::test]
+    async fn terminal_notifications_stack_up_to_three(cx: &mut TestAppContext) {
+        let (project, _workspace, window_handle) = init_test_with_window(cx).await;
+        cx.update(|cx| release_channel::init(semver::Version::new(0, 0, 0), cx));
+        let mut cx = VisualTestContext::from_window(window_handle.into(), cx);
+        cx.deactivate_window();
+
+        for finished in 1..=4 {
+            let (_pane, terminal, _terminal_view) =
+                add_display_only_terminal(&project, window_handle, false, false, &mut cx);
+            run_terminal_for(&terminal, 66, &mut cx);
+            finish_terminal_task(&mut cx);
+
+            assert_eq!(
+                terminal_notification_count(&cx),
+                finished.min(3),
+                "notifications must stack, closing the oldest beyond three"
+            );
+        }
     }
 
     #[gpui::test]

@@ -1215,6 +1215,7 @@ pub struct GitPanel {
     bulk_staging: Option<BulkStaging>,
     stash_entries: GitStash,
     active_tab: GitPanelTab,
+    dock_graph: Option<Entity<crate::git_graph::GitGraph>>,
     commit_history_scroll_handle: UniformListScrollHandle,
     commit_history: CommitHistory,
     focused_history_entry: Option<usize>,
@@ -1617,6 +1618,7 @@ impl GitPanel {
                 bulk_staging: None,
                 stash_entries: Default::default(),
                 active_tab: GitPanelTab::Changes,
+                dock_graph: None,
                 commit_history_scroll_handle: UniformListScrollHandle::new(),
                 commit_history: CommitHistory::Loading,
                 focused_history_entry: None,
@@ -5475,6 +5477,9 @@ impl GitPanel {
             // The history section is always visible, so its state follows the
             // newly active repository immediately.
             self.set_commit_history(CommitHistory::Loading, cx);
+        }
+        if active_repository_changed {
+            self.dock_graph = None;
         }
         self.active_repository = new_active_repository;
         self.reopen_commit_buffer(window, cx);
@@ -9994,6 +9999,64 @@ impl Render for GitPanel {
                         let Some(repo) = self.active_repository.clone() else {
                             return this;
                         };
+                        let bottom_docked =
+                            GitPanelSettings::get_global(cx).dock == DockPosition::Bottom;
+                        let mut this = this;
+                        if bottom_docked {
+                            this = this.child(
+                                h_flex()
+                                    .px_2()
+                                    .py_1()
+                                    .gap_1()
+                                    .border_b_1()
+                                    .border_color(cx.theme().colors().border_variant)
+                                    .child(
+                                        Button::new(
+                                            "git-dock-changes",
+                                            i18n::t!("bbd4b6a86bc65b6a"),
+                                        )
+                                        .toggle_state(self.active_tab == GitPanelTab::Changes)
+                                        .on_click(
+                                            cx.listener(|this, _, window, cx| {
+                                                this.activate_changes_tab(
+                                                    &ActivateChangesTab,
+                                                    window,
+                                                    cx,
+                                                );
+                                            }),
+                                        ),
+                                    )
+                                    .child(
+                                        Button::new("git-dock-log", i18n::t!("bce74369f872a7eb"))
+                                            .toggle_state(self.active_tab == GitPanelTab::History)
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                this.activate_history_tab(
+                                                    &ActivateHistoryTab,
+                                                    window,
+                                                    cx,
+                                                );
+                                            })),
+                                    ),
+                            );
+                            if self.active_tab == GitPanelTab::History {
+                                let graph = self.dock_graph.get_or_insert_with(|| {
+                                    let git_store = self.project.read(cx).git_store().clone();
+                                    let workspace = self.workspace.clone();
+                                    let repository_id = repo.read(cx).id;
+                                    cx.new(|cx| {
+                                        crate::git_graph::GitGraph::new(
+                                            repository_id,
+                                            git_store,
+                                            workspace,
+                                            Some(git::repository::LogSource::All),
+                                            window,
+                                            cx,
+                                        )
+                                    })
+                                });
+                                return this.child(div().flex_1().min_h_0().child(graph.clone()));
+                            }
+                        }
                         this.children(self.render_changes_header(window, cx))
                             .when(!self.commit_editor_expanded, |this| {
                                 this.child(self.render_sections(
@@ -10063,6 +10126,12 @@ impl editor::Addon for GitPanelAddon {
 
 impl Panel for GitPanel {
     fn activation_focus_handle(&self, cx: &App) -> FocusHandle {
+        if self.active_tab == GitPanelTab::History
+            && GitPanelSettings::get_global(cx).dock == DockPosition::Bottom
+            && let Some(graph) = &self.dock_graph
+        {
+            return graph.focus_handle(cx);
+        }
         if self.active_tab == GitPanelTab::Changes
             && !self.commit_editor_collapsed
             && (self.entries.is_empty() || self.commit_editor_expanded)
@@ -10086,7 +10155,10 @@ impl Panel for GitPanel {
     }
 
     fn position_is_valid(&self, position: DockPosition) -> bool {
-        matches!(position, DockPosition::Left | DockPosition::Right)
+        matches!(
+            position,
+            DockPosition::Left | DockPosition::Bottom | DockPosition::Right
+        )
     }
 
     fn set_position(&mut self, position: DockPosition, _: &mut Window, cx: &mut Context<Self>) {
@@ -10096,7 +10168,11 @@ impl Panel for GitPanel {
     }
 
     fn default_size(&self, _: &Window, cx: &App) -> Pixels {
-        GitPanelSettings::get_global(cx).default_width
+        let settings = GitPanelSettings::get_global(cx);
+        match settings.dock {
+            DockPosition::Bottom => settings.default_height,
+            DockPosition::Left | DockPosition::Right => settings.default_width,
+        }
     }
 
     fn icon(&self, _: &Window, cx: &App) -> Option<ui::IconName> {
@@ -11382,6 +11458,64 @@ mod tests {
     }
 
     #[gpui::test]
+    async fn test_git_panel_supports_bottom_dock(cx: &mut TestAppContext) {
+        init_test(cx);
+
+        let fs = FakeFs::new(cx.background_executor.clone());
+        fs.insert_tree("/root", json!({ "project": { ".git": {} } }))
+            .await;
+        let project = Project::test(fs, [Path::new(path!("/root/project"))], cx).await;
+        let window_handle =
+            cx.add_window(|window, cx| MultiWorkspace::test_new(project.clone(), window, cx));
+        let workspace = window_handle
+            .read_with(cx, |mw, _| mw.workspace().clone())
+            .unwrap();
+        let cx = &mut VisualTestContext::from_window(window_handle.into(), cx);
+
+        let panel = workspace.update_in(cx, GitPanel::new);
+        panel.update_in(cx, |panel, window, cx| {
+            assert!(panel.position_is_valid(DockPosition::Bottom));
+            assert!(panel.position_is_valid(DockPosition::Left));
+            assert!(panel.position_is_valid(DockPosition::Right));
+            // 默认停靠底部，且停靠底部时使用默认高度而不是宽度
+            assert_eq!(panel.position(window, cx), DockPosition::Bottom);
+            assert_eq!(
+                panel.default_size(window, cx),
+                GitPanelSettings::get_global(cx).default_height
+            );
+        });
+        workspace.update_in(cx, |workspace, window, cx| {
+            workspace.add_panel(panel.clone(), window, cx);
+            workspace.open_panel::<GitPanel>(window, cx);
+        });
+        panel.update_in(cx, |panel, window, cx| {
+            assert!(panel.dock_graph.is_none());
+            panel.activate_history_tab(&ActivateHistoryTab, window, cx);
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            window.refresh();
+            window.draw(cx).clear(cx);
+        });
+        panel.read_with(cx, |panel, _| {
+            assert!(
+                panel.dock_graph.is_some(),
+                "history mounts the real GitGraph in the dock"
+            );
+        });
+        panel.update_in(cx, |panel, window, cx| {
+            panel.activate_changes_tab(&ActivateChangesTab, window, cx);
+        });
+        cx.update(|window, cx| {
+            window.refresh();
+            window.draw(cx).clear(cx);
+        });
+        panel.read_with(cx, |panel, _| {
+            assert_eq!(panel.active_tab, GitPanelTab::Changes)
+        });
+    }
+
+    #[gpui::test]
     async fn test_history_tab_stops_loading_for_unborn_branch(cx: &mut TestAppContext) {
         init_test(cx);
 
@@ -11547,6 +11681,14 @@ mod tests {
     #[gpui::test]
     async fn test_history_graph_toggle_hides_inline_graph(cx: &mut TestAppContext) {
         init_test(cx);
+        cx.update(|cx| {
+            SettingsStore::update_global(cx, |store, cx| {
+                store.update_user_settings(cx, |settings| {
+                    settings.git_panel.get_or_insert_default().dock =
+                        Some(settings::DockPosition::Right);
+                });
+            });
+        });
 
         let fs = FakeFs::new(cx.background_executor.clone());
         fs.insert_tree("/root", json!({ "project": { ".git": {} } }))
@@ -15521,6 +15663,14 @@ mod tests {
     #[gpui::test]
     async fn test_history_tab_pane_navigation_focuses_rendered_panel(cx: &mut TestAppContext) {
         init_test(cx);
+        cx.update(|cx| {
+            SettingsStore::update_global(cx, |store, cx| {
+                store.update_user_settings(cx, |settings| {
+                    settings.git_panel.get_or_insert_default().dock =
+                        Some(settings::DockPosition::Right);
+                });
+            });
+        });
 
         let (_, _project, workspace, panel, mut cx) =
             setup_git_panel_with_changes(cx, json!({ ".git": {} }), &[]).await;

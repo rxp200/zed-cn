@@ -1164,10 +1164,12 @@
   "git_panel": {
     // Whether to show the git panel button in the status bar.
     "button": true,
-    // Where to dock the git panel. Can be 'left' or 'right'.
-    "dock": "right",
+    // Where to dock the git panel. Can be 'left', 'bottom' or 'right'.
+    "dock": "bottom",
     // Default width of the git panel.
     "default_width": 360,
+    // Default height of the git panel when docked to the bottom.
+    "default_height": 320,
     // Style of the git status indicator in the panel.
     //
     // Choices: label_color, icon
@@ -2372,6 +2374,11 @@
     "path_hyperlink_timeout_ms": 1,
     // Whether to show a badge on the terminal panel icon with the count of open terminals.
     "show_count_badge": false,
+    // Whether to show an always-on-top popup when a terminal task that ran for more than a minute
+    // finishes while you are focused elsewhere.
+    //
+    // Default: true
+    "notify_on_long_task_finish": true,
     // Whether to invoke the OS-specific alert sound when the terminal bell (BEL character) is printed.
     "bell": "off",
   },

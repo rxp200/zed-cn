@@ -544,7 +544,13 @@ async fn test_remote_document_loading(cx: &mut TestAppContext, server_cx: &mut T
     );
     fs.insert_file("/code/project/book.epub", bytes.clone())
         .await;
-    for invalid_path in ["../book.epub", "/code/project/book.epub", "unsupported.txt"] {
+    // `plan.dwg` is a real DWG container, which this fork does not preview.
+    for invalid_path in [
+        "../book.epub",
+        "/code/project/book.epub",
+        "unsupported.txt",
+        "plan.dwg",
+    ] {
         assert!(
             client
                 .request(proto::ReadDocumentChunk {
@@ -685,6 +691,73 @@ async fn test_remote_model_loading(cx: &mut TestAppContext, server_cx: &mut Test
             .expect("document support")
             .await
             .is_err()
+    );
+}
+
+#[gpui::test]
+async fn test_remote_cad_loading(cx: &mut TestAppContext, server_cx: &mut TestAppContext) {
+    let fs = FakeFs::new(server_cx.executor());
+    fs.insert_tree(path!("/code"), json!({"project": {}})).await;
+    let mut bytes = b"0\nSECTION\n2\nENTITIES\n0\nLINE\n8\n0\n10\n0.0\n20\n0.0\n11\n10.0\n21\n5.0\n0\nENDSEC\n0\nEOF\n".to_vec();
+    bytes.resize(project::DOCUMENT_CHUNK_SIZE + 17, b' ');
+    fs.insert_file("/code/project/plan.DXF", bytes.clone())
+        .await;
+    let (project, headless) = init_test(&fs, cx, server_cx).await;
+    let (worktree, _) = project
+        .update(cx, |project, cx| {
+            project.find_or_create_worktree(path!("/code/project"), true, cx)
+        })
+        .await
+        .expect("remote worktree");
+    let path = ProjectPath {
+        worktree_id: worktree.read_with(cx, |worktree, _| worktree.id()),
+        path: rel_path("plan.DXF").into(),
+    };
+    let loaded = project
+        .update(cx, |project, cx| {
+            project.load_document_file(path.clone(), None, cx)
+        })
+        .expect("drawing transfer support")
+        .await
+        .expect("load multi-chunk remote DXF");
+    assert_eq!(loaded.content, bytes);
+    assert!(!loaded.file.is_local);
+    assert_eq!(loaded.file.path.as_unix_str(), "plan.DXF");
+
+    for capabilities in [
+        vec![remote::remote_client::DOCUMENT_CHUNKS_CAPABILITY.to_owned()],
+        vec![remote::remote_client::MODEL_CHUNKS_CAPABILITY.to_owned()],
+        Vec::new(),
+    ] {
+        headless
+            .update(server_cx, |headless, _| {
+                headless.session.send(proto::RemoteStarted { capabilities })
+            })
+            .expect("advertise an older server");
+        cx.run_until_parked();
+        let error = project
+            .update(cx, |project, cx| {
+                project.load_document_file(path.clone(), None, cx)
+            })
+            .expect_err("other capabilities must not enable drawings");
+        assert_eq!(error.to_string(), i18n::t!("86eb01ea60817189"));
+    }
+    headless
+        .update(server_cx, |headless, _| {
+            headless.session.send(proto::RemoteStarted {
+                capabilities: vec![remote::remote_client::CAD_DOCUMENTS_CAPABILITY.to_owned()],
+            })
+        })
+        .expect("restore CAD capability");
+    cx.run_until_parked();
+    assert!(
+        project
+            .update(cx, |project, cx| {
+                project.load_document_file(path, None, cx)
+            })
+            .expect("drawing support")
+            .await
+            .is_ok()
     );
 }
 

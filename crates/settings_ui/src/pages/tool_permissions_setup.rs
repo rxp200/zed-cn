@@ -1,18 +1,23 @@
 use agent::{AgentTool, TerminalTool, ToolPermissionDecision};
 use agent_settings::AgentSettings;
 use gpui::{
-    Focusable, HighlightStyle, ReadGlobal, ScrollHandle, StyledText, TextStyleRefinement, point,
-    prelude::*,
+    App, Focusable, HighlightStyle, ReadGlobal, ScrollHandle, StyledText, TextStyleRefinement,
+    point, prelude::*,
 };
 use settings::{Settings as _, SettingsStore, ToolPermissionMode};
 use shell_command_parser::extract_commands;
 use std::sync::Arc;
 use theme_settings::ThemeSettings;
-use ui::{Banner, ContextMenu, Divider, PopoverMenu, Severity, Tooltip, prelude::*};
+use ui::{
+    Banner, ContextMenu, Divider, IconButtonShape, PopoverMenu, Severity, Tooltip, prelude::*,
+};
 use util::ResultExt as _;
 use util::shell::ShellKind;
 
-use crate::{SettingsWindow, components::SettingsInputField};
+use crate::{
+    SettingsWindow,
+    components::{SettingsInputField, settings_card, settings_card_row},
+};
 
 fn hardcoded_rules_description() -> &'static str {
     i18n::t!("436fafeb4605fecd")
@@ -228,15 +233,15 @@ pub(crate) fn render_tool_permissions_setup_page(
         )
         .child(
             v_flex()
-                .child(render_global_default_mode_section(global_default))
-                .child(Divider::horizontal())
-                .children(tool_items.into_iter().enumerate().flat_map(|(i, item)| {
-                    let mut elements: Vec<AnyElement> = vec![item];
-                    if i + 1 < tools().len() {
-                        elements.push(Divider::horizontal().into_any_element());
-                    }
-                    elements
-                })),
+                .gap_4()
+                .child(render_global_default_mode_section(global_default, cx))
+                .child(
+                    settings_card(cx).children(
+                        tool_items.into_iter().enumerate().map(|(index, item)| {
+                            settings_card_row(index == 0, cx).py_0().child(item)
+                        }),
+                    ),
+                ),
         )
         .into_any_element()
 }
@@ -272,11 +277,16 @@ fn render_tool_list_item(
 
     let render_fn = get_tool_render_fn(tool.id);
 
+    // 整行可点击的工具条目：标题 + 规则摘要 + 描述，右侧箭头进入配置页。
     h_flex()
+        .id(("tool-permission-row", tool_index))
         .w_full()
         .min_w_0()
         .py_3()
+        .gap_2()
         .justify_between()
+        .cursor_pointer()
+        .hover(|this| this.bg(cx.theme().colors().element_hover))
         .child(
             v_flex()
                 .w_full()
@@ -297,32 +307,36 @@ fn render_tool_list_item(
                         .color(Color::Muted),
                 ),
         )
-        .child({
-            let tool_name = tool.name;
-            Button::new(
-                format!("configure-{}", tool.id),
-                i18n::t!("148d195e21b05db5"),
-            )
-            .tab_index(tool_index as isize)
-            .style(ButtonStyle::OutlinedGhost)
-            .size(ButtonSize::Medium)
-            .end_icon(
-                Icon::new(IconName::ChevronRight)
-                    .size(IconSize::Small)
-                    .color(Color::Muted),
-            )
-            .on_click(cx.listener(move |this, _, window, cx| {
-                this.push_dynamic_sub_page(
-                    tool_name,
-                    i18n::t!("a2b60a34a75b7a8e"),
-                    None,
-                    true,
-                    render_fn,
-                    window,
-                    cx,
-                );
-            }))
-        })
+        .child(
+            IconButton::new(format!("configure-{}", tool.id), IconName::ChevronRight)
+                .icon_color(Color::Muted)
+                .icon_size(IconSize::Small)
+                .shape(IconButtonShape::Square)
+                .aria_label(tool.name)
+                .tab_index(tool_index as isize)
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.push_dynamic_sub_page(
+                        tool.name,
+                        i18n::t!("a2b60a34a75b7a8e"),
+                        None,
+                        true,
+                        render_fn,
+                        window,
+                        cx,
+                    );
+                })),
+        )
+        .on_click(cx.listener(move |this, _, window, cx| {
+            this.push_dynamic_sub_page(
+                tool.name,
+                i18n::t!("a2b60a34a75b7a8e"),
+                None,
+                true,
+                render_fn,
+                window,
+                cx,
+            );
+        }))
         .into_any_element()
 }
 
@@ -1100,49 +1114,55 @@ fn render_add_pattern_input(
         .into_any_element()
 }
 
-fn render_global_default_mode_section(current_mode: ToolPermissionMode) -> AnyElement {
+fn render_global_default_mode_section(current_mode: ToolPermissionMode, cx: &App) -> AnyElement {
     let mode_label = current_mode.to_string();
 
-    h_flex()
-        .my_4()
-        .min_w_0()
-        .justify_between()
+    settings_card(cx)
         .child(
-            v_flex()
-                .w_full()
+            h_flex()
+                .px_4()
+                .py_3()
                 .min_w_0()
-                .child(Label::new(i18n::t!("4dbfbb41b6cd9165")))
+                .justify_between()
                 .child(
-                    Label::new(
-                        "Controls the default behavior for all tool actions. Per-tool rules and patterns can override this.",
-                    )
-                    .size(LabelSize::Small)
-                    .color(Color::Muted),
-                ),
-        )
-        .child(
-            PopoverMenu::new("global-default-mode")
-                .trigger(
-                    Button::new("global-mode-trigger", mode_label)
-                        .tab_index(0_isize)
-                        .style(ButtonStyle::Outlined)
-                        .size(ButtonSize::Medium)
-                        .end_icon(Icon::new(IconName::ChevronDown).size(IconSize::Small)),
+                    v_flex()
+                        .w_full()
+                        .min_w_0()
+                        .child(Label::new(i18n::t!("4dbfbb41b6cd9165")))
+                        .child(
+                            Label::new(
+                                "Controls the default behavior for all tool actions. Per-tool rules and patterns can override this.",
+                            )
+                            .size(LabelSize::Small)
+                            .color(Color::Muted),
+                        ),
                 )
-                .menu(move |window, cx| {
-                    Some(ContextMenu::build(window, cx, move |menu, _, _| {
-                        menu.entry(i18n::t!("36f33adaf0942634"), None, move |_, cx| {
-                            set_global_default_permission(ToolPermissionMode::Confirm, cx);
+                .child(
+                    PopoverMenu::new("global-default-mode")
+                        .trigger(
+                            Button::new("global-mode-trigger", mode_label)
+                                .tab_index(0_isize)
+                                .style(ButtonStyle::Outlined)
+                                .size(ButtonSize::Medium)
+                                .end_icon(
+                                    Icon::new(IconName::ChevronDown).size(IconSize::Small),
+                                ),
+                        )
+                        .menu(move |window, cx| {
+                            Some(ContextMenu::build(window, cx, move |menu, _, _| {
+                                menu.entry(i18n::t!("36f33adaf0942634"), None, move |_, cx| {
+                                    set_global_default_permission(ToolPermissionMode::Confirm, cx);
+                                })
+                                .entry(i18n::t!("ce7ef28b670ade58"), None, move |_, cx| {
+                                    set_global_default_permission(ToolPermissionMode::Allow, cx);
+                                })
+                                .entry(i18n::t!("136de7a8c46fc803"), None, move |_, cx| {
+                                    set_global_default_permission(ToolPermissionMode::Deny, cx);
+                                })
+                            }))
                         })
-                        .entry(i18n::t!("ce7ef28b670ade58"), None, move |_, cx| {
-                            set_global_default_permission(ToolPermissionMode::Allow, cx);
-                        })
-                        .entry(i18n::t!("136de7a8c46fc803"), None, move |_, cx| {
-                            set_global_default_permission(ToolPermissionMode::Deny, cx);
-                        })
-                    }))
-                })
-                .anchor(gpui::Anchor::TopRight),
+                        .anchor(gpui::Anchor::TopRight),
+                ),
         )
         .into_any_element()
 }

@@ -238,6 +238,7 @@ mod tests {
                 ("certificate.pem", "lock"),
                 ("saved.bak", "backup"),
                 ("model.stl", "model"),
+                ("plan.dxf", "cad"),
                 ("module.wasm", "code"),
                 ("src/main.rs", "rust"),
                 ("src/view.tsx", "react"),

@@ -275,6 +275,14 @@ impl LanguageModelProvider for OpenAiCompatibleLanguageModelProvider {
         )))
     }
 
+    fn configuration_api_key(&self, api_url: &str, cx: &App) -> Option<String> {
+        self.state
+            .read(cx)
+            .api_key_state
+            .key(api_url)
+            .map(|key| key.to_string())
+    }
+
     fn set_api_key(&self, api_key: Option<String>, cx: &mut App) -> Task<Result<()>> {
         self.state
             .update(cx, |state, cx| state.set_api_key(api_key, cx))

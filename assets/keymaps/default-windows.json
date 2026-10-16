@@ -1649,6 +1649,19 @@
     },
   },
   {
+    "context": "CadReader",
+    "bindings": {
+      "ctrl-=": "cad_reader::ZoomIn",
+      "ctrl-+": "cad_reader::ZoomIn",
+      "ctrl--": "cad_reader::ZoomOut",
+      "ctrl-0": "cad_reader::FitDrawing",
+      "ctrl-1": "cad_reader::ZoomToActualSize",
+      "ctrl-shift-l": "cad_reader::ToggleLayers",
+      "ctrl-shift-e": "cad_reader::OpenAsText",
+      "ctrl-k r": "editor::RevealInFileManager"
+    },
+  },
+  {
     "context": "RunModal",
     "bindings": {
       "alt-1": "new_process_modal::ActivateTaskTab",

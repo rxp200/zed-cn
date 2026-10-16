@@ -18,7 +18,10 @@ use util::ResultExt as _;
 
 use zed_actions::ExtensionCategoryFilter;
 
-use crate::{PROJECT, SettingField, SettingItem, SettingsPageItem, SettingsWindow, USER};
+use crate::{
+    PROJECT, SettingField, SettingItem, SettingsPageItem, SettingsWindow, USER,
+    components::{settings_card, settings_card_row},
+};
 
 pub(crate) fn render_mcp_servers_page(
     settings_window: &SettingsWindow,
@@ -90,7 +93,7 @@ fn render_context_server_timeout(
         files: USER | PROJECT,
     });
 
-    item.render(settings_window, 0, false, false, window, cx)
+    item.render(settings_window, 0, true, true, true, window, cx)
 }
 
 fn get_context_server_store(
@@ -138,15 +141,12 @@ fn render_server_list(
     store: &Entity<ContextServerStore>,
     cx: &mut Context<SettingsWindow>,
 ) -> AnyElement {
-    v_flex()
-        .w_full()
-        .gap_1()
-        .children(itertools::intersperse_with(
-            server_ids
-                .iter()
-                .map(|server_id| render_context_server(server_id, store, cx).into_any_element()),
-            || Divider::horizontal_dashed().into_any_element(),
-        ))
+    settings_card(cx)
+        .children(server_ids.iter().enumerate().map(|(index, server_id)| {
+            settings_card_row(index == 0, cx)
+                .py_0()
+                .child(render_context_server(server_id, store, cx))
+        }))
         .into_any_element()
 }
 

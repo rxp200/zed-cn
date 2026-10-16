@@ -794,12 +794,16 @@ pub struct GitPanelSettingsContent {
     pub button: Option<bool>,
     /// Where to dock the panel.
     ///
-    /// Default: right (Agentic layout), left (Classic layout)
+    /// Default: bottom
     pub dock: Option<DockPosition>,
     /// Default width of the panel in pixels.
     ///
     /// Default: 360
     pub default_width: Option<PixelSetting>,
+    /// Default height of the panel in pixels when docked to the bottom.
+    ///
+    /// Default: 320
+    pub default_height: Option<PixelSetting>,
     /// How entry statuses are displayed.
     ///
     /// Default: icon

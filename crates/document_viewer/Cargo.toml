@@ -23,6 +23,7 @@ rpc.workspace = true
 calamine.workspace = true
 chrono.workspace = true
 db.workspace = true
+encoding_rs.workspace = true
 editor.workspace = true
 futures.workspace = true
 file_icons.workspace = true

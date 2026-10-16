@@ -7,14 +7,25 @@ use release_channel::ReleaseChannel;
 use std::rc::Rc;
 use ui::{Render, prelude::*};
 
-pub struct AgentNotification {
+/// Height of a single popup, used both for its window and for stacking slots.
+pub const POPUP_NOTIFICATION_HEIGHT: Pixels = px(72.);
+
+/// Vertical distance between two stacked popups.
+pub const POPUP_NOTIFICATION_GAP: Pixels = px(8.);
+
+/// A small always-on-top window used to alert the user about work that
+/// finished while they were looking elsewhere.
+pub struct PopupNotification {
+    id: SharedString,
     title: SharedString,
     caption: Option<SharedString>,
     icon: IconName,
+    icon_color: Color,
     project_name: Option<SharedString>,
+    accept_label: SharedString,
 }
 
-impl AgentNotification {
+impl PopupNotification {
     pub fn new(
         title: impl Into<SharedString>,
         caption: Option<SharedString>,
@@ -22,32 +33,63 @@ impl AgentNotification {
         project_name: Option<impl Into<SharedString>>,
     ) -> Self {
         Self {
+            id: "popup-notification".into(),
             title: title.into(),
-            caption: caption,
+            caption,
             icon,
+            icon_color: Color::Muted,
             project_name: project_name.map(|name| name.into()),
+            accept_label: i18n::t!("db8db0530432bd15").into(),
         }
     }
 
-    #[cfg(test)]
+    /// Overrides the id of the root element of this popup.
+    pub fn id(mut self, id: impl Into<SharedString>) -> Self {
+        self.id = id.into();
+        self
+    }
+
+    /// Overrides the color used to paint the leading icon.
+    pub fn icon_color(mut self, icon_color: Color) -> Self {
+        self.icon_color = icon_color;
+        self
+    }
+
+    /// Overrides the label of the primary button that accepts the notification.
+    pub fn accept_label(mut self, accept_label: impl Into<SharedString>) -> Self {
+        self.accept_label = accept_label.into();
+        self
+    }
+
     pub fn title(&self) -> &SharedString {
         &self.title
     }
 
     pub fn window_options(screen: Rc<dyn PlatformDisplay>, cx: &App) -> WindowOptions {
+        Self::window_options_at_slot(screen, 0, cx)
+    }
+
+    /// The `slot`-th notification is placed below the preceding ones, so that
+    /// several simultaneous notifications do not overlap.
+    pub fn window_options_at_slot(
+        screen: Rc<dyn PlatformDisplay>,
+        slot: usize,
+        cx: &App,
+    ) -> WindowOptions {
         let size = Size {
             width: px(450.),
-            height: px(72.),
+            height: POPUP_NOTIFICATION_HEIGHT,
         };
 
         let notification_margin_width = px(16.);
-        let notification_margin_height = px(-48.);
+        let notification_margin_height = px(48.);
+        let slot_offset = (POPUP_NOTIFICATION_HEIGHT + POPUP_NOTIFICATION_GAP) * slot as f32;
 
         let bounds = gpui::Bounds::<Pixels> {
             origin: screen.bounds().top_right()
                 - point(
                     size.width + notification_margin_width,
-                    notification_margin_height,
+                    -(notification_margin_height + slot_offset),
                 ),
             size,
         };
@@ -72,24 +114,24 @@ impl AgentNotification {
     }
 }
 
-pub enum AgentNotificationEvent {
+pub enum PopupNotificationEvent {
     Accepted,
     Dismissed,
 }
 
-impl EventEmitter<AgentNotificationEvent> for AgentNotification {}
+impl EventEmitter<PopupNotificationEvent> for PopupNotification {}
 
-impl AgentNotification {
+impl PopupNotification {
     pub fn accept(&mut self, cx: &mut Context<Self>) {
-        cx.emit(AgentNotificationEvent::Accepted);
+        cx.emit(PopupNotificationEvent::Accepted);
     }
 
     pub fn dismiss(&mut self, cx: &mut Context<Self>) {
-        cx.emit(AgentNotificationEvent::Dismissed);
+        cx.emit(PopupNotificationEvent::Dismissed);
     }
 }
 
-impl Render for AgentNotification {
+impl Render for PopupNotification {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let ui_font = theme_settings::setup_ui_font(window, cx);
         let line_height = window.line_height();
@@ -110,7 +152,7 @@ impl Render for AgentNotification {
         };
 
         h_flex()
-            .id("agent-notification")
+            .id(self.id.clone())
             .size_full()
             .p_3()
             .gap_4()
@@ -128,7 +170,7 @@ impl Render for AgentNotification {
                     .child(
                         h_flex().h(line_height).justify_center().child(
                             Icon::new(self.icon)
-                                .color(Color::Muted)
+                                .color(self.icon_color)
                                 .size(IconSize::Small),
                         ),
                     )
@@ -185,7 +227,7 @@ impl Render for AgentNotification {
                     .gap_1()
                     .items_center()
                     .child(
-                        Button::new("open", i18n::t!("db8db0530432bd15"))
+                        Button::new("open", self.accept_label.clone())
                             .style(ButtonStyle::Tinted(ui::TintColor::Accent))
                             .full_width()
                             .on_click({

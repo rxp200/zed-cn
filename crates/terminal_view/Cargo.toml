@@ -30,6 +30,7 @@ itertools.workspace = true
 language.workspace = true
 log.workspace = true
 menu.workspace = true
+notifications.workspace = true
 project.workspace = true
 regex.workspace = true
 remote.workspace = true

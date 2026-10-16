@@ -7,11 +7,12 @@ use settings::{
 use std::sync::{Arc, OnceLock};
 use strum::{EnumMessage, IntoDiscriminant as _, VariantArray};
 use theme::SystemAppearance;
-use ui::IntoElement;
+use ui::{IconName, IntoElement};
 
 use crate::{
     ActionLink, DynamicItem, PROJECT, SettingField, SettingItem, SettingsFieldMetadata,
-    SettingsPage, SettingsPageItem, SubPageLink, USER, active_language, all_language_names,
+    SettingsNavGroup, SettingsPage, SettingsPageItem, SubPageLink, USER, active_language,
+    all_language_names,
     pages::{
         open_audio_test_window, render_edit_prediction_setup_page, render_external_agents_page,
         render_llm_providers_page, render_mcp_servers_page, render_sandbox_settings_page,
@@ -63,22 +64,45 @@ macro_rules! concat_sections {
 }
 
 pub(crate) fn settings_data(cx: &App) -> Vec<SettingsPage> {
+    // 页面顺序同时决定侧栏导航顺序；与下方 `nav_metadata` 一一对应，
+    // 调整顺序或增删页面时必须同步更新。
     vec![
         general_page(cx),
         appearance_page(),
-        keymap_page(),
         editor_page(),
-        languages_and_tools_page(cx),
-        search_and_files_page(),
+        keymap_page(),
         window_and_layout_page(),
         panels_page(),
-        debugger_page(),
+        search_and_files_page(),
         terminal_page(),
+        languages_and_tools_page(cx),
         version_control_page(),
+        debugger_page(),
         collaboration_page(),
         ai_page(cx),
         network_page(),
         developer_page(cx),
+    ]
+}
+
+/// 侧栏导航的分组与图标，与 [`settings_data`] 返回的页面顺序一一对应。
+pub(crate) fn nav_metadata() -> &'static [(SettingsNavGroup, IconName)] {
+    &[
+        (SettingsNavGroup::General, IconName::Settings),
+        (SettingsNavGroup::General, IconName::Eye),
+        (SettingsNavGroup::General, IconName::CursorIBeam),
+        (SettingsNavGroup::General, IconName::Keyboard),
+        (SettingsNavGroup::Workspace, IconName::ThisWindow),
+        (SettingsNavGroup::Workspace, IconName::ListTree),
+        (SettingsNavGroup::Workspace, IconName::FolderSearch),
+        (SettingsNavGroup::Workspace, IconName::Terminal),
+        (SettingsNavGroup::Tools, IconName::Code),
+        (SettingsNavGroup::Tools, IconName::GitBranch),
+        (SettingsNavGroup::Tools, IconName::Debug),
+        (SettingsNavGroup::Tools, IconName::UserGroup),
+        (SettingsNavGroup::Ai, IconName::Sparkle),
+        (SettingsNavGroup::System, IconName::Public),
+        (SettingsNavGroup::System, IconName::ToolHammer),
     ]
 }
 
@@ -103,6 +127,7 @@ fn developer_page(cx: &App) -> SettingsPage {
         items.push(SettingsPageItem::SectionHeader("Feature Flags"));
         items.push(SettingsPageItem::SubPageLink(SubPageLink {
             title: i18n::t!("50f87e4af37fb572").into(),
+icon: IconName::BoltOutlined,
             r#type: Default::default(),
             description: None,
             search_aliases: &[],
@@ -4218,6 +4243,7 @@ fn languages_and_tools_page(cx: &App) -> SettingsPage {
             let link = format!("languages.{language_name}");
             SettingsPageItem::SubPageLink(SubPageLink {
                 title: language_name,
+icon: IconName::Code,
                 r#type: crate::SubPageType::Language,
                 description: None,
                 search_aliases: &[],
@@ -6735,7 +6761,7 @@ fn panels_page() -> SettingsPage {
         ]
     }
 
-    fn terminal_panel_section() -> [SettingsPageItem; 5] {
+    fn terminal_panel_section() -> [SettingsPageItem; 6] {
         [
             SettingsPageItem::SectionHeader("Terminal Panel"),
             SettingsPageItem::SettingItem(SettingItem {
@@ -6803,6 +6829,29 @@ fn panels_page() -> SettingsPage {
                             .terminal
                             .get_or_insert_default()
                             .show_count_badge = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: i18n::t!("a57168c40e90f7cf"),
+                description: i18n::t!("17a4f169f1c508bc"),
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("terminal.notify_on_long_task_finish"),
+                    pick: |settings_content| {
+                        settings_content
+                            .terminal
+                            .as_ref()?
+                            .notify_on_long_task_finish
+                            .as_ref()
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content
+                            .terminal
+                            .get_or_insert_default()
+                            .notify_on_long_task_finish = value;
                     },
                 }),
                 metadata: None,
@@ -7053,7 +7102,7 @@ fn panels_page() -> SettingsPage {
         ]
     }
 
-    fn git_panel_section() -> [SettingsPageItem; 19] {
+    fn git_panel_section() -> [SettingsPageItem; 20] {
         [
             SettingsPageItem::SectionHeader("Git Panel"),
             SettingsPageItem::SettingItem(SettingItem {
@@ -7117,6 +7166,20 @@ fn panels_page() -> SettingsPage {
                             .git_panel
                             .get_or_insert_default()
                             .default_width = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: i18n::t!("3bd02fe3c0363409"),
+                description: i18n::t!("b226651781049a4e"),
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("git_panel.default_height"),
+                    pick: |content| content.git_panel.as_ref()?.default_height.as_ref(),
+                    write: |content, value, _| {
+                        content.git_panel.get_or_insert_default().default_height = value;
                     },
                 }),
                 metadata: None,
@@ -9618,6 +9681,7 @@ fn ai_page(cx: &App) -> SettingsPage {
             }),
             SettingsPageItem::SubPageLink(SubPageLink {
                 title: i18n::t!("1eabe31d01dca963").into(),
+icon: IconName::Server,
                 r#type: Default::default(),
                 json_path: Some("llm_providers"),
                 description: Some(i18n::t!("edaa7302dd7d8531").into()),
@@ -9653,6 +9717,7 @@ fn ai_page(cx: &App) -> SettingsPage {
             }),
             SettingsPageItem::SubPageLink(SubPageLink {
                 title: i18n::t!("8dc040d2283eab03").into(),
+icon: IconName::ZedAgent,
                 r#type: Default::default(),
                 json_path: Some("agent_servers"),
                 description: Some(i18n::t!("735025642c0d702c").into()),
@@ -9678,6 +9743,7 @@ fn ai_page(cx: &App) -> SettingsPage {
             }),
             SettingsPageItem::SubPageLink(SubPageLink {
                 title: i18n::t!("a203f86cf6a6a841").into(),
+icon: IconName::Blocks,
                 r#type: Default::default(),
                 json_path: Some("context_servers"),
                 description: Some(i18n::t!("02e19b1c0aebe736").into()),
@@ -9697,6 +9763,7 @@ fn ai_page(cx: &App) -> SettingsPage {
         items.extend([
             SettingsPageItem::SubPageLink(SubPageLink {
                 title: i18n::t!("99aea2f9131ad6da").into(),
+icon: IconName::Book,
                 r#type: Default::default(),
                 json_path: Some(zed_actions::AGENT_SKILLS_SETTINGS_PATH),
                 description: Some(i18n::t!("f78eaae8d47089bf").into()),
@@ -9707,6 +9774,7 @@ fn ai_page(cx: &App) -> SettingsPage {
             }),
             SettingsPageItem::SubPageLink(SubPageLink {
                 title: i18n::t!("05fdf30411d98d32").into(),
+icon: IconName::Lock,
                 r#type: Default::default(),
                 json_path: Some(zed_actions::AGENT_SANDBOX_SETTINGS_PATH),
                 description: Some(
@@ -9728,6 +9796,7 @@ fn ai_page(cx: &App) -> SettingsPage {
             }),
             SettingsPageItem::SubPageLink(SubPageLink {
                 title: i18n::t!("a2b60a34a75b7a8e").into(),
+icon: IconName::ToolHammer,
                 r#type: Default::default(),
                 json_path: Some("agent.tool_permissions"),
                 description: Some("Set up regex patterns to auto-allow, auto-deny, or always request confirmation, for specific tool inputs.".into()),
@@ -12132,6 +12201,7 @@ fn edit_prediction_language_settings_section() -> [SettingsPageItem; 5] {
         SettingsPageItem::SectionHeader(i18n::t!("34627253269ac8a6")),
         SettingsPageItem::SubPageLink(SubPageLink {
             title: i18n::t!("4b08b9a69dd7a595").into(),
+icon: IconName::ZedPredict,
             r#type: Default::default(),
             json_path: Some("edit_predictions.providers"),
             description: Some(i18n::t!("bc1739d9f184f06d").into()),

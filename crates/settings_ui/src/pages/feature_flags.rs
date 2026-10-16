@@ -4,6 +4,7 @@ use gpui::{ScrollHandle, prelude::*};
 use ui::{Checkbox, ToggleState, prelude::*};
 
 use crate::SettingsWindow;
+use crate::components::{settings_card, settings_card_row};
 
 pub(crate) fn render_feature_flags_page(
     _settings_window: &SettingsWindow,
@@ -24,13 +25,16 @@ pub(crate) fn render_feature_flags_page(
         .pt_2p5()
         .px_8()
         .pb_16()
-        .gap_4()
         .overflow_y_scroll()
         .track_scroll(scroll_handle)
-        .children(
-            descriptors
-                .into_iter()
-                .map(|descriptor| render_flag_row(descriptor, cx)),
+        .child(
+            settings_card(cx).children(descriptors.into_iter().enumerate().map(
+                |(index, descriptor)| {
+                    settings_card_row(index == 0, cx)
+                        .py_3()
+                        .child(render_flag_row(descriptor, cx))
+                },
+            )),
         )
         .into_any_element()
 }
