@@ -106,6 +106,16 @@ impl RemoteConnectionPrompt {
         self.cancellation = Some(tx);
     }
 
+    /// The opt-in flag the managed-key checkbox writes and the SSH transport
+    /// reads through [`RemoteClientDelegate`].
+    ///
+    /// Every connection path that builds a [`RemoteClientDelegate`] outside
+    /// [`connect`] must hand this same flag to it, otherwise the checkbox has no
+    /// effect and no key is ever created.
+    pub fn managed_key_creation_flag(&self) -> Arc<AtomicBool> {
+        self.create_managed_key.clone()
+    }
+
     pub fn set_prompt(
         &mut self,
         prompt: String,
@@ -609,12 +619,13 @@ impl RemoteClientDelegate {
         window: AnyWindowHandle,
         ui: WeakEntity<RemoteConnectionPrompt>,
         known_password: Option<EncryptedPassword>,
+        create_managed_key: Arc<AtomicBool>,
     ) -> Self {
         Self {
             window,
             ui,
             known_password,
-            create_managed_key: Arc::new(AtomicBool::new(false)),
+            create_managed_key,
         }
     }
 }
@@ -946,7 +957,7 @@ pub fn connect(
     let (tx, mut rx) = oneshot::channel();
     ui.update(cx, |ui, _cx| ui.set_cancellation_tx(tx));
 
-    let create_managed_key = ui.read(cx).create_managed_key.clone();
+    let create_managed_key = ui.read(cx).managed_key_creation_flag();
     let delegate = Arc::new(RemoteClientDelegate {
         window,
         ui: ui.downgrade(),
@@ -983,6 +994,45 @@ mod tests {
             "Enter passphrase for key '/home/user/.ssh/id_ed25519':"
         ));
         assert!(!is_account_password_prompt("Are you sure (yes/no)?"));
+    }
+
+    #[gpui::test]
+    fn delegates_share_the_prompt_managed_key_flag(cx: &mut TestAppContext) {
+        initialize_test(cx);
+
+        let window = cx.add_window(|window, cx| Editor::single_line(window, cx));
+        let prompt = window
+            .update(cx, |_, window, cx| {
+                cx.new(|cx| {
+                    RemoteConnectionPrompt::new(
+                        "example.com".to_string(),
+                        None,
+                        false,
+                        false,
+                        window,
+                        cx,
+                    )
+                })
+            })
+            .expect("test window should remain open");
+
+        let delegate = window
+            .update(cx, |_, window, cx| {
+                let flag = prompt.read(cx).managed_key_creation_flag();
+                RemoteClientDelegate::new(window.window_handle(), prompt.downgrade(), None, flag)
+            })
+            .expect("test window should remain open");
+
+        assert!(!remote::RemoteClientDelegate::should_create_managed_ssh_key(&delegate));
+
+        prompt.update(cx, |prompt, _cx| {
+            prompt
+                .managed_key_creation_flag()
+                .store(true, Ordering::Relaxed);
+        });
+        assert!(remote::RemoteClientDelegate::should_create_managed_ssh_key(
+            &delegate
+        ));
     }
 
     #[gpui::test]

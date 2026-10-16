@@ -8,8 +8,9 @@ pub mod remote_identity;
 mod transport;
 
 pub use managed_ssh_keys::{
-    ManagedSshKey, ManagedSshKeyDeploymentState, delete_local_managed_ssh_key,
-    list_managed_ssh_keys, managed_ssh_key_directory, revoke_and_delete_managed_ssh_key,
+    ImportedManagedSshKey, ManagedSshKey, ManagedSshKeyDeploymentState, ManagedSshKeyKind,
+    delete_local_managed_ssh_key, import_managed_ssh_key, list_managed_ssh_keys,
+    managed_ssh_key_directory, revoke_and_delete_managed_ssh_key,
 };
 #[cfg(target_os = "windows")]
 pub use remote_client::OpenWslPath;

@@ -149,6 +149,7 @@ pub async fn open_remote_terminal_workspace(
                         ui.set_cancellation_tx(cancel_tx);
                     });
 
+                    let create_managed_key = ui.read(cx).managed_key_creation_flag();
                     Some(Arc::new(remote_connection::RemoteClientDelegate::new(
                         window.window_handle(),
                         ui.downgrade(),
@@ -160,6 +161,7 @@ pub async fn open_remote_terminal_workspace(
                         } else {
                             None
                         },
+                        create_managed_key,
                     )))
                 })
             }

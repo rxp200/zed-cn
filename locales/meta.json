@@ -19945,6 +19945,221 @@
       "zh": "中文",
       "en": "",
       "crate": "assets"
+    },
+    "c362a97d314389cd": {
+      "zh": "表单添加服务器",
+      "en": "Add Server (Form)",
+      "crate": "recent_projects"
+    },
+    "37aac5b4e639b93b": {
+      "zh": "地址",
+      "en": "Address",
+      "crate": "recent_projects"
+    },
+    "5e75d10975e8ce94": {
+      "zh": "登录用户",
+      "en": "Login user",
+      "crate": "recent_projects"
+    },
+    "52373e4342173705": {
+      "zh": "验证方式",
+      "en": "Authentication",
+      "crate": "recent_projects"
+    },
+    "a621ab606db2a11f": {
+      "zh": "密码",
+      "en": "Password",
+      "crate": "recent_projects"
+    },
+    "f67bca8f42bcf073": {
+      "zh": "密钥",
+      "en": "Key",
+      "crate": "recent_projects"
+    },
+    "9fc30835877e4450": {
+      "zh": "交互验证",
+      "en": "Keyboard-interactive",
+      "crate": "recent_projects"
+    },
+    "4347df11b74e14ea": {
+      "zh": "密码验证在连接时提示输入，Zed 不会保存密码。",
+      "en": "Password auth prompts on connect; Zed never stores the password.",
+      "crate": "recent_projects"
+    },
+    "429db636b4adcef2": {
+      "zh": "密钥验证使用私钥文件，可在下方拖入或选择文件。",
+      "en": "Key auth uses a private key file; drop one below or choose a file.",
+      "crate": "recent_projects"
+    },
+    "ca192a6339891b48": {
+      "zh": "交互验证只提供 keyboard-interactive，也覆盖多因素提示。",
+      "en": "Interactive auth only offers keyboard-interactive, which also covers multi-factor prompts.",
+      "crate": "recent_projects"
+    },
+    "75141f859dc99aa2": {
+      "zh": "选择密钥文件…",
+      "en": "Choose key file…",
+      "crate": "recent_projects"
+    },
+    "bbe0fecf4af46fe9": {
+      "zh": "已选择密钥：{}",
+      "en": "Selected key: {}",
+      "crate": "recent_projects"
+    },
+    "20199ba6524b09f6": {
+      "zh": "密钥会复制到 Zed 的密钥库，原文件可以移动或删除。",
+      "en": "The key is copied into Zed's key store, so the original file can be moved or deleted.",
+      "crate": "recent_projects"
+    },
+    "0b26467a5e72a15d": {
+      "zh": "也可以把私钥文件拖到这里。",
+      "en": "You can also drop a private key file here.",
+      "crate": "recent_projects"
+    },
+    "4f6e412d26ed86b2": {
+      "zh": "跳板机链路",
+      "en": "Jump hosts",
+      "crate": "recent_projects"
+    },
+    "db639f3485a635fc": {
+      "zh": "按顺序连接，第一项最先连接，全部留空表示直连。",
+      "en": "Connected in order, first entry first; leave empty to connect directly.",
+      "crate": "recent_projects"
+    },
+    "a1e9b8ca998838e8": {
+      "zh": "添加跳板机",
+      "en": "Add jump host",
+      "crate": "recent_projects"
+    },
+    "a888dc136bc8ee40": {
+      "zh": "尚未添加跳板机。",
+      "en": "No jump hosts yet.",
+      "crate": "recent_projects"
+    },
+    "48b970b568a7f8f9": {
+      "zh": "代理设置",
+      "en": "Proxy",
+      "crate": "recent_projects"
+    },
+    "df7f8656cf9d962c": {
+      "zh": "支持 http://、socks5:// 和 socks5h://；填写后会优先于跳板机链路。",
+      "en": "Supports http://, socks5:// and socks5h://; takes precedence over jump hosts.",
+      "crate": "recent_projects"
+    },
+    "41c7caab02b48d59": {
+      "zh": "例如 socks5://127.0.0.1:1080",
+      "en": "e.g. socks5://127.0.0.1:1080",
+      "crate": "recent_projects"
+    },
+    "6b8f6c6cb99b1f89": {
+      "zh": "禁用代理",
+      "en": "Disable proxy",
+      "crate": "recent_projects"
+    },
+    "3899218664bb77ca": {
+      "zh": "超时时间（秒）",
+      "en": "Timeout (seconds)",
+      "crate": "recent_projects"
+    },
+    "30928008029cdf5f": {
+      "zh": "留空使用默认值。",
+      "en": "Leave empty to use the default.",
+      "crate": "recent_projects"
+    },
+    "3fe29ba5aa6ffd60": {
+      "zh": "例如 192.168.1.10",
+      "en": "e.g. 192.168.1.10",
+      "crate": "recent_projects"
+    },
+    "68450ee4ee5c3d6b": {
+      "zh": "例如 22",
+      "en": "e.g. 22",
+      "crate": "recent_projects"
+    },
+    "c6e8dbb3a8be616c": {
+      "zh": "例如 root",
+      "en": "e.g. root",
+      "crate": "recent_projects"
+    },
+    "16dde1c78091301a": {
+      "zh": "选择要作为跳板机的服务器",
+      "en": "Select a server to use as a jump host",
+      "crate": "recent_projects"
+    },
+    "7285fbff8b0f4a6e": {
+      "zh": "没有可用的已保存服务器",
+      "en": "No saved SSH servers are available",
+      "crate": "recent_projects"
+    },
+    "a4339e03ef00d39d": {
+      "zh": "地址不能为空",
+      "en": "The address is required",
+      "crate": "recent_projects"
+    },
+    "e69dbd37f66bcdd1": {
+      "zh": "地址不能以 - 开头，也不能包含空格",
+      "en": "The address must not start with - or contain spaces",
+      "crate": "recent_projects"
+    },
+    "185b7c4cd938c1bd": {
+      "zh": "用户名不能包含空格、@ 或 :",
+      "en": "The user name must not contain spaces, @ or :",
+      "crate": "recent_projects"
+    },
+    "cc7fcd5fae4acbbf": {
+      "zh": "端口无效",
+      "en": "Invalid port",
+      "crate": "recent_projects"
+    },
+    "31084cd9d2a74fed": {
+      "zh": "超时时间无效",
+      "en": "Invalid timeout",
+      "crate": "recent_projects"
+    },
+    "51d23ada472b3ed3": {
+      "zh": "代理地址无效：{}",
+      "en": "Invalid proxy address: {}",
+      "crate": "recent_projects"
+    },
+    "41b86c2b700f0a24": {
+      "zh": "导入 SSH 密钥失败：{}",
+      "en": "Failed to import the SSH key: {}",
+      "crate": "recent_projects"
+    },
+    "2dc1c2b22f6b9084": {
+      "zh": "无法读取 SSH 密钥 {}",
+      "en": "Failed to read SSH key {}",
+      "crate": "remote"
+    },
+    "a14fe49e2bdd3ae5": {
+      "zh": "不能导入符号链接；请选择私钥文件本身",
+      "en": "Cannot import a symbolic link; choose the private key file itself",
+      "crate": "remote"
+    },
+    "e1566fff35f8e4d6": {
+      "zh": "{} 不是文件",
+      "en": "{} is not a file",
+      "crate": "remote"
+    },
+    "9cfc35afc8e79b43": {
+      "zh": "SSH 密钥文件为空或过大：{}",
+      "en": "The SSH key file is empty or too large: {}",
+      "crate": "remote"
+    },
+    "d619bba9ca6909e3": {
+      "zh": "找不到 Zed 管理的 SSH 密钥 {}；请重新选择密钥",
+      "en": "Zed-managed SSH key {} was not found; choose the key again",
+      "crate": "remote"
+    },
+    "e2cf8746a7b14c90": {
+      "zh": "无法确定 SSH 密钥文件名",
+      "en": "Failed to determine the SSH key file name",
+      "crate": "remote"
+    },
+    "e9a7c038ec19f160": {
+      "zh": "无法把 SSH 密钥复制到 Zed 密钥库：{}",
+      "en": "Failed to copy the SSH key into Zed's key store: {}",
+      "crate": "remote"
     }
   },
   "context": {

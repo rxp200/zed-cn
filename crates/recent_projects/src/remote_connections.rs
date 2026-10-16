@@ -270,6 +270,7 @@ pub async fn open_remote_project(
                         ui.set_cancellation_tx(cancel_tx);
                     });
 
+                    let create_managed_key = ui.read(cx).managed_key_creation_flag();
                     Some(Arc::new(RemoteClientDelegate::new(
                         window.window_handle(),
                         ui.downgrade(),
@@ -281,6 +282,7 @@ pub async fn open_remote_project(
                         } else {
                             None
                         },
+                        create_managed_key,
                     )))
                 })
             }
