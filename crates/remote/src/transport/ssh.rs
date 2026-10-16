@@ -267,6 +267,16 @@ pub struct SshConnectionOptions {
     pub upload_binary_over_ssh: bool,
     #[serde(default)]
     pub remote_server_source: settings::RemoteServerSource,
+    #[serde(default)]
+    pub auth_method: Option<settings::SshAuthMethod>,
+    #[serde(default)]
+    pub ssh_key_id: Option<String>,
+    #[serde(default)]
+    pub jump_hosts: Vec<settings::JumpHost>,
+    #[serde(default)]
+    pub proxy: Option<String>,
+    #[serde(default)]
+    pub proxy_disabled: bool,
 }
 
 impl From<settings_content::SshConnection> for SshConnectionOptions {
@@ -283,6 +293,11 @@ impl From<settings_content::SshConnection> for SshConnectionOptions {
             remote_server_source: val.remote_server_source.unwrap_or_default(),
             port_forwards: val.port_forwards,
             connection_timeout: val.connection_timeout,
+            auth_method: val.auth_method,
+            ssh_key_id: val.ssh_key_id,
+            jump_hosts: val.jump_hosts,
+            proxy: val.proxy,
+            proxy_disabled: val.proxy_disabled,
         }
     }
 }
@@ -963,6 +978,7 @@ impl SshRemoteConnection {
         let mut connection_options = connection_options;
         let managed_key =
             crate::managed_ssh_keys::apply_managed_identity(&mut connection_options, cx).await?;
+        connection_options.validate_connection_routing()?;
 
         let temp_dir = tempfile::Builder::new()
             .prefix("zed-ssh-session")
@@ -2734,6 +2750,11 @@ impl SshConnectionOptions {
             upload_binary_over_ssh: false,
             remote_server_source: settings::RemoteServerSource::Official,
             connection_timeout: None,
+            auth_method: None,
+            ssh_key_id: None,
+            jump_hosts: Vec::new(),
+            proxy: None,
+            proxy_disabled: false,
         })
     }
 
@@ -2751,7 +2772,115 @@ impl SshConnectionOptions {
     }
 
     pub fn additional_args_for_scp(&self) -> Vec<String> {
-        self.args.iter().flatten().cloned().collect::<Vec<String>>()
+        let mut args = self.args.iter().flatten().cloned().collect::<Vec<String>>();
+        args.extend(self.routing_args());
+        args
+    }
+
+    /// Fails when the configured proxy cannot be used, so a connection never
+    /// silently falls back to connecting directly.
+    pub fn validate_connection_routing(&self) -> anyhow::Result<()> {
+        let proxy = self
+            .proxy
+            .as_deref()
+            .map(str::trim)
+            .filter(|proxy| !proxy.is_empty())
+            .filter(|_| !self.proxy_disabled);
+        if let Some(proxy) = proxy
+            && !self.raw_args_contain(|argument| argument.contains("ProxyCommand"))
+        {
+            util::ssh_proxy::ProxyEndpoint::parse(proxy)?.command()?;
+        }
+        Ok(())
+    }
+
+    /// Arguments that route this connection through a proxy or a jump-host
+    /// chain and pin the requested authentication method.
+    ///
+    /// These are derived from the structured settings fields rather than parsed
+    /// out of the raw `args`. A raw `-J` or `ProxyCommand` already present in
+    /// `args` wins, so a host added from a one-line `ssh` command keeps exactly
+    /// the behavior it was added with.
+    fn routing_args(&self) -> Vec<String> {
+        let mut args = Vec::new();
+
+        let has_proxy_command = self.raw_args_contain(|argument| argument.contains("ProxyCommand"));
+        let has_jump_host =
+            self.raw_args_contain(|argument| argument == "-J" || argument.starts_with("-J"));
+        let proxy = self
+            .proxy
+            .as_deref()
+            .map(str::trim)
+            .filter(|proxy| !proxy.is_empty());
+
+        if let Some(proxy) = proxy.filter(|_| !self.proxy_disabled) {
+            if !has_proxy_command {
+                match util::ssh_proxy::ProxyEndpoint::parse(proxy)
+                    .and_then(|endpoint| endpoint.command())
+                {
+                    Ok(command) => {
+                        args.push("-o".to_string());
+                        args.push(format!("ProxyCommand={command}"));
+                    }
+                    Err(error) => {
+                        log::error!(
+                            "ignoring invalid SSH proxy for {}: {error:#}",
+                            self.host.to_string()
+                        );
+                    }
+                }
+            }
+        } else if !self.jump_hosts.is_empty() && !has_jump_host {
+            args.push("-J".to_string());
+            args.push(self.jump_host_spec());
+        }
+
+        match self.auth_method {
+            Some(settings::SshAuthMethod::Key) => {
+                args.extend([
+                    "-o".to_string(),
+                    "PreferredAuthentications=publickey".to_string(),
+                ]);
+            }
+            Some(settings::SshAuthMethod::Interactive) => {
+                args.extend([
+                    "-o".to_string(),
+                    "PreferredAuthentications=keyboard-interactive".to_string(),
+                    "-o".to_string(),
+                    "PubkeyAuthentication=no".to_string(),
+                ]);
+            }
+            Some(settings::SshAuthMethod::Password) | None => {}
+        }
+
+        args
+    }
+
+    fn jump_host_spec(&self) -> String {
+        self.jump_hosts
+            .iter()
+            .map(|jump_host| {
+                let mut spec = String::new();
+                if let Some(username) = &jump_host.username {
+                    spec.push_str(&urlencoding::encode(username));
+                    spec.push('@');
+                }
+                spec.push_str(&bracket_ipv6(&jump_host.host));
+                if let Some(port) = jump_host.port {
+                    spec.push(':');
+                    spec.push_str(&port.to_string());
+                }
+                spec
+            })
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+
+    fn raw_args_contain(&self, predicate: impl Fn(&str) -> bool) -> bool {
+        self.args
+            .iter()
+            .flatten()
+            .any(|argument| predicate(argument))
     }
 
     pub fn additional_args_without_port_forwards(&self) -> Vec<String> {
@@ -3847,5 +3976,150 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    fn jump_host(host: &str, username: Option<&str>, port: Option<u16>) -> settings::JumpHost {
+        settings::JumpHost {
+            host: host.to_string(),
+            username: username.map(str::to_string),
+            port,
+        }
+    }
+
+    #[test]
+    fn jump_hosts_become_one_comma_separated_flag() {
+        let options = SshConnectionOptions {
+            host: "target.example".into(),
+            jump_hosts: vec![
+                jump_host("jump-a.example", Some("ops"), None),
+                jump_host("jump-b.example", None, Some(2222)),
+            ],
+            ..Default::default()
+        };
+
+        let args = options.additional_args_without_port_forwards();
+        assert_eq!(
+            args,
+            vec![
+                "-J".to_string(),
+                "ops@jump-a.example,jump-b.example:2222".to_string()
+            ]
+        );
+        assert!(options.validate_connection_routing().is_ok());
+    }
+
+    #[test]
+    fn proxy_takes_precedence_over_jump_hosts() {
+        let options = SshConnectionOptions {
+            host: "target.example".into(),
+            jump_hosts: vec![jump_host("jump-a.example", None, None)],
+            proxy: Some("socks5://127.0.0.1:1080".to_string()),
+            ..Default::default()
+        };
+
+        let args = options.additional_args_without_port_forwards();
+        assert!(
+            args.iter()
+                .any(|arg| arg.starts_with("ProxyCommand=") && arg.contains("--ssh-proxy")),
+            "expected a proxy command: {args:?}"
+        );
+        assert!(!args.iter().any(|arg| arg == "-J"), "proxy must win: {args:?}");
+        assert!(options.validate_connection_routing().is_ok());
+    }
+
+    #[test]
+    fn disabling_the_proxy_falls_back_to_jump_hosts() {
+        let options = SshConnectionOptions {
+            host: "target.example".into(),
+            jump_hosts: vec![jump_host("jump-a.example", None, None)],
+            proxy: Some("socks5://127.0.0.1:1080".to_string()),
+            proxy_disabled: true,
+            ..Default::default()
+        };
+
+        let args = options.additional_args_without_port_forwards();
+        assert!(args.iter().any(|arg| arg == "-J"), "expected jump hosts: {args:?}");
+        assert!(!args.iter().any(|arg| arg.starts_with("ProxyCommand=")));
+    }
+
+    #[test]
+    fn an_invalid_proxy_fails_routing_validation() {
+        let options = SshConnectionOptions {
+            host: "target.example".into(),
+            proxy: Some("ftp://127.0.0.1:21".to_string()),
+            ..Default::default()
+        };
+
+        assert!(options.validate_connection_routing().is_err());
+        assert!(
+            !options
+                .additional_args_without_port_forwards()
+                .iter()
+                .any(|arg| arg.starts_with("ProxyCommand="))
+        );
+    }
+
+    #[test]
+    fn a_raw_jump_host_argument_is_kept_verbatim() {
+        let options = SshConnectionOptions {
+            host: "target.example".into(),
+            args: Some(vec!["-J".to_string(), "raw.example".to_string()]),
+            jump_hosts: vec![jump_host("structured.example", None, None)],
+            ..Default::default()
+        };
+
+        let args = options.additional_args_without_port_forwards();
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == ["-J".to_string(), "raw.example".to_string()]),
+            "the one-line arguments must win: {args:?}"
+        );
+        assert!(!args.iter().any(|arg| arg == "structured.example"));
+    }
+
+    #[test]
+    fn auth_method_pins_the_requested_authentication() {
+        let key = SshConnectionOptions {
+            host: "target.example".into(),
+            auth_method: Some(settings::SshAuthMethod::Key),
+            ..Default::default()
+        };
+        assert_eq!(
+            key.additional_args_without_port_forwards(),
+            vec![
+                "-o".to_string(),
+                "PreferredAuthentications=publickey".to_string()
+            ]
+        );
+
+        let interactive = SshConnectionOptions {
+            host: "target.example".into(),
+            auth_method: Some(settings::SshAuthMethod::Interactive),
+            ..Default::default()
+        };
+        let args = interactive.additional_args_without_port_forwards();
+        assert!(args.contains(&"PreferredAuthentications=keyboard-interactive".to_string()));
+        assert!(args.contains(&"PubkeyAuthentication=no".to_string()));
+
+        let password = SshConnectionOptions {
+            host: "target.example".into(),
+            auth_method: Some(settings::SshAuthMethod::Password),
+            ..Default::default()
+        };
+        assert!(password.additional_args_without_port_forwards().is_empty());
+    }
+
+    #[test]
+    fn routing_arguments_reach_scp_too() {
+        let options = SshConnectionOptions {
+            host: "target.example".into(),
+            jump_hosts: vec![jump_host("jump-a.example", None, None)],
+            ..Default::default()
+        };
+
+        assert_eq!(
+            options.additional_args_for_scp(),
+            vec!["-J".to_string(), "jump-a.example".to_string()]
+        );
     }
 }

@@ -219,6 +219,19 @@ fn main() {
         return;
     }
 
+    // `zed --ssh-proxy` tunnels an SSH connection through an HTTP or SOCKS5 proxy.
+    if let Some(values) = &args.ssh_proxy {
+        let [proxy_url, host, port] = values.as_slice() else {
+            eprintln!("--ssh-proxy requires PROXY_URL, HOST and PORT");
+            process::exit(2);
+        };
+        if let Err(error) = util::ssh_proxy::run(proxy_url, host, port) {
+            eprintln!("Zed SSH 代理失败：{error:#}");
+            process::exit(1);
+        }
+        return;
+    }
+
     // `zed --crash-handler` Makes zed operate in minidump crash handler mode
     if let Some(socket) = &args.crash_handler {
         crashes::crash_server(socket.as_path(), paths::logs_dir().clone());
@@ -1778,6 +1791,11 @@ struct Args {
     #[cfg(not(target_os = "windows"))]
     #[arg(hide = true)]
     askpass: Option<String>,
+
+    /// Connects to an SSH target through an HTTP CONNECT or SOCKS5 proxy, acting as ssh's
+    /// `ProxyCommand` helper.
+    #[arg(long, hide = true, num_args = 3, value_names = ["PROXY_URL", "HOST", "PORT"])]
+    ssh_proxy: Option<Vec<String>>,
 
     #[arg(long, hide = true)]
     dump_all_actions: bool,

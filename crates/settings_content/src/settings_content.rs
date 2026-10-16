@@ -1493,6 +1493,32 @@ pub struct DevContainerConnection {
 }
 
 #[with_fallible_options]
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq, Hash, JsonSchema, MergeFrom)]
+#[serde(rename_all = "snake_case")]
+pub enum SshAuthMethod {
+    /// Prompt for an account password through the askpass helper. This is the
+    /// behavior an SSH host without an explicit method has always had.
+    #[default]
+    Password,
+    /// Offer public-key authentication, either with an imported Zed-managed key
+    /// or with the user's own agent and SSH configuration keys.
+    Key,
+    /// Only offer keyboard-interactive authentication, which is also the path
+    /// servers with multi-factor prompts use.
+    Interactive,
+}
+
+/// One hop in an SSH host's jump-host chain. Hops are connected in order, and
+/// each one is normally picked from the already saved SSH hosts.
+#[with_fallible_options]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq, Hash, JsonSchema, MergeFrom)]
+pub struct JumpHost {
+    pub host: String,
+    pub username: Option<String>,
+    pub port: Option<u16>,
+}
+
+#[with_fallible_options]
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, JsonSchema, MergeFrom)]
 pub struct SshConnection {
     pub host: String,
@@ -1524,6 +1550,23 @@ pub struct SshConnection {
     /// Timeout in seconds for SSH connection and downloading the remote server binary.
     /// Defaults to 10 seconds if not specified.
     pub connection_timeout: Option<u16>,
+    /// How Zed should authenticate to this host. Unset keeps the legacy behavior:
+    /// no authentication method is forced and the password prompt still offers to
+    /// create a Zed-managed key.
+    pub auth_method: Option<SshAuthMethod>,
+    /// Identifier of a private key imported into Zed's managed SSH key store.
+    /// The key file itself lives outside the settings file.
+    pub ssh_key_id: Option<String>,
+    /// Ordered jump hosts that are connected before this host.
+    #[serde(default)]
+    pub jump_hosts: Vec<JumpHost>,
+    /// Optional `http://`, `socks5://` or `socks5h://` proxy that carries this
+    /// connection's SSH traffic. Unset means no proxy.
+    pub proxy: Option<String>,
+    /// Keeps the configured proxy in settings but connects directly instead, so
+    /// a jump-host chain can be used without clearing the address.
+    #[serde(default)]
+    pub proxy_disabled: bool,
 }
 
 #[derive(
