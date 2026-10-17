@@ -7,8 +7,8 @@ use std::{
 
 use anyhow::Result;
 use gpui::{
-    App, Context, Entity, EventEmitter, FocusHandle, Focusable, ImageFormat, ImageSource,
-    ScrollHandle, SharedString, Task, Window, actions, div, px,
+    App, Context, Entity, EventEmitter, FocusHandle, Focusable, ImageFormat, ImageSource, Pixels,
+    Point, ScrollHandle, SharedString, Task, Window, actions, div, px,
 };
 use language::File as _;
 use markdown::{Markdown, MarkdownElement, MarkdownFont, MarkdownOptions, MarkdownStyle};
@@ -123,31 +123,8 @@ impl EpubReader {
             }
         })
         .detach();
-        let source = Arc::new(EpubSource {
-            project: project.downgrade(),
-            path: item.read(cx).project_path(cx),
-            snapshot: Mutex::new(None),
-            limiter: Arc::new(async_lock::Semaphore::new(1)),
-        });
-        let parse_task = cx.spawn({
-            let source = source.clone();
-            async move |this, cx| {
-                let parsed = load_structure(&source, cx).await;
-                this.update(cx, |reader, cx| match parsed {
-                    Ok(archive) => {
-                        reader.archive = Some(Arc::new(archive));
-                        reader.load_chapter(0, cx);
-                        cx.notify();
-                    }
-                    Err(error) => {
-                        reader.error = Some(i18n::t!("5e36c31539810b81", error = error).into());
-                        cx.notify();
-                    }
-                })
-            }
-        });
 
-        Self {
+        let mut reader = Self {
             item,
             project,
             focus_handle: cx.focus_handle(),
@@ -156,7 +133,7 @@ impl EpubReader {
             error: None,
             chapter_index: 0,
             markdown: None,
-            source: Some(source),
+            source: None,
             images: Rc::new(HashMap::new()),
             progress: None,
             loading_resource: None,
@@ -164,8 +141,68 @@ impl EpubReader {
             font_size: DEFAULT_FONT_SIZE,
             show_toc: false,
             image_cache: gpui::RetainAllImageCache::new(cx),
-            _load_task: Some(parse_task),
+            _load_task: None,
+        };
+        reader.source = Some(reader.new_source(cx));
+        reader.start_structure_load(0, None, cx);
+        reader
+    }
+
+    fn new_source(&self, cx: &App) -> Arc<EpubSource> {
+        Arc::new(EpubSource {
+            project: self.project.downgrade(),
+            path: self.item.read(cx).project_path(cx),
+            snapshot: Mutex::new(None),
+            limiter: Arc::new(async_lock::Semaphore::new(1)),
+        })
+    }
+
+    fn start_structure_load(
+        &mut self,
+        chapter_index: usize,
+        restore_offset: Option<Point<Pixels>>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(source) = self.source.clone() else {
+            return;
+        };
+        self._load_task = Some(cx.spawn(async move |this, cx| {
+            let parsed = load_structure(&source, cx).await;
+            this.update(cx, |reader, cx| match parsed {
+                Ok(archive) => {
+                    reader.archive = Some(Arc::new(archive));
+                    let index = chapter_index.min(reader.chapter_count().saturating_sub(1));
+                    reader.load_chapter_at(index, restore_offset, cx);
+                    cx.notify();
+                }
+                Err(error) => {
+                    reader.error = Some(i18n::t!("5e36c31539810b81", error = error).into());
+                    cx.notify();
+                }
+            })
+        }));
+    }
+
+    /// Re-reads the archive after the file changed on disk. A fresh source drops
+    /// the cached size and modification time so the new bytes are accepted, and
+    /// the reader keeps its chapter and scroll position.
+    pub fn reload(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        let chapter_index = self.chapter_index;
+        let restore_offset = Some(self.scroll_handle.offset());
+        self.archive = None;
+        self.error = None;
+        self.markdown = None;
+        self.progress = None;
+        self.loading_resource = None;
+        for image in self.images.values() {
+            image.remove_asset(cx);
         }
+        self.images = Rc::new(HashMap::new());
+        self.image_cache = gpui::RetainAllImageCache::new(cx);
+        let source = self.new_source(cx);
+        self.source = Some(source);
+        self.start_structure_load(chapter_index, restore_offset, cx);
+        cx.notify();
     }
 
     pub fn with_languages(mut self, languages: Arc<language::LanguageRegistry>) -> Self {
@@ -226,6 +263,15 @@ impl EpubReader {
     }
 
     pub fn load_chapter(&mut self, index: usize, cx: &mut Context<Self>) {
+        self.load_chapter_at(index, None, cx);
+    }
+
+    fn load_chapter_at(
+        &mut self,
+        index: usize,
+        restore_offset: Option<Point<Pixels>>,
+        cx: &mut Context<Self>,
+    ) {
         let Some(archive) = self.archive.clone() else {
             return;
         };
@@ -269,6 +315,11 @@ impl EpubReader {
                                 cx,
                             )
                         }));
+                        // A reload restores the reader's place; a chapter change
+                        // starts at the top as before.
+                        if let Some(offset) = restore_offset {
+                            reader.scroll_handle.set_offset(offset);
+                        }
                     }
                     Err(error) => reader.error = Some(i18n::t!("5e36c31539810b81", error = error).into()),
                 }
@@ -806,7 +857,9 @@ fn resolve_epub_image(
     Some(ImageSource::Image(Arc::new(image)))
 }
 
-fn image_format_for_path(path: &str) -> Option<ImageFormat> {
+/// Shared with the Word reader, which resolves images inside the same
+/// kind of ZIP container.
+pub(crate) fn image_format_for_path(path: &str) -> Option<ImageFormat> {
     let extension = path.rsplit('.').next()?.to_ascii_lowercase();
     match extension.as_str() {
         "png" => Some(ImageFormat::Png),
@@ -822,7 +875,7 @@ fn image_format_for_path(path: &str) -> Option<ImageFormat> {
 }
 
 /// Returns the directory portion of a ZIP entry path.
-fn zip_dir(path: &str) -> String {
+pub(crate) fn zip_dir(path: &str) -> String {
     match path.rfind('/') {
         Some(index) => path[..index].to_string(),
         None => String::new(),
@@ -831,7 +884,7 @@ fn zip_dir(path: &str) -> String {
 
 /// Resolves a possibly relative href against a directory inside the archive,
 /// normalizing `.` and `..` segments. ZIP paths never start with `/`.
-fn resolve_zip_path(base_dir: &str, href: &str) -> String {
+pub(crate) fn resolve_zip_path(base_dir: &str, href: &str) -> String {
     let mut segments: Vec<&str> = if base_dir.is_empty() {
         Vec::new()
     } else {

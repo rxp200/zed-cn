@@ -1127,8 +1127,21 @@ impl HeadlessProject {
                 .context("worktree not found")?;
             anyhow::Ok((worktree.read(cx).absolutize(&path), this.fs.clone()))
         })?;
-        project::epub::read_entry_chunk(fs, abs_path, request, cx.background_executor().clone())
-            .await
+        // EPUB chapters and office document entries travel over the same
+        // message because both address a range of one ZIP entry. Servers that
+        // predate office support only accept EPUB paths and never advertise
+        // the office capability, so the extension decides which limits apply.
+        let is_office = abs_path.extension().is_some_and(|extension| {
+            ["docx", "docm", "dotx", "dotm"]
+                .iter()
+                .any(|candidate| extension.eq_ignore_ascii_case(candidate))
+        });
+        let executor = cx.background_executor().clone();
+        if is_office {
+            project::epub::read_office_entry_chunk(fs, abs_path, request, executor).await
+        } else {
+            project::epub::read_entry_chunk(fs, abs_path, request, executor).await
+        }
     }
 
     async fn handle_read_document_chunk(

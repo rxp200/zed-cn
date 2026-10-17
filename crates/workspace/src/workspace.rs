@@ -2035,12 +2035,17 @@ impl Workspace {
         let bottom_dock_buttons =
             cx.new(|cx| PanelButtons::new(bottom_dock.clone(), cx).vertical());
         let right_dock_buttons = cx.new(|cx| PanelButtons::new(right_dock.clone(), cx).vertical());
+        let status_bar_dock_buttons =
+            cx.new(|cx| PanelButtons::new(bottom_dock.clone(), cx).for_status_bar());
         let multi_workspace = window
             .root::<MultiWorkspace>()
             .flatten()
             .map(|mw| mw.downgrade());
         let status_bar =
             cx.new(|cx| StatusBar::new(&center_pane.clone(), multi_workspace.clone(), window, cx));
+        status_bar.update(cx, |status_bar, cx| {
+            status_bar.add_left_item(status_bar_dock_buttons.clone(), window, cx);
+        });
 
         let session_id = app_state.session.read(cx).id().to_owned();
 

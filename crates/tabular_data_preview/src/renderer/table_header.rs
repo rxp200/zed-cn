@@ -591,7 +591,7 @@ impl TableView {
                 with_copy_on_right_click(
                     header_text_cell,
                     header_text,
-                    "Right click to copy column name",
+                    vec![i18n::t!("8720ec2f91e9d499").into()],
                 )
                 .child(displayed_header)
             })

@@ -111,13 +111,34 @@ impl TableView {
 
         // Remaining columns: actual table data
         for col in (0..this.engine.contents.number_of_cols).map(AnyColumn) {
+            let data_cell_id = DataCellId::new(data_row, col);
+
+            // The cell being edited renders an inline editor instead of its value.
+            if let Some(editing) = this
+                .editing
+                .as_ref()
+                .filter(|editing| editing.cell == data_cell_id)
+            {
+                elements.push(
+                    div()
+                        .size_full()
+                        .h(row_height)
+                        .overflow_hidden()
+                        .border_1()
+                        .border_color(cx.theme().colors().border_focused)
+                        .bg(cx.theme().colors().editor_background)
+                        .child(editing.editor.clone())
+                        .into_any_element(),
+                );
+                continue;
+            }
+
             let table_cell = row.expect_get(col);
 
             // TODO: Introduce `<null>` cell type
             let cell_content = table_cell.display_value().cloned().unwrap_or_default();
 
             let display_cell_id = DisplayCellId::new(display_row, col);
-            let data_cell_id = DataCellId::new(data_row, col);
 
             let is_focus_cell = this
                 .selection
@@ -143,8 +164,10 @@ impl TableView {
                 )
                 .child(TableView::create_selectable_cell(
                     display_cell_id,
+                    data_cell_id,
                     cell_content,
                     this.settings.vertical_alignment,
+                    this.editable,
                     cx,
                 ));
 

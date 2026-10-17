@@ -6811,6 +6811,61 @@ impl GitPanel {
         )
     }
 
+    /// Tool window header shown while the panel is docked at the bottom: the
+    /// tool name, the changes/log views as tabs and a branch switcher.
+    fn render_dock_tab_strip(
+        &self,
+        repo: &Entity<Repository>,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let colors = cx.theme().colors();
+        let log_label: SharedString = match repo.read(cx).branch.as_ref() {
+            Some(branch) => i18n::t_args!("a2c36082c7696e93", branch.name()).into(),
+            None => i18n::t!("bce74369f872a7eb").into(),
+        };
+
+        h_flex()
+            .px_2()
+            .py_1()
+            .gap_1()
+            .border_b_1()
+            .border_color(colors.border_variant)
+            .child(
+                Icon::new(IconName::GitBranch)
+                    .size(IconSize::Small)
+                    .color(Color::Muted),
+            )
+            .child(
+                Label::new("Git")
+                    .size(LabelSize::Small)
+                    .color(Color::Muted),
+            )
+            .child(div().w(px(1.)).h_4().mx_1().bg(colors.border_variant))
+            .child(
+                Button::new("git-dock-changes", i18n::t!("bbd4b6a86bc65b6a"))
+                    .toggle_state(self.active_tab == GitPanelTab::Changes)
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.activate_changes_tab(&ActivateChangesTab, window, cx);
+                    })),
+            )
+            .child(
+                Button::new("git-dock-log", log_label)
+                    .toggle_state(self.active_tab == GitPanelTab::History)
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.activate_history_tab(&ActivateHistoryTab, window, cx);
+                    })),
+            )
+            .child(div().flex_1())
+            .child(
+                IconButton::new("git-dock-switch-branch", IconName::GitBranchPlus)
+                    .icon_size(IconSize::Small)
+                    .tooltip(Tooltip::text(i18n::t!("15b739a58e6e5432")))
+                    .on_click(cx.listener(|_, _, window, cx| {
+                        window.dispatch_action(zed_actions::git::Branch.boxed_clone(), cx);
+                    })),
+            )
+    }
+
     fn render_changes_header(
         &self,
         _window: &mut Window,
@@ -10003,41 +10058,7 @@ impl Render for GitPanel {
                             GitPanelSettings::get_global(cx).dock == DockPosition::Bottom;
                         let mut this = this;
                         if bottom_docked {
-                            this = this.child(
-                                h_flex()
-                                    .px_2()
-                                    .py_1()
-                                    .gap_1()
-                                    .border_b_1()
-                                    .border_color(cx.theme().colors().border_variant)
-                                    .child(
-                                        Button::new(
-                                            "git-dock-changes",
-                                            i18n::t!("bbd4b6a86bc65b6a"),
-                                        )
-                                        .toggle_state(self.active_tab == GitPanelTab::Changes)
-                                        .on_click(
-                                            cx.listener(|this, _, window, cx| {
-                                                this.activate_changes_tab(
-                                                    &ActivateChangesTab,
-                                                    window,
-                                                    cx,
-                                                );
-                                            }),
-                                        ),
-                                    )
-                                    .child(
-                                        Button::new("git-dock-log", i18n::t!("bce74369f872a7eb"))
-                                            .toggle_state(self.active_tab == GitPanelTab::History)
-                                            .on_click(cx.listener(|this, _, window, cx| {
-                                                this.activate_history_tab(
-                                                    &ActivateHistoryTab,
-                                                    window,
-                                                    cx,
-                                                );
-                                            })),
-                                    ),
-                            );
+                            this = this.child(self.render_dock_tab_strip(&repo, cx));
                             if self.active_tab == GitPanelTab::History {
                                 let graph = self.dock_graph.get_or_insert_with(|| {
                                     let git_store = self.project.read(cx).git_store().clone();
@@ -10183,6 +10204,10 @@ impl Panel for GitPanel {
 
     fn icon_tooltip(&self, _window: &Window, _cx: &App) -> Option<&'static str> {
         Some("Git Panel")
+    }
+
+    fn toggle_in_status_bar(&self, cx: &App) -> bool {
+        GitPanelSettings::get_global(cx).dock == DockPosition::Bottom
     }
 
     fn icon_label(&self, _: &Window, cx: &App) -> Option<String> {
@@ -11483,6 +11508,28 @@ mod tests {
                 panel.default_size(window, cx),
                 GitPanelSettings::get_global(cx).default_height
             );
+            // 停靠底部时面板开关移到底部状态栏，而不是左侧活动栏。
+            assert!(panel.toggle_in_status_bar(cx));
+        });
+        cx.update(|_window, cx| {
+            SettingsStore::update_global(cx, |store, cx| {
+                store.update_user_settings(cx, |settings| {
+                    settings.git_panel.get_or_insert_default().dock =
+                        Some(settings::DockPosition::Right);
+                });
+            });
+        });
+        panel.update_in(cx, |panel, window, cx| {
+            assert!(!panel.toggle_in_status_bar(cx));
+            assert_eq!(panel.position(window, cx), DockPosition::Right);
+        });
+        cx.update(|_window, cx| {
+            SettingsStore::update_global(cx, |store, cx| {
+                store.update_user_settings(cx, |settings| {
+                    settings.git_panel.get_or_insert_default().dock =
+                        Some(settings::DockPosition::Bottom);
+                });
+            });
         });
         workspace.update_in(cx, |workspace, window, cx| {
             workspace.add_panel(panel.clone(), window, cx);

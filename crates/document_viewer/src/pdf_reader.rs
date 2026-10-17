@@ -147,18 +147,7 @@ impl PdfReader {
         })
         .detach();
 
-        let response_task = cx.spawn(async move |this, cx| {
-            let mut response_rx = response_rx;
-            while let Some(response) = response_rx.next().await {
-                if this
-                    .update(cx, |reader, cx| reader.handle_response(response, cx))
-                    .is_err()
-                {
-                    break;
-                }
-            }
-        });
-
+        let response_task = Self::forward_responses(cx, response_rx);
         Self {
             item,
             project,
@@ -187,10 +176,57 @@ impl PdfReader {
         }
     }
 
+    /// Replaces the rendered document with the item's new bytes. The zoom level
+    /// and current page survive, so a rewritten PDF keeps the reader's place
+    /// instead of jumping back to the first page.
+    pub fn reload(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // Rendered pages live in the window's sprite atlas as well as in this
+        // cache, so they have to be dropped explicitly before re-rendering.
+        for (_, page) in std::mem::take(&mut self.cache) {
+            cx.drop_image(page.image, Some(window));
+        }
+        self.cache_bytes = 0;
+        self.in_flight.clear();
+        self.generation += 1;
+        self.page_sizes = None;
+        self.page_offsets.clear();
+        self.page_offsets_zoom = 0.0;
+        self.total_height = px(0.);
+        self.error = None;
+
+        let (request_tx, response_rx) = spawn_render_worker(self.item.read(cx).contents.clone());
+        self.request_tx = request_tx;
+        self._response_task = Self::forward_responses(cx, response_rx);
+        cx.notify();
+    }
+
+    fn forward_responses(
+        cx: &mut Context<Self>,
+        response_rx: futures::channel::mpsc::UnboundedReceiver<PdfResponse>,
+    ) -> Task<()> {
+        cx.spawn(async move |this, cx| {
+            let mut response_rx = response_rx;
+            while let Some(response) = response_rx.next().await {
+                if this
+                    .update(cx, |reader, cx| reader.handle_response(response, cx))
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        })
+    }
+
     fn handle_response(&mut self, response: PdfResponse, cx: &mut Context<Self>) {
         match response {
             PdfResponse::Initialized(Ok(info)) => {
                 self.page_sizes = Some(info.page_sizes);
+                // A reload keeps the current page; the initial open still fits
+                // the first page to the viewport during layout.
+                if self.did_initial_fit {
+                    self.layout_pages();
+                    self.scroll_to_page(self.current_page, cx);
+                }
                 cx.notify();
             }
             PdfResponse::Initialized(Err(error)) => {

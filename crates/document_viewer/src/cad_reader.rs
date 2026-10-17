@@ -126,6 +126,7 @@ struct RasteredFrame {
 }
 
 pub struct CadReader {
+    item: Entity<DocumentItem>,
     focus: FocusHandle,
     scene: Arc<CadScene>,
     /// Which layers the reader draws. The parsed scene stays immutable so the
@@ -180,6 +181,7 @@ impl CadReader {
 
         let visibility = scene.initial_visibility();
         Self {
+            item,
             focus: cx.focus_handle(),
             scene,
             visibility,
@@ -198,6 +200,32 @@ impl CadReader {
             cancel: Arc::new(AtomicBool::new(false)),
             render_task: None,
         }
+    }
+
+    /// Rebuilds the drawing from the item's new bytes while keeping the camera
+    /// and layer/text/grid toggles, so a re-exported DXF stays in view.
+    pub fn reload(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(scene) = self.item.read(cx).cad.clone() else {
+            return;
+        };
+        let file_size = match self.item.read(cx).file.disk_state {
+            language::DiskState::Present { size, .. } => size,
+            _ => 0,
+        };
+
+        self.cancel.store(true, Ordering::Relaxed);
+        self.cancel = Arc::new(AtomicBool::new(false));
+        self.render_task = None;
+        if let Some(previous) = self.image.take() {
+            window.drop_image(previous).log_err();
+        }
+        self.visibility = scene.initial_visibility();
+        self.scene = scene;
+        self.file_size = file_size;
+        self.rendered_camera = None;
+        self.partial = false;
+        self.dirty = true;
+        cx.notify();
     }
 
     fn raster_style(&self, cx: &App) -> CadRasterStyle {

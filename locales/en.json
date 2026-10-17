@@ -5513,5 +5513,12 @@
   "15b739a58e6e5432": "New Branch…",
   "ee19963ae15d8584": "Toggle Branch Sidebar",
   "b226651781049a4e": "Default height when the Git panel is docked to the bottom (in pixels).",
-  "8973c3bb97c426d3": "Enter a new branch name"
+  "8973c3bb97c426d3": "Enter a new branch name",
+  "d757df97219fc135": "Office document changed while reading",
+  "11275775e3eaa2cc": "Office document entry is too large or offset is invalid",
+  "59b305a1af94171e": "Invalid Word document: {error}",
+  "9995c30406b70f02": "This document is too large to preview in full; the preview was truncated",
+  "306767b45381e7e4": "Double-click to edit the cell",
+  "8720ec2f91e9d499": "Right click to copy column name",
+  "a2c36082c7696e93": "Log: {}"
 }

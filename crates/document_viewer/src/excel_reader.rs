@@ -171,9 +171,63 @@ impl ExcelReader {
         .detach();
         cx.notify();
     }
+
+    /// Re-parses the workbook from the item's new bytes. The active sheet and
+    /// the grid's scroll position survive, so a rewritten spreadsheet stays
+    /// where the user was reading.
+    pub fn reload(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        let bytes = self.item.read(cx).contents.clone();
+        self.error = None;
+        self.sheet_cache.clear();
+        self.truncation = None;
+        self.table
+            .update(cx, |table, cx| table.set_loading(true, cx));
+        let opened = cx.background_spawn(async move {
+            calamine::open_workbook_auto_from_rs(Cursor::new(SharedBytes(bytes)))
+                .map_err(|error| error.to_string())
+        });
+        cx.spawn(async move |this, cx| {
+            let opened = opened.await;
+            this.update(cx, |reader, cx| match opened {
+                Ok(workbook) => {
+                    reader.sheet_names = workbook.sheet_names().to_vec();
+                    reader.workbook = Some(Arc::new(Mutex::new(workbook)));
+                    let index = reader
+                        .active_sheet
+                        .min(reader.sheet_names.len().saturating_sub(1));
+                    reader.load_sheet(index, cx);
+                }
+                Err(error) => {
+                    let message = i18n::t!("868012c570c52c40");
+                    reader.error = Some(format!("{message}: {error}").into());
+                    reader
+                        .table
+                        .update(cx, |table, cx| table.set_loading(false, cx));
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
 }
 
 impl EventEmitter<()> for ExcelReader {}
+
+#[cfg(test)]
+impl ExcelReader {
+    /// Test hook: the displayed text of one cell in the active sheet.
+    pub(crate) fn cell_text_for_test(&self, row: usize, column: usize) -> Option<String> {
+        self.sheet_cache
+            .get(&self.active_sheet)?
+            .table
+            .rows
+            .get(row)
+            .and_then(|cells| cells.get(column))
+            .and_then(|cell| cell.display_value())
+            .map(|value| value.as_ref().to_owned())
+    }
+}
 
 impl Focusable for ExcelReader {
     fn focus_handle(&self, cx: &App) -> FocusHandle {
@@ -421,6 +475,12 @@ pub(crate) mod tests {
 
     /// Builds a minimal xlsx workbook with one sheet containing two rows.
     pub(crate) fn minimal_xlsx() -> Vec<u8> {
+        minimal_xlsx_with_value(42)
+    }
+
+    /// Builds the same workbook with a caller-chosen value in `B2`, so a test
+    /// can rewrite the file and observe a different cell.
+    pub(crate) fn minimal_xlsx_with_value(value: i64) -> Vec<u8> {
         let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
         let options = zip::write::FileOptions::default();
         let mut add = |name: &str, contents: &str| {
@@ -460,13 +520,15 @@ pub(crate) mod tests {
         );
         add(
             "xl/worksheets/sheet1.xml",
-            r#"<?xml version="1.0" encoding="UTF-8"?>
+            &format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
 <sheetData>
 <row r="1"><c r="A1" t="inlineStr"><is><t>名称</t></is></c><c r="B1" t="inlineStr"><is><t>数量</t></is></c></row>
-<row r="2"><c r="A2" t="inlineStr"><is><t>苹果</t></is></c><c r="B2"><v>42</v></c></row>
+<row r="2"><c r="A2" t="inlineStr"><is><t>苹果</t></is></c><c r="B2"><v>{value}</v></c></row>
 </sheetData>
-</worksheet>"#,
+</worksheet>"#
+            ),
         );
         writer.finish().unwrap().into_inner()
     }

@@ -177,6 +177,7 @@ pub const SYSTEM_STATS_CAPABILITY: &str = "system_stats_v1";
 pub const DOCUMENT_CHUNKS_CAPABILITY: &str = "document_chunks_v1";
 pub const MODEL_CHUNKS_CAPABILITY: &str = "model_chunks_v1";
 pub const EPUB_ENTRIES_CAPABILITY: &str = "epub_entries_v1";
+pub const OFFICE_ENTRIES_CAPABILITY: &str = "office_entries_v1";
 pub const CAD_DOCUMENTS_CAPABILITY: &str = "cad_documents_v1";
 pub const UPLOAD_CHUNKS_CAPABILITY: &str = "upload_chunks_v1";
 pub const DOWNLOAD_CHUNKS_CAPABILITY: &str = "download_chunks_v1";
@@ -1448,6 +1449,10 @@ impl RemoteClient {
 
     pub fn supports_epub_entries(&self) -> bool {
         self.client.supports_epub_entries.load(SeqCst)
+    }
+
+    pub fn supports_office_entries(&self) -> bool {
+        self.client.supports_office_entries.load(SeqCst)
     }
 
     pub fn supports_model_chunks(&self) -> bool {
@@ -2734,6 +2739,7 @@ mod tests {
             .update(|cx| ChannelClient::new(incoming_rx, outgoing_tx, cx, "document-test", false));
         assert!(!client.supports_document_chunks.load(SeqCst));
         assert!(!client.supports_epub_entries.load(SeqCst));
+        assert!(!client.supports_office_entries.load(SeqCst));
         assert!(!client.supports_model_chunks.load(SeqCst));
         assert!(!client.supports_cad_documents.load(SeqCst));
         assert!(!client.supports_upload_chunks.load(SeqCst));
@@ -2761,6 +2767,17 @@ mod tests {
                 .expect("deliver EPUB capabilities");
             cx.run_until_parked();
             assert_eq!(client.supports_epub_entries.load(SeqCst), expected);
+        }
+        for (capabilities, expected) in [
+            (vec![OFFICE_ENTRIES_CAPABILITY.to_owned()], true),
+            (vec![EPUB_ENTRIES_CAPABILITY.to_owned()], false),
+            (Vec::new(), false),
+        ] {
+            incoming_tx
+                .unbounded_send(proto::RemoteStarted { capabilities }.into_envelope(0, None, None))
+                .expect("deliver office capabilities");
+            cx.run_until_parked();
+            assert_eq!(client.supports_office_entries.load(SeqCst), expected);
         }
         for (capabilities, expected) in [
             (vec![MODEL_CHUNKS_CAPABILITY.to_owned()], true),
@@ -3187,6 +3204,7 @@ pub(crate) struct ChannelClient {
     supports_model_chunks: AtomicBool,
     supports_cad_documents: AtomicBool,
     supports_epub_entries: AtomicBool,
+    supports_office_entries: AtomicBool,
     supports_upload_chunks: AtomicBool,
     supports_download_chunks: AtomicBool,
     supports_git_operation_cancellation: AtomicBool,
@@ -3229,6 +3247,7 @@ impl ChannelClient {
             supports_model_chunks: AtomicBool::new(false),
             supports_cad_documents: AtomicBool::new(false),
             supports_epub_entries: AtomicBool::new(false),
+            supports_office_entries: AtomicBool::new(false),
             supports_upload_chunks: AtomicBool::new(false),
             supports_download_chunks: AtomicBool::new(false),
             supports_git_operation_cancellation: AtomicBool::new(false),
@@ -3259,6 +3278,7 @@ impl ChannelClient {
                         MODEL_CHUNKS_CAPABILITY.to_string(),
                         CAD_DOCUMENTS_CAPABILITY.to_string(),
                         EPUB_ENTRIES_CAPABILITY.to_string(),
+                        OFFICE_ENTRIES_CAPABILITY.to_string(),
                         UPLOAD_CHUNKS_CAPABILITY.to_string(),
                         DOWNLOAD_CHUNKS_CAPABILITY.to_string(),
                         GIT_OPERATION_CANCELLATION_CAPABILITY.to_string(),
@@ -3322,6 +3342,13 @@ impl ChannelClient {
                             .capabilities
                             .iter()
                             .any(|capability| capability == EPUB_ENTRIES_CAPABILITY),
+                        SeqCst,
+                    );
+                    this.supports_office_entries.store(
+                        started
+                            .capabilities
+                            .iter()
+                            .any(|capability| capability == OFFICE_ENTRIES_CAPABILITY),
                         SeqCst,
                     );
                     this.supports_upload_chunks.store(

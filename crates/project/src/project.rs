@@ -3447,6 +3447,50 @@ impl Project {
         }
     }
 
+    /// Reads one chunk of an entry of a Word/OOXML document.
+    ///
+    /// This shares the archive-entry protocol with [`Project::read_epub_entry`]
+    /// but is gated by the office capability, so servers that only know EPUB
+    /// archives keep showing their unsupported notice instead of an empty tab.
+    /// The container itself is never transferred in full.
+    pub fn read_office_entry(
+        &self,
+        path: ProjectPath,
+        entry_path: String,
+        offset: u64,
+        snapshot: Option<(u64, proto::Timestamp)>,
+        cx: &mut Context<Self>,
+    ) -> Task<Result<proto::ReadEpubEntryResponse>> {
+        let Some(worktree) = self.worktree_for_id(path.worktree_id, cx) else {
+            return Task::ready(Err(anyhow!("worktree not found")));
+        };
+        let request = proto::ReadEpubEntry {
+            worktree_id: path.worktree_id.to_proto(),
+            path: path.path.as_unix_str().to_owned(),
+            entry_path,
+            offset,
+            expected_size: snapshot.map_or(0, |snapshot| snapshot.0),
+            expected_mtime: snapshot.map(|snapshot| snapshot.1),
+        };
+        if let Some(local) = worktree.read(cx).as_local() {
+            let abs_path = local.absolutize(&path.path);
+            let fs = self.fs.clone();
+            let executor = cx.background_executor().clone();
+            return cx.spawn(async move |_, _| {
+                epub::read_office_entry_chunk(fs, abs_path, request, executor).await
+            });
+        }
+        let Some(client) = self.remote_client.as_ref().filter(|client| {
+            let client = client.read(cx);
+            client.supports_office_entries()
+                && custom_protocol_source_allowed(&client.connection_options())
+        }) else {
+            return Task::ready(Err(anyhow!(i18n::t!("05720b24baa5d61e"))));
+        };
+        let client = client.read(cx).proto_client();
+        cx.spawn(async move |_, _| client.request(request).await)
+    }
+
     pub fn read_epub_entry(
         &self,
         path: ProjectPath,

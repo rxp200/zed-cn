@@ -86,6 +86,11 @@ pub trait Panel: Focusable + EventEmitter<PanelEvent> + Render + Sized {
     }
     fn icon(&self, window: &Window, cx: &App) -> Option<ui::IconName>;
     fn icon_tooltip(&self, window: &Window, cx: &App) -> Option<&'static str>;
+    /// Whether this panel's toggle button belongs in the bottom status bar
+    /// instead of the activity bar while it is docked at the bottom.
+    fn toggle_in_status_bar(&self, _cx: &App) -> bool {
+        false
+    }
     fn toggle_action(&self) -> Box<dyn Action>;
     fn icon_label(&self, _window: &Window, _: &App) -> Option<String> {
         None
@@ -141,6 +146,7 @@ pub trait PanelHandle: Send + Sync {
     fn set_flexible_size(&self, flexible: bool, window: &mut Window, cx: &mut App);
     fn icon(&self, window: &Window, cx: &App) -> Option<ui::IconName>;
     fn icon_tooltip(&self, window: &Window, cx: &App) -> Option<&'static str>;
+    fn toggle_in_status_bar(&self, cx: &App) -> bool;
     fn toggle_action(&self, window: &Window, cx: &App) -> Box<dyn Action>;
     fn icon_label(&self, window: &Window, cx: &App) -> Option<String>;
     fn panel_focus_handle(&self, cx: &App) -> FocusHandle;
@@ -254,6 +260,9 @@ where
 
     fn icon_tooltip(&self, window: &Window, cx: &App) -> Option<&'static str> {
         self.read(cx).icon_tooltip(window, cx)
+    }
+    fn toggle_in_status_bar(&self, cx: &App) -> bool {
+        self.read(cx).toggle_in_status_bar(cx)
     }
 
     fn toggle_action(&self, _: &Window, cx: &App) -> Box<dyn Action> {
@@ -413,7 +422,23 @@ struct PanelEntry {
 pub struct PanelButtons {
     dock: Entity<Dock>,
     vertical: bool,
+    status_bar: bool,
     _settings_subscription: Subscription,
+}
+
+/// Panels that opt into a status bar toggle only appear there while they are
+/// docked at the bottom; the activity bar keeps every other panel button.
+fn shows_panel_in_buttons(
+    position: DockPosition,
+    prefers_status_bar: bool,
+    status_bar: bool,
+) -> bool {
+    let prefers_status_bar = prefers_status_bar && position == DockPosition::Bottom;
+    if status_bar {
+        prefers_status_bar
+    } else {
+        !prefers_status_bar
+    }
 }
 
 pub(crate) const PANEL_SIZE_STATE_KEY: &str = "dock_panel_size";
@@ -1491,6 +1516,7 @@ impl PanelButtons {
         Self {
             dock,
             vertical: false,
+            status_bar: false,
             _settings_subscription: settings_subscription,
         }
     }
@@ -1499,6 +1525,21 @@ impl PanelButtons {
     pub fn vertical(mut self) -> Self {
         self.vertical = true;
         self
+    }
+
+    /// Renders only the panels that opt into a status bar toggle, laid out
+    /// horizontally as a status bar item.
+    pub fn for_status_bar(mut self) -> Self {
+        self.status_bar = true;
+        self
+    }
+
+    fn shows_panel(&self, position: DockPosition, panel: &Arc<dyn PanelHandle>, cx: &App) -> bool {
+        shows_panel_in_buttons(
+            position,
+            panel.toggle_in_status_bar(cx),
+            self.status_bar,
+        )
     }
 }
 
@@ -1535,6 +1576,9 @@ impl Render for PanelButtons {
             .iter()
             .enumerate()
             .filter_map(|(i, entry)| {
+                if !self.shows_panel(dock_position, &entry.panel, cx) {
+                    return None;
+                }
                 let icon = entry.panel.icon(window, cx)?;
                 let icon_tooltip = entry
                     .panel
@@ -1856,6 +1900,26 @@ pub mod test {
                 assert!(!dock.read_with(cx, |dock, _| dock.resize_drag_active));
             }
         }
+    }
+
+    #[test]
+    fn status_bar_toggle_only_moves_bottom_docked_panels() {
+        for position in [DockPosition::Left, DockPosition::Bottom, DockPosition::Right] {
+            let stays_in_activity_bar = shows_panel_in_buttons(position, false, false);
+            let status_bar_item = shows_panel_in_buttons(position, false, true);
+            assert!(stays_in_activity_bar, "{position:?} keeps its activity bar button");
+            assert!(!status_bar_item, "{position:?} without opt-in never renders in the status bar");
+        }
+
+        assert!(
+            !shows_panel_in_buttons(DockPosition::Bottom, true, false),
+            "an opted-in bottom panel must leave the activity bar"
+        );
+        assert!(shows_panel_in_buttons(DockPosition::Bottom, true, true));
+
+        // An opted-in panel that is docked elsewhere must stay reachable from the activity bar.
+        assert!(shows_panel_in_buttons(DockPosition::Left, true, false));
+        assert!(!shows_panel_in_buttons(DockPosition::Left, true, true));
     }
 
     #[gpui::test]

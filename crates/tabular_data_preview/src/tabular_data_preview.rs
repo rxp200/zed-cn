@@ -6,10 +6,11 @@ use serde::Deserialize;
 use ui::{SharedString, prelude::*};
 use workspace::{Item, Pane, Workspace};
 
-use crate::parser::EditorState;
+use crate::parser::{EditorState, TabularFormat};
 
-pub use crate::table_view::{CellSelection, PerformanceMetrics, TableView};
+pub use crate::table_view::{CellEdited, CellSelection, PerformanceMetrics, TableView};
 
+mod cell_edit;
 mod parser;
 mod renderer;
 mod settings;
@@ -17,7 +18,7 @@ mod table_data_engine;
 mod table_view;
 pub mod types;
 
-actions!(tabular_data, [OpenPreview, OpenPreviewToTheSide]);
+actions!(tabular_data, [OpenPreview, OpenPreviewToTheSide, EditCell]);
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -49,6 +50,8 @@ pub struct TabularDataPreviewPane {
     /// Forwards the table's notifications so observers of this pane (e.g. `cx.condition` in
     /// tests, or anything watching for the mapping/list-state to settle) see them too.
     _table_subscription: gpui::Subscription,
+    /// Writes committed inline cell edits back into the buffer backing this preview.
+    _cell_edit_subscription: gpui::Subscription,
 }
 
 pub fn init(cx: &mut App) {
@@ -150,6 +153,15 @@ impl TabularDataPreviewPane {
 
             let table = cx.new(|cx| TableView::new(window, cx));
             let table_subscription = cx.observe(&table, |_, _, cx| cx.notify());
+            let cell_edit_subscription =
+                cx.subscribe(&table, |this: &mut TabularDataPreviewPane, table, event, cx| {
+                    this.apply_cell_edit(table, event, cx);
+                });
+
+            let is_editable = !editor.read(cx).read_only(cx)
+                && TabularFormat::from_editor(editor, cx)
+                    .is_some_and(|format| format.delimiter().is_some());
+            table.update(cx, |table, cx| table.set_editable(is_editable, cx));
 
             let mut view = TabularDataPreviewPane {
                 active_editor_state: EditorState {
@@ -162,6 +174,7 @@ impl TabularDataPreviewPane {
                 parse_error: None,
                 last_parse_end_time: None,
                 _table_subscription: table_subscription,
+                _cell_edit_subscription: cell_edit_subscription,
             };
 
             view.parse_from_active_editor(false, cx);
@@ -171,6 +184,66 @@ impl TabularDataPreviewPane {
 
     pub(crate) fn editor_state(&self) -> &EditorState {
         &self.active_editor_state
+    }
+
+    /// Writes a committed inline edit back into the buffer the grid was parsed from.
+    ///
+    /// The buffer edit is the single source of truth: it feeds undo, the dirty indicator and
+    /// saving, and the resulting buffer change re-parses the preview as usual.
+    fn apply_cell_edit(
+        &mut self,
+        table: Entity<TableView>,
+        event: &CellEdited,
+        cx: &mut Context<Self>,
+    ) {
+        let editor = self.active_editor_state.editor.clone();
+        if editor.read(cx).read_only(cx) {
+            return;
+        }
+        let Some(delimiter) = TabularFormat::from_editor(&editor, cx).and_then(|f| f.delimiter())
+        else {
+            return;
+        };
+
+        // Re-parsing would rewrite the grid anyway, so an unchanged value is not worth an
+        // edit transaction (and the undo entry it would create).
+        let unchanged = table.read_with(cx, |table, _| {
+            table
+                .cell_display_value(event.cell)
+                .is_some_and(|current| current == event.value)
+        });
+        if unchanged {
+            return;
+        }
+
+        let Some(buffer) = editor.read(cx).buffer().read(cx).as_singleton() else {
+            return;
+        };
+        let snapshot = buffer.read(cx).text_snapshot();
+        let target = table.read_with(cx, |table, _| {
+            let row = table.engine.contents.get_row(event.cell.row)?;
+            cell_edit::cell_edit_target(
+                row,
+                event.cell.col,
+                event.value.as_ref(),
+                delimiter,
+                &snapshot,
+            )
+        });
+        let Some(target) = target else {
+            return;
+        };
+
+        if let Err(error) = cell_edit::apply_cell_edit(&editor, target, cx) {
+            log::error!("Failed to apply table cell edit: {error:#}");
+            return;
+        }
+
+        // `Editor::edit` changes the buffer without raising `EditorEvent::Edited`; only the
+        // clean-to-dirty transition is reported. Editing a second cell while the file is already
+        // dirty would therefore leave the grid showing the old value, so the producer re-parses
+        // explicitly instead of relying on that event.
+        self.parse_from_active_editor(true, cx);
     }
 
     pub fn resolve_active_item_as_tabular_data_editor(
@@ -238,7 +311,8 @@ impl Item for TabularDataPreviewPane {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gpui::TestAppContext;
+    use crate::types::{AnyColumn, DataCellId, DataRow};
+    use gpui::{TestAppContext, VisualTestContext};
     use project::{FakeFs, Project};
     use serde_json::json;
     use std::path::Path;
@@ -521,6 +595,288 @@ mod tests {
                 assert!(table.engine.applied_sorting.is_none());
                 assert!(preview.parse_error.is_none());
             });
+            Ok(())
+        }
+        .await;
+        assert!(result.is_ok(), "{result:?}");
+    }
+
+    /// Opens the preview for an already created editor, then waits until the grid is mapped.
+    fn open_preview(
+        cx: &mut VisualTestContext,
+        workspace: &Entity<Workspace>,
+        editor: Entity<Editor>,
+    ) -> anyhow::Result<Entity<TabularDataPreviewPane>> {
+        let preview = workspace.update_in(cx, |workspace, window, cx| {
+            let pane = workspace.active_pane().clone();
+            TabularDataPreviewPane::open_preview_in_pane(editor, pane.clone(), window, cx);
+            pane.read(cx)
+                .items_of_type::<TabularDataPreviewPane>()
+                .next()
+        });
+        preview.ok_or_else(|| anyhow::anyhow!("preview did not open"))
+    }
+
+    fn dispatch<A: Action>(table: &Entity<TableView>, action: &A, cx: &mut VisualTestContext) {
+        cx.update(|window, cx| {
+            let focus_handle = table.read(cx).focus_handle(cx);
+            focus_handle.focus(window, cx);
+            focus_handle.dispatch_action(action, window, cx);
+        });
+    }
+
+    fn cell(row: usize, col: usize) -> DataCellId {
+        DataCellId::new(DataRow(row), AnyColumn(col))
+    }
+
+    /// Replaces the inline editor's text and commits, exactly as typing and confirming would.
+    fn edit_cell(
+        preview: &Entity<TabularDataPreviewPane>,
+        value: &str,
+        cx: &mut VisualTestContext,
+    ) -> anyhow::Result<()> {
+        let inline_editor = preview.read_with(cx, |preview, cx| {
+            preview
+                .table
+                .read(cx)
+                .editing
+                .as_ref()
+                .map(|editing| editing.editor.clone())
+        });
+        let Some(inline_editor) = inline_editor else {
+            anyhow::bail!("no cell is being edited")
+        };
+        inline_editor.update_in(cx, |editor, window, cx| {
+            editor.set_text(value, window, cx);
+        });
+        preview.update(cx, |preview, cx| {
+            preview
+                .table
+                .update(cx, |table, cx| table.commit_cell_edit(cx));
+        });
+        Ok(())
+    }
+
+    #[gpui::test]
+    async fn test_csv_cell_edit_writes_back_to_the_buffer(cx: &mut TestAppContext) {
+        init_test(cx);
+        let result: anyhow::Result<()> = async {
+            let fs = FakeFs::new(cx.executor());
+            fs.insert_tree(path!("/project"), json!({ "records.csv": "id,note\n1,first\n2,\"two\nlines\"\n" })).await;
+            let project = Project::test(fs, [Path::new(path!("/project"))], cx).await;
+            let buffer = project
+                .update(cx, |project, cx| {
+                    project.open_local_buffer(path!("/project/records.csv"), cx)
+                })
+                .await?;
+            let (workspace, cx) =
+                cx.add_window_view(|window, cx| Workspace::test_new(project.clone(), window, cx));
+            let editor = cx.update(|window, cx| {
+                cx.new(|cx| Editor::for_buffer(buffer, Some(project), window, cx))
+            });
+            let preview = open_preview(cx, &workspace, editor.clone())?;
+            cx.condition(&preview, |preview, cx| {
+                !preview.is_parsing
+                    && preview.table.read(cx).engine.d2d_mapping().visible_row_count() > 0
+            })
+            .await;
+            assert!(preview.read_with(cx, |preview, cx| preview.table.read(cx).editable));
+
+            preview.update_in(cx, |preview, window, cx| {
+                preview
+                    .table
+                    .update(cx, |table, cx| table.begin_cell_edit(cell(0, 1), window, cx));
+            });
+            // A value that needs quoting must not change the surrounding row structure.
+            edit_cell(&preview, "changed, with comma", cx)?;
+
+            cx.condition(&preview, |preview, cx| {
+                let table = preview.table.read(cx);
+                !preview.is_parsing
+                    && table.engine.d2d_mapping().visible_row_count() == 2
+                    && table.engine.contents.rows[0][1]
+                        .display_value()
+                        .is_some_and(|value| value.as_ref() == "changed, with comma")
+            })
+            .await;
+
+            let text = editor.read_with(cx, |editor, cx| editor.text(cx));
+            assert_eq!(text, "id,note\n1,\"changed, with comma\"\n2,\"two\nlines\"\n");
+
+            // Editing a quote-wrapped multi-line field replaces its whole span, leaving the
+            // following rows untouched.
+            preview.update_in(cx, |preview, window, cx| {
+                preview
+                    .table
+                    .update(cx, |table, cx| table.begin_cell_edit(cell(1, 1), window, cx));
+            });
+            edit_cell(&preview, "single", cx)?;
+            cx.condition(&preview, |preview, cx| {
+                let table = preview.table.read(cx);
+                !preview.is_parsing
+                    && table.engine.d2d_mapping().visible_row_count() == 2
+                    && table
+                        .engine
+                        .contents
+                        .rows
+                        .get(1)
+                        .and_then(|row| row.get(AnyColumn(1)))
+                        .and_then(|cell| cell.display_value())
+                        .is_some_and(|value| value.as_ref() == "single")
+            })
+            .await;
+            let text = editor.read_with(cx, |editor, cx| editor.text(cx));
+            assert_eq!(text, "id,note\n1,\"changed, with comma\"\n2,single\n");
+            Ok(())
+        }
+        .await;
+        assert!(result.is_ok(), "{result:?}");
+    }
+
+    #[gpui::test]
+    async fn test_csv_cell_edit_fills_a_missing_field(cx: &mut TestAppContext) {
+        init_test(cx);
+        let result: anyhow::Result<()> = async {
+            let fs = FakeFs::new(cx.executor());
+            fs.insert_tree(path!("/project"), json!({ "ragged.csv": "a,b,c\n1,2\n" })).await;
+            let project = Project::test(fs, [Path::new(path!("/project"))], cx).await;
+            let buffer = project
+                .update(cx, |project, cx| {
+                    project.open_local_buffer(path!("/project/ragged.csv"), cx)
+                })
+                .await?;
+            let (workspace, cx) =
+                cx.add_window_view(|window, cx| Workspace::test_new(project.clone(), window, cx));
+            let editor = cx.update(|window, cx| {
+                cx.new(|cx| Editor::for_buffer(buffer, Some(project), window, cx))
+            });
+            let preview = open_preview(cx, &workspace, editor.clone())?;
+            cx.condition(&preview, |preview, cx| {
+                !preview.is_parsing
+                    && preview.table.read(cx).engine.d2d_mapping().visible_row_count() > 0
+            })
+            .await;
+
+            preview.update_in(cx, |preview, window, cx| {
+                preview
+                    .table
+                    .update(cx, |table, cx| table.begin_cell_edit(cell(0, 2), window, cx));
+            });
+            edit_cell(&preview, "3", cx)?;
+            cx.condition(&preview, |preview, cx| {
+                let table = preview.table.read(cx);
+                !preview.is_parsing
+                    && table.engine.contents.rows[0][2]
+                        .display_value()
+                        .is_some_and(|value| value.as_ref() == "3")
+            })
+            .await;
+
+            let text = editor.read_with(cx, |editor, cx| editor.text(cx));
+            assert_eq!(text, "a,b,c\n1,2,3\n");
+            Ok(())
+        }
+        .await;
+        assert!(result.is_ok(), "{result:?}");
+    }
+
+    #[gpui::test]
+    async fn test_edit_cell_action_edits_the_focused_cell(cx: &mut TestAppContext) {
+        init_test(cx);
+        let result: anyhow::Result<()> = async {
+            let fs = FakeFs::new(cx.executor());
+            fs.insert_tree(path!("/project"), json!({ "records.csv": "id,note\n1,first\n" })).await;
+            let project = Project::test(fs, [Path::new(path!("/project"))], cx).await;
+            let buffer = project
+                .update(cx, |project, cx| {
+                    project.open_local_buffer(path!("/project/records.csv"), cx)
+                })
+                .await?;
+            let (workspace, cx) =
+                cx.add_window_view(|window, cx| Workspace::test_new(project.clone(), window, cx));
+            let editor = cx.update(|window, cx| {
+                cx.new(|cx| Editor::for_buffer(buffer, Some(project), window, cx))
+            });
+            let preview = open_preview(cx, &workspace, editor.clone())?;
+            cx.condition(&preview, |preview, cx| {
+                !preview.is_parsing
+                    && preview.table.read(cx).engine.d2d_mapping().visible_row_count() > 0
+            })
+            .await;
+            let table = preview.read_with(cx, |preview, _| preview.table.clone());
+
+            dispatch(
+                &table,
+                &MoveFocusedCell {
+                    direction: NavigationDirection::Down,
+                },
+                cx,
+            );
+            dispatch(
+                &table,
+                &MoveFocusedCell {
+                    direction: NavigationDirection::Right,
+                },
+                cx,
+            );
+            dispatch(&table, &EditCell, cx);
+            assert_eq!(
+                preview.read_with(cx, |preview, cx| preview.table.read(cx).editing.as_ref().map(|editing| editing.cell)),
+                Some(cell(0, 1))
+            );
+
+            edit_cell(&preview, "typed", cx)?;
+            cx.condition(&preview, |preview, cx| {
+                let table = preview.table.read(cx);
+                !preview.is_parsing
+                    && table.engine.contents.rows[0][1]
+                        .display_value()
+                        .is_some_and(|value| value.as_ref() == "typed")
+            })
+            .await;
+            assert_eq!(editor.read_with(cx, |editor, cx| editor.text(cx)), "id,note\n1,typed\n");
+            Ok(())
+        }
+        .await;
+        assert!(result.is_ok(), "{result:?}");
+    }
+
+    #[gpui::test]
+    async fn test_json_lines_preview_is_not_editable(cx: &mut TestAppContext) {
+        init_test(cx);
+        let result: anyhow::Result<()> = async {
+            let fs = FakeFs::new(cx.executor());
+            fs.insert_tree(path!("/project"), json!({ "records.jsonl": "{\"id\":1,\"note\":\"first\"}\n" })).await;
+            let project = Project::test(fs, [Path::new(path!("/project"))], cx).await;
+            let buffer = project
+                .update(cx, |project, cx| {
+                    project.open_local_buffer(path!("/project/records.jsonl"), cx)
+                })
+                .await?;
+            let (workspace, cx) =
+                cx.add_window_view(|window, cx| Workspace::test_new(project.clone(), window, cx));
+            let editor = cx.update(|window, cx| {
+                cx.new(|cx| Editor::for_buffer(buffer, Some(project), window, cx))
+            });
+            let preview = open_preview(cx, &workspace, editor.clone())?;
+            cx.condition(&preview, |preview, cx| {
+                !preview.is_parsing
+                    && preview.table.read(cx).engine.d2d_mapping().visible_row_count() > 0
+            })
+            .await;
+            assert!(!preview.read_with(cx, |preview, cx| preview.table.read(cx).editable));
+
+            // A structure-carrying format must not open a text-field editor at all.
+            let table = preview.read_with(cx, |preview, _| preview.table.clone());
+            dispatch(&table, &EditCell, cx);
+            assert!(
+                preview.read_with(cx, |preview, cx| preview.table.read(cx).editing.is_none()),
+                "jsonl cells must stay read-only"
+            );
+            assert_eq!(
+                editor.read_with(cx, |editor, cx| editor.text(cx)),
+                "{\"id\":1,\"note\":\"first\"}\n"
+            );
             Ok(())
         }
         .await;
