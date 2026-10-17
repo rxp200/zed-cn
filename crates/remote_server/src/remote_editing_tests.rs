@@ -830,6 +830,100 @@ async fn test_remote_epub_entries(cx: &mut TestAppContext, server_cx: &mut TestA
 }
 
 #[gpui::test]
+async fn test_remote_office_entries(cx: &mut TestAppContext, server_cx: &mut TestAppContext) {
+    use std::io::{Cursor, Write as _};
+    let fs = FakeFs::new(server_cx.executor());
+    fs.insert_tree(path!("/code"), json!({"project": {}})).await;
+    let mut archive = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    archive
+        .start_file("word/document.xml", zip::write::FileOptions::default())
+        .expect("entry");
+    archive
+        .write_all(&vec![b'x'; project::epub::OFFICE_CHUNK_SIZE + 7])
+        .expect("write");
+    fs.insert_file(
+        "/code/project/report.docx",
+        archive.finish().expect("ZIP").into_inner(),
+    )
+    .await;
+    let (project, headless) = init_test(&fs, cx, server_cx).await;
+    let (worktree, _) = project
+        .update(cx, |project, cx| {
+            project.find_or_create_worktree(path!("/code/project"), true, cx)
+        })
+        .await
+        .expect("worktree");
+    let path = ProjectPath {
+        worktree_id: worktree.read_with(cx, |worktree, _| worktree.id()),
+        path: rel_path("report.docx").into(),
+    };
+    let first = project
+        .update(cx, |project, cx| {
+            project.read_office_entry(path.clone(), "word/document.xml".into(), 0, None, cx)
+        })
+        .await
+        .expect("first office chunk");
+    assert_eq!(first.content.len(), project::epub::OFFICE_CHUNK_SIZE);
+    let snapshot = (
+        first.total_size,
+        first.file.expect("metadata").mtime.expect("mtime"),
+    );
+    let last = project
+        .update(cx, |project, cx| {
+            project.read_office_entry(
+                path.clone(),
+                "word/document.xml".into(),
+                project::epub::OFFICE_CHUNK_SIZE as u64,
+                Some(snapshot),
+                cx,
+            )
+        })
+        .await
+        .expect("last office chunk");
+    assert_eq!(last.content, vec![b'x'; 7]);
+
+    // A server that only knows EPUB archives must be refused before any
+    // request reaches it, and the office capability alone restores access.
+    headless
+        .update(server_cx, |headless, _| {
+            headless.session.send(proto::RemoteStarted {
+                capabilities: vec![remote::remote_client::EPUB_ENTRIES_CAPABILITY.to_owned()],
+            })
+        })
+        .expect("advertise an EPUB-only server");
+    cx.run_until_parked();
+    let error = project
+        .update(cx, |project, cx| {
+            project.read_office_entry(path.clone(), "word/document.xml".into(), 0, None, cx)
+        })
+        .await
+        .expect_err("EPUB support alone must not enable office documents");
+    assert_eq!(error.to_string(), i18n::t!("05720b24baa5d61e"));
+    headless
+        .update(server_cx, |headless, _| {
+            headless.session.send(proto::RemoteStarted {
+                capabilities: vec![remote::remote_client::OFFICE_ENTRIES_CAPABILITY.to_owned()],
+            })
+        })
+        .expect("restore office capability");
+    cx.run_until_parked();
+    fs.insert_file("/code/project/report.docx", b"changed".to_vec())
+        .await;
+    assert!(
+        project
+            .update(cx, |project, cx| project.read_office_entry(
+                path.clone(),
+                "word/document.xml".into(),
+                0,
+                Some(snapshot),
+                cx
+            ))
+            .await
+            .is_err()
+    );
+}
+
+#[gpui::test]
 async fn test_remote_project_image_source(cx: &mut TestAppContext, server_cx: &mut TestAppContext) {
     let fs = FakeFs::new(server_cx.executor());
     fs.insert_tree(

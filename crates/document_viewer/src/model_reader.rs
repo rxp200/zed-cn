@@ -170,6 +170,7 @@ fn color_rgb(color: impl Into<Rgba>) -> [u8; 3] {
 }
 
 pub struct ModelReader {
+    item: Entity<DocumentItem>,
     focus: FocusHandle,
     mesh: Arc<ModelMesh>,
     format: SharedString,
@@ -236,6 +237,7 @@ impl ModelReader {
             mesh.triangles.len()
         );
         let mut reader = Self {
+            item,
             focus: cx.focus_handle(),
             mesh,
             format: format.into(),
@@ -269,6 +271,77 @@ impl ModelReader {
             reader.inspect(cx);
         }
         reader
+    }
+
+    /// Rebuilds the rendered mesh from the item's new bytes. The camera, preset,
+    /// section plane and panel state survive so a repeatedly rewritten model
+    /// (for example a regenerated STL) keeps the user's current viewpoint.
+    pub fn reload(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(mesh) = self.item.read(cx).model.clone() else {
+            return;
+        };
+        let (format, file_size) = {
+            let item = self.item.read(cx);
+            let format = item
+                .file
+                .path
+                .extension()
+                .map(|extension| extension.to_uppercase())
+                .unwrap_or_default();
+            let file_size = match item.file.disk_state {
+                language::DiskState::Present { size, .. } => size,
+                _ => 0,
+            };
+            (format, file_size)
+        };
+        log::info!(
+            "[open-debug] ModelReader::reload format={} triangles={}",
+            format,
+            mesh.triangles.len()
+        );
+
+        // The old mesh's render and inspection results are stale; stop both and
+        // give the replacements a fresh cancellation flag.
+        self.cancel.store(true, Ordering::Relaxed);
+        self.cancel = Arc::new(AtomicBool::new(false));
+        self.render_task = None;
+        self.inspect_task = None;
+        if let Some(previous) = self.image.take() {
+            window.drop_image(previous).log_err();
+        }
+        self.mesh = mesh;
+        self.format = format.into();
+        self.file_size = file_size;
+        self.topology = None;
+        self.section_geometry = None;
+        self.error = None;
+        self.dirty = true;
+        if self.mesh.triangles.len() <= 300_000 {
+            self.inspect(cx);
+        }
+        cx.notify();
+    }
+
+    /// Test hook: the camera state a reload must preserve.
+    #[cfg(test)]
+    pub(crate) fn camera_state_for_test(&self) -> (f64, f64, f64, [f64; 2], bool) {
+        (
+            self.camera.yaw,
+            self.camera.pitch,
+            self.camera.zoom,
+            self.camera.pan,
+            self.camera.perspective,
+        )
+    }
+
+    /// Test hook: moves the camera away from its default so a reload that
+    /// resets the viewpoint is observable.
+    #[cfg(test)]
+    pub(crate) fn set_camera_for_test(&mut self, yaw: f64, pitch: f64, zoom: f64) {
+        self.camera.yaw = yaw;
+        self.camera.pitch = pitch;
+        self.camera.zoom = zoom;
+        self.dirty = true;
     }
 
     fn raster_style(&self, cx: &App) -> RasterStyle {

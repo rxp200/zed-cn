@@ -1674,6 +1674,22 @@
     },
   },
   {
+    "context": "WordReader",
+    "bindings": {
+      "ctrl-=": "word_reader::IncreaseFontSize",
+      "ctrl-+": "word_reader::IncreaseFontSize",
+      "ctrl--": "word_reader::DecreaseFontSize",
+      "ctrl-0": "word_reader::ResetFontSize",
+      "ctrl-k r": "editor::RevealInFileManager",
+      "pageup": "word_reader::ScrollPageUp",
+      "pagedown": "word_reader::ScrollPageDown",
+      "up": "word_reader::ScrollUp",
+      "down": "word_reader::ScrollDown",
+      "ctrl-home": "word_reader::ScrollToStart",
+      "ctrl-end": "word_reader::ScrollToEnd"
+    },
+  },
+  {
     "context": "CadReader",
     "bindings": {
       "ctrl-=": "cad_reader::ZoomIn",
@@ -1744,12 +1760,15 @@
     },
   },
   {
-    "context": "TableView",
+    // The grid's own bindings must not shadow the inline cell editor's, hence `!Editor`.
+    "context": "TableView && !Editor",
     "bindings": {
       "up": ["tabular_data::MoveFocusedCell", { "direction": "up" }],
       "down": ["tabular_data::MoveFocusedCell", { "direction": "down" }],
       "left": ["tabular_data::MoveFocusedCell", { "direction": "left" }],
       "right": ["tabular_data::MoveFocusedCell", { "direction": "right" }],
+      "enter": "tabular_data::EditCell",
+      "f2": "tabular_data::EditCell",
     },
   },
 ]

@@ -7,6 +7,7 @@ mod model_mesh;
 mod model_reader;
 mod model_section;
 mod pdf_reader;
+mod word_reader;
 
 use std::{path::Path, sync::Arc};
 
@@ -39,6 +40,7 @@ use crate::cad_scene::CadScene;
 use crate::epub_reader::EpubReader;
 use crate::excel_reader::ExcelReader;
 use crate::pdf_reader::PdfReader;
+use crate::word_reader::WordReader;
 use persistence::DocumentViewerDb;
 
 /// A binary document format that can be previewed natively.
@@ -49,6 +51,7 @@ pub enum DocumentFormat {
     Spreadsheet,
     Model,
     Cad,
+    Word,
 }
 
 impl DocumentFormat {
@@ -59,6 +62,7 @@ impl DocumentFormat {
             "epub" => Some(Self::Epub),
             "xlsx" | "xlsm" | "xls" | "xlsb" | "ods" => Some(Self::Spreadsheet),
             "dxf" => Some(Self::Cad),
+            "docx" | "docm" | "dotx" | "dotm" => Some(Self::Word),
             _ => None,
         }
     }
@@ -66,9 +70,14 @@ impl DocumentFormat {
     /// Upper bound on the file size that is loaded into memory for previewing.
     ///
     /// `xlsx`/`xlsb` are parsed lazily per sheet, while `xls`/`ods` are parsed
-    /// eagerly in full by calamine, so eager formats get a lower cap.
+    /// eagerly in full by calamine, so eager formats get a lower cap. Word
+    /// documents are read entry by entry like EPUB books and never enter memory
+    /// as a whole, so only their container needs a file-level cap.
     fn max_file_size(extension: &str) -> u64 {
-        project::document_file_size_limit(extension).unwrap_or(0)
+        match extension.to_ascii_lowercase().as_str() {
+            "docx" | "docm" | "dotx" | "dotm" => project::epub::OFFICE_FILE_LIMIT,
+            _ => project::document_file_size_limit(extension).unwrap_or(0),
+        }
     }
 }
 
@@ -89,6 +98,8 @@ enum DocumentLoadState {
 pub enum DocumentItemEvent {
     /// The bytes are available and a reader can be created.
     Ready,
+    /// The bytes changed on disk and an existing reader must reload in place.
+    Reloaded,
     /// The document could not be read.
     Failed,
 }
@@ -106,6 +117,12 @@ pub struct DocumentItem {
     pub cad: Option<Arc<CadScene>>,
     state: DocumentLoadState,
     load_task: Option<Task<()>>,
+    /// Route-aware project handle used to re-read the document on change, so
+    /// reloads follow the same local/remote path as the initial open.
+    project: Entity<Project>,
+    /// Incremented per reload so a slow load cannot overwrite newer bytes.
+    reload_generation: u64,
+    _worktree_subscription: Option<Subscription>,
 }
 
 impl EventEmitter<DocumentItemEvent> for DocumentItem {}
@@ -163,10 +180,11 @@ impl DocumentItem {
             worktree,
         });
 
-        // EPUB reads only the entries it shows, so it never waits for the whole
-        // file and reports its own progress from `EpubReader`.
-        if format == DocumentFormat::Epub {
-            return Task::ready(Ok(cx.new(|_| Self {
+        // EPUB and Word documents read only the archive entries they show, so
+        // they never wait for the whole file and report their own progress
+        // from their readers.
+        if matches!(format, DocumentFormat::Epub | DocumentFormat::Word) {
+            let item = cx.new(|_| Self {
                 file,
                 contents: Arc::new(Vec::new()),
                 format,
@@ -174,7 +192,12 @@ impl DocumentItem {
                 cad: None,
                 state: DocumentLoadState::Ready,
                 load_task: None,
-            })));
+                project,
+                reload_generation: 0,
+                _worktree_subscription: None,
+            });
+            Self::follow_worktree_changes(&item, cx);
+            return Task::ready(Ok(item));
         }
 
         // Formats that need the whole file ask how the server would transfer it
@@ -199,7 +222,11 @@ impl DocumentItem {
                 total,
             },
             load_task: None,
+            project: project.clone(),
+            reload_generation: 0,
+            _worktree_subscription: None,
         });
+        Self::follow_worktree_changes(&item, cx);
 
         let progress_item = item.downgrade();
         let progress: Option<project::DocumentLoadProgress> = Some(Box::new(
@@ -232,49 +259,13 @@ impl DocumentItem {
                 item.load_task = Some(cx.spawn(async move |this, cx| {
                     let result = match load.await {
                         Ok(LoadedBinaryFile { file, content }) => {
-                            if format == DocumentFormat::Model {
-                                let extension = extension.clone();
-                                cx.background_spawn(async move {
-                                    log::info!(
-                                        "[open-debug] parsing model {extension} ({} bytes)",
-                                        content.len()
-                                    );
-                                    let mesh = model_mesh::ModelMesh::parse(&extension, &content)?;
-                                    log::info!(
-                                        "[open-debug] model parsed: {} triangles",
-                                        mesh.triangles.len()
-                                    );
-                                    anyhow::Ok((file, Vec::new(), Some(Arc::new(mesh)), None))
-                                })
-                                .await
-                            } else if format == DocumentFormat::Cad {
-                                // The drawing only needs its bytes until it has
-                                // been flattened into the render scene, which is
-                                // smaller than the file and drops everything the
-                                // reader cannot draw.
-                                cx.background_spawn(async move {
-                                    log::info!(
-                                        "[open-debug] parsing drawing ({} bytes)",
-                                        content.len()
-                                    );
-                                    let scene = cad_dxf::parse(&content)?;
-                                    log::info!(
-                                        "[open-debug] drawing parsed: {} paths, {} fills, {} texts",
-                                        scene.paths.len(),
-                                        scene.fills.len(),
-                                        scene.texts.len()
-                                    );
-                                    anyhow::Ok((file, Vec::new(), None, Some(Arc::new(scene))))
-                                })
-                                .await
-                            } else {
-                                log::info!(
-                                    "[open-debug] document loaded {:?} ({} bytes)",
-                                    file.path.as_unix_str(),
-                                    content.len()
-                                );
-                                Ok((file, content, None, None))
-                            }
+                            let extension = extension.clone();
+                            cx.background_spawn(async move {
+                                let (content, model, cad) =
+                                    parse_document_payload(format, extension, content).await?;
+                                anyhow::Ok((file, content, model, cad))
+                            })
+                            .await
                         }
                         Err(error) => Err(error),
                     };
@@ -303,6 +294,157 @@ impl DocumentItem {
         }
 
         Task::ready(Ok(item))
+    }
+
+    /// Watches the owning worktree so an open preview follows the file when it
+    /// is replaced on disk instead of staying on the bytes it was opened with.
+    fn follow_worktree_changes(item: &Entity<Self>, cx: &mut App) {
+        item.update(cx, |item, cx| {
+            let worktree = item.file.worktree.clone();
+            item._worktree_subscription = Some(
+                cx.subscribe(&worktree, |item: &mut Self, worktree, event, cx| {
+                    item.on_worktree_event(&worktree, event, cx)
+                }),
+            );
+        });
+    }
+
+    fn on_worktree_event(
+        &mut self,
+        worktree: &Entity<worktree::Worktree>,
+        event: &worktree::Event,
+        cx: &mut Context<Self>,
+    ) {
+        let worktree::Event::UpdatedEntries(changes) = event else {
+            return;
+        };
+        let is_relevant = changes.iter().any(|(path, entry_id, _)| {
+            Some(*entry_id) == self.file.entry_id || path.as_ref() == self.file.path.as_ref()
+        });
+        if !is_relevant {
+            return;
+        }
+
+        let snapshot = worktree.read(cx).snapshot();
+        let entry = self
+            .file
+            .entry_id
+            .and_then(|entry_id| snapshot.entry_for_id(entry_id))
+            .or_else(|| snapshot.entry_for_path(self.file.path.as_ref()));
+        let new_file = match entry {
+            Some(entry) => worktree::File {
+                disk_state: match entry.mtime {
+                    Some(mtime) => language::DiskState::Present {
+                        mtime,
+                        size: entry.size,
+                    },
+                    None => self.file.disk_state,
+                },
+                is_local: worktree.read(cx).is_local(),
+                entry_id: Some(entry.id),
+                path: entry.path.clone(),
+                worktree: worktree.clone(),
+                is_private: entry.is_private,
+            },
+            None => worktree::File {
+                disk_state: language::DiskState::Deleted,
+                is_local: worktree.read(cx).is_local(),
+                entry_id: self.file.entry_id,
+                path: self.file.path.clone(),
+                is_private: self.file.is_private,
+                worktree: worktree.clone(),
+            },
+        };
+
+        if new_file == *self.file {
+            return;
+        }
+        // A deleted document keeps its last loaded copy; a re-created one
+        // becomes present again and reloads through this same path.
+        let became_present = matches!(new_file.disk_state, language::DiskState::Present { .. });
+        self.file = Arc::new(new_file);
+        if became_present {
+            self.reload(cx);
+        }
+        cx.notify();
+    }
+
+    /// Re-reads a document whose bytes changed on disk. Readers reload in place
+    /// so the tab keeps its scroll position, zoom or camera.
+    fn reload(&mut self, cx: &mut Context<Self>) {
+        match self.format {
+            // EPUB and Word read the archive entry by entry inside their own
+            // readers, so the item only has to tell them the file changed.
+            DocumentFormat::Epub | DocumentFormat::Word => {
+                cx.emit(DocumentItemEvent::Reloaded);
+            }
+            _ => self.reload_bytes(cx),
+        }
+    }
+
+    fn reload_bytes(&mut self, cx: &mut Context<Self>) {
+        let path = self.project_path(cx);
+        let Some(extension) = path.path.extension().map(str::to_string) else {
+            return;
+        };
+        if let Some(entry) = self.project.read(cx).entry_for_path(&path, cx)
+            && entry.size > DocumentFormat::max_file_size(&extension)
+        {
+            log::warn!(
+                "document grew past the preview limit, keeping the loaded copy: {:?} ({} bytes)",
+                path.path.as_unix_str(),
+                entry.size
+            );
+            return;
+        }
+
+        let load = self
+            .project
+            .update(cx, |project, cx| project.load_document_file(path, None, cx));
+        let load = match load {
+            Ok(load) => load,
+            Err(error) => {
+                log::warn!("failed to reload document preview: {error:#}");
+                return;
+            }
+        };
+
+        self.reload_generation += 1;
+        let generation = self.reload_generation;
+        let format = self.format;
+        self.load_task = Some(cx.spawn(async move |this, cx| {
+            let loaded = match load.await {
+                Ok(loaded) => loaded,
+                Err(error) => {
+                    log::warn!("failed to reload document preview: {error:#}");
+                    return;
+                }
+            };
+            let (file, content) = (loaded.file, loaded.content);
+            let parsed = cx
+                .background_spawn(parse_document_payload(format, extension, content))
+                .await;
+            this.update(cx, |item, cx| {
+                if item.reload_generation != generation {
+                    return;
+                }
+                match parsed {
+                    Ok((content, model, cad)) => {
+                        item.file = file;
+                        item.contents = Arc::new(content);
+                        item.model = model;
+                        item.cad = cad;
+                        item.state = DocumentLoadState::Ready;
+                        cx.emit(DocumentItemEvent::Reloaded);
+                        cx.notify();
+                    }
+                    // A failed re-parse keeps the previously rendered copy
+                    // instead of replacing a usable preview with an error page.
+                    Err(error) => log::warn!("failed to parse reloaded document: {error:#}"),
+                }
+            })
+            .log_err();
+        }));
     }
 
     pub fn project_path(&self, cx: &App) -> ProjectPath {
@@ -348,6 +490,52 @@ impl project::ProjectItem for DocumentItem {
     }
 }
 
+/// Parses a loaded document into the representation its reader renders. Formats
+/// that render the bytes directly keep them; models and drawings are flattened
+/// so their file bytes do not stay resident.
+async fn parse_document_payload(
+    format: DocumentFormat,
+    extension: String,
+    content: Vec<u8>,
+) -> Result<(
+    Vec<u8>,
+    Option<Arc<model_mesh::ModelMesh>>,
+    Option<Arc<CadScene>>,
+)> {
+    match format {
+        DocumentFormat::Model => {
+            log::info!(
+                "[open-debug] parsing model {extension} ({} bytes)",
+                content.len()
+            );
+            let mesh = model_mesh::ModelMesh::parse(&extension, &content)?;
+            log::info!(
+                "[open-debug] model parsed: {} triangles",
+                mesh.triangles.len()
+            );
+            Ok((Vec::new(), Some(Arc::new(mesh)), None))
+        }
+        // The drawing only needs its bytes until it has been flattened into the
+        // render scene, which is smaller than the file and drops everything the
+        // reader cannot draw.
+        DocumentFormat::Cad => {
+            log::info!("[open-debug] parsing drawing ({} bytes)", content.len());
+            let scene = cad_dxf::parse(&content)?;
+            log::info!(
+                "[open-debug] drawing parsed: {} paths, {} fills, {} texts",
+                scene.paths.len(),
+                scene.fills.len(),
+                scene.texts.len()
+            );
+            Ok((Vec::new(), None, Some(Arc::new(scene))))
+        }
+        _ => {
+            log::info!("[open-debug] document loaded ({} bytes)", content.len());
+            Ok((content, None, None))
+        }
+    }
+}
+
 /// Which concrete reader a [`DocumentView`] shows. `Loading` covers both a
 /// document whose bytes are still in transit and one that failed to load.
 enum DocumentChild {
@@ -357,6 +545,7 @@ enum DocumentChild {
     Spreadsheet(Entity<ExcelReader>),
     Model(Entity<model_reader::ModelReader>),
     Cad(Entity<CadReader>),
+    Word(Entity<WordReader>),
 }
 
 /// Workspace item that renders a binary document (PDF, EPUB or spreadsheet)
@@ -395,6 +584,14 @@ impl DocumentView {
                             Self::build_child(this.item.clone(), this.project.clone(), window, cx);
                     }
                 }
+                DocumentItemEvent::Reloaded => {
+                    if matches!(this.child, DocumentChild::Loading) {
+                        this.child =
+                            Self::build_child(this.item.clone(), this.project.clone(), window, cx);
+                    } else {
+                        this.reload_child(window, cx);
+                    }
+                }
                 DocumentItemEvent::Failed => cx.notify(),
             },
         )];
@@ -425,6 +622,28 @@ impl DocumentView {
         }
     }
 
+    /// Reloads the open reader in place. Each reader keeps its own view state
+    /// (scroll position, zoom, camera), so the tab stays where the user left it.
+    fn reload_child(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match &self.child {
+            DocumentChild::Loading => {}
+            DocumentChild::Pdf(reader) => reader.update(cx, |reader, cx| reader.reload(window, cx)),
+            DocumentChild::Epub(reader) => {
+                reader.update(cx, |reader, cx| reader.reload(window, cx))
+            }
+            DocumentChild::Spreadsheet(reader) => {
+                reader.update(cx, |reader, cx| reader.reload(window, cx))
+            }
+            DocumentChild::Model(reader) => {
+                reader.update(cx, |reader, cx| reader.reload(window, cx))
+            }
+            DocumentChild::Cad(reader) => reader.update(cx, |reader, cx| reader.reload(window, cx)),
+            DocumentChild::Word(reader) => {
+                reader.update(cx, |reader, cx| reader.reload(window, cx))
+            }
+        }
+    }
+
     fn build_child(
         item: Entity<DocumentItem>,
         project: Entity<Project>,
@@ -448,6 +667,10 @@ impl DocumentView {
             DocumentFormat::Cad => {
                 DocumentChild::Cad(cx.new(|cx| CadReader::new(item, window, cx)))
             }
+            DocumentFormat::Word => DocumentChild::Word(cx.new(|cx| {
+                WordReader::new(item, project.clone(), window, cx)
+                    .with_languages(project.read(cx).languages().clone())
+            })),
         }
     }
 
@@ -662,6 +885,7 @@ impl Focusable for DocumentView {
             DocumentChild::Spreadsheet(reader) => reader.read(cx).focus_handle(cx),
             DocumentChild::Model(reader) => reader.read(cx).focus_handle(cx),
             DocumentChild::Cad(reader) => reader.read(cx).focus_handle(cx),
+            DocumentChild::Word(reader) => reader.read(cx).focus_handle(cx),
         }
     }
 }
@@ -675,6 +899,7 @@ impl gpui::Render for DocumentView {
             DocumentChild::Spreadsheet(reader) => reader.clone().into_any_element(),
             DocumentChild::Model(reader) => reader.clone().into_any_element(),
             DocumentChild::Cad(reader) => reader.clone().into_any_element(),
+            DocumentChild::Word(reader) => reader.clone().into_any_element(),
         }
     }
 }
@@ -1024,6 +1249,49 @@ impl DocumentToolbarControls {
             })
             .into_any_element()
     }
+    fn render_word_controls(reader: &Entity<WordReader>) -> AnyElement {
+        h_flex()
+            .gap_1()
+            .child(
+                IconButton::new("word-decrease-font", IconName::Dash)
+                    .icon_size(IconSize::Small)
+                    .tooltip(|_window, cx| {
+                        Tooltip::for_action(
+                            i18n::t!("99f597e412b89d14"),
+                            &word_reader::DecreaseFontSize,
+                            cx,
+                        )
+                    })
+                    .on_click({
+                        let reader = reader.downgrade();
+                        move |_, _window, cx| {
+                            if let Some(reader) = reader.upgrade() {
+                                reader.update(cx, |reader, cx| reader.decrease_font_size(cx));
+                            }
+                        }
+                    }),
+            )
+            .child(
+                IconButton::new("word-increase-font", IconName::Plus)
+                    .icon_size(IconSize::Small)
+                    .tooltip(|_window, cx| {
+                        Tooltip::for_action(
+                            i18n::t!("a4b896e9fcee581e"),
+                            &word_reader::IncreaseFontSize,
+                            cx,
+                        )
+                    })
+                    .on_click({
+                        let reader = reader.downgrade();
+                        move |_, _window, cx| {
+                            if let Some(reader) = reader.upgrade() {
+                                reader.update(cx, |reader, cx| reader.increase_font_size(cx));
+                            }
+                        }
+                    }),
+            )
+            .into_any_element()
+    }
 }
 
 impl EventEmitter<workspace::ToolbarItemEvent> for DocumentToolbarControls {}
@@ -1074,10 +1342,12 @@ impl gpui::Render for DocumentToolbarControls {
             DocumentChild::Spreadsheet(reader) => DocumentChild::Spreadsheet(reader.clone()),
             DocumentChild::Model(reader) => DocumentChild::Model(reader.clone()),
             DocumentChild::Cad(reader) => DocumentChild::Cad(reader.clone()),
+            DocumentChild::Word(reader) => DocumentChild::Word(reader.clone()),
         };
         match &child {
             DocumentChild::Pdf(reader) => Self::render_pdf_controls(reader, cx),
             DocumentChild::Epub(reader) => Self::render_epub_controls(reader, cx),
+            DocumentChild::Word(reader) => Self::render_word_controls(reader),
             DocumentChild::Loading
             | DocumentChild::Spreadsheet(_)
             | DocumentChild::Model(_)
@@ -1177,6 +1447,7 @@ mod tests {
     use super::*;
     use fs::{FakeFs, Fs as _};
     use gpui::TestAppContext;
+    use postage::stream::Stream as _;
     use util::rel_path::rel_path;
     use workspace::AppState;
 
@@ -1194,13 +1465,24 @@ mod tests {
         name: &str,
         contents: Vec<u8>,
     ) -> (Entity<Project>, ProjectPath) {
+        let (_, project, project_path) = test_document_project_with_fs(cx, name, contents).await;
+        (project, project_path)
+    }
+
+    /// Same as [`test_document_project`], but also hands back the fake filesystem
+    /// so a test can rewrite the file and rescan the worktree.
+    async fn test_document_project_with_fs(
+        cx: &mut TestAppContext,
+        name: &str,
+        contents: Vec<u8>,
+    ) -> (Arc<FakeFs>, Entity<Project>, ProjectPath) {
         let fs = FakeFs::new(cx.executor());
         fs.create_dir(Path::new("/root"))
             .await
             .expect("test root should be created");
         fs.insert_file(&format!("/root/{name}"), contents).await;
 
-        let project = Project::test(fs, [Path::new("/root")], cx).await;
+        let project = Project::test(fs.clone(), [Path::new("/root")], cx).await;
         let worktree_id = cx.update(|cx| {
             project
                 .read(cx)
@@ -1211,12 +1493,43 @@ mod tests {
                 .id()
         });
         (
+            fs,
             project,
             ProjectPath {
                 worktree_id,
                 path: rel_path(name).into(),
             },
         )
+    }
+
+    /// Rewrites a file and rescans its worktree entry, which is how the real
+    /// filesystem watcher reports an external change.
+    async fn rewrite_test_file(
+        cx: &mut TestAppContext,
+        fs: &FakeFs,
+        project: &Entity<Project>,
+        name: &str,
+        contents: Vec<u8>,
+    ) {
+        fs.insert_file(&format!("/root/{name}"), contents).await;
+        rescan_test_file(cx, project, name).await;
+    }
+
+    /// Rescans one worktree entry after its file was changed outside the editor.
+    async fn rescan_test_file(cx: &mut TestAppContext, project: &Entity<Project>, name: &str) {
+        let worktree = project.read_with(cx, |project, cx| {
+            project.worktrees(cx).next().expect("test worktree")
+        });
+        worktree
+            .read_with(cx, |worktree, _| {
+                worktree
+                    .as_local()
+                    .expect("test worktree is local")
+                    .manually_refresh_entries_for_paths(vec![rel_path(name).into()])
+            })
+            .recv()
+            .await;
+        cx.run_until_parked();
     }
 
     /// Builds an image that can be pushed into the window's sprite atlas.
@@ -1480,6 +1793,23 @@ mod tests {
             Some(DocumentFormat::Cad)
         );
         assert_eq!(
+            DocumentFormat::from_extension("DOCX"),
+            Some(DocumentFormat::Word)
+        );
+        assert_eq!(
+            DocumentFormat::from_extension("docm"),
+            Some(DocumentFormat::Word)
+        );
+        assert_eq!(
+            DocumentFormat::from_extension("dotx"),
+            Some(DocumentFormat::Word)
+        );
+        assert_eq!(
+            DocumentFormat::from_extension("doc"),
+            None,
+            "the legacy binary Word format is not previewable and must not be claimed"
+        );
+        assert_eq!(
             DocumentFormat::from_extension("dwg"),
             None,
             "DWG is not previewable and must not be claimed"
@@ -1511,6 +1841,256 @@ mod tests {
         });
     }
 
+    /// A one-triangle OBJ and its two-triangle counterpart, so a reload can be
+    /// observed through the parsed mesh rather than the raw bytes.
+    fn one_triangle_obj() -> Vec<u8> {
+        b"v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n".to_vec()
+    }
+
+    fn two_triangle_obj() -> Vec<u8> {
+        b"v 0 0 0\nv 1 0 0\nv 0 1 0\nv 1 1 0\nf 1 2 3\nf 2 4 3\n".to_vec()
+    }
+
+    /// A workbook rewritten by another application must refresh the open tab
+    /// instead of leaving the bytes it was opened with.
+    #[gpui::test]
+    async fn test_open_spreadsheet_reloads_when_the_file_changes_on_disk(cx: &mut TestAppContext) {
+        init_test(cx);
+        let (fs, project, project_path) = test_document_project_with_fs(
+            cx,
+            "data.xlsx",
+            crate::excel_reader::tests::minimal_xlsx(),
+        )
+        .await;
+        let item = cx
+            .update(|cx| DocumentItem::open(project.clone(), project_path, cx))
+            .await
+            .expect("spreadsheet should open");
+
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            DocumentView::new(item.clone(), project.clone(), window, cx)
+        });
+        cx.run_until_parked();
+        view.read_with(cx, |view, cx| match &view.child {
+            DocumentChild::Spreadsheet(reader) => {
+                assert_eq!(
+                    reader.read(cx).cell_text_for_test(1, 1).as_deref(),
+                    Some("42"),
+                    "the first read must show the original value"
+                );
+            }
+            _ => panic!("expected spreadsheet reader"),
+        });
+
+        rewrite_test_file(
+            cx,
+            &fs,
+            &project,
+            "data.xlsx",
+            crate::excel_reader::tests::minimal_xlsx_with_value(7),
+        )
+        .await;
+
+        view.read_with(cx, |view, cx| match &view.child {
+            DocumentChild::Spreadsheet(reader) => {
+                assert_eq!(
+                    reader.read(cx).cell_text_for_test(1, 1).as_deref(),
+                    Some("7"),
+                    "an externally rewritten workbook must reload in place"
+                );
+            }
+            _ => panic!("expected spreadsheet reader"),
+        });
+    }
+
+    /// A regenerated 3D model must refresh the open tab while keeping the
+    /// viewer's camera, which is what makes a live STL preview usable.
+    #[gpui::test]
+    async fn test_open_model_reloads_in_place_and_keeps_the_camera(cx: &mut TestAppContext) {
+        init_test(cx);
+        let (fs, project, project_path) =
+            test_document_project_with_fs(cx, "shape.obj", one_triangle_obj()).await;
+        let item = cx
+            .update(|cx| DocumentItem::open(project.clone(), project_path, cx))
+            .await
+            .expect("model should open");
+
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            DocumentView::new(item.clone(), project.clone(), window, cx)
+        });
+        cx.run_until_parked();
+
+        let reader = view.read_with(cx, |view, _| match &view.child {
+            DocumentChild::Model(reader) => reader.clone(),
+            _ => panic!("expected model reader"),
+        });
+        reader.update(cx, |reader, _| {
+            reader.set_camera_for_test(1.25, -0.5, 2.5);
+        });
+        let camera_before = reader.read_with(cx, |reader, _| reader.camera_state_for_test());
+
+        rewrite_test_file(cx, &fs, &project, "shape.obj", two_triangle_obj()).await;
+
+        assert_eq!(
+            item.read_with(cx, |item, _| item
+                .model
+                .as_ref()
+                .expect("parsed model")
+                .triangles
+                .len()),
+            2,
+            "the rewritten model must replace the parsed mesh"
+        );
+        let camera_after = reader.read_with(cx, |reader, _| reader.camera_state_for_test());
+        assert_eq!(
+            camera_before, camera_after,
+            "reloading a model must keep the viewer's camera"
+        );
+    }
+
+    /// An EPUB rewritten by another application must re-parse its structure
+    /// instead of keeping the archive it was opened with.
+    #[gpui::test]
+    async fn test_open_epub_reloads_in_place_when_the_file_changes(cx: &mut TestAppContext) {
+        init_test(cx);
+        let (fs, project, project_path) = test_document_project_with_fs(
+            cx,
+            "book.epub",
+            crate::epub_reader::tests::epub_fixture(false),
+        )
+        .await;
+        let item = cx
+            .update(|cx| DocumentItem::open(project.clone(), project_path, cx))
+            .await
+            .expect("epub should open");
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            DocumentView::new(item.clone(), project.clone(), window, cx)
+        });
+        cx.run_until_parked();
+
+        view.read_with(cx, |view, cx| match &view.child {
+            DocumentChild::Epub(reader) => {
+                let archive = reader.read(cx).archive.clone().expect("epub archive");
+                assert_eq!(archive.toc[1].title, "第二节");
+            }
+            _ => panic!("expected epub reader"),
+        });
+
+        // The EPUB 3 fixture carries a nav document, so the table of contents
+        // is parsed from a different file than the EPUB 2 fixture's NCX.
+        rewrite_test_file(
+            cx,
+            &fs,
+            &project,
+            "book.epub",
+            crate::epub_reader::tests::epub_fixture(true),
+        )
+        .await;
+
+        view.read_with(cx, |view, cx| match &view.child {
+            DocumentChild::Epub(reader) => {
+                let archive = reader
+                    .read(cx)
+                    .archive
+                    .clone()
+                    .expect("reloaded epub archive");
+                assert_eq!(
+                    archive.toc[1].title, "第二章",
+                    "an externally rewritten book must re-parse its structure"
+                );
+            }
+            _ => panic!("expected epub reader"),
+        });
+    }
+
+    /// A rewritten Word document must be read again, which replaces its
+    /// rendered Markdown instead of leaving the previous render on screen.
+    #[gpui::test]
+    async fn test_open_word_reloads_in_place_when_the_file_changes(cx: &mut TestAppContext) {
+        init_test(cx);
+        let (fs, project, project_path) = test_document_project_with_fs(
+            cx,
+            "report.docx",
+            crate::word_reader::tests::docx_fixture(),
+        )
+        .await;
+        let item = cx
+            .update(|cx| DocumentItem::open(project.clone(), project_path, cx))
+            .await
+            .expect("word document should open");
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            DocumentView::new(item.clone(), project.clone(), window, cx)
+        });
+        cx.run_until_parked();
+
+        let markdown_before = view.read_with(cx, |view, cx| match &view.child {
+            DocumentChild::Word(reader) => reader
+                .read(cx)
+                .markdown
+                .clone()
+                .expect("rendered document")
+                .entity_id(),
+            _ => panic!("expected word reader"),
+        });
+
+        rewrite_test_file(
+            cx,
+            &fs,
+            &project,
+            "report.docx",
+            crate::word_reader::tests::docx_fixture(),
+        )
+        .await;
+
+        view.read_with(cx, |view, cx| match &view.child {
+            DocumentChild::Word(reader) => {
+                let reader = reader.read(cx);
+                assert!(reader.error.is_none(), "reloaded document must not error");
+                let markdown_after = reader.markdown.clone().expect("re-rendered document");
+                assert_ne!(
+                    markdown_before,
+                    markdown_after.entity_id(),
+                    "a rewritten document must be rendered again"
+                );
+            }
+            _ => panic!("expected word reader"),
+        });
+    }
+
+    /// A document removed while its tab is open keeps its last loaded copy;
+    /// only a re-created file triggers another reload.
+    #[gpui::test]
+    async fn test_deleted_document_keeps_its_loaded_copy(cx: &mut TestAppContext) {
+        init_test(cx);
+        let (fs, project, project_path) = test_document_project_with_fs(
+            cx,
+            "data.xlsx",
+            crate::excel_reader::tests::minimal_xlsx(),
+        )
+        .await;
+        let item = cx
+            .update(|cx| DocumentItem::open(project.clone(), project_path, cx))
+            .await
+            .expect("spreadsheet should open");
+        cx.run_until_parked();
+        let contents_before = item.read_with(cx, |item, _| item.contents.clone());
+        assert!(!contents_before.is_empty());
+
+        fs.remove_file(Path::new("/root/data.xlsx"), Default::default())
+            .await
+            .expect("test file should be removed");
+        rescan_test_file(cx, &project, "data.xlsx").await;
+
+        assert_eq!(
+            item.read_with(cx, |item, _| item.contents.clone()),
+            contents_before,
+            "removing a document must not drop the loaded preview"
+        );
+        item.read_with(cx, |item, _| {
+            assert!(matches!(item.state, DocumentLoadState::Ready));
+        });
+    }
+
     #[gpui::test]
     async fn test_open_epub_document(cx: &mut TestAppContext) {
         init_test(cx);
@@ -1537,6 +2117,30 @@ mod tests {
                 assert!(reader.markdown.is_some());
             }
             _ => panic!("expected epub reader"),
+        });
+    }
+
+    #[gpui::test]
+    async fn test_open_word_document(cx: &mut TestAppContext) {
+        init_test(cx);
+        let (project, item) =
+            open_test_document(cx, "report.docx", crate::word_reader::tests::docx_fixture()).await;
+        assert_eq!(cx.read(|cx| item.read(cx).format), DocumentFormat::Word);
+        assert!(
+            cx.read(|cx| item.read(cx).contents.is_empty()),
+            "opening the tab must not load the container"
+        );
+
+        let (view, cx) =
+            cx.add_window_view(|window, cx| DocumentView::new(item, project, window, cx));
+        cx.run_until_parked();
+        view.read_with(cx, |view, cx| match &view.child {
+            DocumentChild::Word(reader) => {
+                let reader = reader.read(cx);
+                assert!(reader.error.is_none(), "the document should be parsed");
+                assert!(reader.markdown.is_some(), "the document flow should render");
+            }
+            _ => panic!("expected a word reader"),
         });
     }
 
@@ -1667,6 +2271,9 @@ mod tests {
                 total: Some(10),
             },
             load_task: None,
+            project: project.clone(),
+            reload_generation: 0,
+            _worktree_subscription: None,
         });
 
         let (view, cx) =
@@ -1718,6 +2325,9 @@ mod tests {
             cad: None,
             state: DocumentLoadState::Failed("connection lost".into()),
             load_task: None,
+            project: project.clone(),
+            reload_generation: 0,
+            _worktree_subscription: None,
         });
         let (view, cx) =
             cx.add_window_view(|window, cx| DocumentView::new(failed, project, window, cx));
