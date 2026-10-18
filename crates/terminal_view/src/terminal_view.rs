@@ -3341,6 +3341,138 @@ mod tests {
         }
     }
 
+    fn visible_terminal_notifications(
+        cx: &TestAppContext,
+    ) -> Vec<(gpui::EntityId, Entity<notifications::PopupNotification>)> {
+        cx.update(|cx| {
+            TerminalNotificationStack::global(cx)
+                .read(cx)
+                .visible_notifications()
+        })
+    }
+
+    /// Y offsets of the popup windows, ordered from the top of the screen down.
+    fn terminal_notification_offsets(cx: &mut VisualTestContext) -> Vec<Pixels> {
+        let mut offsets = Vec::new();
+        for window in cx.windows() {
+            let Some(handle) = window.downcast::<notifications::PopupNotification>() else {
+                continue;
+            };
+            let Ok(offset) = handle.update(cx, |_, window, _| window.bounds().origin.y) else {
+                continue;
+            };
+            offsets.push(offset);
+        }
+        offsets.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        offsets
+    }
+
+    #[gpui::test]
+    async fn terminal_notifications_reflow_when_one_is_dismissed(cx: &mut TestAppContext) {
+        let (project, _workspace, window_handle) = init_test_with_window(cx).await;
+        cx.update(|cx| release_channel::init(semver::Version::new(0, 0, 0), cx));
+        let mut cx = VisualTestContext::from_window(window_handle.into(), cx);
+        cx.deactivate_window();
+
+        for _ in 0..3 {
+            let (_pane, terminal, _terminal_view) =
+                add_display_only_terminal(&project, window_handle, false, false, &mut cx);
+            run_terminal_for(&terminal, 66, &mut cx);
+            finish_terminal_task(&mut cx);
+        }
+
+        let offsets = terminal_notification_offsets(&mut cx);
+        assert_eq!(offsets.len(), 3, "three notifications must be visible");
+        let slot_height =
+            notifications::POPUP_NOTIFICATION_HEIGHT + notifications::POPUP_NOTIFICATION_GAP;
+        assert_eq!(offsets[1] - offsets[0], slot_height);
+        assert_eq!(offsets[2] - offsets[1], slot_height);
+
+        // Dismiss the middle popup the way a click on its button would.
+        let mut popups = Vec::new();
+        for window in cx.windows() {
+            let Some(handle) = window.downcast::<notifications::PopupNotification>() else {
+                continue;
+            };
+            let Ok(offset) = handle.update(&mut cx, |_, window, _| window.bounds().origin.y) else {
+                continue;
+            };
+            popups.push((offset, handle));
+        }
+        popups.sort_by(|(a, _), (b, _)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let (_, middle) = popups.swap_remove(1);
+        middle
+            .update(&mut cx, |popup, _, cx| popup.dismiss(cx))
+            .expect("the middle popup window must still be open");
+        cx.run_until_parked();
+
+        let offsets = terminal_notification_offsets(&mut cx);
+        assert_eq!(offsets.len(), 2, "the dismissed popup must close");
+        assert_eq!(
+            offsets[1] - offsets[0],
+            slot_height,
+            "the remaining popups must move up instead of leaving a hole"
+        );
+    }
+
+    #[gpui::test]
+    async fn terminal_notifications_stack_newest_first(cx: &mut TestAppContext) {
+        let (project, _workspace, window_handle) = init_test_with_window(cx).await;
+        cx.update(|cx| release_channel::init(semver::Version::new(0, 0, 0), cx));
+        let mut cx = VisualTestContext::from_window(window_handle.into(), cx);
+        cx.deactivate_window();
+
+        let mut views = Vec::new();
+        for _ in 0..3 {
+            let (_pane, terminal, terminal_view) =
+                add_display_only_terminal(&project, window_handle, false, false, &mut cx);
+            run_terminal_for(&terminal, 66, &mut cx);
+            finish_terminal_task(&mut cx);
+            views.push(terminal_view.entity_id());
+        }
+
+        let ids = |cx: &TestAppContext| {
+            visible_terminal_notifications(cx)
+                .into_iter()
+                .map(|(id, _)| id)
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(
+            ids(&cx),
+            vec![views[2], views[1], views[0]],
+            "the newest notification must occupy the top slot"
+        );
+
+        // A fourth notification evicts the oldest and takes the top slot.
+        let (_pane, fourth, four_view) =
+            add_display_only_terminal(&project, window_handle, false, false, &mut cx);
+        run_terminal_for(&fourth, 66, &mut cx);
+        finish_terminal_task(&mut cx);
+
+        assert_eq!(
+            ids(&cx),
+            vec![four_view.entity_id(), views[2], views[1]],
+            "a full stack must evict the oldest and keep the newest on top"
+        );
+
+        // Dismissing the middle notification pulls the bottom one up.
+        let middle = visible_terminal_notifications(&cx)
+            .into_iter()
+            .nth(1)
+            .map(|(_, popup)| popup)
+            .expect("the middle notification must be visible");
+        middle.update(&mut cx, |popup, cx| popup.dismiss(cx));
+        cx.run_until_parked();
+
+        assert_eq!(
+            ids(&cx),
+            vec![four_view.entity_id(), views[1]],
+            "dismissing a notification must close the gap it leaves behind"
+        );
+        assert_eq!(terminal_notification_count(&cx), 2);
+    }
+
     #[gpui::test]
     async fn replacing_output_resets_view_scrolling_hover_and_search(cx: &mut TestAppContext) {
         let (project, _workspace, window_handle) = init_test_with_window(cx).await;

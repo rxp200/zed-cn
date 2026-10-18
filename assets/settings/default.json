@@ -1165,7 +1165,7 @@
     // Whether to show the git panel button in the status bar.
     "button": true,
     // Where to dock the git panel. Can be 'left', 'bottom' or 'right'.
-    "dock": "bottom",
+    "dock": "left",
     // Default width of the git panel.
     "default_width": 360,
     // Default height of the git panel when docked to the bottom.
