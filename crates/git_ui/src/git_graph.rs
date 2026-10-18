@@ -3598,11 +3598,15 @@ impl GitGraph {
             .into_any_element()
     }
 
-    fn render_commit_detail_placeholder(&self) -> AnyElement {
+    fn render_commit_detail_placeholder(&self, cx: &App) -> AnyElement {
         v_flex()
             .id("git-graph-detail-placeholder")
             .debug_selector(|| "git-graph-detail-placeholder".into())
-            .size_full()
+            .min_w(px(300.))
+            .h_full()
+            .flex_basis(DefiniteLength::Fraction(
+                self.commit_details_split_state.read(cx).right_ratio(),
+            ))
             .items_center()
             .justify_center()
             .gap_2()
@@ -3625,15 +3629,15 @@ impl GitGraph {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let Some(selected_idx) = self.selected_entry_idx else {
-            return self.render_commit_detail_placeholder();
+            return self.render_commit_detail_placeholder(cx);
         };
 
         let Some(commit_entry) = self.graph_data.commits.get(selected_idx) else {
-            return self.render_commit_detail_placeholder();
+            return self.render_commit_detail_placeholder(cx);
         };
 
         let Some(repository) = self.get_repository(cx) else {
-            return self.render_commit_detail_placeholder();
+            return self.render_commit_detail_placeholder(cx);
         };
 
         let data = repository.update(cx, |repository, cx| {
@@ -5273,6 +5277,9 @@ impl Render for GitGraph {
                                                     .tab_index(2)
                                                     .tab_group()
                                                     .tab_stop(false)
+                                                    .debug_selector(|| {
+                                                        "git-graph-commits-table".into()
+                                                    })
                                                     .map(|this| {
                                                         if table_collapsed {
                                                             this.flex_1()
@@ -6579,9 +6586,7 @@ mod tests {
 
     // The full integration test has less iterations because it's significantly slower
     #[gpui::test]
-    async fn commit_details_show_a_placeholder_until_a_commit_is_selected(
-        cx: &mut TestAppContext,
-    ) {
+    async fn commit_details_placeholder_keeps_the_commit_list_visible(cx: &mut TestAppContext) {
         init_test(cx);
 
         let fs = FakeFs::new(cx.executor());
@@ -6635,9 +6640,21 @@ mod tests {
         };
 
         draw(cx, &git_graph);
+        let placeholder = cx
+            .debug_bounds("git-graph-detail-placeholder")
+            .expect("the details pane reserves space before a commit is selected");
         assert!(
-            cx.debug_bounds("git-graph-detail-placeholder").is_some(),
-            "the details pane reserves space before a commit is selected"
+            placeholder.size.width <= gpui::px(400.),
+            "the placeholder must respect the details split instead of claiming the whole pane: {:?}",
+            placeholder.size.width
+        );
+        let commits_table = cx
+            .debug_bounds("git-graph-commits-table")
+            .expect("the commit list stays visible before a commit is selected");
+        assert!(
+            commits_table.size.width >= gpui::px(300.),
+            "the commit list keeps its width while no commit is selected: {:?}",
+            commits_table.size.width
         );
 
         git_graph.update_in(cx, |graph, window, cx| {
