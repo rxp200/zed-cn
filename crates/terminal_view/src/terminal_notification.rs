@@ -1,8 +1,9 @@
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use gpui::{
-    AnyWindowHandle, App, AppContext as _, Context, Entity, EntityId, Global, SharedString,
-    Subscription, WeakEntity, Window, WindowHandle,
+    AnyWindowHandle, App, AppContext as _, Context, DisplayId, Entity, EntityId, Global,
+    PlatformDisplay, SharedString, Subscription, WeakEntity, Window, WindowHandle,
 };
 use notifications::{PopupNotification, PopupNotificationEvent};
 use terminal::TaskStatus;
@@ -95,6 +96,7 @@ impl LongTaskTracker {
 }
 
 /// Everything the popup needs to describe a finished long-running terminal task.
+#[derive(Clone)]
 pub struct LongTaskNotification {
     pub title: SharedString,
     pub caption: SharedString,
@@ -244,15 +246,152 @@ mod tracker_tests {
     }
 }
 
+struct PopupWindow {
+    handle: WindowHandle<PopupNotification>,
+    popup: Entity<PopupNotification>,
+    _subscription: Subscription,
+}
+
 struct NotificationEntry {
-    id: u64,
-    slot: usize,
-    window: WindowHandle<PopupNotification>,
+    content: LongTaskNotification,
     terminal: WeakEntity<TerminalView>,
     workspace: WeakEntity<Workspace>,
     /// The window that owns the terminal, used to bring it back to the front.
     source_window: AnyWindowHandle,
-    _subscriptions: Vec<Subscription>,
+    /// Dropping the entry stops watching its terminal.
+    _release_subscription: Subscription,
+}
+
+/// The popups shown on one display, newest first.
+///
+/// Slot `i` is the `i`-th popup from the top and is backed by `windows[i]` for
+/// as long as the stack reaches that far. Reordering swaps what each window
+/// renders instead of moving it, because GPUI cannot reposition an existing
+/// window; that way dismissing a notification makes the ones below it scroll up
+/// instead of leaving a hole.
+struct DisplayStack {
+    screen: Rc<dyn PlatformDisplay>,
+    entries: Vec<NotificationEntry>,
+    windows: Vec<PopupWindow>,
+}
+
+impl DisplayStack {
+    fn new(screen: Rc<dyn PlatformDisplay>) -> Self {
+        Self {
+            screen,
+            entries: Vec::new(),
+            windows: Vec::new(),
+        }
+    }
+
+    fn display_id(&self) -> DisplayId {
+        self.screen.id()
+    }
+
+    /// Adds `entry` as the newest notification, dropping the oldest when the
+    /// display already shows the maximum number of popups.
+    fn push(&mut self, entry: NotificationEntry, cx: &mut Context<TerminalNotificationStack>) {
+        if self.entries.len() >= MAX_VISIBLE_NOTIFICATIONS {
+            self.entries.pop();
+        }
+        self.entries.insert(0, entry);
+
+        while self.windows.len() < self.entries.len() {
+            let slot = self.windows.len();
+            let Some(content) = self.entries.get(slot).map(|entry| entry.content.clone()) else {
+                break;
+            };
+            let Some(window) = self.open_window(slot, content, cx) else {
+                self.entries.pop();
+                break;
+            };
+            self.windows.push(window);
+        }
+
+        self.sync_contents(cx);
+    }
+
+    /// Removes the entry at `slot` and closes the bottom-most popup.
+    ///
+    /// Windows keep their screen position, so the surviving entries are pushed
+    /// up by one slot. The window that hosted the removed entry is never the one
+    /// that closes unless it was the bottom one.
+    fn remove_at(&mut self, slot: usize, cx: &mut App) -> Option<NotificationEntry> {
+        if slot >= self.entries.len() {
+            return None;
+        }
+
+        let entry = self.entries.remove(slot);
+        if let Some(window) = self.windows.pop() {
+            window
+                .handle
+                .update(cx, |_, window, _| window.remove_window())
+                .log_err();
+        }
+        self.sync_contents(cx);
+        Some(entry)
+    }
+
+    fn open_window(
+        &self,
+        slot: usize,
+        content: LongTaskNotification,
+        cx: &mut Context<TerminalNotificationStack>,
+    ) -> Option<PopupWindow> {
+        let options = PopupNotification::window_options_at_slot(self.screen.clone(), slot, cx);
+        let handle = cx
+            .open_window(options, move |_window, cx| {
+                cx.new(move |_| {
+                    PopupNotification::new(
+                        content.title,
+                        Some(content.caption),
+                        content.icon,
+                        content.project_name,
+                    )
+                    .id("terminal-notification")
+                    .icon_color(content.icon_color)
+                    .accept_label(i18n::t!("afd0b9482dfa57f0"))
+                })
+            })
+            .log_err()?;
+
+        let popup = handle.entity(cx).log_err()?;
+        let display_id = self.display_id();
+        let subscription = cx.subscribe(
+            &popup,
+            move |stack, _, event: &PopupNotificationEvent, cx| {
+                stack.handle_popup_event(
+                    display_id,
+                    slot,
+                    matches!(event, PopupNotificationEvent::Accepted),
+                    cx,
+                );
+            },
+        );
+
+        Some(PopupWindow {
+            handle,
+            popup,
+            _subscription: subscription,
+        })
+    }
+
+    /// Renders the entry currently assigned to each slot.
+    fn sync_contents(&mut self, cx: &mut App) {
+        for (window, entry) in self.windows.iter().zip(self.entries.iter()) {
+            let content = entry.content.clone();
+            window.popup.update(cx, |popup, cx| {
+                popup.set_content(
+                    content.title,
+                    Some(content.caption),
+                    content.icon,
+                    content.icon_color,
+                    content.project_name,
+                    cx,
+                );
+            });
+        }
+    }
 }
 
 /// Tracks the terminal notifications that are currently on screen so that they
@@ -260,8 +399,7 @@ struct NotificationEntry {
 /// when its terminal goes away or is brought back into focus.
 #[derive(Default)]
 pub struct TerminalNotificationStack {
-    entries: Vec<NotificationEntry>,
-    next_id: u64,
+    displays: Vec<DisplayStack>,
 }
 
 struct GlobalStack(Entity<TerminalNotificationStack>);
@@ -286,13 +424,16 @@ impl TerminalNotificationStack {
 
     /// Dismisses the notification belonging to `terminal_id`, if any.
     pub fn dismiss_for_terminal(&mut self, terminal_id: EntityId, cx: &mut Context<Self>) {
-        if let Some(index) = self
-            .entries
-            .iter()
-            .position(|entry| entry.terminal.entity_id() == terminal_id)
-        {
-            self.remove(index, cx);
+        for display in &mut self.displays {
+            if let Some(slot) = display
+                .entries
+                .iter()
+                .position(|entry| entry.terminal.entity_id() == terminal_id)
+            {
+                let _removed = display.remove_at(slot, cx);
+            }
         }
+        self.displays.retain(|display| !display.entries.is_empty());
     }
 
     pub fn push(
@@ -312,113 +453,93 @@ impl TerminalNotificationStack {
             log::error!("no display available for the terminal notification");
             return;
         };
-
-        let slot = match self.free_slot() {
-            Some(slot) => slot,
-            None => match self
-                .entries
-                .iter()
-                .enumerate()
-                .min_by_key(|(_, entry)| entry.id)
-            {
-                Some((index, entry)) => {
-                    let slot = entry.slot;
-                    self.remove(index, cx);
-                    slot
-                }
-                None => 0,
-            },
-        };
-
-        let options = PopupNotification::window_options_at_slot(screen, slot, cx);
-        let popup_window = match cx.open_window(options, |_window, cx| {
-            cx.new(|_| {
-                PopupNotification::new(
-                    content.title.clone(),
-                    Some(content.caption.clone()),
-                    content.icon,
-                    content.project_name.clone(),
-                )
-                .id("terminal-notification")
-                .icon_color(content.icon_color)
-                .accept_label(i18n::t!("afd0b9482dfa57f0"))
-            })
-        }) {
-            Ok(popup) => popup,
-            Err(error) => {
-                log::error!("failed to open terminal notification window: {error}");
-                return;
-            }
-        };
-
-        let Ok(popup) = popup_window.entity(cx) else {
-            log::error!("terminal notification window has no root view");
-            return;
-        };
-
-        let id = self.next_id;
-        self.next_id += 1;
-
-        let mut subscriptions = Vec::with_capacity(2);
-        subscriptions.push(
-            cx.subscribe_in(&popup, window, move |stack, _, event, _window, cx| {
-                let Some(index) = stack.entries.iter().position(|entry| entry.id == id) else {
-                    return;
-                };
-                let entry = stack.entries.remove(index);
-                entry
-                    .window
-                    .update(cx, |_, window, _| window.remove_window())
-                    .log_err();
-
-                if matches!(event, PopupNotificationEvent::Accepted) {
-                    activate_terminal(entry.workspace, entry.terminal, entry.source_window, cx);
-                }
-            }),
-        );
+        let display_id = screen.id();
 
         let terminal_id = terminal.entity_id();
-        subscriptions.push(
-            cx.observe_release_in(&terminal, window, move |stack, _, _, cx| {
-                stack.dismiss_for_terminal(terminal_id, cx);
-            }),
-        );
+        let release_subscription = cx.observe_release(&terminal, move |stack, _, cx| {
+            stack.dismiss_for_terminal(terminal_id, cx);
+        });
 
-        self.entries.push(NotificationEntry {
-            id,
-            slot,
-            window: popup_window,
+        let entry = NotificationEntry {
+            content,
             terminal: terminal.downgrade(),
             workspace,
             source_window,
-            _subscriptions: subscriptions,
-        });
-    }
+            _release_subscription: release_subscription,
+        };
 
-    fn free_slot(&self) -> Option<usize> {
-        (0..MAX_VISIBLE_NOTIFICATIONS)
-            .find(|slot| self.entries.iter().all(|entry| entry.slot != *slot))
+        if let Some(display) = self
+            .displays
+            .iter_mut()
+            .find(|display| display.display_id() == display_id)
+        {
+            display.push(entry, cx);
+        } else {
+            let mut display = DisplayStack::new(screen);
+            display.push(entry, cx);
+            self.displays.push(display);
+        }
     }
 
     /// Closes notifications whose terminal or workspace no longer exists.
     fn reap_released(&mut self, cx: &mut Context<Self>) {
-        let mut index = 0;
-        while index < self.entries.len() {
-            let entry = &self.entries[index];
-            if entry.terminal.upgrade().is_none() || entry.workspace.upgrade().is_none() {
-                self.remove(index, cx);
-            } else {
-                index += 1;
+        for display in &mut self.displays {
+            let mut slot = 0;
+            while slot < display.entries.len() {
+                let released = display.entries.get(slot).is_none_or(|entry| {
+                    entry.terminal.upgrade().is_none() || entry.workspace.upgrade().is_none()
+                });
+                if released {
+                    let _removed = display.remove_at(slot, cx);
+                } else {
+                    slot += 1;
+                }
             }
         }
+        self.displays.retain(|display| !display.entries.is_empty());
     }
 
-    fn remove(&mut self, index: usize, cx: &mut App) {
-        let entry = self.entries.remove(index);
-        entry
-            .window
-            .update(cx, |_, window, _| window.remove_window())
-            .log_err();
+    /// Handles the accept or dismiss button of one popup.
+    fn handle_popup_event(
+        &mut self,
+        display_id: DisplayId,
+        slot: usize,
+        accepted: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(display) = self
+            .displays
+            .iter_mut()
+            .find(|display| display.display_id() == display_id)
+        else {
+            return;
+        };
+        let Some(entry) = display.remove_at(slot, cx) else {
+            return;
+        };
+        self.displays.retain(|display| !display.entries.is_empty());
+
+        if accepted {
+            activate_terminal(entry.workspace, entry.terminal, entry.source_window, cx);
+        }
+    }
+}
+
+#[cfg(test)]
+impl TerminalNotificationStack {
+    /// The terminal and popup of every visible notification, top slot first,
+    /// for regression tests that assert stacking order.
+    pub(crate) fn visible_notifications(&self) -> Vec<(EntityId, Entity<PopupNotification>)> {
+        self.displays
+            .iter()
+            .flat_map(|display| {
+                display
+                    .entries
+                    .iter()
+                    .zip(display.windows.iter())
+                    .map(|(entry, window)| (entry.terminal.entity_id(), window.popup.clone()))
+            })
+            .collect()
     }
 }
 

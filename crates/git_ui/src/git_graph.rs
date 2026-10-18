@@ -82,6 +82,20 @@ const LINE_WIDTH: Pixels = px(2.0);
 const REF_LABEL_GUTTER_MIN_WIDTH: Pixels = px(240.0);
 const REF_LABEL_GUTTER_MAX_WIDTH: Pixels = px(280.0);
 const RESIZE_HANDLE_WIDTH: f32 = 8.0;
+
+/// Default and allowed width of the branch tree beside the commit list.
+const GIT_SIDEBAR_DEFAULT_WIDTH: Pixels = px(240.);
+const GIT_SIDEBAR_MIN_WIDTH: Pixels = px(150.);
+const GIT_SIDEBAR_MAX_WIDTH: Pixels = px(460.);
+
+fn clamped_sidebar_width(width: Pixels) -> Pixels {
+    width.clamp(GIT_SIDEBAR_MIN_WIDTH, GIT_SIDEBAR_MAX_WIDTH)
+}
+
+/// Opening a historical file requires a double click; a single click only selects.
+fn click_opens_commit_file(click_count: usize) -> bool {
+    click_count >= 2
+}
 const COPIED_STATE_DURATION: Duration = Duration::from_secs(2);
 const COMMIT_TAG_LIST_WIDTH_IN_REMS: Rems = rems(10.);
 const TREE_INDENT: f32 = 20.0;
@@ -217,6 +231,8 @@ impl PickerDelegate for CommitTagPickerDelegate {
     }
 }
 
+struct DraggedBranchSidebar;
+
 #[derive(Clone)]
 struct ChangedFileEntry {
     status: FileStatus,
@@ -321,7 +337,13 @@ impl ChangedFileEntry {
             })
             .on_click({
                 let entry = self.clone();
-                move |_, window, cx| {
+                move |event: &ClickEvent, window, cx| {
+                    // A single click only highlights the file; opening the historical
+                    // commit is reserved for double clicks.
+                    if !click_opens_commit_file(event.click_count()) {
+                        cx.stop_propagation();
+                        return;
+                    }
                     entry.open_in_commit_view(&commit_sha, &repository, &workspace, window, cx);
                 }
             })
@@ -1521,6 +1543,7 @@ pub struct GitGraph {
     pending_select_sha: Option<Oid>,
     nav_history: Option<ItemNavHistory>,
     sidebar_visible: bool,
+    sidebar_width: Pixels,
     sidebar_branches: Vec<Branch>,
     sidebar_collapsed_folders: HashSet<SharedString>,
 }
@@ -1824,6 +1847,7 @@ impl GitGraph {
             pending_select_sha: None,
             nav_history: None,
             sidebar_visible: true,
+            sidebar_width: GIT_SIDEBAR_DEFAULT_WIDTH,
             sidebar_branches: Vec::new(),
             sidebar_collapsed_folders: HashSet::default(),
         };
@@ -2918,6 +2942,48 @@ impl GitGraph {
         rows
     }
 
+    fn handle_sidebar_width_drag(
+        &mut self,
+        event: &DragMoveEvent<DraggedBranchSidebar>,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let width = clamped_sidebar_width(event.event.position.x - event.bounds.left());
+        if self.sidebar_width != width {
+            self.sidebar_width = width;
+            cx.notify();
+        }
+    }
+
+    fn render_sidebar_resize_handle(&self, cx: &mut Context<Self>) -> AnyElement {
+        div()
+            .id("git-graph-sidebar-resize-container")
+            .relative()
+            .h_full()
+            .flex_shrink_0()
+            .w(px(1.))
+            .bg(cx.theme().colors().border_variant)
+            .child(
+                div()
+                    .id("git-graph-sidebar-resize-handle")
+                    .absolute()
+                    .left(px(-RESIZE_HANDLE_WIDTH / 2.0))
+                    .w(px(RESIZE_HANDLE_WIDTH))
+                    .h_full()
+                    .cursor_col_resize()
+                    .block_mouse_except_scroll()
+                    .on_click(cx.listener(|this, event: &ClickEvent, _window, cx| {
+                        if event.click_count() >= 2 {
+                            this.sidebar_width = GIT_SIDEBAR_DEFAULT_WIDTH;
+                            cx.notify();
+                        }
+                        cx.stop_propagation();
+                    }))
+                    .on_drag(DraggedBranchSidebar, |_, _, _, cx| cx.new(|_| Empty)),
+            )
+            .into_any_element()
+    }
+
     fn render_branch_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let border_variant = cx.theme().colors().border_variant;
         let selected_background = cx.theme().colors().ghost_element_selected;
@@ -2960,7 +3026,7 @@ impl GitGraph {
             .when(all_commits_selected, |this| this.bg(selected_background));
 
         v_flex()
-            .w(rems(14.))
+            .w(self.sidebar_width)
             .h_full()
             .flex_shrink_0()
             .border_r_1()
@@ -3532,21 +3598,42 @@ impl GitGraph {
             .into_any_element()
     }
 
+    fn render_commit_detail_placeholder(&self) -> AnyElement {
+        v_flex()
+            .id("git-graph-detail-placeholder")
+            .debug_selector(|| "git-graph-detail-placeholder".into())
+            .size_full()
+            .items_center()
+            .justify_center()
+            .gap_2()
+            .child(
+                Icon::new(IconName::GitCommit)
+                    .size(IconSize::Small)
+                    .color(Color::Muted),
+            )
+            .child(
+                Label::new(i18n::t!("a3584d6883b982b4"))
+                    .color(Color::Muted)
+                    .size(LabelSize::Small),
+            )
+            .into_any_element()
+    }
+
     fn render_commit_detail_panel(
         &self,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> AnyElement {
         let Some(selected_idx) = self.selected_entry_idx else {
-            return Empty.into_any_element();
+            return self.render_commit_detail_placeholder();
         };
 
         let Some(commit_entry) = self.graph_data.commits.get(selected_idx) else {
-            return Empty.into_any_element();
+            return self.render_commit_detail_placeholder();
         };
 
         let Some(repository) = self.get_repository(cx) else {
-            return Empty.into_any_element();
+            return self.render_commit_detail_placeholder();
         };
 
         let data = repository.update(cx, |repository, cx| {
@@ -4842,191 +4929,6 @@ pub(crate) fn graph_row_height(window: &Window, _cx: &App) -> Pixels {
     (raw * scale).round() / scale
 }
 
-/// Paints the commit circles and lane connection lines for a slice of graph rows.
-///
-/// Shared by the full Git Graph view and the Git panel's inline history section.
-/// `rows` are the visible commits (starting at `first_visible_row`), `commit_lines`
-/// the lane segments intersecting the visible range, and `vertical_scroll_offset`
-/// the sub-row pixel offset of the viewport.
-pub(crate) fn paint_commit_graph_lanes(
-    bounds: Bounds<Pixels>,
-    rows: &[Rc<CommitEntry>],
-    commit_lines: &[Rc<CommitLine>],
-    first_visible_row: usize,
-    row_height: Pixels,
-    vertical_scroll_offset: Pixels,
-    window: &mut Window,
-    cx: &App,
-) {
-    let accent_colors = cx.theme().accents();
-
-    let mut lines: BTreeMap<usize, Vec<_>> = BTreeMap::new();
-
-    for (row_idx, row) in rows.iter().enumerate() {
-        let row_color = accent_colors.color_for_index(row.color_idx as u32);
-        let row_y_center = bounds.origin.y + row_idx as f32 * row_height + row_height / 2.0
-            - vertical_scroll_offset;
-
-        let commit_x = lane_center_x(bounds, row.lane as f32);
-
-        draw_commit_circle(
-            commit_x,
-            row_y_center,
-            row_color,
-            cx.theme().colors().editor_background,
-            window,
-        );
-    }
-
-    for line in commit_lines {
-        let Some((start_segment_idx, start_column)) =
-            line.get_first_visible_segment_idx(first_visible_row)
-        else {
-            continue;
-        };
-
-        let line_x = lane_center_x(bounds, start_column as f32);
-
-        let start_row = line.full_interval.start as i32 - first_visible_row as i32;
-
-        let from_y = bounds.origin.y + start_row as f32 * row_height + row_height / 2.0
-            - vertical_scroll_offset
-            + COMMIT_CIRCLE_RADIUS;
-
-        let mut current_row = from_y;
-        let mut current_column = line_x;
-
-        let mut builder = PathBuilder::stroke(LINE_WIDTH);
-        builder.move_to(point(line_x, from_y));
-
-        let segments = &line.segments[start_segment_idx..];
-        let desired_curve_height = row_height / 3.0;
-        let desired_curve_width = LANE_WIDTH / 3.0;
-
-        for (segment_idx, segment) in segments.iter().enumerate() {
-            let is_last = segment_idx + 1 == segments.len();
-
-            match segment {
-                CommitLineSegment::Straight { to_row } => {
-                    let mut dest_row = to_row_center(
-                        to_row - first_visible_row,
-                        row_height,
-                        vertical_scroll_offset,
-                        bounds,
-                    );
-                    if is_last {
-                        dest_row -= COMMIT_CIRCLE_RADIUS;
-                    }
-
-                    let dest_point = point(current_column, dest_row);
-
-                    current_row = dest_point.y;
-                    builder.line_to(dest_point);
-                    builder.move_to(dest_point);
-                }
-                CommitLineSegment::Curve {
-                    to_column,
-                    on_row,
-                    curve_kind,
-                } => {
-                    let mut to_column = lane_center_x(bounds, *to_column as f32);
-
-                    let mut to_row = to_row_center(
-                        *on_row - first_visible_row,
-                        row_height,
-                        vertical_scroll_offset,
-                        bounds,
-                    );
-
-                    // This means that this branch was a checkout
-                    let going_right = to_column > current_column;
-                    let column_shift = if going_right {
-                        COMMIT_CIRCLE_RADIUS + COMMIT_CIRCLE_STROKE_WIDTH
-                    } else {
-                        -COMMIT_CIRCLE_RADIUS - COMMIT_CIRCLE_STROKE_WIDTH
-                    };
-
-                    match curve_kind {
-                        CurveKind::Checkout => {
-                            if is_last {
-                                to_column -= column_shift;
-                            }
-
-                            let available_curve_width = (to_column - current_column).abs();
-                            let available_curve_height = (to_row - current_row).abs();
-                            let curve_width = desired_curve_width.min(available_curve_width);
-                            let curve_height = desired_curve_height.min(available_curve_height);
-                            let signed_curve_width = if going_right {
-                                curve_width
-                            } else {
-                                -curve_width
-                            };
-                            let curve_start = point(current_column, to_row - curve_height);
-                            let curve_end = point(current_column + signed_curve_width, to_row);
-                            let curve_control = point(current_column, to_row);
-
-                            builder.move_to(point(current_column, current_row));
-                            builder.line_to(curve_start);
-                            builder.move_to(curve_start);
-                            builder.curve_to(curve_end, curve_control);
-                            builder.move_to(curve_end);
-                            builder.line_to(point(to_column, to_row));
-                        }
-                        CurveKind::Merge => {
-                            if is_last {
-                                to_row -= COMMIT_CIRCLE_RADIUS;
-                            }
-
-                            let merge_start = point(
-                                current_column + column_shift,
-                                current_row - COMMIT_CIRCLE_RADIUS,
-                            );
-                            let available_curve_width = (to_column - merge_start.x).abs();
-                            let available_curve_height = (to_row - merge_start.y).abs();
-                            let curve_width = desired_curve_width.min(available_curve_width);
-                            let curve_height = desired_curve_height.min(available_curve_height);
-                            let signed_curve_width = if going_right {
-                                curve_width
-                            } else {
-                                -curve_width
-                            };
-                            let curve_start = point(to_column - signed_curve_width, merge_start.y);
-                            let curve_end = point(to_column, merge_start.y + curve_height);
-                            let curve_control = point(to_column, merge_start.y);
-
-                            builder.move_to(merge_start);
-                            builder.line_to(curve_start);
-                            builder.move_to(curve_start);
-                            builder.curve_to(curve_end, curve_control);
-                            builder.move_to(curve_end);
-                            builder.line_to(point(to_column, to_row));
-                        }
-                    }
-                    current_row = to_row;
-                    current_column = to_column;
-                    builder.move_to(point(current_column, current_row));
-                }
-            }
-        }
-
-        builder.close();
-        lines.entry(line.color_idx).or_default().push(builder);
-    }
-
-    for (color_idx, builders) in lines {
-        let line_color = accent_colors.color_for_index(color_idx as u32);
-
-        for builder in builders {
-            if let Ok(path) = builder.build() {
-                // we paint each color on it's own layer to stop overlapping lines
-                // of different colors changing the color of a line
-                window.paint_layer(bounds, |window| {
-                    window.paint_path(path, line_color);
-                });
-            }
-        }
-    }
-}
 
 impl Render for GitGraph {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -5406,10 +5308,8 @@ impl Render for GitGraph {
                         state.commit_ratio();
                     });
                 }))
-                .when(self.selected_entry_idx.is_some(), |this| {
-                    this.child(self.render_commit_view_resize_handle(window, cx))
-                        .child(self.render_commit_detail_panel(window, cx))
-                })
+                .child(self.render_commit_view_resize_handle(window, cx))
+                .child(self.render_commit_detail_panel(window, cx))
         };
 
         div()
@@ -5460,8 +5360,12 @@ impl Render for GitGraph {
                         h_flex()
                             .flex_1()
                             .min_h_0()
+                            .on_drag_move::<DraggedBranchSidebar>(
+                                cx.listener(Self::handle_sidebar_width_drag),
+                            )
                             .when(self.sidebar_visible, |this| {
                                 this.child(self.render_branch_sidebar(cx))
+                                    .child(self.render_sidebar_resize_handle(cx))
                             })
                             .child(div().flex_1().min_w_0().h_full().child(content)),
                     ),
@@ -6674,6 +6578,100 @@ mod tests {
     }
 
     // The full integration test has less iterations because it's significantly slower
+    #[gpui::test]
+    async fn commit_details_show_a_placeholder_until_a_commit_is_selected(
+        cx: &mut TestAppContext,
+    ) {
+        init_test(cx);
+
+        let fs = FakeFs::new(cx.executor());
+        fs.insert_tree(
+            Path::new("/project"),
+            json!({
+                ".git": {},
+                "file.txt": "content",
+            }),
+        )
+        .await;
+
+        let mut rng = StdRng::seed_from_u64(7);
+        let commits = generate_random_commit_dag(&mut rng, 5, false);
+        fs.set_graph_commits(Path::new("/project/.git"), commits);
+
+        let project = Project::test(fs.clone(), [Path::new("/project")], cx).await;
+        cx.run_until_parked();
+
+        let repository = project.read_with(cx, |project, cx| {
+            project
+                .active_repository(cx)
+                .expect("should have a repository")
+        });
+
+        let (multi_workspace, cx) = cx.add_window_view(|window, cx| {
+            workspace::MultiWorkspace::test_new(project.clone(), window, cx)
+        });
+        let workspace_weak =
+            multi_workspace.read_with(&*cx, |multi, _| multi.workspace().downgrade());
+        let git_graph = cx.new_window_entity(|window, cx| {
+            GitGraph::new(
+                repository.read(cx).id,
+                project.read(cx).git_store().clone(),
+                workspace_weak,
+                None,
+                window,
+                cx,
+            )
+        });
+        cx.run_until_parked();
+
+        let draw = |cx: &mut gpui::VisualTestContext, git_graph: &Entity<GitGraph>| {
+            let git_graph = git_graph.clone();
+            cx.draw(
+                gpui::point(gpui::px(0.), gpui::px(0.)),
+                gpui::size(gpui::px(1200.), gpui::px(800.)),
+                move |_, _| git_graph.into_any_element(),
+            );
+            cx.run_until_parked();
+        };
+
+        draw(cx, &git_graph);
+        assert!(
+            cx.debug_bounds("git-graph-detail-placeholder").is_some(),
+            "the details pane reserves space before a commit is selected"
+        );
+
+        git_graph.update_in(cx, |graph, window, cx| {
+            graph.select_first(&menu::SelectFirst, window, cx);
+        });
+        cx.run_until_parked();
+        draw(cx, &git_graph);
+
+        assert!(
+            git_graph.read_with(&*cx, |graph, _| graph.selected_entry_idx.is_some()),
+            "selecting the first commit should populate the details"
+        );
+        assert!(
+            cx.debug_bounds("git-graph-detail-placeholder").is_none(),
+            "selecting a commit replaces the placeholder with its details"
+        );
+    }
+
+    #[test]
+    fn sidebar_width_is_clamped_and_default_is_within_bounds() {
+        assert_eq!(clamped_sidebar_width(px(80.)), GIT_SIDEBAR_MIN_WIDTH);
+        assert_eq!(clamped_sidebar_width(px(900.)), GIT_SIDEBAR_MAX_WIDTH);
+        assert_eq!(clamped_sidebar_width(px(300.)), px(300.));
+        assert!(GIT_SIDEBAR_DEFAULT_WIDTH >= GIT_SIDEBAR_MIN_WIDTH);
+        assert!(GIT_SIDEBAR_DEFAULT_WIDTH <= GIT_SIDEBAR_MAX_WIDTH);
+    }
+
+    #[test]
+    fn only_a_double_click_opens_the_commit_file() {
+        assert!(!click_opens_commit_file(1));
+        assert!(click_opens_commit_file(2));
+        assert!(click_opens_commit_file(3));
+    }
+
     // than the random commit test
     #[gpui::test(iterations = 10)]
     async fn test_git_graph_random_integration(mut rng: StdRng, cx: &mut TestAppContext) {

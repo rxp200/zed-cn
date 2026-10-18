@@ -65,6 +65,28 @@ impl PopupNotification {
         &self.title
     }
 
+    /// Replaces the content an already-open popup shows.
+    ///
+    /// A stack that keeps its windows pinned to fixed screen slots reorders
+    /// itself by swapping what each window renders, because GPUI cannot
+    /// reposition an existing window.
+    pub fn set_content(
+        &mut self,
+        title: SharedString,
+        caption: Option<SharedString>,
+        icon: IconName,
+        icon_color: Color,
+        project_name: Option<SharedString>,
+        cx: &mut Context<Self>,
+    ) {
+        self.title = title;
+        self.caption = caption;
+        self.icon = icon;
+        self.icon_color = icon_color;
+        self.project_name = project_name;
+        cx.notify();
+    }
+
     pub fn window_options(screen: Rc<dyn PlatformDisplay>, cx: &App) -> WindowOptions {
         Self::window_options_at_slot(screen, 0, cx)
     }
