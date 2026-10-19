@@ -1296,6 +1296,7 @@ pub fn open_or_reuse_graph(
                 git_store,
                 workspace_handle,
                 Some(log_source),
+                GraphPresentation::FullTab,
                 window,
                 cx,
             )
@@ -1511,6 +1512,27 @@ struct DetailPanelCommitMessage {
     scroll_handle: ScrollHandle,
 }
 
+/// Where a `GitGraph` is being shown. The bottom-docked history panel is much
+/// shorter than a full tab, so the commit details column uses a compact header
+/// and a single scroll container there instead of the tall stacked layout.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum GraphPresentation {
+    #[default]
+    FullTab,
+    BottomPanel,
+}
+
+impl GraphPresentation {
+    fn is_bottom_panel(self) -> bool {
+        self == Self::BottomPanel
+    }
+}
+
+/// Above this many changed files the details column stops scrolling as one
+/// column and lets the virtualized file list scroll on its own, so a huge
+/// commit never builds every row in a single layout pass.
+const COMPACT_DETAIL_UNIFIED_SCROLL_MAX_FILES: usize = 300;
+
 pub struct GitGraph {
     focus_handle: FocusHandle,
     search_state: SearchState,
@@ -1534,11 +1556,15 @@ pub struct GitGraph {
     selected_commit_message: Option<DetailPanelCommitMessage>,
     _selected_commit_message_task: Option<Task<()>>,
     commit_details_split_state: Entity<SplitState>,
+    presentation: GraphPresentation,
     repo_id: RepositoryId,
     changed_files_scroll_handle: UniformListScrollHandle,
     changed_files_view_mode: ChangedFilesViewMode,
     commit_details_metadata_collapsed: bool,
     commit_details_message_collapsed: bool,
+    commit_details_compact_metadata_expanded: bool,
+    commit_details_compact_message_expanded: bool,
+    commit_details_scroll_handle: ScrollHandle,
     changed_files_expanded_dirs: HashMap<RepoPath, bool>,
     pending_select_sha: Option<Oid>,
     nav_history: Option<ItemNavHistory>,
@@ -1720,6 +1746,7 @@ impl GitGraph {
         git_store: Entity<GitStore>,
         workspace: WeakEntity<Workspace>,
         log_source: Option<LogSource>,
+        presentation: GraphPresentation,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -1838,11 +1865,15 @@ impl GitGraph {
             log_source,
             log_order,
             commit_details_split_state: cx.new(|_cx| SplitState::new()),
+            presentation,
             repo_id,
             changed_files_scroll_handle: UniformListScrollHandle::new(),
             changed_files_view_mode: ChangedFilesViewMode::default(),
             commit_details_metadata_collapsed: false,
             commit_details_message_collapsed: false,
+            commit_details_compact_metadata_expanded: false,
+            commit_details_compact_message_expanded: false,
+            commit_details_scroll_handle: ScrollHandle::new(),
             changed_files_expanded_dirs: HashMap::default(),
             pending_select_sha: None,
             nav_history: None,
@@ -3640,6 +3671,21 @@ impl GitGraph {
             return self.render_commit_detail_placeholder(cx);
         };
 
+        if self.presentation.is_bottom_panel() {
+            self.render_compact_commit_detail_panel(commit_entry, &repository, window, cx)
+        } else {
+            self.render_full_tab_commit_detail_panel(selected_idx, commit_entry, &repository, window, cx)
+        }
+    }
+
+    fn render_full_tab_commit_detail_panel(
+        &self,
+        selected_idx: usize,
+        commit_entry: &CommitEntry,
+        repository: &Entity<Repository>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let data = repository.update(cx, |repository, cx| {
             repository
                 .fetch_commit_data(commit_entry.data.sha, false, cx)
@@ -3738,9 +3784,9 @@ impl GitGraph {
             .toggle_state(self.changed_files_view_mode.is_tree())
             .tooltip({
                 let tooltip = if is_tree_view {
-                    "Show Flat View"
+                    i18n::t!("2ac74a1a8007d44a")
                 } else {
-                    "Show Tree View"
+                    i18n::t!("0018f0c2c98ae294")
                 };
                 move |_, cx| Tooltip::for_action(tooltip, &ToggleChangedFilesView, cx)
             })
@@ -3752,6 +3798,8 @@ impl GitGraph {
             }));
 
         v_flex()
+            .id("commit-detail-full-tab")
+            .debug_selector(|| "commit-detail-full-tab".into())
             .min_w(px(300.))
             .h_full()
             .bg(cx.theme().colors().editor_background)
@@ -3788,9 +3836,9 @@ impl GitGraph {
                             )
                             .tooltip({
                                 let label = if self.commit_details_metadata_collapsed {
-                                    "Show Commit Details"
+                                    i18n::t!("c3723029a39d5fdc")
                                 } else {
-                                    "Hide Commit Details"
+                                    i18n::t!("b19eabeb429d332e")
                                 };
                                 move |_window, cx: &mut App| Tooltip::simple(label, cx)
                             })
@@ -3877,9 +3925,13 @@ impl GitGraph {
                                     let is_copied = copied_state.read(cx).is_copied();
 
                                     let (icon, icon_color, tooltip_label) = if is_copied {
-                                        (IconName::Check, Color::Success, "Email Copied!")
+                                        (
+                                            IconName::Check,
+                                            Color::Success,
+                                            i18n::t!("a3d913c6a2f12b83"),
+                                        )
                                     } else {
-                                        (IconName::Envelope, Color::Muted, "Copy Email")
+                                        (IconName::Envelope, Color::Muted, i18n::t!("d943df80186fd177"))
                                     };
 
                                     let copy_email = author_email.clone();
@@ -3930,9 +3982,13 @@ impl GitGraph {
                                     let is_copied = copied_state.read(cx).is_copied();
 
                                     let (icon, icon_color, tooltip_label) = if is_copied {
-                                        (IconName::Check, Color::Success, "Commit SHA Copied!")
+                                        (
+                                            IconName::Check,
+                                            Color::Success,
+                                            i18n::t!("f105aca9e13f49f5"),
+                                        )
                                     } else {
-                                        (IconName::Hash, Color::Muted, "Copy Commit SHA")
+                                        (IconName::Hash, Color::Muted, i18n::t!("4d11a9cdc6af90ab"))
                                     };
 
                                     Button::new("sha-button", &full_sha)
@@ -3991,7 +4047,7 @@ impl GitGraph {
                                     this.child(
                                         Button::new(
                                             "view-on-provider",
-                                            format!("View on {}", provider_name),
+                                            i18n::t_args!("f2245eadbe3b33f0", provider_name),
                                         )
                                         .start_icon(
                                             Icon::new(icon)
@@ -4031,15 +4087,7 @@ impl GitGraph {
                                 h_flex()
                                     .gap_1()
                                     .child(
-                                        Label::new(format!(
-                                            "{} Changed {}",
-                                            changed_files_count,
-                                            if changed_files_count == 1 {
-                                                "File"
-                                            } else {
-                                                "Files"
-                                            }
-                                        ))
+                                        Label::new(i18n::t_args!("19970312dc0986c5", changed_files_count))
                                         .size(LabelSize::Small)
                                         .color(Color::Muted),
                                     )
@@ -4146,6 +4194,647 @@ impl GitGraph {
                             .vertical_scrollbar_for(&self.changed_files_scroll_handle, window, cx),
                     ),
             )
+            .child(Divider::horizontal())
+            .child(
+                h_flex().p_1p5().w_full().child(
+                    Button::new("view-commit", i18n::t!("f9241c1ae340b651"))
+                        .full_width()
+                        .start_icon(
+                            Icon::new(IconName::GitCommit)
+                                .size(IconSize::Small)
+                                .color(Color::Muted),
+                        )
+                        .style(ButtonStyle::OutlinedGhost)
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.open_selected_commit_view(window, cx);
+                        })),
+                ),
+            )
+            .into_any_element()
+    }
+
+    /// Renders the commit details column for the bottom-docked history panel.
+    ///
+    /// The panel is only a few hundred pixels tall, so the tall stacked layout
+    /// used by the full tab leaves the changed-files list with almost no
+    /// visible rows. Here the header is compact, the commit message is a single
+    /// line until expanded, and the whole column scrolls as one. Very large
+    /// commits fall back to scrolling the virtualized file list on its own so
+    /// the column never builds every row in a single layout pass.
+    fn render_compact_commit_detail_panel(
+        &self,
+        commit_entry: &CommitEntry,
+        repository: &Entity<Repository>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let data = repository.update(cx, |repository, cx| {
+            repository
+                .fetch_commit_data(commit_entry.data.sha, false, cx)
+                .clone()
+        });
+
+        let full_sha: SharedString = commit_entry.data.sha.to_string().into();
+        let short_sha: SharedString = full_sha.chars().take(7).collect::<String>().into();
+        let ref_names = commit_entry.data.ref_names.clone();
+
+        let head_branch_name: Option<SharedString> = repository
+            .read(cx)
+            .snapshot()
+            .branch
+            .as_ref()
+            .map(|branch| SharedString::from(branch.name().to_string()));
+
+        let accent_colors = cx.theme().accents();
+        let accent_color = accent_colors
+            .0
+            .get(commit_entry.color_idx)
+            .copied()
+            .unwrap_or_else(|| accent_colors.0.first().copied().unwrap_or_default());
+
+        let (author_name, author_email, commit_timestamp, subject, has_full_message) = match &data {
+            CommitDataState::Loaded(data) => (
+                data.author_name.clone(),
+                data.author_email.clone(),
+                Some(data.commit_timestamp),
+                data.subject.clone(),
+                data.message.trim() != data.subject.trim(),
+            ),
+            CommitDataState::Loading(_) => (
+                "Loading…".into(),
+                "".into(),
+                None,
+                SharedString::default(),
+                false,
+            ),
+        };
+
+        let date_string = commit_timestamp.map(format_timestamp).unwrap_or_default();
+
+        let remote = repository.update(cx, |repo, cx| {
+            let remote_url = repo.default_remote_url()?;
+            let provider_registry = GitHostingProviderRegistry::default_global(cx);
+            let (provider, parsed) = parse_git_remote_url(provider_registry, &remote_url)?;
+            Some(GitRemote {
+                host: provider,
+                owner: parsed.owner.into(),
+                repo: parsed.repo.into(),
+            })
+        });
+
+        let changed_files_count = self
+            .selected_commit_diff
+            .as_ref()
+            .map(|diff| diff.files.len())
+            .unwrap_or(0);
+        let (total_lines_added, total_lines_removed) =
+            self.selected_commit_diff_stats.unwrap_or((0, 0));
+        let scrolls_as_one_column = changed_files_count <= COMPACT_DETAIL_UNIFIED_SCROLL_MAX_FILES;
+
+        let changed_file_entries: Vec<ChangedFileEntry> = self
+            .selected_commit_diff
+            .as_ref()
+            .map(|diff| {
+                let mut files = diff.files.iter().collect::<Vec<_>>();
+                if !self.changed_files_view_mode.is_tree() {
+                    files.sort_by_key(|file| file.status());
+                }
+                files
+                    .into_iter()
+                    .map(|file| ChangedFileEntry::from_commit_file(file, cx))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let changed_file_entries = Rc::new(changed_file_entries);
+        let is_tree_view = self.changed_files_view_mode.is_tree();
+        let tree_entries: Rc<Vec<ChangedFileTreeEntry>> = if is_tree_view {
+            Rc::new(build_changed_file_tree_entries(
+                changed_file_entries.as_ref().clone(),
+                &self.changed_files_expanded_dirs,
+            ))
+        } else {
+            Rc::default()
+        };
+
+        let metadata_expanded = self.commit_details_compact_metadata_expanded;
+        let message_expanded = self.commit_details_compact_message_expanded;
+        let background = cx.theme().colors().editor_background;
+
+        let close_button = IconButton::new("close-detail", IconName::Close)
+            .icon_size(IconSize::Small)
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.selected_entry_idx = None;
+                this.selected_commit_diff = None;
+                this.selected_commit_diff_stats = None;
+                this.selected_commit_message = None;
+                this._selected_commit_message_task = None;
+                this.changed_files_expanded_dirs.clear();
+                this._commit_diff_task = None;
+                this.commit_details_compact_metadata_expanded = false;
+                this.commit_details_compact_message_expanded = false;
+                cx.notify();
+            }));
+
+        let details_toggle = IconButton::new("toggle-compact-commit-metadata", IconName::Info)
+            .icon_size(IconSize::Small)
+            .toggle_state(metadata_expanded)
+            .tooltip({
+                let label = if metadata_expanded {
+                    i18n::t!("39159679e60c3502")
+                } else {
+                    i18n::t!("a525be98c4abc148")
+                };
+                move |_window, cx: &mut App| Tooltip::simple(label, cx)
+            })
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.commit_details_compact_metadata_expanded =
+                    !this.commit_details_compact_metadata_expanded;
+                cx.notify();
+            }));
+
+        let author_button = Button::new("show-author-commits", author_name.clone())
+            .style(ButtonStyle::Subtle)
+            .label_size(LabelSize::Small)
+            .truncate(true)
+            .tooltip(Tooltip::text(i18n::t!("6ac7a508e97bdb53")))
+            .on_click({
+                let author_email = author_email.clone();
+                cx.listener(move |this, _, window, cx| {
+                    this.show_author_commits(
+                        author_name.clone(),
+                        author_email.clone(),
+                        window,
+                        cx,
+                    );
+                })
+            });
+
+        let metadata_rows = metadata_expanded.then(|| {
+            v_flex()
+                .w_full()
+                .gap_0p5()
+                .pt_1()
+                .when(!ref_names.is_empty(), |this| {
+                    this.child(
+                        h_flex().gap_1().flex_wrap().children(ref_names.iter().map(|name| {
+                            let is_head = Self::is_head_ref(name.as_ref(), &head_branch_name);
+                            self.render_ref_chip(
+                                name.clone(),
+                                accent_color,
+                                is_head,
+                                self.selected_entry_idx.unwrap_or_default(),
+                                background,
+                                cx,
+                            )
+                        })),
+                    )
+                })
+                .when(!author_email.is_empty(), |this| {
+                    let copied_state: Entity<CopiedState> =
+                        window.use_keyed_state("author-email-copy", cx, CopiedState::new);
+                    let is_copied = copied_state.read(cx).is_copied();
+                    let (icon, icon_color, tooltip_label) = if is_copied {
+                        (IconName::Check, Color::Success, i18n::t!("a3d913c6a2f12b83"))
+                    } else {
+                        (IconName::Envelope, Color::Muted, i18n::t!("d943df80186fd177"))
+                    };
+
+                    let copy_email = author_email.clone();
+                    let author_email_for_tooltip = author_email.clone();
+
+                    this.child(
+                        Button::new("author-email-copy", author_email.clone())
+                            .start_icon(
+                                Icon::new(icon).size(IconSize::Small).color(icon_color),
+                            )
+                            .label_size(LabelSize::Small)
+                            .truncate(true)
+                            .color(Color::Muted)
+                            .tooltip(move |_, cx| {
+                                Tooltip::with_meta(
+                                    tooltip_label,
+                                    None,
+                                    author_email_for_tooltip.clone(),
+                                    cx,
+                                )
+                            })
+                            .on_click(move |_, _, cx| {
+                                copied_state.update(cx, |state, _cx| {
+                                    state.mark_copied();
+                                });
+                                cx.write_to_clipboard(ClipboardItem::new_string(
+                                    copy_email.to_string(),
+                                ));
+                                let state_id = copied_state.entity_id();
+                                cx.spawn(async move |cx| {
+                                    cx.background_executor().timer(COPIED_STATE_DURATION).await;
+                                    cx.update(|cx| {
+                                        cx.notify(state_id);
+                                    })
+                                })
+                                .detach();
+                            }),
+                    )
+                })
+                .child({
+                    let copy_sha = full_sha.clone();
+                    let copied_state: Entity<CopiedState> =
+                        window.use_keyed_state("sha-copy", cx, CopiedState::new);
+                    let is_copied = copied_state.read(cx).is_copied();
+                    let (icon, icon_color, tooltip_label) = if is_copied {
+                        (IconName::Check, Color::Success, i18n::t!("f105aca9e13f49f5"))
+                    } else {
+                        (IconName::Hash, Color::Muted, i18n::t!("4d11a9cdc6af90ab"))
+                    };
+
+                    Button::new("sha-button", &full_sha)
+                        .start_icon(Icon::new(icon).size(IconSize::Small).color(icon_color))
+                        .label_size(LabelSize::Small)
+                        .truncate(true)
+                        .color(Color::Muted)
+                        .tooltip({
+                            let full_sha = full_sha.clone();
+                            move |_, cx| {
+                                Tooltip::with_meta(
+                                    tooltip_label,
+                                    None,
+                                    full_sha.clone(),
+                                    cx,
+                                )
+                            }
+                        })
+                        .on_click(move |_, _, cx| {
+                            copied_state.update(cx, |state, _cx| {
+                                state.mark_copied();
+                            });
+                            cx.write_to_clipboard(ClipboardItem::new_string(copy_sha.to_string()));
+                            let state_id = copied_state.entity_id();
+                            cx.spawn(async move |cx| {
+                                cx.background_executor().timer(COPIED_STATE_DURATION).await;
+                                cx.update(|cx| {
+                                    cx.notify(state_id);
+                                })
+                            })
+                            .detach();
+                        })
+                })
+                .when_some(remote.clone(), |this, remote| {
+                    let provider_name = remote.host.name();
+                    let icon = ui::git_hosting_provider_icon(provider_name.as_str());
+                    let parsed_remote = ParsedGitRemote {
+                        owner: remote.owner.as_ref().into(),
+                        repo: remote.repo.as_ref().into(),
+                    };
+                    let params = BuildCommitPermalinkParams {
+                        sha: full_sha.as_ref(),
+                    };
+                    let url = remote
+                        .host
+                        .build_commit_permalink(&parsed_remote, params)
+                        .to_string();
+
+                    this.child(
+                        Button::new(
+                            "view-on-provider",
+                            i18n::t_args!("f2245eadbe3b33f0", provider_name),
+                        )
+                        .start_icon(
+                            Icon::new(icon).size(IconSize::Small).color(Color::Muted),
+                        )
+                        .label_size(LabelSize::Small)
+                        .truncate(true)
+                        .color(Color::Muted)
+                        .on_click(move |_, _, cx| {
+                            cx.open_url(&url);
+                        }),
+                    )
+                })
+        });
+
+        let avatar_email = if author_email.is_empty() {
+            None
+        } else {
+            Some(author_email)
+        };
+        let avatar = CommitAvatar::new(&full_sha, avatar_email, remote.as_ref())
+            .size(px(20.))
+            .render(window, cx);
+
+        let header = v_flex()
+            .id("commit-detail-compact-header")
+            .debug_selector(|| "commit-detail-compact-header".into())
+            .flex_none()
+            .w_full()
+            .px_2()
+            .py_1()
+            .gap_1()
+            .child(
+                h_flex()
+                    .w_full()
+                    .gap_1p5()
+                    .child(div().flex_none().child(avatar))
+                    .child(
+                        h_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .gap_1p5()
+                            .child(div().min_w_0().child(author_button))
+                            .child(
+                                Label::new(short_sha)
+                                    .size(LabelSize::Small)
+                                    .color(Color::Muted),
+                            )
+                            .when(!date_string.is_empty(), |this| {
+                                this.child(
+                                    Label::new(date_string)
+                                        .size(LabelSize::Small)
+                                        .color(Color::Muted),
+                                )
+                            }),
+                    )
+                    .child(details_toggle)
+                    .child(close_button),
+            )
+            .children(metadata_rows);
+
+        let message_style = editor::hover_markdown_style(window, cx);
+        let message_line_height = message_style
+            .base_text_style
+            .line_height_in_pixels(window.rem_size());
+
+        let message_block = v_flex()
+            .id("commit-detail-compact-message")
+            .flex_none()
+            .w_full()
+            .px_2()
+            .py_1()
+            .gap_1()
+            .child(
+                h_flex()
+                    .w_full()
+                    .gap_1()
+                    .child(
+                        Label::new(subject)
+                            .size(LabelSize::Small)
+                            .truncate(),
+                    )
+                    .when(has_full_message, |this| {
+                        this.child(
+                            Button::new(
+                                "toggle-compact-commit-message",
+                                if message_expanded {
+                                    i18n::t!("a3451a010013dd2e")
+                                } else {
+                                    i18n::t!("0ee750b46cfd7294")
+                                },
+                            )
+                            .label_size(LabelSize::Small)
+                            .style(ButtonStyle::Subtle)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.commit_details_compact_message_expanded =
+                                    !this.commit_details_compact_message_expanded;
+                                cx.notify();
+                            })),
+                        )
+                    }),
+            )
+            .when(message_expanded, |this| {
+                let Some(DetailPanelCommitMessage {
+                    message,
+                    scroll_handle,
+                    ..
+                }) = self.selected_commit_message.as_ref()
+                else {
+                    return this;
+                };
+
+                this.child(
+                    div()
+                        .relative()
+                        .w_full()
+                        .child(
+                            div()
+                                .id("commit-detail-compact-message-body")
+                                .text_sm()
+                                .w_full()
+                                .max_h(message_line_height * 12.)
+                                .overflow_y_scroll()
+                                .track_scroll(scroll_handle)
+                                .child(MarkdownElement::new(message.clone(), message_style)),
+                        )
+                        .vertical_scrollbar_for(scroll_handle, window, cx),
+                )
+            });
+
+        let view_toggle = IconButton::new("toggle-changed-files-view", IconName::ListTree)
+            .icon_size(IconSize::Small)
+            .toggle_state(is_tree_view)
+            .tooltip({
+                let tooltip = if is_tree_view {
+                    i18n::t!("2ac74a1a8007d44a")
+                } else {
+                    i18n::t!("0018f0c2c98ae294")
+                };
+                move |_, cx| Tooltip::for_action(tooltip, &ToggleChangedFilesView, cx)
+            })
+            .on_click(cx.listener(|this, _, _window, cx| {
+                this.changed_files_view_mode = this.changed_files_view_mode.toggled();
+                this.changed_files_scroll_handle
+                    .scroll_to_item(0, ScrollStrategy::Top);
+                cx.notify();
+            }));
+
+        let files_header = h_flex()
+            .flex_none()
+            .w_full()
+            .px_2()
+            .py_1()
+            .gap_1()
+            .justify_between()
+            .child(
+                h_flex()
+                    .gap_1()
+                    .child(
+                        Label::new(i18n::t_args!("19970312dc0986c5", changed_files_count))
+                        .size(LabelSize::Small)
+                        .color(Color::Muted),
+                    )
+                    .child(view_toggle),
+            )
+            .child(DiffStat::new(
+                "commit-diff-stat",
+                total_lines_added,
+                total_lines_removed,
+            ));
+
+        let commit_sha = full_sha.clone();
+        let repository_handle = repository.downgrade();
+        let workspace = self.workspace.clone();
+
+        let file_list = v_flex()
+            .id("commit-detail-files-list")
+            .debug_selector(|| "commit-detail-files-list".into())
+            .w_full()
+            .py_0p5()
+            .children((0..if is_tree_view {
+                tree_entries.len()
+            } else {
+                changed_file_entries.len()
+            })
+                .map(|ix| {
+                    if is_tree_view {
+                        match &tree_entries[ix] {
+                            ChangedFileTreeEntry::Directory(entry) => {
+                                entry.render(ix, cx.weak_entity(), cx)
+                            }
+                            ChangedFileTreeEntry::File(entry) => entry.entry.render(
+                                ix,
+                                entry.depth,
+                                None,
+                                commit_sha.clone(),
+                                repository_handle.clone(),
+                                workspace.clone(),
+                                cx,
+                            ),
+                        }
+                    } else {
+                        let directory_label = (!changed_file_entries[ix].dir_path.is_empty())
+                            .then(|| changed_file_entries[ix].dir_path.clone());
+                        changed_file_entries[ix].render(
+                            ix,
+                            0,
+                            directory_label,
+                            commit_sha.clone(),
+                            repository_handle.clone(),
+                            workspace.clone(),
+                            cx,
+                        )
+                    }
+                }));
+
+        let body: AnyElement = if scrolls_as_one_column {
+            v_flex()
+                .id("commit-detail-unified-scroll")
+                .debug_selector(|| "commit-detail-unified-scroll".into())
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scroll()
+                .track_scroll(&self.commit_details_scroll_handle)
+                .child(message_block)
+                .child(Divider::horizontal())
+                .child(files_header)
+                .child(file_list)
+                .vertical_scrollbar_for(&self.commit_details_scroll_handle, window, cx)
+                .into_any_element()
+        } else {
+            let git_graph = cx.weak_entity();
+            let list_tree_entries = tree_entries.clone();
+            let indent_tree_entries = tree_entries.clone();
+            let flat_entries = changed_file_entries.clone();
+
+            v_flex()
+                .flex_1()
+                .min_h_0()
+                .child(message_block)
+                .child(Divider::horizontal())
+                .child(files_header)
+                .child(
+                    div()
+                        .id("commit-detail-virtual-files")
+                        .debug_selector(|| "commit-detail-virtual-files".into())
+                        .flex_1()
+                        .min_h_0()
+                        .child(
+                            uniform_list(
+                                "changed-files-list",
+                                if is_tree_view {
+                                    tree_entries.len()
+                                } else {
+                                    changed_file_entries.len()
+                                },
+                                move |range, _window, cx| {
+                                    range
+                                        .map(|ix| {
+                                            if is_tree_view {
+                                                match &list_tree_entries[ix] {
+                                                    ChangedFileTreeEntry::Directory(entry) => entry
+                                                        .render(ix, git_graph.clone(), cx),
+                                                    ChangedFileTreeEntry::File(entry) => {
+                                                        entry.entry.render(
+                                                            ix,
+                                                            entry.depth,
+                                                            None,
+                                                            commit_sha.clone(),
+                                                            repository_handle.clone(),
+                                                            workspace.clone(),
+                                                            cx,
+                                                        )
+                                                    }
+                                                }
+                                            } else {
+                                                let directory_label = (!flat_entries[ix]
+                                                    .dir_path
+                                                    .is_empty())
+                                                .then(|| flat_entries[ix].dir_path.clone());
+                                                flat_entries[ix].render(
+                                                    ix,
+                                                    0,
+                                                    directory_label,
+                                                    commit_sha.clone(),
+                                                    repository_handle.clone(),
+                                                    workspace.clone(),
+                                                    cx,
+                                                )
+                                            }
+                                        })
+                                        .collect()
+                                },
+                            )
+                            .when(is_tree_view, |list| {
+                                list.with_decoration(
+                                    ui::indent_guides(
+                                        px(TREE_INDENT),
+                                        IndentGuideColors::panel(cx),
+                                    )
+                                    .with_left_offset(
+                                        ui::LIST_ITEM_INDENT_GUIDE_LEFT_OFFSET - px(2.),
+                                    )
+                                    .with_compute_indents_fn(
+                                        cx.entity(),
+                                        move |_, range, _window, _cx| {
+                                            range
+                                                .map(|ix| match indent_tree_entries.get(ix) {
+                                                    Some(ChangedFileTreeEntry::Directory(
+                                                        entry,
+                                                    )) => entry.depth,
+                                                    Some(ChangedFileTreeEntry::File(entry)) => {
+                                                        entry.depth
+                                                    }
+                                                    None => 0,
+                                                })
+                                                .collect()
+                                        },
+                                    ),
+                                )
+                            })
+                            .size_full()
+                            .track_scroll(&self.changed_files_scroll_handle),
+                        )
+                        .vertical_scrollbar_for(&self.changed_files_scroll_handle, window, cx),
+                )
+                .into_any_element()
+        };
+
+        v_flex()
+            .min_w(px(300.))
+            .h_full()
+            .bg(background)
+            .flex_basis(DefiniteLength::Fraction(
+                self.commit_details_split_state.read(cx).right_ratio(),
+            ))
+            .child(header)
+            .child(Divider::horizontal())
+            .child(body)
             .child(Divider::horizontal())
             .child(
                 h_flex().p_1p5().w_full().child(
@@ -4895,7 +5584,7 @@ impl GitGraph {
                         )),
                     )
                     .child(
-                        Label::new("Message")
+                        Label::new(i18n::t!("2f77668a9dfbf8d5"))
                             .size(LabelSize::Small)
                             .color(Color::Muted),
                     ),
@@ -5564,7 +6253,15 @@ impl workspace::SerializableItem for GitGraph {
 
                 let git_graph = cx.new(|cx| {
                     let mut graph =
-                        GitGraph::new(repo_id, git_store, workspace, Some(log_source), window, cx);
+                        GitGraph::new(
+                            repo_id,
+                            git_store,
+                            workspace,
+                            Some(log_source),
+                            GraphPresentation::FullTab,
+                            window,
+                            cx,
+                        );
                     graph.log_order = log_order;
 
                     if let Some(sha) = &state.selected_sha {
@@ -5910,6 +6607,27 @@ impl GitGraph {
 
     pub fn log_source_for_test(&self) -> &LogSource {
         &self.log_source
+    }
+
+    pub fn presentation_for_test(&self) -> GraphPresentation {
+        self.presentation
+    }
+
+    pub fn set_presentation_for_test(&mut self, presentation: GraphPresentation) {
+        self.presentation = presentation;
+    }
+
+    pub fn commit_details_scroll_handle_for_test(&self) -> ScrollHandle {
+        self.commit_details_scroll_handle.clone()
+    }
+
+    pub fn set_commit_details_compact_expanded_for_test(
+        &mut self,
+        metadata_expanded: bool,
+        message_expanded: bool,
+    ) {
+        self.commit_details_compact_metadata_expanded = metadata_expanded;
+        self.commit_details_compact_message_expanded = message_expanded;
     }
 }
 
@@ -6623,6 +7341,7 @@ mod tests {
                 project.read(cx).git_store().clone(),
                 workspace_weak,
                 None,
+                GraphPresentation::FullTab,
                 window,
                 cx,
             )
@@ -6789,6 +7508,7 @@ mod tests {
                 project.read(cx).git_store().clone(),
                 workspace,
                 None,
+                GraphPresentation::FullTab,
                 window,
                 cx,
             )
@@ -6996,6 +7716,7 @@ mod tests {
                 project.read(cx).git_store().clone(),
                 workspace_weak,
                 None,
+                GraphPresentation::FullTab,
                 window,
                 cx,
             )
@@ -7486,6 +8207,7 @@ mod tests {
                 project.read(cx).git_store().clone(),
                 workspace_weak.clone(),
                 None,
+                GraphPresentation::FullTab,
                 window,
                 cx,
             )
@@ -7702,6 +8424,7 @@ mod tests {
                 project.read(cx).git_store().clone(),
                 workspace_weak,
                 None,
+                GraphPresentation::FullTab,
                 window,
                 cx,
             )
@@ -7882,6 +8605,7 @@ mod tests {
                 project.read(cx).git_store().clone(),
                 workspace_weak,
                 None,
+                GraphPresentation::FullTab,
                 window,
                 cx,
             )
@@ -7994,6 +8718,7 @@ mod tests {
                 project.read(cx).git_store().clone(),
                 workspace_weak,
                 None,
+                GraphPresentation::FullTab,
                 window,
                 cx,
             )
@@ -8088,6 +8813,7 @@ mod tests {
                 project.read(cx).git_store().clone(),
                 workspace_weak,
                 None,
+                GraphPresentation::FullTab,
                 window,
                 cx,
             )
@@ -8159,6 +8885,7 @@ mod tests {
                 project.read(cx).git_store().clone(),
                 workspace_weak,
                 None,
+                GraphPresentation::FullTab,
                 window,
                 cx,
             )
@@ -8230,6 +8957,7 @@ mod tests {
                 project.read(cx).git_store().clone(),
                 workspace_weak,
                 None,
+                GraphPresentation::FullTab,
                 window,
                 cx,
             )
@@ -8318,6 +9046,7 @@ mod tests {
                 project.read(cx).git_store().clone(),
                 workspace_weak,
                 None,
+                GraphPresentation::FullTab,
                 window,
                 cx,
             )
@@ -8386,6 +9115,7 @@ mod tests {
                 project.read(cx).git_store().clone(),
                 workspace_weak,
                 None,
+                GraphPresentation::FullTab,
                 window,
                 cx,
             )
@@ -8491,6 +9221,7 @@ mod tests {
                 project.read(cx).git_store().clone(),
                 workspace.downgrade(),
                 None,
+                GraphPresentation::FullTab,
                 window,
                 cx,
             )
@@ -8604,6 +9335,7 @@ mod tests {
                 project.read(cx).git_store().clone(),
                 workspace.downgrade(),
                 None,
+                GraphPresentation::FullTab,
                 window,
                 cx,
             )
@@ -8708,6 +9440,7 @@ mod tests {
                 project.read(cx).git_store().clone(),
                 workspace_weak,
                 None,
+                GraphPresentation::FullTab,
                 window,
                 cx,
             )
@@ -8856,6 +9589,7 @@ mod tests {
                 project.read(cx).git_store().clone(),
                 workspace_weak,
                 None,
+                GraphPresentation::FullTab,
                 window,
                 cx,
             )
@@ -8947,6 +9681,7 @@ mod tests {
                 project.read(cx).git_store().clone(),
                 workspace_weak,
                 None,
+                GraphPresentation::FullTab,
                 window,
                 cx,
             )
@@ -9173,6 +9908,7 @@ mod tests {
                 project.read(cx).git_store().clone(),
                 workspace_weak,
                 None,
+                GraphPresentation::FullTab,
                 window,
                 cx,
             )
@@ -9309,6 +10045,7 @@ mod tests {
                 project.read(cx).git_store().clone(),
                 workspace_weak,
                 None,
+                GraphPresentation::FullTab,
                 window,
                 cx,
             )
@@ -9435,6 +10172,7 @@ mod tests {
                 project.read(cx).git_store().clone(),
                 workspace_weak,
                 None,
+                GraphPresentation::FullTab,
                 window,
                 cx,
             )
@@ -9522,6 +10260,7 @@ mod tests {
                 project.read(cx).git_store().clone(),
                 workspace_weak,
                 None,
+                GraphPresentation::FullTab,
                 window,
                 cx,
             )
@@ -9591,6 +10330,246 @@ mod tests {
         );
     }
 
+    /// Builds a project whose single commit has `file_count` changed files, and
+    /// returns the graph plus the details-pane state used by the layout tests.
+    async fn setup_detail_panel(
+        cx: &mut TestAppContext,
+        presentation: GraphPresentation,
+        file_count: usize,
+        message: &str,
+    ) -> (Entity<GitGraph>, gpui::VisualTestContext) {
+        init_test(cx);
+
+        let fs = FakeFs::new(cx.executor());
+        fs.insert_tree(
+            Path::new("/project"),
+            json!({ ".git": {}, "file.txt": "content" }),
+        )
+        .await;
+
+        let commit_sha = Oid::from_bytes(&[7; 20]).expect("commit SHA should be valid");
+        fs.set_graph_commits(
+            Path::new("/project/.git"),
+            vec![Arc::new(InitialGraphCommitData {
+                sha: commit_sha,
+                parents: smallvec![],
+                ref_names: vec!["HEAD -> main".into()],
+            })],
+        );
+        fs.set_commit_data(
+            Path::new("/project/.git"),
+            [(
+                CommitData {
+                    sha: commit_sha,
+                    parents: smallvec![],
+                    author_name: "Author".into(),
+                    author_email: "author@example.com".into(),
+                    commit_timestamp: 1_700_000_000,
+                    subject: "Compact details".into(),
+                    message: message.into(),
+                },
+                false,
+            )],
+        );
+
+        let project = Project::test(fs.clone(), [Path::new("/project")], cx).await;
+        cx.run_until_parked();
+
+        let repository = project.read_with(cx, |project, cx| {
+            project
+                .active_repository(cx)
+                .expect("should have a repository")
+        });
+        let (multi_workspace, cx) = cx.add_window_view(|window, cx| {
+            workspace::MultiWorkspace::test_new(project.clone(), window, cx)
+        });
+        let workspace_weak =
+            multi_workspace.read_with(&*cx, |multi, _| multi.workspace().downgrade());
+        let git_graph = cx.new_window_entity(|window, cx| {
+            GitGraph::new(
+                repository.read(cx).id,
+                project.read(cx).git_store().clone(),
+                workspace_weak,
+                None,
+                presentation,
+                window,
+                cx,
+            )
+        });
+        cx.run_until_parked();
+
+        git_graph.update_in(cx, |graph, window, cx| {
+            graph.select_first(&menu::SelectFirst, window, cx);
+        });
+        cx.run_until_parked();
+
+        let files = (0..file_count)
+            .map(|index| CommitFile {
+                path: RepoPath::new(&format!("src/file_{index}.rs"))
+                    .expect("repository path should be valid"),
+                old_text: Some("content".into()),
+                new_text: Some("updated content".into()),
+                is_binary: false,
+            })
+            .collect::<Vec<_>>();
+        git_graph.update(cx, |graph, cx| {
+            graph.selected_commit_diff = Some(CommitDiff {
+                files,
+                is_shallow_boundary: false,
+            });
+            graph.selected_commit_diff_stats = Some((file_count, file_count));
+            cx.notify();
+        });
+        cx.run_until_parked();
+
+        (git_graph, cx.clone())
+    }
+
+    fn draw_detail_panel(
+        cx: &mut gpui::VisualTestContext,
+        git_graph: &Entity<GitGraph>,
+        height: f32,
+    ) {
+        let git_graph = git_graph.clone();
+        cx.draw(
+            point(px(0.), px(0.)),
+            gpui::size(px(1200.), px(height)),
+            move |_, _| git_graph.into_any_element(),
+        );
+        cx.run_until_parked();
+    }
+
+    #[gpui::test]
+    async fn bottom_panel_uses_compact_details_and_scrolls_as_one_column(
+        cx: &mut TestAppContext,
+    ) {
+        let (git_graph, mut cx) =
+            setup_detail_panel(cx, GraphPresentation::BottomPanel, 24, "Subject\n\nBody line")
+                .await;
+
+        // A short panel is exactly where the stacked layout used to collapse.
+        draw_detail_panel(&mut cx, &git_graph, 320.);
+
+        assert!(
+            cx.debug_bounds("commit-detail-compact-header").is_some(),
+            "the bottom panel must use the compact details header"
+        );
+        assert!(
+            cx.debug_bounds("commit-detail-unified-scroll").is_some(),
+            "a small commit must scroll the whole details column as one"
+        );
+        assert!(
+            cx.debug_bounds("commit-detail-virtual-files").is_none(),
+            "a small commit must not fall back to the virtualized file list"
+        );
+        assert!(
+            cx.debug_bounds("toggle-commit-metadata").is_none(),
+            "the full-tab metadata disclosure must not be rendered in the bottom panel"
+        );
+
+        let files_bounds = cx
+            .debug_bounds("commit-detail-files-list")
+            .expect("the changed files list is rendered");
+        assert!(
+            files_bounds.size.height > px(0.),
+            "the changed files list must keep a visible height: {files_bounds:?}"
+        );
+
+        let scroll_handle = git_graph.read_with(&*cx, |graph, _| {
+            graph.commit_details_scroll_handle_for_test()
+        });
+        let viewport = scroll_handle.bounds();
+        assert!(
+            viewport.size.height > px(0.),
+            "the unified scroll container must occupy the panel body: {viewport:?}"
+        );
+        assert!(
+            scroll_handle.max_offset().y > px(0.),
+            "24 changed files must overflow the short panel and be scrollable"
+        );
+
+        // Expanding the metadata must not push the file list out of reach; the
+        // column simply grows and stays scrollable.
+        git_graph.update(&mut cx, |graph, cx| {
+            graph.set_commit_details_compact_expanded_for_test(true, true);
+            cx.notify();
+        });
+        draw_detail_panel(&mut cx, &git_graph, 320.);
+
+        let files_bounds = cx
+            .debug_bounds("commit-detail-files-list")
+            .expect("the changed files list is still rendered after expanding details");
+        assert!(
+            files_bounds.size.height > px(0.),
+            "expanding the metadata must not collapse the changed files list: {files_bounds:?}"
+        );
+        let scroll_handle = git_graph.read_with(&*cx, |graph, _| {
+            graph.commit_details_scroll_handle_for_test()
+        });
+        assert!(
+            scroll_handle.max_offset().y > px(0.),
+            "the expanded column must remain scrollable"
+        );
+    }
+
+    #[gpui::test]
+    async fn bottom_panel_falls_back_to_virtualized_files_for_huge_commits(
+        cx: &mut TestAppContext,
+    ) {
+        let file_count = COMPACT_DETAIL_UNIFIED_SCROLL_MAX_FILES + 1;
+        let (git_graph, mut cx) = setup_detail_panel(
+            cx,
+            GraphPresentation::BottomPanel,
+            file_count,
+            "Subject\n\nBody line",
+        )
+        .await;
+
+        draw_detail_panel(&mut cx, &git_graph, 320.);
+
+        assert!(
+            cx.debug_bounds("commit-detail-virtual-files").is_some(),
+            "commits above the threshold must use the virtualized file list"
+        );
+        assert!(
+            cx.debug_bounds("commit-detail-unified-scroll").is_none(),
+            "commits above the threshold must not build every row in one column"
+        );
+        assert!(
+            cx.debug_bounds("commit-detail-files-list").is_none(),
+            "the non-virtualized file list must not be used for huge commits"
+        );
+        assert!(
+            cx.debug_bounds("commit-detail-compact-header").is_some(),
+            "the compact header stays visible while the file list scrolls on its own"
+        );
+    }
+
+    #[gpui::test]
+    async fn full_tab_details_keep_the_stacked_layout(cx: &mut TestAppContext) {
+        let (git_graph, mut cx) =
+            setup_detail_panel(cx, GraphPresentation::FullTab, 24, "Subject\n\nBody line").await;
+
+        draw_detail_panel(&mut cx, &git_graph, 800.);
+
+        assert_eq!(
+            git_graph.read_with(&*cx, |graph, _| graph.presentation_for_test()),
+            GraphPresentation::FullTab
+        );
+        assert!(
+            cx.debug_bounds("commit-detail-full-tab").is_some(),
+            "the full tab keeps its stacked details column"
+        );
+        assert!(
+            cx.debug_bounds("commit-detail-compact-header").is_none(),
+            "the full tab must not use the compact header"
+        );
+        assert!(
+            cx.debug_bounds("commit-detail-unified-scroll").is_none(),
+            "the full tab keeps its stacked, separately scrolling sections"
+        );
+    }
+
     #[gpui::test]
     async fn test_commit_message_not_reloaded_for_same_sha(cx: &mut TestAppContext) {
         init_test(cx);
@@ -9646,6 +10625,7 @@ mod tests {
                 project.read(cx).git_store().clone(),
                 workspace_weak,
                 None,
+                GraphPresentation::FullTab,
                 window,
                 cx,
             )

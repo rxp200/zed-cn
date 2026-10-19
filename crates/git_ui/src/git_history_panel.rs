@@ -1,4 +1,4 @@
-use crate::git_graph::{self, GitGraph};
+use crate::git_graph::{self, GitGraph, GraphPresentation};
 use crate::git_panel_settings::GitPanelSettings;
 use git::repository::LogSource;
 use gpui::{
@@ -50,6 +50,7 @@ impl GitHistoryPanel {
                 git_store.clone(),
                 workspace.clone(),
                 Some(LogSource::All),
+                GraphPresentation::BottomPanel,
                 window,
                 cx,
             )
@@ -247,6 +248,11 @@ mod tests {
             assert_eq!(
                 panel.default_size(window, cx),
                 GitPanelSettings::get_global(cx).default_height
+            );
+            assert_eq!(
+                panel.graph.read(cx).presentation_for_test(),
+                GraphPresentation::BottomPanel,
+                "the docked history panel must render the compact details column"
             );
         });
     }
