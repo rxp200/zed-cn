@@ -216,17 +216,13 @@ impl WslRemoteConnection {
         &self,
         delegate: &Arc<dyn RemoteClientDelegate>,
         release_channel: ReleaseChannel,
-        version: Version,
+        _version: Version,
         cx: &mut AsyncApp,
     ) -> Result<Arc<RelPath>> {
-        let version_str = super::remote_server_version(release_channel, &version);
-
-        let binary_name = format!(
-            "zed-remote-server-{}-{}",
-            release_channel.dev_name(),
-            version_str
-        );
-
+        let tag = cx
+            .update(|cx| release_channel::CustomReleaseTag::current(cx))
+            .context("Zed CN Remote Server requires a custom release tag")?;
+        let binary_name = format!("zed-cn-remote-server-{tag}");
         let dst_path =
             paths::remote_server_dir_relative().join(RelPath::from_unix_str(&binary_name).unwrap());
 
@@ -238,19 +234,18 @@ impl WslRemoteConnection {
                 .map_err(|e| e.context("Failed to create directory"))?;
         }
 
-        let binary_exists_on_server = self
-            .run_wsl_command(&dst_path.display(PathStyle::Unix), &["version"])
-            .await
-            .is_ok();
+        if self
+            .verify_custom_server_binary(&dst_path, &tag, delegate, cx)
+            .await?
+        {
+            return Ok(dst_path.into());
+        }
 
         #[cfg(any(debug_assertions, feature = "build-remote-server-binary"))]
-        if let Some(remote_server_path) = super::build_remote_server_from_source(
-            &self.platform,
-            delegate.as_ref(),
-            binary_exists_on_server,
-            cx,
-        )
-        .await?
+        if release_channel == ReleaseChannel::Dev
+            && let Some(remote_server_path) =
+                super::build_remote_server_from_source(&self.platform, delegate.as_ref(), false, cx)
+                    .await?
         {
             let tmp_path = paths::remote_server_dir_relative().join(
                 &RelPath::from_unix_str(&format!(
@@ -267,31 +262,67 @@ impl WslRemoteConnection {
             return Ok(dst_path.into());
         }
 
-        if binary_exists_on_server {
-            return Ok(dst_path.into());
-        }
-
-        let wanted_version = match release_channel {
-            ReleaseChannel::Nightly | ReleaseChannel::Dev => None,
-            _ => Some(cx.update(|cx| AppVersion::global(cx))),
-        };
-
         let src_path = delegate
-            .download_server_binary_locally(self.platform, release_channel, wanted_version, cx)
+            .download_custom_server_binary(self.platform, tag.clone(), cx)
             .await?;
-
-        let tmp_path = format!(
+        let tmp_path_str = format!(
             "{}.{}.gz",
             dst_path.display(PathStyle::Unix),
             std::process::id()
         );
-        let tmp_path = RelPath::from_unix_str(&tmp_path).unwrap();
-
+        let tmp_path = RelPath::from_unix_str(&tmp_path_str)?;
         self.upload_file(&src_path, &tmp_path, delegate, cx).await?;
         self.extract_and_install(&tmp_path, &dst_path, delegate, cx)
             .await?;
-
+        anyhow::ensure!(
+            self.verify_custom_server_binary(&dst_path, &tag, delegate, cx)
+                .await?,
+            "installed WSL remote server does not match the Zed CN release archive"
+        );
         Ok(dst_path.into())
+    }
+
+    /// Confirms the installed binary came from the Zed CN archive for `tag`.
+    ///
+    /// It hashes the trusted archive through the exact-tag/checksum path and the
+    /// installed file, and never executes the installed binary to identify it.
+    async fn verify_custom_server_binary(
+        &self,
+        path: &RelPath,
+        tag: &str,
+        delegate: &Arc<dyn RemoteClientDelegate>,
+        cx: &mut AsyncApp,
+    ) -> Result<bool> {
+        let archive = delegate
+            .download_custom_server_binary(self.platform, tag.to_owned(), cx)
+            .await?;
+        let expected = cx
+            .background_spawn(async move {
+                use sha2::{Digest, Sha256};
+                let file = fs::File::open(&archive).await?;
+                let mut reader = async_compression::futures::bufread::GzipDecoder::new(
+                    futures::io::BufReader::new(file),
+                );
+                let mut hasher = Sha256::new();
+                let mut buffer = [0; 65536];
+                loop {
+                    let count = futures::AsyncReadExt::read(&mut reader, &mut buffer).await?;
+                    if count == 0 {
+                        break;
+                    }
+                    hasher.update(&buffer[..count]);
+                }
+                anyhow::Ok(hasher.finalize())
+            })
+            .await?;
+        let installed = self
+            .run_wsl_command_with_output("sha256sum", &[&path.display(PathStyle::Unix)])
+            .await;
+        let Ok(installed) = installed else {
+            return Ok(false);
+        };
+        let installed = installed.split_whitespace().next().unwrap_or_default();
+        Ok(installed.eq_ignore_ascii_case(&format!("{expected:x}")))
     }
 
     async fn upload_file(
@@ -476,7 +507,7 @@ impl RemoteConnection for WslRemoteConnection {
         proxy_args.push(remote_binary_path.display(PathStyle::Unix).into_owned());
         proxy_args.push("proxy".to_owned());
         proxy_args.push("--identifier".to_owned());
-        proxy_args.push(unique_identifier);
+        proxy_args.push(format!("cn-{unique_identifier}"));
 
         if reconnect {
             proxy_args.push("--reconnect".to_owned());

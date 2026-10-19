@@ -40,10 +40,6 @@ use util::{
 
 /// How long to wait for SSH to connect when no askpass prompt has opened.
 const SSH_CONNECTION_PROMPT_TIMEOUT: Duration = Duration::from_secs(17);
-const REMOTE_SERVER_DOWNLOAD_IDLE_TIMEOUT_SECS: u64 = 30;
-const REMOTE_SERVER_DOWNLOAD_TOTAL_TIMEOUT_SECS: u64 = 300;
-const REMOTE_SERVER_DOWNLOAD_TOTAL_TIMEOUT: Duration =
-    Duration::from_secs(REMOTE_SERVER_DOWNLOAD_TOTAL_TIMEOUT_SECS);
 const REMOTE_SERVER_UPLOAD_TOTAL_TIMEOUT: Duration = Duration::from_secs(300);
 const REMOTE_SERVER_INSTALL_TIMEOUT: Duration = Duration::from_secs(120);
 
@@ -266,8 +262,6 @@ pub struct SshConnectionOptions {
     pub nickname: Option<String>,
     pub upload_binary_over_ssh: bool,
     #[serde(default)]
-    pub remote_server_source: settings::RemoteServerSource,
-    #[serde(default)]
     pub auth_method: Option<settings::SshAuthMethod>,
     #[serde(default)]
     pub ssh_key_id: Option<String>,
@@ -288,9 +282,7 @@ impl From<settings_content::SshConnection> for SshConnectionOptions {
             password: None,
             args: Some(val.args),
             nickname: val.nickname,
-            upload_binary_over_ssh: val.remote_server_source.is_some()
-                || val.upload_binary_over_ssh.unwrap_or_default(),
-            remote_server_source: val.remote_server_source.unwrap_or_default(),
+            upload_binary_over_ssh: val.upload_binary_over_ssh.unwrap_or_default(),
             port_forwards: val.port_forwards,
             connection_timeout: val.connection_timeout,
             auth_method: val.auth_method,
@@ -796,15 +788,9 @@ impl RemoteConnection for SshRemoteConnection {
             return Task::ready(Err(anyhow!("Remote binary path not set")));
         };
 
-        // Separate source sessions as well as binaries: a normal proxy launch replaces
-        // the server holding the same identifier.
-        let unique_identifier = if self.socket.connection_options.remote_server_source
-            == settings::RemoteServerSource::ZedCn
-        {
-            format!("cn-{unique_identifier}")
-        } else {
-            unique_identifier
-        };
+        // Zed CN servers own a namespaced socket directory so they never attach to
+        // a server installed by another Zed distribution on the same host.
+        let unique_identifier = format!("cn-{unique_identifier}");
         let mut ssh_command = if self.ssh_platform.os.is_windows() {
             // TODO: Set the `VARS` environment variables, we do not have `env` on windows
             // so this needs a different approach
@@ -865,7 +851,7 @@ impl RemoteConnection for SshRemoteConnection {
     }
 
     fn restart_unresponsive_server_on_initial_connect(&self) -> bool {
-        self.socket.connection_options.remote_server_source == settings::RemoteServerSource::ZedCn
+        true
     }
 
     fn home_dir(&self) -> Option<String> {
@@ -1204,77 +1190,45 @@ impl SshRemoteConnection {
         &self,
         delegate: &Arc<dyn RemoteClientDelegate>,
         release_channel: ReleaseChannel,
-        version: Version,
+        _version: Version,
         cx: &mut AsyncApp,
     ) -> Result<Arc<RelPath>> {
-        let custom_tag = if self.socket.connection_options.remote_server_source
-            == settings::RemoteServerSource::ZedCn
-        {
-            Some(
-                cx.update(|cx| release_channel::CustomReleaseTag::current(cx))
-                    .context(i18n::t!("00332ab969a75afe"))?,
-            )
-        } else {
-            None
-        };
-        let version_str = super::remote_server_version(release_channel, &version);
-        let binary_name = if let Some(tag) = &custom_tag {
-            format!(
-                "zed-cn-remote-server-{tag}{}",
-                if self.ssh_platform.os.is_windows() {
-                    ".exe"
-                } else {
-                    ""
-                }
-            )
-        } else {
-            format!(
-                "zed-remote-server-{}-{}{}",
-                release_channel.dev_name(),
-                version_str,
-                if self.ssh_platform.os.is_windows() {
-                    ".exe"
-                } else {
-                    ""
-                }
-            )
-        };
+        let tag = cx
+            .update(|cx| release_channel::CustomReleaseTag::current(cx))
+            .context(i18n::t!("00332ab969a75afe"))?;
+        let binary_name = format!(
+            "zed-cn-remote-server-{tag}{}",
+            if self.ssh_platform.os.is_windows() {
+                ".exe"
+            } else {
+                ""
+            }
+        );
         let dst_path =
             paths::remote_server_dir_relative().join(RelPath::from_unix_str(&binary_name).unwrap());
 
-        let display_version = custom_tag.as_deref().unwrap_or(&version_str);
         delegate.set_status(
             Some(&i18n::t!(
                 "928f0d81c6e96aa8",
-                display_version = display_version
+                display_version = tag.as_str()
             )),
             cx,
         );
         delegate.append_connection_log(i18n::t!("dbc47acf91d29e59"), cx);
-        let binary_exists_on_server = if let Some(tag) = &custom_tag {
-            self.verify_custom_server_binary(&dst_path, tag, delegate, cx)
-                .await?
-        } else {
-            self.socket
-                .run_command_with_timeout(
-                    self.ssh_shell_kind,
-                    &dst_path.display(self.path_style()),
-                    &["version"],
-                    true,
-                    REMOTE_COMMAND_TIMEOUT,
-                    cx,
-                )
-                .await
-                .is_ok()
-        };
+        if self
+            .verify_custom_server_binary(&dst_path, &tag, delegate, cx)
+            .await?
+        {
+            delegate.set_status(Some(i18n::t!("bafe99071aee2afe")), cx);
+            return Ok(dst_path.into());
+        }
 
         #[cfg(any(debug_assertions, feature = "build-remote-server-binary"))]
-        if custom_tag.is_none()
-            && release_channel == ReleaseChannel::Dev
+        if release_channel == ReleaseChannel::Dev
             && let Some(remote_server_path) = super::build_remote_server_from_source(
                 &self.ssh_platform,
                 delegate.as_ref(),
-                binary_exists_on_server,
+                false,
                 cx,
             )
             .await?
@@ -1294,22 +1248,7 @@ impl SshRemoteConnection {
             return Ok(dst_path.into());
         }
 
-        if binary_exists_on_server {
-            delegate.set_status(Some(i18n::t!("bafe99071aee2afe")), cx);
-            return Ok(dst_path.into());
-        }
-
         delegate.set_status(Some(i18n::t!("ac6a43b01771ed1e")), cx);
-        let wanted_version = cx.update(|cx| match release_channel {
-            ReleaseChannel::Nightly => Ok(None),
-            ReleaseChannel::Dev => {
-                anyhow::bail!(
-                    "ZED_BUILD_REMOTE_SERVER is not set and no remote server exists at ({:?})",
-                    dst_path
-                )
-            }
-            _ => Ok(Some(AppVersion::global(cx))),
-        })?;
 
         // Keep the random local directory alive so concurrent installations cannot
         // share upload/extraction paths, even when they originate in one process.
@@ -1319,257 +1258,42 @@ impl SshRemoteConnection {
             .file_name()
             .and_then(|name| name.to_str())
             .context("invalid install identifier")?;
-        let tmp_path_compressed = remote_server_dir_relative().join(
-            RelPath::from_unix_str(&format!(
+        let tmp_path_compressed =
+            remote_server_dir_relative().join(RelPath::from_unix_str(&format!(
                 "{}-download-{}.{}",
                 binary_name,
-                if custom_tag.is_some() {
-                    install_id.to_owned()
-                } else {
-                    std::process::id().to_string()
-                },
+                install_id,
                 if self.ssh_platform.os.is_windows() {
                     "zip"
                 } else {
                     "gz"
                 }
-            ))
-            .unwrap(),
-        );
-        let mut remote_download_error = None;
-        if custom_tag.is_none() && !self.socket.connection_options.upload_binary_over_ssh {
-            delegate.set_status(Some(i18n::t!("0477f16d11c8f4bb")), cx);
-            match delegate
-                .get_download_url(
-                    self.ssh_platform,
-                    release_channel,
-                    wanted_version.clone(),
-                    cx,
-                )
-                .await
-            {
-                Ok(Some(url)) => {
-                    match self
-                        .download_binary_on_server(&url, &tmp_path_compressed, delegate, cx)
-                        .await
-                    {
-                        Ok(()) => {
-                            self.extract_server_binary(
-                                &dst_path,
-                                &tmp_path_compressed,
-                                delegate,
-                                cx,
-                            )
-                            .await
-                            .context(i18n::t!("ddfb785e49d94d49"))?;
-                            return Ok(dst_path.into());
-                        }
-                        Err(error) => {
-                            log::warn!(
-                                "Failed to download remote server binary on host; falling back to a local download: {error:#}"
-                            );
-                            self.remove_remote_download(&tmp_path_compressed, cx).await;
-                            delegate.set_status(Some(i18n::t!("3706f3332b6c2e8c")), cx);
-                            remote_download_error = Some(error);
-                        }
-                    }
-                }
-                Ok(None) => {
-                    let error = anyhow!(i18n::t!("5bd5e338c21649e7"));
-                    delegate.set_status(Some(i18n::t!("f1617ba9948e848d")), cx);
-                    remote_download_error = Some(error);
-                }
-                Err(error) => {
-                    log::warn!("Failed to obtain a remote server download URL: {error:#}");
-                    delegate.set_status(Some(i18n::t!("5d232f03080ab67d")), cx);
-                    remote_download_error = Some(error);
-                }
-            }
-        } else {
-            delegate.set_status(Some(i18n::t!("065419df547c2992")), cx);
-        }
+            ))?);
 
-        let local_download = if let Some(tag) = &custom_tag {
-            delegate
-                .download_custom_server_binary(self.ssh_platform, tag.clone(), cx)
-                .await
-        } else {
-            delegate
-                .download_server_binary_locally(
-                    self.ssh_platform,
-                    release_channel,
-                    wanted_version.clone(),
-                    cx,
-                )
-                .await
-        };
-        let src_path = match (local_download, remote_download_error) {
-            (Ok(path), _) => path,
-            (Err(local_error), Some(remote_error)) => {
-                return Err(local_error)
-                    .context(i18n::t!("2a98da3f39828695", remote_error = remote_error));
-            }
-            (Err(local_error), None) => {
-                return Err(local_error).context(i18n::t!("3b317243723f3b51"));
-            }
-        };
+        let src_path = delegate
+            .download_custom_server_binary(self.ssh_platform, tag.clone(), cx)
+            .await
+            .context(i18n::t!("3b317243723f3b51"))?;
         self.upload_local_server_binary(&src_path, &tmp_path_compressed, delegate, cx)
             .await
             .context(i18n::t!("644a8c1d42e010f5"))?;
-        if let Some(tag) = &custom_tag {
-            let staged_path = remote_server_dir_relative().join(RelPath::from_unix_str(&format!(
-                "{binary_name}-{install_id}-staged"
-            ))?);
-            self.extract_server_binary(&staged_path, &tmp_path_compressed, delegate, cx)
-                .await
-                .context(i18n::t!("ddfb785e49d94d49"))?;
-            let promotion = self
-                .promote_custom_server_binary(&staged_path, &dst_path, cx)
-                .await;
-            self.remove_remote_download(&staged_path, cx).await;
-            promotion?;
-            anyhow::ensure!(
-                self.verify_custom_server_binary(&dst_path, tag, delegate, cx)
-                    .await?,
-                i18n::t!("eaed8ae33a3b06a6")
-            );
-        } else {
-            self.extract_server_binary(&dst_path, &tmp_path_compressed, delegate, cx)
-                .await
-                .context(i18n::t!("ddfb785e49d94d49"))?;
-        }
-        Ok(dst_path.into())
-    }
-
-    async fn download_binary_on_server(
-        &self,
-        url: &str,
-        tmp_path: &RelPath,
-        delegate: &Arc<dyn RemoteClientDelegate>,
-        cx: &mut AsyncApp,
-    ) -> Result<()> {
-        if let Some(parent) = tmp_path.parent() {
-            let res = self
-                .socket
-                .run_command_with_timeout(
-                    self.ssh_shell_kind,
-                    "mkdir",
-                    &["-p", parent.display(self.path_style()).as_ref()],
-                    true,
-                    REMOTE_COMMAND_TIMEOUT,
-                    cx,
-                )
-                .await;
-            if !self.ssh_platform.os.is_windows() {
-                // mkdir fails on windows if the path already exists ...
-                res?;
-            }
-        }
-
-        delegate.set_status(Some(i18n::t!("84c2006b99ebf59d")), cx);
-
-        let connection_timeout = self
-            .socket
-            .connection_options
-            .connection_timeout
-            .unwrap_or(10)
-            .to_string();
-        let idle_timeout = REMOTE_SERVER_DOWNLOAD_IDLE_TIMEOUT_SECS.to_string();
-        let total_timeout = REMOTE_SERVER_DOWNLOAD_TOTAL_TIMEOUT_SECS.to_string();
-        let tmp_path = tmp_path.display(self.path_style());
-
-        match self
-            .socket
-            .run_command_with_timeout(
-                self.ssh_shell_kind,
-                "curl",
-                &[
-                    "-f",
-                    "-L",
-                    "--connect-timeout",
-                    &connection_timeout,
-                    "--speed-limit",
-                    "1024",
-                    "--speed-time",
-                    &idle_timeout,
-                    "--max-time",
-                    &total_timeout,
-                    url,
-                    "-o",
-                    &tmp_path,
-                ],
-                true,
-                REMOTE_SERVER_DOWNLOAD_TOTAL_TIMEOUT,
-                cx,
-            )
+        let staged_path = remote_server_dir_relative().join(RelPath::from_unix_str(&format!(
+            "{binary_name}-{install_id}-staged"
+        ))?);
+        self.extract_server_binary(&staged_path, &tmp_path_compressed, delegate, cx)
             .await
-        {
-            Ok(_) => {}
-            Err(e) => {
-                if self
-                    .socket
-                    .run_command_with_timeout(
-                        self.ssh_shell_kind,
-                        "which",
-                        &["curl"],
-                        true,
-                        Duration::from_secs(10),
-                        cx,
-                    )
-                    .await
-                    .is_ok()
-                {
-                    return Err(e);
-                }
-
-                log::info!("curl is not available, trying wget");
-                match self
-                    .socket
-                    .run_command_with_timeout(
-                        self.ssh_shell_kind,
-                        "wget",
-                        &[
-                            "--connect-timeout",
-                            &connection_timeout,
-                            "--timeout",
-                            &idle_timeout,
-                            "--tries",
-                            "1",
-                            url,
-                            "-O",
-                            &tmp_path,
-                        ],
-                        true,
-                        REMOTE_SERVER_DOWNLOAD_TOTAL_TIMEOUT,
-                        cx,
-                    )
-                    .await
-                {
-                    Ok(_) => {}
-                    Err(e) => {
-                        if self
-                            .socket
-                            .run_command_with_timeout(
-                                self.ssh_shell_kind,
-                                "which",
-                                &["wget"],
-                                true,
-                                Duration::from_secs(10),
-                                cx,
-                            )
-                            .await
-                            .is_ok()
-                        {
-                            return Err(e);
-                        } else {
-                            anyhow::bail!("Neither curl nor wget is available");
-                        }
-                    }
-                }
-            }
-        }
-
-        Ok(())
+            .context(i18n::t!("ddfb785e49d94d49"))?;
+        let promotion = self
+            .promote_custom_server_binary(&staged_path, &dst_path, cx)
+            .await;
+        self.remove_remote_download(&staged_path, cx).await;
+        promotion?;
+        anyhow::ensure!(
+            self.verify_custom_server_binary(&dst_path, &tag, delegate, cx)
+                .await?,
+            i18n::t!("eaed8ae33a3b06a6")
+        );
+        Ok(dst_path.into())
     }
 
     async fn promote_custom_server_binary(
@@ -2748,7 +2472,6 @@ impl SshConnectionOptions {
             password: None,
             nickname: None,
             upload_binary_over_ssh: false,
-            remote_server_source: settings::RemoteServerSource::Official,
             connection_timeout: None,
             auth_method: None,
             ssh_key_id: None,
@@ -4023,7 +3746,10 @@ mod tests {
                 .any(|arg| arg.starts_with("ProxyCommand=") && arg.contains("--ssh-proxy")),
             "expected a proxy command: {args:?}"
         );
-        assert!(!args.iter().any(|arg| arg == "-J"), "proxy must win: {args:?}");
+        assert!(
+            !args.iter().any(|arg| arg == "-J"),
+            "proxy must win: {args:?}"
+        );
         assert!(options.validate_connection_routing().is_ok());
     }
 
@@ -4038,7 +3764,10 @@ mod tests {
         };
 
         let args = options.additional_args_without_port_forwards();
-        assert!(args.iter().any(|arg| arg == "-J"), "expected jump hosts: {args:?}");
+        assert!(
+            args.iter().any(|arg| arg == "-J"),
+            "expected jump hosts: {args:?}"
+        );
         assert!(!args.iter().any(|arg| arg.starts_with("ProxyCommand=")));
     }
 

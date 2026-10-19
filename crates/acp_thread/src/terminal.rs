@@ -611,8 +611,8 @@ impl Terminal {
         if !self.is_process_backed() {
             return;
         }
-        self.terminal.update(cx, |terminal, _cx| {
-            terminal.kill_active_task();
+        self.terminal.update(cx, |terminal, cx| {
+            terminal.kill_active_task(cx);
         });
     }
 

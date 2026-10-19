@@ -18306,7 +18306,6 @@ fn test_project_group_key_equality_ignores_runtime_connection_fields() {
     let mut drifted = options.clone();
     drifted.nickname = Some("example-host".to_string());
     drifted.upload_binary_over_ssh = true;
-    drifted.remote_server_source = settings::RemoteServerSource::ZedCn;
     drifted.args = Some(vec!["-o".to_string(), "IdentitiesOnly=yes".to_string()]);
     drifted.password = Some("exported-password".to_string());
 

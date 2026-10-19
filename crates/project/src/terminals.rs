@@ -2,10 +2,10 @@ use anyhow::{Context as _, Result};
 use collections::HashMap;
 use gpui::{App, AppContext as _, Context, Entity, Task, WeakEntity};
 
-use futures::{FutureExt, future::Shared};
+use futures::{FutureExt, future::BoxFuture, future::Shared};
 use itertools::Itertools as _;
 use language::LanguageName;
-use remote::{Interactive, RemoteClient, RemoteConnectionOptions};
+use remote::{Interactive, RemoteClient};
 use rpc::proto;
 use settings::{Settings, SettingsLocation};
 use std::{
@@ -20,7 +20,8 @@ use terminal::{
     terminal_settings::TerminalSettings,
 };
 use util::{
-    command::new_std_command, get_default_system_shell, get_system_shell, maybe, rel_path::RelPath,
+    command::new_std_command, get_default_system_shell, get_system_shell, maybe, paths::PathStyle,
+    rel_path::RelPath,
 };
 use uuid::Uuid;
 
@@ -135,7 +136,7 @@ impl Project {
         let lang_registry = self.languages.clone();
         cx.spawn(async move |project, cx| {
             let mut env = env_task.await.unwrap_or_default();
-            env.extend(settings.env);
+            env.extend(settings.env.clone());
 
             let activation_script = maybe!(async {
                 for toolchain in toolchains {
@@ -167,45 +168,44 @@ impl Project {
                         )
                     };
 
-                    let (shell, env) = {
-                        let to_run =
-                            (!activation_script.is_empty()).then(|| format_to_run(&spawn_task));
-                        env.extend(spawn_task.env);
-                        match remote_client {
-                            Some(remote_client) => match activation_script.clone() {
-                                activation_script if !activation_script.is_empty() => {
-                                    let separator = shell_kind.sequential_commands_separator();
-                                    let activation_script =
-                                        activation_script.join(&format!("{separator} "));
-                                    let to_run = to_run.expect("activation command was formatted");
-
-                                    let arg = format!("{activation_script}{separator} {to_run}");
-                                    let args = shell_kind.args_for_shell(true, arg);
-                                    let shell = remote_client
-                                        .read(cx)
-                                        .shell()
-                                        .unwrap_or_else(get_default_system_shell);
-
-                                    create_remote_shell(
-                                        Some((&shell, &args)),
-                                        env,
-                                        path,
-                                        remote_client,
-                                        cx,
-                                    )?
+                    let to_run =
+                        (!activation_script.is_empty()).then(|| format_to_run(&spawn_task));
+                    env.extend(spawn_task.env);
+                    // Remote tasks run on the Remote Server like any other remote
+                    // terminal; the client no longer spawns `ssh -t`.
+                    match remote_client {
+                        Some(remote_client) => {
+                            // A toolchain activation script runs first and then
+                            // execs the shell, so the task command becomes part of
+                            // that script instead of the terminal's program.
+                            let (program, args, activation) = match &to_run {
+                                Some(to_run) if !activation_script.is_empty() => {
+                                    (shell.clone(), Vec::new(), vec![to_run.clone()])
                                 }
-                                _ => create_remote_shell(
-                                    spawn_task
-                                        .command
-                                        .as_ref()
-                                        .map(|command| (command, &spawn_task.args)),
-                                    env,
-                                    path,
-                                    remote_client,
-                                    cx,
-                                )?,
-                            },
-                            None => match activation_script.clone() {
+                                _ => match spawn_task.command.as_ref() {
+                                    Some(command) => {
+                                        (command.clone(), spawn_task.args.clone(), Vec::new())
+                                    }
+                                    None => (shell.clone(), Vec::new(), Vec::new()),
+                                },
+                            };
+                            create_hosted_terminal(
+                                remote_client,
+                                program,
+                                args,
+                                shell_kind,
+                                activation,
+                                env,
+                                path,
+                                &settings,
+                                terminal_mode,
+                                cx.entity_id().as_u64(),
+                                path_style,
+                                cx,
+                            )
+                        }
+                        None => {
+                            let (shell, env) = match activation_script.clone() {
                                 activation_script if !activation_script.is_empty() => {
                                     let separator = shell_kind.sequential_commands_separator();
                                     let activation_script =
@@ -236,25 +236,26 @@ impl Project {
                                     },
                                     env,
                                 ),
-                            },
+                            };
+                            Ok(TerminalBuilder::new(
+                                local_path.map(|path| path.to_path_buf()),
+                                terminal_mode,
+                                shell,
+                                env,
+                                settings.cursor_shape,
+                                settings.alternate_scroll,
+                                settings.max_scroll_history_lines,
+                                settings.path_hyperlink_regexes,
+                                Duration::from_millis(settings.path_hyperlink_timeout_ms),
+                                false,
+                                cx.entity_id().as_u64(),
+                                cx,
+                                activation_script,
+                                path_style,
+                            )
+                            .boxed())
                         }
-                    };
-                    anyhow::Ok(TerminalBuilder::new(
-                        local_path.map(|path| path.to_path_buf()),
-                        terminal_mode,
-                        shell,
-                        env,
-                        settings.cursor_shape,
-                        settings.alternate_scroll,
-                        settings.max_scroll_history_lines,
-                        settings.path_hyperlink_regexes,
-                        Duration::from_millis(settings.path_hyperlink_timeout_ms),
-                        is_via_remote,
-                        cx.entity_id().as_u64(),
-                        cx,
-                        activation_script,
-                        path_style,
-                    ))
+                    }
                 })??
                 .await?;
             project.update(cx, move |this, cx| {
@@ -399,8 +400,8 @@ impl Project {
                         Some(shell)
                     }
                     Err(error) => {
-                        // Older official servers and every Zed CN server before this message
-                        // was upstreamed do not recognize it; keep the connection shell.
+                        // Zed CN servers older than this message do not recognize it;
+                        // keep the connection shell rather than failing the terminal.
                         log::warn!(
                             "remote terminal shell settings unavailable, using connection shell: {error:#}"
                         );
@@ -413,7 +414,7 @@ impl Project {
             let shell_program = resolve_remote_shell_program(remote_shell.as_ref(), shell);
             let shell_kind = ShellKind::new(&shell_program, path_style.is_windows());
             let mut env = env_task.await.unwrap_or_default();
-            env.extend(settings.env);
+            env.extend(settings.env.clone());
 
             let activation_script = maybe!(async {
                 for toolchain in toolchains {
@@ -434,16 +435,6 @@ impl Project {
             .await
             .unwrap_or_default();
 
-            let persistent_remote = remote_client.as_ref().filter(|remote_client| {
-                remote_client.read_with(cx, |remote_client, _| {
-                    remote_client.supports_persistent_terminals()
-                        && matches!(
-                            remote_client.connection_options(),
-                            RemoteConnectionOptions::Ssh(options)
-                                if options.remote_server_source == settings::RemoteServerSource::ZedCn
-                        )
-                })
-            });
             // Only a remote shell's directory is meaningful for the cwd
             // observer; local terminals resolve their own process cwd.
             let remote_working_directory = if is_via_remote {
@@ -451,99 +442,49 @@ impl Project {
             } else {
                 None
             };
-            let builder = if let Some(remote_client) = persistent_remote {
-                // The Remote Server is launched over a non-PTY SSH session, so its own
-                // environment carries no terminal type; without these variables the
-                // hosted shell loses color and terminfo-based full-screen programs.
-                let persistent_env = persistent_terminal_env(
-                    env.clone(),
-                    &cx.update(|cx| release_channel::AppVersion::global(cx)),
-                );
-                let persistent_shell = if activation_script.is_empty() {
-                    (shell_program.clone(), Vec::new())
-                } else {
-                    let separator = shell_kind.sequential_commands_separator();
-                    let command = format!(
-                        "{}{separator} exec {shell_program} -l",
-                        activation_script.join(&format!("{separator} "))
-                    );
-                    (shell_program.clone(), shell_kind.args_for_shell(true, command))
-                };
-                let response = remote_client
-                    .read_with(cx, |remote_client, _| {
-                        remote_client.proto_client().request(proto::CreatePersistentTerminal {
-                            creation_id: Uuid::new_v4().to_string(),
-                            program: persistent_shell.0.clone(),
-                            args: persistent_shell.1.clone(),
-                            env: persistent_env.into_iter().collect(),
-                            working_directory: path.as_ref().map(|path| path.display().to_string()),
-                            rows: 24,
-                            columns: 80,
-                            pixel_width: 0,
-                            pixel_height: 0,
-                        })
-                    })
-                    .await?;
-                let client = remote_client.read_with(cx, |remote_client, _| remote_client.proto_client());
-                let streaming = remote_client.read_with(cx, |remote_client, _| {
-                    remote_client.supports_persistent_terminal_streaming()
-                });
-                TerminalBuilder::new_remote(
-                    TerminalMode::interactive(),
-                    Shell::Program(shell_program.clone()),
-                    settings.cursor_shape,
-                    settings.alternate_scroll,
-                    settings.max_scroll_history_lines,
-                    settings.path_hyperlink_regexes,
-                    Duration::from_millis(settings.path_hyperlink_timeout_ms),
-                    project.entity_id().as_u64(),
-                    path_style,
-                    client,
-                    response.server_instance_id,
-                    response.terminal_id,
-                    streaming,
-                    cx.background_executor(),
-                )
-                .remote_working_directory(remote_working_directory)
-            } else {
-                let builder = project
-                    .update(cx, move |_, cx| {
-                        let (shell, env) = match remote_client {
-                            Some(remote_client) => {
-                                let empty_args = Vec::new();
-                                let spawn_command = match remote_shell.as_ref() {
-                                    Some(Shell::System) | None => None,
-                                    Some(Shell::Program(program)) => Some((program, &empty_args)),
-                                    Some(Shell::WithArguments { program, args, .. }) => {
-                                        Some((program, args))
-                                    }
-                                };
-                                create_remote_shell(spawn_command, env, path.clone(), remote_client, cx)?
-                            }
-                            None => (settings.shell, env),
-                        };
-                        anyhow::Ok(
-                            TerminalBuilder::new(
-                                local_path.map(|path| path.to_path_buf()),
-                                TerminalMode::interactive(),
-                                shell,
-                                env,
-                                settings.cursor_shape,
-                                settings.alternate_scroll,
-                                settings.max_scroll_history_lines,
-                                settings.path_hyperlink_regexes,
-                                Duration::from_millis(settings.path_hyperlink_timeout_ms),
-                                is_via_remote,
-                                cx.entity_id().as_u64(),
-                                cx,
+            let window_id = project.entity_id().as_u64();
+            let builder = project
+                .update(cx, move |_, cx| {
+                    match remote_client {
+                        Some(remote_client) => {
+                            let (program, args) =
+                                hosted_shell_command(remote_shell.as_ref(), &shell_program);
+                            create_hosted_terminal(
+                                remote_client,
+                                program,
+                                args,
+                                shell_kind,
                                 activation_script,
+                                env,
+                                path,
+                                &settings,
+                                TerminalMode::interactive(),
+                                window_id,
                                 path_style,
-                            ),
+                                cx,
+                            )
+                        }
+                        None => Ok(TerminalBuilder::new(
+                            local_path.map(|path| path.to_path_buf()),
+                            TerminalMode::interactive(),
+                            settings.shell,
+                            env,
+                            settings.cursor_shape,
+                            settings.alternate_scroll,
+                            settings.max_scroll_history_lines,
+                            settings.path_hyperlink_regexes,
+                            Duration::from_millis(settings.path_hyperlink_timeout_ms),
+                            false,
+                            window_id,
+                            cx,
+                            activation_script,
+                            path_style,
                         )
-                    })??
-                    .await?;
-                builder.remote_working_directory(remote_working_directory)
-            };
+                        .boxed()),
+                    }
+                })??
+                .await?
+                .remote_working_directory(remote_working_directory);
             project.update(cx, move |this, cx| {
                 let terminal_handle = cx.new(|cx| builder.subscribe(cx));
 
@@ -578,10 +519,9 @@ impl Project {
     ) -> Task<Result<Entity<Terminal>>> {
         // We cannot clone the task's terminal, as it will effectively re-spawn the task, which might not be desirable.
         // For now, create a new shell instead.
-        // A Remote Server-hosted terminal's PTY lives on the server, and its clone
-        // template holds the remote shell path rather than a client-side command, so
-        // cloning it would run that shell on the client. Request a new hosted
-        // terminal instead; legacy `ssh` terminals keep their client-side template.
+        // A hosted terminal's PTY lives on the server, and its clone template holds
+        // the remote shell path rather than a client-side command, so cloning it
+        // would run that shell on the client. Request a new hosted terminal instead.
         if terminal.read(cx).task().is_some() || terminal.read(cx).is_server_hosted() {
             return self.create_terminal_shell(cwd, cx);
         }
@@ -729,40 +669,120 @@ impl Project {
     }
 }
 
-fn create_remote_shell(
-    spawn_command: Option<(&String, &Vec<String>)>,
-    mut env: HashMap<String, String>,
-    working_directory: Option<Arc<Path>>,
+/// Fails when the connection cannot host terminals.
+///
+/// Hosted terminals are the only supported remote terminal, so a connection that
+/// cannot provide one must fail instead of silently starting a client-side
+/// `ssh -t` shell. The capability advertisement is the discriminator: every Zed
+/// CN Remote Server sends both, and a server that does not is a different build.
+fn require_hosted_terminal_support(remote_client: &Entity<RemoteClient>, cx: &App) -> Result<()> {
+    let supported = remote_client.read_with(cx, |remote_client, _| {
+        remote_client.supports_persistent_terminals()
+            && remote_client.supports_persistent_terminal_streaming()
+    });
+    if !supported {
+        anyhow::bail!(i18n::t!("f9da540818e754a9"));
+    }
+    Ok(())
+}
+
+/// Requests a PTY from the Remote Server and wraps it in a client-side terminal.
+///
+/// The PTY, the program and its exit status live on the remote host; the client
+/// keeps terminal emulation and rendering. `program` and `args` must already be
+/// remote values: callers resolve the remote `Shell::System` through
+/// [`resolve_remote_shell_program`], never through `Shell::program()`, which
+/// would substitute the client's own shell.
+#[allow(clippy::too_many_arguments)]
+fn create_hosted_terminal(
     remote_client: Entity<RemoteClient>,
+    program: String,
+    args: Vec<String>,
+    shell_kind: ShellKind,
+    activation_script: Vec<String>,
+    env: HashMap<String, String>,
+    working_directory: Option<Arc<Path>>,
+    settings: &TerminalSettings,
+    mode: TerminalMode,
+    window_id: u64,
+    path_style: PathStyle,
     cx: &mut App,
-) -> Result<(Shell, HashMap<String, String>)> {
-    insert_zed_terminal_env(&mut env, &release_channel::AppVersion::global(cx));
+) -> Result<BoxFuture<'static, Result<TerminalBuilder>>> {
+    require_hosted_terminal_support(&remote_client, cx)?;
 
-    let (program, args) = match spawn_command {
-        Some((program, args)) => (Some(program.clone()), args),
-        None => (None, &Vec::new()),
+    // The Remote Server is launched over a non-PTY SSH session, so its own
+    // environment carries no terminal type; without these variables the hosted
+    // shell loses color and terminfo-based full-screen programs.
+    let env = persistent_terminal_env(env, &release_channel::AppVersion::global(cx));
+    let (program, args) = if activation_script.is_empty() {
+        (program, args)
+    } else {
+        let separator = shell_kind.sequential_commands_separator();
+        let command = format!(
+            "{}{separator} exec {program} -l",
+            activation_script.join(&format!("{separator} "))
+        );
+        (program, shell_kind.args_for_shell(true, command))
     };
-
-    let command = remote_client.read(cx).build_command(
+    // The remote shell program is what the terminal emulator reports as its
+    // shell; `program` itself is moved into the request below.
+    let template_shell = Shell::Program(program.clone());
+    let working_directory = working_directory.map(|path| path.display().to_string());
+    let client = remote_client.read(cx).proto_client();
+    let request = client.request(proto::CreatePersistentTerminal {
+        creation_id: Uuid::new_v4().to_string(),
         program,
-        args.as_slice(),
-        &env,
-        working_directory.map(|path| path.display().to_string()),
-        None,
-        Interactive::Yes,
-    )?;
+        args,
+        env: env.into_iter().collect(),
+        working_directory: working_directory.clone(),
+        rows: 24,
+        columns: 80,
+        pixel_width: 0,
+        pixel_height: 0,
+    });
+    let cursor_shape = settings.cursor_shape;
+    let alternate_scroll = settings.alternate_scroll;
+    let max_scroll_history_lines = settings.max_scroll_history_lines;
+    let path_hyperlink_regexes = settings.path_hyperlink_regexes.clone();
+    let path_hyperlink_timeout = Duration::from_millis(settings.path_hyperlink_timeout_ms);
+    let background_executor = cx.background_executor().clone();
+    Ok(async move {
+        let response = request.await?;
+        Ok(TerminalBuilder::new_remote(
+            mode,
+            template_shell,
+            cursor_shape,
+            alternate_scroll,
+            max_scroll_history_lines,
+            path_hyperlink_regexes,
+            path_hyperlink_timeout,
+            window_id,
+            path_style,
+            client,
+            response.server_instance_id,
+            response.terminal_id,
+            &background_executor,
+        )
+        .remote_working_directory(working_directory.map(PathBuf::from)))
+    }
+    .boxed())
+}
 
-    log::debug!("Connecting to a remote server: {:?}", command.program);
-    let host = remote_client.read(cx).connection_options().display_name();
-
-    Ok((
-        Shell::WithArguments {
-            program: command.program,
-            args: command.args,
-            title_override: Some(format!("{} — Terminal", host)),
-        },
-        command.env,
-    ))
+/// Resolves the program and arguments a hosted terminal must start.
+///
+/// `connection_shell` is the shell the connection probed on the remote host.
+/// `Shell::System` and a missing setting must both resolve to that remote shell:
+/// `Shell::program()` would substitute the client's own shell, which is how a
+/// Windows `powershell.exe` path once reached a Linux host.
+fn hosted_shell_command(
+    remote_shell: Option<&Shell>,
+    connection_shell: &str,
+) -> (String, Vec<String>) {
+    match remote_shell {
+        Some(Shell::WithArguments { program, args, .. }) => (program.clone(), args.clone()),
+        Some(Shell::Program(program)) => (program.clone(), Vec::new()),
+        Some(Shell::System) | None => (connection_shell.to_string(), Vec::new()),
+    }
 }
 
 fn resolve_remote_shell_program(remote_shell: Option<&Shell>, connection_shell: String) -> String {
@@ -915,6 +935,40 @@ mod tests {
         assert_eq!(
             format_task_for_activation(&task, ShellKind::PowerShell, "powershell.exe", true),
             "&cmd.exe /S /C '\"echo It''s fine\"'"
+        );
+    }
+
+    #[test]
+    fn hosted_shell_command_uses_the_remote_connection_shell_for_system() {
+        for connection_shell in ["/bin/bash", "cmd.exe"] {
+            for remote_shell in [Some(&Shell::System), None] {
+                assert_eq!(
+                    hosted_shell_command(remote_shell, connection_shell),
+                    (connection_shell.to_string(), Vec::new())
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn hosted_shell_command_preserves_explicit_remote_programs_and_arguments() {
+        assert_eq!(
+            hosted_shell_command(Some(&Shell::Program("/bin/fish".to_string())), "cmd.exe"),
+            ("/bin/fish".to_string(), Vec::new())
+        );
+        assert_eq!(
+            hosted_shell_command(
+                Some(&Shell::WithArguments {
+                    program: "/bin/zsh".to_string(),
+                    args: vec!["-l".to_string(), "-i".to_string()],
+                    title_override: None,
+                }),
+                "cmd.exe"
+            ),
+            (
+                "/bin/zsh".to_string(),
+                vec!["-l".to_string(), "-i".to_string()]
+            )
         );
     }
 

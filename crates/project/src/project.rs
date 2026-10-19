@@ -251,31 +251,11 @@ mod document_loading_tests {
     }
 
     #[test]
-    fn document_formats_and_server_source() {
+    fn document_formats_and_size_limits() {
         for extension in ["pdf", "EPUB", "xlsx", "xlsm", "xlsb", "xls", "ods", "DXF"] {
             assert!(document_file_size_limit(extension).is_some());
         }
         assert!(document_file_size_limit("txt").is_none());
-        let options = remote::SshConnectionOptions::default();
-        assert!(!custom_protocol_source_allowed(
-            &remote::RemoteConnectionOptions::Ssh(options.clone())
-        ));
-        let mut options = options;
-        options.remote_server_source = settings::RemoteServerSource::ZedCn;
-        assert!(custom_protocol_source_allowed(
-            &remote::RemoteConnectionOptions::Ssh(options)
-        ));
-    }
-}
-
-fn custom_protocol_source_allowed(options: &remote::RemoteConnectionOptions) -> bool {
-    match options {
-        remote::RemoteConnectionOptions::Ssh(options) => {
-            options.remote_server_source == settings::RemoteServerSource::ZedCn
-        }
-        #[cfg(any(test, feature = "test-support"))]
-        remote::RemoteConnectionOptions::Mock(_) => true,
-        _ => false,
     }
 }
 
@@ -2458,7 +2438,6 @@ impl Project {
         self.remote_client.as_ref().is_some_and(|client| {
             let client = client.read(cx);
             client.supports_upload_chunks()
-                && custom_protocol_source_allowed(&client.connection_options())
         })
     }
 
@@ -2470,7 +2449,6 @@ impl Project {
         self.remote_client.as_ref().is_some_and(|client| {
             let client = client.read(cx);
             client.supports_download_chunks()
-                && custom_protocol_source_allowed(&client.connection_options())
         })
     }
 
@@ -2482,7 +2460,6 @@ impl Project {
         self.remote_client.as_ref().is_some_and(|client| {
             let client = client.read(cx);
             client.supports_git_operation_cancellation()
-                && custom_protocol_source_allowed(&client.connection_options())
         })
     }
 
@@ -3483,7 +3460,6 @@ impl Project {
         let Some(client) = self.remote_client.as_ref().filter(|client| {
             let client = client.read(cx);
             client.supports_office_entries()
-                && custom_protocol_source_allowed(&client.connection_options())
         }) else {
             return Task::ready(Err(anyhow!(i18n::t!("05720b24baa5d61e"))));
         };
@@ -3521,7 +3497,6 @@ impl Project {
         let Some(client) = self.remote_client.as_ref().filter(|client| {
             let client = client.read(cx);
             client.supports_epub_entries()
-                && custom_protocol_source_allowed(&client.connection_options())
         }) else {
             return Task::ready(Err(anyhow!(i18n::t!("05720b24baa5d61e"))));
         };
@@ -3559,13 +3534,13 @@ impl Project {
             .is_some_and(|extension| extension.eq_ignore_ascii_case("dxf"));
         let Some(client) = self.remote_client.as_ref().filter(|client| {
             let client = client.read(cx);
-            (if is_model {
+            if is_model {
                 client.supports_model_chunks()
             } else if is_cad {
                 client.supports_cad_documents()
             } else {
                 client.supports_document_chunks()
-            }) && custom_protocol_source_allowed(&client.connection_options())
+            }
         }) else {
             let message = if is_model {
                 i18n::t!("3eb2f17c6a2710fa")

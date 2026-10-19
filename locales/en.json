@@ -5554,5 +5554,7 @@
   "1031cfcb802afd94": "Jump hosts",
   "174ee9d6ee539ded": "Automatic follows the current client setting.",
   "803ceae2249c2334": "e.g. Home server",
-  "ec07ed7f41b88860": "Leave empty for the default; raise it on slow networks."
+  "ec07ed7f41b88860": "Leave empty for the default; raise it on slow networks.",
+  "f5e4d34b558e9646": "Remote terminals require the Zed CN Remote Server",
+  "f9da540818e754a9": "The Remote Server does not support hosted terminals; update the Zed CN Remote Server"
 }

@@ -133,7 +133,6 @@ fn ssh_connection_from_options(options: &remote::SshConnectionOptions) -> SshCon
         nickname: options.nickname.clone(),
         args: options.args.clone().unwrap_or_default(),
         upload_binary_over_ssh: None,
-        remote_server_source: Some(options.remote_server_source),
         port_forwards: options.port_forwards.clone(),
         connection_timeout: options.connection_timeout,
         auth_method: options.auth_method,
@@ -286,7 +285,6 @@ struct RemoteServerFormDraft {
     proxy: Option<String>,
     proxy_disabled: bool,
     connection_timeout: Option<u16>,
-    remote_server_source: Option<settings::RemoteServerSource>,
 }
 
 /// The fill-in-the-blanks SSH server form.
@@ -312,9 +310,6 @@ struct CreateRemoteServerForm {
     /// Whether the advanced section is expanded. Only affects the current
     /// form; nothing here is persisted.
     advanced_open: bool,
-    /// Explicit Remote Server distribution for this host. `None` follows the
-    /// client default, matching an unset `remote_server_source` in settings.
-    remote_server_source: Option<settings::RemoteServerSource>,
     /// Inline validation message for the host field, so the error appears next
     /// to the field instead of only in the footer.
     host_error: Option<SharedString>,
@@ -352,7 +347,6 @@ impl CreateRemoteServerForm {
             jump_host_picker: None,
             proxy_disabled: false,
             advanced_open: false,
-            remote_server_source: None,
             host_error: None,
             saved_index: None,
             error: None,
@@ -374,12 +368,6 @@ impl CreateRemoteServerForm {
         }
         if trimmed_text(self.proxy_editor.read(cx).text(cx)).is_some() {
             parts.push(i18n::t!("48b970b568a7f8f9").to_string());
-        }
-        if let Some(source) = self.remote_server_source {
-            parts.push(match source {
-                settings::RemoteServerSource::Official => i18n::t!("e73e38c1f65d0326").to_string(),
-                settings::RemoteServerSource::ZedCn => "Zed CN".to_string(),
-            });
         }
         if parts.is_empty() {
             None
@@ -700,187 +688,6 @@ struct ProjectPicker {
     data: ProjectPickerData,
     picker: Entity<Picker<OpenPathDelegate>>,
     _path_task: Shared<Task<Option<()>>>,
-}
-
-struct RemoteServerSourcePickerDelegate {
-    index: SshServerIndex,
-    connection: SshConnection,
-    parent_modal: WeakEntity<RemoteServerProjects>,
-    selected_index: usize,
-    matches: Vec<settings::RemoteServerSource>,
-}
-
-impl RemoteServerSourcePickerDelegate {
-    fn label(source: settings::RemoteServerSource) -> &'static str {
-        match source {
-            settings::RemoteServerSource::Official => i18n::t!("f4d01e6a6436dd7a"),
-            settings::RemoteServerSource::ZedCn => "Zed CN",
-        }
-    }
-}
-
-impl PickerDelegate for RemoteServerSourcePickerDelegate {
-    type ListItem = AnyElement;
-
-    fn name() -> &'static str {
-        "remote server source picker"
-    }
-
-    fn match_count(&self) -> usize {
-        self.matches.len()
-    }
-
-    fn selected_index(&self) -> usize {
-        self.selected_index
-    }
-
-    fn set_selected_index(&mut self, index: usize, _: &mut Window, _: &mut Context<Picker<Self>>) {
-        self.selected_index = index;
-    }
-
-    fn placeholder_text(&self, _: &mut Window, _: &mut App) -> Arc<str> {
-        i18n::t_args!(
-            "42031c6c944a4350",
-            self.connection
-                .nickname
-                .as_deref()
-                .unwrap_or(&self.connection.host)
-        )
-        .into()
-    }
-
-    fn update_matches(
-        &mut self,
-        query: String,
-        _: &mut Window,
-        _: &mut Context<Picker<Self>>,
-    ) -> Task<()> {
-        let selected = self.matches.get(self.selected_index).copied();
-        self.matches = [
-            settings::RemoteServerSource::Official,
-            settings::RemoteServerSource::ZedCn,
-        ]
-        .into_iter()
-        .filter(|source| {
-            Self::label(*source)
-                .to_lowercase()
-                .contains(&query.to_lowercase())
-        })
-        .collect();
-        self.selected_index = self
-            .matches
-            .iter()
-            .position(|source| Some(*source) == selected)
-            .unwrap_or(0);
-        Task::ready(())
-    }
-
-    fn confirm(&mut self, _: bool, window: &mut Window, cx: &mut Context<Picker<Self>>) {
-        let Some(source) = self.matches.get(self.selected_index).copied() else {
-            return;
-        };
-        let index = self.index;
-        let connection = self.connection.clone();
-        self.parent_modal
-            .update(cx, |modal, cx| {
-                modal.update_settings_file(cx, move |settings, _| {
-                    if let Some(server) = settings
-                        .ssh_connections
-                        .as_mut()
-                        .and_then(|servers| servers.get_mut(index.0))
-                        && server.host == connection.host
-                        && server.username == connection.username
-                        && server.port == connection.port
-                    {
-                        server.remote_server_source = Some(source);
-                        server.upload_binary_over_ssh = Some(true);
-                    }
-                });
-                modal.cancel(&menu::Cancel, window, cx);
-            })
-            .log_err();
-    }
-
-    fn dismissed(&mut self, window: &mut Window, cx: &mut Context<Picker<Self>>) {
-        self.parent_modal
-            .update(cx, |modal, cx| modal.cancel(&menu::Cancel, window, cx))
-            .log_err();
-    }
-
-    fn render_match(
-        &self,
-        index: usize,
-        selected: bool,
-        _: &mut Window,
-        cx: &mut Context<Picker<Self>>,
-    ) -> Option<AnyElement> {
-        let source = *self.matches.get(index)?;
-        let current = source
-            == self
-                .connection
-                .remote_server_source
-                .unwrap_or_else(|| remote::default_remote_server_source(cx));
-        Some(
-            ListItem::new(index)
-                .inset(true)
-                .toggle_state(selected)
-                .child(
-                    v_flex()
-                        .child(Label::new(format!(
-                            "{}{}",
-                            Self::label(source),
-                            if current {
-                                i18n::t!("58d8cd20d2e6b681")
-                            } else {
-                                ""
-                            }
-                        )))
-                        .child(
-                            Label::new(match source {
-                                settings::RemoteServerSource::Official => {
-                                    i18n::t!("f9fdf830e4be4b67")
-                                }
-                                settings::RemoteServerSource::ZedCn => {
-                                    i18n::t!("5a7a2861c0df18b4")
-                                }
-                            })
-                            .size(LabelSize::Small)
-                            .color(Color::Muted),
-                        ),
-                )
-                .into_any_element(),
-        )
-    }
-
-    fn render_footer(&self, _: &mut Window, cx: &mut Context<Picker<Self>>) -> Option<AnyElement> {
-        Some(
-            v_flex()
-                .p_2()
-                .gap_1()
-                .border_t_1()
-                .border_color(cx.theme().colors().border_variant)
-                .child(
-                    Label::new(i18n::t!("6675c275c2ae4d5e"))
-                        .size(LabelSize::Small)
-                        .color(Color::Muted),
-                )
-                .child(
-                    Label::new(i18n::t!("2944af31611a1489"))
-                        .size(LabelSize::Small)
-                        .color(Color::Muted),
-                )
-                .child(
-                    h_flex().justify_end().child(
-                        Button::new("confirm-source", i18n::t!("c11330b85234f9c0"))
-                            .key_binding(KeyBinding::for_action(&menu::Confirm, cx))
-                            .on_click(|_, window, cx| {
-                                window.dispatch_action(menu::Confirm.boxed_clone(), cx)
-                            }),
-                    ),
-                )
-                .into_any_element(),
-        )
-    }
 }
 
 struct EditNicknameState {
@@ -1525,7 +1332,6 @@ impl ViewServerOptionsState {
 enum Mode {
     Default,
     ViewServerOptions(ViewServerOptionsState),
-    RemoteServerSource(Entity<Picker<RemoteServerSourcePickerDelegate>>),
     EditNickname(EditNicknameState),
     ProjectPicker(Entity<ProjectPicker>),
     CreateRemoteServer(CreateRemoteServer),
@@ -1576,9 +1382,6 @@ enum RemoteMatch {
     ViewServerOptions {
         server: usize,
     },
-    RemoteServerSource {
-        server: usize,
-    },
     RemoteTerminal {
         server: usize,
     },
@@ -1595,7 +1398,6 @@ impl RemoteMatch {
             RemoteMatch::Project { .. }
             | RemoteMatch::OpenFolder { .. }
             | RemoteMatch::ViewServerOptions { .. }
-            | RemoteMatch::RemoteServerSource { .. }
             | RemoteMatch::RemoteTerminal { .. }
                 if searching =>
             {
@@ -1830,9 +1632,6 @@ impl RemoteServerPickerDelegate {
                             server: server_index,
                         });
                         if matches!(connection, Connection::Ssh(_)) {
-                            matches.push(RemoteMatch::RemoteServerSource {
-                                server: server_index,
-                            });
                             matches.push(RemoteMatch::RemoteTerminal {
                                 server: server_index,
                             });
@@ -1844,9 +1643,6 @@ impl RemoteServerPickerDelegate {
                         });
                         matches.push(RemoteMatch::Separator);
                         matches.push(RemoteMatch::ViewServerOptions {
-                            server: server_index,
-                        });
-                        matches.push(RemoteMatch::RemoteServerSource {
                             server: server_index,
                         });
                         matches.push(RemoteMatch::RemoteTerminal {
@@ -1907,9 +1703,6 @@ impl RemoteServerPickerDelegate {
                                 server: server_index,
                             });
                             if matches!(connection, Connection::Ssh(_)) {
-                                matches.push(RemoteMatch::RemoteServerSource {
-                                    server: server_index,
-                                });
                                 matches.push(RemoteMatch::RemoteTerminal {
                                     server: server_index,
                                 });
@@ -1921,9 +1714,6 @@ impl RemoteServerPickerDelegate {
                             });
                             matches.push(RemoteMatch::Separator);
                             matches.push(RemoteMatch::ViewServerOptions {
-                                server: server_index,
-                            });
-                            matches.push(RemoteMatch::RemoteServerSource {
                                 server: server_index,
                             });
                             matches.push(RemoteMatch::RemoteTerminal {
@@ -2299,20 +2089,6 @@ impl PickerDelegate for RemoteServerPickerDelegate {
                     })
                     .log_err();
             }
-            RemoteMatch::RemoteServerSource { server } => {
-                let Some(picker_server) = self.picker_server(*server) else {
-                    return;
-                };
-                remote_server_projects
-                    .update(cx, |this, cx| {
-                        let (index, connection) = this.save_picker_server(picker_server, cx);
-                        let Connection::Ssh(connection) = connection else {
-                            return;
-                        };
-                        this.choose_remote_server_source(index, connection, window, cx);
-                    })
-                    .log_err();
-            }
             RemoteMatch::ViewServerOptions { server } => {
                 let Some(picker_server) = self.picker_server(*server) else {
                     return;
@@ -2420,23 +2196,6 @@ impl PickerDelegate for RemoteServerPickerDelegate {
                 i18n::t!("136cbc80612aee9b"),
                 selected,
             )),
-            RemoteMatch::RemoteServerSource { server } => {
-                let Some(RemoteEntry::Project {
-                    connection: Connection::Ssh(connection),
-                    ..
-                }) = self.state.servers.get(*server)
-                else {
-                    return None;
-                };
-                let source = connection
-                    .remote_server_source
-                    .unwrap_or_else(|| remote::default_remote_server_source(cx));
-                let label = match source {
-                    settings::RemoteServerSource::Official => i18n::t!("4ea080c2c7c5be6d"),
-                    settings::RemoteServerSource::ZedCn => i18n::t!("e9b311484f597a82"),
-                };
-                Some(self.render_action_item(ix, IconName::Server, label, selected))
-            }
             RemoteMatch::ViewServerOptions { .. } => Some(self.render_action_item(
                 ix,
                 IconName::Settings,
@@ -2783,7 +2542,7 @@ impl RemoteServerProjects {
             return;
         }
 
-        let mut connection_options = match SshConnectionOptions::parse_command_line(&input) {
+        let connection_options = match SshConnectionOptions::parse_command_line(&input) {
             Ok(c) => c,
             Err(e) => {
                 self.mode = Mode::CreateRemoteServer(CreateRemoteServer {
@@ -2795,7 +2554,6 @@ impl RemoteServerProjects {
                 return;
             }
         };
-        connection_options.remote_server_source = remote::default_remote_server_source(cx);
         let ssh_prompt = cx.new(|cx| {
             RemoteConnectionPrompt::new(
                 connection_options.connection_string(),
@@ -2929,39 +2687,6 @@ impl RemoteServerProjects {
             connection_prompt: Some(prompt),
             _creating: Some(creating),
         });
-    }
-
-    fn choose_remote_server_source(
-        &mut self,
-        index: ServerIndex,
-        connection: SshConnection,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let ServerIndex::Ssh(index) = index else {
-            return;
-        };
-        let selected_index = match connection
-            .remote_server_source
-            .unwrap_or_else(|| remote::default_remote_server_source(cx))
-        {
-            settings::RemoteServerSource::Official => 0,
-            settings::RemoteServerSource::ZedCn => 1,
-        };
-        let delegate = RemoteServerSourcePickerDelegate {
-            index,
-            connection,
-            parent_modal: cx.weak_entity(),
-            selected_index,
-            matches: vec![
-                settings::RemoteServerSource::Official,
-                settings::RemoteServerSource::ZedCn,
-            ],
-        };
-        let picker = cx.new(|cx| Picker::uniform_list(delegate, window, cx).embedded());
-        picker.focus_handle(cx).focus(window, cx);
-        self.mode = Mode::RemoteServerSource(picker);
-        cx.notify();
     }
 
     fn view_server_options(
@@ -3111,7 +2836,7 @@ impl RemoteServerProjects {
 
     fn confirm(&mut self, _: &menu::Confirm, window: &mut Window, cx: &mut Context<Self>) {
         match &self.mode {
-            Mode::Default | Mode::ViewServerOptions(_) | Mode::RemoteServerSource(_) => {}
+            Mode::Default | Mode::ViewServerOptions(_) => {}
             Mode::ProjectPicker(_) => {}
             Mode::CreateRemoteServer(state) => {
                 if let Some(prompt) = state.ssh_prompt.as_ref() {
@@ -3479,18 +3204,6 @@ impl RemoteServerProjects {
         cx.notify();
     }
 
-    fn set_form_remote_server_source(
-        &mut self,
-        source: Option<settings::RemoteServerSource>,
-        cx: &mut Context<Self>,
-    ) {
-        if let Mode::CreateRemoteServerForm(state) = &mut self.mode {
-            state.remote_server_source = source;
-            state.error = None;
-        }
-        cx.notify();
-    }
-
     fn set_form_key_file(&mut self, path: PathBuf, cx: &mut Context<Self>) {
         if let Mode::CreateRemoteServerForm(state) = &mut self.mode {
             state.key_file = Some(path);
@@ -3623,7 +3336,6 @@ impl RemoteServerProjects {
             proxy,
             proxy_disabled: state.proxy_disabled,
             connection_timeout,
-            remote_server_source: state.remote_server_source,
         })
     }
 
@@ -3644,9 +3356,6 @@ impl RemoteServerProjects {
             Mode::CreateRemoteServerForm(state) => state.saved_index,
             _ => None,
         };
-        let remote_server_source = draft
-            .remote_server_source
-            .unwrap_or_else(|| remote::default_remote_server_source(cx));
 
         if let Mode::CreateRemoteServerForm(state) = &mut self.mode {
             state.error = None;
@@ -3699,7 +3408,6 @@ impl RemoteServerProjects {
                     connection_timeout: draft.connection_timeout,
                     nickname: draft.nickname.clone(),
                     upload_binary_over_ssh: true,
-                    remote_server_source,
                     auth_method: Some(draft.auth_method),
                     ssh_key_id: key_id.clone(),
                     jump_hosts: draft.jump_hosts.clone(),
@@ -3707,12 +3415,8 @@ impl RemoteServerProjects {
                     proxy_disabled: draft.proxy_disabled,
                 };
 
-                let index = this.persist_form_connection(
-                    &connection_options,
-                    draft.remote_server_source,
-                    saved_index,
-                    cx,
-                );
+                let index =
+                    this.persist_form_connection(&connection_options, saved_index, cx);
                 if let Mode::CreateRemoteServerForm(state) = &mut this.mode {
                     state.saved_index = Some(index);
                     state.key_id = key_id;
@@ -3730,18 +3434,13 @@ impl RemoteServerProjects {
     /// retrying never produces duplicates.
     /// Saves the form entry, replacing the entry a previous attempt created so
     /// retrying never produces duplicates.
-    ///
-    /// `remote_server_source` is stored as chosen: `None` keeps following the
-    /// client default instead of pinning today's resolved source.
     fn persist_form_connection(
         &mut self,
         connection_options: &remote::SshConnectionOptions,
-        remote_server_source: Option<settings::RemoteServerSource>,
         existing_index: Option<SshServerIndex>,
         cx: &mut Context<Self>,
     ) -> SshServerIndex {
-        let mut connection = ssh_connection_from_options(connection_options);
-        connection.remote_server_source = remote_server_source;
+        let connection = ssh_connection_from_options(connection_options);
         let index = existing_index.unwrap_or_else(|| {
             SshServerIndex(RemoteSettings::get_global(cx).ssh_connections().count())
         });
@@ -4560,65 +4259,6 @@ impl RemoteServerProjects {
                                                 form_input_surface(&state.timeout_editor, false, cx),
                                             ),
                                         ),
-                                )
-                                .child(
-                                    v_flex()
-                                        .flex_1()
-                                        .min_w_0()
-                                        .gap_1()
-                                        .child(form_label(
-                                            i18n::t!("662a98128a924ea0"),
-                                            Some(i18n::t!("174ee9d6ee539ded").into()),
-                                        ))
-                                        .child(
-                                            h_flex()
-                                                .w_full()
-                                                .gap_0p5()
-                                                .p_0p5()
-                                                .rounded_md()
-                                                .border_1()
-                                                .border_color(colors.border)
-                                                .bg(colors.editor_background)
-                                                .child(form_segment(
-                                                    SharedString::from("server-source-auto"),
-                                                    i18n::t!("7eb336e42cb5076b"),
-                                                    state.remote_server_source.is_none(),
-                                                    cx.listener(|this, _, _, cx| {
-                                                        this.set_form_remote_server_source(None, cx)
-                                                    }),
-                                                    cx,
-                                                ))
-                                                .child(form_segment(
-                                                    SharedString::from("server-source-official"),
-                                                    i18n::t!("e73e38c1f65d0326"),
-                                                    matches!(
-                                                        state.remote_server_source,
-                                                        Some(settings::RemoteServerSource::Official)
-                                                    ),
-                                                    cx.listener(|this, _, _, cx| {
-                                                        this.set_form_remote_server_source(
-                                                            Some(settings::RemoteServerSource::Official),
-                                                            cx,
-                                                        )
-                                                    }),
-                                                    cx,
-                                                ))
-                                                .child(form_segment(
-                                                    SharedString::from("server-source-zed-cn"),
-                                                    "Zed CN",
-                                                    matches!(
-                                                        state.remote_server_source,
-                                                        Some(settings::RemoteServerSource::ZedCn)
-                                                    ),
-                                                    cx.listener(|this, _, _, cx| {
-                                                        this.set_form_remote_server_source(
-                                                            Some(settings::RemoteServerSource::ZedCn),
-                                                            cx,
-                                                        )
-                                                    }),
-                                                    cx,
-                                                )),
-                                        ),
                                 ),
                         )
                         .child(
@@ -5420,7 +5060,6 @@ impl RemoteServerProjects {
         self.add_ssh_server(
             SshConnectionOptions {
                 host: ssh_config_host.to_string().into(),
-                remote_server_source: remote::default_remote_server_source(cx),
                 ..SshConnectionOptions::default()
             },
             cx,
@@ -5518,7 +5157,6 @@ impl Focusable for RemoteServerProjects {
     fn focus_handle(&self, cx: &App) -> FocusHandle {
         match &self.mode {
             Mode::Default => self.default_picker.focus_handle(cx),
-            Mode::RemoteServerSource(picker) => picker.focus_handle(cx),
             Mode::ProjectPicker(picker) => picker.focus_handle(cx),
             _ => self.focus_handle.clone(),
         }
@@ -5545,7 +5183,6 @@ impl Render for RemoteServerProjects {
             }))
             .child(match &self.mode {
                 Mode::Default => self.render_default(window, cx).into_any_element(),
-                Mode::RemoteServerSource(picker) => picker.clone().into_any_element(),
                 Mode::ViewServerOptions(state) => self
                     .render_view_options(state.clone(), window, cx)
                     .into_any_element(),
@@ -5581,7 +5218,7 @@ mod filter_tests {
     }
 
     #[test]
-    fn remote_server_source_entry_follows_options_for_each_ssh_host() {
+    fn ssh_host_rows_expose_server_options_and_terminal_mode() {
         let entries = vec![RemoteEntry::Project {
             projects: Vec::new(),
             connection: Connection::Ssh(SshConnection {
@@ -5618,7 +5255,7 @@ mod filter_tests {
             entries,
             [
                 RemoteMatch::ViewServerOptions { server: 0 },
-                RemoteMatch::RemoteServerSource { server: 0 }
+                RemoteMatch::RemoteTerminal { server: 0 }
             ]
         )));
     }
@@ -5661,75 +5298,6 @@ mod tests {
             editor::init(cx);
             state
         })
-    }
-
-    #[gpui::test]
-    async fn test_remote_server_source_picker_persists_and_cancels(cx: &mut TestAppContext) {
-        let app_state = init_test(cx);
-        let fs = app_state.fs.clone();
-        let connection = SshConnection {
-            host: "example.com".into(),
-            ..Default::default()
-        };
-        cx.update(|cx| {
-            update_settings_file(fs.clone(), cx, {
-                let connection = connection.clone();
-                move |settings, _| settings.remote.ssh_connections = Some(vec![connection])
-            })
-        });
-        cx.run_until_parked();
-        let project = Project::test(fs.clone(), [], cx).await;
-        let (workspace, cx) =
-            cx.add_window_view(|window, cx| Workspace::test_new(project, window, cx));
-        let modal = workspace.update_in(cx, |_, window, cx| {
-            let workspace = cx.weak_entity();
-            cx.new(|cx| RemoteServerProjects::new(false, fs.clone(), window, workspace, cx))
-        });
-        for (answer, expected) in [
-            ("Zed CN", settings::RemoteServerSource::ZedCn),
-            ("取消", settings::RemoteServerSource::ZedCn),
-            ("官方 Zed", settings::RemoteServerSource::Official),
-        ] {
-            modal.update_in(cx, |modal, window, cx| {
-                modal.choose_remote_server_source(
-                    ServerIndex::Ssh(SshServerIndex(0)),
-                    connection.clone(),
-                    window,
-                    cx,
-                )
-            });
-            let picker = modal.read_with(cx, |modal, _| {
-                let Mode::RemoteServerSource(picker) = &modal.mode else {
-                    panic!("expected embedded source picker");
-                };
-                picker.clone()
-            });
-            picker.update_in(cx, |picker, window, cx| {
-                if answer == "取消" {
-                    picker.delegate.dismissed(window, cx);
-                } else {
-                    picker.delegate.selected_index = picker
-                        .delegate
-                        .matches
-                        .iter()
-                        .position(|source| {
-                            RemoteServerSourcePickerDelegate::label(*source) == answer
-                        })
-                        .expect("source option");
-                    picker.delegate.confirm(false, window, cx);
-                }
-            });
-            modal.read_with(cx, |modal, _| assert!(matches!(modal.mode, Mode::Default)));
-            cx.run_until_parked();
-            cx.update(|_, cx| {
-                let connection = RemoteSettings::get_global(cx)
-                    .ssh_connections()
-                    .next()
-                    .expect("connection");
-                assert_eq!(connection.remote_server_source, Some(expected));
-                assert_eq!(connection.upload_binary_over_ssh, Some(true));
-            });
-        }
     }
 
     #[gpui::test]
@@ -5913,13 +5481,10 @@ mod tests {
         });
         cx.run_until_parked();
 
-        let (connections, default_source) = cx.update(|_, cx| {
-            (
-                RemoteSettings::get_global(cx)
-                    .ssh_connections()
-                    .collect::<Vec<_>>(),
-                remote::default_remote_server_source(cx),
-            )
+        let connections = cx.update(|_, cx| {
+            RemoteSettings::get_global(cx)
+                .ssh_connections()
+                .collect::<Vec<_>>()
         });
 
         assert_eq!(connections.len(), 2);
@@ -5933,14 +5498,8 @@ mod tests {
         assert_eq!(connections[0].projects.len(), 1);
         assert!(connections[new_index.0].projects.is_empty());
         assert_eq!(
-            default_source,
-            settings::RemoteServerSource::ZedCn,
-            "the test client embeds a custom release tag"
-        );
-        assert_eq!(
-            connections[new_index.0].remote_server_source,
-            Some(settings::RemoteServerSource::ZedCn),
-            "an implicitly added SSH-config host follows the resolved default source"
+            connections[new_index.0].upload_binary_over_ssh, None,
+            "an implicitly added SSH-config host keeps the default upload mode"
         );
     }
 
@@ -5991,17 +5550,13 @@ mod tests {
             "an SSH-config host is saved and returned as a saved connection"
         );
 
-        let (connections, default_source) = cx.update(|_, cx| {
-            (
-                RemoteSettings::get_global(cx)
-                    .ssh_connections()
-                    .collect::<Vec<_>>(),
-                remote::default_remote_server_source(cx),
-            )
+        let connections = cx.update(|_, cx| {
+            RemoteSettings::get_global(cx)
+                .ssh_connections()
+                .collect::<Vec<_>>()
         });
         assert_eq!(connections.len(), 1);
         assert_eq!(connections[0].host, "host-b.example");
-        assert_eq!(connections[0].remote_server_source, Some(default_source));
     }
 
     #[gpui::test]
@@ -6096,7 +5651,6 @@ mod tests {
                 username: Some("dev".into()),
                 port: Some(2222),
                 nickname: Some("测试主机".into()),
-                remote_server_source: settings::RemoteServerSource::ZedCn,
                 auth_method: Some(SshAuthMethod::Key),
                 ssh_key_id: Some("key-id".into()),
                 jump_hosts: vec![JumpHost {
@@ -6109,10 +5663,9 @@ mod tests {
                 ..Default::default()
             };
 
-            let source = Some(settings::RemoteServerSource::ZedCn);
-            let index = modal.persist_form_connection(&options, source, None, cx);
+            let index = modal.persist_form_connection(&options, None, cx);
             assert_eq!(index, SshServerIndex(0));
-            let updated = modal.persist_form_connection(&options, source, Some(index), cx);
+            let updated = modal.persist_form_connection(&options, Some(index), cx);
             assert_eq!(updated, index);
         });
         cx.run_until_parked();
@@ -6138,46 +5691,6 @@ mod tests {
                 Some("socks5://127.0.0.1:1080")
             );
             assert_eq!(connection.connection_timeout, Some(30));
-            assert_eq!(
-                connection.remote_server_source,
-                Some(settings::RemoteServerSource::ZedCn)
-            );
-        });
-    }
-
-    #[gpui::test]
-    async fn test_add_server_form_keeps_automatic_server_source_unset(cx: &mut TestAppContext) {
-        let app_state = init_test(cx);
-        let fs = app_state.fs.clone();
-        let project = Project::test(fs.clone(), [], cx).await;
-        let (workspace, cx) =
-            cx.add_window_view(|window, cx| Workspace::test_new(project, window, cx));
-        let modal = workspace.update_in(cx, |_workspace, window, cx| {
-            let workspace = cx.weak_entity();
-            cx.new(|cx| RemoteServerProjects::new(false, fs.clone(), window, workspace, cx))
-        });
-
-        modal.update(cx, |modal, cx| {
-            let options = SshConnectionOptions {
-                host: "target.example".into(),
-                remote_server_source: settings::RemoteServerSource::ZedCn,
-                ..Default::default()
-            };
-            // The picker showed "automatic", so the entry must stay unset even
-            // though the resolved source used for connecting was Zed CN.
-            modal.persist_form_connection(&options, None, None, cx);
-        });
-        cx.run_until_parked();
-
-        cx.update(|_, cx| {
-            let connection = RemoteSettings::get_global(cx)
-                .ssh_connections()
-                .next()
-                .expect("the entry was saved");
-            assert_eq!(
-                connection.remote_server_source, None,
-                "an automatic source must not be pinned to today's resolution"
-            );
         });
     }
 
@@ -6413,12 +5926,11 @@ mod tests {
             state.proxy_editor.update(cx, |editor, cx| {
                 editor.set_text("socks5://127.0.0.1:1080", window, cx)
             });
-            state.remote_server_source = Some(settings::RemoteServerSource::ZedCn);
             assert_eq!(
                 state.advanced_summary(cx).as_deref(),
                 Some(
                     format!(
-                        "{} 1 · {} · Zed CN",
+                        "{} 1 · {}",
                         i18n::t!("1031cfcb802afd94"),
                         i18n::t!("48b970b568a7f8f9")
                     )
@@ -6549,7 +6061,6 @@ mod picker_view_tests {
                 RemoteMatch::Project { .. }
                     | RemoteMatch::OpenFolder { .. }
                     | RemoteMatch::ViewServerOptions { .. }
-                    | RemoteMatch::RemoteServerSource { .. }
             )),
             "the default view must not inline per-server entries: {:?}",
             delegate
@@ -6639,7 +6150,6 @@ mod picker_view_tests {
             "open_folder",
             "project",
             "view_server_options",
-            "remote_server_source",
             "remote_terminal",
         ] {
             let found = delegate
@@ -6649,7 +6159,6 @@ mod picker_view_tests {
                     ("open_folder", RemoteMatch::OpenFolder { .. }) => true,
                     ("project", RemoteMatch::Project { .. }) => true,
                     ("view_server_options", RemoteMatch::ViewServerOptions { .. }) => true,
-                    ("remote_server_source", RemoteMatch::RemoteServerSource { .. }) => true,
                     ("remote_terminal", RemoteMatch::RemoteTerminal { .. }) => true,
                     _ => false,
                 });
@@ -6766,7 +6275,7 @@ mod picker_view_tests {
         ));
         assert!(matches!(
             delegate.matches.get(7),
-            Some(RemoteMatch::RemoteServerSource { server: 0 })
+            Some(RemoteMatch::RemoteTerminal { server: 0 })
         ));
         assert_eq!(
             delegate.selected_index, 1,
@@ -6799,13 +6308,9 @@ mod picker_view_tests {
         ));
         assert!(matches!(
             delegate.matches.get(4),
-            Some(RemoteMatch::RemoteServerSource { server: 0 })
-        ));
-        assert!(matches!(
-            delegate.matches.get(5),
             Some(RemoteMatch::RemoteTerminal { server: 0 })
         ));
-        assert_eq!(delegate.matches.len(), 6);
+        assert_eq!(delegate.matches.len(), 5);
     }
 
     #[test]
@@ -6833,13 +6338,9 @@ mod picker_view_tests {
         ));
         assert!(matches!(
             delegate.matches.get(4),
-            Some(RemoteMatch::RemoteServerSource { server: 0 })
-        ));
-        assert!(matches!(
-            delegate.matches.get(5),
             Some(RemoteMatch::RemoteTerminal { server: 0 })
         ));
-        assert_eq!(delegate.matches.len(), 6);
+        assert_eq!(delegate.matches.len(), 5);
         assert!(
             delegate
                 .matches
