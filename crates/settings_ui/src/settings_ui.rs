@@ -1097,7 +1097,7 @@ struct NavBarEntry {
     focus_handle: FocusHandle,
 }
 
-/// 侧栏导航中页面所属的分组，分组标题显示在每组第一个页面之上。
+/// 侧栏导航中页面所属的分组。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SettingsNavGroup {
     General,
@@ -1105,18 +1105,6 @@ pub(crate) enum SettingsNavGroup {
     Tools,
     Ai,
     System,
-}
-
-impl SettingsNavGroup {
-    fn title(self) -> &'static str {
-        match self {
-            SettingsNavGroup::General => i18n::t!("40fae00b7c6d8ac0"),
-            SettingsNavGroup::Workspace => i18n::t!("37979829426b0cdb"),
-            SettingsNavGroup::Tools => i18n::t!("5ca6730d44152201"),
-            SettingsNavGroup::Ai => i18n::t!("09217f84a1e23708"),
-            SettingsNavGroup::System => i18n::t!("5b50d7c4b5950dc5"),
-        }
-    }
 }
 
 struct SettingsPage {
@@ -3482,23 +3470,7 @@ impl SettingsWindow {
                                     .map(|(entry_index, entry)| {
                                         let selected =
                                             this.is_navbar_entry_selected(entry_index);
-                                        let (nav_group, nav_icon) =
-                                            Self::nav_meta(entry.page_index);
-
-                                        // 每组第一个可见的根条目上方显示分组标题
-                                        let show_group_label = entry.is_root && {
-                                            let previous_root_group = this
-                                                .visible_navbar_entries()
-                                                .take_while(|(index, _)| {
-                                                    *index != entry_index
-                                                })
-                                                .filter(|(_, entry)| entry.is_root)
-                                                .last()
-                                                .map(|(_, entry)| {
-                                                    Self::nav_meta(entry.page_index).0
-                                                });
-                                            previous_root_group != Some(nav_group)
-                                        };
+                                        let (_, nav_icon) = Self::nav_meta(entry.page_index);
 
                                         let tree_item = TreeViewItem::new(
                                             ("settings-ui-navbar-entry", entry_index),
@@ -3556,22 +3528,14 @@ impl SettingsWindow {
                                             })
                                         });
 
+                                        // UniformList measures one row for every entry, so group
+                                        // headings must not be embedded in individual rows.
                                         v_flex()
-                                            .when(show_group_label, |this| {
-                                                this.child(
-                                                    div()
-                                                        .pt_3()
-                                                        .pb_1()
-                                                        .px_2()
-                                                        .child(
-                                                            Label::new(nav_group.title())
-                                                                .size(LabelSize::XSmall)
-                                                                .color(Color::Disabled),
-                                                        ),
-                                                )
-                                            })
+                                            .w_full()
+                                            .debug_selector(move || format!("settings-nav-row-{entry_index}"))
                                             .child(
                                                 div()
+                                                    .w_full()
                                                     .relative()
                                                     .when(selected && entry.is_root, |this| {
                                                         this.child(
@@ -7199,6 +7163,34 @@ pub mod test {
         > Appearance & Behavior
         "
     );
+
+    #[gpui::test]
+    fn navbar_rows_are_compact_and_fill_sidebar(cx: &mut gpui::TestAppContext) {
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            register_settings(cx);
+            let mut settings_window = parse(
+                "v General*\n- One\n- Two\nv Appearance\n- Theme",
+                window,
+                cx,
+            );
+            settings_window.build_content_handles(window, cx);
+            settings_window
+        });
+        cx.run_until_parked();
+        cx.refresh().expect("refresh navigation layout");
+        let first = cx.debug_bounds("settings-nav-row-0").expect("first row");
+        let second = cx.debug_bounds("settings-nav-row-1").expect("second row");
+        let third = cx.debug_bounds("settings-nav-row-2").expect("third row");
+        assert!(
+            second.top() - first.top() <= px(32.),
+            "navigation rows must not inherit a group heading's height: {first:?} {second:?}"
+        );
+        assert!(third.top() - second.top() <= px(32.));
+        assert!(
+            second.size.width >= SIDEBAR_WIDTH - px(24.),
+            "selection must span the sidebar: {second:?}"
+        );
+    }
 
     #[gpui::test]
     fn navbar_double_click_toggle(cx: &mut gpui::TestAppContext) {
