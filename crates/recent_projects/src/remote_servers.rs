@@ -16,9 +16,9 @@ use extension_host::ExtensionStore;
 use filter::{FilterData, FilteredServer};
 use futures::{FutureExt, StreamExt as _, channel::oneshot, future::Shared};
 use gpui::{
-    Action, AnyElement, App, ClipboardItem, Context, DismissEvent, Entity, EventEmitter,
-    ExternalPaths, FocusHandle, Focusable, PathPromptOptions, PromptLevel, Subscription, Task,
-    TaskExt, WeakEntity, Window,
+    Action, AnyElement, App, ClickEvent, ClipboardItem, Context, DismissEvent, Entity,
+    EventEmitter, ExternalPaths, FocusHandle, Focusable, FontWeight, PathPromptOptions,
+    PromptLevel, Subscription, Task, TaskExt, WeakEntity, Window,
 };
 use log::{debug, info};
 use open_path_prompt::OpenPathDelegate;
@@ -41,8 +41,9 @@ use std::{
 };
 
 use ui::{
-    Checkbox, CommonAnimationExt, HighlightedLabel, IconButtonShape, KeyBinding, ListItem,
-    ListSeparator, ModalHeader, Navigable, NavigableEntry, Tooltip, prelude::*,
+    Checkbox, CommonAnimationExt, ElevationIndex, HighlightedLabel, IconButtonShape, KeyBinding,
+    ListItem, ListSeparator, ModalHeader, Navigable, NavigableEntry, TintColor, Tooltip,
+    prelude::*,
 };
 use util::{
     ResultExt,
@@ -165,23 +166,111 @@ fn jump_host_label(jump_host: &JumpHost) -> String {
     label
 }
 
-fn form_row(
-    label: &'static str,
-    description: Option<&'static str>,
-    control: AnyElement,
-) -> impl IntoElement {
-    v_flex()
+/// Wraps a form control in the bordered, recessed surface that makes it read
+/// as an input rather than as text sitting on the modal background.
+///
+/// The single-line `Editor` paints no background of its own, so without this
+/// wrapper the field is indistinguishable from the surrounding label text.
+fn form_input_surface(editor: &Entity<Editor>, invalid: bool, cx: &App) -> AnyElement {
+    let colors = cx.theme().colors();
+    let status = cx.theme().status();
+    let resting_border = if invalid {
+        status.error_border
+    } else {
+        colors.border
+    };
+    let focused_border = if invalid {
+        status.error_border
+    } else {
+        colors.border_focused
+    };
+    let focus_handle = editor.read(cx).focus_handle(cx);
+
+    h_flex()
         .w_full()
-        .gap_1()
+        .h(rems_from_px(32_f32))
+        .px_2()
+        .items_center()
+        .rounded_md()
+        .border_1()
+        .border_color(resting_border)
+        .bg(colors.editor_background)
+        .track_focus(&focus_handle)
+        .focus(move |style| style.border_color(focused_border))
+        .child(div().flex_1().min_w_0().child(editor.clone()))
+        .into_any_element()
+}
+
+/// A small pill that marks a field as required.
+fn form_badge(label: impl Into<SharedString>, color: Color, cx: &App) -> AnyElement {
+    let tint = color.color(cx);
+    div()
+        .px_1()
+        .rounded_sm()
+        .bg(tint.opacity(0.14))
+        .child(Label::new(label).size(LabelSize::XSmall).color(color))
+        .into_any_element()
+}
+
+/// The label above a form control, optionally carrying a trailing note.
+fn form_label(label: impl Into<SharedString>, note: Option<SharedString>) -> AnyElement {
+    h_flex()
+        .w_full()
+        .justify_between()
+        .gap_2()
         .child(Label::new(label))
-        .when_some(description, |this, description| {
-            this.child(
-                Label::new(description)
-                    .size(LabelSize::Small)
-                    .color(Color::Muted),
-            )
+        .when_some(note, |this, note| {
+            this.child(Label::new(note).size(LabelSize::XSmall).color(Color::Muted))
         })
-        .child(control)
+        .into_any_element()
+}
+
+/// A section heading that separates the connection fields from the advanced
+/// ones, with an optional note on the right.
+fn form_section_head(title: &'static str, note: Option<SharedString>, cx: &App) -> AnyElement {
+    h_flex()
+        .w_full()
+        .justify_between()
+        .gap_2()
+        .pb_1()
+        .border_b_1()
+        .border_color(cx.theme().colors().border_variant)
+        .child(
+            Label::new(title)
+                .size(LabelSize::XSmall)
+                .color(Color::Muted)
+                .weight(FontWeight::SEMIBOLD),
+        )
+        .when_some(note, |this, note| {
+            this.child(Label::new(note).size(LabelSize::XSmall).color(Color::Muted))
+        })
+        .into_any_element()
+}
+
+/// One mutually exclusive choice in a segmented control.
+fn form_segment(
+    id: SharedString,
+    label: &'static str,
+    selected: bool,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    _cx: &App,
+) -> AnyElement {
+    // 28px segments inside a container with 2px padding fill the same 32px
+    // control row as the inputs beside them.
+    Button::new(id, label)
+        .style(ButtonStyle::Subtle)
+        .size(ButtonSize::Medium)
+        .label_size(LabelSize::Small)
+        .toggle_state(selected)
+        .selected_style(ButtonStyle::Filled)
+        .layer(ElevationIndex::Surface)
+        .color(if selected {
+            Color::Default
+        } else {
+            Color::Muted
+        })
+        .on_click(move |event, window, cx| on_click(event, window, cx))
+        .into_any_element()
 }
 
 /// The validated contents of [`CreateRemoteServerForm`] at submission time.
@@ -197,6 +286,7 @@ struct RemoteServerFormDraft {
     proxy: Option<String>,
     proxy_disabled: bool,
     connection_timeout: Option<u16>,
+    remote_server_source: Option<settings::RemoteServerSource>,
 }
 
 /// The fill-in-the-blanks SSH server form.
@@ -219,6 +309,15 @@ struct CreateRemoteServerForm {
     jump_hosts: Vec<JumpHost>,
     jump_host_picker: Option<Entity<Picker<JumpHostPickerDelegate>>>,
     proxy_disabled: bool,
+    /// Whether the advanced section is expanded. Only affects the current
+    /// form; nothing here is persisted.
+    advanced_open: bool,
+    /// Explicit Remote Server distribution for this host. `None` follows the
+    /// client default, matching an unset `remote_server_source` in settings.
+    remote_server_source: Option<settings::RemoteServerSource>,
+    /// Inline validation message for the host field, so the error appears next
+    /// to the field instead of only in the footer.
+    host_error: Option<SharedString>,
     /// Settings index of the entry this form already saved, so a retry updates
     /// that entry instead of adding a duplicate.
     saved_index: Option<SshServerIndex>,
@@ -252,11 +351,88 @@ impl CreateRemoteServerForm {
             jump_hosts: Vec::new(),
             jump_host_picker: None,
             proxy_disabled: false,
+            advanced_open: false,
+            remote_server_source: None,
+            host_error: None,
             saved_index: None,
             error: None,
             ssh_prompt: None,
             _creating: None,
         }
+    }
+
+    /// A summary of the non-default advanced values, shown while the section
+    /// is collapsed so nothing silently disappears from view.
+    fn advanced_summary(&self, cx: &App) -> Option<SharedString> {
+        let mut parts = Vec::new();
+        if !self.jump_hosts.is_empty() {
+            parts.push(format!(
+                "{} {}",
+                i18n::t!("1031cfcb802afd94"),
+                self.jump_hosts.len()
+            ));
+        }
+        if trimmed_text(self.proxy_editor.read(cx).text(cx)).is_some() {
+            parts.push(i18n::t!("48b970b568a7f8f9").to_string());
+        }
+        if let Some(source) = self.remote_server_source {
+            parts.push(match source {
+                settings::RemoteServerSource::Official => i18n::t!("e73e38c1f65d0326").to_string(),
+                settings::RemoteServerSource::ZedCn => "Zed CN".to_string(),
+            });
+        }
+        if parts.is_empty() {
+            None
+        } else {
+            Some(parts.join(" · ").into())
+        }
+    }
+
+    /// The `ssh` invocation this form will use, so the jump-host order and the
+    /// proxy precedence become visible before connecting.
+    fn ssh_preview(&self, cx: &App) -> Option<SharedString> {
+        let host = self.host_editor.read(cx).text(cx);
+        let host = host.trim();
+        if host.is_empty() {
+            return None;
+        }
+
+        let username = trimmed_text(self.username_editor.read(cx).text(cx));
+        let mut preview = String::from("ssh ");
+        if let Some(username) = username {
+            preview.push_str(&username);
+            preview.push('@');
+        }
+        preview.push_str(host);
+
+        if let Some(port) = trimmed_text(self.port_editor.read(cx).text(cx)) {
+            preview.push_str(" -p ");
+            preview.push_str(&port);
+        }
+
+        let proxy = trimmed_text(self.proxy_editor.read(cx).text(cx));
+        if let Some(proxy) = proxy
+            && !self.proxy_disabled
+        {
+            preview.push_str(" (");
+            preview.push_str(&proxy);
+            preview.push(')');
+        }
+
+        if !self.jump_hosts.is_empty() {
+            preview.push_str(" (");
+            preview.push_str(
+                &self
+                    .jump_hosts
+                    .iter()
+                    .map(jump_host_label)
+                    .collect::<Vec<_>>()
+                    .join(" → "),
+            );
+            preview.push(')');
+        }
+
+        Some(preview.into())
     }
 }
 
@@ -3303,6 +3479,18 @@ impl RemoteServerProjects {
         cx.notify();
     }
 
+    fn set_form_remote_server_source(
+        &mut self,
+        source: Option<settings::RemoteServerSource>,
+        cx: &mut Context<Self>,
+    ) {
+        if let Mode::CreateRemoteServerForm(state) = &mut self.mode {
+            state.remote_server_source = source;
+            state.error = None;
+        }
+        cx.notify();
+    }
+
     fn set_form_key_file(&mut self, path: PathBuf, cx: &mut Context<Self>) {
         if let Mode::CreateRemoteServerForm(state) = &mut self.mode {
             state.key_file = Some(path);
@@ -3372,7 +3560,11 @@ impl RemoteServerProjects {
         if host.is_empty() {
             return Err(SharedString::from(i18n::t!("a4339e03ef00d39d")));
         }
-        if host.starts_with('-') || host.chars().any(|character| character.is_whitespace() || character.is_control()) {
+        if host.starts_with('-')
+            || host
+                .chars()
+                .any(|character| character.is_whitespace() || character.is_control())
+        {
             return Err(SharedString::from(i18n::t!("e69dbd37f66bcdd1")));
         }
 
@@ -3431,6 +3623,7 @@ impl RemoteServerProjects {
             proxy,
             proxy_disabled: state.proxy_disabled,
             connection_timeout,
+            remote_server_source: state.remote_server_source,
         })
     }
 
@@ -3438,6 +3631,10 @@ impl RemoteServerProjects {
         let draft = match self.read_form_draft(cx) {
             Ok(draft) => draft,
             Err(error) => {
+                if let Mode::CreateRemoteServerForm(state) = &mut self.mode {
+                    state.host_error = Some(error.clone());
+                    state.advanced_open = true;
+                }
                 self.set_form_error(error, cx);
                 return;
             }
@@ -3447,10 +3644,13 @@ impl RemoteServerProjects {
             Mode::CreateRemoteServerForm(state) => state.saved_index,
             _ => None,
         };
-        let remote_server_source = remote::default_remote_server_source(cx);
+        let remote_server_source = draft
+            .remote_server_source
+            .unwrap_or_else(|| remote::default_remote_server_source(cx));
 
         if let Mode::CreateRemoteServerForm(state) = &mut self.mode {
             state.error = None;
+            state.host_error = None;
         }
         cx.notify();
 
@@ -3507,7 +3707,12 @@ impl RemoteServerProjects {
                     proxy_disabled: draft.proxy_disabled,
                 };
 
-                let index = this.persist_form_connection(&connection_options, saved_index, cx);
+                let index = this.persist_form_connection(
+                    &connection_options,
+                    draft.remote_server_source,
+                    saved_index,
+                    cx,
+                );
                 if let Mode::CreateRemoteServerForm(state) = &mut this.mode {
                     state.saved_index = Some(index);
                     state.key_id = key_id;
@@ -3523,13 +3728,20 @@ impl RemoteServerProjects {
 
     /// Saves the form entry, replacing the entry a previous attempt created so
     /// retrying never produces duplicates.
+    /// Saves the form entry, replacing the entry a previous attempt created so
+    /// retrying never produces duplicates.
+    ///
+    /// `remote_server_source` is stored as chosen: `None` keeps following the
+    /// client default instead of pinning today's resolved source.
     fn persist_form_connection(
         &mut self,
         connection_options: &remote::SshConnectionOptions,
+        remote_server_source: Option<settings::RemoteServerSource>,
         existing_index: Option<SshServerIndex>,
         cx: &mut Context<Self>,
     ) -> SshServerIndex {
-        let connection = ssh_connection_from_options(connection_options);
+        let mut connection = ssh_connection_from_options(connection_options);
+        connection.remote_server_source = remote_server_source;
         let index = existing_index.unwrap_or_else(|| {
             SshServerIndex(RemoteSettings::get_global(cx).ssh_connections().count())
         });
@@ -4027,7 +4239,8 @@ impl RemoteServerProjects {
                 .into_any_element();
         }
 
-        let border_color = cx.theme().colors().border_variant;
+        let colors = cx.theme().colors().clone();
+        let border_color = colors.border_variant;
         let auth_hint = match state.auth_method {
             SshAuthMethod::Password => i18n::t!("4347df11b74e14ea"),
             SshAuthMethod::Key => i18n::t!("429db636b4adcef2"),
@@ -4039,178 +4252,527 @@ impl RemoteServerProjects {
             .and_then(|path| path.file_name())
             .map(|name| i18n::t_args!("bbe0fecf4af46fe9", name.to_string_lossy()));
 
-        let fields = v_flex()
+        let host_error = state.host_error.clone();
+        let advanced_summary = state.advanced_summary(cx);
+
+        let mut connection_fields = v_flex()
+            .w_full()
             .gap_3()
-            .p_3()
-            .child(form_row(
-                i18n::t!("d44e9b3d3b31d37b"),
-                None,
-                state.nickname_editor.clone().into_any_element(),
+            .child(form_section_head(
+                i18n::t!("82479cb6ca73042d"),
+                Some(i18n::t!("aded7effd1660dad").into()),
+                cx,
             ))
-            .child(form_row(
-                i18n::t!("37aac5b4e639b93b"),
-                None,
-                h_flex()
-                    .w_full()
-                    .gap_2()
-                    .child(div().flex_1().child(state.host_editor.clone()))
-                    .child(div().w(rems(7.)).child(state.port_editor.clone()))
-                    .into_any_element(),
-            ))
-            .child(form_row(
-                i18n::t!("5e75d10975e8ce94"),
-                None,
-                state.username_editor.clone().into_any_element(),
-            ))
-            .child(form_row(
-                i18n::t!("52373e4342173705"),
-                None,
-                v_flex()
-                    .w_full()
-                    .gap_2()
-                    .child(
-                        h_flex().gap_1().children(
-                            [
-                                SshAuthMethod::Password,
-                                SshAuthMethod::Key,
-                                SshAuthMethod::Interactive,
-                            ]
-                            .map(|method| {
-                                Button::new(
-                                    match method {
-                                        SshAuthMethod::Password => "auth-method-password",
-                                        SshAuthMethod::Key => "auth-method-key",
-                                        SshAuthMethod::Interactive => "auth-method-interactive",
-                                    },
-                                    auth_method_label(method),
-                                )
-                                .toggle_state(state.auth_method == method)
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.set_form_auth_method(method, cx)
-                                }))
-                                .into_any_element()
-                            }),
-                        ),
-                    )
-                    .child(
-                        Label::new(auth_hint)
-                            .size(LabelSize::Small)
-                            .color(Color::Muted),
-                    )
-                    .when(state.auth_method == SshAuthMethod::Key, |this| {
-                        this.child(
-                            v_flex()
-                                .gap_1()
-                                .child(
-                                    h_flex()
-                                        .gap_2()
-                                        .items_center()
-                                        .child(
-                                            Button::new(
-                                                "choose-key-file",
-                                                i18n::t!("75141f859dc99aa2"),
-                                            )
-                                            .on_click(cx.listener(|this, _, window, cx| {
-                                                this.prompt_for_key_file(window, cx)
-                                            })),
-                                        )
-                                        .when_some(key_label.clone(), |this, label| {
-                                            this.child(Label::new(label).size(LabelSize::Small))
-                                        }),
-                                )
-                                .child(
-                                    Label::new(i18n::t!("0b26467a5e72a15d"))
-                                        .size(LabelSize::Small)
-                                        .color(Color::Muted),
-                                )
-                                .child(
-                                    Label::new(i18n::t!("20199ba6524b09f6"))
-                                        .size(LabelSize::Small)
-                                        .color(Color::Muted),
-                                ),
-                        )
-                    })
-                    .into_any_element(),
-            ))
-            .child(form_row(
-                i18n::t!("4f6e412d26ed86b2"),
-                Some(i18n::t!("db639f3485a635fc")),
+            .child(
                 v_flex()
                     .w_full()
                     .gap_1()
-                    .children(state.jump_hosts.iter().enumerate().map(
-                        |(index, jump_host)| {
+                    .child(form_label(
+                        i18n::t!("d44e9b3d3b31d37b"),
+                        Some(i18n::t!("f73049dceb2f0281").into()),
+                    ))
+                    .child(
+                        div()
+                            .debug_selector(|| "form-input-nickname".into())
+                            .child(form_input_surface(&state.nickname_editor, false, cx)),
+                    ),
+            )
+            .child(
+                h_flex()
+                    .w_full()
+                    .gap_2()
+                    .items_start()
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .gap_1()
+                            .child(
+                                h_flex()
+                                    .gap_1()
+                                    .child(Label::new(i18n::t!("317c133e7a877caf")))
+                                    .child(form_badge(
+                                        i18n::t!("11da9dc4428537c4"),
+                                        Color::Accent,
+                                        cx,
+                                    )),
+                            )
+                            .child(div().debug_selector(|| "form-input-host".into()).child(
+                                form_input_surface(&state.host_editor, host_error.is_some(), cx),
+                            ))
+                            .when_some(host_error, |this, error| {
+                                this.child(
+                                    Label::new(error)
+                                        .size(LabelSize::XSmall)
+                                        .color(Color::Error),
+                                )
+                            }),
+                    )
+                    .child(
+                        v_flex()
+                            .w(rems_from_px(88_f32))
+                            .flex_none()
+                            .gap_1()
+                            .child(Label::new(i18n::t!("e71ac32b544b0ebf")))
+                            .child(
+                                div()
+                                    .debug_selector(|| "form-input-port".into())
+                                    .child(form_input_surface(&state.port_editor, false, cx)),
+                            ),
+                    ),
+            )
+            .child(
+                h_flex()
+                    .w_full()
+                    .gap_2()
+                    .items_start()
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .gap_1()
+                            .child(form_label(
+                                i18n::t!("5e75d10975e8ce94"),
+                                Some(i18n::t!("4eca75ab4b1fc398").into()),
+                            ))
+                            .child(
+                                div()
+                                    .debug_selector(|| "form-input-username".into())
+                                    .child(form_input_surface(&state.username_editor, false, cx)),
+                            ),
+                    )
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .gap_1()
+                            .child(Label::new(i18n::t!("52373e4342173705")))
+                            .child(
+                                h_flex()
+                                    .w_full()
+                                    .gap_0p5()
+                                    .p_0p5()
+                                    .rounded_md()
+                                    .border_1()
+                                    .border_color(colors.border)
+                                    .bg(colors.editor_background)
+                                    .children(
+                                        [
+                                            SshAuthMethod::Password,
+                                            SshAuthMethod::Key,
+                                            SshAuthMethod::Interactive,
+                                        ]
+                                        .map(|method| {
+                                            form_segment(
+                                                SharedString::from(match method {
+                                                    SshAuthMethod::Password => {
+                                                        "auth-method-password"
+                                                    }
+                                                    SshAuthMethod::Key => "auth-method-key",
+                                                    SshAuthMethod::Interactive => {
+                                                        "auth-method-interactive"
+                                                    }
+                                                }),
+                                                auth_method_label(method),
+                                                state.auth_method == method,
+                                                cx.listener(move |this, _, _, cx| {
+                                                    this.set_form_auth_method(method, cx)
+                                                }),
+                                                cx,
+                                            )
+                                        }),
+                                    ),
+                            ),
+                    ),
+            )
+            .child(
+                Label::new(auth_hint)
+                    .size(LabelSize::XSmall)
+                    .color(Color::Muted),
+            )
+            .when(state.auth_method == SshAuthMethod::Key, |this| {
+                this.child(
+                    v_flex()
+                        .w_full()
+                        .gap_2()
+                        .child(
                             h_flex()
                                 .w_full()
                                 .gap_2()
-                                .items_center()
-                                .child(Label::new(jump_host_label(jump_host)))
-                                .child(
-                                    IconButton::new(
-                                        SharedString::from(format!("remove-jump-host-{index}")),
-                                        IconName::Close,
-                                    )
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.remove_form_jump_host(index, cx)
-                                    })),
-                                )
-                                .into_any_element()
-                        },
-                    ))
-                    .when(state.jump_hosts.is_empty(), |this| {
-                        this.child(
-                            Label::new(i18n::t!("a888dc136bc8ee40"))
-                                .size(LabelSize::Small)
-                                .color(Color::Muted),
-                        )
-                    })
-                    .child(
-                        Button::new("add-jump-host", i18n::t!("a1e9b8ca998838e8")).on_click(
-                            cx.listener(|this, _, window, cx| {
-                                this.open_jump_host_picker(window, cx)
-                            }),
-                        ),
-                    )
-                    .when_some(state.jump_host_picker.clone(), |this, picker| {
-                        this.child(
-                            div()
-                                .h(rems(12.))
+                                .px_2()
+                                .py_1p5()
+                                .rounded_md()
                                 .border_1()
-                                .border_color(border_color)
-                                .rounded_sm()
-                                .overflow_hidden()
-                                .child(picker),
+                                .border_dashed()
+                                .border_color(colors.border)
+                                .child(
+                                    Icon::new(IconName::Lock)
+                                        .size(IconSize::Small)
+                                        .color(Color::Muted),
+                                )
+                                .child(
+                                    Label::new(i18n::t!("0b26467a5e72a15d"))
+                                        .size(LabelSize::XSmall)
+                                        .color(Color::Muted)
+                                        .flex_1(),
+                                )
+                                .child(
+                                    Button::new("choose-key-file", i18n::t!("75141f859dc99aa2"))
+                                        .size(ButtonSize::Default)
+                                        .label_size(LabelSize::Small)
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.prompt_for_key_file(window, cx)
+                                        })),
+                                ),
                         )
-                    })
-                    .into_any_element(),
-            ))
-            .child(form_row(
-                i18n::t!("48b970b568a7f8f9"),
-                Some(i18n::t!("df7f8656cf9d962c")),
-                v_flex()
+                        .when_some(key_label.clone(), |this, label| {
+                            this.child(
+                                Label::new(label)
+                                    .size(LabelSize::XSmall)
+                                    .color(Color::Muted),
+                            )
+                        })
+                        .child(
+                            Label::new(i18n::t!("20199ba6524b09f6"))
+                                .size(LabelSize::XSmall)
+                                .color(Color::Muted),
+                        ),
+                )
+            });
+
+        if let Some(preview) = state.ssh_preview(cx) {
+            connection_fields = connection_fields.child(
+                h_flex()
+                    .debug_selector(|| "form-ssh-preview".into())
                     .w_full()
                     .gap_2()
-                    .child(state.proxy_editor.clone())
+                    .px_2()
+                    .py_1()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(border_color)
                     .child(
-                        Checkbox::new(
-                            "disable-proxy",
-                            ToggleState::from(state.proxy_disabled),
-                        )
-                        .label(i18n::t!("6b8f6c6cb99b1f89"))
-                        .on_click(cx.listener(|this, toggle: &ToggleState, _, cx| {
-                            if let Mode::CreateRemoteServerForm(state) = &mut this.mode {
-                                state.proxy_disabled = toggle.selected();
-                            }
-                            cx.notify();
-                        })),
+                        div()
+                            .flex_none()
+                            .mr_2()
+                            .pr_2()
+                            .border_r_1()
+                            .border_color(border_color)
+                            .child(
+                                Label::new(i18n::t!("b25c0dac0eddd103"))
+                                    .size(LabelSize::XSmall)
+                                    .color(Color::Muted),
+                            ),
                     )
-                    .into_any_element(),
-            ))
-            .child(form_row(
-                i18n::t!("3899218664bb77ca"),
-                Some(i18n::t!("30928008029cdf5f")),
-                state.timeout_editor.clone().into_any_element(),
-            ));
+                    .child(
+                        Label::new(preview)
+                            .size(LabelSize::XSmall)
+                            .color(Color::Default)
+                            .truncate(),
+                    ),
+            );
+        }
+
+        let advanced = v_flex()
+            .w_full()
+            .rounded_md()
+            .border_1()
+            .border_color(border_color)
+            .overflow_hidden()
+            .child(
+                h_flex()
+                    .id("toggle-advanced-options")
+                    .debug_selector(|| "form-advanced-toggle".into())
+                    .w_full()
+                    .gap_2()
+                    .px_2()
+                    .py_1p5()
+                    .cursor_pointer()
+                    .hover(|style| style.bg(colors.ghost_element_hover))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        if let Mode::CreateRemoteServerForm(state) = &mut this.mode {
+                            state.advanced_open = !state.advanced_open;
+                        }
+                        cx.notify();
+                    }))
+                    .child(
+                        Icon::new(if state.advanced_open {
+                            IconName::ChevronDown
+                        } else {
+                            IconName::ChevronRight
+                        })
+                        .size(IconSize::XSmall)
+                        .color(Color::Muted),
+                    )
+                    .child(
+                        Label::new(i18n::t!("91a61fdde856cd9e"))
+                            .size(LabelSize::Small)
+                            .flex_none(),
+                    )
+                    .child(
+                        Label::new(i18n::t!("db639f3485a635fc"))
+                            .size(LabelSize::XSmall)
+                            .color(Color::Muted)
+                            .flex_1()
+                            .truncate(),
+                    )
+                    .when_some(advanced_summary, |this, summary| {
+                        this.child(
+                            div()
+                                .px_1()
+                                .rounded_sm()
+                                .bg(colors.text_accent.opacity(0.14))
+                                .child(
+                                    Label::new(summary)
+                                        .size(LabelSize::XSmall)
+                                        .color(Color::Accent),
+                                ),
+                        )
+                    }),
+            )
+            .when(state.advanced_open, |this| {
+                this.child(
+                    v_flex()
+                        .debug_selector(|| "form-advanced-body".into())
+                        .w_full()
+                        .gap_3()
+                        .px_2()
+                        .pt_2()
+                        .pb_2()
+                        .border_t_1()
+                        .border_color(border_color)
+                        .child(
+                            h_flex()
+                                .w_full()
+                                .gap_2()
+                                .items_start()
+                                .child(
+                                    v_flex()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .gap_1()
+                                        .child(form_label(
+                                            i18n::t!("3899218664bb77ca"),
+                                            Some(i18n::t!("30928008029cdf5f").into()),
+                                        ))
+                                        .child(
+                                            div().debug_selector(|| "form-input-timeout".into()).child(
+                                                form_input_surface(&state.timeout_editor, false, cx),
+                                            ),
+                                        ),
+                                )
+                                .child(
+                                    v_flex()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .gap_1()
+                                        .child(form_label(
+                                            i18n::t!("662a98128a924ea0"),
+                                            Some(i18n::t!("174ee9d6ee539ded").into()),
+                                        ))
+                                        .child(
+                                            h_flex()
+                                                .w_full()
+                                                .gap_0p5()
+                                                .p_0p5()
+                                                .rounded_md()
+                                                .border_1()
+                                                .border_color(colors.border)
+                                                .bg(colors.editor_background)
+                                                .child(form_segment(
+                                                    SharedString::from("server-source-auto"),
+                                                    i18n::t!("7eb336e42cb5076b"),
+                                                    state.remote_server_source.is_none(),
+                                                    cx.listener(|this, _, _, cx| {
+                                                        this.set_form_remote_server_source(None, cx)
+                                                    }),
+                                                    cx,
+                                                ))
+                                                .child(form_segment(
+                                                    SharedString::from("server-source-official"),
+                                                    i18n::t!("e73e38c1f65d0326"),
+                                                    matches!(
+                                                        state.remote_server_source,
+                                                        Some(settings::RemoteServerSource::Official)
+                                                    ),
+                                                    cx.listener(|this, _, _, cx| {
+                                                        this.set_form_remote_server_source(
+                                                            Some(settings::RemoteServerSource::Official),
+                                                            cx,
+                                                        )
+                                                    }),
+                                                    cx,
+                                                ))
+                                                .child(form_segment(
+                                                    SharedString::from("server-source-zed-cn"),
+                                                    "Zed CN",
+                                                    matches!(
+                                                        state.remote_server_source,
+                                                        Some(settings::RemoteServerSource::ZedCn)
+                                                    ),
+                                                    cx.listener(|this, _, _, cx| {
+                                                        this.set_form_remote_server_source(
+                                                            Some(settings::RemoteServerSource::ZedCn),
+                                                            cx,
+                                                        )
+                                                    }),
+                                                    cx,
+                                                )),
+                                        ),
+                                ),
+                        )
+                        .child(
+                            v_flex()
+                                .w_full()
+                                .gap_1()
+                                .child(form_label(
+                                    i18n::t!("4f6e412d26ed86b2"),
+                                    Some(i18n::t!("db639f3485a635fc").into()),
+                                ))
+                                .children(state.jump_hosts.iter().enumerate().map(
+                                    |(index, jump_host)| {
+                                        h_flex()
+                                            .w_full()
+                                            .gap_2()
+                                            .px_2()
+                                            .py_1()
+                                            .rounded_md()
+                                            .border_1()
+                                            .border_color(colors.border)
+                                            .bg(colors.editor_background)
+                                            .child(
+                                                div()
+                                                    .size(rems_from_px(16_f32))
+                                                    .flex_none()
+                                                    .rounded_full()
+                                                    .bg(colors.text_accent.opacity(0.14))
+                                                    .flex()
+                                                    .items_center()
+                                                    .justify_center()
+                                                    .child(
+                                                        Label::new((index + 1).to_string())
+                                                            .size(LabelSize::XSmall)
+                                                            .color(Color::Accent),
+                                                    ),
+                                            )
+                                            .child(
+                                                Label::new(jump_host_label(jump_host))
+                                                    .size(LabelSize::Small)
+                                                    .flex_1()
+                                                    .truncate(),
+                                            )
+                                            .child(
+                                                IconButton::new(
+                                                    SharedString::from(format!(
+                                                        "remove-jump-host-{index}"
+                                                    )),
+                                                    IconName::Close,
+                                                )
+                                                .icon_size(IconSize::XSmall)
+                                                .icon_color(Color::Muted)
+                                                .on_click(cx.listener(move |this, _, _, cx| {
+                                                    this.remove_form_jump_host(index, cx)
+                                                })),
+                                            )
+                                            .into_any_element()
+                                    },
+                                ))
+                                .when(state.jump_hosts.is_empty(), |this| {
+                                    this.child(
+                                        Label::new(i18n::t!("98466a48cb101185"))
+                                            .size(LabelSize::XSmall)
+                                            .color(Color::Muted),
+                                    )
+                                })
+                                .child(
+                                    Button::new(
+                                        "add-jump-host",
+                                        i18n::t!("a1e9b8ca998838e8"),
+                                    )
+                                    .size(ButtonSize::Default)
+                                    .label_size(LabelSize::Small)
+                                    .start_icon(Icon::new(IconName::Plus).size(IconSize::XSmall))
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.open_jump_host_picker(window, cx)
+                                    })),
+                                )
+                                .when_some(state.jump_host_picker.clone(), |this, picker| {
+                                    this.child(
+                                        div()
+                                            .h(rems(12.))
+                                            .border_1()
+                                            .border_color(border_color)
+                                            .rounded_md()
+                                            .overflow_hidden()
+                                            .child(picker),
+                                    )
+                                }),
+                        )
+                        .child(
+                            v_flex()
+                                .w_full()
+                                .gap_1()
+                                .child(
+                                    h_flex()
+                                        .w_full()
+                                        .justify_between()
+                                        .gap_2()
+                                        .child(Label::new(i18n::t!("48b970b568a7f8f9")))
+                                        .child(
+                                            Checkbox::new(
+                                                "disable-proxy",
+                                                ToggleState::from(state.proxy_disabled),
+                                            )
+                                            .label(i18n::t!("6b8f6c6cb99b1f89"))
+                                            .label_size(LabelSize::XSmall)
+                                            .on_click(cx.listener(
+                                                |this, toggle: &ToggleState, _, cx| {
+                                                    if let Mode::CreateRemoteServerForm(state) =
+                                                        &mut this.mode
+                                                    {
+                                                        state.proxy_disabled = toggle.selected();
+                                                    }
+                                                    cx.notify();
+                                                },
+                                            )),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .debug_selector(|| "form-input-proxy".into())
+                                        .child(form_input_surface(&state.proxy_editor, false, cx)),
+                                )
+                                .child(
+                                    Label::new(i18n::t!("df7f8656cf9d962c"))
+                                        .size(LabelSize::XSmall)
+                                        .color(Color::Muted),
+                                ),
+                        ),
+                )
+            });
+
+        let banner = h_flex()
+            .w_full()
+            .gap_2()
+            .px_2()
+            .py_1p5()
+            .rounded_md()
+            .when_some(state.error.clone(), |this, error| {
+                this.bg(cx.theme().status().error_background)
+                    .border_1()
+                    .border_color(cx.theme().status().error_border)
+                    .child(
+                        Icon::new(IconName::Warning)
+                            .size(IconSize::Small)
+                            .color(Color::Error),
+                    )
+                    .child(
+                        Label::new(error)
+                            .size(LabelSize::Small)
+                            .color(Color::Error)
+                            .flex_1(),
+                    )
+            });
 
         let footer = h_flex()
             .w_full()
@@ -4219,29 +4781,24 @@ impl RemoteServerProjects {
             .items_center()
             .border_t_1()
             .border_color(border_color)
-            .when_some(state.error.clone(), |this, error| {
-                this.child(
-                    Label::new(error)
-                        .size(LabelSize::Small)
-                        .color(Color::Error),
-                )
-            })
             .child(div().flex_1())
             .child(
-                Button::new("back-from-form", i18n::t!("572cf45ba43634b3")).on_click(
-                    cx.listener(|this, _, window, cx| {
+                Button::new("back-from-form", i18n::t!("572cf45ba43634b3"))
+                    .style(ButtonStyle::Transparent)
+                    .color(Color::Muted)
+                    .on_click(cx.listener(|this, _, window, cx| {
                         this.mode = Mode::default_mode(&this.ssh_config_servers, cx);
                         this.focus_handle(cx).focus(window, cx);
                         cx.notify();
-                    }),
-                ),
+                    })),
             )
             .child(
-                Button::new("connect-form", i18n::t!("a5574109f0208e89")).on_click(
-                    cx.listener(|this, _, window, cx| {
+                Button::new("connect-form", i18n::t!("a5574109f0208e89"))
+                    .style(ButtonStyle::Tinted(TintColor::Accent))
+                    .start_icon(Icon::new(IconName::ArrowRight).size(IconSize::XSmall))
+                    .on_click(cx.listener(|this, _, window, cx| {
                         this.confirm_create_remote_server_form(window, cx)
-                    }),
-                ),
+                    })),
             );
 
         v_flex()
@@ -4258,7 +4815,15 @@ impl RemoteServerProjects {
                     .id("create-remote-server-form-fields")
                     .flex_1()
                     .overflow_y_scroll()
-                    .child(fields),
+                    .child(
+                        v_flex()
+                            .w_full()
+                            .gap_3()
+                            .p_3()
+                            .child(connection_fields)
+                            .child(advanced)
+                            .child(banner),
+                    ),
             )
             .child(footer)
             .into_any_element()
@@ -4966,7 +5531,7 @@ impl Render for RemoteServerProjects {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .elevation_3(cx)
-            .w(rems(34.))
+            .w(rems(40.))
             .key_context("RemoteServerModal")
             .on_action(cx.listener(Self::cancel))
             .on_action(cx.listener(Self::confirm))
@@ -5544,9 +6109,10 @@ mod tests {
                 ..Default::default()
             };
 
-            let index = modal.persist_form_connection(&options, None, cx);
+            let source = Some(settings::RemoteServerSource::ZedCn);
+            let index = modal.persist_form_connection(&options, source, None, cx);
             assert_eq!(index, SshServerIndex(0));
-            let updated = modal.persist_form_connection(&options, Some(index), cx);
+            let updated = modal.persist_form_connection(&options, source, Some(index), cx);
             assert_eq!(updated, index);
         });
         cx.run_until_parked();
@@ -5575,6 +6141,290 @@ mod tests {
             assert_eq!(
                 connection.remote_server_source,
                 Some(settings::RemoteServerSource::ZedCn)
+            );
+        });
+    }
+
+    #[gpui::test]
+    async fn test_add_server_form_keeps_automatic_server_source_unset(cx: &mut TestAppContext) {
+        let app_state = init_test(cx);
+        let fs = app_state.fs.clone();
+        let project = Project::test(fs.clone(), [], cx).await;
+        let (workspace, cx) =
+            cx.add_window_view(|window, cx| Workspace::test_new(project, window, cx));
+        let modal = workspace.update_in(cx, |_workspace, window, cx| {
+            let workspace = cx.weak_entity();
+            cx.new(|cx| RemoteServerProjects::new(false, fs.clone(), window, workspace, cx))
+        });
+
+        modal.update(cx, |modal, cx| {
+            let options = SshConnectionOptions {
+                host: "target.example".into(),
+                remote_server_source: settings::RemoteServerSource::ZedCn,
+                ..Default::default()
+            };
+            // The picker showed "automatic", so the entry must stay unset even
+            // though the resolved source used for connecting was Zed CN.
+            modal.persist_form_connection(&options, None, None, cx);
+        });
+        cx.run_until_parked();
+
+        cx.update(|_, cx| {
+            let connection = RemoteSettings::get_global(cx)
+                .ssh_connections()
+                .next()
+                .expect("the entry was saved");
+            assert_eq!(
+                connection.remote_server_source, None,
+                "an automatic source must not be pinned to today's resolution"
+            );
+        });
+    }
+
+    #[gpui::test]
+    async fn test_add_server_form_reports_the_host_error_inline(cx: &mut TestAppContext) {
+        let app_state = init_test(cx);
+        let fs = app_state.fs.clone();
+        let project = Project::test(fs.clone(), [], cx).await;
+        let (workspace, cx) =
+            cx.add_window_view(|window, cx| Workspace::test_new(project, window, cx));
+        let modal = workspace.update_in(cx, |_workspace, window, cx| {
+            let workspace = cx.weak_entity();
+            cx.new(|cx| RemoteServerProjects::new(false, fs.clone(), window, workspace, cx))
+        });
+
+        modal.update_in(cx, |modal, window, cx| {
+            modal.mode = Mode::CreateRemoteServerForm(CreateRemoteServerForm::new(window, cx));
+            modal.confirm_create_remote_server_form(window, cx);
+            let Mode::CreateRemoteServerForm(state) = &modal.mode else {
+                panic!("expected the form mode");
+            };
+            assert_eq!(
+                state.host_error.as_deref(),
+                Some(i18n::t!("a4339e03ef00d39d")),
+                "an empty host must be flagged next to the field"
+            );
+        });
+
+        modal.update_in(cx, |modal, window, cx| {
+            let Mode::CreateRemoteServerForm(state) = &modal.mode else {
+                panic!("expected the form mode");
+            };
+            state.host_editor.update(cx, |editor, cx| {
+                editor.set_text("target.example", window, cx)
+            });
+            modal.confirm_create_remote_server_form(window, cx);
+            let Mode::CreateRemoteServerForm(state) = &modal.mode else {
+                panic!("expected the form mode");
+            };
+            assert!(
+                state.host_error.is_none(),
+                "a valid host must clear the inline error"
+            );
+        });
+    }
+
+    #[gpui::test]
+    async fn test_add_server_form_previews_the_ssh_command(cx: &mut TestAppContext) {
+        let app_state = init_test(cx);
+        let fs = app_state.fs.clone();
+        let project = Project::test(fs.clone(), [], cx).await;
+        let (workspace, cx) =
+            cx.add_window_view(|window, cx| Workspace::test_new(project, window, cx));
+        let modal = workspace.update_in(cx, |_workspace, window, cx| {
+            let workspace = cx.weak_entity();
+            cx.new(|cx| RemoteServerProjects::new(false, fs.clone(), window, workspace, cx))
+        });
+
+        modal.update_in(cx, |modal, window, cx| {
+            modal.mode = Mode::CreateRemoteServerForm(CreateRemoteServerForm::new(window, cx));
+            let Mode::CreateRemoteServerForm(state) = &mut modal.mode else {
+                panic!("expected the form mode");
+            };
+
+            assert_eq!(
+                state.ssh_preview(cx),
+                None,
+                "an empty host has nothing to preview"
+            );
+
+            state.host_editor.update(cx, |editor, cx| {
+                editor.set_text("target.example", window, cx)
+            });
+            state
+                .username_editor
+                .update(cx, |editor, cx| editor.set_text("dev", window, cx));
+            state
+                .port_editor
+                .update(cx, |editor, cx| editor.set_text("2222", window, cx));
+            assert_eq!(
+                state.ssh_preview(cx).as_deref(),
+                Some("ssh dev@target.example -p 2222")
+            );
+
+            state.jump_hosts = vec![JumpHost {
+                host: "jump.example".into(),
+                username: Some("ops".into()),
+                port: None,
+            }];
+            state.proxy_editor.update(cx, |editor, cx| {
+                editor.set_text("socks5://127.0.0.1:1080", window, cx)
+            });
+            assert_eq!(
+                state.ssh_preview(cx).as_deref(),
+                Some("ssh dev@target.example -p 2222 (socks5://127.0.0.1:1080) (ops@jump.example)")
+            );
+
+            state.proxy_disabled = true;
+            assert_eq!(
+                state.ssh_preview(cx).as_deref(),
+                Some("ssh dev@target.example -p 2222 (ops@jump.example)"),
+                "a disabled proxy is left out of the preview"
+            );
+        });
+    }
+
+    #[gpui::test]
+    async fn test_add_server_form_renders_inputs_and_collapses_advanced_options(
+        cx: &mut TestAppContext,
+    ) {
+        let app_state = init_test(cx);
+        let fs = app_state.fs.as_fake();
+        let project = Project::test(fs.clone(), [], cx).await;
+        let (multi_workspace, cx) = cx.add_window_view(|window, cx| {
+            let workspace = cx.new(|cx| Workspace::test_new(project, window, cx));
+            MultiWorkspace::new(workspace, window, cx)
+        });
+        let workspace =
+            multi_workspace.read_with(cx, |multi_workspace, _| multi_workspace.workspace().clone());
+        workspace.update_in(cx, |workspace, window, cx| {
+            let weak = cx.weak_entity();
+            workspace.toggle_modal(window, cx, |window, cx| {
+                RemoteServerProjects::new(false, fs.clone(), window, weak, cx)
+            });
+        });
+        cx.run_until_parked();
+
+        workspace.update_in(cx, |workspace, window, cx| {
+            let modal = workspace
+                .active_modal::<RemoteServerProjects>(cx)
+                .expect("the remote server modal is open");
+            modal.update(cx, |modal, cx| {
+                modal.mode = Mode::CreateRemoteServerForm(CreateRemoteServerForm::new(window, cx));
+                cx.notify();
+            });
+        });
+        cx.run_until_parked();
+
+        for selector in [
+            "form-input-nickname",
+            "form-input-host",
+            "form-input-port",
+            "form-input-username",
+        ] {
+            assert!(
+                cx.debug_bounds(selector).is_some(),
+                "{selector} must be laid out as its own control"
+            );
+        }
+        assert!(
+            cx.debug_bounds("form-input-timeout").is_none(),
+            "advanced fields stay collapsed until the section is opened"
+        );
+        assert!(
+            cx.debug_bounds("form-ssh-preview").is_none(),
+            "an empty host has nothing to preview"
+        );
+
+        // Fill the host so the derived command preview appears, then open the
+        // advanced section.
+        workspace.update_in(cx, |workspace, window, cx| {
+            let modal = workspace
+                .active_modal::<RemoteServerProjects>(cx)
+                .expect("the remote server modal is open");
+            modal.update(cx, |modal, cx| {
+                let Mode::CreateRemoteServerForm(state) = &modal.mode else {
+                    panic!("expected the form mode");
+                };
+                state.host_editor.update(cx, |editor, cx| {
+                    editor.set_text("target.example", window, cx)
+                });
+                cx.notify();
+            });
+        });
+        cx.run_until_parked();
+        assert!(
+            cx.debug_bounds("form-ssh-preview").is_some(),
+            "the ssh command preview follows the host field"
+        );
+
+        workspace.update_in(cx, |workspace, _window, cx| {
+            let modal = workspace
+                .active_modal::<RemoteServerProjects>(cx)
+                .expect("the remote server modal is open");
+            modal.update(cx, |modal, cx| {
+                let Mode::CreateRemoteServerForm(state) = &mut modal.mode else {
+                    panic!("expected the form mode");
+                };
+                state.advanced_open = true;
+                cx.notify();
+            });
+        });
+        cx.run_until_parked();
+        assert!(
+            cx.debug_bounds("form-input-timeout").is_some(),
+            "opening the section reveals the timeout field"
+        );
+        assert!(
+            cx.debug_bounds("form-input-proxy").is_some(),
+            "opening the section reveals the proxy field"
+        );
+    }
+
+    #[gpui::test]
+    async fn test_add_server_form_summarizes_non_default_advanced_values(cx: &mut TestAppContext) {
+        let app_state = init_test(cx);
+        let fs = app_state.fs.clone();
+        let project = Project::test(fs.clone(), [], cx).await;
+        let (workspace, cx) =
+            cx.add_window_view(|window, cx| Workspace::test_new(project, window, cx));
+        let modal = workspace.update_in(cx, |_workspace, window, cx| {
+            let workspace = cx.weak_entity();
+            cx.new(|cx| RemoteServerProjects::new(false, fs.clone(), window, workspace, cx))
+        });
+
+        modal.update_in(cx, |modal, window, cx| {
+            modal.mode = Mode::CreateRemoteServerForm(CreateRemoteServerForm::new(window, cx));
+            let Mode::CreateRemoteServerForm(state) = &mut modal.mode else {
+                panic!("expected the form mode");
+            };
+
+            assert_eq!(
+                state.advanced_summary(cx),
+                None,
+                "a collapsed section with defaults shows no badge"
+            );
+
+            state.jump_hosts = vec![JumpHost {
+                host: "jump.example".into(),
+                username: None,
+                port: None,
+            }];
+            state.proxy_editor.update(cx, |editor, cx| {
+                editor.set_text("socks5://127.0.0.1:1080", window, cx)
+            });
+            state.remote_server_source = Some(settings::RemoteServerSource::ZedCn);
+            assert_eq!(
+                state.advanced_summary(cx).as_deref(),
+                Some(
+                    format!(
+                        "{} 1 · {} · Zed CN",
+                        i18n::t!("1031cfcb802afd94"),
+                        i18n::t!("48b970b568a7f8f9")
+                    )
+                    .as_str()
+                ),
+                "every non-default advanced value stays visible while collapsed"
             );
         });
     }
