@@ -515,20 +515,6 @@ impl Settings for RemoteServerDownloadSettings {
     }
 }
 
-/// The Remote Server distribution an SSH connection uses when neither the
-/// saved connection nor the caller selects one.
-///
-/// Zed CN clients embed the exact custom release tag they were built from, so
-/// they match their own Remote Server revision. Clients without a validated
-/// custom tag keep using Zed's official release service.
-pub fn default_remote_server_source(cx: &App) -> settings::RemoteServerSource {
-    if release_channel::CustomReleaseTag::try_current(cx).is_some() {
-        settings::RemoteServerSource::ZedCn
-    } else {
-        settings::RemoteServerSource::Official
-    }
-}
-
 fn apply_remote_server_download_settings(
     mut connection_options: RemoteConnectionOptions,
     china_server_adaptation: bool,
@@ -542,32 +528,25 @@ fn apply_remote_server_download_settings(
 }
 
 fn connection_options_with_settings(
-    connection_options: RemoteConnectionOptions,
+    mut connection_options: RemoteConnectionOptions,
     cx: &App,
 ) -> RemoteConnectionOptions {
     let download_settings = RemoteServerDownloadSettings::try_get(cx);
     let china_server_adaptation = download_settings
         .as_ref()
         .is_some_and(|settings| settings.china_server_adaptation);
-    let mut connection_options = connection_options;
-    if let RemoteConnectionOptions::Ssh(options) = &mut connection_options {
-        let saved_source = download_settings.as_ref().and_then(|settings| {
-            settings
-                .ssh_connections
-                .iter()
-                .find(|connection| {
-                    connection.host == options.host.to_string()
-                        && connection.username == options.username
-                        && connection.port == options.port
-                })
-                .and_then(|connection| connection.remote_server_source)
-        });
-        if let Some(saved_source) = saved_source {
-            options.remote_server_source = saved_source;
-            options.upload_binary_over_ssh = true;
-        } else {
-            options.remote_server_source = default_remote_server_source(cx);
-        }
+    // Restored connections must carry the host's saved transfer preference even
+    // though every Zed CN install downloads locally before uploading.
+    if let RemoteConnectionOptions::Ssh(options) = &mut connection_options
+        && let Some(saved) = download_settings.as_ref().and_then(|settings| {
+            settings.ssh_connections.iter().find(|connection| {
+                connection.host == options.host.to_string()
+                    && connection.username == options.username
+                    && connection.port == options.port
+            })
+        })
+    {
+        options.upload_binary_over_ssh = saved.upload_binary_over_ssh.unwrap_or_default();
     }
     apply_remote_server_download_settings(connection_options, china_server_adaptation)
 }
@@ -2316,106 +2295,55 @@ mod tests {
     }
 
     #[gpui::test]
-    fn remote_server_source_defaults_to_the_zed_cn_remote_server(cx: &mut App) {
-        let version = Version::new(1, 19, 2);
-        release_channel::init_test(version.clone(), ReleaseChannel::Stable, cx);
-        cx.set_global(release_channel::CustomReleaseTag(format!(
-            "zed-cn-v{version}-r1"
-        )));
-        assert_eq!(
-            default_remote_server_source(cx),
-            settings::RemoteServerSource::ZedCn
-        );
-    }
-
-    #[gpui::test]
-    fn remote_server_source_defaults_to_official_without_a_validated_custom_release(cx: &mut App) {
-        release_channel::init_test(Version::new(1, 19, 2), ReleaseChannel::Dev, cx);
-        assert_eq!(
-            default_remote_server_source(cx),
-            settings::RemoteServerSource::Official
-        );
-
-        let version = Version::new(1, 19, 2);
-        release_channel::init_test(version, ReleaseChannel::Stable, cx);
-        cx.set_global(release_channel::CustomReleaseTag(
-            "zed-cn-v1.19.1-r1".into(),
-        ));
-        assert_eq!(
-            default_remote_server_source(cx),
-            settings::RemoteServerSource::Official
-        );
-    }
-
-    #[gpui::test]
-    fn connection_options_without_a_saved_source_use_the_default_source(cx: &mut App) {
+    fn saved_connection_settings_still_apply_without_a_server_source(cx: &mut App) {
         settings::init(cx);
-        let version = Version::new(1, 19, 2);
-        release_channel::init_test(version.clone(), ReleaseChannel::Stable, cx);
-        cx.set_global(release_channel::CustomReleaseTag(format!(
-            "zed-cn-v{version}-r1"
-        )));
         cx.update_global::<settings::SettingsStore, _>(|store, cx| {
             store
                 .set_user_settings(
-                    r#"{"china_server_adaptation":false,"ssh_connections":[{"host":"example.com"},{"host":"official.com","remote_server_source":"official"}]}"#,
+                    r#"{"china_server_adaptation":false,"ssh_connections":[{"host":"example.com","upload_binary_over_ssh":true}]}"#,
                     cx,
                 )
                 .expect("settings");
         });
 
-        let saved_without_source = connection_options_with_settings(
+        let effective = connection_options_with_settings(
             RemoteConnectionOptions::Ssh(SshConnectionOptions {
                 host: "example.com".into(),
                 ..Default::default()
             }),
             cx,
         );
-        let RemoteConnectionOptions::Ssh(saved_without_source) = saved_without_source else {
+        let RemoteConnectionOptions::Ssh(effective) = effective else {
             panic!("SSH");
         };
-        assert_eq!(
-            saved_without_source.remote_server_source,
-            settings::RemoteServerSource::ZedCn
-        );
-        assert!(!saved_without_source.upload_binary_over_ssh);
+        assert!(effective.upload_binary_over_ssh);
+    }
 
-        let saved_official = connection_options_with_settings(
+    #[gpui::test]
+    fn legacy_saved_remote_server_source_is_ignored(cx: &mut App) {
+        settings::init(cx);
+        // Settings written by older Zed CN builds still contain the removed
+        // source selector; loading them must not fail.
+        cx.update_global::<settings::SettingsStore, _>(|store, cx| {
+            store
+                .set_user_settings(
+                    r#"{"china_server_adaptation":false,"ssh_connections":[{"host":"example.com","remote_server_source":"official"}]}"#,
+                    cx,
+                )
+                .expect("legacy settings still load");
+        });
+
+        let effective = connection_options_with_settings(
             RemoteConnectionOptions::Ssh(SshConnectionOptions {
-                host: "official.com".into(),
+                host: "example.com".into(),
                 ..Default::default()
             }),
             cx,
         );
-        let RemoteConnectionOptions::Ssh(saved_official) = saved_official else {
+        let RemoteConnectionOptions::Ssh(effective) = effective else {
             panic!("SSH");
         };
-        assert_eq!(
-            saved_official.remote_server_source,
-            settings::RemoteServerSource::Official
-        );
-    }
-
-    #[gpui::test]
-    fn remote_server_source_settings_apply_to_restored_connections(cx: &mut App) {
-        settings::init(cx);
-        cx.update_global::<settings::SettingsStore, _>(|store, cx| {
-            store.set_user_settings(r#"{"china_server_adaptation":false,"ssh_connections":[{"host":"example.com","remote_server_source":"zed_cn","upload_binary_over_ssh":false}]}"#, cx).expect("settings");
-        });
-        let restored = RemoteConnectionOptions::Ssh(SshConnectionOptions {
-            host: "example.com".into(),
-            ..Default::default()
-        });
-        let RemoteConnectionOptions::Ssh(effective) =
-            connection_options_with_settings(restored, cx)
-        else {
-            panic!("SSH");
-        };
-        assert_eq!(
-            effective.remote_server_source,
-            settings::RemoteServerSource::ZedCn
-        );
-        assert!(effective.upload_binary_over_ssh);
+        assert!(!effective.upload_binary_over_ssh);
     }
 
     #[gpui::test]
@@ -2485,24 +2413,19 @@ mod tests {
     }
 
     #[test]
-    fn remote_server_sources_have_separate_pool_keys_and_legacy_default() {
-        let official = SshConnectionOptions {
+    fn legacy_ssh_options_without_a_server_source_still_decode() {
+        let options = SshConnectionOptions {
             host: "example.com".into(),
             ..Default::default()
         };
-        let mut custom = official.clone();
-        custom.remote_server_source = settings::RemoteServerSource::ZedCn;
-        assert_ne!(official, custom);
-        let mut legacy = serde_json::to_value(&custom).expect("serialize");
+        let mut legacy = serde_json::to_value(&options).expect("serialize");
         legacy
             .as_object_mut()
             .expect("object")
-            .remove("remote_server_source");
-        let decoded: SshConnectionOptions = serde_json::from_value(legacy).expect("legacy options");
-        assert_eq!(
-            decoded.remote_server_source,
-            settings::RemoteServerSource::Official
-        );
+            .insert("remote_server_source".into(), "official".into());
+        let decoded: SshConnectionOptions =
+            serde_json::from_value(legacy).expect("legacy options still decode");
+        assert_eq!(decoded.host.to_string(), "example.com");
     }
 
     #[test]

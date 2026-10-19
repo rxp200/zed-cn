@@ -910,8 +910,8 @@ const INPUT_BACKLOG_RETRY_INTERVAL: Duration = Duration::from_millis(200);
 /// How much streamed remote-terminal output the client applies before
 /// reporting a new credit offset to the server.
 const OUTPUT_CREDIT_GRANULARITY_BYTES: u64 = 256 * 1024;
-/// Consecutive output-stream failures tolerated before falling back to
-/// polling for the rest of the terminal's lifetime.
+/// Consecutive output-stream failures tolerated before the failure rate is
+/// reported as a warning; the subscription itself is always retried.
 const MAX_STREAM_FAILURES: u32 = 3;
 static NEXT_INIT_COMMAND_STARTUP_MARKER_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -1133,7 +1133,6 @@ impl TerminalBuilder {
         client: AnyProtoClient,
         server_instance_id: String,
         terminal_id: String,
-        streaming: bool,
         background_executor: &BackgroundExecutor,
     ) -> TerminalBuilder {
         let mut builder = Self::new_display_only(
@@ -1181,7 +1180,6 @@ impl TerminalBuilder {
             client,
             server_instance_id,
             terminal_id,
-            streaming,
             input_tx,
             input_backpressure_warned: std::cell::Cell::new(false),
             input_task: None,
@@ -1535,7 +1533,6 @@ impl TerminalBuilder {
             let client = remote.client.clone();
             let server_instance_id = remote.server_instance_id.clone();
             let terminal_id = remote.terminal_id.clone();
-            let streaming = remote.streaming;
             let input_rx = self
                 .remote_input_rx
                 .take()
@@ -1563,9 +1560,11 @@ impl TerminalBuilder {
                     }
                 }
             });
-            let output_task = cx.spawn(async move |terminal, cx| {
+            let output_task = cx.spawn(async move |terminal, cx| -> Result<()> {
                 let mut offset = 0;
-                let mut use_streaming = streaming;
+                // Zed CN Remote Servers are the only supported provider, so output
+                // always arrives over the streaming subscription; there is no
+                // polling fallback for servers that never advertised it.
                 let mut consecutive_stream_failures = 0;
                 loop {
                     if terminal.read_with(cx, |terminal, _| {
@@ -1573,159 +1572,112 @@ impl TerminalBuilder {
                     })? {
                         return Ok(());
                     }
-                    if use_streaming {
-                        let frames = client
-                            .request_stream(proto::SubscribePersistentTerminal {
-                                server_instance_id: server_instance_id.clone(),
-                                terminal_id: terminal_id.clone(),
-                                offset,
-                            })
-                            .await;
-                        match frames {
-                            Err(error) => {
-                                if persistent_terminal_is_unavailable(&error) {
-                                    terminal.update(cx, |terminal, cx| {
-                                        terminal.fail_remote_terminal(&error, cx);
-                                    })?;
+                    let frames = client
+                        .request_stream(proto::SubscribePersistentTerminal {
+                            server_instance_id: server_instance_id.clone(),
+                            terminal_id: terminal_id.clone(),
+                            offset,
+                        })
+                        .await;
+                    match frames {
+                        Err(error) => {
+                            if persistent_terminal_is_unavailable(&error) {
+                                terminal.update(cx, |terminal, cx| {
+                                    terminal.fail_remote_terminal(&error, cx);
+                                })?;
+                                return Ok(());
+                            }
+                            log::debug!(
+                                "persistent terminal output stream unavailable, retrying subscription: {error:#}"
+                            );
+                            cx.background_executor()
+                                .timer(Duration::from_millis(200))
+                                .await;
+                        }
+                        Ok(mut frames) => {
+                            let mut last_credit_offset = offset;
+                            let mut made_progress = false;
+                            'stream: loop {
+                                if terminal.read_with(cx, |terminal, _| {
+                                    matches!(&terminal.terminal_type, TerminalType::Remote(remote) if remote.failed)
+                                })? {
                                     return Ok(());
                                 }
-                                log::debug!(
-                                    "persistent terminal output stream unavailable, falling back to polling: {error:#}"
-                                );
-                                use_streaming = false;
-                            }
-                            Ok(mut frames) => {
-                                let mut last_credit_offset = offset;
-                                let mut made_progress = false;
-                                'stream: loop {
-                                    if terminal.read_with(cx, |terminal, _| {
-                                        matches!(&terminal.terminal_type, TerminalType::Remote(remote) if remote.failed)
-                                    })? {
-                                        return Ok(());
-                                    }
-                                    let Some(frame) = frames.next().await else {
-                                        consecutive_stream_failures += 1;
-                                        break 'stream;
-                                    };
-                                    let frame = match frame {
-                                        Ok(frame) => frame,
-                                        Err(error) => {
-                                            if persistent_terminal_is_unavailable(&error) {
-                                                terminal.update(cx, |terminal, cx| {
-                                                    terminal.fail_remote_terminal(&error, cx);
-                                                })?;
-                                                return Ok(());
-                                            }
-                                            log::debug!(
-                                                "persistent terminal output stream interrupted: {error:#}"
-                                            );
-                                            consecutive_stream_failures += 1;
-                                            break 'stream;
+                                let Some(frame) = frames.next().await else {
+                                    consecutive_stream_failures += 1;
+                                    break 'stream;
+                                };
+                                let frame = match frame {
+                                    Ok(frame) => frame,
+                                    Err(error) => {
+                                        if persistent_terminal_is_unavailable(&error) {
+                                            terminal.update(cx, |terminal, cx| {
+                                                terminal.fail_remote_terminal(&error, cx);
+                                            })?;
+                                            return Ok(());
                                         }
-                                    };
-                                    if frame.offset > offset && !frame.history_truncated {
-                                        // Missed bytes: resubscribe from the expected offset.
+                                        log::debug!(
+                                            "persistent terminal output stream interrupted: {error:#}"
+                                        );
                                         consecutive_stream_failures += 1;
                                         break 'stream;
                                     }
-                                    let skip = (offset.saturating_sub(frame.offset) as usize)
-                                        .min(frame.data.len());
-                                    let frame_end = frame.offset + frame.data.len() as u64;
-                                    let history_truncated = frame.history_truncated;
-                                    let exited = frame.exited;
-                                    let exit_code = frame.exit_code;
-                                    terminal.update(cx, |terminal, cx| {
-                                        if history_truncated {
-                                            terminal.clear_for_init_command(cx);
-                                        }
-                                        if skip < frame.data.len() {
-                                            terminal.write_raw_output(&frame.data[skip..], cx);
-                                        }
-                                        if exited && terminal.child_exited.is_none() {
-                                            terminal.register_task_finished(
-                                                exit_code.map(exit_status_from_code),
-                                                cx,
-                                            );
-                                        }
-                                    })?;
-                                    offset = offset.max(frame_end);
-                                    made_progress = true;
-                                    if offset - last_credit_offset
-                                        >= OUTPUT_CREDIT_GRANULARITY_BYTES
-                                    {
-                                        last_credit_offset = offset;
-                                        client.send(proto::PersistentTerminalOutputCredit {
-                                            server_instance_id: server_instance_id.clone(),
-                                            terminal_id: terminal_id.clone(),
-                                            offset,
-                                        })?;
-                                    }
-                                    if exited {
-                                        return anyhow::Ok(());
-                                    }
+                                };
+                                if frame.offset > offset && !frame.history_truncated {
+                                    // Missed bytes: resubscribe from the expected offset.
+                                    consecutive_stream_failures += 1;
+                                    break 'stream;
                                 }
-                                if made_progress {
-                                    consecutive_stream_failures = 0;
-                                }
-                                if consecutive_stream_failures >= MAX_STREAM_FAILURES {
-                                    log::warn!(
-                                        "persistent terminal output stream failed repeatedly, falling back to polling"
-                                    );
-                                    use_streaming = false;
-                                } else {
-                                    cx.background_executor()
-                                        .timer(Duration::from_millis(200))
-                                        .await;
-                                }
-                            }
-                        }
-                    } else {
-                        let response = client
-                            .request(proto::ReadPersistentTerminal {
-                                server_instance_id: server_instance_id.clone(),
-                                terminal_id: terminal_id.clone(),
-                                offset,
-                                max_bytes: 256 * 1024,
-                            })
-                            .await;
-                        match response {
-                            Ok(response) => {
-                                offset = response.next_offset;
-                                let exited = response.exited;
+                                let skip = (offset.saturating_sub(frame.offset) as usize)
+                                    .min(frame.data.len());
+                                let frame_end = frame.offset + frame.data.len() as u64;
+                                let history_truncated = frame.history_truncated;
+                                let exited = frame.exited;
+                                let exit_code = frame.exit_code;
                                 terminal.update(cx, |terminal, cx| {
-                                    if response.history_truncated {
+                                    if history_truncated {
                                         terminal.clear_for_init_command(cx);
                                     }
-                                    if !response.data.is_empty() {
-                                        terminal.write_raw_output(&response.data, cx);
+                                    if skip < frame.data.len() {
+                                        terminal.write_raw_output(&frame.data[skip..], cx);
                                     }
                                     if exited && terminal.child_exited.is_none() {
                                         terminal.register_task_finished(
-                                            response.exit_code.map(exit_status_from_code),
+                                            exit_code.map(exit_status_from_code),
                                             cx,
                                         );
                                     }
                                 })?;
-                                if exited {
-                                    break;
-                                }
-                            }
-                            Err(error) => {
-                                if persistent_terminal_is_unavailable(&error) {
-                                    terminal.update(cx, |terminal, cx| {
-                                        terminal.fail_remote_terminal(&error, cx);
+                                offset = offset.max(frame_end);
+                                made_progress = true;
+                                if offset - last_credit_offset
+                                    >= OUTPUT_CREDIT_GRANULARITY_BYTES
+                                {
+                                    last_credit_offset = offset;
+                                    client.send(proto::PersistentTerminalOutputCredit {
+                                        server_instance_id: server_instance_id.clone(),
+                                        terminal_id: terminal_id.clone(),
+                                        offset,
                                     })?;
-                                    break;
                                 }
-                                log::debug!("persistent terminal poll paused: {error:#}");
+                                if exited {
+                                    return anyhow::Ok(());
+                                }
                             }
+                            if made_progress {
+                                consecutive_stream_failures = 0;
+                            }
+                            if consecutive_stream_failures >= MAX_STREAM_FAILURES {
+                                log::warn!(
+                                    "persistent terminal output stream failed {consecutive_stream_failures} times without progress"
+                                );
+                            }
+                            cx.background_executor()
+                                .timer(Duration::from_millis(200))
+                                .await;
                         }
-                        cx.background_executor()
-                            .timer(Duration::from_millis(50))
-                            .await;
                     }
                 }
-                anyhow::Ok(())
             });
             if let TerminalType::Remote(remote) = &mut self.terminal.terminal_type {
                 remote.input_task = Some(input_task);
@@ -1906,7 +1858,6 @@ struct RemoteTerminal {
     client: AnyProtoClient,
     server_instance_id: String,
     terminal_id: String,
-    streaming: bool,
     input_tx: Sender<Vec<u8>>,
     /// Set after a failed input send so a persistently full queue warns once
     /// instead of once per keystroke.
@@ -3955,7 +3906,7 @@ impl Terminal {
         }
     }
 
-    pub fn kill_active_task(&mut self) {
+    pub fn kill_active_task(&mut self, cx: &mut Context<Self>) {
         if let Some(task) = self.task()
             && task.status == TaskStatus::Running
         {
@@ -3974,6 +3925,15 @@ impl Terminal {
                             terminal_id: remote.terminal_id.clone(),
                         }))
                         .detach();
+                    // Closing the server terminal removes it, so no exit frame follows.
+                    // Mark the terminal failed first so the output task stops silently
+                    // instead of reporting a missing terminal, then finish the task here
+                    // so `wait_for_completed_task` does not hang.
+                    if let TerminalType::Remote(remote) = &mut self.terminal_type {
+                        remote.failed = true;
+                        remote.input_tx.close();
+                    }
+                    self.register_task_finished(None, cx);
                 }
                 TerminalType::DisplayOnly => {
                     // Non-PTY task terminals own their subprocess directly.
@@ -6209,7 +6169,6 @@ mod tests {
                 })),
                 "server".into(),
                 "terminal".into(),
-                false,
                 cx.background_executor(),
             )
             .subscribe(cx)
@@ -6514,7 +6473,6 @@ mod tests {
                 })),
                 "server".into(),
                 "terminal".into(),
-                false,
                 cx.background_executor(),
             )
             .subscribe(cx)
@@ -7488,8 +7446,8 @@ mod tests {
             terminal.read_with(cx, |terminal, cx| terminal.wait_for_completed_task(cx));
 
         // Kill the active task
-        terminal.update(cx, |term, _cx| {
-            term.kill_active_task();
+        terminal.update(cx, |term, cx| {
+            term.kill_active_task(cx);
         });
 
         // The exit status should indicate the process was killed (not a clean exit)
@@ -7523,8 +7481,8 @@ mod tests {
         assert_content_eventually(&terminal, "done", cx).await;
 
         // Now try to kill - should be a no-op since task already completed
-        terminal.update(cx, |term, _cx| {
-            term.kill_active_task();
+        terminal.update(cx, |term, cx| {
+            term.kill_active_task(cx);
         });
 
         // Content should still be there
@@ -8028,40 +7986,68 @@ mod tests {
             .expect("input completes after the backlog drains");
     }
 
-    struct PollTestClient {
+    struct StreamTestClient {
         handler_set: Mutex<ProtoMessageHandlerSet>,
-        reads: std::sync::atomic::AtomicUsize,
+        subscriptions: std::sync::atomic::AtomicUsize,
+        closes: std::sync::atomic::AtomicUsize,
         missing: bool,
     }
 
-    impl ProtoClient for PollTestClient {
+    impl ProtoClient for StreamTestClient {
         fn request(
             &self,
             envelope: proto::Envelope,
-            _: &'static str,
+            request_type: &'static str,
         ) -> futures::future::BoxFuture<'static, Result<proto::Envelope>> {
             if matches!(
                 envelope.payload,
-                Some(proto::envelope::Payload::ReadPersistentTerminal(_))
+                Some(proto::envelope::Payload::ClosePersistentTerminal(_))
             ) {
-                self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                let message = if self.missing {
-                    "persistent terminal not found"
-                } else {
-                    "temporary error"
-                };
+                self.closes
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                return async { Ok(proto::Ack {}.into_envelope(0, None, None)) }.boxed();
+            }
+            async move { anyhow::bail!("unexpected {request_type} request in test") }.boxed()
+        }
+        fn request_stream(
+            &self,
+            envelope: proto::Envelope,
+            _: &'static str,
+        ) -> futures::future::BoxFuture<
+            'static,
+            Result<futures::stream::BoxStream<'static, Result<proto::Envelope>>>,
+        > {
+            assert!(matches!(
+                envelope.payload,
+                Some(proto::envelope::Payload::SubscribePersistentTerminal(_))
+            ));
+            self.subscriptions
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if self.missing {
                 async move {
                     Err(proto::RpcError::from_proto(
                         &proto::Error {
-                            message: message.into(),
+                            message: "persistent terminal not found".into(),
                             ..Default::default()
                         },
-                        "ReadPersistentTerminal",
+                        "SubscribePersistentTerminal",
                     ))
                 }
                 .boxed()
             } else {
-                async { Ok(proto::Ack {}.into_envelope(0, None, None)) }.boxed()
+                async move {
+                    Ok(futures::stream::once(async {
+                        Err(proto::RpcError::from_proto(
+                            &proto::Error {
+                                message: "temporary error".into(),
+                                ..Default::default()
+                            },
+                            "SubscribePersistentTerminal",
+                        ))
+                    })
+                    .boxed())
+                }
+                .boxed()
             }
         }
         fn send(&self, _: proto::Envelope, _: &'static str) -> Result<()> {
@@ -8081,10 +8067,21 @@ mod tests {
         }
     }
 
-    fn polling_terminal(client: Arc<PollTestClient>, cx: &mut TestAppContext) -> Entity<Terminal> {
+    fn streaming_terminal(
+        client: Arc<StreamTestClient>,
+        cx: &mut TestAppContext,
+    ) -> Entity<Terminal> {
+        streaming_terminal_with_mode(client, TerminalMode::interactive(), cx)
+    }
+
+    fn streaming_terminal_with_mode(
+        client: Arc<StreamTestClient>,
+        mode: TerminalMode,
+        cx: &mut TestAppContext,
+    ) -> Entity<Terminal> {
         cx.new(|cx| {
             TerminalBuilder::new_remote(
-                TerminalMode::interactive(),
+                mode,
                 Shell::Program("bash".into()),
                 SettingsCursorShape::default(),
                 AlternateScroll::On,
@@ -8096,7 +8093,6 @@ mod tests {
                 AnyProtoClient::new(client),
                 "server".into(),
                 "terminal".into(),
-                false,
                 cx.background_executor(),
             )
             .subscribe(cx)
@@ -8104,17 +8100,23 @@ mod tests {
     }
 
     #[gpui::test(iterations = 20)]
-    fn persistent_terminal_missing_stops_polling_and_disables_input(cx: &mut TestAppContext) {
-        let client = Arc::new(PollTestClient {
+    fn missing_hosted_terminal_stops_streaming_and_disables_input(cx: &mut TestAppContext) {
+        let client = Arc::new(StreamTestClient {
             handler_set: Mutex::new(ProtoMessageHandlerSet::default()),
-            reads: Default::default(),
+            subscriptions: Default::default(),
+            closes: Default::default(),
             missing: true,
         });
-        let terminal = polling_terminal(client.clone(), cx);
+        let terminal = streaming_terminal(client.clone(), cx);
         cx.run_until_parked();
         cx.background_executor.advance_clock(Duration::from_secs(1));
         cx.run_until_parked();
-        assert_eq!(client.reads.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(
+            client
+                .subscriptions
+                .load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
         terminal.read_with(cx, |terminal, _| {
             let TerminalType::Remote(remote) = &terminal.terminal_type else {
                 panic!("remote terminal")
@@ -8125,28 +8127,80 @@ mod tests {
     }
 
     #[gpui::test(iterations = 20)]
-    fn persistent_terminal_drop_cancels_polling_but_transient_errors_retry(
+    async fn hosted_task_terminal_stop_closes_the_server_pty_and_finishes_the_task(
         cx: &mut TestAppContext,
     ) {
-        let client = Arc::new(PollTestClient {
+        let client = Arc::new(StreamTestClient {
             handler_set: Mutex::new(ProtoMessageHandlerSet::default()),
-            reads: Default::default(),
+            subscriptions: Default::default(),
+            closes: Default::default(),
             missing: false,
         });
-        let terminal = polling_terminal(client.clone(), cx);
+        let mode = TerminalMode::task(SpawnInTerminal {
+            command: Some("sleep".to_string()),
+            args: vec!["60".to_string()],
+            ..SpawnInTerminal::default()
+        });
+        let terminal = streaming_terminal_with_mode(client.clone(), mode, cx);
+
+        let completion =
+            terminal.read_with(cx, |terminal, cx| terminal.wait_for_completed_task(cx));
+
+        terminal.update(cx, |terminal, cx| terminal.kill_active_task(cx));
+        cx.run_until_parked();
+
+        assert_eq!(
+            client.closes.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "stopping a hosted task must close the server-side PTY"
+        );
+        assert_eq!(
+            completion.await,
+            None,
+            "stopping a hosted task reports an unknown exit status instead of hanging"
+        );
+        terminal.read_with(cx, |terminal, _| {
+            assert_eq!(
+                terminal.task().map(|task| task.status),
+                Some(TaskStatus::Unknown),
+                "the task must not stay Running after a hosted stop"
+            );
+        });
+    }
+
+    #[gpui::test(iterations = 20)]
+    fn hosted_terminal_drop_cancels_streaming_but_transient_errors_resubscribe(
+        cx: &mut TestAppContext,
+    ) {
+        let client = Arc::new(StreamTestClient {
+            handler_set: Mutex::new(ProtoMessageHandlerSet::default()),
+            subscriptions: Default::default(),
+            closes: Default::default(),
+            missing: false,
+        });
+        let terminal = streaming_terminal(client.clone(), cx);
         cx.run_until_parked();
         cx.background_executor
-            .advance_clock(Duration::from_millis(50));
+            .advance_clock(Duration::from_millis(200));
         cx.run_until_parked();
-        assert!(client.reads.load(std::sync::atomic::Ordering::SeqCst) >= 2);
+        assert!(
+            client
+                .subscriptions
+                .load(std::sync::atomic::Ordering::SeqCst)
+                >= 2
+        );
         drop(terminal);
         cx.run_until_parked();
-        let reads = client.reads.load(std::sync::atomic::Ordering::SeqCst);
+        let subscriptions = client
+            .subscriptions
+            .load(std::sync::atomic::Ordering::SeqCst);
         cx.background_executor.advance_clock(Duration::from_secs(1));
         cx.run_until_parked();
         assert_eq!(
-            client.reads.load(std::sync::atomic::Ordering::SeqCst),
-            reads
+            client
+                .subscriptions
+                .load(std::sync::atomic::Ordering::SeqCst),
+            subscriptions
         );
     }
 
@@ -8240,7 +8294,6 @@ mod tests {
             })),
             "server".to_string(),
             "terminal".to_string(),
-            false,
             &cx.background_executor,
         );
         assert!(hosted.terminal.is_server_hosted());

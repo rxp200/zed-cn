@@ -301,6 +301,9 @@ jobs:
           - arch: aarch64
             target: aarch64-apple-darwin
             runner: macos-15
+          - arch: x86_64
+            target: x86_64-apple-darwin
+            runner: macos-15-intel
     env:
       CARGO_BUILD_JOBS: "3"
       ZED_COMMIT_SHA: ${{ needs.validate_source.outputs.source_sha }}
@@ -621,11 +624,13 @@ jobs:
             bwrap-linux-x86_64.gz
             Zed-aarch64.dmg
             Zed-aarch64.exe
+            Zed-x86_64.dmg
             zed-linux-aarch64.tar.gz
             zed-linux-x86_64.tar.gz
             zed-remote-server-linux-aarch64.gz
             zed-remote-server-linux-x86_64.gz
             zed-remote-server-macos-aarch64.gz
+            zed-remote-server-macos-x86_64.gz
             zed-remote-server-windows-aarch64.zip
             zed-remote-server-windows-x86_64.zip
             Zed-x86_64.exe
@@ -711,7 +716,7 @@ jobs:
           - 定制修订：r$RELEASE_REVISION
           - 源码提交：\`$SOURCE_SHA\`
           - 发布渠道：$UPDATE_CHANNEL
-          - 支持平台：Linux、Windows（x86_64 / aarch64），macOS（仅 Apple Silicon / aarch64）；不再提供 Intel Mac 安装包及对应的 Zed CN Remote Server
+          - 支持平台：Linux、Windows、macOS（x86_64 / aarch64）
           - 代码签名：Windows 未签名，macOS 使用临时签名且未公证
 
           本次 Release 包含所有成功完成构建并通过验证的产物。失败平台的产物不会阻止其他平台发布，也不会作为空文件上传。所有已发布二进制的 SHA-256 见 \`SHA256SUMS.txt\`。Windows SmartScreen 和 macOS Gatekeeper 可能显示警告。

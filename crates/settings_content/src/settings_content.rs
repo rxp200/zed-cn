@@ -1543,13 +1543,6 @@ pub struct SshConnection {
     // limited outbound internet access. The global `china_server_adaptation`
     // setting forces this behavior for every SSH connection.
     pub upload_binary_over_ssh: Option<bool>,
-    /// Selects the Remote Server distribution for this SSH host.
-    ///
-    /// When left unset, Zed CN clients use the Remote Server matching their own
-    /// custom release, and clients without a validated custom release use Zed's
-    /// official Remote Server.
-    pub remote_server_source: Option<RemoteServerSource>,
-
     pub port_forwards: Option<Vec<SshPortForwardOption>>,
     /// Timeout in seconds for SSH connection and downloading the remote server binary.
     /// Defaults to 10 seconds if not specified.
@@ -1571,16 +1564,6 @@ pub struct SshConnection {
     /// a jump-host chain can be used without clearing the address.
     #[serde(default)]
     pub proxy_disabled: bool,
-}
-
-#[derive(
-    Clone, Copy, Default, Debug, Serialize, Deserialize, PartialEq, Eq, Hash, JsonSchema, MergeFrom,
-)]
-#[serde(rename_all = "snake_case")]
-pub enum RemoteServerSource {
-    #[default]
-    Official,
-    ZedCn,
 }
 
 #[derive(Clone, Default, Serialize, Deserialize, PartialEq, JsonSchema, MergeFrom, Debug)]

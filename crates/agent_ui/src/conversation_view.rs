@@ -2502,7 +2502,7 @@ impl ConversationView {
                         return Err(anyhow!("exited before logging in"));
                     }
                 }
-                terminal.update(cx, |terminal, _| terminal.kill_active_task())?;
+                terminal.update(cx, |terminal, cx| terminal.kill_active_task(cx))?;
                 Ok(())
             }
         })

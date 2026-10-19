@@ -88,11 +88,11 @@ pub fn init(cx: &mut App) {
                                     .is_some_and(|value| value == "1")
                             });
                             if managed {
-                                terminal.update(cx, |terminal, _| {
+                                terminal.update(cx, |terminal, cx| {
                                     if terminal.is_remote_terminal() {
                                         terminal.input(vec![3]);
                                     } else {
-                                        terminal.kill_active_task();
+                                        terminal.kill_active_task(cx);
                                     }
                                 });
                             }
@@ -186,11 +186,11 @@ impl TerminalPanel {
                 .task()
                 .is_some_and(|task| task.spawned_task.id == *task_id);
             if is_target {
-                terminal.update(cx, |terminal, _| {
+                terminal.update(cx, |terminal, cx| {
                     if terminal.is_remote_terminal() {
                         terminal.input(vec![3]);
                     } else {
-                        terminal.kill_active_task();
+                        terminal.kill_active_task(cx);
                     }
                 });
             }

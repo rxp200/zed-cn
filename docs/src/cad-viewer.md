@@ -37,9 +37,9 @@
 
 ## 远程边界
 
-远程复用只读 1 MiB 文档分块协议（Proto 510/511），额外要求 `cad_documents_v1` 能力与既有 Zed CN 来源门控。旧版或官方服务端不接收图纸请求，**没有本地路径回退**。服务端只按 `project::document_file_size_limit` 校验扩展名、大小与修改时间并读取字节，解析与渲染全部在客户端完成，因此 Windows 客户端连接 Linux 服务端不涉及路径或程序启动的跨主机差异。
+远程复用只读 1 MiB 文档分块协议（Proto 510/511），只要求 `cad_documents_v1` 能力；所有远程连接现在都使用 Zed CN Remote Server。旧版服务端不接收图纸请求，**没有本地路径回退**。服务端只按 `project::document_file_size_limit` 校验扩展名、大小与修改时间并读取字节，解析与渲染全部在客户端完成，因此 Windows 客户端连接 Linux 服务端不涉及路径或程序启动的跨主机差异。
 
-使用 SSH 远程预览时，在该连接的「服务端选项」中选择 Zed CN 来源，并使用包含图纸查看器能力的客户端与服务端后重新连接。缺少 `cad_documents_v1` 时，打开标签页之前就会提示需要支持 CAD 图纸预览的 Zed CN 服务端。
+使用 SSH 远程预览时，使用匹配当前客户端版本的 Zed CN Remote Server 重新连接。缺少 `cad_documents_v1` 时，打开标签页之前就会提示需要支持 CAD 图纸预览的 Zed CN 服务端。
 
 ## 人工验证
 

@@ -54,22 +54,7 @@ pub const PLATFORMS: [Platform; 6] = [
 /// Identifies one downloadable remote server archive.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct DownloadKey {
-    pub custom: bool,
     pub platform: Platform,
-}
-
-/// Whether the running build can fetch the given platform from the given source.
-pub fn platform_supported(
-    custom: bool,
-    channel: ReleaseChannel,
-    index: usize,
-    has_tag: bool,
-) -> bool {
-    if custom {
-        has_tag && index != 5
-    } else {
-        channel != ReleaseChannel::Dev
-    }
 }
 
 #[derive(Clone)]
@@ -180,10 +165,8 @@ impl RemoteServerDownloads {
             .collect()
     }
 
-    pub fn has_active(&self, custom: bool) -> bool {
-        self.entries
-            .iter()
-            .any(|entry| entry.is_active() && entry.key.custom == custom)
+    pub fn has_active(&self) -> bool {
+        self.entries.iter().any(|entry| entry.is_active())
     }
 
     pub fn has_any_active(&self) -> bool {
@@ -205,27 +188,21 @@ impl RemoteServerDownloads {
             return None;
         }
         let channel = ReleaseChannel::global(cx);
-        let tag = CustomReleaseTag::try_current(cx);
-        if key.custom && tag.is_none() {
+        let Some(tag) = CustomReleaseTag::try_current(cx) else {
             return None;
-        }
-        let index = PLATFORMS
+        };
+        PLATFORMS
             .iter()
             .position(|platform| *platform == key.platform)?;
-        if !platform_supported(key.custom, channel, index, tag.is_some()) {
-            return None;
-        }
 
         let version = AppVersion::global(cx);
         let path = remote_server_cache_path(
             channel,
             &version,
-            if key.custom { tag.as_deref() } else { None },
+            Some(tag.as_str()),
             key.platform.os,
             key.platform.arch,
         );
-        let official_version = (channel != ReleaseChannel::Nightly).then(|| version.clone());
-        let custom_tag = if key.custom { tag } else { None };
         self.next_id += 1;
         let id = self.next_id;
         self.entries.push(RemoteServerDownload {
@@ -256,33 +233,15 @@ impl RemoteServerDownloads {
                         .log_err();
                 }
             };
-            let result = if key.custom {
-                match custom_tag {
-                    Some(tag) => {
-                        AutoUpdater::download_custom_remote_server_release(
-                            tag,
-                            key.platform.os,
-                            key.platform.arch,
-                            set_status,
-                            set_progress,
-                            cx,
-                        )
-                        .await
-                    }
-                    None => Err(anyhow::anyhow!(i18n::t!("b77ef0d9ca5014ab"))),
-                }
-            } else {
-                AutoUpdater::download_remote_server_release(
-                    channel,
-                    official_version,
-                    key.platform.os,
-                    key.platform.arch,
-                    set_status,
-                    set_progress,
-                    cx,
-                )
-                .await
-            };
+            let result = AutoUpdater::download_custom_remote_server_release(
+                tag,
+                key.platform.os,
+                key.platform.arch,
+                set_status,
+                set_progress,
+                cx,
+            )
+            .await;
             let (status, error) = match result {
                 Ok(path) => match smol::fs::metadata(&path).await {
                     Ok(metadata) => (
@@ -395,7 +354,6 @@ mod tests {
 
     fn key(index: usize) -> DownloadKey {
         DownloadKey {
-            custom: false,
             platform: PLATFORMS[index],
         }
     }

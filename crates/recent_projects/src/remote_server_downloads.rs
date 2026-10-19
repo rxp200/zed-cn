@@ -1,7 +1,5 @@
 use auto_update::remote_server_cache_path;
-use auto_update::remote_server_downloads::{
-    DownloadKey, PLATFORMS, RemoteServerDownloads, platform_supported,
-};
+use auto_update::remote_server_downloads::{DownloadKey, PLATFORMS, RemoteServerDownloads};
 use gpui::{
     App, Context, DismissEvent, Entity, EventEmitter, FocusHandle, Focusable, Subscription, Task,
     Window,
@@ -17,7 +15,6 @@ pub(crate) fn open(workspace: &mut Workspace, window: &mut Window, cx: &mut Cont
 
 pub(crate) struct RemoteServerDownloadsModal {
     focus_handle: FocusHandle,
-    custom: bool,
     selected: [bool; 6],
     statuses: [String; 6],
     store: Entity<RemoteServerDownloads>,
@@ -31,7 +28,6 @@ impl RemoteServerDownloadsModal {
         let store = RemoteServerDownloads::global(cx);
         let mut this = Self {
             focus_handle: cx.focus_handle(),
-            custom: CustomReleaseTag::try_current(cx).is_some(),
             selected: [false; 6],
             statuses: std::array::from_fn(|_| String::new()),
             store: store.clone(),
@@ -48,21 +44,18 @@ impl RemoteServerDownloadsModal {
     }
 
     fn refresh(&mut self, cx: &mut Context<Self>) {
-        let custom = self.custom;
         let tag = CustomReleaseTag::try_current(cx);
         let version = AppVersion::global(cx);
         let channel = ReleaseChannel::global(cx);
         self.task = Some(cx.spawn(async move |this, cx| {
             for (index, platform) in PLATFORMS.iter().enumerate() {
-                let status = if !platform_supported(custom, channel, index, tag.is_some()) {
+                let status = if tag.is_none() {
                     i18n::t!("b77ef0d9ca5014ab").to_owned()
-                } else if !custom && channel == ReleaseChannel::Nightly {
-                    i18n::t!("c95db392cea4388f").to_owned()
                 } else {
                     let path = remote_server_cache_path(
                         channel,
                         &version,
-                        if custom { tag.as_deref() } else { None },
+                        tag.as_deref(),
                         platform.os,
                         platform.arch,
                     );
@@ -95,14 +88,12 @@ impl RemoteServerDownloadsModal {
 
     fn download(&mut self, cx: &mut Context<Self>) {
         let selected = self.selected;
-        let custom = self.custom;
         let store = self.store.clone();
         store.update(cx, |store, cx| {
             for (index, platform) in PLATFORMS.iter().enumerate() {
                 if selected[index] {
                     store.start(
                         DownloadKey {
-                            custom,
                             platform: *platform,
                         },
                         cx,
@@ -119,16 +110,13 @@ impl RemoteServerDownloadsModal {
     fn delete(&mut self, index: usize, cx: &mut Context<Self>) {
         let tag = CustomReleaseTag::try_current(cx);
         let channel = ReleaseChannel::global(cx);
-        if !self.custom && channel == ReleaseChannel::Nightly {
-            return;
-        }
         let Some(platform) = PLATFORMS.get(index) else {
             return;
         };
         let path = remote_server_cache_path(
             channel,
             &AppVersion::global(cx),
-            if self.custom { tag.as_deref() } else { None },
+            tag.as_deref(),
             platform.os,
             platform.arch,
         );
@@ -147,7 +135,6 @@ impl RemoteServerDownloadsModal {
 
     fn live_status(&self, cx: &App, index: usize) -> Option<String> {
         let key = DownloadKey {
-            custom: self.custom,
             platform: *PLATFORMS.get(index)?,
         };
         self.store
@@ -168,14 +155,9 @@ impl Focusable for RemoteServerDownloadsModal {
 }
 impl Render for RemoteServerDownloadsModal {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let channel = ReleaseChannel::global(cx);
         let tag = CustomReleaseTag::try_current(cx);
-        let version = if self.custom {
-            tag.clone().unwrap_or_default()
-        } else {
-            AppVersion::global(cx).to_string()
-        };
-        let busy = self.store.read(cx).has_active(self.custom);
+        let version = tag.clone().unwrap_or_default();
+        let busy = self.store.read(cx).has_active();
         let any_active = self.store.read(cx).has_any_active();
         v_flex()
             .elevation_3(cx)
@@ -190,36 +172,9 @@ impl Render for RemoteServerDownloadsModal {
                     .size(LabelSize::Small)
                     .color(Color::Muted),
             )
-            .child(
-                h_flex()
-                    .gap_2()
-                    .child(
-                        Button::new("official", i18n::t!("f4d01e6a6436dd7a")).on_click(
-                            cx.listener(|this, _, _, cx| {
-                                this.custom = false;
-                                this.refresh(cx);
-                            }),
-                        ),
-                    )
-                    .child(
-                        Button::new("custom", "Zed CN")
-                            .disabled(tag.is_none())
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.custom = true;
-                                this.refresh(cx);
-                            })),
-                    ),
-            )
-            .child(Label::new(format!(
-                "{} · {version}",
-                if self.custom {
-                    "Zed CN"
-                } else {
-                    channel.display_name()
-                }
-            )))
+            .child(Label::new(format!("Zed CN · {version}")))
             .children(PLATFORMS.iter().enumerate().map(|(index, platform)| {
-                let available = platform_supported(self.custom, channel, index, tag.is_some());
+                let available = tag.is_some();
                 let status = self
                     .live_status(cx, index)
                     .unwrap_or_else(|| self.statuses[index].clone());
@@ -242,9 +197,7 @@ impl Render for RemoteServerDownloadsModal {
                     )
                     .child(
                         IconButton::new(("delete", index), IconName::Trash)
-                            .disabled(
-                                !available || (!self.custom && channel == ReleaseChannel::Nightly),
-                            )
+                            .disabled(!available)
                             .on_click(cx.listener(move |this, _, _, cx| this.delete(index, cx))),
                     )
             }))
@@ -253,19 +206,7 @@ impl Render for RemoteServerDownloadsModal {
                     .gap_2()
                     .child(
                         Button::new("download", i18n::t!("bf99ac442d15f953"))
-                            .disabled(
-                                busy || !self.selected.iter().enumerate().any(
-                                    |(index, selected)| {
-                                        *selected
-                                            && platform_supported(
-                                                self.custom,
-                                                channel,
-                                                index,
-                                                tag.is_some(),
-                                            )
-                                    },
-                                ),
-                            )
+                            .disabled(busy || !self.selected.iter().any(|selected| *selected))
                             .on_click(cx.listener(|this, _, _, cx| this.download(cx))),
                     )
                     .child(
@@ -312,7 +253,6 @@ mod tests {
         store.update(cx, |store, _| {
             store.insert_test_download(
                 DownloadKey {
-                    custom: false,
                     platform: PLATFORMS[0],
                 },
                 task,
@@ -339,7 +279,6 @@ mod tests {
         store.update(cx, |store, _| {
             store.insert_test_download(
                 DownloadKey {
-                    custom: false,
                     platform: PLATFORMS[0],
                 },
                 Task::ready(()),
@@ -353,30 +292,15 @@ mod tests {
     }
 
     #[test]
-    fn available_platforms_respect_distribution_and_build_identity() {
-        for index in 0..PLATFORMS.len() {
-            assert!(!platform_supported(
-                true,
-                ReleaseChannel::Stable,
-                index,
-                false
-            ));
-            assert_eq!(
-                platform_supported(true, ReleaseChannel::Stable, index, true),
-                index != 5
-            );
-            assert!(platform_supported(
-                false,
-                ReleaseChannel::Stable,
-                index,
-                false
-            ));
-            assert!(!platform_supported(
-                false,
-                ReleaseChannel::Dev,
-                index,
-                false
-            ));
-        }
+    fn every_published_platform_is_downloadable_including_macos_intel() {
+        // PLATFORMS is ordered by the release asset list; the Intel macOS entry
+        // used to be excluded while that server was retired.
+        assert_eq!(PLATFORMS.len(), 6);
+        assert!(
+            PLATFORMS
+                .iter()
+                .any(|platform| platform.os == "macos" && platform.arch == "x86_64"),
+            "macOS Intel must stay downloadable"
+        );
     }
 }

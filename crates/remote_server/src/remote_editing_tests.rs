@@ -7423,7 +7423,6 @@ async fn test_persistent_terminal_input_resumes_after_reconnect(
             proto_client.clone(),
             server_instance_id.clone(),
             terminal_id.clone(),
-            true,
             cx.background_executor(),
         )
         .subscribe(cx)

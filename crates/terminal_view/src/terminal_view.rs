@@ -20,7 +20,6 @@ use gpui::{
 use menu;
 use persistence::TerminalDb;
 use project::{Project, ProjectEntryId, search::SearchQuery};
-use remote::RemoteConnectionOptions;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use settings::{
@@ -1634,33 +1633,17 @@ impl TerminalView {
 
     fn remote_supports_temporary_files(&self, project: &Entity<Project>, cx: &App) -> bool {
         project.read(cx).supports_temporary_files(cx)
-            && match project.read(cx).remote_connection_options(cx) {
-                Some(RemoteConnectionOptions::Ssh(options)) => {
-                    options.remote_server_source == settings::RemoteServerSource::ZedCn
-                }
-                Some(_) => true,
-                None => false,
-            }
     }
 
-    fn show_temporary_file_unavailable(&self, project: &Entity<Project>, cx: &mut Context<Self>) {
-        struct OfficialRemoteClipboardFiles;
+    fn show_temporary_file_unavailable(&self, _project: &Entity<Project>, cx: &mut Context<Self>) {
+        struct RemoteClipboardFilesUnavailable;
 
-        let official = matches!(
-            project.read(cx).remote_connection_options(cx),
-            Some(RemoteConnectionOptions::Ssh(options))
-                if options.remote_server_source == settings::RemoteServerSource::Official
-        );
-        let message = if official {
-            i18n::t!("a99947c272142556")
-        } else {
-            i18n::t!("0563b4a650b98e46")
-        };
+        let message = i18n::t!("0563b4a650b98e46");
         self.workspace
             .update(cx, |workspace, cx| {
                 workspace.show_toast(
                     Toast::new(
-                        NotificationId::unique::<OfficialRemoteClipboardFiles>(),
+                        NotificationId::unique::<RemoteClipboardFilesUnavailable>(),
                         message,
                     ),
                     cx,
