@@ -265,7 +265,7 @@ async fn wait_for_forward(
                     return snapshot.local_port.context(i18n::t!("b4315e90e22b46eb"));
                 }
                 ForwardStatus::Failed(error) => bail!(i18n::t!("45327346a6ea2cd0", error = error)),
-                ForwardStatus::Starting => {}
+                ForwardStatus::Starting | ForwardStatus::Retrying(_) => {}
             }
         }
         cx.background_executor()

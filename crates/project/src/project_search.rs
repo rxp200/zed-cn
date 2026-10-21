@@ -92,6 +92,147 @@ impl SearchResultsHandle {
     }
 }
 
+/// A directory or file whose own name, or whose parent path, matched a project search query.
+///
+/// These are collected on the client from worktree snapshots, so name and path search works the
+/// same for local and remote projects and never reads the host's file system.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NameMatch {
+    pub path: ProjectPath,
+    pub is_directory: bool,
+    pub name: String,
+    /// The containing directory, including the trailing separator, or empty for worktree roots.
+    pub parent: String,
+    /// Byte ranges within `name` that matched.
+    pub name_ranges: Vec<Range<usize>>,
+    /// Byte ranges within `parent` that matched.
+    pub parent_ranges: Vec<Range<usize>>,
+}
+
+impl NameMatch {
+    pub fn has_name_match(&self) -> bool {
+        !self.name_ranges.is_empty()
+    }
+
+    pub fn has_path_match(&self) -> bool {
+        !self.parent_ranges.is_empty()
+    }
+}
+
+/// Collects folder-name and file-name / path matches for `query`.
+///
+/// Directories only match by their own name. Files match when either their name or their parent
+/// path matches. `opened_paths` restricts the scan to those files (the "only search open files"
+/// mode). The scan stops after `limit` matches and reports whether it did.
+pub fn collect_name_matches(
+    query: &SearchQuery,
+    worktrees: Vec<Arc<Snapshot>>,
+    opened_paths: Option<Vec<ProjectPath>>,
+    limit: usize,
+) -> (Vec<NameMatch>, bool) {
+    if query.as_str().is_empty() || limit == 0 {
+        return (Vec::new(), false);
+    }
+
+    let mut matches = Vec::new();
+
+    if let Some(opened_paths) = opened_paths {
+        for path in opened_paths {
+            let Some(name) = path.path.file_name() else {
+                continue;
+            };
+            let parent = parent_string(&path);
+            let name_ranges = query.search_str(name);
+            let parent_ranges = query.search_str(&parent);
+            if name_ranges.is_empty() && parent_ranges.is_empty() {
+                continue;
+            }
+            matches.push(NameMatch {
+                is_directory: false,
+                name: name.to_owned(),
+                parent,
+                name_ranges,
+                parent_ranges,
+                path,
+            });
+            if matches.len() >= limit {
+                return (matches, true);
+            }
+        }
+        return (matches, false);
+    }
+
+    let include_ignored = query.include_ignored();
+    for snapshot in worktrees {
+        for entry in snapshot.entries(include_ignored, 0) {
+            if entry.path.is_empty() || entry.is_fifo {
+                continue;
+            }
+            if !include_ignored && entry.is_ignored && !entry.is_always_included {
+                continue;
+            }
+            if !entry.is_file() && !entry.is_dir() {
+                continue;
+            }
+
+            if query.filters_path() {
+                let filtered_path = if query.match_full_paths() {
+                    let mut full_path = snapshot.root_name().to_owned();
+                    full_path.push(&entry.path);
+                    full_path
+                } else {
+                    entry.path.to_rel_path_buf()
+                };
+                if !query.match_path(&filtered_path) {
+                    continue;
+                }
+            }
+
+            let Some(name) = entry.path.file_name() else {
+                continue;
+            };
+            let path = ProjectPath {
+                worktree_id: snapshot.id(),
+                path: entry.path.clone(),
+            };
+            let parent = parent_string(&path);
+            let name_ranges = query.search_str(name);
+            if entry.is_dir() && name_ranges.is_empty() {
+                continue;
+            }
+            let parent_ranges = query.search_str(&parent);
+            if entry.is_file() && name_ranges.is_empty() && parent_ranges.is_empty() {
+                continue;
+            }
+
+            matches.push(NameMatch {
+                path,
+                is_directory: entry.is_dir(),
+                name: name.to_owned(),
+                parent,
+                name_ranges,
+                parent_ranges,
+            });
+            if matches.len() >= limit {
+                return (matches, true);
+            }
+        }
+    }
+
+    (matches, false)
+}
+
+fn parent_string(path: &ProjectPath) -> String {
+    match path.path.parent() {
+        Some(parent) if !parent.is_empty() => {
+            let mut parent = parent.to_string();
+            parent.push('/');
+            parent
+        }
+        _ => String::new(),
+    }
+}
+
 #[derive(Clone)]
 enum FindSearchCandidates {
     Local {

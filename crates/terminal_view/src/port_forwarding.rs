@@ -1,14 +1,11 @@
-use std::{
-    collections::HashSet,
-    net::TcpListener,
-    sync::{Arc, LazyLock},
-    time::Duration,
-};
+use std::{collections::HashSet, net::TcpListener, sync::LazyLock, time::Duration};
 
 use anyhow::{Context as _, Result, anyhow};
 use collections::HashMap;
 use editor::Editor;
-use futures::{FutureExt as _, channel::oneshot, io::AsyncReadExt as _, select_biased};
+use futures::{
+    FutureExt as _, StreamExt as _, channel::oneshot, io::AsyncReadExt as _, select_biased,
+};
 use gpui::{
     App, ClipboardItem, Context, DismissEvent, Entity, EventEmitter, FocusHandle, Focusable,
     IntoElement, Render, Task, WeakEntity, Window,
@@ -57,6 +54,9 @@ pub enum ForwardSource {
 pub enum ForwardStatus {
     Starting,
     RunningUnconfirmed,
+    /// The tunnel process ended and the manager is waiting to re-establish it.
+    /// It keeps retrying until the entry is stopped or the workspace closes.
+    Retrying(String),
     Failed(String),
 }
 
@@ -210,19 +210,19 @@ pub struct ForwardSnapshot {
 struct AutomaticForwardContext {
     project: Entity<Project>,
     client: Entity<RemoteClient>,
-    connection: Arc<dyn remote::RemoteConnection>,
     roots: Vec<(settings::WorktreeId, std::path::PathBuf)>,
 }
 
 impl AutomaticForwardContext {
+    /// Captures the scope only while a live transport exists, because the
+    /// ownership probe builds its command from the current connection.
     fn capture(project: Entity<Project>, cx: &mut App) -> Option<Self> {
         let client = ssh_remote_client(&project, cx)?;
-        let connection = client.read(cx).connection()?;
+        client.read(cx).connection()?;
         let roots = Self::trusted_roots(&project, cx)?;
         Some(Self {
             project,
             client,
-            connection,
             roots,
         })
     }
@@ -253,27 +253,20 @@ impl AutomaticForwardContext {
         Some(roots)
     }
 
+    /// Whether the project trust decision captured here still applies.
+    ///
+    /// A transport reconnect keeps the same project, client entity and trusted
+    /// roots but replaces the live connection, so automatic forwards must
+    /// survive it and be re-established by the retry loop instead of being
+    /// discarded and never re-detected.
     fn is_current(&self, cx: &mut App) -> bool {
-        Self::capture(self.project.clone(), cx).is_some_and(|current| {
-            current.project == self.project
-                && current.client == self.client
-                && same_automatic_scope(
-                    &current.connection,
-                    &current.roots,
-                    &self.connection,
-                    &self.roots,
-                )
-        })
+        ssh_remote_client(&self.project, cx).is_some_and(|client| client == self.client)
+            && Self::trusted_roots(&self.project, cx).as_ref() == Some(&self.roots)
     }
-}
 
-fn same_automatic_scope<T: ?Sized, R: PartialEq>(
-    current_connection: &Arc<T>,
-    current_roots: &R,
-    captured_connection: &Arc<T>,
-    captured_roots: &R,
-) -> bool {
-    Arc::ptr_eq(current_connection, captured_connection) && current_roots == captured_roots
+    fn same_scope(&self, other: &Self) -> bool {
+        self.project == other.project && self.client == other.client && self.roots == other.roots
+    }
 }
 
 enum ForwardChild {
@@ -553,13 +546,21 @@ impl PortForwardManager {
     ) {
         self.check_automatic_context(cx);
         let Some(context) = AutomaticForwardContext::capture(project.clone(), cx) else {
-            self.invalidate_automatic(cx);
+            // A missing transport is transient and handled by the retry loop. Only
+            // a scope that no longer holds drops the automatic forwards.
+            if !self
+                .automatic_context
+                .as_ref()
+                .is_some_and(|context| context.is_current(cx))
+            {
+                self.invalidate_automatic(cx);
+            }
             return;
         };
-        if self
+        if !self
             .automatic_context
             .as_ref()
-            .is_some_and(|old| old.project != project)
+            .is_some_and(|current| current.same_scope(&context))
         {
             self.invalidate_automatic(cx);
         }
@@ -591,7 +592,7 @@ impl PortForwardManager {
                 }),
                 cx.observe(&context.client, move |this, _, cx| {
                     if this.context_generation == generation {
-                        this.invalidate_automatic(cx);
+                        this.check_automatic_context(cx);
                     }
                 }),
             ];
@@ -898,6 +899,25 @@ fn ssh_remote_client(project: &Entity<Project>, cx: &App) -> Option<Entity<Remot
     .then_some(remote_client)
 }
 
+/// A tunnel that stayed up this long counts as a fresh outage instead of a
+/// continuation of the previous failure streak, so recovery starts fast again.
+const STABLE_TUNNEL_THRESHOLD: Duration = Duration::from_secs(10);
+const RETRY_INITIAL_DELAY: Duration = Duration::from_secs(1);
+const RETRY_MAX_DELAY: Duration = Duration::from_secs(30);
+
+fn retry_delay(failures: u32) -> Duration {
+    let exponent = failures.saturating_sub(1).min(5);
+    RETRY_INITIAL_DELAY
+        .saturating_mul(1_u32 << exponent)
+        .min(RETRY_MAX_DELAY)
+}
+
+/// Keeps one entry's tunnel alive until the entry is stopped.
+///
+/// Every way a tunnel can end (process exit, start failure, diagnostic read
+/// error, remote session reconnect) only schedules another attempt with a
+/// capped exponential backoff, because the user expects forwarding to survive
+/// network outages without reopening the workspace.
 async fn run_forward(
     remote_client: Entity<RemoteClient>,
     automatic_context: Option<AutomaticForwardContext>,
@@ -908,7 +928,8 @@ async fn run_forward(
     generation: u64,
     cx: &mut gpui::AsyncApp,
 ) -> Result<()> {
-    let mut last_error = None;
+    let key = (direction, target.clone());
+    let mut failures = 0_u32;
     let mut cancellation = cancellation.fuse();
     let mut next_local_port = match direction {
         ForwardDirection::RemoteToLocal => {
@@ -917,7 +938,23 @@ async fn run_forward(
         ForwardDirection::LocalToRemote => target.port,
     };
 
-    for attempt in 0..5 {
+    // Replacing the remote session kills the forwarding process because it is a
+    // mux client of the old master connection. Retrying as soon as the session
+    // is back avoids waiting out the current backoff.
+    let (reconnected_tx, mut reconnected_rx) = futures::channel::mpsc::unbounded::<()>();
+    let _reconnected_subscription = cx.update(|cx| {
+        cx.subscribe(
+            &remote_client,
+            move |_, event: &remote::RemoteClientEvent, _| {
+                if matches!(event, remote::RemoteClientEvent::Reconnected) {
+                    // Sending only fails once the forwarding task has ended.
+                    reconnected_tx.unbounded_send(()).log_err();
+                }
+            },
+        )
+    });
+
+    loop {
         if !cx.update(|cx| {
             automatic_context
                 .as_ref()
@@ -928,14 +965,20 @@ async fn run_forward(
         if !manager.read_with(cx, |manager, _| {
             manager
                 .entries
-                .get(&(direction, target.clone()))
+                .get(&key)
                 .is_some_and(|entry| entry.generation == generation)
         })? {
             return Ok(());
         }
+
         let local_port = next_local_port;
-        let command_template =
-            remote_client.read_with(cx, |client, _| match direction {
+        let attempt = failures.saturating_add(1);
+        let mut early_exit = false;
+        let mut stable = false;
+        let diagnostic: Option<anyhow::Error>;
+
+        'attempt: {
+            let command_template = match remote_client.read_with(cx, |client, _| match direction {
                 ForwardDirection::RemoteToLocal => client.build_forward_ports_command(vec![(
                     local_port,
                     target.connect_host("localhost"),
@@ -944,160 +987,198 @@ async fn run_forward(
                 ForwardDirection::LocalToRemote => client.build_reverse_forward_ports_command(
                     vec![(target.port, target.connect_host("127.0.0.1"), local_port)],
                 ),
-            })?;
-
-        let mut command = new_command(&command_template.program);
-        command
-            .args(&command_template.args)
-            .envs(&command_template.env)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true);
-        #[cfg(test)]
-        let controlled = manager.update(cx, |manager, _| {
-            manager
-                .forward_launcher
-                .as_mut()
-                .map(|launch| launch(direction, &target, &command_template.args))
-        })?;
-        #[cfg(not(test))]
-        let controlled: Option<ForwardChild> = None;
-        let mut child = match controlled {
-            Some(child) => child,
-            None => {
-                ForwardChild::Process(Some(command.spawn().context(i18n::t!("8aac5b1a043ae283"))?))
-            }
-        };
-
-        if !cx.update(|cx| {
-            automatic_context
-                .as_ref()
-                .is_none_or(|context| context.is_current(cx))
-        }) {
-            return Ok(());
-        }
-        manager.update(cx, |manager, cx| {
-            if let Some(entry) = manager.entries.get_mut(&(direction, target.clone()))
-                && entry.generation == generation
-            {
-                entry.local_port = Some(local_port);
-                entry.status = ForwardStatus::RunningUnconfirmed;
-                cx.notify();
-            }
-        })?;
-
-        let mut tail = DiagnosticTail::default();
-        let mut stderr = child.take_stderr();
-        let mut early = true;
-        let mut eof = false;
-        let mut incomplete = false;
-        let early_timer = cx
-            .background_executor()
-            .timer(Duration::from_millis(400))
-            .fuse();
-        let status = child.status().fuse();
-        futures::pin_mut!(early_timer, status);
-        let mut chunk = [0; 4096];
-        let result = loop {
-            let read = async {
-                if eof {
-                    futures::future::pending().await
-                } else {
-                    stderr.read(&mut chunk).await
+            }) {
+                Ok(template) => template,
+                Err(error) => {
+                    diagnostic = Some(error.context(i18n::t!("d19ff0ea62ad0732")));
+                    break 'attempt;
                 }
-            }
-            .fuse();
-            futures::pin_mut!(read);
-            select_biased! {
-                _ = cancellation => return Ok(()),
-                _ = early_timer => early = false,
-                result = status => break result,
-                result = read => match result {
-                    Ok(0) => eof = true,
-                    Ok(count) => {
-                        tail.push(&chunk[..count]);
-                        yield_diagnostic_drain().await;
-                    }
+            };
+
+            let mut command = new_command(&command_template.program);
+            command
+                .args(&command_template.args)
+                .envs(&command_template.env)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::piped())
+                .kill_on_drop(true);
+            #[cfg(test)]
+            let controlled = manager.update(cx, |manager, _| {
+                manager
+                    .forward_launcher
+                    .as_mut()
+                    .map(|launch| launch(direction, &target, &command_template.args))
+            })?;
+            #[cfg(not(test))]
+            let controlled: Option<ForwardChild> = None;
+            let mut child = match controlled {
+                Some(child) => child,
+                None => match command.spawn().context(i18n::t!("8aac5b1a043ae283")) {
+                    Ok(child) => ForwardChild::Process(Some(child)),
                     Err(error) => {
-                        return Err(anyhow!(i18n::t_mix!(
-                            "3c83d895fc4bafdd";
-                            attempt + 1,
-                            tail.display(&command_template.env);
-                            direction = format!("{direction:?}"),
-                            port = target.to_string(),
-                            error = error
-                        )));
+                        diagnostic = Some(error);
+                        break 'attempt;
                     }
                 },
+            };
+
+            if !cx.update(|cx| {
+                automatic_context
+                    .as_ref()
+                    .is_none_or(|context| context.is_current(cx))
+            }) {
+                return Ok(());
             }
-        };
-        let grace = cx
-            .background_executor()
-            .timer(Duration::from_millis(250))
-            .fuse();
-        futures::pin_mut!(grace);
-        while !eof {
-            let read = stderr.read(&mut chunk).fuse();
-            futures::pin_mut!(read);
-            select_biased! {
-                _ = cancellation => return Ok(()),
-                _ = grace => { incomplete = true; break; },
-                result = read => match result {
-                    Ok(0) => eof = true,
-                    Ok(count) => { tail.push(&chunk[..count]); yield_diagnostic_drain().await; }
-                    Err(error) => {
-                        return Err(anyhow!(i18n::t_mix!(
-                            "3c83d895fc4bafdd";
-                            attempt + 1,
-                            tail.display(&command_template.env);
-                            direction = format!("{direction:?}"),
-                            port = target.to_string(),
-                            error = error
-                        )));
-                    }
-                },
-            }
-        }
-        let exited = result.is_ok();
-        let outcome = match result {
-            Ok(status) => i18n::t!("34922cb45f442133", status = status),
-            Err(error) => i18n::t!("6872562fccf85da4", error = error),
-        };
-        last_error = Some(anyhow!(i18n::t_mix!(
-            "562dde06c4719e16";
-            attempt + 1,
-            if incomplete {
-                i18n::t!("984b154e11a98a30")
-            } else {
-                ""
-            },
-            tail.display(&command_template.env);
-            outcome = outcome,
-            direction = format!("{direction:?}"),
-            port = target.to_string(),
-            local_port = local_port
-        )));
-        if early && exited && attempt < 4 && direction == ForwardDirection::RemoteToLocal {
             manager.update(cx, |manager, cx| {
-                if let Some(entry) = manager.entries.get_mut(&(direction, target.clone()))
+                if let Some(entry) = manager.entries.get_mut(&key)
                     && entry.generation == generation
                 {
-                    entry.status = ForwardStatus::Starting;
-                    entry.local_port = None;
+                    entry.local_port = Some(local_port);
+                    entry.status = ForwardStatus::RunningUnconfirmed;
                     cx.notify();
                 }
             })?;
-            next_local_port = available_local_port(None)?;
+
+            let mut tail = DiagnosticTail::default();
+            let mut stderr = child.take_stderr();
+            let mut early = true;
+            let mut eof = false;
+            let mut incomplete = false;
+            let early_timer = cx
+                .background_executor()
+                .timer(Duration::from_millis(400))
+                .fuse();
+            let stable_timer = cx
+                .background_executor()
+                .timer(STABLE_TUNNEL_THRESHOLD)
+                .fuse();
+            let status = child.status().fuse();
+            futures::pin_mut!(early_timer, stable_timer, status);
+            let mut chunk = [0; 4096];
+            let result = loop {
+                let read = async {
+                    if eof {
+                        futures::future::pending().await
+                    } else {
+                        stderr.read(&mut chunk).await
+                    }
+                }
+                .fuse();
+                futures::pin_mut!(read);
+                select_biased! {
+                    _ = cancellation => return Ok(()),
+                    _ = early_timer => early = false,
+                    _ = stable_timer => stable = true,
+                    result = status => break result,
+                    result = read => match result {
+                        Ok(0) => eof = true,
+                        Ok(count) => {
+                            tail.push(&chunk[..count]);
+                            yield_diagnostic_drain().await;
+                        }
+                        Err(error) => {
+                            diagnostic = Some(anyhow!(i18n::t_mix!(
+                                "3c83d895fc4bafdd";
+                                attempt,
+                                tail.display(&command_template.env);
+                                direction = format!("{direction:?}"),
+                                port = target.to_string(),
+                                error = error
+                            )));
+                            break 'attempt;
+                        }
+                    },
+                }
+            };
+            let grace = cx
+                .background_executor()
+                .timer(Duration::from_millis(250))
+                .fuse();
+            futures::pin_mut!(grace);
+            while !eof {
+                let read = stderr.read(&mut chunk).fuse();
+                futures::pin_mut!(read);
+                select_biased! {
+                    _ = cancellation => return Ok(()),
+                    _ = grace => { incomplete = true; break; },
+                    result = read => match result {
+                        Ok(0) => eof = true,
+                        Ok(count) => { tail.push(&chunk[..count]); yield_diagnostic_drain().await; }
+                        Err(error) => {
+                            diagnostic = Some(anyhow!(i18n::t_mix!(
+                                "3c83d895fc4bafdd";
+                                attempt,
+                                tail.display(&command_template.env);
+                                direction = format!("{direction:?}"),
+                                port = target.to_string(),
+                                error = error
+                            )));
+                            break 'attempt;
+                        }
+                    },
+                }
+            }
+            let exited = result.is_ok();
+            let outcome = match result {
+                Ok(status) => i18n::t!("34922cb45f442133", status = status),
+                Err(error) => i18n::t!("6872562fccf85da4", error = error),
+            };
+            early_exit = early && exited;
+            diagnostic = Some(anyhow!(i18n::t_mix!(
+                "562dde06c4719e16";
+                attempt,
+                if incomplete {
+                    i18n::t!("984b154e11a98a30")
+                } else {
+                    ""
+                },
+                tail.display(&command_template.env);
+                outcome = outcome,
+                direction = format!("{direction:?}"),
+                port = target.to_string(),
+                local_port = local_port
+            )));
+        }
+
+        let Some(diagnostic) = diagnostic else {
+            return Ok(());
+        };
+        failures = if stable {
+            1
         } else {
-            break;
+            failures.saturating_add(1)
+        };
+        if early_exit && direction == ForwardDirection::RemoteToLocal {
+            next_local_port = available_local_port(None)?;
+        }
+        let delay = retry_delay(failures);
+        let message = format!("{diagnostic:#}");
+        manager.update(cx, |manager, cx| {
+            if let Some(entry) = manager.entries.get_mut(&key)
+                && entry.generation == generation
+            {
+                entry.local_port = Some(next_local_port);
+                entry.status = ForwardStatus::Retrying(message);
+                cx.notify();
+            }
+        })?;
+        log::info!(
+            "SSH port forward {direction:?} {target} ended; retrying in {delay:?} (attempt {failures})"
+        );
+
+        let retry_timer = cx.background_executor().timer(delay).fuse();
+        futures::pin_mut!(retry_timer);
+        select_biased! {
+            _ = cancellation => return Ok(()),
+            _ = retry_timer => {}
+            message = reconnected_rx.next() => {
+                if message.is_none() {
+                    return Ok(());
+                }
+            }
         }
     }
-
-    Err(last_error.unwrap_or_else(|| match direction {
-        ForwardDirection::RemoteToLocal => anyhow!(i18n::t!("16f0a4150c7d5647")),
-        ForwardDirection::LocalToRemote => anyhow!(i18n::t!("da2828975efd3347")),
-    }))
 }
 
 fn available_local_port(preferred: Option<u16>) -> Result<u16> {
@@ -1397,6 +1478,11 @@ impl Render for PortForwardModal {
                                 },
                                 Color::Muted,
                                 Color::Success,
+                            ),
+                            ForwardStatus::Retrying(error) => (
+                                i18n::t!("432561af550457ec", error = error),
+                                Color::Muted,
+                                Color::Modified,
                             ),
                             ForwardStatus::Failed(error) => (
                                 i18n::t!("377e359e55ec05ab", error = error),
@@ -1731,10 +1817,10 @@ mod tests {
             .advance_clock(std::time::Duration::from_millis(250));
         cx.run_until_parked();
         manager.read_with(cx, |manager, _| {
-            let ForwardStatus::Failed(error) =
+            let ForwardStatus::Retrying(error) =
                 &manager.entries[&(RemoteToLocal, loopback(39001))].status
             else {
-                panic!("expected late failure")
+                panic!("expected a scheduled retry after the late exit")
             };
             assert!(
                 error.contains("late diagnostic")
@@ -1742,14 +1828,26 @@ mod tests {
                     && error.contains("已截断")
             );
         });
-        assert_eq!(launches.borrow().len(), 1, "late exit must not retry");
+        assert_eq!(launches.borrow().len(), 1, "retry waits for the backoff");
         assert!(launches.borrow()[0].3.get() && launches.borrow()[0].4.get());
+        cx.executor()
+            .advance_clock(std::time::Duration::from_secs(1));
+        cx.run_until_parked();
+        assert_eq!(launches.borrow().len(), 2, "late exit must retry");
+        manager.read_with(cx, |manager, _| {
+            let entry = &manager.entries[&(RemoteToLocal, loopback(39001))];
+            assert_eq!(entry.status, ForwardStatus::RunningUnconfirmed);
+            assert_eq!(
+                entry.local_port, first_port,
+                "a late exit keeps the advertised local port"
+            );
+        });
         manager.update(cx, |manager, cx| {
             manager.add_manual(RemoteToLocal, loopback(39001), project.clone(), cx)
         });
         cx.run_until_parked();
         // Independent EOF and exit: early exit retries even while EOF is delayed.
-        launches.borrow_mut()[1]
+        launches.borrow_mut()[2]
             .0
             .take()
             .unwrap()
@@ -1759,42 +1857,58 @@ mod tests {
         cx.executor()
             .advance_clock(std::time::Duration::from_millis(250));
         cx.run_until_parked();
-        assert_eq!(launches.borrow().len(), 3);
+        assert_eq!(
+            launches.borrow().len(),
+            3,
+            "early exit waits for the backoff"
+        );
+        cx.executor()
+            .advance_clock(std::time::Duration::from_secs(1));
+        cx.run_until_parked();
+        assert_eq!(launches.borrow().len(), 4, "early exit must retry");
         manager.read_with(cx, |manager, _| {
             let entry = &manager.entries[&(RemoteToLocal, loopback(39001))];
             assert_eq!(entry.status, ForwardStatus::RunningUnconfirmed);
             assert_ne!(entry.local_port, first_port);
         });
-        launches.borrow()[2]
+        launches.borrow()[3]
             .1
             .unbounded_send(Err(std::io::Error::other("injected read failure")))
             .unwrap();
         cx.run_until_parked();
         manager.read_with(cx, |manager, _| {
-            let ForwardStatus::Failed(error) =
+            let ForwardStatus::Retrying(error) =
                 &manager.entries[&(RemoteToLocal, loopback(39001))].status
             else {
-                panic!("expected read failure")
+                panic!("expected a scheduled retry after the read failure")
             };
             assert!(error.contains("读取 SSH 诊断失败") && error.contains("injected read failure"));
         });
-        assert!(launches.borrow()[2].3.get() && launches.borrow()[2].4.get());
+        assert!(launches.borrow()[3].3.get() && launches.borrow()[3].4.get());
+        manager.update(cx, |manager, cx| {
+            manager.stop(RemoteToLocal, &loopback(39001), cx)
+        });
+        cx.run_until_parked();
         manager.update(cx, |manager, cx| {
             manager.add_manual(LocalToRemote, loopback(39002), project.clone(), cx)
         });
         cx.run_until_parked();
-        launches.borrow_mut()[3]
+        assert_eq!(launches.borrow().len(), 5);
+        launches.borrow_mut()[4]
             .0
             .take()
             .unwrap()
             .send(Ok(success_status()))
             .unwrap();
         cx.run_until_parked();
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(250));
+        cx.run_until_parked();
         manager.update(cx, |manager, cx| {
             manager.stop(LocalToRemote, &loopback(39002), cx)
         });
         cx.run_until_parked();
-        assert!(launches.borrow()[3].3.get() && launches.borrow()[3].4.get());
+        assert!(launches.borrow()[4].3.get() && launches.borrow()[4].4.get());
         cx.executor()
             .advance_clock(std::time::Duration::from_secs(1));
         cx.run_until_parked();
@@ -1805,13 +1919,18 @@ mod tests {
                     .contains_key(&(LocalToRemote, loopback(39002)))
             )
         });
-        assert_eq!(launches.borrow().len(), 4, "cancelled grace must not retry");
+        assert_eq!(
+            launches.borrow().len(),
+            5,
+            "a stopped retry must not launch"
+        );
         manager.update(cx, |manager, cx| {
             manager.add_manual(LocalToRemote, loopback(39002), project.clone(), cx)
         });
         cx.run_until_parked();
-        launches.borrow()[4].1.close_channel();
-        launches.borrow_mut()[4]
+        assert_eq!(launches.borrow().len(), 6);
+        launches.borrow()[5].1.close_channel();
+        launches.borrow_mut()[5]
             .0
             .take()
             .unwrap()
@@ -1820,15 +1939,23 @@ mod tests {
         cx.run_until_parked();
         assert_eq!(
             launches.borrow().len(),
-            5,
-            "reverse early exit must not retry"
+            6,
+            "reverse retry waits for the backoff"
         );
         manager.read_with(cx, |manager, _| {
             assert!(matches!(
                 manager.entries[&(LocalToRemote, loopback(39002))].status,
-                ForwardStatus::Failed(_)
+                ForwardStatus::Retrying(_)
             ))
         });
+        cx.executor()
+            .advance_clock(std::time::Duration::from_secs(1));
+        cx.run_until_parked();
+        assert_eq!(launches.borrow().len(), 7, "reverse early exit must retry");
+        manager.update(cx, |manager, cx| {
+            manager.stop(LocalToRemote, &loopback(39002), cx)
+        });
+        cx.run_until_parked();
     }
 
     #[gpui::test]
@@ -1942,8 +2069,8 @@ mod tests {
             assert!(manager.entries.is_empty());
             assert!(manager.automatically_seen.is_empty());
         });
-        // Restore the identical Arc before notifications are dispatched.
-
+        // Replacing only the live transport of the same client is a reconnect:
+        // the captured automatic scope and its pending probe must survive it.
         let connection = client.read_with(cx, |client, _| client.connection().unwrap());
         cx.update(|cx| {
             client.update(cx, |client, cx| client.set_connection_for_test(None, cx));
@@ -1954,7 +2081,29 @@ mod tests {
         cx.executor()
             .advance_clock(std::time::Duration::from_secs(1));
         cx.run_until_parked();
-        assert!(launches.borrow().is_empty());
+        assert_eq!(
+            launches.borrow().len(),
+            1,
+            "a transport replacement keeps the pending automatic probe"
+        );
+        let (probe, cancelled) = launches.borrow_mut().remove(0);
+        assert!(!cancelled.get());
+        probe
+            .send(std::process::Output {
+                status: success_status(),
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+            })
+            .unwrap();
+        cx.run_until_parked();
+        manager.read_with(cx, |manager, _| {
+            assert!(manager.entries.is_empty());
+            assert!(manager.detection_task.is_none());
+            assert!(
+                manager.automatic_context.is_some(),
+                "a transport reconnect keeps the automatic scope"
+            );
+        });
         detect(cx);
         cx.run_until_parked();
         let replacement_client = remote::RemoteClient::test_connected_ssh(cx).await;
@@ -2248,34 +2397,167 @@ mod tests {
     }
 
     #[test]
-    fn automatic_scope_rejects_reconnected_identity_and_changed_roots() {
-        let connection = std::sync::Arc::new("same host");
-        let reconnected = std::sync::Arc::new("same host");
-        let roots = vec![(1, "/project")];
-        assert!(super::same_automatic_scope(
-            &connection,
-            &roots,
-            &connection.clone(),
-            &roots
-        ));
-        assert!(!super::same_automatic_scope(
-            &reconnected,
-            &roots,
-            &connection,
-            &roots
-        ));
-        assert!(!super::same_automatic_scope(
-            &connection,
-            &vec![(2, "/project")],
-            &connection,
-            &roots
-        ));
-        assert!(!super::same_automatic_scope(
-            &connection,
-            &vec![(1, "/other")],
-            &connection,
-            &roots
-        ));
+    fn retry_backoff_is_bounded_and_capped() {
+        use std::time::Duration;
+        assert_eq!(super::retry_delay(1), Duration::from_secs(1));
+        assert_eq!(super::retry_delay(2), Duration::from_secs(2));
+        assert_eq!(super::retry_delay(3), Duration::from_secs(4));
+        assert_eq!(super::retry_delay(4), Duration::from_secs(8));
+        assert_eq!(super::retry_delay(5), Duration::from_secs(16));
+        assert_eq!(super::retry_delay(6), super::RETRY_MAX_DELAY);
+        assert_eq!(super::retry_delay(1_000), super::RETRY_MAX_DELAY);
+    }
+
+    #[gpui::test]
+    async fn automatic_scope_survives_transport_reconnect_but_not_replacement(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use project::trusted_worktrees::{self, PathTrust};
+        use std::path::Path;
+        cx.update(|cx| {
+            let settings = settings::SettingsStore::test(cx);
+            cx.set_global(settings);
+            trusted_worktrees::init(Default::default(), cx);
+        });
+        let fs = project::FakeFs::new(cx.executor());
+        fs.insert_tree("/project", serde_json::json!({"file": ""}))
+            .await;
+        let project =
+            project::Project::test_with_worktree_trust(fs, [Path::new("/project")], cx).await;
+        let client = remote::RemoteClient::test_connected_ssh(cx).await;
+        project.update(cx, |project, cx| {
+            project.set_remote_client_for_test(client.clone(), cx)
+        });
+        let store = project.read_with(cx, |project, _| project.worktree_store());
+        let id = project.read_with(cx, |project, cx| {
+            project.visible_worktrees(cx).next().unwrap().read(cx).id()
+        });
+        let trusted = cx.update(|cx| super::TrustedWorktrees::try_get_global(cx).unwrap());
+        cx.update(|cx| {
+            assert!(
+                super::AutomaticForwardContext::capture(project.clone(), cx).is_none(),
+                "untrusted roots never capture a scope"
+            )
+        });
+        trusted.update(cx, |trusted, cx| {
+            trusted.trust(&store, [PathTrust::Worktree(id)].into_iter().collect(), cx)
+        });
+        let context = cx.update(|cx| {
+            super::AutomaticForwardContext::capture(project.clone(), cx).expect("trusted scope")
+        });
+
+        let other_client = remote::RemoteClient::test_connected_ssh(cx).await;
+        let reconnected = other_client
+            .read_with(cx, |client, _| client.connection())
+            .expect("replacement transport");
+        let previous = client
+            .read_with(cx, |client, _| client.connection())
+            .expect("transport");
+        assert!(!std::sync::Arc::ptr_eq(&previous, &reconnected));
+        client.update(cx, |client, cx| {
+            client.set_connection_for_test(Some(reconnected), cx)
+        });
+        cx.update(|cx| {
+            assert!(
+                context.is_current(cx),
+                "a transport reconnect keeps the automatic scope"
+            )
+        });
+
+        let replacement_client = remote::RemoteClient::test_connected_ssh(cx).await;
+        project.update(cx, |project, cx| {
+            project.set_remote_client_for_test(replacement_client, cx)
+        });
+        cx.update(|cx| {
+            assert!(
+                !context.is_current(cx),
+                "a replaced remote client ends the captured scope"
+            )
+        });
+    }
+
+    #[gpui::test]
+    async fn forward_waits_for_the_session_and_retries_after_reconnect(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use super::{ForwardDirection::*, ForwardStatus};
+        use gpui::AppContext as _;
+        use std::{cell::RefCell, rc::Rc};
+        cx.update(|cx| {
+            let settings = settings::SettingsStore::test(cx);
+            cx.set_global(settings);
+        });
+        let fs = project::FakeFs::new(cx.executor());
+        let project = project::Project::test(fs, [], cx).await;
+        let client = remote::RemoteClient::test_connected_ssh(cx).await;
+        project.update(cx, |project, cx| {
+            project.set_remote_client_for_test(client.clone(), cx)
+        });
+        let connection = client
+            .read_with(cx, |client, _| client.connection())
+            .expect("transport");
+        let manager = cx.new(|_| super::PortForwardManager::new());
+        let launches = Rc::new(RefCell::new(Vec::new()));
+        manager.update(cx, |manager, _| {
+            let launches = launches.clone();
+            manager.forward_launcher = Some(Box::new(move |_, _, _| {
+                let cancelled = Rc::new(std::cell::Cell::new(false));
+                let (output, receiver) = futures::channel::oneshot::channel();
+                launches.borrow_mut().push((output, cancelled.clone()));
+                super::ForwardChild::Controlled {
+                    output: receiver,
+                    cancelled,
+                }
+            }));
+        });
+
+        client.update(cx, |client, cx| client.set_connection_for_test(None, cx));
+        manager.update(cx, |manager, cx| {
+            manager.add_manual(RemoteToLocal, loopback(39101), project.clone(), cx)
+        });
+        cx.run_until_parked();
+        manager.read_with(cx, |manager, _| {
+            let ForwardStatus::Retrying(error) =
+                &manager.entries[&(RemoteToLocal, loopback(39101))].status
+            else {
+                panic!("expected a retry while the session is unavailable")
+            };
+            assert!(error.contains("无法创建 SSH 端口转发命令"), "{error}");
+        });
+        assert!(launches.borrow().is_empty());
+        manager.update(cx, |manager, cx| {
+            manager.add_manual(RemoteToLocal, loopback(39102), project.clone(), cx)
+        });
+        cx.run_until_parked();
+        assert!(launches.borrow().is_empty());
+
+        // A successful session reconnect wakes every pending backoff at once, so
+        // the tunnels come back without waiting out the retry delay.
+        client.update(cx, |client, cx| {
+            client.set_connection_for_test(Some(connection), cx)
+        });
+        client.update(cx, |_, cx| cx.emit(remote::RemoteClientEvent::Reconnected));
+        cx.run_until_parked();
+        assert_eq!(launches.borrow().len(), 2, "the tunnels recover");
+        manager.read_with(cx, |manager, _| {
+            for port in [39101, 39102] {
+                let entry = &manager.entries[&(RemoteToLocal, loopback(port))];
+                assert_eq!(entry.status, ForwardStatus::RunningUnconfirmed);
+                assert!(entry.local_port.is_some());
+            }
+        });
+        manager.update(cx, |manager, cx| {
+            manager.stop(RemoteToLocal, &loopback(39101), cx);
+            manager.stop(RemoteToLocal, &loopback(39102), cx);
+        });
+        cx.run_until_parked();
+        assert!(
+            launches
+                .borrow()
+                .iter()
+                .all(|(_, cancelled)| cancelled.get()),
+            "stopping releases both tunnels"
+        );
     }
 
     #[test]

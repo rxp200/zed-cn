@@ -452,6 +452,9 @@ impl Domain for TerminalDb {
         sql! (
             ALTER TABLE terminals ADD COLUMN custom_title TEXT;
         ),
+        sql! (
+            ALTER TABLE terminals ADD COLUMN hosted_session_id TEXT;
+        ),
     ];
 }
 
@@ -539,6 +542,34 @@ impl TerminalDb {
     query! {
         pub fn get_custom_title(item_id: ItemId, workspace_id: WorkspaceId) -> Result<Option<String>> {
             SELECT custom_title
+            FROM terminals
+            WHERE item_id = ? AND workspace_id = ?
+        }
+    }
+
+    pub async fn save_hosted_session_id(
+        &self,
+        item_id: ItemId,
+        workspace_id: WorkspaceId,
+        hosted_session_id: Option<String>,
+    ) -> Result<()> {
+        self.write(move |conn| {
+            let query = "INSERT INTO terminals (item_id, workspace_id, hosted_session_id)
+                VALUES (?1, ?2, ?3)
+                ON CONFLICT (workspace_id, item_id) DO UPDATE SET
+                    hosted_session_id = excluded.hosted_session_id";
+            let mut statement = Statement::prepare(conn, query)?;
+            let mut next_index = statement.bind(&item_id, 1)?;
+            next_index = statement.bind(&workspace_id, next_index)?;
+            statement.bind(&hosted_session_id, next_index)?;
+            statement.exec()
+        })
+        .await
+    }
+
+    query! {
+        pub fn get_hosted_session_id(item_id: ItemId, workspace_id: WorkspaceId) -> Result<Option<String>> {
+            SELECT hosted_session_id
             FROM terminals
             WHERE item_id = ? AND workspace_id = ?
         }

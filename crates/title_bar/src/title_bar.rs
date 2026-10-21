@@ -41,6 +41,7 @@ use remote::RemoteConnectionOptions;
 use settings::{Settings as _, SettingsStore};
 
 use std::any::TypeId;
+use std::rc::Rc;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -220,6 +221,8 @@ pub struct TitleBar {
     banner: Option<Entity<OnboardingBanner>>,
     update_version: Entity<UpdateVersion>,
     screen_share_popover_handle: PopoverMenuHandle<ContextMenu>,
+    hosted_sessions: Vec<rpc::proto::HostedTerminalSummary>,
+    hosted_menu: PopoverMenuHandle<ContextMenu>,
     _diagnostics_subscription: Option<gpui::Subscription>,
 }
 
@@ -538,6 +541,8 @@ impl TitleBar {
             banner,
             update_version,
             screen_share_popover_handle: PopoverMenuHandle::default(),
+            hosted_sessions: Vec::new(),
+            hosted_menu: PopoverMenuHandle::default(),
             _diagnostics_subscription: None,
         };
 
@@ -1157,6 +1162,190 @@ impl TitleBar {
                     )
                 })
                 .children(branch_picker)
+                .children(self.render_hosted_terminals_button(cx))
+                .into_any_element(),
+        )
+    }
+
+    /// Lists terminals that were explicitly promoted on the remote host. The
+    /// list is scoped to this connection's project root, so another work folder
+    /// or another account never appears here.
+    fn render_hosted_terminals_button(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if !self.project.read(cx).supports_hosted_terminals(cx) {
+            return None;
+        }
+        let sessions = self.hosted_sessions.clone();
+        let count = sessions.iter().filter(|session| session.running).count();
+        let label: SharedString = if count > 0 {
+            format!("{} ({count})", i18n::t!("a9dc9b921c645f65")).into()
+        } else {
+            i18n::t!("a9dc9b921c645f65").into()
+        };
+        let project = self.project.clone();
+        let title_bar = cx.entity().downgrade();
+        let menu_project = project.clone();
+        let menu_title_bar = title_bar.clone();
+        let refresh_label: SharedString = i18n::t!("a9dc9b921c645f65").into();
+        Some(
+            PopoverMenu::new("hosted-terminals-menu")
+                .with_handle(self.hosted_menu.clone())
+                .on_open({
+                    let project = project.clone();
+                    let title_bar = title_bar.clone();
+                    let menu = self.hosted_menu.clone();
+                    Rc::new(move |_window, cx| {
+                        let Some(root) = project.read(cx).hosted_terminal_root(cx) else {
+                            return;
+                        };
+                        let Some(request) = project.read_with(cx, |project, cx| {
+                            project
+                                .remote_client()
+                                .map(|client| client.read(cx).list_hosted_terminals(root))
+                        }) else {
+                            return;
+                        };
+                        let title_bar = title_bar.clone();
+                        let menu = menu.clone();
+                        cx.spawn(async move |cx| {
+                            let Ok(response) = request.await else {
+                                return;
+                            };
+                            let changed = title_bar
+                                .update(cx, |this, cx| {
+                                    let changed = this.hosted_sessions.len()
+                                        != response.sessions.len()
+                                        || this
+                                            .hosted_sessions
+                                            .iter()
+                                            .zip(&response.sessions)
+                                            .any(|(old, new)| {
+                                                old.session_id != new.session_id
+                                                    || old.name != new.name
+                                                    || old.running != new.running
+                                                    || old.viewer_count != new.viewer_count
+                                            });
+                                    this.hosted_sessions = response.sessions;
+                                    cx.notify();
+                                    changed
+                                })
+                                .unwrap_or(false);
+                            let _ = (changed, &menu);
+                        })
+                        .detach();
+                    })
+                })
+                .menu(move |window, cx| {
+                    let sessions = sessions.clone();
+                    let project = menu_project.clone();
+                    let title_bar = menu_title_bar.clone();
+                    Some(ContextMenu::build(window, cx, |menu, _, _| {
+                        let menu = menu.header(i18n::t!("a9dc9b921c645f65"));
+                        if sessions.is_empty() {
+                            return menu.label(i18n::t!("67f8c2977a77a09d")).separator();
+                        }
+                        let menu = sessions.iter().fold(menu, |menu, session| {
+                            let session_id = session.session_id.clone();
+                            let label: SharedString = if session.running {
+                                session.name.clone().into()
+                            } else {
+                                format!("{} · ✓", session.name).into()
+                            };
+                            menu.entry(label, None, move |window, cx| {
+                                window.dispatch_action(
+                                    Box::new(workspace::OpenHostedTerminal {
+                                        session_id: session_id.clone(),
+                                    }),
+                                    cx,
+                                );
+                            })
+                        });
+                        let ended: Vec<_> = sessions
+                            .iter()
+                            .filter(|session| !session.running)
+                            .cloned()
+                            .collect();
+                        if ended.is_empty() {
+                            return menu;
+                        }
+                        ended.iter().fold(menu.separator(), |menu, session| {
+                            let session_id = session.session_id.clone();
+                            let project = project.clone();
+                            let title_bar = title_bar.clone();
+                            let label: SharedString = format!(
+                                "{}: {}",
+                                i18n::t!("67f8c2977a77a09d"),
+                                session.name
+                            )
+                            .into();
+                            menu.entry(label, None, move |_, cx| {
+                                let project = project.clone();
+                                let session_id = session_id.clone();
+                                let title_bar = title_bar.clone();
+                                let Some(request) = project.read_with(cx, |project, cx| {
+                                    project.remote_client().map(|client| {
+                                        client.read(cx).delete_hosted_terminal(session_id)
+                                    })
+                                }) else {
+                                    return;
+                                };
+                                cx.spawn(async move |cx| {
+                                    if let Err(error) = request.await {
+                                        eprintln!("failed to delete hosted terminal: {error:#}");
+                                        return;
+                                    }
+                                    title_bar
+                                        .update(cx, |this, cx| {
+                                            this.hosted_sessions
+                                                .retain(|session| session.running);
+                                            cx.notify();
+                                        })
+                                        .ok();
+                                })
+                                .detach();
+                            })
+                        })
+                    }))
+                })
+                .trigger_with_tooltip(
+                    ui::Button::new("hosted_terminals_trigger", label)
+                        .label_size(LabelSize::Small)
+                        .start_icon(
+                            Icon::new(IconName::Terminal)
+                                .size(IconSize::XSmall)
+                                .color(Color::Muted),
+                        )
+                        .on_click(move |_, _window, cx| {
+                            let Some(root) = project.read(cx).hosted_terminal_root(cx) else {
+                                return;
+                            };
+                            let Some(request) = project.read_with(cx, |project, cx| {
+                                project
+                                    .remote_client()
+                                    .map(|client| client.read(cx).list_hosted_terminals(root))
+                            }) else {
+                                return;
+                            };
+                            let title_bar = title_bar.clone();
+                            cx.spawn(async move |cx| {
+                                let sessions = match request.await {
+                                    Ok(response) => response.sessions,
+                                    Err(error) => {
+                                        eprintln!("failed to list hosted terminals: {error:#}");
+                                        Vec::new()
+                                    }
+                                };
+                                title_bar
+                                    .update(cx, |this, cx| {
+                                        this.hosted_sessions = sessions;
+                                        cx.notify();
+                                    })
+                                    .ok();
+                            })
+                            .detach();
+                        }),
+                    move |window, cx| Tooltip::text(refresh_label.clone())(window, cx),
+                )
+                .anchor(gpui::Anchor::TopLeft)
                 .into_any_element(),
         )
     }

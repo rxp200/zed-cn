@@ -411,6 +411,10 @@ pub struct Pane {
     was_focused: bool,
     active_item_index: usize,
     preview_item_id: Option<EntityId>,
+    /// Items the user kept open explicitly (permanent open, double-clicked tab, or
+    /// edited). Their tabs are never replaced by a newly opened file. In-memory only:
+    /// after a restart, restored tabs count as unmodified and can be reused again.
+    retained_item_ids: HashSet<EntityId>,
     last_focus_handle_by_item: HashMap<EntityId, WeakFocusHandle>,
     nav_history: NavHistory,
     toolbar: Entity<Toolbar>,
@@ -618,6 +622,7 @@ impl Pane {
             zoomed: false,
             active_item_index: 0,
             preview_item_id: None,
+            retained_item_ids: HashSet::default(),
             max_tabs,
             use_max_tabs,
             last_focus_handle_by_item: Default::default(),
@@ -1103,11 +1108,59 @@ impl Pane {
     }
 
     pub fn handle_item_edit(&mut self, item_id: EntityId, cx: &App) {
+        self.retain_item(item_id);
         if let Some(preview_item) = self.preview_item()
             && preview_item.item_id() == item_id
             && !preview_item.preserve_preview(cx)
         {
             self.unpreview_item_if_preview(item_id);
+        }
+    }
+
+    /// Marks an item as explicitly kept by the user so that opening another file
+    /// no longer reuses its tab.
+    fn retain_item(&mut self, item_id: EntityId) {
+        self.retained_item_ids.insert(item_id);
+    }
+
+    /// Whether the tab holding this item can be replaced in place by a newly opened file.
+    /// Only unmodified, file-backed items qualify; terminals and other tab kinds, as well
+    /// as items the user kept open explicitly, are left alone.
+    fn is_item_replaceable(&self, item: &dyn ItemHandle, cx: &App) -> bool {
+        item.buffer_kind(cx) == ItemBufferKind::Singleton
+            && item.project_path(cx).is_some()
+            && !item.is_dirty(cx)
+            && !self.retained_item_ids.contains(&item.item_id())
+    }
+
+    /// Closes the active item when it can be replaced, returning the index the new item
+    /// should take so that the tab keeps its position.
+    fn close_replaceable_active_item(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<usize> {
+        let item_index = self.active_item_index;
+        if self.is_tab_pinned(item_index) {
+            return None;
+        }
+
+        let item = self.items.get(item_index)?.boxed_clone();
+        if !self.is_item_replaceable(item.as_ref(), cx) {
+            return None;
+        }
+
+        let previous_active_item_index = self.active_item_index;
+        self.remove_item(item.item_id(), false, false, window, cx);
+        self.active_item_index = previous_active_item_index;
+        if item_index < previous_active_item_index {
+            self.active_item_index -= 1;
+        }
+
+        if item_index < self.items.len() {
+            Some(item_index)
+        } else {
+            None
         }
     }
 
@@ -1150,8 +1203,11 @@ impl Pane {
 
         let set_up_existing_item =
             |index: usize, pane: &mut Self, window: &mut Window, cx: &mut Context<Self>| {
-                if !allow_preview && let Some(item) = pane.items.get(index) {
-                    pane.unpreview_item_if_preview(item.item_id());
+                if !allow_preview
+                    && let Some(item_id) = pane.items.get(index).map(|item| item.item_id())
+                {
+                    pane.unpreview_item_if_preview(item_id);
+                    pane.retain_item(item_id);
                 }
                 if activate {
                     pane.activate_item(index, focus_item, focus_item, window, cx);
@@ -1184,21 +1240,33 @@ impl Pane {
 
             if allow_preview && !preview_was_active {
                 pane.set_preview_item_id(Some(new_item_id), cx);
+            } else if !allow_preview {
+                pane.retain_item(new_item_id);
             }
         };
+
+        // Opening a file reuses the active tab when it has not been modified, and otherwise
+        // falls back to the existing preview tab (if any). Permanent and batch opens keep
+        // every tab, so reuse only applies where the caller allows a preview tab. The tab is
+        // only closed once we know the new item is actually inserted.
+        let compute_destination =
+            |pane: &mut Self, window: &mut Window, cx: &mut Context<Self>| -> Option<usize> {
+                if allow_preview {
+                    let reusable_active_item = if activate {
+                        pane.close_replaceable_active_item(window, cx)
+                    } else {
+                        None
+                    };
+                    reusable_active_item.or_else(|| pane.close_current_preview_item(window, cx))
+                } else {
+                    suggested_position
+                }
+            };
 
         if let Some((index, existing_item)) = existing_item {
             set_up_existing_item(index, self, window, cx);
             existing_item
         } else {
-            // If the item is being opened as preview and we have an existing preview tab,
-            // open the new item in the position of the existing preview tab.
-            let destination_index = if allow_preview {
-                self.close_current_preview_item(window, cx)
-            } else {
-                suggested_position
-            };
-
             let new_item = build_item(self, window, cx);
             // A special case that won't ever get a `project_entry_id` but has to be deduplicated nonetheless.
             if let Some(invalid_buffer_view) = new_item.downcast::<InvalidItemView>() {
@@ -1225,6 +1293,7 @@ impl Pane {
                         Box::new(already_open_view) as Box<_>
                     }
                     None => {
+                        let destination_index = compute_destination(self, window, cx);
                         set_up_new_item(new_item.clone(), destination_index, self, window, cx);
                         new_item
                     }
@@ -1237,6 +1306,7 @@ impl Pane {
 
                 resulting_item
             } else {
+                let destination_index = compute_destination(self, window, cx);
                 set_up_new_item(new_item.clone(), destination_index, self, window, cx);
                 new_item
             }
@@ -2252,6 +2322,7 @@ impl Pane {
         }
 
         let item = self.items.remove(item_index);
+        self.retained_item_ids.remove(&item.item_id());
 
         cx.emit(Event::RemovedItem { item: item.clone() });
         if self.items.is_empty() {
@@ -3001,6 +3072,7 @@ impl Pane {
                 move |pane: &mut Self, event: &ClickEvent, window, cx| {
                     if event.click_count() > 1 {
                         pane.unpreview_item_if_preview(item_id);
+                        pane.retain_item(item_id);
                         let extra_actions = item_handle.tab_extra_context_menu_actions(window, cx);
                         if let Some((_, action)) = extra_actions
                             .into_iter()
@@ -7487,6 +7559,226 @@ mod tests {
             pane.add_item(a, false, false, None, window, cx);
         });
         assert_item_labels(&pane, ["A*", "B", "C"], cx);
+    }
+
+    fn open_test_file(
+        pane: &Entity<Pane>,
+        entry_id: u64,
+        path: &'static str,
+        allow_preview: bool,
+        cx: &mut VisualTestContext,
+    ) {
+        let entry = ProjectEntryId::from_proto(entry_id);
+        let project_path = ProjectPath {
+            worktree_id: WorktreeId::from_usize(0),
+            path: util::rel_path::rel_path(path).into(),
+        };
+        pane.update_in(cx, |pane, window, cx| {
+            pane.open_item(
+                Some(entry),
+                project_path,
+                true,
+                allow_preview,
+                true,
+                None,
+                window,
+                cx,
+                Box::new(move |_, _, cx| {
+                    Box::new(cx.new(|cx| {
+                        TestItem::new(cx)
+                            .with_label(path)
+                            .with_project_items(&[TestProjectItem::new(entry_id, path, cx)])
+                    }))
+                }),
+            );
+        });
+    }
+
+    fn add_restored_test_file(
+        pane: &Entity<Pane>,
+        entry_id: u64,
+        path: &'static str,
+        cx: &mut VisualTestContext,
+    ) {
+        pane.update_in(cx, |pane, window, cx| {
+            pane.add_item(
+                Box::new(cx.new(|cx| {
+                    TestItem::new(cx)
+                        .with_label(path)
+                        .with_project_items(&[TestProjectItem::new(entry_id, path, cx)])
+                })),
+                true,
+                true,
+                None,
+                window,
+                cx,
+            );
+        });
+    }
+
+    #[gpui::test]
+    async fn test_opening_file_replaces_preview_tab(cx: &mut TestAppContext) {
+        init_test(cx);
+        let project = Project::test(FakeFs::new(cx.executor()), None, cx).await;
+        let (workspace, cx) =
+            cx.add_window_view(|window, cx| Workspace::test_new(project.clone(), window, cx));
+        let pane = workspace.read_with(cx, |workspace, _| workspace.active_pane().clone());
+
+        open_test_file(&pane, 1, "first.rs", true, cx);
+        assert_item_labels(&pane, ["first.rs*"], cx);
+
+        open_test_file(&pane, 2, "second.rs", true, cx);
+        assert_item_labels(&pane, ["second.rs*"], cx);
+    }
+
+    #[gpui::test]
+    async fn test_opening_file_replaces_restored_unmodified_tab(cx: &mut TestAppContext) {
+        init_test(cx);
+        let project = Project::test(FakeFs::new(cx.executor()), None, cx).await;
+        let (workspace, cx) =
+            cx.add_window_view(|window, cx| Workspace::test_new(project.clone(), window, cx));
+        let pane = workspace.read_with(cx, |workspace, _| workspace.active_pane().clone());
+
+        add_restored_test_file(&pane, 1, "first.rs", cx);
+        assert_item_labels(&pane, ["first.rs*"], cx);
+
+        open_test_file(&pane, 2, "second.rs", true, cx);
+        assert_item_labels(&pane, ["second.rs*"], cx);
+    }
+
+    #[gpui::test]
+    async fn test_opening_file_keeps_permanently_opened_tab(cx: &mut TestAppContext) {
+        init_test(cx);
+        let project = Project::test(FakeFs::new(cx.executor()), None, cx).await;
+        let (workspace, cx) =
+            cx.add_window_view(|window, cx| Workspace::test_new(project.clone(), window, cx));
+        let pane = workspace.read_with(cx, |workspace, _| workspace.active_pane().clone());
+
+        open_test_file(&pane, 1, "first.rs", false, cx);
+        assert_item_labels(&pane, ["first.rs*"], cx);
+
+        open_test_file(&pane, 2, "second.rs", true, cx);
+        assert_item_labels(&pane, ["first.rs", "second.rs*"], cx);
+    }
+
+    #[gpui::test]
+    async fn test_opening_file_keeps_edited_tab(cx: &mut TestAppContext) {
+        init_test(cx);
+        let project = Project::test(FakeFs::new(cx.executor()), None, cx).await;
+        let (workspace, cx) =
+            cx.add_window_view(|window, cx| Workspace::test_new(project.clone(), window, cx));
+        let pane = workspace.read_with(cx, |workspace, _| workspace.active_pane().clone());
+
+        open_test_file(&pane, 1, "first.rs", true, cx);
+        let item_id = pane.read_with(cx, |pane, _| {
+            pane.active_item().expect("an active item").item_id()
+        });
+        pane.update_in(cx, |pane, window, cx| {
+            pane.handle_item_edit(item_id, cx);
+            pane.activate_item(0, true, true, window, cx);
+        });
+        let item = pane.read_with(cx, |pane, _cx| {
+            let index = pane.index_for_item_id(item_id).expect("item index");
+            pane.items[index]
+                .to_any_view()
+                .downcast::<TestItem>()
+                .expect("test item")
+        });
+        item.update(cx, |item, _| item.is_dirty = true);
+
+        open_test_file(&pane, 2, "second.rs", true, cx);
+        assert_item_labels(&pane, ["first.rs^", "second.rs*"], cx);
+    }
+
+    #[gpui::test]
+    async fn test_opening_file_keeps_tab_without_project_path(cx: &mut TestAppContext) {
+        init_test(cx);
+        let project = Project::test(FakeFs::new(cx.executor()), None, cx).await;
+        let (workspace, cx) =
+            cx.add_window_view(|window, cx| Workspace::test_new(project.clone(), window, cx));
+        let pane = workspace.read_with(cx, |workspace, _| workspace.active_pane().clone());
+
+        pane.update_in(cx, |pane, window, cx| {
+            pane.add_item(
+                Box::new(cx.new(|cx| TestItem::new(cx).with_label("terminal"))),
+                true,
+                true,
+                None,
+                window,
+                cx,
+            );
+        });
+        assert_item_labels(&pane, ["terminal*"], cx);
+
+        open_test_file(&pane, 1, "first.rs", true, cx);
+        assert_item_labels(&pane, ["terminal", "first.rs*"], cx);
+    }
+
+    #[gpui::test]
+    async fn test_opening_file_keeps_pinned_tab(cx: &mut TestAppContext) {
+        init_test(cx);
+        let project = Project::test(FakeFs::new(cx.executor()), None, cx).await;
+        let (workspace, cx) =
+            cx.add_window_view(|window, cx| Workspace::test_new(project.clone(), window, cx));
+        let pane = workspace.read_with(cx, |workspace, _| workspace.active_pane().clone());
+
+        open_test_file(&pane, 1, "first.rs", true, cx);
+        pane.update_in(cx, |pane, window, cx| {
+            pane.pin_tab_at(0, window, cx);
+            pane.activate_item(0, true, true, window, cx);
+        });
+        assert_item_labels(&pane, ["first.rs*!"], cx);
+
+        open_test_file(&pane, 2, "second.rs", true, cx);
+        assert_item_labels(&pane, ["first.rs!", "second.rs*"], cx);
+    }
+
+    #[gpui::test]
+    async fn test_opening_file_keeps_multibuffer_tab(cx: &mut TestAppContext) {
+        init_test(cx);
+        let project = Project::test(FakeFs::new(cx.executor()), None, cx).await;
+        let (workspace, cx) =
+            cx.add_window_view(|window, cx| Workspace::test_new(project.clone(), window, cx));
+        let pane = workspace.read_with(cx, |workspace, _| workspace.active_pane().clone());
+
+        pane.update_in(cx, |pane, window, cx| {
+            pane.add_item(
+                Box::new(cx.new(|cx| {
+                    TestItem::new(cx)
+                        .with_label("multibuffer")
+                        .with_buffer_kind(ItemBufferKind::Multibuffer)
+                        .with_project_items(&[TestProjectItem::new(1, "first.rs", cx)])
+                })),
+                true,
+                true,
+                None,
+                window,
+                cx,
+            );
+        });
+
+        open_test_file(&pane, 2, "second.rs", true, cx);
+        assert_item_labels(&pane, ["multibuffer", "second.rs*"], cx);
+    }
+
+    #[gpui::test]
+    async fn test_opening_file_replaces_active_tab_in_place(cx: &mut TestAppContext) {
+        init_test(cx);
+        let project = Project::test(FakeFs::new(cx.executor()), None, cx).await;
+        let (workspace, cx) =
+            cx.add_window_view(|window, cx| Workspace::test_new(project.clone(), window, cx));
+        let pane = workspace.read_with(cx, |workspace, _| workspace.active_pane().clone());
+
+        open_test_file(&pane, 1, "first.rs", false, cx);
+        open_test_file(&pane, 2, "second.rs", true, cx);
+        open_test_file(&pane, 3, "third.rs", false, cx);
+        assert_item_labels(&pane, ["first.rs", "second.rs", "third.rs*"], cx);
+
+        pane.update_in(cx, |pane, window, cx| {
+            pane.activate_item(1, true, true, window, cx);
+        });
+        open_test_file(&pane, 4, "fourth.rs", true, cx);
+        assert_item_labels(&pane, ["first.rs", "fourth.rs*", "third.rs"], cx);
     }
 
     #[gpui::test]

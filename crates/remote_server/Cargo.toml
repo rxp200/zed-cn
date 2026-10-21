@@ -57,6 +57,7 @@ net.workspace = true
 node_runtime.workspace = true
 paths.workspace = true
 portable-pty.workspace = true
+prost.workspace = true
 project.workspace = true
 proto.workspace = true
 release_channel.workspace = true

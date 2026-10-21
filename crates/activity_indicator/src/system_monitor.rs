@@ -1304,6 +1304,7 @@ fn port_forwarding_card(
             let (status, status_color) = match entry.status {
                 ForwardStatus::Starting => (i18n::t!("33439d263173fae0"), Color::Muted),
                 ForwardStatus::RunningUnconfirmed => (i18n::t!("1f0eb99b7ed094be"), Color::Success),
+                ForwardStatus::Retrying(_) => (i18n::t!("ab7e3afbecbdafbe"), Color::Modified),
                 ForwardStatus::Failed(_) => (i18n::t!("28384d7afd2e4fa6"), Color::Error),
             };
             h_flex()

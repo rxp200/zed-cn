@@ -913,6 +913,12 @@ const OUTPUT_CREDIT_GRANULARITY_BYTES: u64 = 256 * 1024;
 /// Consecutive output-stream failures tolerated before the failure rate is
 /// reported as a warning; the subscription itself is always retried.
 const MAX_STREAM_FAILURES: u32 = 3;
+/// Delay between attempts to resubscribe to a hosted terminal output stream.
+const STREAM_RETRY_INTERVAL: Duration = Duration::from_millis(200);
+/// How long a hosted task terminal may keep failing to resubscribe without
+/// receiving a single byte before its task is reported as finished without an
+/// exit status.
+const STREAM_FAILURE_LIMIT: Duration = Duration::from_secs(60);
 static NEXT_INIT_COMMAND_STARTUP_MARKER_ID: AtomicU64 = AtomicU64::new(1);
 
 const INIT_COMMAND_STARTUP_MARKER_PREFIX: &str = "__zed_init_command_ready_";
@@ -1590,9 +1596,7 @@ impl TerminalBuilder {
                             log::debug!(
                                 "persistent terminal output stream unavailable, retrying subscription: {error:#}"
                             );
-                            cx.background_executor()
-                                .timer(Duration::from_millis(200))
-                                .await;
+                            consecutive_stream_failures += 1;
                         }
                         Ok(mut frames) => {
                             let mut last_credit_offset = offset;
@@ -1672,11 +1676,27 @@ impl TerminalBuilder {
                                     "persistent terminal output stream failed {consecutive_stream_failures} times without progress"
                                 );
                             }
-                            cx.background_executor()
-                                .timer(Duration::from_millis(200))
-                                .await;
                         }
                     }
+
+                    // A hosted task terminal reports completion only through a
+                    // stream frame, so retrying a broken stream forever would
+                    // leave the agent's terminal tool waiting for an exit status
+                    // that never arrives. Report the running task as finished
+                    // without an exit status, then keep retrying: the terminal
+                    // must stay usable if the connection comes back.
+                    if stream_failure_limit_reached(consecutive_stream_failures)
+                        && terminal.read_with(cx, |terminal, _| terminal.has_running_task())?
+                    {
+                        terminal.update(cx, |terminal, cx| {
+                            terminal
+                                .report_lost_task_output_stream(consecutive_stream_failures, cx);
+                        })?;
+                    }
+
+                    cx.background_executor()
+                        .timer(STREAM_RETRY_INTERVAL)
+                        .await;
                 }
             });
             if let TerminalType::Remote(remote) = &mut self.terminal.terminal_type {
@@ -1833,6 +1853,10 @@ async fn send_persistent_terminal_input(
         sequence += 1;
     }
     Ok(())
+}
+
+fn stream_failure_limit_reached(consecutive_failures: u32) -> bool {
+    STREAM_RETRY_INTERVAL.saturating_mul(consecutive_failures) >= STREAM_FAILURE_LIMIT
 }
 
 fn persistent_terminal_is_unavailable(error: &anyhow::Error) -> bool {
@@ -3288,6 +3312,19 @@ impl Terminal {
         content_text(&term)
     }
 
+    /// Server-side identity of a hosted remote terminal, used by the client to
+    /// promote it. Local and display-only terminals have no identity.
+    pub fn remote_terminal_identity(&self) -> Option<(String, String)> {
+        if let TerminalType::Remote(remote) = &self.terminal_type {
+            Some((
+                remote.server_instance_id.clone(),
+                remote.terminal_id.clone(),
+            ))
+        } else {
+            None
+        }
+    }
+
     pub fn is_remote_terminal(&self) -> bool {
         self.is_remote_terminal
     }
@@ -4028,6 +4065,36 @@ impl Terminal {
         }
         let message = i18n::t!("e9068449f2994cdc", error = format!("{error:#}"));
         self.write_raw_output(format!("\r\n{message}\r\n").as_bytes(), cx);
+        cx.notify();
+        // A failed hosted terminal never delivers an exit frame, so a running
+        // task would wait for a completion that cannot arrive. Report the
+        // unknown exit status to the waiter instead of leaving it blocked.
+        if self.has_running_task() {
+            self.register_task_finished(None, cx);
+        }
+    }
+
+    fn has_running_task(&self) -> bool {
+        self.task
+            .as_ref()
+            .is_some_and(|task| task.status == TaskStatus::Running)
+    }
+
+    /// Finishes a running task whose hosted output stream is gone without
+    /// disabling the terminal, so output (and a later exit frame) can still
+    /// arrive if the connection recovers.
+    fn report_lost_task_output_stream(
+        &mut self,
+        consecutive_failures: u32,
+        cx: &mut Context<Self>,
+    ) {
+        log::warn!(
+            "persistent terminal output stream failed {consecutive_failures} times without progress; \
+             finishing the task without an exit status"
+        );
+        let message = i18n::t!("8c035dba0f10e24c");
+        self.write_raw_output(format!("\r\n{message}\r\n").as_bytes(), cx);
+        self.register_task_finished(None, cx);
         cx.notify();
     }
 
@@ -8124,6 +8191,149 @@ mod tests {
             assert!(remote.failed);
             assert!(remote.input_tx.is_closed());
         });
+    }
+
+    #[gpui::test(iterations = 20)]
+    async fn unavailable_hosted_task_terminal_finishes_the_task_instead_of_hanging(
+        cx: &mut TestAppContext,
+    ) {
+        let client = Arc::new(StreamTestClient {
+            handler_set: Mutex::new(ProtoMessageHandlerSet::default()),
+            subscriptions: Default::default(),
+            closes: Default::default(),
+            missing: true,
+        });
+        let mode = task_mode();
+        let terminal = streaming_terminal_with_mode(client, mode, cx);
+
+        let completion =
+            terminal.read_with(cx, |terminal, cx| terminal.wait_for_completed_task(cx));
+        cx.run_until_parked();
+
+        // Checked before awaiting the completion so the test fails instead of
+        // hanging when the task is never finished.
+        terminal.read_with(cx, |terminal, _| {
+            assert_eq!(
+                terminal.task().map(|task| task.status),
+                Some(TaskStatus::Unknown),
+                "the task must not stay Running after the hosted terminal disappeared"
+            );
+            let TerminalType::Remote(remote) = &terminal.terminal_type else {
+                panic!("remote terminal")
+            };
+            assert!(remote.failed);
+        });
+        assert_eq!(
+            completion.await,
+            None,
+            "an unavailable hosted terminal reports an unknown exit status instead of hanging"
+        );
+    }
+
+    #[gpui::test(iterations = 20)]
+    async fn hosted_task_terminal_stops_waiting_after_the_stream_failure_limit(
+        cx: &mut TestAppContext,
+    ) {
+        let client = Arc::new(StreamTestClient {
+            handler_set: Mutex::new(ProtoMessageHandlerSet::default()),
+            subscriptions: Default::default(),
+            closes: Default::default(),
+            missing: false,
+        });
+        let mode = task_mode();
+        let terminal = streaming_terminal_with_mode(client.clone(), mode, cx);
+
+        let completion =
+            terminal.read_with(cx, |terminal, cx| terminal.wait_for_completed_task(cx));
+        advance_past_stream_failure_limit(cx);
+
+        // Checked before awaiting the completion so the test fails instead of
+        // hanging when the task is never finished.
+        terminal.read_with(cx, |terminal, _| {
+            assert_eq!(
+                terminal.task().map(|task| task.status),
+                Some(TaskStatus::Unknown),
+                "the task must not stay Running after the stream failure limit"
+            );
+            let TerminalType::Remote(remote) = &terminal.terminal_type else {
+                panic!("remote terminal")
+            };
+            assert!(
+                !remote.failed && !remote.input_tx.is_closed(),
+                "a lost output stream must not disable the terminal; a reconnect can still restore it"
+            );
+        });
+        assert_eq!(
+            completion.await,
+            None,
+            "a task terminal whose stream keeps failing reports an unknown exit status instead of hanging"
+        );
+        // The terminal keeps resubscribing after the task was reported finished.
+        let subscriptions = client
+            .subscriptions
+            .load(std::sync::atomic::Ordering::SeqCst);
+        cx.background_executor.advance_clock(STREAM_RETRY_INTERVAL);
+        cx.run_until_parked();
+        assert!(
+            client
+                .subscriptions
+                .load(std::sync::atomic::Ordering::SeqCst)
+                > subscriptions,
+            "the output stream must keep retrying after the task is reported finished"
+        );
+    }
+
+    #[gpui::test(iterations = 20)]
+    fn hosted_interactive_terminal_keeps_retrying_a_broken_stream(cx: &mut TestAppContext) {
+        let client = Arc::new(StreamTestClient {
+            handler_set: Mutex::new(ProtoMessageHandlerSet::default()),
+            subscriptions: Default::default(),
+            closes: Default::default(),
+            missing: false,
+        });
+        let terminal = streaming_terminal(client, cx);
+        advance_past_stream_failure_limit(cx);
+
+        terminal.read_with(cx, |terminal, _| {
+            let TerminalType::Remote(remote) = &terminal.terminal_type else {
+                panic!("remote terminal")
+            };
+            assert!(
+                !remote.failed,
+                "an interactive terminal must keep retrying so a reconnect can restore it"
+            );
+            assert!(
+                !remote.input_tx.is_closed(),
+                "an interactive terminal must remain usable after transient stream failures"
+            );
+        });
+    }
+
+    #[test]
+    fn stream_failure_limit_matches_the_retry_interval() {
+        let retries_to_limit =
+            (STREAM_FAILURE_LIMIT.as_millis() / STREAM_RETRY_INTERVAL.as_millis()) as u32;
+        assert!(retries_to_limit > 0);
+        assert!(!stream_failure_limit_reached(retries_to_limit - 1));
+        assert!(stream_failure_limit_reached(retries_to_limit));
+    }
+
+    fn task_mode() -> TerminalMode {
+        TerminalMode::task(SpawnInTerminal {
+            command: Some("sleep".to_string()),
+            args: vec!["60".to_string()],
+            ..SpawnInTerminal::default()
+        })
+    }
+
+    fn advance_past_stream_failure_limit(cx: &mut TestAppContext) {
+        // Every retry waits `STREAM_RETRY_INTERVAL` before resubscribing, so the
+        // simulated clock has to advance once per retry to reach the limit.
+        let retries = STREAM_FAILURE_LIMIT.as_millis() / STREAM_RETRY_INTERVAL.as_millis() + 2;
+        for _ in 0..retries {
+            cx.background_executor.advance_clock(STREAM_RETRY_INTERVAL);
+            cx.run_until_parked();
+        }
     }
 
     #[gpui::test(iterations = 20)]

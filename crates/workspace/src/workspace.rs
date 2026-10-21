@@ -628,6 +628,14 @@ pub struct ToggleFileFinder {
     pub include_ignored: Option<bool>,
 }
 
+/// Opens a hosted terminal that is already running on the remote host.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, JsonSchema, Action)]
+#[action(namespace = workspace)]
+#[serde(deny_unknown_fields)]
+pub struct OpenHostedTerminal {
+    pub session_id: String,
+}
+
 /// Opens a new terminal in the center.
 #[derive(Default, PartialEq, Eq, Clone, Deserialize, JsonSchema, Action)]
 #[action(namespace = workspace)]
