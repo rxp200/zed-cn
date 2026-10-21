@@ -45,6 +45,12 @@ worktree.workspace = true
 workspace.workspace = true
 zip.workspace = true
 quick-xml.workspace = true
+truck-geometry.workspace = true
+truck-meshalgo.workspace = true
+truck-modeling.workspace = true
+truck-topology.workspace = true
+truck-stepio.workspace = true
+ruststep.workspace = true
 
 [dev-dependencies]
 fs = { workspace = true, features = ["test-support"] }

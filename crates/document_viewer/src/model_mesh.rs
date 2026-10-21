@@ -11,6 +11,13 @@ pub struct ModelMesh {
     pub area: f64,
     pub signed_volume: f64,
     pub degenerate_faces: usize,
+    /// Length unit declared by a STEP file; `None` for raw triangle meshes.
+    pub step_unit: Option<super::step_reader::StepUnit>,
+    /// Number of solid bodies read from a STEP file (0 for raw meshes).
+    pub step_solids: usize,
+    /// STEP geometry is a tessellation of curved surfaces, so the exact-coordinate
+    /// topology inspection would report tessellation seams as model defects.
+    pub topology_reliable: bool,
 }
 
 impl ModelMesh {
@@ -19,10 +26,20 @@ impl ModelMesh {
             "[open-debug] ModelMesh::parse extension={extension} bytes={}",
             bytes.len()
         );
+        let mut step_unit = None;
+        let mut step_solids = 0;
+        let mut topology_reliable = true;
         let triangles = match extension.to_ascii_lowercase().as_str() {
             "stl" => parse_stl(bytes)?,
             "obj" => parse_obj(std::str::from_utf8(bytes)?)?,
             "ply" => parse_ply(std::str::from_utf8(bytes)?)?,
+            "step" | "stp" => {
+                let step = super::step_reader::parse(bytes)?;
+                step_unit = Some(step.unit);
+                step_solids = step.solids;
+                topology_reliable = false;
+                step.triangles
+            }
             _ => bail!("unsupported model format"),
         };
         ensure!(!triangles.is_empty(), "model has no triangle faces");
@@ -33,6 +50,9 @@ impl ModelMesh {
             area: 0.0,
             signed_volume: 0.0,
             degenerate_faces: 0,
+            step_unit,
+            step_solids,
+            topology_reliable,
         };
         for triangle in &mesh.triangles {
             for vertex in triangle {

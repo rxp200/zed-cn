@@ -7,6 +7,7 @@ mod model_mesh;
 mod model_reader;
 mod model_section;
 mod pdf_reader;
+mod step_reader;
 mod word_reader;
 
 use std::{path::Path, sync::Arc};
@@ -58,6 +59,7 @@ impl DocumentFormat {
     fn from_extension(extension: &str) -> Option<Self> {
         match extension.to_ascii_lowercase().as_str() {
             "stl" | "obj" | "ply" => Some(Self::Model),
+            "step" | "stp" => Some(Self::Model),
             "pdf" => Some(Self::Pdf),
             "epub" => Some(Self::Epub),
             "xlsx" | "xlsm" | "xls" | "xlsb" | "ods" => Some(Self::Spreadsheet),
@@ -1627,6 +1629,44 @@ mod tests {
                 "expected the DWG explanation, got {:?}",
                 item.state
             );
+        });
+    }
+
+    #[gpui::test]
+    async fn test_step_documents_open_the_model_reader(cx: &mut TestAppContext) {
+        init_test(cx);
+        assert_eq!(
+            DocumentFormat::from_extension("step"),
+            Some(DocumentFormat::Model)
+        );
+        assert_eq!(
+            DocumentFormat::from_extension("STP"),
+            Some(DocumentFormat::Model)
+        );
+        let step =
+            crate::step_reader::tests::cube_step(crate::step_reader::tests::millimetre_unit());
+        let (project, item) = open_test_document(cx, "part.step", step.into_bytes()).await;
+        item.read_with(cx, |item, _| {
+            assert_eq!(item.format, DocumentFormat::Model);
+            let mesh = item.model.as_ref().expect("STEP mesh");
+            assert_eq!(mesh.step_solids, 1);
+            assert_eq!(mesh.triangles.len(), 12);
+            assert_eq!(
+                mesh.step_unit,
+                Some(crate::step_reader::StepUnit::Millimetre)
+            );
+            assert!(
+                !mesh.topology_reliable,
+                "tessellated STEP surfaces must not claim an exact topology check"
+            );
+        });
+        let (view, window) =
+            cx.add_window_view(|window, cx| DocumentView::new(item, project, window, cx));
+        window.run_until_parked();
+        assert!(window.debug_bounds("model-viewport").is_some());
+        assert!(window.debug_bounds("model-panel").is_some());
+        window.update(|_, cx| {
+            assert!(matches!(view.read(cx).child, DocumentChild::Model(_)));
         });
     }
 

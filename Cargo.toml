@@ -846,6 +846,7 @@ rustc-hash = "2.1.0"
 rustix = { version = "1.1", features = ["fs"] }
 rustls = "0.23.26"
 rustls-platform-verifier = "0.7"
+ruststep = "0.4"
 # WARNING: If you change this, you must also publish a new version of zed-scap to crates.io
 scap = { git = "https://github.com/zed-industries/scap", rev = "4afea48c3b002197176fb19cd0f9b180dd36eaac", default-features = false, package = "zed-scap", version = "0.0.8-zed" }
 schemars = { version = "1.0", default-features = false, features = ["std", "indexmap2"] }
@@ -903,6 +904,11 @@ tree-sitter = { git = "https://github.com/tree-sitter/tree-sitter", rev = "43623
 tracing = "0.1.40"
 tracing-subscriber = "0.3"
 tree-sitter-bash = "0.25.1"
+truck-geometry = "0.5"
+truck-meshalgo = { version = "0.4", default-features = false, features = ["tessellation"] }
+truck-modeling = "0.6"
+truck-topology = "0.6"
+truck-stepio = "0.3"
 tree-sitter-c = "0.24.1"
 tree-sitter-cpp = { git = "https://github.com/tree-sitter/tree-sitter-cpp", rev = "5cb9b693cfd7bfacab1d9ff4acac1a4150700609" }
 tree-sitter-css = "0.23"

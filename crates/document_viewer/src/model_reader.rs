@@ -267,7 +267,9 @@ impl ModelReader {
         };
         // Topology is cheap enough for supported meshes and the panel presents
         // it immediately; oversized meshes stay lazy until explicitly requested.
-        if reader.mesh.triangles.len() <= 300_000 {
+        // STEP geometry is a tessellation, so exact-coordinate edge matching would
+        // report tessellation seams as model defects.
+        if reader.mesh.topology_reliable && reader.mesh.triangles.len() <= 300_000 {
             reader.inspect(cx);
         }
         reader
@@ -316,7 +318,7 @@ impl ModelReader {
         self.section_geometry = None;
         self.error = None;
         self.dirty = true;
-        if self.mesh.triangles.len() <= 300_000 {
+        if self.mesh.topology_reliable && self.mesh.triangles.len() <= 300_000 {
             self.inspect(cx);
         }
         cx.notify();
@@ -436,7 +438,7 @@ impl ModelReader {
     }
 
     fn inspect(&mut self, cx: &mut Context<Self>) {
-        if self.inspect_task.is_some() {
+        if self.inspect_task.is_some() || !self.mesh.topology_reliable {
             return;
         }
         // The edge table is deliberately temporary: only small summary counts survive inspection.
@@ -807,8 +809,20 @@ impl ModelReader {
                             ))
                             .child(property_row(
                                 i18n::t!("9fb6669a77ea48bb"),
-                                i18n::t!("5b8aa0bf3c59daec").to_string(),
+                                self.mesh
+                                    .step_unit
+                                    .map(|unit| unit.label().to_string())
+                                    .filter(|label| !label.is_empty())
+                                    .unwrap_or_else(|| {
+                                        i18n::t!("5b8aa0bf3c59daec").to_string()
+                                    }),
                             ))
+                            .when(self.mesh.step_solids > 0, |section| {
+                                section.child(property_row(
+                                    i18n::t!("f80ef1756ed9b411"),
+                                    grouped(self.mesh.step_solids),
+                                ))
+                            })
                             .when(closed, |section| {
                                 section.child(property_row(
                                     i18n::t!("b10fb966d72063f5"),
@@ -831,6 +845,15 @@ impl ModelReader {
                         }),
                     ))
                     .when(topology_open, |section| {
+                        if !self.mesh.topology_reliable {
+                            return section.child(
+                                div().px_3().py_1().child(
+                                    Label::new(i18n::t!("1d513de9e33840f7"))
+                                        .size(LabelSize::XSmall)
+                                        .color(Color::Muted),
+                                ),
+                            );
+                        }
                         let section = section
                             .child(check_row(
                                 i18n::t!("0abb54d180cded75"),
