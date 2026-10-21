@@ -18,7 +18,7 @@ use futures::{FutureExt, StreamExt as _, channel::oneshot, future::Shared};
 use gpui::{
     Action, AnyElement, App, ClickEvent, ClipboardItem, Context, DismissEvent, Entity,
     EventEmitter, ExternalPaths, FocusHandle, Focusable, FontWeight, PathPromptOptions,
-    PromptLevel, Subscription, Task, TaskExt, WeakEntity, Window,
+    PromptLevel, Rems, Subscription, Task, TaskExt, WeakEntity, Window,
 };
 use log::{debug, info};
 use open_path_prompt::OpenPathDelegate;
@@ -740,7 +740,7 @@ impl PickerDelegate for DevContainerPickerDelegate {
     }
 
     fn placeholder_text(&self, _window: &mut Window, _cx: &mut App) -> Arc<str> {
-        "Select Dev Container Configuration".into()
+        i18n::t!("88a364330a40384d").into()
     }
 
     fn update_matches(
@@ -1769,7 +1769,9 @@ impl RemoteServerPickerDelegate {
                         .overflow_hidden()
                         .text_ellipsis()
                         .when(is_wsl, |this| {
-                            this.child(Label::new("WSL：").color(Color::Muted))
+                            this.child(
+                                Label::new(i18n::t!("41ed0a615790bb95")).color(Color::Muted),
+                            )
                         })
                         .child(HighlightedLabel::new(main_label, host_positions.to_vec()))
                         .children(aux_label.map(|label| Label::new(label).color(Color::Muted))),
@@ -1815,7 +1817,7 @@ impl RemoteServerPickerDelegate {
                         .text_ellipsis()
                         .when(is_wsl, |this| {
                             this.child(
-                                Label::new("WSL：")
+                                Label::new(i18n::t!("41ed0a615790bb95"))
                                     .size(LabelSize::Small)
                                     .color(Color::Muted),
                             )
@@ -1903,7 +1905,7 @@ impl PickerDelegate for RemoteServerPickerDelegate {
     }
 
     fn placeholder_text(&self, _window: &mut Window, _cx: &mut App) -> Arc<str> {
-        "Search remote projects…".into()
+        i18n::t!("6ca8ee311f9672f0").into()
     }
 
     fn no_matches_text(&self, _window: &mut Window, _cx: &mut App) -> Option<SharedString> {
@@ -2152,7 +2154,12 @@ impl PickerDelegate for RemoteServerPickerDelegate {
                 self.render_focused_server_header(*server, cx)
             }
             RemoteMatch::AddServer => {
-                Some(self.render_action_item(ix, IconName::Plus, "Connect SSH Server", selected))
+                Some(self.render_action_item(
+                    ix,
+                    IconName::Plus,
+                    i18n::t!("591480f799bfdc33"),
+                    selected,
+                ))
             }
             RemoteMatch::AddServerForm => Some(self.render_action_item(
                 ix,
@@ -2161,10 +2168,20 @@ impl PickerDelegate for RemoteServerPickerDelegate {
                 selected,
             )),
             RemoteMatch::AddDevContainer => {
-                Some(self.render_action_item(ix, IconName::Plus, "Connect Dev Container", selected))
+                Some(self.render_action_item(
+                    ix,
+                    IconName::Plus,
+                    i18n::t!("8115d17d2638aa80"),
+                    selected,
+                ))
             }
             RemoteMatch::AddWsl => {
-                Some(self.render_action_item(ix, IconName::Plus, "Add WSL Distro", selected))
+                Some(self.render_action_item(
+                    ix,
+                    IconName::Plus,
+                    i18n::t!("52b35c9c3eff543a"),
+                    selected,
+                ))
             }
             RemoteMatch::EditSshConfig => Some(self.render_action_item(
                 ix,
@@ -2572,7 +2589,7 @@ impl RemoteServerProjects {
             window,
             cx,
         )
-        .prompt_err("Failed to connect", window, cx, |_, _, _| None);
+        .prompt_err(i18n::t!("46c9f3b7520fde53"), window, cx, |_, _, _| None);
 
         let address_editor = editor.clone();
         let creating = cx.spawn_in(window, async move |this, cx| {
@@ -2647,7 +2664,7 @@ impl RemoteServerProjects {
             window,
             cx,
         )
-        .prompt_err("Failed to connect", window, cx, |_, _, _| None);
+        .prompt_err(i18n::t!("46c9f3b7520fde53"), window, cx, |_, _, _| None);
 
         let wsl_picker = picker.clone();
         let creating = cx.spawn_in(window, async move |this, cx| {
@@ -2761,7 +2778,7 @@ impl RemoteServerProjects {
                     window,
                     cx,
                 )
-                .prompt_err("Failed to connect", window, cx, |_, _, _| None);
+                .prompt_err(i18n::t!("46c9f3b7520fde53"), window, cx, |_, _, _| None);
 
                 cx.spawn_in(window, async move |workspace, cx| {
                     let session = connect.await;
@@ -3028,7 +3045,7 @@ impl RemoteServerProjects {
                 log::error!("Failed to connect: {e:#}");
                 cx.prompt(
                     gpui::PromptLevel::Critical,
-                    "Failed to connect",
+                    i18n::t!("46c9f3b7520fde53"),
                     Some(&e.to_string()),
                     &[i18n::t!("fac2a67ad87807c4")],
                 )
@@ -3480,7 +3497,7 @@ impl RemoteServerProjects {
             window,
             cx,
         )
-        .prompt_err("Failed to connect", window, cx, |_, _, _| None);
+        .prompt_err(i18n::t!("46c9f3b7520fde53"), window, cx, |_, _, _| None);
 
         let task = cx.spawn_in(window, async move |this, cx| {
             match connection.await {
@@ -3684,7 +3701,7 @@ impl RemoteServerProjects {
                 log::error!("Failed to connect: {e:#}");
                 cx.prompt(
                     gpui::PromptLevel::Critical,
-                    "Failed to connect",
+                    i18n::t!("46c9f3b7520fde53"),
                     Some(&e.to_string()),
                     &[i18n::t!("fac2a67ad87807c4")],
                 )
@@ -3802,7 +3819,8 @@ impl RemoteServerProjects {
                             .pb_1()
                             .child(
                                 ModalHeader::new().child(
-                                    Headline::new("Dev Containers").size(HeadlineSize::XSmall),
+                                    Headline::new(i18n::t!("5d76904f98924950"))
+                                        .size(HeadlineSize::XSmall),
                                 ),
                             )
                             .child(ListSeparator)
@@ -3898,11 +3916,9 @@ impl RemoteServerProjects {
                                     .w_full()
                                     .gap_1()
                                     .child(
-                                        Label::new(
-                                            "Enter the command you use to SSH into this server.",
-                                        )
-                                        .color(Color::Muted)
-                                        .size(LabelSize::Small),
+                                        Label::new(i18n::t!("37e81904c66f0280"))
+                                            .color(Color::Muted)
+                                            .size(LabelSize::Small),
                                     )
                                     .child(
                                         Button::new("learn-more", i18n::t!("ca66c2da6f5bf825"))
@@ -4124,6 +4140,17 @@ impl RemoteServerProjects {
                                         })),
                                 ),
                         )
+                        .when(state.key_file.is_none() && state.key_id.is_none(), |this| {
+                            this.child(
+                                div()
+                                    .debug_selector(|| "form-key-default-hint".into())
+                                    .child(
+                                        Label::new(i18n::t!("e02fc8f1ec338629"))
+                                            .size(LabelSize::XSmall)
+                                            .color(Color::Muted),
+                                    ),
+                            )
+                        })
                         .when_some(key_label.clone(), |this, label| {
                             this.child(
                                 Label::new(label)
@@ -4674,9 +4701,9 @@ impl RemoteServerProjects {
         v_flex()
             .child({
                 let label = if connection.nickname.is_some() {
-                    "Edit Nickname"
+                    i18n::t!("6e34485973735c6d")
                 } else {
-                    "Add Nickname to Server"
+                    i18n::t!("26146c158993c858")
                 };
                 div()
                     .id("ssh-options-add-nickname")
@@ -4710,10 +4737,8 @@ impl RemoteServerProjects {
                     workspace
                         .update(cx, |this, cx| {
                             struct SshServerAddressCopiedToClipboard;
-                            let notification = format!(
-                                "Copied server address ({}) to clipboard",
-                                connection_string
-                            );
+                            let notification =
+                                i18n::t_args!("4d975328c6b9d747", connection_string);
 
                             this.show_toast(
                                 Toast::new(
@@ -5165,11 +5190,24 @@ impl Focusable for RemoteServerProjects {
 
 impl EventEmitter<DismissEvent> for RemoteServerProjects {}
 
+impl RemoteServerProjects {
+    /// The two-column add-server form needs the wider modal, while every other
+    /// mode renders a picker or a single column at the standard picker width.
+    /// Every mode shares one container, so a width set for the form would leave
+    /// the remaining modes with an empty band on the right.
+    fn modal_width(&self) -> Rems {
+        match &self.mode {
+            Mode::CreateRemoteServerForm(_) => rems(40.),
+            _ => picker::DEFAULT_MODAL_WIDTH,
+        }
+    }
+}
+
 impl Render for RemoteServerProjects {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .elevation_3(cx)
-            .w(rems(40.))
+            .w(self.modal_width())
             .key_context("RemoteServerModal")
             .on_action(cx.listener(Self::cancel))
             .on_action(cx.listener(Self::confirm))
@@ -5634,6 +5672,34 @@ mod tests {
     }
 
     #[gpui::test]
+    async fn test_modal_width_follows_mode(cx: &mut TestAppContext) {
+        let app_state = init_test(cx);
+        let fs = app_state.fs.clone();
+        let project = Project::test(fs.clone(), [], cx).await;
+        let (workspace, cx) =
+            cx.add_window_view(|window, cx| Workspace::test_new(project, window, cx));
+        let modal = workspace.update_in(cx, |_workspace, window, cx| {
+            let workspace = cx.weak_entity();
+            cx.new(|cx| RemoteServerProjects::new(false, fs.clone(), window, workspace, cx))
+        });
+
+        modal.read_with(cx, |modal, _cx| {
+            assert!(
+                modal.modal_width() == picker::DEFAULT_MODAL_WIDTH,
+                "the default picker keeps the standard picker width instead of leaving an empty band on the right"
+            );
+        });
+
+        modal.update_in(cx, |modal, window, cx| {
+            modal.mode = Mode::CreateRemoteServerForm(CreateRemoteServerForm::new(window, cx));
+            assert!(
+                modal.modal_width() == rems(40.),
+                "the two-column form still gets the wider modal"
+            );
+        });
+    }
+
+    #[gpui::test]
     async fn test_add_server_form_persists_and_updates_one_entry(cx: &mut TestAppContext) {
         let app_state = init_test(cx);
         let fs = app_state.fs.clone();
@@ -5891,6 +5957,94 @@ mod tests {
         assert!(
             cx.debug_bounds("form-input-proxy").is_some(),
             "opening the section reveals the proxy field"
+        );
+    }
+
+    #[gpui::test]
+    async fn test_add_server_form_explains_the_default_key_for_key_auth(
+        cx: &mut TestAppContext,
+    ) {
+        let app_state = init_test(cx);
+        let fs = app_state.fs.as_fake();
+        let project = Project::test(fs.clone(), [], cx).await;
+        let (multi_workspace, cx) = cx.add_window_view(|window, cx| {
+            let workspace = cx.new(|cx| Workspace::test_new(project, window, cx));
+            MultiWorkspace::new(workspace, window, cx)
+        });
+        let workspace =
+            multi_workspace.read_with(cx, |multi_workspace, _| multi_workspace.workspace().clone());
+        workspace.update_in(cx, |workspace, window, cx| {
+            let weak = cx.weak_entity();
+            workspace.toggle_modal(window, cx, |window, cx| {
+                RemoteServerProjects::new(false, fs.clone(), window, weak, cx)
+            });
+        });
+        cx.run_until_parked();
+
+        workspace.update_in(cx, |workspace, window, cx| {
+            let modal = workspace
+                .active_modal::<RemoteServerProjects>(cx)
+                .expect("the remote server modal is open");
+            modal.update(cx, |modal, cx| {
+                modal.mode = Mode::CreateRemoteServerForm(CreateRemoteServerForm::new(window, cx));
+                modal.set_form_auth_method(SshAuthMethod::Key, cx);
+            });
+        });
+        cx.run_until_parked();
+        assert!(
+            cx.debug_bounds("form-key-default-hint").is_some(),
+            "key auth without a key file explains that the local default keys are used"
+        );
+
+        workspace.update_in(cx, |workspace, _window, cx| {
+            let modal = workspace
+                .active_modal::<RemoteServerProjects>(cx)
+                .expect("the remote server modal is open");
+            modal.update(cx, |modal, cx| {
+                let Mode::CreateRemoteServerForm(state) = &mut modal.mode else {
+                    panic!("expected the form mode");
+                };
+                state.key_file = Some(PathBuf::from("/home/user/.ssh/id_ed25519"));
+                cx.notify();
+            });
+        });
+        cx.run_until_parked();
+        assert!(
+            cx.debug_bounds("form-key-default-hint").is_none(),
+            "a chosen key file replaces the default-key hint"
+        );
+
+        workspace.update_in(cx, |workspace, _window, cx| {
+            let modal = workspace
+                .active_modal::<RemoteServerProjects>(cx)
+                .expect("the remote server modal is open");
+            modal.update(cx, |modal, cx| {
+                let Mode::CreateRemoteServerForm(state) = &mut modal.mode else {
+                    panic!("expected the form mode");
+                };
+                state.key_file = None;
+                state.key_id = Some("key-id".into());
+                cx.notify();
+            });
+        });
+        cx.run_until_parked();
+        assert!(
+            cx.debug_bounds("form-key-default-hint").is_none(),
+            "an already imported key also keeps the default-key hint hidden"
+        );
+
+        workspace.update_in(cx, |workspace, _window, cx| {
+            let modal = workspace
+                .active_modal::<RemoteServerProjects>(cx)
+                .expect("the remote server modal is open");
+            modal.update(cx, |modal, cx| {
+                modal.set_form_auth_method(SshAuthMethod::Password, cx);
+            });
+        });
+        cx.run_until_parked();
+        assert!(
+            cx.debug_bounds("form-key-default-hint").is_none(),
+            "the default-key hint only belongs to key authentication"
         );
     }
 
