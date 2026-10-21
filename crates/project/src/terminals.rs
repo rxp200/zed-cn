@@ -1,4 +1,4 @@
-use anyhow::{Context as _, Result};
+use anyhow::{Context as _, Result, anyhow};
 use collections::HashMap;
 use gpui::{App, AppContext as _, Context, Entity, Task, WeakEntity};
 
@@ -281,6 +281,70 @@ impl Project {
 
                 terminal_handle
             })
+        })
+    }
+
+
+    /// Attaches an existing hosted session as a new terminal in this project.
+    /// The session keeps running on the remote host; the returned terminal is
+    /// only this client's view of it.
+    pub fn attach_hosted_terminal(
+        &mut self,
+        canonical_root: String,
+        session_id: String,
+        cx: &mut Context<Self>,
+    ) -> Task<Result<(Entity<Terminal>, String, bool)>> {
+        let Some(remote_client) = self.remote_client.clone() else {
+            return Task::ready(Err(anyhow!(i18n::t!("9f6b5ab6c9cd5eb2"))));
+        };
+        if !remote_client.read(cx).supports_hosted_terminals() {
+            return Task::ready(Err(anyhow!(i18n::t!("4f9d307004f2e8d4"))));
+        }
+        let settings = TerminalSettings::get_global(cx).clone();
+        let shell = remote_client
+            .read(cx)
+            .shell()
+            .unwrap_or_else(get_default_system_shell);
+        let request = remote_client
+            .read(cx)
+            .attach_hosted_terminal(canonical_root, session_id);
+        let path_style = self.path_style(cx);
+        let background_executor = cx.background_executor().clone();
+        cx.spawn(async move |project, cx| {
+            let response = request.await?;
+            let client = project
+                .read_with(cx, |project, cx| {
+                    project
+                        .remote_client
+                        .as_ref()
+                        .map(|client| client.read(cx).proto_client())
+                })?
+                .context(i18n::t!("9f6b5ab6c9cd5eb2"))?;
+            Ok(cx.update(|cx| {
+                let terminal = cx.new(|cx| {
+                    TerminalBuilder::new_remote(
+                        TerminalMode::interactive(),
+                        Shell::Program(shell),
+                        settings.cursor_shape,
+                        settings.alternate_scroll,
+                        settings.max_scroll_history_lines,
+                        settings.path_hyperlink_regexes.clone(),
+                        Duration::from_millis(settings.path_hyperlink_timeout_ms),
+                        0,
+                        path_style,
+                        client,
+                        response.server_instance_id,
+                        response.terminal_id,
+                        &background_executor,
+                    )
+                    .subscribe(cx)
+                });
+                (
+                    terminal,
+                    response.session_id.clone(),
+                    response.controls_input,
+                )
+            }))
         })
     }
 
@@ -728,7 +792,12 @@ fn create_hosted_terminal(
     // shell; `program` itself is moved into the request below.
     let template_shell = Shell::Program(program.clone());
     let working_directory = working_directory.map(|path| path.display().to_string());
-    let client = remote_client.read(cx).proto_client();
+    let (client, hosted) = remote_client.read_with(cx, |remote_client, _| {
+        (
+            remote_client.proto_client(),
+            remote_client.supports_hosted_terminals(),
+        )
+    });
     let request = client.request(proto::CreatePersistentTerminal {
         creation_id: Uuid::new_v4().to_string(),
         program,
@@ -739,6 +808,7 @@ fn create_hosted_terminal(
         columns: 80,
         pixel_width: 0,
         pixel_height: 0,
+        hosted,
     });
     let cursor_shape = settings.cursor_shape;
     let alternate_scroll = settings.alternate_scroll;

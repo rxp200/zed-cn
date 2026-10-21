@@ -11,7 +11,7 @@ use crate::{
     text_finder::TextFinder,
 };
 use anyhow::Context as _;
-use collections::HashMap;
+use collections::{HashMap, HashSet};
 use editor::{
     Anchor, Editor, EditorEvent, EditorSettings, MAX_TAB_TITLE_LEN, MultiBuffer, PathKey,
     SearchResultsStatus, SelectionEffects,
@@ -23,9 +23,10 @@ use editor::{
 use futures::{StreamExt, stream::FuturesOrdered};
 use gpui::{
     Action, AnyElement, App, AsyncApp, Context, Entity, EntityId, EventEmitter, FocusHandle,
-    Focusable, Global, Hsla, InteractiveElement, IntoElement, KeyContext, ParentElement, Pixels,
-    Point, Render, SharedString, Styled, Subscription, Task, TaskExt, UpdateGlobal, WeakEntity,
-    Window, actions, canvas, div, px, uniform_list,
+    Focusable, Global, Hsla, InteractiveElement, IntoElement, KeyContext, KeyDownEvent,
+    ParentElement, Pixels, Point, Render, ScrollStrategy, SharedString, Styled, Subscription, Task,
+    TaskExt, UniformListScrollHandle, UpdateGlobal, WeakEntity, Window, actions, div, px,
+    uniform_list,
 };
 use itertools::Itertools;
 use language::{Buffer, Language};
@@ -33,6 +34,7 @@ use menu::Confirm;
 use multi_buffer;
 use project::{
     Project, ProjectPath, SearchResults,
+    project_search::NameMatch,
     search::{SearchInputKind, SearchQuery, SearchResult},
     search_history::SearchHistoryCursor,
 };
@@ -54,7 +56,7 @@ use ui::{
     CommonAnimationExt, HighlightedLabel, IconButtonShape, KeyBinding, Toggleable, Tooltip,
     prelude::*, utils::SearchInputWidth,
 };
-use util::{ResultExt as _, paths::PathMatcher};
+use util::{ResultExt as _, paths::PathMatcher, rel_path::RelPath};
 use workspace::{
     DeploySearch, ItemNavHistory, NewSearch, Panel, Save, SaveIntent, ToolbarItemEvent,
     ToolbarItemLocation, ToolbarItemView, Workspace, WorkspaceId,
@@ -263,12 +265,21 @@ fn contains_uppercase(str: &str) -> bool {
 
 const SEARCH_ON_TYPE_DEBOUNCE: Duration = Duration::from_millis(250);
 
+/// Upper bound on folder / path matches shown alongside content results. Name matching is cheap
+/// compared to the content scan, but the list still has to stay bounded for broad queries.
+const MAX_NAME_MATCHES: usize = 500;
+
 pub struct ProjectSearch {
     pub(crate) project: Entity<Project>,
     workspace: WeakEntity<Workspace>,
     pub excerpts: Entity<MultiBuffer>,
     pub pending_search: Option<Task<Option<SearchResults<SearchResult>>>>,
     pub match_ranges: Vec<Range<Anchor>>,
+    /// Folder names and file paths that matched the current query. Collected on the client from
+    /// worktree snapshots, so this works for remote projects as well.
+    pub name_matches: Vec<NameMatch>,
+    pub name_matches_limit_reached: bool,
+    name_search: Option<Task<()>>,
     pub(crate) active_query: Option<SearchQuery>,
     last_search_query_text: Option<String>,
     pub search_id: usize,
@@ -392,7 +403,92 @@ pub struct ProjectSearchView {
     regex_language: Option<Arc<Language>>,
     debounced_search: Option<Task<()>>,
     last_search_signature: Option<SearchSignature>,
+    /// Folders and files whose name or path matched, plus the files holding content matches,
+    /// ordered by path. Rebuilt whenever the model's results change.
+    result_groups: Vec<ResultGroup>,
+    result_rows: Vec<ResultRow>,
+    result_counts: ResultCounts,
+    collapsed_result_groups: HashSet<ProjectPath>,
+    selected_result_row: Option<usize>,
+    results_focus_handle: FocusHandle,
+    results_scroll_handle: UniformListScrollHandle,
+    uses_unified_results: bool,
     _subscriptions: Vec<Subscription>,
+}
+
+/// One path in the unified result list: either a folder matched by name, or a file matched by
+/// name, path, or content.
+#[derive(Clone, Debug)]
+struct ResultGroup {
+    project_path: ProjectPath,
+    display_path: SharedString,
+    parent: SharedString,
+    is_directory: bool,
+    name_ranges: Vec<Range<usize>>,
+    parent_ranges: Vec<Range<usize>>,
+    /// Indices into `ProjectSearch::match_ranges`, in file order.
+    content: Vec<usize>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ResultRow {
+    group_index: usize,
+    content_index: Option<usize>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ResultCounts {
+    pub folders: usize,
+    pub name_files: usize,
+    pub path_files: usize,
+    pub content_lines: usize,
+}
+
+impl ResultGroup {
+    fn from_name_match(name_match: &NameMatch) -> Self {
+        Self {
+            project_path: name_match.path.clone(),
+            display_path: format!("{}{}", name_match.parent, name_match.name).into(),
+            parent: name_match.parent.clone().into(),
+            is_directory: name_match.is_directory,
+            name_ranges: name_match.name_ranges.clone(),
+            parent_ranges: name_match.parent_ranges.clone(),
+            content: Vec::new(),
+        }
+    }
+
+    fn for_path(project_path: ProjectPath, is_directory: bool) -> Self {
+        let parent = rel_path_parent(&project_path.path);
+        let display_path = project_path.path.to_string();
+        Self {
+            project_path,
+            display_path: display_path.into(),
+            parent: parent.into(),
+            is_directory,
+            name_ranges: Vec::new(),
+            parent_ranges: Vec::new(),
+            content: Vec::new(),
+        }
+    }
+
+    fn has_name_match(&self) -> bool {
+        !self.name_ranges.is_empty()
+    }
+
+    fn has_path_match(&self) -> bool {
+        !self.parent_ranges.is_empty()
+    }
+}
+
+fn rel_path_parent(path: &RelPath) -> String {
+    match path.parent() {
+        Some(parent) if !parent.is_empty() => {
+            let mut parent = parent.to_string();
+            parent.push('/');
+            parent
+        }
+        _ => String::new(),
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -414,7 +510,6 @@ pub struct ProjectSearchPanel {
     view: Option<Entity<ProjectSearchView>>,
     focus_handle: FocusHandle,
     position: DockPosition,
-    width: Pixels,
     _view_subscription: Option<Subscription>,
 }
 
@@ -430,7 +525,6 @@ impl ProjectSearchPanel {
             view: None,
             focus_handle: cx.focus_handle(),
             position: DockPosition::Left,
-            width: px(0.),
             _view_subscription: None,
         }
     }
@@ -449,6 +543,7 @@ impl ProjectSearchPanel {
         let entity = cx.new(|cx| ProjectSearch::new(project.clone(), self.workspace.clone(), cx));
         let view = cx
             .new(|cx| ProjectSearchView::new(self.workspace.clone(), entity, window, cx, settings));
+        view.update(cx, |view, cx| view.set_unified_results(true, cx));
         self._view_subscription = Some(cx.observe(&view, |_, _, cx| cx.notify()));
         self.view = Some(view.clone());
         cx.notify();
@@ -667,13 +762,12 @@ impl Render for ProjectSearchPanel {
                 .track_focus(&self.focus_handle)
                 .into_any_element();
         };
-        let compact = self.width > px(0.) && self.width < px(600.);
-        let compact_results = (compact && view.read(cx).has_matches())
-            .then(|| view.update(cx, |view, cx| view.render_compact_results(cx)));
+        let unified_results = view.update(cx, |view, cx| view.render_unified_results(cx));
         let search = view.read(cx);
         let view_focus_handle = search.focus_handle(cx);
         let project_search = search.entity.read(cx);
-        let limit_reached = project_search.search_state.limit_reached();
+        let limit_reached = project_search.search_state.limit_reached()
+            || project_search.name_matches_limit_reached;
         let is_search_underway = project_search.pending_search.is_some();
         let filters_enabled = search.filters_enabled;
         let replace_enabled = search.replace_enabled;
@@ -691,25 +785,18 @@ impl Render for ProjectSearchPanel {
         }
 
         let match_text = search
-            .active_match_index
-            .and_then(|index| {
-                let index = index + 1;
-                let match_quantity = project_search.match_ranges.len();
-                if match_quantity > 0 {
-                    debug_assert!(match_quantity >= index);
-                    if limit_reached {
-                        Some(format!("{index}/{match_quantity}+"))
-                    } else {
-                        Some(format!("{index}/{match_quantity}"))
-                    }
+            .result_position()
+            .map(|(index, total)| {
+                if limit_reached {
+                    format!("{index}/{total}+")
                 } else {
-                    None
+                    format!("{index}/{total}")
                 }
             })
             .unwrap_or_else(|| "0/0".to_string());
-        let has_active_match = search.active_match_index.is_some();
+        let has_active_match = search.result_position().is_some();
 
-        let is_collapsed = search.results_editor.read(cx).has_any_buffer_folded(cx);
+        let is_collapsed = search.any_result_group_collapsed();
         let (expand_icon, expand_tooltip) = if is_collapsed {
             (IconName::ChevronUpDown, i18n::t!("63e2bced47422838"))
         } else {
@@ -882,12 +969,29 @@ impl Render for ProjectSearchPanel {
                     replacement_focus,
                 ));
 
+            let content_match_count = search.result_counts().content_lines;
+            let replace_scope = if content_match_count > 0 {
+                i18n::t!("464b38cbfea53ef5", count = content_match_count)
+            } else {
+                i18n::t!("1732d1412bd1d196").to_string()
+            };
+
             Some(
-                h_flex()
+                v_flex()
                     .w_full()
                     .gap_1()
-                    .child(replace_input)
-                    .child(replace_actions),
+                    .child(
+                        h_flex()
+                            .w_full()
+                            .gap_1()
+                            .child(replace_input)
+                            .child(replace_actions),
+                    )
+                    .child(
+                        Label::new(replace_scope)
+                            .size(LabelSize::Small)
+                            .color(Color::Muted),
+                    ),
             )
         } else {
             None
@@ -1015,12 +1119,12 @@ impl Render for ProjectSearchPanel {
             }))
             .on_action(cx.listener(|this, _: &SelectNextMatch, window, cx| {
                 this.with_view(cx, |view, cx| {
-                    view.select_match(Direction::Next, window, cx)
+                    view.select_adjacent_result_row(Direction::Next, window, cx)
                 });
             }))
             .on_action(cx.listener(|this, _: &SelectPreviousMatch, window, cx| {
                 this.with_view(cx, |view, cx| {
-                    view.select_match(Direction::Prev, window, cx)
+                    view.select_adjacent_result_row(Direction::Prev, window, cx)
                 });
             }))
             .on_action(cx.listener(|this, _: &NextHistoryQuery, window, cx| {
@@ -1056,23 +1160,6 @@ impl Render for ProjectSearchPanel {
                     view.cycle_fields(Direction::Prev, window, cx)
                 });
             }))
-            .child(
-                canvas(|_, _, _| (), {
-                    let panel = cx.entity().downgrade();
-                    move |bounds, _, _, cx| {
-                        panel
-                            .update(cx, |this, cx| {
-                                if this.width != bounds.size.width {
-                                    this.width = bounds.size.width;
-                                    cx.notify();
-                                }
-                            })
-                            .log_err();
-                    }
-                })
-                .absolute()
-                .size_full(),
-            )
             .child(header)
             .child(
                 v_flex()
@@ -1094,7 +1181,7 @@ impl Render for ProjectSearchPanel {
                     .w_full()
                     .border_t_1()
                     .border_color(cx.theme().colors().border)
-                    .child(compact_results.unwrap_or_else(|| view.into_any_element())),
+                    .child(unified_results),
             )
             .into_any_element()
     }
@@ -1122,6 +1209,9 @@ impl ProjectSearch {
             excerpts,
             pending_search: Default::default(),
             match_ranges: Default::default(),
+            name_matches: Default::default(),
+            name_matches_limit_reached: false,
+            name_search: Default::default(),
             active_query: None,
             last_search_query_text: None,
             search_id: 0,
@@ -1152,6 +1242,9 @@ impl ProjectSearch {
                 excerpts,
                 pending_search: Default::default(),
                 match_ranges: self.match_ranges.clone(),
+                name_matches: self.name_matches.clone(),
+                name_matches_limit_reached: self.name_matches_limit_reached,
+                name_search: Default::default(),
                 active_query: self.active_query.clone(),
                 last_search_query_text: self.last_search_query_text.clone(),
                 search_id: self.search_id,
@@ -1269,7 +1362,7 @@ impl ProjectSearch {
             .update(cx, |project, cx| project.search(query.clone(), cx));
         self.last_search_query_text = Some(query.as_str().to_string());
         self.search_id += 1;
-        self.active_query = Some(query);
+        self.active_query = Some(query.clone());
         match mode {
             SearchMode::Manual => {
                 self.record_search_history(cx);
@@ -1297,11 +1390,87 @@ impl ProjectSearch {
             )
             .await
         }));
+        let name_search = self.spawn_name_search(&query, cx);
+        self.name_search = Some(name_search);
         cx.notify();
+    }
+
+    /// Matches folder names, file names and parent paths against `query`.
+    ///
+    /// The scan only reads worktree snapshots held by the client, so it behaves the same for local
+    /// and remote projects. It runs in the background and is discarded if a newer search starts.
+    fn spawn_name_search(&self, query: &SearchQuery, cx: &mut Context<Self>) -> Task<()> {
+        let project = self.project.clone();
+        let name_query = query.clone();
+        let search_id = self.search_id;
+        let opened_paths = query.as_inner().buffers().as_ref().map(|buffers| {
+            buffers
+                .iter()
+                .filter_map(|buffer| {
+                    let file = buffer.read(cx).file()?;
+                    Some(ProjectPath::from_file(file.as_ref(), cx))
+                })
+                .collect::<Vec<_>>()
+        });
+
+        cx.spawn(async move |this, cx| {
+            let worktrees = if opened_paths.is_some() {
+                Vec::new()
+            } else {
+                let scans = this
+                    .update(cx, |_this, cx| {
+                        project
+                            .read(cx)
+                            .visible_worktrees(cx)
+                            .filter_map(|worktree| {
+                                worktree
+                                    .read(cx)
+                                    .as_local()
+                                    .map(|local| local.scan_complete())
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .ok();
+                for scan in scans.into_iter().flatten() {
+                    scan.await;
+                }
+                this.update(cx, |_this, cx| {
+                    project
+                        .read(cx)
+                        .visible_worktrees(cx)
+                        .map(|worktree| Arc::new(worktree.read(cx).snapshot()))
+                        .collect::<Vec<_>>()
+                })
+                .ok()
+                .unwrap_or_default()
+            };
+
+            let (name_matches, limit_reached) = cx
+                .background_spawn(async move {
+                    project::project_search::collect_name_matches(
+                        &name_query,
+                        worktrees,
+                        opened_paths,
+                        MAX_NAME_MATCHES,
+                    )
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                if this.search_id == search_id {
+                    this.name_matches = name_matches;
+                    this.name_matches_limit_reached = limit_reached;
+                    cx.notify();
+                }
+            })
+            .log_err();
+        })
     }
 
     fn clear(&mut self, cx: &mut Context<Self>) {
         self.pending_search = None;
+        self.name_search = None;
+        self.name_matches.clear();
+        self.name_matches_limit_reached = false;
         self.match_ranges.clear();
         self.excerpts.update(cx, |excerpts, cx| excerpts.clear(cx));
         self.search_state = SearchState::Idle;
@@ -1756,105 +1925,650 @@ impl ProjectSearchView {
         }
     }
 
-    fn render_compact_results(&self, cx: &mut Context<Self>) -> AnyElement {
-        let count = self.entity.read(cx).match_ranges.len();
-        uniform_list(
-            "compact-search-results",
-            count,
-            cx.processor(|this, indices: Range<usize>, _, cx| {
-                let model = this.entity.read(cx);
+    /// Enables the unified folder / file / content result list in this view. The sidebar panel
+    /// uses it; the center-pane item keeps rendering the excerpts editor.
+    pub(crate) fn set_unified_results(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        if self.uses_unified_results == enabled {
+            return;
+        }
+        self.uses_unified_results = enabled;
+        if enabled {
+            self.rebuild_result_rows(cx);
+        }
+    }
+
+    pub(crate) fn result_counts(&self) -> ResultCounts {
+        self.result_counts
+    }
+
+    /// One-based position of the selected result row, plus the total row count.
+    pub(crate) fn result_position(&self) -> Option<(usize, usize)> {
+        if self.result_rows.is_empty() {
+            return None;
+        }
+        Some((
+            self.selected_result_row.map_or(0, |index| index + 1),
+            self.result_rows.len(),
+        ))
+    }
+
+    pub(crate) fn any_result_group_collapsed(&self) -> bool {
+        self.result_groups.iter().any(|group| {
+            !group.content.is_empty() && self.collapsed_result_groups.contains(&group.project_path)
+        })
+    }
+
+    pub(crate) fn toggle_all_result_groups(&mut self, cx: &mut Context<Self>) {
+        let collapsible = self
+            .result_groups
+            .iter()
+            .filter(|group| !group.content.is_empty())
+            .map(|group| group.project_path.clone())
+            .collect::<Vec<_>>();
+        if collapsible.is_empty() {
+            return;
+        }
+        let all_collapsed = collapsible
+            .iter()
+            .all(|path| self.collapsed_result_groups.contains(path));
+        if all_collapsed {
+            for path in collapsible {
+                self.collapsed_result_groups.remove(&path);
+            }
+        } else {
+            self.collapsed_result_groups.extend(collapsible);
+        }
+        self.rebuild_result_rows(cx);
+        cx.notify();
+    }
+
+    fn toggle_result_group(&mut self, group_index: usize, cx: &mut Context<Self>) {
+        let Some(group) = self.result_groups.get(group_index) else {
+            return;
+        };
+        if group.content.is_empty() {
+            return;
+        }
+        let path = group.project_path.clone();
+        if !self.collapsed_result_groups.remove(&path) {
+            self.collapsed_result_groups.insert(path);
+        }
+        self.rebuild_result_rows(cx);
+        cx.notify();
+    }
+
+    /// Rebuilds the unified result rows from the model's name matches and content matches.
+    ///
+    /// A path appears once: folders matched by name, files matched by name or path, and files
+    /// holding content matches all become a single row, ordered by path. Content lines follow
+    /// their file row unless the group is collapsed.
+    fn rebuild_result_rows(&mut self, cx: &App) {
+        let previous_selection = self.selected_result_row.and_then(|index| {
+            let row = self.result_rows.get(index)?;
+            let group = self.result_groups.get(row.group_index)?;
+            Some((
+                group.project_path.clone(),
+                row.content_index
+                    .and_then(|content_index| group.content.get(content_index).copied()),
+            ))
+        });
+
+        let mut groups = Vec::new();
+        let mut group_indices = HashMap::default();
+        let mut counts = ResultCounts::default();
+        {
+            let model = self.entity.read(cx);
+            for name_match in &model.name_matches {
+                group_indices.insert(name_match.path.clone(), groups.len());
+                groups.push(ResultGroup::from_name_match(name_match));
+            }
+
+            if !model.match_ranges.is_empty() {
                 let snapshot = model.excerpts.read(cx).snapshot(cx);
-                indices
-                    .filter_map(|index| {
-                        let range = model.match_ranges.get(index)?;
-                        let buffer_id = range.start.buffer_id()?;
-                        let buffer = snapshot.buffer_for_id(buffer_id)?;
-                        let point = range.start.text_anchor_in(buffer).to_point(buffer);
-                        let path = buffer.file()?.path().to_string();
-                        let start = buffer.clip_point(
-                            text::Point::new(point.row, point.column.saturating_sub(40)),
-                            text::Bias::Left,
-                        );
-                        let line = buffer
-                            .chars_at(start)
-                            .take_while(|character| *character != '\n' && *character != '\r')
-                            .take(256)
-                            .collect::<String>();
-                        let end = range.end.text_anchor_in(buffer).to_point(buffer);
-                        let highlight_start = point.column.saturating_sub(start.column) as usize;
-                        let highlight_end = if end.row == point.row {
-                            end.column.saturating_sub(start.column) as usize
-                        } else {
-                            line.len()
+                for (match_index, range) in model.match_ranges.iter().enumerate() {
+                    let Some(buffer_id) = range.start.buffer_id() else {
+                        continue;
+                    };
+                    let Some(buffer) = snapshot.buffer_for_id(buffer_id) else {
+                        continue;
+                    };
+                    let Some(file) = buffer.file() else {
+                        continue;
+                    };
+                    let project_path = ProjectPath::from_file(file.as_ref(), cx);
+                    let group_index = match group_indices.get(&project_path) {
+                        Some(group_index) => *group_index,
+                        None => {
+                            let group_index = groups.len();
+                            groups.push(ResultGroup::for_path(project_path.clone(), false));
+                            group_indices.insert(project_path, group_index);
+                            group_index
                         }
-                        .min(line.len());
-                        let highlights = (highlight_start < highlight_end)
-                            .then_some(highlight_start..highlight_end)
-                            .into_iter()
-                            .collect();
-                        let starts_file = index == 0
-                            || model.match_ranges.get(index - 1).is_none_or(|previous| {
-                                previous.start.buffer_id() != Some(buffer_id)
-                            });
-                        Some(
-                            v_flex()
-                                .id(("search-match", index))
-                                .w_full()
-                                .px_2()
-                                .py_1()
-                                .overflow_hidden()
-                                .cursor_pointer()
-                                .hover(|style| style.bg(cx.theme().colors().ghost_element_hover))
-                                .when(this.active_match_index == Some(index), |element| {
-                                    element.bg(cx.theme().colors().ghost_element_selected)
-                                })
-                                .child(
-                                    Label::new(if starts_file { path } else { String::new() })
-                                        .size(LabelSize::Small)
-                                        .truncate(),
-                                )
-                                .child(
-                                    h_flex()
-                                        .gap_2()
-                                        .min_w_0()
-                                        .child(
-                                            Label::new((point.row + 1).to_string())
-                                                .size(LabelSize::Small)
-                                                .color(Color::Muted),
-                                        )
-                                        .child(
-                                            HighlightedLabel::from_ranges(line, highlights)
-                                                .size(LabelSize::Small)
-                                                .truncate(),
-                                        ),
-                                )
-                                .on_click(cx.listener(move |this, _, window, cx| {
-                                    let range =
-                                        this.entity.read(cx).match_ranges.get(index).cloned();
-                                    if let Some(range) = range {
-                                        this.results_editor.update(cx, |editor, cx| {
-                                            let range = editor.range_for_match(&range);
-                                            editor.change_selections(
-                                                SelectionEffects::scroll(Autoscroll::fit()),
-                                                window,
-                                                cx,
-                                                |selections| selections.select_ranges([range]),
-                                            );
-                                            editor.open_excerpts(
-                                                &editor::actions::OpenExcerpts,
-                                                window,
-                                                cx,
-                                            );
-                                        });
-                                    }
-                                })),
-                        )
-                    })
-                    .collect::<Vec<_>>()
-            }),
+                    };
+                    groups[group_index].content.push(match_index);
+                }
+            }
+        }
+
+        for group in &groups {
+            if group.is_directory {
+                counts.folders += 1;
+            } else {
+                if group.has_name_match() {
+                    counts.name_files += 1;
+                }
+                if group.has_path_match() && !group.has_name_match() {
+                    counts.path_files += 1;
+                }
+                counts.content_lines += group.content.len();
+            }
+        }
+
+        groups.sort_by(|left, right| {
+            left.display_path.cmp(&right.display_path).then_with(|| {
+                left.project_path
+                    .worktree_id
+                    .cmp(&right.project_path.worktree_id)
+            })
+        });
+
+        self.collapsed_result_groups
+            .retain(|path| group_indices.contains_key(path));
+
+        let mut rows = Vec::new();
+        for (group_index, group) in groups.iter().enumerate() {
+            rows.push(ResultRow {
+                group_index,
+                content_index: None,
+            });
+            if group.content.is_empty()
+                || self.collapsed_result_groups.contains(&group.project_path)
+            {
+                continue;
+            }
+            for content_index in 0..group.content.len() {
+                rows.push(ResultRow {
+                    group_index,
+                    content_index: Some(content_index),
+                });
+            }
+        }
+
+        let selection = previous_selection.and_then(|(path, match_index)| {
+            rows.iter().position(|row| {
+                let group = &groups[row.group_index];
+                group.project_path == path
+                    && row
+                        .content_index
+                        .and_then(|content_index| group.content.get(content_index).copied())
+                        == match_index
+            })
+        });
+
+        self.selected_result_row = selection.or_else(|| (!rows.is_empty()).then_some(0));
+        self.result_groups = groups;
+        self.result_rows = rows;
+        self.result_counts = counts;
+    }
+
+    fn select_result_row(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if index >= self.result_rows.len() {
+            return;
+        }
+        self.selected_result_row = Some(index);
+        if let Some(row) = self.result_rows.get(index).copied()
+            && let Some(content_index) = row.content_index
+            && let Some(group) = self.result_groups.get(row.group_index)
+            && let Some(match_index) = group.content.get(content_index).copied()
+        {
+            self.select_content_match(match_index, window, cx);
+        }
+        self.results_scroll_handle
+            .scroll_to_item(index, ScrollStrategy::Nearest);
+        cx.notify();
+    }
+
+    pub(crate) fn select_adjacent_result_row(
+        &mut self,
+        direction: Direction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let count = self.result_rows.len();
+        if count == 0 {
+            return;
+        }
+        let current = self.selected_result_row.unwrap_or(0);
+        let wrap = EditorSettings::get_global(cx).search_wrap;
+        let next = match direction {
+            Direction::Next if current + 1 < count => current + 1,
+            Direction::Next if wrap => 0,
+            Direction::Next => {
+                crate::show_no_more_matches(window, cx);
+                return;
+            }
+            Direction::Prev if current > 0 => current - 1,
+            Direction::Prev if wrap => count - 1,
+            Direction::Prev => {
+                crate::show_no_more_matches(window, cx);
+                return;
+            }
+        };
+        self.select_result_row(next, window, cx);
+    }
+
+    fn select_content_match(&mut self, match_index: usize, window: &mut Window, cx: &mut App) {
+        let range = self.entity.read(cx).match_ranges.get(match_index).cloned();
+        if let Some(range) = range {
+            self.results_editor.update(cx, |editor, cx| {
+                let range = editor.range_for_match(&range);
+                editor.change_selections(SelectionEffects::no_scroll(), window, cx, |selections| {
+                    selections.select_ranges([range])
+                });
+            });
+        }
+    }
+
+    pub(crate) fn activate_selected_result_row(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(index) = self.selected_result_row {
+            self.activate_result_row(index, window, cx);
+        }
+    }
+
+    fn activate_result_row(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(row) = self.result_rows.get(index).copied() else {
+            return;
+        };
+        let Some(group) = self.result_groups.get(row.group_index) else {
+            return;
+        };
+        let project_path = group.project_path.clone();
+        let is_directory = group.is_directory;
+        let first_content_match = group.content.first().copied();
+        let content_match = row
+            .content_index
+            .and_then(|content_index| group.content.get(content_index).copied());
+
+        self.selected_result_row = Some(index);
+        self.results_scroll_handle
+            .scroll_to_item(index, ScrollStrategy::Nearest);
+        window.focus(&self.results_focus_handle, cx);
+
+        if let Some(match_index) = content_match.or(first_content_match) {
+            self.open_content_match(match_index, window, cx);
+        } else if is_directory {
+            self.reveal_result_path(project_path, cx);
+        } else {
+            self.open_result_path(project_path, window, cx);
+        }
+        cx.notify();
+    }
+
+    fn open_content_match(
+        &mut self,
+        match_index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let range = self.entity.read(cx).match_ranges.get(match_index).cloned();
+        if let Some(range) = range {
+            self.results_editor.update(cx, |editor, cx| {
+                let range = editor.range_for_match(&range);
+                editor.change_selections(
+                    SelectionEffects::scroll(Autoscroll::fit()),
+                    window,
+                    cx,
+                    |selections| selections.select_ranges([range]),
+                );
+                editor.open_excerpts(&editor::actions::OpenExcerpts, window, cx);
+            });
+        }
+    }
+
+    fn open_result_path(&mut self, path: ProjectPath, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(workspace) = self.workspace.upgrade() else {
+            return;
+        };
+        cx.spawn_in(window, async move |_, cx| {
+            workspace
+                .update_in(cx, |workspace, window, cx| {
+                    workspace
+                        .open_path(path, None, true, window, cx)
+                        .detach_and_log_err(cx);
+                })
+                .log_err();
+        })
+        .detach();
+    }
+
+    fn reveal_result_path(&mut self, path: ProjectPath, cx: &mut Context<Self>) {
+        self.entity.update(cx, |model, cx| {
+            model.project.update(cx, |project, cx| {
+                if let Some(entry) = project.entry_for_path(&path, cx) {
+                    cx.emit(project::Event::RevealInProjectPanel(entry.id));
+                }
+            });
+        });
+    }
+
+    fn content_line_info(
+        &self,
+        match_index: usize,
+        cx: &App,
+    ) -> Option<(u32, String, Vec<Range<usize>>)> {
+        let model = self.entity.read(cx);
+        let range = model.match_ranges.get(match_index)?;
+        let snapshot = model.excerpts.read(cx).snapshot(cx);
+        let buffer_id = range.start.buffer_id()?;
+        let buffer = snapshot.buffer_for_id(buffer_id)?;
+        let point = range.start.text_anchor_in(buffer).to_point(buffer);
+        let start = buffer.clip_point(
+            text::Point::new(point.row, point.column.saturating_sub(40)),
+            text::Bias::Left,
+        );
+        let line = buffer
+            .chars_at(start)
+            .take_while(|character| *character != '\n' && *character != '\r')
+            .take(256)
+            .collect::<String>();
+        let end = range.end.text_anchor_in(buffer).to_point(buffer);
+        let highlight_start = point.column.saturating_sub(start.column) as usize;
+        let highlight_end = if end.row == point.row {
+            end.column.saturating_sub(start.column) as usize
+        } else {
+            line.len()
+        }
+        .min(line.len());
+        let highlights = (highlight_start < highlight_end)
+            .then_some(highlight_start..highlight_end)
+            .into_iter()
+            .collect();
+        Some((point.row + 1, line, highlights))
+    }
+
+    fn render_unified_results(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        if self.result_rows.is_empty() {
+            return self.render_landing(cx);
+        }
+
+        let colors = cx.theme().colors();
+        let status = cx.theme().status();
+        let counts = self.result_counts;
+        let legend_entry = |color: Hsla, text: String| {
+            h_flex()
+                .gap_1()
+                .items_center()
+                .child(div().size(px(5.)).rounded_full().bg(color))
+                .child(Label::new(text).size(LabelSize::Small).color(Color::Muted))
+        };
+
+        let legend = h_flex()
+            .w_full()
+            .flex_wrap()
+            .px_2()
+            .py_1()
+            .gap_3()
+            .border_b_1()
+            .border_color(colors.border_variant)
+            .when(counts.folders > 0, |this| {
+                this.child(legend_entry(
+                    status.warning,
+                    i18n::t!("d1ff5ece6df6bf65", count = counts.folders),
+                ))
+            })
+            .when(counts.name_files > 0, |this| {
+                this.child(legend_entry(
+                    colors.text_accent,
+                    i18n::t!("b6c82c800c5ffbb3", count = counts.name_files),
+                ))
+            })
+            .when(counts.path_files > 0, |this| {
+                this.child(legend_entry(
+                    status.success,
+                    i18n::t!("ab49448d781d4b7d", count = counts.path_files),
+                ))
+            })
+            .when(counts.content_lines > 0, |this| {
+                this.child(legend_entry(
+                    colors.text_muted,
+                    i18n::t!("2b5b99199740f6d0", count = counts.content_lines),
+                ))
+            });
+
+        v_flex()
+            .size_full()
+            .track_focus(&self.results_focus_handle)
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                let direction = match event.keystroke.key.as_str() {
+                    "up" => Direction::Prev,
+                    "down" => Direction::Next,
+                    "enter" => {
+                        this.activate_selected_result_row(window, cx);
+                        cx.stop_propagation();
+                        return;
+                    }
+                    _ => return,
+                };
+                this.select_adjacent_result_row(direction, window, cx);
+                cx.stop_propagation();
+            }))
+            .on_action(cx.listener(|this, _: &Confirm, window, cx| {
+                this.activate_selected_result_row(window, cx);
+                cx.stop_propagation();
+            }))
+            .child(legend)
+            .child(
+                uniform_list(
+                    "project-search-results",
+                    self.result_rows.len(),
+                    cx.processor(|this, range: Range<usize>, _, cx| {
+                        range
+                            .filter_map(|index| this.render_result_row(index, cx))
+                            .collect::<Vec<_>>()
+                    }),
+                )
+                .flex_1()
+                .min_h_0()
+                .track_scroll(&self.results_scroll_handle),
+            )
+            .into_any_element()
+    }
+
+    fn render_result_row(&mut self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let row = *self.result_rows.get(index)?;
+        let group = self.result_groups.get(row.group_index)?;
+        let selected = self.selected_result_row == Some(index);
+        let colors = cx.theme().colors();
+        let project_path = group.project_path.clone();
+
+        if let Some(content_index) = row.content_index {
+            let match_index = group.content.get(content_index).copied()?;
+            let (line, text, highlights) = self.content_line_info(match_index, cx)?;
+            return Some(
+                h_flex()
+                    .id(("project-search-result", index))
+                    .w_full()
+                    .h(px(22.))
+                    .pl(px(30.))
+                    .pr_2()
+                    .gap_2()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .cursor_pointer()
+                    .hover(|style| style.bg(colors.ghost_element_hover))
+                    .when(selected, |this| this.bg(colors.ghost_element_selected))
+                    .child(
+                        h_flex().min_w(px(30.)).justify_end().child(
+                            Label::new(line.to_string())
+                                .size(LabelSize::Small)
+                                .color(Color::Muted),
+                        ),
+                    )
+                    .child(
+                        HighlightedLabel::from_ranges(text, highlights)
+                            .size(LabelSize::Small)
+                            .truncate(),
+                    )
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.activate_result_row(index, window, cx);
+                    }))
+                    .into_any_element(),
+            );
+        }
+
+        let collapsed = self.collapsed_result_groups.contains(&project_path);
+        let group_index = row.group_index;
+        let parent_len = group.parent.len();
+        let mut ranges = group.parent_ranges.clone();
+        ranges.extend(
+            group
+                .name_ranges
+                .iter()
+                .map(|range| range.start + parent_len..range.end + parent_len),
+        );
+        let display_path = group.display_path.clone();
+        let icon = if group.is_directory {
+            (IconName::Folder, Color::Warning)
+        } else if group.has_name_match() {
+            (IconName::File, Color::Accent)
+        } else if group.has_path_match() {
+            (IconName::FileTree, Color::Success)
+        } else {
+            (IconName::File, Color::Muted)
+        };
+        let has_content = !group.content.is_empty();
+        let content_count = group.content.len();
+        let name_matched = group.has_name_match();
+        let path_matched = group.has_path_match();
+        let is_directory = group.is_directory;
+
+        let mut meta = h_flex().gap_1p5().items_center().flex_none();
+        if is_directory {
+            meta = meta.child(
+                Label::new(i18n::t!("7c7802d8adaed72e"))
+                    .size(LabelSize::Small)
+                    .color(Color::Muted),
+            );
+        } else {
+            if name_matched {
+                meta = meta.child(
+                    Label::new(i18n::t!("a6e48adc26d686d7"))
+                        .size(LabelSize::Small)
+                        .color(Color::Muted),
+                );
+            }
+            if path_matched {
+                meta = meta.child(
+                    Label::new(i18n::t!("77e1ea5c5688eea4"))
+                        .size(LabelSize::Small)
+                        .color(Color::Muted),
+                );
+            }
+            if has_content {
+                meta = meta.child(
+                    Label::new(i18n::t!("04e23d09115d66e0", count = content_count))
+                        .size(LabelSize::Small)
+                        .color(Color::Muted),
+                );
+            }
+        }
+
+        let fold_button = (has_content && !is_directory).then(|| {
+            IconButton::new(
+                ("project-search-fold", index),
+                if collapsed {
+                    IconName::ChevronRight
+                } else {
+                    IconName::ChevronDown
+                },
+            )
+            .icon_size(IconSize::Small)
+            .on_click(cx.listener(move |this, _, _window, cx| {
+                cx.stop_propagation();
+                this.toggle_result_group(group_index, cx);
+            }))
+        });
+
+        Some(
+            h_flex()
+                .id(("project-search-result", index))
+                .w_full()
+                .h(px(22.))
+                .px_2()
+                .gap_1p5()
+                .items_center()
+                .min_w_0()
+                .overflow_hidden()
+                .cursor_pointer()
+                .hover(|style| style.bg(colors.ghost_element_hover))
+                .when(selected, |this| this.bg(colors.ghost_element_selected))
+                .child(Icon::new(icon.0).size(IconSize::Small).color(icon.1))
+                .child(
+                    HighlightedLabel::from_ranges(display_path, ranges)
+                        .size(LabelSize::Small)
+                        .truncate_middle(),
+                )
+                .child(meta.ml_auto())
+                .children(fold_button)
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.activate_result_row(index, window, cx);
+                }))
+                .into_any_element(),
         )
-        .size_full()
-        .into_any_element()
+    }
+
+    fn render_landing(&self, cx: &mut Context<Self>) -> AnyElement {
+        let model = self.entity.read(cx);
+
+        let heading_text = match model.search_state {
+            SearchState::Running { .. } if model.search_state.no_results_so_far() => "No Results",
+            SearchState::Running {
+                activity: SearchActivity::WaitingForScan,
+                ..
+            } => "Loading project…",
+            SearchState::Running {
+                activity: SearchActivity::Searching,
+                ..
+            } => "Searching…",
+            SearchState::Completed(SearchCompletion::NoResults) => "No Results",
+            _ => "Search All Files",
+        };
+
+        let heading_text = div()
+            .justify_center()
+            .child(Label::new(heading_text).size(LabelSize::Large));
+
+        let page_content: Option<AnyElement> = match model.search_state {
+            SearchState::Idle => Some(self.landing_text_minor(cx).into_any_element()),
+            _ if model.search_state.no_results_so_far() => Some(
+                Label::new(i18n::t!("a11426ff80f34e64"))
+                    .size(LabelSize::Small)
+                    .into_any_element(),
+            ),
+            _ => None,
+        };
+
+        let page_content = page_content.map(|text| div().child(text));
+
+        h_flex()
+            .size_full()
+            .items_center()
+            .justify_center()
+            .overflow_hidden()
+            .bg(cx.theme().colors().editor_background)
+            .child(
+                v_flex()
+                    .id("project-search-landing-page")
+                    .overflow_y_scroll()
+                    .gap_1()
+                    .child(heading_text)
+                    .children(page_content),
+            )
+            .into_any_element()
     }
 }
 
@@ -1871,58 +2585,15 @@ impl Render for ProjectSearchView {
                 .size_full()
                 .track_focus(&self.focus_handle(cx))
                 .child(self.results_editor.clone())
+                .into_any_element()
         } else {
-            let model = self.entity.read(cx);
-
-            let heading_text = match model.search_state {
-                SearchState::Running { .. } if model.search_state.no_results_so_far() => {
-                    "No Results"
-                }
-                SearchState::Running {
-                    activity: SearchActivity::WaitingForScan,
-                    ..
-                } => "Loading project…",
-                SearchState::Running {
-                    activity: SearchActivity::Searching,
-                    ..
-                } => "Searching…",
-                SearchState::Completed(SearchCompletion::NoResults) => "No Results",
-                _ => "Search All Files",
-            };
-
-            let heading_text = div()
-                .justify_center()
-                .child(Label::new(heading_text).size(LabelSize::Large));
-
-            let page_content: Option<AnyElement> = match model.search_state {
-                SearchState::Idle => Some(self.landing_text_minor(cx).into_any_element()),
-                _ if model.search_state.no_results_so_far() => Some(
-                    Label::new(i18n::t!("a11426ff80f34e64"))
-                        .size(LabelSize::Small)
-                        .into_any_element(),
-                ),
-                _ => None,
-            };
-
-            let page_content = page_content.map(|text| div().child(text));
-
             h_flex()
                 .key_context(key_context)
                 .on_action(cx.listener(Self::open_text_finder))
                 .size_full()
-                .items_center()
-                .justify_center()
-                .overflow_hidden()
-                .bg(cx.theme().colors().editor_background)
                 .track_focus(&self.focus_handle(cx))
-                .child(
-                    v_flex()
-                        .id("project-search-landing-page")
-                        .overflow_y_scroll()
-                        .gap_1()
-                        .child(heading_text)
-                        .children(page_content),
-                )
+                .child(self.render_landing(cx))
+                .into_any_element()
         }
     }
 }
@@ -2265,6 +2936,10 @@ impl ProjectSearchView {
     }
 
     fn update_results_visibility(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.uses_unified_results {
+            self.toggle_all_result_groups(cx);
+            return;
+        }
         let has_any_folded = self.results_editor.read(cx).has_any_buffer_folded(cx);
         self.results_editor.update(cx, |editor, cx| {
             if has_any_folded {
@@ -2489,6 +3164,14 @@ impl ProjectSearchView {
             regex_language: None,
             debounced_search: None,
             last_search_signature: None,
+            result_groups: Vec::new(),
+            result_rows: Vec::new(),
+            result_counts: ResultCounts::default(),
+            collapsed_result_groups: HashSet::default(),
+            selected_result_row: None,
+            results_focus_handle: cx.focus_handle(),
+            results_scroll_handle: UniformListScrollHandle::new(),
+            uses_unified_results: false,
             _subscriptions: subscriptions,
         };
 
@@ -3356,7 +4039,11 @@ impl ProjectSearchView {
                 s.select_ranges([cursor..cursor])
             });
         });
-        let results_handle = self.results_editor.focus_handle(cx);
+        let results_handle = if self.uses_unified_results {
+            self.results_focus_handle.clone()
+        } else {
+            self.results_editor.focus_handle(cx)
+        };
         window.focus(&results_handle, cx);
     }
 
@@ -3368,6 +4055,15 @@ impl ProjectSearchView {
         let results_stale = search_pending && !model.results_refreshed;
         let preserve_view = phase == SearchPhase::Typing || results_stale;
         let match_ranges = model.match_ranges.clone();
+        let new_search = self.search_id != model.search_id;
+        if self.uses_unified_results {
+            self.rebuild_result_rows(cx);
+            if new_search && !self.result_rows.is_empty() {
+                self.selected_result_row = Some(0);
+                self.results_scroll_handle
+                    .scroll_to_item(0, ScrollStrategy::Top);
+            }
+        }
         self.sync_search_results_status(cx);
 
         if phase == SearchPhase::Typing
@@ -10678,6 +11374,71 @@ pub mod tests {
         );
     }
 
+    #[gpui::test]
+    async fn test_unified_name_matches_only_search_opened_files(cx: &mut TestAppContext) {
+        init_test(cx);
+        let fs = FakeFs::new(cx.background_executor.clone());
+        fs.insert_tree(
+            path!("/dir"),
+            json!({
+                "alpha.rs": "let x = search;\n",
+                "beta.rs": "let y = search;\n",
+            }),
+        )
+        .await;
+        let project = Project::test(fs, [path!("/dir").as_ref()], cx).await;
+        let window =
+            cx.add_window(|window, cx| MultiWorkspace::test_new(project.clone(), window, cx));
+        let workspace = window
+            .read_with(cx, |mw, _| mw.workspace().clone())
+            .unwrap();
+        let worktree_id = project.read_with(cx, |project, cx| {
+            project
+                .visible_worktrees(cx)
+                .next()
+                .expect("project should have a worktree")
+                .read(cx)
+                .id()
+        });
+
+        window
+            .update(cx, |_, window, cx| {
+                workspace.update(cx, |workspace, cx| {
+                    workspace.open_path((worktree_id, rel_path("alpha.rs")), None, true, window, cx)
+                })
+            })
+            .unwrap()
+            .await
+            .unwrap();
+        cx.run_until_parked();
+
+        let search = cx.new(|cx| ProjectSearch::new(project, workspace.downgrade(), cx));
+        let search_view = cx.add_window(|window, cx| {
+            ProjectSearchView::new(workspace.downgrade(), search, window, cx, None)
+        });
+        search_view
+            .update(cx, |view, window, cx| {
+                view.set_unified_results(true, cx);
+                view.toggle_opened_only_with_research(window, cx)
+            })
+            .unwrap();
+
+        perform_search(search_view, "search", cx);
+        cx.run_until_parked();
+
+        search_view
+            .update(cx, |view, _window, _cx| {
+                assert_eq!(
+                    view.result_groups
+                        .iter()
+                        .map(|group| group.display_path.to_string())
+                        .collect::<Vec<_>>(),
+                    vec!["alpha.rs".to_string()]
+                );
+            })
+            .unwrap();
+    }
+
     struct SearchBarTest {
         project: Entity<Project>,
         window: WindowHandle<MultiWorkspace>,
@@ -10718,5 +11479,251 @@ pub mod tests {
             search_view,
             cx,
         }
+    }
+
+    #[gpui::test]
+    async fn test_unified_results_mix_folder_names_file_names_paths_and_content(
+        cx: &mut TestAppContext,
+    ) {
+        init_test(cx);
+        let fs = FakeFs::new(cx.background_executor.clone());
+        fs.insert_tree(
+            path!("/dir"),
+            json!({
+                "search": {
+                    "handler.rs": "fn search() {}\n",
+                    "note.md": "search here\n",
+                    "search_helper.rs": "fn helper() {}\n",
+                    "src": {
+                        "alpha.rs": "const VALUE: usize = 1;\n",
+                    },
+                },
+                "search_index.rs": "fn index() {}\n",
+                "other.rs": "let x = search;\n",
+            }),
+        )
+        .await;
+        let project = Project::test(fs, [path!("/dir").as_ref()], cx).await;
+        let window =
+            cx.add_window(|window, cx| MultiWorkspace::test_new(project.clone(), window, cx));
+        let workspace = window
+            .read_with(cx, |mw, _| mw.workspace().clone())
+            .unwrap();
+        let search = cx.new(|cx| ProjectSearch::new(project, workspace.downgrade(), cx));
+        let search_view = cx.add_window(|window, cx| {
+            ProjectSearchView::new(workspace.downgrade(), search, window, cx, None)
+        });
+        search_view
+            .update(cx, |view, _window, cx| view.set_unified_results(true, cx))
+            .unwrap();
+
+        perform_search(search_view, "search", cx);
+        cx.run_until_parked();
+
+        search_view
+            .update(cx, |view, _window, cx| {
+                let groups = view
+                    .result_groups
+                    .iter()
+                    .map(|group| {
+                        (
+                            group.display_path.to_string(),
+                            group.is_directory,
+                            group.has_name_match(),
+                            group.has_path_match(),
+                            group.content.len(),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    groups,
+                    vec![
+                        ("other.rs".to_string(), false, false, false, 1),
+                        ("search".to_string(), true, true, false, 0),
+                        ("search/handler.rs".to_string(), false, false, true, 1),
+                        ("search/note.md".to_string(), false, false, true, 1),
+                        ("search/search_helper.rs".to_string(), false, true, true, 0),
+                        ("search/src/alpha.rs".to_string(), false, false, true, 0),
+                        ("search_index.rs".to_string(), false, true, false, 0),
+                    ]
+                );
+                assert_eq!(
+                    view.result_counts(),
+                    ResultCounts {
+                        folders: 1,
+                        name_files: 2,
+                        path_files: 3,
+                        content_lines: 3,
+                    }
+                );
+                assert_eq!(
+                    view.result_rows
+                        .iter()
+                        .map(|row| row.content_index.is_some())
+                        .collect::<Vec<_>>(),
+                    vec![
+                        false, true, false, false, true, false, true, false, false, false
+                    ]
+                );
+                assert_eq!(view.result_position(), Some((1, 10)));
+
+                view.toggle_result_group(3, cx);
+                assert_eq!(
+                    view.result_rows
+                        .iter()
+                        .map(|row| row.content_index.is_some())
+                        .collect::<Vec<_>>(),
+                    vec![false, true, false, false, true, false, false, false, false]
+                );
+                view.toggle_all_result_groups(cx);
+                assert!(
+                    view.result_rows
+                        .iter()
+                        .all(|row| row.content_index.is_none())
+                );
+                view.toggle_all_result_groups(cx);
+                assert_eq!(view.result_rows.len(), 10);
+            })
+            .unwrap();
+
+        search_view
+            .update(cx, |view, window, cx| {
+                assert_eq!(view.result_position(), Some((1, 10)));
+                view.select_adjacent_result_row(Direction::Next, window, cx);
+                assert_eq!(view.result_position(), Some((2, 10)));
+                view.select_adjacent_result_row(Direction::Prev, window, cx);
+                assert_eq!(view.result_position(), Some((1, 10)));
+            })
+            .unwrap();
+        cx.run_until_parked();
+    }
+
+    #[gpui::test]
+    async fn test_unified_name_matches_respect_filters_and_ignored_files(cx: &mut TestAppContext) {
+        init_test(cx);
+        let fs = FakeFs::new(cx.background_executor.clone());
+        fs.insert_tree(
+            path!("/dir"),
+            json!({
+                ".gitignore": "search/ignored.rs\n",
+                "search": {
+                    "handler.rs": "fn handler() {}\n",
+                    "ignored.rs": "fn ignored() {}\n",
+                },
+                "other": {
+                    "search.rs": "fn other() {}\n",
+                },
+            }),
+        )
+        .await;
+        let project = Project::test(fs, [path!("/dir").as_ref()], cx).await;
+        let window =
+            cx.add_window(|window, cx| MultiWorkspace::test_new(project.clone(), window, cx));
+        let workspace = window
+            .read_with(cx, |mw, _| mw.workspace().clone())
+            .unwrap();
+        let search = cx.new(|cx| ProjectSearch::new(project, workspace.downgrade(), cx));
+        let search_view = cx.add_window(|window, cx| {
+            ProjectSearchView::new(workspace.downgrade(), search, window, cx, None)
+        });
+        search_view
+            .update(cx, |view, window, cx| {
+                view.set_unified_results(true, cx);
+                view.filters_enabled = true;
+                view.included_files_editor
+                    .update(cx, |editor, cx| editor.set_text("search", window, cx));
+            })
+            .unwrap();
+
+        perform_search(search_view, "search", cx);
+        cx.run_until_parked();
+
+        search_view
+            .update(cx, |view, _window, _cx| {
+                let paths = view
+                    .result_groups
+                    .iter()
+                    .map(|group| group.display_path.to_string())
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    paths,
+                    vec!["search".to_string(), "search/handler.rs".to_string()]
+                );
+            })
+            .unwrap();
+
+        // Ignored files stay out of the list until they are explicitly included.
+        search_view
+            .update(cx, |view, _window, cx| {
+                view.toggle_search_option(SearchOptions::INCLUDE_IGNORED, cx);
+            })
+            .unwrap();
+        perform_search(search_view, "search", cx);
+        cx.run_until_parked();
+        search_view
+            .update(cx, |view, _window, _cx| {
+                let paths = view
+                    .result_groups
+                    .iter()
+                    .map(|group| group.display_path.to_string())
+                    .collect::<Vec<_>>();
+                assert!(paths.contains(&"search/ignored.rs".to_string()));
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    async fn test_unified_name_matches_respect_case_sensitivity(cx: &mut TestAppContext) {
+        init_test(cx);
+        let fs = FakeFs::new(cx.background_executor.clone());
+        fs.insert_tree(
+            path!("/dir"),
+            json!({
+                "Search": {
+                    "handler.rs": "fn handler() {}\n",
+                },
+            }),
+        )
+        .await;
+        let project = Project::test(fs, [path!("/dir").as_ref()], cx).await;
+        let window =
+            cx.add_window(|window, cx| MultiWorkspace::test_new(project.clone(), window, cx));
+        let workspace = window
+            .read_with(cx, |mw, _| mw.workspace().clone())
+            .unwrap();
+        let search = cx.new(|cx| ProjectSearch::new(project, workspace.downgrade(), cx));
+        let search_view = cx.add_window(|window, cx| {
+            ProjectSearchView::new(workspace.downgrade(), search, window, cx, None)
+        });
+        search_view
+            .update(cx, |view, _window, cx| view.set_unified_results(true, cx))
+            .unwrap();
+
+        perform_search(search_view, "search", cx);
+        cx.run_until_parked();
+        search_view
+            .update(cx, |view, _window, _cx| {
+                assert_eq!(
+                    view.result_groups
+                        .iter()
+                        .map(|group| group.display_path.to_string())
+                        .collect::<Vec<_>>(),
+                    vec!["Search".to_string(), "Search/handler.rs".to_string()]
+                );
+            })
+            .unwrap();
+
+        search_view
+            .update(cx, |view, _window, cx| {
+                view.toggle_search_option(SearchOptions::CASE_SENSITIVE, cx);
+            })
+            .unwrap();
+        perform_search(search_view, "search", cx);
+        cx.run_until_parked();
+        search_view
+            .update(cx, |view, _window, _cx| {
+                assert!(view.result_groups.is_empty());
+            })
+            .unwrap();
     }
 }

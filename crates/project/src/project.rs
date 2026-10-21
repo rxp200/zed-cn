@@ -2429,6 +2429,18 @@ impl Project {
         self.remote_client.clone()
     }
 
+    pub fn supports_hosted_terminals(&self, cx: &App) -> bool {
+        self.remote_client.as_ref().is_some_and(|client| {
+            client.read(cx).supports_hosted_terminals() && self.supports_terminal(cx)
+        })
+    }
+
+    pub fn hosted_terminal_root(&self, cx: &App) -> Option<String> {
+        self.worktrees(cx)
+            .next()
+            .map(|worktree| worktree.read(cx).abs_path().display().to_string())
+    }
+
     pub fn supports_temporary_files(&self, cx: &App) -> bool {
         self.remote_client
             .as_ref()

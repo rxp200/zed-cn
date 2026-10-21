@@ -553,7 +553,19 @@ message Envelope {
     AbortProjectEntryUploadResponse abort_project_entry_upload_response = 521;
     DownloadFileChunk download_file_chunk = 522;
     DownloadFileChunkResponse download_file_chunk_response = 523;
-    CancelGitOperation cancel_git_operation = 524; // current max
+    CancelGitOperation cancel_git_operation = 524;
+    HostTerminal host_terminal = 525;
+    HostTerminalResponse host_terminal_response = 526;
+    ListHostedTerminals list_hosted_terminals = 527;
+    ListHostedTerminalsResponse list_hosted_terminals_response = 528;
+    AttachHostedTerminal attach_hosted_terminal = 529;
+    AttachHostedTerminalResponse attach_hosted_terminal_response = 530;
+    DetachHostedTerminal detach_hosted_terminal = 531;
+    TakeHostedTerminalControl take_hosted_terminal_control = 532;
+    TakeHostedTerminalControlResponse take_hosted_terminal_control_response = 533;
+    RenameHostedTerminal rename_hosted_terminal = 534;
+    TerminateHostedTerminal terminate_hosted_terminal = 535;
+    DeleteHostedTerminal delete_hosted_terminal = 536; // current max
   }
 
   reserved 87 to 88;

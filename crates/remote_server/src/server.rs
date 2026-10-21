@@ -1,4 +1,6 @@
 mod headless_project;
+mod hosted_terminal;
+mod hosted_terminals;
 mod persistent_terminal;
 
 #[cfg(test)]
@@ -90,6 +92,12 @@ pub enum Commands {
         identifier: String,
     },
     Version,
+    /// Runs the independent terminal hosting service for this account.
+    #[command(name = "hosted-terminal-daemon")]
+    HostedTerminalDaemon {
+        #[arg(long)]
+        state_dir: PathBuf,
+    },
     #[cfg(unix)]
     Exec,
 }
@@ -116,6 +124,9 @@ pub fn run(command: Commands) -> anyhow::Result<()> {
             identifier,
             reconnect,
         } => execute_proxy(identifier, reconnect).context("running proxy on the remote server"),
+        Commands::HostedTerminalDaemon { state_dir } => {
+            smol::block_on(hosted_terminal::serve(state_dir))
+        }
         #[cfg(unix)]
         Commands::Exec => execute_command(),
         Commands::Version => {

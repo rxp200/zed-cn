@@ -57,6 +57,7 @@ use terminal::terminal_settings::TerminalSettings;
 use util::{ResultExt, paths::PathStyle, rel_path::RelPath};
 use worktree::Worktree;
 
+use crate::hosted_terminals::{HOSTED_INSTANCE_ID, HostedTerminals};
 use crate::persistent_terminal::{OutputPull, PersistentTerminalManager};
 
 struct SystemStatsSampler {
@@ -268,6 +269,7 @@ pub struct HeadlessProject {
     pub _toolchain_store: Entity<ToolchainStore>,
     pub kernels: HashMap<String, Child>,
     persistent_terminals: Arc<PersistentTerminalManager>,
+    hosted_terminals: Arc<HostedTerminals>,
     epub_read_limiter: Arc<async_lock::Semaphore>,
     search_buffer_batches: async_channel::Sender<SearchBufferBatch>,
     _search_buffer_sender: Task<()>,
@@ -552,6 +554,14 @@ impl HeadlessProject {
             cx.weak_entity(),
             Self::handle_persistent_terminal_output_credit,
         );
+        session.add_request_handler(cx.weak_entity(), Self::handle_host_terminal);
+        session.add_request_handler(cx.weak_entity(), Self::handle_list_hosted_terminals);
+        session.add_request_handler(cx.weak_entity(), Self::handle_attach_hosted_terminal);
+        session.add_request_handler(cx.weak_entity(), Self::handle_detach_hosted_terminal);
+        session.add_request_handler(cx.weak_entity(), Self::handle_take_hosted_terminal_control);
+        session.add_request_handler(cx.weak_entity(), Self::handle_rename_hosted_terminal);
+        session.add_request_handler(cx.weak_entity(), Self::handle_terminate_hosted_terminal);
+        session.add_request_handler(cx.weak_entity(), Self::handle_delete_hosted_terminal);
 
         session.add_entity_request_handler(Self::handle_add_worktree);
         session.add_request_handler(cx.weak_entity(), Self::handle_remove_worktree);
@@ -671,6 +681,9 @@ impl HeadlessProject {
             _toolchain_store: toolchain_store,
             kernels: Default::default(),
             persistent_terminals: Arc::new(PersistentTerminalManager::new()),
+            hosted_terminals: Arc::new(HostedTerminals::new(
+                paths::remote_server_state_dir().join("hosted-terminals"),
+            )),
             epub_read_limiter: Arc::new(async_lock::Semaphore::new(2)),
             search_buffer_batches,
             _search_buffer_sender: search_buffer_sender,
@@ -1423,9 +1436,95 @@ impl HeadlessProject {
         message: TypedEnvelope<proto::CreatePersistentTerminal>,
         cx: AsyncApp,
     ) -> Result<proto::CreatePersistentTerminalResponse> {
-        let manager = this.read_with(&cx, |this, _| this.persistent_terminals.clone());
+        let (manager, hosted) = this.read_with(&cx, |this, _| {
+            (
+                this.persistent_terminals.clone(),
+                this.hosted_terminals.clone(),
+            )
+        });
+        if message.payload.hosted {
+            // New clients create their terminals in the independent service so a
+            // later promotion never has to move a running PTY.
+            return hosted.create(message.payload).await;
+        }
         cx.background_spawn(async move { manager.create(message.payload) })
             .await
+    }
+
+    async fn handle_host_terminal(
+        this: Entity<Self>,
+        message: TypedEnvelope<proto::HostTerminal>,
+        cx: AsyncApp,
+    ) -> Result<proto::HostTerminalResponse> {
+        let hosted = this.read_with(&cx, |this, _| this.hosted_terminals.clone());
+        hosted.host(message.payload).await
+    }
+
+    async fn handle_list_hosted_terminals(
+        this: Entity<Self>,
+        message: TypedEnvelope<proto::ListHostedTerminals>,
+        cx: AsyncApp,
+    ) -> Result<proto::ListHostedTerminalsResponse> {
+        let hosted = this.read_with(&cx, |this, _| this.hosted_terminals.clone());
+        hosted.list(message.payload).await
+    }
+
+    async fn handle_attach_hosted_terminal(
+        this: Entity<Self>,
+        message: TypedEnvelope<proto::AttachHostedTerminal>,
+        cx: AsyncApp,
+    ) -> Result<proto::AttachHostedTerminalResponse> {
+        let hosted = this.read_with(&cx, |this, _| this.hosted_terminals.clone());
+        hosted.attach(message.payload).await
+    }
+
+    async fn handle_detach_hosted_terminal(
+        this: Entity<Self>,
+        message: TypedEnvelope<proto::DetachHostedTerminal>,
+        cx: AsyncApp,
+    ) -> Result<proto::Ack> {
+        let hosted = this.read_with(&cx, |this, _| this.hosted_terminals.clone());
+        hosted.detach(message.payload).await?;
+        Ok(proto::Ack {})
+    }
+
+    async fn handle_take_hosted_terminal_control(
+        this: Entity<Self>,
+        message: TypedEnvelope<proto::TakeHostedTerminalControl>,
+        cx: AsyncApp,
+    ) -> Result<proto::TakeHostedTerminalControlResponse> {
+        let hosted = this.read_with(&cx, |this, _| this.hosted_terminals.clone());
+        hosted.take_control(message.payload).await
+    }
+
+    async fn handle_rename_hosted_terminal(
+        this: Entity<Self>,
+        message: TypedEnvelope<proto::RenameHostedTerminal>,
+        cx: AsyncApp,
+    ) -> Result<proto::Ack> {
+        let hosted = this.read_with(&cx, |this, _| this.hosted_terminals.clone());
+        hosted.rename(message.payload).await?;
+        Ok(proto::Ack {})
+    }
+
+    async fn handle_terminate_hosted_terminal(
+        this: Entity<Self>,
+        message: TypedEnvelope<proto::TerminateHostedTerminal>,
+        cx: AsyncApp,
+    ) -> Result<proto::Ack> {
+        let hosted = this.read_with(&cx, |this, _| this.hosted_terminals.clone());
+        hosted.terminate(message.payload).await?;
+        Ok(proto::Ack {})
+    }
+
+    async fn handle_delete_hosted_terminal(
+        this: Entity<Self>,
+        message: TypedEnvelope<proto::DeleteHostedTerminal>,
+        cx: AsyncApp,
+    ) -> Result<proto::Ack> {
+        let hosted = this.read_with(&cx, |this, _| this.hosted_terminals.clone());
+        hosted.delete(message.payload).await?;
+        Ok(proto::Ack {})
     }
 
     async fn handle_persistent_terminal_input(
@@ -1433,6 +1532,10 @@ impl HeadlessProject {
         message: TypedEnvelope<proto::PersistentTerminalInput>,
         cx: AsyncApp,
     ) -> Result<proto::Ack> {
+        if message.payload.server_instance_id == HOSTED_INSTANCE_ID {
+            let hosted = this.read_with(&cx, |this, _| this.hosted_terminals.clone());
+            return hosted.input(message.payload).await.map(|_| proto::Ack {});
+        }
         let manager = this.read_with(&cx, |this, _| this.persistent_terminals.clone());
         cx.background_spawn(async move { manager.input(message.payload) })
             .await?;
@@ -1444,6 +1547,10 @@ impl HeadlessProject {
         message: TypedEnvelope<proto::ResizePersistentTerminal>,
         cx: AsyncApp,
     ) -> Result<proto::Ack> {
+        if message.payload.server_instance_id == HOSTED_INSTANCE_ID {
+            let hosted = this.read_with(&cx, |this, _| this.hosted_terminals.clone());
+            return hosted.resize(message.payload).await.map(|_| proto::Ack {});
+        }
         let manager = this.read_with(&cx, |this, _| this.persistent_terminals.clone());
         cx.background_spawn(async move { manager.resize(message.payload) })
             .await?;
@@ -1455,6 +1562,10 @@ impl HeadlessProject {
         message: TypedEnvelope<proto::ReadPersistentTerminal>,
         cx: AsyncApp,
     ) -> Result<proto::ReadPersistentTerminalResponse> {
+        anyhow::ensure!(
+            message.payload.server_instance_id != HOSTED_INSTANCE_ID,
+            "hosted terminals stream their output and cannot be polled"
+        );
         let manager = this.read_with(&cx, |this, _| this.persistent_terminals.clone());
         cx.background_spawn(async move { manager.read(message.payload) })
             .await
@@ -1465,6 +1576,10 @@ impl HeadlessProject {
         message: TypedEnvelope<proto::ClosePersistentTerminal>,
         cx: AsyncApp,
     ) -> Result<proto::Ack> {
+        if message.payload.server_instance_id == HOSTED_INSTANCE_ID {
+            let hosted = this.read_with(&cx, |this, _| this.hosted_terminals.clone());
+            return hosted.close(message.payload).await.map(|_| proto::Ack {});
+        }
         let manager = this.read_with(&cx, |this, _| this.persistent_terminals.clone());
         cx.background_spawn(async move {
             manager.close(
@@ -1481,6 +1596,21 @@ impl HeadlessProject {
         message: TypedEnvelope<proto::SubscribePersistentTerminal>,
         cx: AsyncApp,
     ) -> Result<impl Stream<Item = Result<proto::PersistentTerminalOutput>>> {
+        if message.payload.server_instance_id == HOSTED_INSTANCE_ID {
+            let hosted = this.read_with(&cx, |this, _| this.hosted_terminals.clone());
+            let outputs = hosted.subscribe(message.payload).await?;
+            let (mut frame_tx, frame_rx) = mpsc::unbounded();
+            cx.background_spawn(async move {
+                while let Ok(frame) = outputs.recv().await {
+                    let exited = frame.exited;
+                    if frame_tx.send(Ok(frame)).await.is_err() || exited {
+                        break;
+                    }
+                }
+            })
+            .detach();
+            return Ok(frame_rx);
+        }
         let manager = this.read_with(&cx, |this, _| this.persistent_terminals.clone());
         let server_instance_id = message.payload.server_instance_id.clone();
         let terminal_id = message.payload.terminal_id.clone();
@@ -1523,6 +1653,10 @@ impl HeadlessProject {
         message: TypedEnvelope<proto::PersistentTerminalOutputCredit>,
         cx: AsyncApp,
     ) -> Result<proto::Ack> {
+        if message.payload.server_instance_id == HOSTED_INSTANCE_ID {
+            let hosted = this.read_with(&cx, |this, _| this.hosted_terminals.clone());
+            return hosted.credit(message.payload).await.map(|_| proto::Ack {});
+        }
         let manager = this.read_with(&cx, |this, _| this.persistent_terminals.clone());
         cx.background_spawn(async move { manager.set_output_credit(message.payload) })
             .await?;

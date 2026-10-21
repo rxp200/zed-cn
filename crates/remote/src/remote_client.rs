@@ -184,6 +184,9 @@ pub const DOWNLOAD_CHUNKS_CAPABILITY: &str = "download_chunks_v1";
 pub const GIT_OPERATION_CANCELLATION_CAPABILITY: &str = "git_operation_cancellation_v1";
 pub const PERSISTENT_TERMINALS_CAPABILITY: &str = "persistent_terminals_v1";
 pub const PERSISTENT_TERMINAL_STREAMING_CAPABILITY: &str = "persistent_terminal_streaming_v1";
+/// The server can keep promoted terminals alive independently of a client
+/// connection and let other clients of the same account attach them.
+pub const HOSTED_TERMINALS_CAPABILITY: &str = "hosted_terminals_v1";
 
 const MAX_MISSED_HEARTBEATS: usize = 5;
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
@@ -1466,6 +1469,138 @@ impl RemoteClient {
         self.client
             .supports_persistent_terminal_streaming
             .load(SeqCst)
+    }
+
+    pub fn supports_hosted_terminals(&self) -> bool {
+        self.client.supports_hosted_terminals.load(SeqCst)
+    }
+
+    pub fn host_terminal(
+        &self,
+        server_instance_id: String,
+        terminal_id: String,
+        name: String,
+    ) -> impl Future<Output = Result<proto::HostTerminalResponse>> + use<> {
+        let client = self.proto_client();
+        async move {
+            client
+                .request(proto::HostTerminal {
+                    server_instance_id,
+                    terminal_id,
+                    name,
+                    attachment_id: String::new(),
+                })
+                .await
+        }
+    }
+
+    pub fn list_hosted_terminals(
+        &self,
+        canonical_root: String,
+    ) -> impl Future<Output = Result<proto::ListHostedTerminalsResponse>> + use<> {
+        let client = self.proto_client();
+        async move {
+            client
+                .request(proto::ListHostedTerminals { canonical_root })
+                .await
+        }
+    }
+
+    pub fn attach_hosted_terminal(
+        &self,
+        canonical_root: String,
+        session_id: String,
+    ) -> impl Future<Output = Result<proto::AttachHostedTerminalResponse>> + use<> {
+        let client = self.proto_client();
+        async move {
+            client
+                .request(proto::AttachHostedTerminal {
+                    canonical_root,
+                    session_id,
+                })
+                .await
+        }
+    }
+
+    pub fn take_hosted_terminal_control(
+        &self,
+        session_id: String,
+    ) -> impl Future<Output = Result<proto::TakeHostedTerminalControlResponse>> + use<> {
+        let client = self.proto_client();
+        async move {
+            client
+                .request(proto::TakeHostedTerminalControl {
+                    session_id,
+                    attachment_id: String::new(),
+                })
+                .await
+        }
+    }
+
+    pub fn detach_hosted_terminal(
+        &self,
+        session_id: String,
+    ) -> impl Future<Output = Result<()>> + use<> {
+        let client = self.proto_client();
+        async move {
+            client
+                .request(proto::DetachHostedTerminal {
+                    session_id,
+                    attachment_id: String::new(),
+                })
+                .await
+                .map(|_: proto::Ack| ())
+        }
+    }
+
+    pub fn rename_hosted_terminal(
+        &self,
+        session_id: String,
+        name: String,
+    ) -> impl Future<Output = Result<()>> + use<> {
+        let client = self.proto_client();
+        async move {
+            client
+                .request(proto::RenameHostedTerminal {
+                    session_id,
+                    name,
+                    attachment_id: String::new(),
+                })
+                .await
+                .map(|_: proto::Ack| ())
+        }
+    }
+
+    pub fn terminate_hosted_terminal(
+        &self,
+        session_id: String,
+    ) -> impl Future<Output = Result<()>> + use<> {
+        let client = self.proto_client();
+        async move {
+            client
+                .request(proto::TerminateHostedTerminal {
+                    session_id,
+                    attachment_id: String::new(),
+                })
+                .await
+                .map(|_: proto::Ack| ())
+        }
+    }
+
+    pub fn delete_hosted_terminal(
+        &self,
+        session_id: String,
+    ) -> impl Future<Output = Result<()>> + use<> {
+        let client = self.proto_client();
+        async move {
+            client
+                .request(proto::DeleteHostedTerminal {
+                    session_id,
+                    attachment_id: String::new(),
+                })
+                .await
+                .map(|_: proto::Ack| ())
+        }
     }
 
     pub fn system_stats(
@@ -3133,6 +3268,7 @@ pub(crate) struct ChannelClient {
     supports_git_operation_cancellation: AtomicBool,
     supports_persistent_terminals: AtomicBool,
     supports_persistent_terminal_streaming: AtomicBool,
+    supports_hosted_terminals: AtomicBool,
     session_invalidated: Arc<Signal<String>>,
     session_is_invalid: Arc<AtomicBool>,
     has_wsl_interop: bool,
@@ -3176,6 +3312,7 @@ impl ChannelClient {
             supports_git_operation_cancellation: AtomicBool::new(false),
             supports_persistent_terminals: AtomicBool::new(false),
             supports_persistent_terminal_streaming: AtomicBool::new(false),
+            supports_hosted_terminals: AtomicBool::new(false),
             session_invalidated: Arc::new(Signal::new(cx)),
             session_is_invalid: Arc::new(AtomicBool::new(false)),
             has_wsl_interop,
@@ -3207,6 +3344,7 @@ impl ChannelClient {
                         GIT_OPERATION_CANCELLATION_CAPABILITY.to_string(),
                         PERSISTENT_TERMINALS_CAPABILITY.to_string(),
                         PERSISTENT_TERMINAL_STREAMING_CAPABILITY.to_string(),
+                        HOSTED_TERMINALS_CAPABILITY.to_string(),
                     ],
                 }
                 .into_envelope(0, None, None);
@@ -3327,6 +3465,13 @@ impl ChannelClient {
                         started.capabilities.iter().any(|capability| {
                             capability == PERSISTENT_TERMINAL_STREAMING_CAPABILITY
                         }),
+                        SeqCst,
+                    );
+                    this.supports_hosted_terminals.store(
+                        started
+                            .capabilities
+                            .iter()
+                            .any(|capability| capability == HOSTED_TERMINALS_CAPABILITY),
                         SeqCst,
                     );
                     this.remote_started.set(());

@@ -59,6 +59,7 @@ pub fn init(cx: &mut App) {
     cx.observe_new(
         |workspace: &mut Workspace, _window, _: &mut Context<Workspace>| {
             workspace.register_action(TerminalPanel::new_terminal);
+            workspace.register_action(TerminalPanel::open_hosted_terminal);
             workspace.register_action(TerminalPanel::open_terminal);
             workspace.register_action(|workspace, _: &editor::StopCode, _, cx| {
                 if let Some(panel) = workspace.panel::<TerminalPanel>(cx) {
@@ -1025,6 +1026,47 @@ impl TerminalPanel {
             })?;
             Ok(terminal.downgrade())
         })
+    }
+
+    /// Attaches an already running hosted session as a new terminal in the
+    /// center pane. The session keeps running regardless of this view.
+    fn open_hosted_terminal(
+        workspace: &mut Workspace,
+        action: &workspace::OpenHostedTerminal,
+        window: &mut Window,
+        cx: &mut Context<Workspace>,
+    ) {
+        let Some(root) = workspace.project().read(cx).hosted_terminal_root(cx) else {
+            return;
+        };
+        let session_id = action.session_id.clone();
+        let project = workspace.project().clone();
+        let terminal = cx.spawn_in(window, async move |workspace, cx| {
+            let (terminal, session_id, controls_input) = project
+                .update(cx, |project, cx| {
+                    project.attach_hosted_terminal(root, session_id, cx)
+                })
+                .await?;
+            workspace.update_in(cx, |workspace, window, cx| {
+                let view = cx.new(|cx| {
+                    TerminalView::new(
+                        terminal.clone(),
+                        workspace.weak_handle(),
+                        workspace.database_id(),
+                        workspace.project().downgrade(),
+                        window,
+                        cx,
+                    )
+                });
+                view.update(cx, |view, cx| {
+                    view.adopt_hosted_session(session_id, controls_input, cx)
+                });
+                let focus_item = !workspace.has_active_modal(window, cx);
+                workspace.add_item_to_active_pane(Box::new(view), None, focus_item, window, cx);
+            })?;
+            anyhow::Ok(())
+        });
+        terminal.detach_and_log_err(cx);
     }
 
     pub fn add_terminal_task(

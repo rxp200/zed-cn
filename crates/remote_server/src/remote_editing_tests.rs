@@ -7403,6 +7403,7 @@ async fn test_persistent_terminal_input_resumes_after_reconnect(
             columns: 80,
             pixel_width: 0,
             pixel_height: 0,
+            hosted: false,
         })
         .await
         .expect("create persistent terminal");

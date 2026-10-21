@@ -577,7 +577,12 @@ fn write_terminal_input(
     }
 }
 
-fn pty_size(rows: u32, columns: u32, pixel_width: u32, pixel_height: u32) -> Result<PtySize> {
+pub(crate) fn pty_size(
+    rows: u32,
+    columns: u32,
+    pixel_width: u32,
+    pixel_height: u32,
+) -> Result<PtySize> {
     let rows = u16::try_from(rows).context("terminal row count is too large")?;
     let cols = u16::try_from(columns).context("terminal column count is too large")?;
     anyhow::ensure!(rows > 0 && cols > 0, "terminal dimensions must be positive");
@@ -871,6 +876,7 @@ mod tests {
                 columns: 80,
                 pixel_width: 0,
                 pixel_height: 0,
+                hosted: false,
             })
             .expect("create terminal");
 
