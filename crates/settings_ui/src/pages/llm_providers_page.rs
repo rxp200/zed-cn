@@ -23,7 +23,7 @@ use settings::{
 };
 use ui::{
     ButtonLink, Checkbox, ConfiguredApiCard, ContextMenu, Divider, DropdownMenu, DropdownStyle,
-    IconPosition, PopoverMenu, ToggleState, prelude::*,
+    IconPosition, PopoverMenu, ToggleState, WithScrollbar as _, prelude::*,
 };
 use util::ResultExt as _;
 
@@ -44,6 +44,13 @@ pub(crate) fn render_llm_providers_page(
         .and_then(|id| providers.iter().find(|provider| provider.id() == *id))
         .or_else(|| providers.first());
 
+    let showing_form = selected.is_some_and(|provider| {
+        settings_window
+            .llm_provider_form
+            .as_ref()
+            .is_some_and(|form| form.editing_name.as_deref() == Some(provider.id().0.as_ref()))
+    });
+
     h_flex()
         .id("llm-providers-page")
         .size_full()
@@ -58,7 +65,14 @@ pub(crate) fn render_llm_providers_page(
                 .gap_1()
                 .border_r_1()
                 .border_color(cx.theme().colors().border_variant)
+                .track_scroll(&settings_window.llm_provider_navigation_scroll_handle)
                 .overflow_y_scroll()
+                .debug_selector(|| "llm-provider-navigation".into())
+                .vertical_scrollbar_for(
+                    &settings_window.llm_provider_navigation_scroll_handle,
+                    window,
+                    cx,
+                )
                 .children(providers.iter().map(|provider| {
                     let id = provider.id();
                     let active = selected.is_some_and(|selected| selected.id() == id);
@@ -105,19 +119,17 @@ pub(crate) fn render_llm_providers_page(
                 .h_full()
                 .px_6()
                 .pb_8()
-                .track_scroll(scroll_handle)
-                .overflow_y_scroll()
+                .debug_selector(|| "llm-provider-details".into())
+                // 表单页自带滚动区域和固定的操作栏。若这里再包一层滚动，
+                // 两层容器的滚动范围都会变成零，右侧就完全无法滚动。
+                .when(!showing_form, |this| {
+                    this.track_scroll(scroll_handle).overflow_y_scroll()
+                })
                 .when_some(selected, |this, provider| {
-                    if settings_window
-                        .llm_provider_form
-                        .as_ref()
-                        .is_some_and(|form| {
-                            form.editing_name.as_deref() == Some(provider.id().0.as_ref())
-                        })
-                    {
+                    if showing_form {
                         this.child(render_llm_provider_form_page(
                             settings_window,
-                            &ScrollHandle::new(),
+                            scroll_handle,
                             window,
                             cx,
                         ))
@@ -1020,10 +1032,13 @@ fn render_llm_provider_form_page(
 
     v_flex()
         .size_full()
+        .min_h_0()
         .child(
             v_flex()
                 .id("llm-provider-form-page")
+                .min_h_0()
                 .track_scroll(scroll_handle)
+                .debug_selector(|| "llm-provider-form-scroll".into())
                 .pt_2p5()
                 .px_8()
                 .pb_16()
@@ -1146,6 +1161,7 @@ fn render_models_section(
     v_flex()
         .mt_1()
         .gap_2()
+        .debug_selector(|| "llm-provider-models".into())
         .child(
             Label::new(i18n::t!("389f7369b58b6072"))
                 .size(LabelSize::Small)
@@ -2058,6 +2074,7 @@ fn parse_u64_field(value: &str, name: &str) -> Result<u64, SharedString> {
 
 #[cfg(test)]
 mod tests {
+    use futures::FutureExt as _;
     use gpui::{TestAppContext, VisualTestContext, size};
     use language_models::provider::cloud;
     use settings::SettingsStore;
@@ -2191,5 +2208,287 @@ mod tests {
                 "provider description collapsed at {width}px"
             );
         }
+    }
+
+    struct LlmProvidersPageHarness {
+        settings_window: Entity<SettingsWindow>,
+        scroll_handle: ScrollHandle,
+    }
+
+    impl Render for LlmProvidersPageHarness {
+        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let scroll_handle = self.scroll_handle.clone();
+            let page = self.settings_window.update(cx, |settings_window, cx| {
+                render_llm_providers_page(settings_window, &scroll_handle, window, cx)
+            });
+            div().size_full().min_h_0().child(page)
+        }
+    }
+
+    fn init_llm_provider_test(cx: &mut gpui::App) {
+        let settings_store = SettingsStore::test(cx);
+        cx.set_global(settings_store);
+        theme::init(theme::LoadThemes::JustBase, cx);
+        theme_settings::init(theme::LoadThemes::JustBase, cx);
+        editor::init(cx);
+        LanguageModelRegistry::test(cx);
+    }
+
+    fn scroll_by_wheel(cx: &mut VisualTestContext, position: gpui::Point<gpui::Pixels>) {
+        cx.simulate_event(gpui::ScrollWheelEvent {
+            position,
+            delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(-10_000.))),
+            modifiers: gpui::Modifiers::default(),
+            touch_phase: gpui::TouchPhase::Moved,
+        });
+        cx.run_until_parked();
+    }
+
+    #[gpui::test]
+    async fn provider_form_pane_scrolls(cx: &mut TestAppContext) {
+        cx.update(init_llm_provider_test);
+
+        let window = cx.open_window(size(px(900.), px(320.)), |window, cx| {
+            let settings_window = cx.new(|cx| {
+                let mut settings_window = SettingsWindow::test(window, cx);
+                settings_window.configuring_provider =
+                    Some(LanguageModelProviderId::from("fake".to_string()));
+                settings_window.llm_provider_form = Some(LlmProviderForm::for_existing(
+                    CompatibleProviderKind::OpenAi,
+                    "fake",
+                    "https://example.com/v1",
+                    (0..2)
+                        .map(|index| ModelInput::new(index, window, cx))
+                        .collect(),
+                    window,
+                    cx,
+                ));
+                settings_window
+            });
+
+            LlmProvidersPageHarness {
+                settings_window,
+                scroll_handle: ScrollHandle::new(),
+            }
+        });
+
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        cx.run_until_parked();
+
+        let scroll_area = cx
+            .debug_bounds("llm-provider-form-scroll")
+            .expect("the provider form should render a scroll area");
+        let models_before = cx
+            .debug_bounds("llm-provider-models")
+            .expect("the provider form should render the models section");
+        assert!(
+            models_before.bottom() > scroll_area.bottom(),
+            "the model configuration should overflow the pane in this test window"
+        );
+
+        scroll_by_wheel(&mut cx, scroll_area.center());
+
+        let models_after = cx
+            .debug_bounds("llm-provider-models")
+            .expect("the provider form should still render the models section");
+        assert!(
+            models_after.top() < models_before.top(),
+            "wheel scrolling over the provider form should move its content"
+        );
+        assert!(
+            models_after.bottom() <= scroll_area.bottom(),
+            "scrolling to the end should reveal the model configuration"
+        );
+    }
+
+    struct TallSettingsProvider {
+        id: LanguageModelProviderId,
+    }
+
+    struct TallSettingsView;
+
+    impl Render for TallSettingsView {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .w_full()
+                .h(px(2_000.))
+                .debug_selector(|| "tall-provider-settings".into())
+        }
+    }
+
+    impl language_model::LanguageModelClient for TallSettingsProvider {
+        fn stream_completion(
+            &self,
+            _model: &language_model::LanguageModel,
+            _request: language_model::LanguageModelRequest,
+            _cx: &gpui::AsyncApp,
+        ) -> futures::future::BoxFuture<
+            'static,
+            http_client::Result<
+                language_model::LanguageModelCompletionStream,
+                language_model::LanguageModelCompletionError,
+            >,
+        > {
+            async { Err(anyhow::anyhow!("not used in tests").into()) }.boxed()
+        }
+    }
+
+    impl language_model::LanguageModelProviderState for TallSettingsProvider {
+        type ObservableEntity = ();
+
+        fn observable_entity(&self) -> Option<Entity<()>> {
+            None
+        }
+    }
+
+    impl LanguageModelProvider for TallSettingsProvider {
+        fn id(&self) -> LanguageModelProviderId {
+            self.id.clone()
+        }
+
+        fn name(&self) -> language_model::LanguageModelProviderName {
+            language_model::LanguageModelProviderName::from("Tall".to_string())
+        }
+
+        fn default_model(&self, _cx: &gpui::App) -> Option<language_model::LanguageModel> {
+            None
+        }
+
+        fn default_fast_model(&self, _cx: &gpui::App) -> Option<language_model::LanguageModel> {
+            None
+        }
+
+        fn provided_models(&self, _cx: &gpui::App) -> Vec<language_model::LanguageModel> {
+            Vec::new()
+        }
+
+        fn is_authenticated(&self, _cx: &gpui::App) -> bool {
+            true
+        }
+
+        fn authenticate(
+            &self,
+            _cx: &mut gpui::App,
+        ) -> gpui::Task<Result<(), language_model::AuthenticateError>> {
+            gpui::Task::ready(Ok(()))
+        }
+
+        fn settings_view(&self, _cx: &mut gpui::App) -> Option<ProviderSettingsView> {
+            Some(ProviderSettingsView::Inline(
+                language_model::InlineProviderSettings {
+                    title: None,
+                    description: None,
+                    create_view: Arc::new(|_, cx| cx.new(|_| TallSettingsView).into()),
+                },
+            ))
+        }
+    }
+
+    #[gpui::test]
+    async fn provider_details_pane_scrolls(cx: &mut TestAppContext) {
+        cx.update(init_llm_provider_test);
+
+        let provider_id = LanguageModelProviderId::from("tall".to_string());
+        let window = cx.open_window(size(px(900.), px(320.)), |window, cx| {
+            let registry = LanguageModelRegistry::global(cx);
+            registry.update(cx, |registry, cx| {
+                registry.register_provider(
+                    Arc::new(TallSettingsProvider {
+                        id: provider_id.clone(),
+                    }),
+                    cx,
+                );
+            });
+
+            let settings_window = cx.new(|cx| {
+                let mut settings_window = SettingsWindow::test(window, cx);
+                settings_window.configuring_provider = Some(provider_id.clone());
+                settings_window
+            });
+
+            LlmProvidersPageHarness {
+                settings_window,
+                scroll_handle: ScrollHandle::new(),
+            }
+        });
+
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        cx.run_until_parked();
+
+        let pane = cx
+            .debug_bounds("llm-provider-details")
+            .expect("the provider details pane should be rendered");
+        let settings_before = cx
+            .debug_bounds("tall-provider-settings")
+            .expect("the provider settings view should be rendered");
+        assert!(
+            settings_before.bottom() > pane.bottom(),
+            "the provider settings should overflow the pane in this test window"
+        );
+
+        scroll_by_wheel(&mut cx, pane.center());
+
+        let settings_after = cx
+            .debug_bounds("tall-provider-settings")
+            .expect("the provider settings view should still be rendered");
+        assert!(
+            settings_after.top() < settings_before.top(),
+            "wheel scrolling over the details pane should move its content"
+        );
+    }
+
+    #[gpui::test]
+    async fn provider_navigation_scrolls(cx: &mut TestAppContext) {
+        cx.update(init_llm_provider_test);
+
+        let mut providers = None;
+        let window = cx.open_window(size(px(900.), px(320.)), |window, cx| {
+            let registry = LanguageModelRegistry::global(cx);
+            registry.update(cx, |registry, cx| {
+                for index in 0..24 {
+                    let id = LanguageModelProviderId::from(format!("tall-{index}"));
+                    registry.register_provider(Arc::new(TallSettingsProvider { id }), cx);
+                }
+            });
+
+            let settings_window = cx.new(|cx| {
+                let mut settings_window = SettingsWindow::test(window, cx);
+                settings_window.configuring_provider =
+                    Some(LanguageModelProviderId::from("tall-0".to_string()));
+                settings_window
+            });
+            providers = Some(settings_window.clone());
+
+            LlmProvidersPageHarness {
+                settings_window,
+                scroll_handle: ScrollHandle::new(),
+            }
+        });
+
+        let navigation_handle = cx.update(|cx| {
+            providers
+                .expect("the providers page should be created with the window")
+                .read(cx)
+                .llm_provider_navigation_scroll_handle
+                .clone()
+        });
+
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        cx.run_until_parked();
+
+        assert!(
+            navigation_handle.max_offset().y > px(0.),
+            "the provider list should overflow this test window"
+        );
+        let navigation = cx
+            .debug_bounds("llm-provider-navigation")
+            .expect("the provider navigation should be rendered");
+
+        scroll_by_wheel(&mut cx, navigation.center());
+
+        assert!(
+            navigation_handle.offset().y < px(0.),
+            "wheel scrolling over the provider list should move it"
+        );
     }
 }

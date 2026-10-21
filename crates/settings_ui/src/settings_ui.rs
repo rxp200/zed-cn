@@ -1010,6 +1010,8 @@ pub struct SettingsWindow {
     /// focus ring when the page auto-focuses it on open (which happens via mouse,
     /// where `focus_visible` styling would otherwise be suppressed).
     pub(crate) llm_provider_add_focus_handle: FocusHandle,
+    /// Scroll state for the LLM provider list on the left of the AI providers page.
+    pub(crate) llm_provider_navigation_scroll_handle: ScrollHandle,
     /// State for the active "add/edit custom MCP server" form sub-page, if open.
     pub(crate) mcp_server_form: Option<McpServerForm>,
     /// Stable focus handle for the MCP "Add Server" button, so it can show a
@@ -2186,6 +2188,7 @@ impl SettingsWindow {
             last_copied_skill_directory_path: None,
             llm_provider_form: None,
             llm_provider_add_focus_handle: cx.focus_handle(),
+            llm_provider_navigation_scroll_handle: ScrollHandle::new(),
             mcp_server_form: None,
             mcp_add_server_focus_handle: cx.focus_handle(),
             custom_agent_form: None,
@@ -6051,6 +6054,7 @@ pub mod test {
                 last_copied_skill_directory_path: None,
                 llm_provider_form: None,
                 llm_provider_add_focus_handle: cx.focus_handle(),
+                llm_provider_navigation_scroll_handle: ScrollHandle::new(),
                 mcp_server_form: None,
                 mcp_add_server_focus_handle: cx.focus_handle(),
                 custom_agent_form: None,
@@ -6227,6 +6231,7 @@ pub mod test {
             last_copied_skill_directory_path: None,
             llm_provider_form: None,
             llm_provider_add_focus_handle: cx.focus_handle(),
+            llm_provider_navigation_scroll_handle: ScrollHandle::new(),
             mcp_server_form: None,
             mcp_add_server_focus_handle: cx.focus_handle(),
             custom_agent_form: None,
