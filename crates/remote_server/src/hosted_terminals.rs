@@ -225,7 +225,19 @@ impl HostedTerminals {
                 attachment_id: link.attachment_id,
             })
         };
-        client.request(kind).await.map(|_| ())
+        match client.request(kind).await {
+            Ok(_) => Ok(()),
+            // The daemon releases an attachment when its connection ends, so a
+            // close that arrives afterwards is already satisfied.
+            Err(error)
+                if error.to_string()
+                    == crate::hosted_terminal::SessionError::UnknownAttachment.message() =>
+            {
+                log::debug!("hosted terminal was already detached: {error:#}");
+                Ok(())
+            }
+            Err(error) => Err(error),
+        }
     }
 
     pub async fn host(&self, request: proto::HostTerminal) -> Result<proto::HostTerminalResponse> {
@@ -280,27 +292,6 @@ impl HostedTerminals {
         &self,
         request: proto::AttachHostedTerminal,
     ) -> Result<proto::AttachHostedTerminalResponse> {
-        if let Ok(links) = self.links()
-            && let Some((terminal_id, _link)) = links
-                .terminals
-                .iter()
-                .find(|(_, link)| link.session_id == request.session_id)
-        {
-            let controls_input = self.link(terminal_id).is_ok()
-                && self
-                    .links()?
-                    .terminals
-                    .get(terminal_id)
-                    .is_some_and(|link| link.controls_input);
-            return Ok(proto::AttachHostedTerminalResponse {
-                server_instance_id: HOSTED_INSTANCE_ID.to_owned(),
-                terminal_id: terminal_id.clone(),
-                controls_input,
-                running: true,
-                exit_code: None,
-                session_id: request.session_id,
-            });
-        }
         let canonical_root = self
             .canonical_root(Some(&request.canonical_root))
             .await
@@ -347,12 +338,18 @@ impl HostedTerminals {
         client
             .request(proto::hosted_terminal_daemon_request::Kind::Detach(
                 proto::DetachHostedTerminal {
-                    session_id: request.session_id,
+                    session_id: request.session_id.clone(),
                     attachment_id,
                 },
             ))
-            .await
-            .map(|_| ())
+            .await?;
+        // The pseudo terminal id only ever named this attachment, so it must not
+        // stay addressable: a later close or input would hit an attachment the
+        // daemon already released.
+        self.links()?
+            .terminals
+            .retain(|_, link| link.session_id != request.session_id);
+        Ok(())
     }
 
     pub async fn take_control(
@@ -622,6 +619,117 @@ mod tests {
             attachment_id: String::new(),
         }))
         .expect("delete");
+    }
+
+    #[test]
+    fn a_closed_connection_releases_its_attachment_and_input_control() {
+        let (_daemon, service_dir, root) = daemon();
+        let canonical_root = root.display().to_string();
+        let first = HostedTerminals::new(service_dir.clone());
+        let created =
+            smol::block_on(first.create(create_request(&root, "reconnect"))).expect("create");
+        let hosted = smol::block_on(first.host(proto::HostTerminal {
+            server_instance_id: created.server_instance_id,
+            terminal_id: created.terminal_id,
+            name: "agent".into(),
+            attachment_id: String::new(),
+        }))
+        .expect("host");
+
+        // Reconnecting creates a new project connection while the previous one
+        // is gone. Closing its socket must release the old attachment, otherwise
+        // the new one can never type.
+        drop(first);
+        let second = HostedTerminals::new(service_dir);
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let listed = smol::block_on(second.list(proto::ListHostedTerminals {
+                canonical_root: canonical_root.clone(),
+            }))
+            .expect("list");
+            if listed
+                .sessions
+                .first()
+                .is_some_and(|session| session.viewer_count == 0)
+            {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the closed connection kept its hosted terminal attachment"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+
+        let attached = smol::block_on(second.attach(proto::AttachHostedTerminal {
+            canonical_root,
+            session_id: hosted.session_id.clone(),
+        }))
+        .expect("attach");
+        assert!(attached.controls_input);
+        smol::block_on(second.input(proto::PersistentTerminalInput {
+            server_instance_id: attached.server_instance_id,
+            terminal_id: attached.terminal_id,
+            sequence: 1,
+            data: b"echo reattached\n".to_vec(),
+        }))
+        .expect("input after reattach");
+        smol::block_on(second.terminate(proto::TerminateHostedTerminal {
+            session_id: hosted.session_id,
+            attachment_id: String::new(),
+        }))
+        .expect("terminate");
+    }
+
+    #[test]
+    fn detaching_a_session_makes_its_pseudo_terminal_unaddressable() {
+        let (_daemon, service_dir, root) = daemon();
+        let terminals = HostedTerminals::new(service_dir.clone());
+        let created =
+            smol::block_on(terminals.create(create_request(&root, "detach"))).expect("create");
+        let hosted = smol::block_on(terminals.host(proto::HostTerminal {
+            server_instance_id: created.server_instance_id,
+            terminal_id: created.terminal_id.clone(),
+            name: "agent".into(),
+            attachment_id: String::new(),
+        }))
+        .expect("host");
+        smol::block_on(terminals.detach(proto::DetachHostedTerminal {
+            session_id: hosted.session_id.clone(),
+            attachment_id: String::new(),
+        }))
+        .expect("detach");
+        // The old pseudo terminal must not survive the detach, or a later close
+        // and any keystroke would address a released attachment.
+        let error = smol::block_on(terminals.input(proto::PersistentTerminalInput {
+            server_instance_id: HOSTED_INSTANCE_ID.into(),
+            terminal_id: created.terminal_id.clone(),
+            sequence: 1,
+            data: b"x".to_vec(),
+        }))
+        .expect_err("a detached pseudo terminal must reject input");
+        assert!(
+            error.to_string().contains("no longer attached"),
+            "{error:#}"
+        );
+        smol::block_on(terminals.close(proto::ClosePersistentTerminal {
+            server_instance_id: HOSTED_INSTANCE_ID.into(),
+            terminal_id: created.terminal_id,
+        }))
+        .expect("closing a detached terminal is a no-op");
+        // A different connection can attach the surviving session and clean up.
+        let second = HostedTerminals::new(service_dir);
+        let attached = smol::block_on(second.attach(proto::AttachHostedTerminal {
+            canonical_root: root.display().to_string(),
+            session_id: hosted.session_id.clone(),
+        }))
+        .expect("attach");
+        assert!(attached.controls_input);
+        smol::block_on(second.terminate(proto::TerminateHostedTerminal {
+            session_id: hosted.session_id,
+            attachment_id: String::new(),
+        }))
+        .expect("terminate");
     }
 
     #[test]

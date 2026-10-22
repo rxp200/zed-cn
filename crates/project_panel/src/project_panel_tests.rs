@@ -7283,16 +7283,17 @@ async fn test_reveal_abs_path_loads_unscanned_ancestors(cx: &mut gpui::TestAppCo
 }
 
 #[gpui::test]
-async fn test_reveal_abs_path_outside_worktrees_opens_temporary_root(
-    cx: &mut gpui::TestAppContext,
-) {
+async fn test_reveal_abs_path_outside_worktrees_is_ignored(cx: &mut gpui::TestAppContext) {
     init_test(cx);
 
     let fs = FakeFs::new(cx.executor());
     fs.insert_tree(
         "/root",
         json!({
-            "a": {},
+            "proj": {
+                "a": {},
+            },
+            "shared": {},
         }),
     )
     .await;
@@ -7308,7 +7309,7 @@ async fn test_reveal_abs_path_outside_worktrees_opens_temporary_root(
     )
     .await;
 
-    let project = Project::test(fs.clone(), ["/root".as_ref()], cx).await;
+    let project = Project::test(fs.clone(), ["/root/proj".as_ref()], cx).await;
     let window = cx.add_window(|window, cx| MultiWorkspace::test_new(project.clone(), window, cx));
     let workspace = window
         .read_with(cx, |mw, _| mw.workspace().clone())
@@ -7321,37 +7322,45 @@ async fn test_reveal_abs_path_outside_worktrees_opens_temporary_root(
     });
     cx.run_until_parked();
 
-    project.update(cx, |_, cx| {
-        cx.emit(project::Event::RevealPathInProjectPanel(PathBuf::from(
-            "/elsewhere/x",
-        )));
-    });
-    for _ in 0..5 {
-        cx.run_until_parked();
+    // A terminal that leaves the worktree (e.g. `cd ..` to the parent of the
+    // project root, to the filesystem root, or into a sibling directory) must
+    // stay a plain terminal: no new root, no scan, no selection.
+    for outside in ["/root", "/", "/elsewhere/x"] {
+        project.update(cx, |_, cx| {
+            cx.emit(project::Event::RevealPathInProjectPanel(PathBuf::from(
+                outside,
+            )));
+        });
+        for _ in 0..5 {
+            cx.run_until_parked();
+        }
     }
 
-    panel.update(cx, |panel, cx| {
-        let selected = panel
-            .selected_entry_project_path(cx)
-            .map(|project_path| project_path.path.as_unix_str().to_string());
-        assert_eq!(
-            selected.as_deref(),
-            Some(""),
-            "the new worktree root itself is selected"
-        );
-    });
+    assert_eq!(
+        project.read_with(cx, |project, cx| project.worktrees(cx).count()),
+        1,
+        "paths outside the worktree must not be added as new roots"
+    );
+    assert!(
+        project.read_with(cx, |project, cx| project
+            .find_worktree(Path::new("/root"), cx)
+            .is_none()),
+        "the parent of the project root must not become a worktree"
+    );
+    assert!(
+        panel.read_with(cx, |panel, cx| panel.selected_entry(cx).is_none()),
+        "an outside directory must not be selected in the project panel"
+    );
+    assert_eq!(
+        visible_entries_as_strings(&panel, 0..50, cx),
+        ["v proj", "    > a"],
+        "the project panel must keep showing only the existing roots"
+    );
 
-    // Moving to another outside directory replaces the temporary root.
-    fs.insert_tree(
-        "/other_place",
-        json!({
-            "z": {},
-        }),
-    )
-    .await;
+    // Directories inside the worktree are still revealed.
     project.update(cx, |_, cx| {
         cx.emit(project::Event::RevealPathInProjectPanel(PathBuf::from(
-            "/other_place/z",
+            "/root/proj/a",
         )));
     });
     for _ in 0..5 {
@@ -7360,8 +7369,8 @@ async fn test_reveal_abs_path_outside_worktrees_opens_temporary_root(
 
     assert_eq!(
         visible_entries_as_strings(&panel, 0..50, cx),
-        ["v root", "    > a", "v z  <== selected  <== marked",],
-        "the previous temporary worktree must be replaced"
+        ["v proj", "    v a  <== selected  <== marked"],
+        "a directory inside the worktree must still be revealed"
     );
 }
 

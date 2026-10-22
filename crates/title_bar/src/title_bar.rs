@@ -452,6 +452,28 @@ impl Render for TitleBar {
     }
 }
 
+/// Tab titles are shell titles, so several terminals in the same folder share
+/// one name. Number repeated names so the hosted-terminal list never shows rows
+/// that cannot be told apart.
+fn disambiguate_hosted_session_names(names: &[&str]) -> Vec<String> {
+    let mut totals: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    for name in names {
+        *totals.entry(name).or_default() += 1;
+    }
+    let mut seen: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    names
+        .iter()
+        .map(|name| {
+            if totals.get(name).copied().unwrap_or_default() < 2 {
+                return (*name).to_owned();
+            }
+            let index = seen.entry(name).or_default();
+            *index += 1;
+            format!("{name} ({index})")
+        })
+        .collect()
+}
+
 impl TitleBar {
     pub fn new(
         id: impl Into<ElementId>,
@@ -1243,14 +1265,20 @@ impl TitleBar {
                         if sessions.is_empty() {
                             return menu.label(i18n::t!("67f8c2977a77a09d")).separator();
                         }
-                        let menu = sessions.iter().fold(menu, |menu, session| {
+                        let labels = disambiguate_hosted_session_names(
+                            &sessions
+                                .iter()
+                                .map(|session| session.name.as_str())
+                                .collect::<Vec<_>>(),
+                        );
+                        let running: Vec<_> = sessions
+                            .iter()
+                            .zip(&labels)
+                            .filter(|(session, _)| session.running)
+                            .collect();
+                        let menu = running.iter().fold(menu, |menu, (session, label)| {
                             let session_id = session.session_id.clone();
-                            let label: SharedString = if session.running {
-                                session.name.clone().into()
-                            } else {
-                                format!("{} · ✓", session.name).into()
-                            };
-                            menu.entry(label, None, move |window, cx| {
+                            menu.entry(label.to_string(), None, move |window, cx| {
                                 window.dispatch_action(
                                     Box::new(workspace::OpenHostedTerminal {
                                         session_id: session_id.clone(),
@@ -1261,49 +1289,50 @@ impl TitleBar {
                         });
                         let ended: Vec<_> = sessions
                             .iter()
-                            .filter(|session| !session.running)
-                            .cloned()
+                            .zip(&labels)
+                            .filter(|(session, _)| !session.running)
                             .collect();
                         if ended.is_empty() {
                             return menu;
                         }
-                        ended.iter().fold(menu.separator(), |menu, session| {
-                            let session_id = session.session_id.clone();
-                            let project = project.clone();
-                            let title_bar = title_bar.clone();
-                            let label: SharedString = format!(
-                                "{}: {}",
-                                i18n::t!("67f8c2977a77a09d"),
-                                session.name
-                            )
-                            .into();
-                            menu.entry(label, None, move |_, cx| {
+                        ended.iter().fold(
+                            menu.separator().header(i18n::t!("ef6e108d77f3528b")),
+                            |menu, (session, label)| {
+                                let session_id = session.session_id.clone();
                                 let project = project.clone();
-                                let session_id = session_id.clone();
                                 let title_bar = title_bar.clone();
-                                let Some(request) = project.read_with(cx, |project, cx| {
-                                    project.remote_client().map(|client| {
-                                        client.read(cx).delete_hosted_terminal(session_id)
-                                    })
-                                }) else {
-                                    return;
-                                };
-                                cx.spawn(async move |cx| {
-                                    if let Err(error) = request.await {
-                                        eprintln!("failed to delete hosted terminal: {error:#}");
-                                        return;
-                                    }
-                                    title_bar
-                                        .update(cx, |this, cx| {
-                                            this.hosted_sessions
-                                                .retain(|session| session.running);
-                                            cx.notify();
+                                let label: SharedString =
+                                    i18n::t!("2e0028d2ccba4855", name = label.as_str()).into();
+                                menu.entry(label, None, move |_, cx| {
+                                    let project = project.clone();
+                                    let session_id = session_id.clone();
+                                    let title_bar = title_bar.clone();
+                                    let Some(request) = project.read_with(cx, |project, cx| {
+                                        project.remote_client().map(|client| {
+                                            client.read(cx).delete_hosted_terminal(session_id)
                                         })
-                                        .ok();
+                                    }) else {
+                                        return;
+                                    };
+                                    cx.spawn(async move |cx| {
+                                        if let Err(error) = request.await {
+                                            eprintln!(
+                                                "failed to delete hosted terminal: {error:#}"
+                                            );
+                                            return;
+                                        }
+                                        title_bar
+                                            .update(cx, |this, cx| {
+                                                this.hosted_sessions
+                                                    .retain(|session| session.running);
+                                                cx.notify();
+                                            })
+                                            .ok();
+                                    })
+                                    .detach();
                                 })
-                                .detach();
-                            })
-                        })
+                            },
+                        )
                     }))
                 })
                 .trigger_with_tooltip(
@@ -1692,6 +1721,23 @@ impl TitleBar {
 mod tests {
     use super::*;
     use util::paths::PathStyle;
+
+    #[test]
+    fn repeated_hosted_session_names_are_numbered() {
+        assert_eq!(
+            disambiguate_hosted_session_names(&["agent: ~/code/zed", "agent: ~/code/zed"]),
+            vec!["agent: ~/code/zed (1)", "agent: ~/code/zed (2)"]
+        );
+        assert_eq!(
+            disambiguate_hosted_session_names(&["build", "test", "build"]),
+            vec!["build (1)", "test", "build (2)"]
+        );
+        assert_eq!(
+            disambiguate_hosted_session_names(&["only"]),
+            vec!["only".to_string()]
+        );
+        assert!(disambiguate_hosted_session_names(&[]).is_empty());
+    }
 
     #[test]
     fn test_foreign_path_style_does_not_use_repository_identity_as_name_anchor() {

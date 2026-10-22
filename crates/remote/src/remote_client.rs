@@ -187,6 +187,10 @@ pub const PERSISTENT_TERMINAL_STREAMING_CAPABILITY: &str = "persistent_terminal_
 /// The server can keep promoted terminals alive independently of a client
 /// connection and let other clients of the same account attach them.
 pub const HOSTED_TERMINALS_CAPABILITY: &str = "hosted_terminals_v1";
+/// The server can create a directory at an arbitrary path outside of any
+/// worktree, so the remote project picker can turn a typed new name into a
+/// usable project root.
+pub const CREATE_REMOTE_DIRECTORY_CAPABILITY: &str = "create_remote_directory_v1";
 
 const MAX_MISSED_HEARTBEATS: usize = 5;
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
@@ -1473,6 +1477,10 @@ impl RemoteClient {
 
     pub fn supports_hosted_terminals(&self) -> bool {
         self.client.supports_hosted_terminals.load(SeqCst)
+    }
+
+    pub fn supports_create_remote_directory(&self) -> bool {
+        self.client.supports_create_remote_directory.load(SeqCst)
     }
 
     pub fn host_terminal(
@@ -2803,6 +2811,7 @@ mod tests {
         assert!(!client.supports_upload_chunks.load(SeqCst));
         assert!(!client.supports_download_chunks.load(SeqCst));
         assert!(!client.supports_git_operation_cancellation.load(SeqCst));
+        assert!(!client.supports_create_remote_directory.load(SeqCst));
         for (capabilities, expected) in [
             (Vec::new(), false),
             (vec![DOCUMENT_CHUNKS_CAPABILITY.to_owned()], true),
@@ -2909,6 +2918,26 @@ mod tests {
             cx.run_until_parked();
             assert_eq!(
                 client.supports_git_operation_cancellation.load(SeqCst),
+                expected
+            );
+        }
+        for (capabilities, expected) in [
+            (vec![CREATE_REMOTE_DIRECTORY_CAPABILITY.to_owned()], true),
+            (
+                vec![
+                    CREATE_REMOTE_DIRECTORY_CAPABILITY.to_owned(),
+                    TEMPORARY_FILES_CAPABILITY.to_owned(),
+                ],
+                true,
+            ),
+            (Vec::new(), false),
+        ] {
+            incoming_tx
+                .unbounded_send(proto::RemoteStarted { capabilities }.into_envelope(0, None, None))
+                .expect("deliver create remote directory capabilities");
+            cx.run_until_parked();
+            assert_eq!(
+                client.supports_create_remote_directory.load(SeqCst),
                 expected
             );
         }
@@ -3269,6 +3298,7 @@ pub(crate) struct ChannelClient {
     supports_persistent_terminals: AtomicBool,
     supports_persistent_terminal_streaming: AtomicBool,
     supports_hosted_terminals: AtomicBool,
+    supports_create_remote_directory: AtomicBool,
     session_invalidated: Arc<Signal<String>>,
     session_is_invalid: Arc<AtomicBool>,
     has_wsl_interop: bool,
@@ -3313,6 +3343,7 @@ impl ChannelClient {
             supports_persistent_terminals: AtomicBool::new(false),
             supports_persistent_terminal_streaming: AtomicBool::new(false),
             supports_hosted_terminals: AtomicBool::new(false),
+            supports_create_remote_directory: AtomicBool::new(false),
             session_invalidated: Arc::new(Signal::new(cx)),
             session_is_invalid: Arc::new(AtomicBool::new(false)),
             has_wsl_interop,
@@ -3345,6 +3376,7 @@ impl ChannelClient {
                         PERSISTENT_TERMINALS_CAPABILITY.to_string(),
                         PERSISTENT_TERMINAL_STREAMING_CAPABILITY.to_string(),
                         HOSTED_TERMINALS_CAPABILITY.to_string(),
+                        CREATE_REMOTE_DIRECTORY_CAPABILITY.to_string(),
                     ],
                 }
                 .into_envelope(0, None, None);
@@ -3472,6 +3504,13 @@ impl ChannelClient {
                             .capabilities
                             .iter()
                             .any(|capability| capability == HOSTED_TERMINALS_CAPABILITY),
+                        SeqCst,
+                    );
+                    this.supports_create_remote_directory.store(
+                        started
+                            .capabilities
+                            .iter()
+                            .any(|capability| capability == CREATE_REMOTE_DIRECTORY_CAPABILITY),
                         SeqCst,
                     );
                     this.remote_started.set(());

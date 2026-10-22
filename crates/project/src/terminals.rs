@@ -170,31 +170,24 @@ impl Project {
 
                     let to_run =
                         (!activation_script.is_empty()).then(|| format_to_run(&spawn_task));
-                    env.extend(spawn_task.env);
                     // Remote tasks run on the Remote Server like any other remote
                     // terminal; the client no longer spawns `ssh -t`.
                     match remote_client {
                         Some(remote_client) => {
-                            // A toolchain activation script runs first and then
-                            // execs the shell, so the task command becomes part of
-                            // that script instead of the terminal's program.
-                            let (program, args, activation) = match &to_run {
-                                Some(to_run) if !activation_script.is_empty() => {
-                                    (shell.clone(), Vec::new(), vec![to_run.clone()])
-                                }
-                                _ => match spawn_task.command.as_ref() {
-                                    Some(command) => {
-                                        (command.clone(), spawn_task.args.clone(), Vec::new())
-                                    }
-                                    None => (shell.clone(), Vec::new(), Vec::new()),
-                                },
-                            };
+                            let (program, args) = hosted_task_command(
+                                &spawn_task,
+                                &activation_script,
+                                &shell,
+                                shell_kind,
+                                path_style.is_windows(),
+                            );
+                            env.extend(spawn_task.env);
                             create_hosted_terminal(
                                 remote_client,
                                 program,
                                 args,
                                 shell_kind,
-                                activation,
+                                Vec::new(),
                                 env,
                                 path,
                                 &settings,
@@ -205,6 +198,7 @@ impl Project {
                             )
                         }
                         None => {
+                            env.extend(spawn_task.env);
                             let (shell, env) = match activation_script.clone() {
                                 activation_script if !activation_script.is_empty() => {
                                     let separator = shell_kind.sequential_commands_separator();
@@ -855,6 +849,38 @@ fn hosted_shell_command(
     }
 }
 
+/// Resolves the program and arguments of a hosted task terminal.
+///
+/// A task terminal's completion is the PTY's exit status, so the command line
+/// has to end the shell. Toolchain activation therefore joins the task command
+/// here. Building it in `create_hosted_terminal` instead would append
+/// `exec <shell> -l`, which is right for interactive terminals but leaves a
+/// login shell running after the command: the hosted PTY never exits, no exit
+/// frame reaches the client, and the agent's terminal tool waits forever even
+/// though the command finished long ago.
+fn hosted_task_command(
+    spawn_task: &SpawnInTerminal,
+    activation_script: &[String],
+    shell: &str,
+    shell_kind: ShellKind,
+    is_windows: bool,
+) -> (String, Vec<String>) {
+    if activation_script.is_empty() {
+        return match spawn_task.command.as_ref() {
+            Some(command) => (command.clone(), spawn_task.args.clone()),
+            None => (shell.to_string(), Vec::new()),
+        };
+    }
+
+    let separator = shell_kind.sequential_commands_separator();
+    let activation_script = activation_script.join(&format!("{separator} "));
+    let to_run = format_task_for_activation(spawn_task, shell_kind, shell, is_windows);
+    (
+        shell.to_string(),
+        shell_kind.args_for_shell(true, format!("{activation_script}{separator} {to_run}")),
+    )
+}
+
 fn resolve_remote_shell_program(remote_shell: Option<&Shell>, connection_shell: String) -> String {
     match remote_shell {
         // System refers to the remote host, not the client running Shell::program().
@@ -1018,6 +1044,78 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn hosted_task_command_joins_activation_with_the_task_command() {
+        let task = SpawnInTerminal {
+            command: Some("cargo".to_string()),
+            args: vec!["test".to_string(), "--workspace".to_string()],
+            ..SpawnInTerminal::default()
+        };
+        let activation_script = vec!["source .venv/bin/activate".to_string()];
+
+        let (program, args) = hosted_task_command(
+            &task,
+            &activation_script,
+            "/bin/bash",
+            ShellKind::Posix,
+            false,
+        );
+
+        // The task must run and then end the shell. Appending `exec /bin/bash -l`
+        // (what an interactive hosted terminal does) would leave a login shell
+        // running, so the hosted PTY would never report the command's exit.
+        assert_eq!(program, "/bin/bash");
+        assert_eq!(
+            args,
+            vec![
+                "-i".to_string(),
+                "-c".to_string(),
+                "source .venv/bin/activate; cargo test --workspace".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn hosted_task_command_keeps_the_task_program_without_activation() {
+        let task = SpawnInTerminal {
+            command: Some("/bin/bash".to_string()),
+            args: vec![
+                "-i".to_string(),
+                "-c".to_string(),
+                "exec </dev/null\nls -la secrets".to_string(),
+            ],
+            ..SpawnInTerminal::default()
+        };
+
+        assert_eq!(
+            hosted_task_command(&task, &[], "/bin/zsh", ShellKind::Posix, false),
+            ("/bin/bash".to_string(), task.args.clone())
+        );
+    }
+
+    #[test]
+    fn hosted_task_command_without_a_task_command_activates_then_starts_the_shell() {
+        let activation_script = vec!["source .venv/bin/activate".to_string()];
+
+        assert_eq!(
+            hosted_task_command(
+                &SpawnInTerminal::default(),
+                &activation_script,
+                "/bin/bash",
+                ShellKind::Posix,
+                false,
+            ),
+            (
+                "/bin/bash".to_string(),
+                vec![
+                    "-i".to_string(),
+                    "-c".to_string(),
+                    "source .venv/bin/activate; exec /bin/bash -l".to_string(),
+                ]
+            )
+        );
     }
 
     #[test]

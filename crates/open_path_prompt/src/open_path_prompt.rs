@@ -19,7 +19,7 @@ use std::{
         atomic::{self, AtomicBool},
     },
 };
-use ui::{Context, LabelLike, ListItem, Window};
+use ui::{Context, Label, LabelLike, ListItem, Window};
 use ui::{HighlightedLabel, ListItemSpacing, prelude::*};
 use util::{
     ResultExt, maybe,
@@ -28,6 +28,11 @@ use util::{
 use workspace::Workspace;
 
 pub struct OpenPathPrompt;
+
+/// Creates a directory for a name typed into a create-capable path prompt and
+/// resolves to the path the owner actually created, which may be canonicalized
+/// (symlinks resolved, `~` expanded) and is used to enter that directory.
+pub type CreateDirectoryHandler = dyn Fn(String, &App) -> Task<anyhow::Result<String>> + 'static;
 
 pub struct OpenPathDelegate {
     tx: Option<oneshot::Sender<Option<Vec<PathBuf>>>>,
@@ -41,6 +46,9 @@ pub struct OpenPathDelegate {
     prompt_root: String,
     path_style: PathStyle,
     replace_prompt: Task<()>,
+    create_prompt: Task<()>,
+    create_directory: Option<Arc<CreateDirectoryHandler>>,
+    create_error: Option<SharedString>,
     render_footer:
         Arc<dyn Fn(&mut Window, &mut Context<Picker<Self>>) -> Option<AnyElement> + 'static>,
     hidden_entries: bool,
@@ -76,6 +84,9 @@ impl OpenPathDelegate {
             },
             path_style,
             replace_prompt: Task::ready(()),
+            create_prompt: Task::ready(()),
+            create_directory: None,
+            create_error: None,
             render_footer: Arc::new(|_, _| None),
             hidden_entries: false,
             sort_mode,
@@ -94,6 +105,14 @@ impl OpenPathDelegate {
 
     pub fn show_hidden(mut self) -> Self {
         self.hidden_entries = true;
+        self
+    }
+
+    /// Lets this prompt turn a typed, nonexistent name into a new directory.
+    /// Only callers that can create the directory (for example the remote
+    /// project picker, whose server advertised the capability) should set it.
+    pub fn with_create_directory(mut self, create_directory: Arc<CreateDirectoryHandler>) -> Self {
+        self.create_directory = Some(create_directory);
         self
     }
     fn get_entry(&self, selected_match_index: usize) -> Option<CandidateInfo> {
@@ -164,6 +183,23 @@ impl OpenPathDelegate {
             PathStyle::Unix => "./",
             PathStyle::Windows => ".\\",
         }
+    }
+
+    fn confirmed_directory_path(
+        &self,
+        parent_path: &String,
+        candidate: &StringMatchCandidate,
+        cx: &App,
+    ) -> Option<PathBuf> {
+        if parent_path == &self.prompt_root && candidate.string.is_empty() {
+            return Some(PathBuf::from(&self.prompt_root));
+        }
+        self.path_style
+            .join_path_preserving_components(
+                Path::new(self.lister.resolve_tilde(parent_path, cx).as_ref()),
+                &candidate.string,
+            )
+            .log_err()
     }
 }
 
@@ -683,22 +719,11 @@ impl PickerDelegate for OpenPathDelegate {
         match &self.directory_state {
             DirectoryState::None { .. } => return,
             DirectoryState::List { parent_path, .. } => {
-                let confirmed_path =
-                    if parent_path == &self.prompt_root && candidate.path.string.is_empty() {
-                        PathBuf::from(&self.prompt_root)
-                    } else {
-                        let Some(confirmed_path) = self
-                            .path_style
-                            .join_path_preserving_components(
-                                Path::new(self.lister.resolve_tilde(parent_path, cx).as_ref()),
-                                &candidate.path.string,
-                            )
-                            .log_err()
-                        else {
-                            return;
-                        };
-                        confirmed_path
-                    };
+                let Some(confirmed_path) =
+                    self.confirmed_directory_path(parent_path, &candidate.path, cx)
+                else {
+                    return;
+                };
                 if let Some(tx) = self.tx.take() {
                     tx.send(Some(vec![confirmed_path])).ok();
                 }
@@ -713,22 +738,11 @@ impl PickerDelegate for OpenPathDelegate {
                     if user_input.is_dir {
                         return;
                     }
-                    let prompted_path =
-                        if parent_path == &self.prompt_root && user_input.file.string.is_empty() {
-                            PathBuf::from(&self.prompt_root)
-                        } else {
-                            let Some(prompted_path) = self
-                                .path_style
-                                .join_path_preserving_components(
-                                    Path::new(self.lister.resolve_tilde(parent_path, cx).as_ref()),
-                                    &user_input.file.string,
-                                )
-                                .log_err()
-                            else {
-                                return;
-                            };
-                            prompted_path
-                        };
+                    let Some(prompted_path) =
+                        self.confirmed_directory_path(parent_path, &user_input.file, cx)
+                    else {
+                        return;
+                    };
                     if user_input.exists {
                         self.should_dismiss = false;
                         let answer = window.prompt(
@@ -752,6 +766,38 @@ impl PickerDelegate for OpenPathDelegate {
                                         tx.send(Some(vec![prompted_path])).ok();
                                     }
                                     cx.emit(gpui::DismissEvent);
+                                })
+                                .ok();
+                        });
+                        return;
+                    } else if let Some(create_directory) = self.create_directory.clone() {
+                        self.should_dismiss = false;
+                        self.create_error = None;
+                        let requested_path = prompted_path.to_string_lossy().into_owned();
+                        let create_task = create_directory(requested_path, cx);
+                        self.create_prompt = cx.spawn_in(window, async move |picker, cx| {
+                            let result = create_task.await;
+                            picker
+                                .update_in(cx, |picker, _window, cx| {
+                                    picker.delegate.should_dismiss = true;
+                                    match result {
+                                        Ok(created_path) => {
+                                            picker.delegate.create_error = None;
+                                            if let Some(tx) = picker.delegate.tx.take() {
+                                                tx.send(Some(vec![PathBuf::from(created_path)]))
+                                                    .ok();
+                                            }
+                                            cx.emit(gpui::DismissEvent);
+                                        }
+                                        Err(error) => {
+                                            log::error!(
+                                                "failed to create directory from path prompt: {error:#}"
+                                            );
+                                            picker.delegate.create_error =
+                                                Some(SharedString::from(format!("{error:#}")));
+                                            cx.notify();
+                                        }
+                                    }
                                 })
                                 .ok();
                         });
@@ -886,7 +932,7 @@ impl PickerDelegate for OpenPathDelegate {
                                 let label = if user_input.is_dir {
                                     label
                                 } else {
-                                    format!("{label} (replace)")
+                                    format!("{label} {}", i18n::t!("5f55a862215d421e"))
                                 };
                                 StyledText::new(label)
                                     .with_default_highlights(
@@ -898,7 +944,7 @@ impl PickerDelegate for OpenPathDelegate {
                                     )
                                     .into_any_element()
                             } else {
-                                StyledText::new(format!("{label} (create)"))
+                                StyledText::new(format!("{label} {}", i18n::t!("4e5244f7fd8f9ad5")))
                                     .with_default_highlights(
                                         &window.text_style(),
                                         vec![(
@@ -933,7 +979,25 @@ impl PickerDelegate for OpenPathDelegate {
         window: &mut Window,
         cx: &mut Context<Picker<Self>>,
     ) -> Option<AnyElement> {
-        (self.render_footer)(window, cx)
+        let custom_footer = (self.render_footer)(window, cx);
+        let Some(error) = self.create_error.clone() else {
+            return custom_footer;
+        };
+
+        let error = div()
+            .w_full()
+            .p_1p5()
+            .border_t_1()
+            .border_color(cx.theme().colors().border_variant)
+            .child(Label::new(error).color(Color::Error))
+            .into_any_element();
+        Some(match custom_footer {
+            Some(custom_footer) => v_flex()
+                .child(error)
+                .child(custom_footer)
+                .into_any_element(),
+            None => error,
+        })
     }
 
     fn no_matches_text(&self, _window: &mut Window, _cx: &mut App) -> Option<SharedString> {

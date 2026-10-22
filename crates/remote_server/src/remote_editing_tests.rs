@@ -623,6 +623,85 @@ async fn test_remote_document_loading(cx: &mut TestAppContext, server_cx: &mut T
 }
 
 #[gpui::test]
+async fn test_create_remote_directory_creates_missing_paths(
+    cx: &mut TestAppContext,
+    server_cx: &mut TestAppContext,
+) {
+    let fs = FakeFs::new(server_cx.executor());
+    fs.insert_tree(
+        path!("/code"),
+        json!({ "project": { "README.md": "# project" } }),
+    )
+    .await;
+    let (project, headless) = init_test(&fs, cx, server_cx).await;
+
+    assert!(
+        project.read_with(cx, |project, cx| project
+            .supports_create_remote_directory(cx)),
+        "a matching server advertises the capability"
+    );
+
+    let target = path!("/code/new-project/nested");
+    let created = project
+        .update(cx, |project, cx| {
+            project.create_remote_directory(target.to_string(), cx)
+        })
+        .await
+        .expect("create a missing remote directory");
+    assert_eq!(created, target);
+    assert!(
+        fs.is_dir(Path::new(target)).await,
+        "the server creates missing parent directories"
+    );
+
+    // Re-creating the same directory is not an error, so a retried confirmation
+    // cannot fail just because the first one already succeeded.
+    let created_again = project
+        .update(cx, |project, cx| {
+            project.create_remote_directory(target.to_string(), cx)
+        })
+        .await
+        .expect("creating an existing directory is idempotent");
+    assert_eq!(created_again, target);
+
+    let relative = project
+        .update(cx, |project, cx| {
+            project.create_remote_directory("relative/path".to_string(), cx)
+        })
+        .await
+        .expect_err("relative paths are refused by the server");
+    assert!(
+        relative.to_string().contains("absolute"),
+        "unexpected error: {relative:#}"
+    );
+
+    headless
+        .update(server_cx, |headless, _| {
+            headless.session.send(proto::RemoteStarted {
+                capabilities: Vec::new(),
+            })
+        })
+        .expect("advertise an older server");
+    cx.run_until_parked();
+    assert!(
+        !project.read_with(cx, |project, cx| project
+            .supports_create_remote_directory(cx)),
+        "an official or older server must not be treated as capable"
+    );
+    let unsupported_target = path!("/code/unsupported");
+    project
+        .update(cx, |project, cx| {
+            project.create_remote_directory(unsupported_target.to_string(), cx)
+        })
+        .await
+        .expect_err("creating a remote directory requires the capability");
+    assert!(
+        !fs.is_dir(Path::new(unsupported_target)).await,
+        "no request may reach a server without the capability"
+    );
+}
+
+#[gpui::test]
 async fn test_remote_model_loading(cx: &mut TestAppContext, server_cx: &mut TestAppContext) {
     let fs = FakeFs::new(server_cx.executor());
     fs.insert_tree(path!("/code"), json!({"project": {}})).await;
