@@ -565,7 +565,9 @@ message Envelope {
     TakeHostedTerminalControlResponse take_hosted_terminal_control_response = 533;
     RenameHostedTerminal rename_hosted_terminal = 534;
     TerminateHostedTerminal terminate_hosted_terminal = 535;
-    DeleteHostedTerminal delete_hosted_terminal = 536; // current max
+    DeleteHostedTerminal delete_hosted_terminal = 536;
+    CreateRemoteDirectory create_remote_directory = 537;
+    CreateRemoteDirectoryResponse create_remote_directory_response = 538; // current max
   }
 
   reserved 87 to 88;

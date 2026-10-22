@@ -12647,12 +12647,14 @@ dependencies = [
 name = "open_path_prompt"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "editor",
  "file_icons",
  "futures 0.3.34",
  "fuzzy",
  "gpui",
  "i18n",
+ "log",
  "picker",
  "project",
  "serde",

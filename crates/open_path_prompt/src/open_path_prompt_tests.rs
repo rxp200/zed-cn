@@ -1,14 +1,15 @@
 use std::sync::{Arc, atomic};
 
+use futures::channel::oneshot;
 use fuzzy::{StringMatch, StringMatchCandidate};
-use gpui::{AppContext, Entity, TestAppContext, VisualTestContext};
+use gpui::{App, AppContext, Entity, TestAppContext, VisualTestContext};
 use picker::{Picker, PickerDelegate};
 use project::Project;
 use serde_json::json;
 use util::path;
 use workspace::{AppState, MultiWorkspace};
 
-use crate::{CandidateInfo, DirectoryState, OpenPathDelegate};
+use crate::{CandidateInfo, CreateDirectoryHandler, DirectoryState, OpenPathDelegate};
 
 #[gpui::test]
 async fn test_open_path_prompt(cx: &mut TestAppContext) {
@@ -401,6 +402,108 @@ async fn test_new_path_prompt(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+async fn test_new_path_prompt_creates_missing_directory(cx: &mut TestAppContext) {
+    let app_state = init_test(cx);
+    app_state
+        .fs
+        .as_fake()
+        .insert_tree(path!("/root"), json!({ "dir1": {} }))
+        .await;
+
+    let project = Project::test(app_state.fs.clone(), [path!("/root").as_ref()], cx).await;
+    let create_fs = app_state.fs.clone();
+    let create_directory: Arc<CreateDirectoryHandler> = Arc::new(move |path: String, cx: &App| {
+        let fs = create_fs.clone();
+        cx.spawn(async move |_| {
+            let path = std::path::PathBuf::from(path);
+            fs.create_dir(&path).await?;
+            Ok(fs.canonicalize(&path).await?.to_string_lossy().into_owned())
+        })
+    });
+    let (picker, mut confirmed, cx) = build_new_path_prompt(project, create_directory, cx);
+
+    insert_query(path!("/root/new-project"), &picker, cx).await;
+    assert_eq!(collect_match_candidates(&picker, cx), vec!["new-project"]);
+
+    picker.update_in(cx, |picker, window, cx| {
+        picker.delegate.confirm(false, window, cx)
+    });
+    cx.run_until_parked();
+
+    let created = std::path::PathBuf::from(path!("/root/new-project"));
+    assert!(
+        app_state.fs.is_dir(&created).await,
+        "confirming a typed, nonexistent name creates that directory"
+    );
+    let confirmed_path = confirmed
+        .try_recv()
+        .expect("confirmation is delivered")
+        .expect("confirmation is not cancelled")
+        .expect("a path is confirmed");
+    assert_eq!(confirmed_path.len(), 1);
+    assert_eq!(
+        app_state
+            .fs
+            .canonicalize(&confirmed_path[0])
+            .await
+            .expect("the confirmed path exists"),
+        app_state
+            .fs
+            .canonicalize(&created)
+            .await
+            .expect("the created path exists"),
+        "one Enter creates the directory and returns it to be opened"
+    );
+    assert!(
+        picker.read_with(cx, |picker, _| picker.delegate.create_error.is_none()),
+        "a successful creation reports no error"
+    );
+}
+
+#[gpui::test]
+async fn test_new_path_prompt_reports_create_failure(cx: &mut TestAppContext) {
+    let app_state = init_test(cx);
+    app_state
+        .fs
+        .as_fake()
+        .insert_tree(path!("/root"), json!({ "dir1": {} }))
+        .await;
+
+    let project = Project::test(app_state.fs.clone(), [path!("/root").as_ref()], cx).await;
+    let create_directory: Arc<CreateDirectoryHandler> = Arc::new(move |path: String, cx: &App| {
+        cx.spawn(async move |_| -> anyhow::Result<String> {
+            anyhow::bail!("mkdir permission denied for {path}")
+        })
+    });
+    let (picker, mut confirmed, cx) = build_new_path_prompt(project, create_directory, cx);
+
+    insert_query(path!("/root/forbidden"), &picker, cx).await;
+    picker.update_in(cx, |picker, window, cx| {
+        picker.delegate.confirm(false, window, cx)
+    });
+    cx.run_until_parked();
+
+    assert_eq!(
+        picker.read_with(cx, |picker, _| picker.delegate.current_query.clone()),
+        path!("/root/forbidden").to_string(),
+        "a failed creation leaves the query intact so the user can correct it"
+    );
+    let error = picker.read_with(cx, |picker, _| picker.delegate.create_error.clone());
+    assert!(
+        error.is_some_and(|error| error.contains("mkdir permission denied")),
+        "a failed creation is surfaced instead of being swallowed"
+    );
+    assert!(
+        picker.read_with(cx, |picker, _| picker.delegate.should_dismiss),
+        "the prompt can be dismissed again after a failed creation"
+    );
+    assert!(
+        matches!(confirmed.try_recv(), Ok(None)),
+        "a failed creation confirms nothing"
+    );
+}
+
+#[gpui::test]
 async fn test_open_path_prompt_panics_with_stale_highlight_positions(cx: &mut TestAppContext) {
     let app_state = init_test(cx);
     app_state
@@ -542,6 +645,38 @@ fn build_open_path_prompt(
                 picker
             })
         }),
+        cx,
+    )
+}
+
+fn build_new_path_prompt(
+    project: Entity<Project>,
+    create_directory: Arc<CreateDirectoryHandler>,
+    cx: &mut TestAppContext,
+) -> (
+    Entity<Picker<OpenPathDelegate>>,
+    oneshot::Receiver<Option<Vec<std::path::PathBuf>>>,
+    &mut VisualTestContext,
+) {
+    let (tx, rx) = oneshot::channel();
+    let lister = project::DirectoryLister::Project(project.clone());
+
+    let (multi_workspace, cx) =
+        cx.add_window_view(|window, cx| MultiWorkspace::test_new(project, window, cx));
+    let workspace =
+        multi_workspace.read_with(cx, |multi_workspace, _| multi_workspace.workspace().clone());
+    (
+        workspace.update_in(cx, |_, window, cx| {
+            let delegate = OpenPathDelegate::new(tx, lister.clone(), true, cx)
+                .with_create_directory(create_directory);
+            cx.new(|cx| {
+                let picker = Picker::uniform_list(delegate, window, cx).embedded();
+                let query = lister.default_query(cx);
+                picker.set_query(&query, window, cx);
+                picker
+            })
+        }),
+        rx,
         cx,
     )
 }

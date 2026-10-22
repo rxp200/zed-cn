@@ -537,6 +537,7 @@ impl HeadlessProject {
         session.add_request_handler(cx.weak_entity(), Self::handle_get_processes);
         session.add_request_handler(cx.weak_entity(), Self::handle_get_remote_profiling_data);
         session.add_request_handler(cx.weak_entity(), Self::handle_create_temporary_file);
+        session.add_request_handler(cx.weak_entity(), Self::handle_create_remote_directory);
         session.add_request_handler(cx.weak_entity(), Self::handle_get_system_stats);
         session.add_request_handler(cx.weak_entity(), Self::handle_read_document_chunk);
         session.add_request_handler(cx.weak_entity(), Self::handle_read_download_chunk);
@@ -1711,6 +1712,25 @@ impl HeadlessProject {
 
         Ok(proto::CreateTemporaryFileResponse {
             path: path.to_string_lossy().into_owned(),
+        })
+    }
+
+    async fn handle_create_remote_directory(
+        this: Entity<Self>,
+        envelope: TypedEnvelope<proto::CreateRemoteDirectory>,
+        cx: AsyncApp,
+    ) -> Result<proto::CreateRemoteDirectoryResponse> {
+        let fs = cx.read_entity(&this, |this, _| this.fs.clone());
+        let expanded = PathBuf::from(shellexpand::tilde(&envelope.payload.path).to_string());
+        anyhow::ensure!(
+            expanded.is_absolute(),
+            "remote directory path must be absolute"
+        );
+
+        fs.create_dir(&expanded).await?;
+        let canonicalized = fs.canonicalize(&expanded).await?;
+        Ok(proto::CreateRemoteDirectoryResponse {
+            path: canonicalized.to_string_lossy().into_owned(),
         })
     }
 

@@ -97,6 +97,17 @@ message ListRemoteDirectoryResponse {
   repeated EntryInfo entry_info = 2;
 }
 
+// Creates a directory outside of any worktree, used by the remote project
+// picker before the chosen path becomes a worktree root. Only sent to servers
+// that advertised the `create_remote_directory_v1` capability.
+message CreateRemoteDirectory {
+  string path = 1;
+}
+
+message CreateRemoteDirectoryResponse {
+  string path = 1;
+}
+
 message CreateProjectEntry {
   uint64 project_id = 1;
   uint64 worktree_id = 2;

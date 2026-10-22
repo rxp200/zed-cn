@@ -209,6 +209,28 @@ pub struct TerminateHostedTerminal;
 #[serde(deny_unknown_fields)]
 pub struct HostTerminal;
 
+/// Which hosted-terminal actions a terminal offers. Promotion and the hosted
+/// actions are mutually exclusive: once a session is hosted the menu must offer
+/// termination and detach instead of hosting it a second time.
+#[derive(Debug, PartialEq, Eq)]
+struct HostedTerminalActions {
+    can_host: bool,
+    can_manage: bool,
+    can_take_control: bool,
+}
+
+fn hosted_terminal_actions(
+    hostable: bool,
+    hosted: bool,
+    controls_input: bool,
+) -> HostedTerminalActions {
+    HostedTerminalActions {
+        can_host: hostable && !hosted,
+        can_manage: hosted,
+        can_take_control: hosted && !controls_input,
+    }
+}
+
 /// Creates a read-only snapshot with the terminal's retained scrollback.
 #[derive(Clone, Debug, Default, Deserialize, JsonSchema, PartialEq, Action)]
 #[action(namespace = terminal)]
@@ -251,8 +273,6 @@ pub struct TerminalView {
     /// Server-side session id of the hosted terminal, required by management
     /// operations. `None` for ordinary terminals.
     hosted_session_id: Option<String>,
-    /// Whether this client currently owns input for a hosted terminal.
-    controls_input: bool,
     cursor_shape: CursorShape,
     blink_manager: Entity<BlinkManager>,
     mode: TerminalMode,
@@ -425,20 +445,26 @@ impl TerminalView {
     ) {
         self.hosted = true;
         self.hosted_session_id = Some(session_id);
-        self.controls_input = controls_input;
+        self.terminal.update(cx, |terminal, _| {
+            terminal.set_remote_controls_input(controls_input);
+        });
         cx.notify();
     }
 
-    fn can_host_terminal(&self, cx: &mut Context<Self>) -> bool {
-        let Some(project) = self.project.upgrade() else {
-            return false;
-        };
-        let hostable = self
-            .terminal
-            .read(cx)
-            .remote_terminal_identity()
-            .is_some();
-        hostable && project.read(cx).supports_hosted_terminals(cx)
+    fn hosted_terminal_actions(&self, cx: &mut Context<Self>) -> HostedTerminalActions {
+        let terminal = self.terminal.read(cx);
+        let hostable = !terminal.remote_session_ended()
+            && terminal.remote_terminal_identity().is_some()
+            && self
+                .project
+                .upgrade()
+                .is_some_and(|project| project.read(cx).supports_hosted_terminals(cx));
+        let controls_input = terminal.remote_controls_input();
+        hosted_terminal_actions(
+            hostable,
+            self.hosted || self.hosted_session_id.is_some(),
+            controls_input,
+        )
     }
 
     /// Promotion never restarts the shell: the remote server marks the existing
@@ -452,6 +478,12 @@ impl TerminalView {
         let Some(project) = self.project.upgrade() else {
             return;
         };
+        if self.hosted
+            || self.hosted_session_id.is_some()
+            || self.terminal.read(cx).remote_session_ended()
+        {
+            return;
+        }
         let Some((server_instance_id, terminal_id)) = self
             .terminal
             .read(cx)
@@ -474,7 +506,9 @@ impl TerminalView {
                     this.update_in(cx, |this, _window, cx| {
                         this.hosted = true;
                         this.hosted_session_id = Some(response.session_id);
-                        this.controls_input = true;
+                        this.terminal.update(cx, |terminal, _| {
+                            terminal.set_remote_controls_input(true);
+                        });
                         cx.notify();
                     })
                     .ok();
@@ -510,13 +544,15 @@ impl TerminalView {
             match request.await {
                 Ok(response) => {
                     this.update_in(cx, |this, _window, cx| {
-                        this.controls_input = response.controls_input;
+                        this.terminal.update(cx, |terminal, _| {
+                            terminal.set_remote_controls_input(response.controls_input);
+                        });
                         cx.notify();
                     })
                     .ok();
                 }
                 Err(error) => {
-                    eprintln!("failed to take hosted terminal control: {error:#}");
+                    log::error!("failed to take hosted terminal control: {error:#}");
                 }
             }
         })
@@ -542,12 +578,22 @@ impl TerminalView {
             })
         });
         if let Some(request) = request {
-            cx.spawn_in(window, async move |_, cx| {
+            cx.spawn_in(window, async move |this, cx| {
                 if let Err(error) = request.await {
-                    eprintln!("failed to detach hosted terminal: {error:#}");
+                    log::error!("failed to detach hosted terminal: {error:#}");
                 }
-                cx.update(|window, cx| window.dispatch_action(Box::new(CloseActiveItem::default()), cx))
-                    .ok();
+                // Leaves only this view: the session keeps running on the remote
+                // host, so the tab that belonged to it must close, not whichever
+                // tab happens to be active.
+                this.update_in(cx, |this, _window, cx| {
+                    this.terminal.update(cx, |terminal, _| {
+                        terminal.end_remote_session();
+                    });
+                    this.hosted = false;
+                    this.hosted_session_id = None;
+                    cx.emit(ItemEvent::CloseItem);
+                })
+                .ok();
             })
             .detach();
         }
@@ -575,15 +621,21 @@ impl TerminalView {
         cx.spawn_in(window, async move |this, cx| {
             match request.await {
                 Ok(()) => {
+                    // The remote program is gone, so this view must not keep
+                    // accepting input or claim the whole terminal is unavailable:
+                    // it keeps the scrollback and stops silently.
                     this.update_in(cx, |this, _window, cx| {
                         this.hosted_session_id = None;
                         this.hosted = false;
+                        this.terminal.update(cx, |terminal, _| {
+                            terminal.end_remote_session();
+                        });
                         cx.notify();
                     })
                     .ok();
                 }
                 Err(error) => {
-                    eprintln!("failed to terminate hosted terminal: {error:#}");
+                    log::error!("failed to terminate hosted terminal: {error:#}");
                 }
             }
         })
@@ -849,7 +901,6 @@ impl TerminalView {
             context_menu: None,
             hosted: false,
             hosted_session_id: None,
-            controls_input: true,
             cursor_shape,
             blink_manager,
             blinking_terminal_enabled: false,
@@ -1283,7 +1334,7 @@ impl TerminalView {
             .upgrade()
             .and_then(|workspace| workspace.read(cx).panel::<TerminalPanel>(cx))
             .is_some_and(|terminal_panel| terminal_panel.read(cx).assistant_enabled());
-        let can_host_terminal = self.can_host_terminal(cx);
+        let hosted_actions = self.hosted_terminal_actions(cx);
         let context_menu = ContextMenu::build(window, cx, |menu, _, _| {
             menu.context(self.focus_handle.clone())
                 .when(self.shows_workspace_actions(), |menu| {
@@ -1297,13 +1348,13 @@ impl TerminalView {
                     )
                     .separator()
                 })
-                .when(can_host_terminal, |menu| {
+                .when(hosted_actions.can_host, |menu| {
                     menu.action(i18n::t!("69178944fb4ed4a8"), Box::new(HostTerminal))
                         .separator()
                 })
-                .when(self.hosted_session_id.is_some(), |menu| {
+                .when(hosted_actions.can_manage, |menu| {
                     menu
-                        .when(!self.controls_input, |menu| {
+                        .when(hosted_actions.can_take_control, |menu| {
                             menu.action(
                                 i18n::t!("de5a8ab47de9e80d"),
                                 Box::new(TakeHostedTerminalControl),
@@ -2536,6 +2587,22 @@ impl Item for TerminalView {
             TerminalActivity::Active => Color::Success.color(cx).opacity(0.55),
             TerminalActivity::Idle => Color::Warning.color(cx).opacity(0.55),
         };
+        let hosted_badge = self.hosted.then(|| {
+            let controls_input = terminal.remote_controls_input();
+            let description = if controls_input {
+                i18n::t!("6855143c078434ab")
+            } else {
+                i18n::t!("f52cc51406d6ba95")
+            };
+            (
+                if controls_input {
+                    Color::Accent
+                } else {
+                    Color::Muted
+                },
+                description,
+            )
+        });
         h_flex()
             .gap_1()
             .group("term-tab-icon")
@@ -2585,6 +2652,15 @@ impl Item for TerminalView {
                         .ok();
                 }
             })
+            .when_some(hosted_badge, |this, (color, description)| {
+                this.child(
+                    div()
+                        .id("terminal-hosted-indicator")
+                        .flex_shrink_0()
+                        .tooltip(Tooltip::text(description))
+                        .child(Icon::new(IconName::Cloud).size(IconSize::XSmall).color(color)),
+                )
+            })
             .when(!self.read_only, |this| {
                 this.child(
                     div()
@@ -2624,19 +2700,6 @@ impl Item for TerminalView {
                             .color(params.text_color())
                             .when(self.is_renaming(), |this| this.alpha(0.)),
                     )
-                    .when(self.hosted, |this| {
-                        let badge = if self.controls_input {
-                            i18n::t!("6855143c078434ab")
-                        } else {
-                            i18n::t!("f52cc51406d6ba95")
-                        };
-                        this.child(
-                            Label::new(badge)
-                                .size(LabelSize::Small)
-                                .color(Color::Muted)
-                                .ml_1(),
-                        )
-                    })
                     .when_some(self.rename_editor.clone(), |this, editor| {
                         let self_handle = self.self_handle.clone();
                         let self_handle_cancel = self.self_handle.clone();
@@ -2844,14 +2907,15 @@ impl Item for TerminalView {
         if self.terminal.read(cx).task().is_none() {
             actions.push(("Rename".into(), Box::new(RenameTerminal)));
         }
-        if self.can_host_terminal(cx) {
+        let hosted_actions = self.hosted_terminal_actions(cx);
+        if hosted_actions.can_host {
             actions.push((
                 i18n::t!("69178944fb4ed4a8").into(),
                 Box::new(HostTerminal),
             ));
         }
-        if self.hosted_session_id.is_some() {
-            if !self.controls_input {
+        if hosted_actions.can_manage {
+            if hosted_actions.can_take_control {
                 actions.push((
                     i18n::t!("de5a8ab47de9e80d").into(),
                     Box::new(TakeHostedTerminalControl),
@@ -3142,7 +3206,9 @@ impl SerializableItem for TerminalView {
                     if let Some((session_id, controls_input)) = hosted {
                         view.hosted = true;
                         view.hosted_session_id = Some(session_id);
-                        view.controls_input = controls_input;
+                        view.terminal.update(cx, |terminal, _| {
+                            terminal.set_remote_controls_input(controls_input);
+                        });
                     }
                     view
                 })
@@ -5419,5 +5485,27 @@ mod tests {
                 text
             );
         });
+    }
+
+    #[test]
+    fn hosting_a_terminal_replaces_promotion_with_the_hosted_actions() {
+        let unhosted = hosted_terminal_actions(true, false, true);
+        assert!(unhosted.can_host);
+        assert!(!unhosted.can_manage);
+        assert!(!unhosted.can_take_control);
+
+        let controller = hosted_terminal_actions(true, true, true);
+        assert!(!controller.can_host, "promotion must disappear once hosted");
+        assert!(controller.can_manage);
+        assert!(!controller.can_take_control);
+
+        let viewer = hosted_terminal_actions(true, true, false);
+        assert!(!viewer.can_host);
+        assert!(viewer.can_manage);
+        assert!(viewer.can_take_control);
+
+        let local = hosted_terminal_actions(false, false, true);
+        assert!(!local.can_host);
+        assert!(!local.can_manage);
     }
 }

@@ -167,12 +167,20 @@ impl SessionLifecycle {
         if self.attachments.len() >= MAX_ATTACHMENTS {
             return Err(SessionError::AttachmentLimit);
         }
+        // Nobody holds control once the previous controller detached or its
+        // connection was released, so the next attachment takes it instead of
+        // staying permanently read-only.
+        let takes_control = self.controller.is_none() && !self.exited;
         self.attachments.insert(
-            attachment_id,
+            attachment_id.clone(),
             Attachment {
                 last_input_sequence: 0,
             },
         );
+        if takes_control {
+            self.controller = Some(attachment_id);
+            self.control_generation += 1;
+        }
         self.disconnected_at = None;
         self.last_event_at = now;
         Ok(())
@@ -793,6 +801,19 @@ impl HostedTerminalService {
         Ok(())
     }
 
+    /// Releases every attachment that a closed connection still held. The
+    /// session keeps running; control becomes free for the next attachment, so
+    /// a reconnecting client is not left as a read-only viewer.
+    pub fn detach_owned(&self, attachments: &[(String, String)]) {
+        for (session_id, attachment_id) in attachments {
+            if let Err(error) = self.detach(session_id, attachment_id) {
+                log::debug!(
+                    "hosted terminal attachment {attachment_id} was already released: {error}"
+                );
+            }
+        }
+    }
+
     pub fn input(&self, request: proto::HostedTerminalDaemonInput) -> Result<(), SessionError> {
         if request.data.len() > MAX_INPUT_BYTES {
             return Err(SessionError::InputSequenceGap);
@@ -1227,6 +1248,25 @@ async fn handle_connection(
         }
     });
 
+    let mut owned_attachments: Vec<(String, String)> = Vec::new();
+    let result = read_requests(&mut reader, &service, &outbound, &mut owned_attachments).await;
+    // Attachments belong to the connection that created them. Releasing them
+    // here hands control back instead of leaving a ghost controller and a
+    // leaked attachment slot after every reconnect.
+    service.detach_owned(&owned_attachments);
+    drop(outbound);
+    writer_task.await;
+    result
+}
+
+async fn read_requests(
+    reader: &mut futures::io::ReadHalf<net::async_net::UnixStream>,
+    service: &Arc<HostedTerminalService>,
+    outbound: &async_channel::Sender<Vec<u8>>,
+    owned_attachments: &mut Vec<(String, String)>,
+) -> Result<()> {
+    use futures::AsyncReadExt as _;
+
     loop {
         let mut length = [0_u8; 4];
         if reader.read_exact(&mut length).await.is_err() {
@@ -1281,17 +1321,41 @@ async fn handle_connection(
                 }
             }
             other => {
-                let response = dispatch(&service, other);
+                let request = other.clone();
+                let response = dispatch(service, other);
                 match response {
-                    Ok(response) => send_response(&outbound, request_id, response).await,
+                    Ok(response) => {
+                        if let Some(owned) = owned_attachment(&request, &response) {
+                            owned_attachments.push(owned);
+                        }
+                        send_response(&outbound, request_id, response).await
+                    }
                     Err(error) => send_error(&outbound, request_id, error).await,
                 }
             }
         }
     }
-    drop(outbound);
-    writer_task.await;
     Ok(())
+}
+
+/// Reports the attachment a request added to this connection, so it can be
+/// released when the connection ends. Creation is idempotent, so a retried
+/// create may record an attachment that already existed.
+fn owned_attachment(
+    request: &Option<proto::hosted_terminal_daemon_request::Kind>,
+    response: &proto::HostedTerminalDaemonResponse,
+) -> Option<(String, String)> {
+    use proto::hosted_terminal_daemon_request::Kind as RequestKind;
+    use proto::hosted_terminal_daemon_response::Kind as ResponseKind;
+    match (request.as_ref()?, response.kind.as_ref()?) {
+        (RequestKind::Create(create), ResponseKind::Created(created)) => {
+            Some((created.session_id.clone(), create.attachment_id.clone()))
+        }
+        (RequestKind::Attach(attach), ResponseKind::Attached(attached)) => {
+            Some((attach.session_id.clone(), attached.attachment_id.clone()))
+        }
+        _ => None,
+    }
 }
 
 async fn forward_output(
@@ -1462,6 +1526,15 @@ struct ClientShared {
 pub struct HostedTerminalClient {
     writer: async_lock::Mutex<futures::io::WriteHalf<net::async_net::UnixStream>>,
     shared: Arc<ClientShared>,
+    /// Cancelled on drop, which closes the socket so the daemon can release the
+    /// attachments this connection held instead of keeping ghost controllers.
+    reader_task: Option<smol::Task<()>>,
+}
+
+impl Drop for HostedTerminalClient {
+    fn drop(&mut self) {
+        drop(self.reader_task.take());
+    }
 }
 
 #[allow(
@@ -1500,13 +1573,13 @@ impl HostedTerminalClient {
         let (reader, writer) = stream.split();
         let shared = Arc::new(ClientShared::default());
         let reader_shared = shared.clone();
-        smol::spawn(async move {
+        let reader_task = smol::spawn(async move {
             read_client_frames(reader, reader_shared).await;
-        })
-        .detach();
+        });
         Ok(Arc::new(Self {
             writer: async_lock::Mutex::new(writer),
             shared,
+            reader_task: Some(reader_task),
         }))
     }
 
@@ -1759,6 +1832,22 @@ mod tests {
     }
 
     #[test]
+    fn control_moves_to_the_next_attachment_when_the_controller_detaches() {
+        let mut state = session();
+        state.host("first", "agent").unwrap();
+        state.attach("viewer".into(), Duration::ZERO).unwrap();
+        assert!(!state.controls("viewer"));
+        state.detach("first", Duration::ZERO).unwrap();
+        assert_eq!(state.controller(), None);
+        state.attach("second".into(), Duration::ZERO).unwrap();
+        assert!(state.controls("second"));
+        assert_eq!(
+            state.check_input("second", state.control_generation(), 1),
+            Ok(InputDecision::Accept)
+        );
+    }
+
+    #[test]
     fn new_viewer_is_read_only_and_takeover_rejects_stale_input_and_resize() {
         let mut state = session();
         state.host("first", "agent").unwrap();
@@ -1789,6 +1878,19 @@ mod tests {
         assert_eq!(
             state.commit_input("first", next_generation, 1),
             Ok(InputDecision::Accept)
+        );
+    }
+
+    #[test]
+    fn attaching_while_another_attachment_controls_stays_read_only() {
+        let mut state = session();
+        state.host("first", "agent").unwrap();
+        state.attach("viewer".into(), Duration::ZERO).unwrap();
+        assert!(state.controls("first"));
+        assert!(!state.controls("viewer"));
+        assert_eq!(
+            state.check_input("viewer", state.control_generation(), 1),
+            Err(SessionError::NotController)
         );
     }
 
@@ -1956,7 +2058,9 @@ mod tests {
         let attached = service
             .attach(&session_id, "second", "/home/user/project")
             .unwrap();
-        assert!(!attached.controls_input);
+        // Control was free after the previous controller detached, so the late
+        // attachment takes it instead of staying read-only forever.
+        assert!(attached.controls_input);
         let replay = drain(&service, &session_id, "second");
         assert!(replay.contains("ready"));
         assert_eq!(service.list("/home/user/project").len(), 1);

@@ -2447,6 +2447,39 @@ impl Project {
             .is_some_and(|client| client.read(cx).supports_temporary_files())
     }
 
+    pub fn supports_create_remote_directory(&self, cx: &App) -> bool {
+        self.remote_client
+            .as_ref()
+            .is_some_and(|client| client.read(cx).supports_create_remote_directory())
+    }
+
+    /// Creates a directory at an arbitrary path on the remote host, outside of
+    /// any worktree. This changes wire semantics, so it requires a server that
+    /// advertised the capability; callers must check
+    /// [`Self::supports_create_remote_directory`] first.
+    ///
+    /// Returns the path reported by the server, which may be canonicalized
+    /// (symlinks resolved), so callers should use it instead of the input.
+    pub fn create_remote_directory(&self, path: String, cx: &App) -> Task<Result<String>> {
+        let Some(remote_client) = &self.remote_client else {
+            return Task::ready(Err(anyhow!("project is not connected to a remote server")));
+        };
+        if !remote_client.read(cx).supports_create_remote_directory() {
+            return Task::ready(Err(anyhow!(
+                "remote server does not support creating directories"
+            )));
+        }
+
+        let request = remote_client
+            .read(cx)
+            .proto_client()
+            .request(proto::CreateRemoteDirectory { path });
+        cx.spawn(async move |_| {
+            let response = request.await?;
+            Ok(response.path)
+        })
+    }
+
     /// Whether files dropped into this project can be uploaded in chunks. This
     /// changes wire semantics, so it requires a server that advertised the
     /// upload capability as well as an explicit Zed CN SSH connection, never

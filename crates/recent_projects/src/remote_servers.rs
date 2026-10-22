@@ -909,7 +909,19 @@ impl ProjectPicker {
     ) -> Entity<Self> {
         let (tx, rx) = oneshot::channel();
         let lister = project::DirectoryLister::Project(project.clone());
-        let delegate = open_path_prompt::OpenPathDelegate::new(tx, lister, false, cx).show_hidden();
+        let can_create_directory = project.read(cx).supports_create_remote_directory(cx);
+        let delegate =
+            open_path_prompt::OpenPathDelegate::new(tx, lister, can_create_directory, cx)
+                .show_hidden();
+        let delegate = if can_create_directory {
+            let project = project.clone();
+            let create_directory = Arc::new(move |path: String, cx: &App| {
+                project.read_with(cx, |project, cx| project.create_remote_directory(path, cx))
+            });
+            delegate.with_create_directory(create_directory)
+        } else {
+            delegate
+        };
 
         let picker = cx.new(|cx| {
             let picker = Picker::uniform_list(delegate, window, cx).embedded();

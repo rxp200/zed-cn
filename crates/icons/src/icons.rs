@@ -72,6 +72,7 @@ pub enum IconName {
     CircleHelp,
     Clock,
     Close,
+    Cloud,
     CloudDownload,
     Code,
     Codeberg,

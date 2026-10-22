@@ -904,6 +904,13 @@ const MAX_COALESCED_INPUT_BYTES: usize = 64 * 1024;
 /// the remote program is not reading stdin. The batch is not recorded, so the
 /// client retries the same sequence until the program drains the backlog.
 const PERSISTENT_TERMINAL_INPUT_BACKLOG_FULL: &str = "persistent terminal input backlog is full";
+/// A hosted session has one controller. These rejections mean this view is not
+/// (or is no longer) that controller, so they must never end the terminal.
+const PERSISTENT_TERMINAL_NOT_CONTROLLER: &str = "attachment does not control this terminal";
+const PERSISTENT_TERMINAL_STALE_CONTROL: &str = "terminal input control was taken over";
+/// Delay between retries of a batch rejected because another client controls the
+/// hosted terminal. Taking control again lets the held batch through.
+const INPUT_CONTROL_RETRY_INTERVAL: Duration = Duration::from_millis(500);
 /// Delay between retries of a batch the server rejected because its input
 /// backlog was full.
 const INPUT_BACKLOG_RETRY_INTERVAL: Duration = Duration::from_millis(200);
@@ -1188,6 +1195,9 @@ impl TerminalBuilder {
             terminal_id,
             input_tx,
             input_backpressure_warned: std::cell::Cell::new(false),
+            input_blocked_warned: std::cell::Cell::new(false),
+            controls_input: std::cell::Cell::new(true),
+            session_ended: std::cell::Cell::new(false),
             input_task: None,
             output_task: None,
             failed: false,
@@ -1574,7 +1584,7 @@ impl TerminalBuilder {
                 let mut consecutive_stream_failures = 0;
                 loop {
                     if terminal.read_with(cx, |terminal, _| {
-                        matches!(&terminal.terminal_type, TerminalType::Remote(remote) if remote.failed)
+                        matches!(&terminal.terminal_type, TerminalType::Remote(remote) if remote.failed || remote.session_ended.get())
                     })? {
                         return Ok(());
                     }
@@ -1587,6 +1597,12 @@ impl TerminalBuilder {
                         .await;
                     match frames {
                         Err(error) => {
+                            if persistent_terminal_session_ended(&error) {
+                                terminal.update(cx, |terminal, _| {
+                                    terminal.end_remote_session();
+                                })?;
+                                return Ok(());
+                            }
                             if persistent_terminal_is_unavailable(&error) {
                                 terminal.update(cx, |terminal, cx| {
                                     terminal.fail_remote_terminal(&error, cx);
@@ -1603,7 +1619,7 @@ impl TerminalBuilder {
                             let mut made_progress = false;
                             'stream: loop {
                                 if terminal.read_with(cx, |terminal, _| {
-                                    matches!(&terminal.terminal_type, TerminalType::Remote(remote) if remote.failed)
+                                    matches!(&terminal.terminal_type, TerminalType::Remote(remote) if remote.failed || remote.session_ended.get())
                                 })? {
                                     return Ok(());
                                 }
@@ -1614,6 +1630,12 @@ impl TerminalBuilder {
                                 let frame = match frame {
                                     Ok(frame) => frame,
                                     Err(error) => {
+                                        if persistent_terminal_session_ended(&error) {
+                                            terminal.update(cx, |terminal, _| {
+                                                terminal.end_remote_session();
+                                            })?;
+                                            return Ok(());
+                                        }
                                         if persistent_terminal_is_unavailable(&error) {
                                             terminal.update(cx, |terminal, cx| {
                                                 terminal.fail_remote_terminal(&error, cx);
@@ -1815,6 +1837,7 @@ async fn send_persistent_terminal_input(
     executor: BackgroundExecutor,
 ) -> Result<()> {
     let mut sequence = 1;
+    let mut control_wait_reported = false;
     while let Ok(first) = input_rx.recv().await {
         let mut data = first;
         while data.len() < MAX_COALESCED_INPUT_BYTES {
@@ -1836,7 +1859,10 @@ async fn send_persistent_terminal_input(
                 })
                 .await;
             match result {
-                Ok(_) => break,
+                Ok(_) => {
+                    control_wait_reported = false;
+                    break;
+                }
                 Err(error) if persistent_terminal_input_backlog_is_full(&error) => {
                     // The remote program is not reading stdin, so the server's
                     // backlog is full. It did not record this sequence, so retry
@@ -1846,6 +1872,23 @@ async fn send_persistent_terminal_input(
                         "persistent terminal input waiting for remote backlog space: {error:#}"
                     );
                     executor.timer(INPUT_BACKLOG_RETRY_INTERVAL).await;
+                }
+                Err(error) if persistent_terminal_session_ended(&error) => {
+                    log::debug!("hosted terminal session ended before input: {error:#}");
+                    return Ok(());
+                }
+                Err(error) if persistent_terminal_input_control_lost(&error) => {
+                    // Another client currently controls the hosted session. The
+                    // server did not record this sequence either, so hold the
+                    // batch until this view takes control back; failing here
+                    // would end the whole terminal view.
+                    if !control_wait_reported {
+                        control_wait_reported = true;
+                        log::warn!(
+                            "persistent terminal input waiting for input control: {error:#}"
+                        );
+                    }
+                    executor.timer(INPUT_CONTROL_RETRY_INTERVAL).await;
                 }
                 Err(error) => return Err(error),
             }
@@ -1878,6 +1921,35 @@ fn persistent_terminal_input_backlog_is_full(error: &anyhow::Error) -> bool {
         .is_some_and(|error| error.raw_message() == PERSISTENT_TERMINAL_INPUT_BACKLOG_FULL)
 }
 
+/// Errors that mean the hosted session itself no longer exists (it exited, was
+/// terminated, or this view was detached). They must stop the input pump and the
+/// output stream quietly: the terminal keeps its scrollback, and a "terminal is
+/// unavailable" banner would be wrong for a session that simply ended.
+fn persistent_terminal_session_ended(error: &anyhow::Error) -> bool {
+    error
+        .downcast_ref::<proto::RpcError>()
+        .is_some_and(|error| {
+            matches!(
+                error.raw_message(),
+                "hosted terminal has exited"
+                    | "hosted terminal attachment not found"
+                    | "hosted terminal not found"
+                    | "terminal is not hosted"
+            )
+        })
+}
+
+fn persistent_terminal_input_control_lost(error: &anyhow::Error) -> bool {
+    error
+        .downcast_ref::<proto::RpcError>()
+        .is_some_and(|error| {
+            matches!(
+                error.raw_message(),
+                PERSISTENT_TERMINAL_NOT_CONTROLLER | PERSISTENT_TERMINAL_STALE_CONTROL
+            )
+        })
+}
+
 struct RemoteTerminal {
     client: AnyProtoClient,
     server_instance_id: String,
@@ -1886,6 +1958,16 @@ struct RemoteTerminal {
     /// Set after a failed input send so a persistently full queue warns once
     /// instead of once per keystroke.
     input_backpressure_warned: std::cell::Cell<bool>,
+    /// Set once when input is dropped because another client controls the
+    /// hosted session, so the warning is not repeated per keystroke.
+    input_blocked_warned: std::cell::Cell<bool>,
+    /// Whether this view may type into its hosted terminal. Hosted sessions have
+    /// a single controller; viewers are read-only until they take control.
+    controls_input: std::cell::Cell<bool>,
+    /// Set once the remote session is gone (terminated, detached or already
+    /// exited). Input is dropped and the output stream stops without reporting
+    /// the terminal as unavailable, because no request can succeed any more.
+    session_ended: std::cell::Cell<bool>,
     input_task: Option<Task<()>>,
     output_task: Option<Task<Result<()>>>,
     failed: bool,
@@ -2955,6 +3037,16 @@ impl Terminal {
     /// (This is a no-op for display-only terminals.)
     fn write_to_pty(&self, input: impl Into<Cow<'static, [u8]>>) {
         let input = input.into();
+        if let TerminalType::Remote(remote) = &self.terminal_type
+            && (remote.session_ended.get() || !remote.controls_input.get())
+        {
+            if !remote.input_blocked_warned.replace(true) {
+                log::warn!(
+                    "hosted terminal input ignored: this view does not control the terminal"
+                );
+            }
+            return;
+        }
         #[cfg(any(test, feature = "test-support"))]
         self.pty_write_log.borrow_mut().push(input.to_vec());
         match &self.terminal_type {
@@ -3322,6 +3414,42 @@ impl Terminal {
             ))
         } else {
             None
+        }
+    }
+
+    /// Records whether this client may type into its hosted remote terminal.
+    /// Hosted sessions have one controller; a viewer's input is dropped locally
+    /// instead of being rejected by the server, which would end the terminal.
+    pub fn set_remote_controls_input(&mut self, controls_input: bool) {
+        if let TerminalType::Remote(remote) = &mut self.terminal_type {
+            remote.controls_input.set(controls_input);
+            if controls_input {
+                remote.input_blocked_warned.set(false);
+            }
+        }
+    }
+
+    pub fn remote_controls_input(&self) -> bool {
+        match &self.terminal_type {
+            TerminalType::Remote(remote) => remote.controls_input.get(),
+            _ => true,
+        }
+    }
+
+    /// Marks the remote session as gone after it was terminated or detached.
+    /// The view keeps its scrollback, but input is dropped locally and the output
+    /// stream stops quietly instead of reporting the terminal as unavailable.
+    pub fn end_remote_session(&mut self) {
+        if let TerminalType::Remote(remote) = &mut self.terminal_type {
+            remote.session_ended.set(true);
+            remote.input_tx.close();
+        }
+    }
+
+    pub fn remote_session_ended(&self) -> bool {
+        match &self.terminal_type {
+            TerminalType::Remote(remote) => remote.session_ended.get(),
+            _ => false,
         }
     }
 
@@ -8053,6 +8181,171 @@ mod tests {
             .expect("input completes after the backlog drains");
     }
 
+    struct ControlTestClient {
+        handler_set: Mutex<ProtoMessageHandlerSet>,
+        rejections: std::sync::atomic::AtomicUsize,
+        delivered: Sender<proto::PersistentTerminalInput>,
+    }
+
+    impl ProtoClient for ControlTestClient {
+        fn request(
+            &self,
+            envelope: proto::Envelope,
+            request_type: &'static str,
+        ) -> futures::future::BoxFuture<'static, Result<proto::Envelope>> {
+            let Some(proto::envelope::Payload::PersistentTerminalInput(input)) = envelope.payload
+            else {
+                return async move { anyhow::bail!("unexpected {request_type}") }.boxed();
+            };
+            if self
+                .rejections
+                .fetch_sub(1, std::sync::atomic::Ordering::SeqCst)
+                > 0
+            {
+                let error = proto::RpcError::from_proto(
+                    &proto::Error {
+                        message: PERSISTENT_TERMINAL_NOT_CONTROLLER.into(),
+                        ..Default::default()
+                    },
+                    "PersistentTerminalInput",
+                );
+                return async move { Err(error) }.boxed();
+            }
+            let result = self.delivered.try_send(input);
+            async move {
+                result.map_err(|error| anyhow::anyhow!("{error}"))?;
+                Ok(proto::Ack {}.into_envelope(0, None, None))
+            }
+            .boxed()
+        }
+        fn send(&self, _: proto::Envelope, _: &'static str) -> Result<()> {
+            Ok(())
+        }
+        fn send_response(&self, _: proto::Envelope, _: &'static str) -> Result<()> {
+            Ok(())
+        }
+        fn message_handler_set(&self) -> &Mutex<ProtoMessageHandlerSet> {
+            &self.handler_set
+        }
+        fn is_via_collab(&self) -> bool {
+            false
+        }
+        fn has_wsl_interop(&self) -> bool {
+            false
+        }
+    }
+
+    #[gpui::test(iterations = 20)]
+    async fn persistent_terminal_input_waits_for_control_instead_of_failing(
+        cx: &mut TestAppContext,
+    ) {
+        let (delivered_tx, delivered_rx) = async_channel::bounded(10);
+        let client = AnyProtoClient::new(Arc::new(ControlTestClient {
+            handler_set: Mutex::new(ProtoMessageHandlerSet::default()),
+            rejections: std::sync::atomic::AtomicUsize::new(2),
+            delivered: delivered_tx,
+        }));
+        let (input_tx, input_rx) = async_channel::bounded(256);
+        let task = cx.background_executor.spawn(send_persistent_terminal_input(
+            client,
+            "server".into(),
+            "terminal".into(),
+            input_rx,
+            cx.background_executor.clone(),
+        ));
+        input_tx.send(b"a".to_vec()).await.expect("input");
+
+        // Two rejections while another client controls the session, then the
+        // same sequence is delivered once this view takes control back.
+        for _ in 0..6 {
+            cx.run_until_parked();
+            cx.background_executor
+                .advance_clock(INPUT_CONTROL_RETRY_INTERVAL * 2);
+        }
+        cx.run_until_parked();
+
+        let delivered = delivered_rx.recv().await.expect("batch held for control");
+        assert_eq!(delivered.sequence, 1);
+        assert_eq!(delivered.data, b"a");
+
+        input_tx.close();
+        task.await.expect("input completes after control returns");
+    }
+
+    struct EndedTestClient {
+        handler_set: Mutex<ProtoMessageHandlerSet>,
+        attempts: std::sync::atomic::AtomicUsize,
+    }
+
+    impl ProtoClient for EndedTestClient {
+        fn request(
+            &self,
+            envelope: proto::Envelope,
+            request_type: &'static str,
+        ) -> futures::future::BoxFuture<'static, Result<proto::Envelope>> {
+            if !matches!(
+                envelope.payload,
+                Some(proto::envelope::Payload::PersistentTerminalInput(_))
+            ) {
+                return async move { anyhow::bail!("unexpected {request_type}") }.boxed();
+            }
+            self.attempts
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let error = proto::RpcError::from_proto(
+                &proto::Error {
+                    message: "hosted terminal has exited".into(),
+                    ..Default::default()
+                },
+                "PersistentTerminalInput",
+            );
+            async move { Err(error) }.boxed()
+        }
+        fn send(&self, _: proto::Envelope, _: &'static str) -> Result<()> {
+            Ok(())
+        }
+        fn send_response(&self, _: proto::Envelope, _: &'static str) -> Result<()> {
+            Ok(())
+        }
+        fn message_handler_set(&self) -> &Mutex<ProtoMessageHandlerSet> {
+            &self.handler_set
+        }
+        fn is_via_collab(&self) -> bool {
+            false
+        }
+        fn has_wsl_interop(&self) -> bool {
+            false
+        }
+    }
+
+    #[gpui::test]
+    async fn persistent_terminal_input_stops_quietly_when_the_session_ended(
+        cx: &mut TestAppContext,
+    ) {
+        let client = Arc::new(EndedTestClient {
+            handler_set: Mutex::new(ProtoMessageHandlerSet::default()),
+            attempts: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let (input_tx, input_rx) = async_channel::bounded(256);
+        let task = cx.background_executor.spawn(send_persistent_terminal_input(
+            AnyProtoClient::new(client.clone()),
+            "server".into(),
+            "terminal".into(),
+            input_rx,
+            cx.background_executor.clone(),
+        ));
+        input_tx.send(b"a".to_vec()).await.expect("input");
+        // An ended session is not an unavailable terminal: the pump must finish
+        // successfully instead of reporting the whole view as broken.
+        task.await
+            .expect("input pump stops after the session ended");
+        assert_eq!(
+            client.attempts.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "an ended session must not be retried"
+        );
+        assert!(input_tx.is_closed());
+    }
+
     struct StreamTestClient {
         handler_set: Mutex<ProtoMessageHandlerSet>,
         subscriptions: std::sync::atomic::AtomicUsize,
@@ -8451,6 +8744,25 @@ mod tests {
         );
         assert!(persistent_terminal_input_backlog_is_full(&backlog_error));
         assert!(!persistent_terminal_is_unavailable(&backlog_error));
+
+        for message in [
+            PERSISTENT_TERMINAL_NOT_CONTROLLER,
+            PERSISTENT_TERMINAL_STALE_CONTROL,
+        ] {
+            let control_error = proto::RpcError::from_proto(
+                &proto::Error {
+                    message: message.into(),
+                    ..Default::default()
+                },
+                "PersistentTerminalInput",
+            );
+            assert!(persistent_terminal_input_control_lost(&control_error));
+            assert!(!persistent_terminal_is_unavailable(&control_error));
+            assert!(!persistent_terminal_input_backlog_is_full(&control_error));
+        }
+        assert!(!persistent_terminal_input_control_lost(&anyhow::anyhow!(
+            "connection lost"
+        )));
     }
 
     struct TestProtoClient {
@@ -8485,6 +8797,51 @@ mod tests {
         fn has_wsl_interop(&self) -> bool {
             false
         }
+    }
+
+    #[gpui::test]
+    fn hosted_viewer_input_is_dropped_until_the_view_controls_the_terminal(
+        cx: &mut TestAppContext,
+    ) {
+        let mut builder = TerminalBuilder::new_remote(
+            TerminalMode::interactive(),
+            Shell::Program("bash".to_string()),
+            SettingsCursorShape::default(),
+            AlternateScroll::On,
+            None,
+            Vec::new(),
+            Duration::from_millis(0),
+            0,
+            PathStyle::local(),
+            AnyProtoClient::new(Arc::new(TestProtoClient {
+                handler_set: Mutex::new(ProtoMessageHandlerSet::default()),
+            })),
+            "server".to_string(),
+            "terminal".to_string(),
+            &cx.background_executor,
+        );
+        let input_rx = builder.remote_input_rx.take().expect("input receiver");
+
+        builder.terminal.set_remote_controls_input(false);
+        assert!(!builder.terminal.remote_controls_input());
+        builder.terminal.input(b"blocked".to_vec());
+        assert!(input_rx.try_recv().is_err());
+        assert!(builder.terminal.pty_write_log.borrow().is_empty());
+
+        builder.terminal.set_remote_controls_input(true);
+        assert!(builder.terminal.remote_controls_input());
+        builder.terminal.input(b"typed".to_vec());
+        assert_eq!(
+            input_rx.try_recv().expect("input after control"),
+            b"typed".to_vec()
+        );
+
+        // Once the remote session is gone (terminated or detached), later input
+        // is dropped locally instead of being rejected by the server.
+        builder.terminal.end_remote_session();
+        assert!(builder.terminal.remote_session_ended());
+        builder.terminal.input(b"after-end".to_vec());
+        assert!(input_rx.try_recv().is_err());
     }
 
     #[gpui::test]
