@@ -2547,6 +2547,44 @@ impl Item for TerminalView {
                     .update(cx, |this, cx| this.rename_terminal(action, window, cx))
                     .ok();
             })
+            .on_action({
+                let self_handle = self.self_handle.clone();
+                move |action: &HostTerminal, window, cx| {
+                    self_handle
+                        .update(cx, |this, cx| this.host_terminal(action, window, cx))
+                        .ok();
+                }
+            })
+            .on_action({
+                let self_handle = self.self_handle.clone();
+                move |action: &TakeHostedTerminalControl, window, cx| {
+                    self_handle
+                        .update(cx, |this, cx| {
+                            this.take_hosted_terminal_control(action, window, cx)
+                        })
+                        .ok();
+                }
+            })
+            .on_action({
+                let self_handle = self.self_handle.clone();
+                move |action: &DetachHostedTerminal, window, cx| {
+                    self_handle
+                        .update(cx, |this, cx| {
+                            this.detach_hosted_terminal(action, window, cx)
+                        })
+                        .ok();
+                }
+            })
+            .on_action({
+                let self_handle = self.self_handle.clone();
+                move |action: &TerminateHostedTerminal, window, cx| {
+                    self_handle
+                        .update(cx, |this, cx| {
+                            this.terminate_hosted_terminal(action, window, cx)
+                        })
+                        .ok();
+                }
+            })
             .when(!self.read_only, |this| {
                 this.child(
                     div()
@@ -2805,6 +2843,28 @@ impl Item for TerminalView {
         ];
         if self.terminal.read(cx).task().is_none() {
             actions.push(("Rename".into(), Box::new(RenameTerminal)));
+        }
+        if self.can_host_terminal(cx) {
+            actions.push((
+                i18n::t!("69178944fb4ed4a8").into(),
+                Box::new(HostTerminal),
+            ));
+        }
+        if self.hosted_session_id.is_some() {
+            if !self.controls_input {
+                actions.push((
+                    i18n::t!("de5a8ab47de9e80d").into(),
+                    Box::new(TakeHostedTerminalControl),
+                ));
+            }
+            actions.push((
+                i18n::t!("bf8e704f7a487c42").into(),
+                Box::new(DetachHostedTerminal),
+            ));
+            actions.push((
+                i18n::t!("2407c7a65bb97428").into(),
+                Box::new(TerminateHostedTerminal),
+            ));
         }
         actions
     }

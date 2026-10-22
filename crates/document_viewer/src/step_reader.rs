@@ -13,12 +13,18 @@ use std::time::{Duration, Instant};
 use truck_geometry::prelude::SearchNearestParameter as _;
 use truck_meshalgo::tessellation::{MeshedShape as _, RobustMeshableShape as _};
 use truck_stepio::r#in::{Table, alias::*};
-use truck_topology::compress::CompressedShell;
+use truck_topology::compress::{CompressedEdge, CompressedFace, CompressedShell};
 
 use crate::model_mesh::MAX_TRIANGLES;
 
 /// Upper bound on the number of shells (bodies) considered in one file.
 const MAX_SHELLS: usize = 4096;
+/// Upper bound on the subdivision steps taken by one edge's polyline. `truck`
+/// stops at a depth of 100, which permits 2^100 leaves, so an edge that never
+/// meets the tolerance would exhaust the process before that limit.
+const MAX_CURVE_STEPS: usize = 4096;
+/// Upper bound on the parameter cells one surface may be divided into.
+const MAX_SURFACE_CELLS: usize = 65_536;
 /// Upper bound on the number of faces before tessellation starts. A pathological
 /// B-rep with millions of faces would otherwise spend minutes building topology.
 const MAX_FACES: usize = 500_000;
@@ -158,7 +164,7 @@ pub fn parse(bytes: &[u8]) -> Result<StepMesh> {
 
     let unit = detect_unit(&raw);
     let scale = unit.scale();
-    let placements = shell_placements(&raw, &table);
+    let placements = shell_placements(&raw, &table)?;
     ensure!(!placements.is_empty(), i18n::t!("67c7488a47fd7b4c"));
 
     // Start with a tolerance relative to the model size and coarsen it when a
@@ -245,14 +251,30 @@ fn tessellate_shells(
             let mut compressed = table
                 .to_compressed_shell(shell)
                 .map_err(|error| anyhow!("{error}"))?;
-            orient_boundaries(&mut compressed);
             let tolerance = tessellation_tolerance(&compressed, scale) * coarseness;
+            let valid = tessellatable_faces(&compressed, tolerance);
+            let kept = prune_faces(&mut compressed, &valid);
+            if kept == 0 {
+                return Ok(None);
+            }
+            if kept < valid.len() {
+                log::warn!(
+                    "[step] shell #{shell_id}: dropped {} of {} faces that `truck` cannot tessellate",
+                    valid.len() - kept,
+                    valid.len()
+                );
+            }
+            orient_boundaries(&mut compressed);
             let tessellated = compressed.robust_triangulation(tolerance);
             let polygon = tessellated.to_polygon();
-            Ok::<_, anyhow::Error>((polygon, compressed.faces.len()))
+            Ok::<_, anyhow::Error>(Some((polygon, compressed.faces.len())))
         }));
         let (polygon, face_count) = match output {
-            Ok(Ok(value)) => value,
+            Ok(Ok(Some(value))) => value,
+            Ok(Ok(None)) => {
+                log::warn!("[step] shell #{shell_id} has no tessellatable faces");
+                continue;
+            }
             Ok(Err(error)) => {
                 log::warn!("[step] shell #{shell_id} is not convertible: {error}");
                 continue;
@@ -527,6 +549,300 @@ fn unit_parameter(raw: &RawEntities, parameter: &Parameter, depth: usize) -> Opt
     }
 }
 
+/// Reports which faces of a shell can be tessellated safely.
+///
+/// `truck` meshes an edge by halving every interval whose midpoint deviates
+/// from the tolerated curve, and a surface by splitting every patch that misses
+/// the tolerance. Both loops terminate only when the deviation eventually falls
+/// below the tolerance: non-finite coordinates or a control point far outside
+/// the model never satisfy it, so a single face expands into an exponential
+/// number of steps and exhausts memory (an allocation failure aborts the whole
+/// editor, because the preview is parsed inside the Zed process). Faces that
+/// cannot converge are dropped here instead of being handed to `truck`.
+fn tessellatable_faces(
+    shell: &CompressedShell<Point3, Curve3D, Surface>,
+    tolerance: f64,
+) -> Vec<bool> {
+    let edge_valid: Vec<bool> = shell
+        .edges
+        .iter()
+        .map(|edge| edge_is_tessellatable(edge, &shell.vertices, tolerance))
+        .collect();
+    shell
+        .faces
+        .iter()
+        .map(|face| {
+            face.boundaries
+                .iter()
+                .flatten()
+                .all(|index| index.index < edge_valid.len() && edge_valid[index.index])
+                && surface_is_tessellatable(face, &shell.edges, &shell.vertices, tolerance)
+        })
+        .collect()
+}
+
+fn point_is_finite(point: Point3) -> bool {
+    point.x.is_finite() && point.y.is_finite() && point.z.is_finite()
+}
+
+fn edge_is_tessellatable(edge: &CompressedEdge<Curve3D>, vertices: &[Point3], tolerance: f64) -> bool {
+    let Some(first) = vertices.get(edge.vertices.0) else {
+        return false;
+    };
+    let Some(second) = vertices.get(edge.vertices.1) else {
+        return false;
+    };
+    if !point_is_finite(*first) || !point_is_finite(*second) {
+        return false;
+    }
+    let Some((start, end)) = edge.curve.try_range_tuple() else {
+        return false;
+    };
+    if !start.is_finite() || !end.is_finite() {
+        return false;
+    }
+    let span = end - start;
+    let samples = [0.0, 0.25, 0.5, 0.75, 1.0]
+        .into_iter()
+        .all(|fraction| point_is_finite(edge.curve.subs(start + span * fraction)));
+    samples && curve_division_fits(&edge.curve, (start, end), tolerance)
+}
+
+fn surface_is_tessellatable(
+    face: &CompressedFace<Surface>,
+    edges: &[CompressedEdge<Curve3D>],
+    vertices: &[Point3],
+    tolerance: f64,
+) -> bool {
+    if !spline_division_fits(&face.surface, tolerance) {
+        return false;
+    }
+    for boundary in &face.boundaries {
+        let mut hint = None;
+        for index in boundary {
+            let Some(edge) = edges.get(index.index) else {
+                return false;
+            };
+            let Some(point) = vertices.get(edge.vertices.0) else {
+                return false;
+            };
+            let Some((u, v)) = face.surface.search_nearest_parameter(*point, hint, 10) else {
+                continue;
+            };
+            if !u.is_finite() || !v.is_finite() {
+                return false;
+            }
+            hint = Some((u, v));
+            if !point_is_finite(face.surface.subs(u, v)) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// Mirrors `truck`'s curve subdivision
+/// (`truck_geotrait::algo::curve::sub_parameter_division`, Apache-2.0) with a
+/// step budget in place of its 100-level depth limit, which permits 2^100
+/// leaves. Convergent edges need a few dozen steps; an edge that cannot
+/// converge is rejected here.
+fn curve_division_fits(curve: &Curve3D, range: (f64, f64), tolerance: f64) -> bool {
+    let mut remaining = MAX_CURVE_STEPS;
+    curve_sub_division(
+        curve,
+        range,
+        (curve.subs(range.0), curve.subs(range.1)),
+        tolerance,
+        100,
+        &mut remaining,
+    )
+}
+
+fn curve_sub_division(
+    curve: &Curve3D,
+    range: (f64, f64),
+    ends: (Point3, Point3),
+    tolerance: f64,
+    depth: usize,
+    budget: &mut usize,
+) -> bool {
+    if *budget == 0 {
+        return false;
+    }
+    *budget -= 1;
+    if !point_is_finite(ends.0) || !point_is_finite(ends.1) {
+        return false;
+    }
+    let midpoint = ends.0.midpoint(ends.1);
+    let fraction = 0.5 + (0.2 * HashGen::hash1(midpoint) - 0.1);
+    let parameter = range.0 * (1.0 - fraction) + range.1 * fraction;
+    let interpolated = ends.0 + (ends.1 - ends.0) * fraction;
+    let deviation = curve.subs(parameter).distance2(interpolated);
+    if deviation < tolerance * tolerance || depth == 0 {
+        return true;
+    }
+    let middle_parameter = (range.0 + range.1) / 2.0;
+    let middle_value = curve.subs(middle_parameter);
+    curve_sub_division(
+        curve,
+        (range.0, middle_parameter),
+        (ends.0, middle_value),
+        tolerance,
+        depth - 1,
+        budget,
+    ) && curve_sub_division(
+        curve,
+        (middle_parameter, range.1),
+        (middle_value, ends.1),
+        tolerance,
+        depth - 1,
+        budget,
+    )
+}
+
+/// Analytic surfaces divide in closed form; B-spline and NURBS surfaces use
+/// `truck_geotrait::algo::surface::sub_parameter_division`, which splits every
+/// patch that misses the tolerance without any depth limit. This bounded replay
+/// uses the surface's own parameter range, a superset of the trimmed range
+/// `truck` divides, so an accepted surface stays inside the budget there too.
+fn spline_division_fits(surface: &Surface, tolerance: f64) -> bool {
+    if !matches!(
+        surface,
+        Surface::BSplineSurface(_) | Surface::NurbsSurface(_)
+    ) {
+        return true;
+    }
+    let (Some(urange), Some(vrange)) = surface.try_range_tuple() else {
+        return true;
+    };
+    if !urange.0.is_finite()
+        || !urange.1.is_finite()
+        || !vrange.0.is_finite()
+        || !vrange.1.is_finite()
+    {
+        return false;
+    }
+    let mut u_division = vec![urange.0, urange.1];
+    let mut v_division = vec![vrange.0, vrange.1];
+    surface_sub_division(surface, (&mut u_division, &mut v_division), tolerance)
+}
+
+fn surface_sub_division(
+    surface: &Surface,
+    (u_division, v_division): (&mut Vec<f64>, &mut Vec<f64>),
+    tolerance: f64,
+) -> bool {
+    let mut split_u = vec![false; u_division.len().saturating_sub(1)];
+    let mut split_v = vec![false; v_division.len().saturating_sub(1)];
+    for (u_index, u) in u_division.windows(2).enumerate() {
+        for (v_index, v) in v_division.windows(2).enumerate() {
+            if split_u[u_index] && split_v[v_index] {
+                continue;
+            }
+            let (middle_u, middle_v) = ((u[0] + u[1]) / 2.0, (v[0] + v[1]) / 2.0);
+            let center = surface.subs(middle_u, middle_v);
+            let p = 0.5 + (0.2 * HashGen::hash1(center) - 0.1);
+            let q = 0.5 + (0.2 * HashGen::hash1(center) - 0.1);
+            let sample = surface.subs(u[0] * (1.0 - p) + u[1] * p, v[0] * (1.0 - q) + v[1] * q);
+            let corner_00 = surface.subs(u[0], v[0]);
+            let corner_01 = surface.subs(u[0], v[1]);
+            let corner_10 = surface.subs(u[1], v[0]);
+            let corner_11 = surface.subs(u[1], v[1]);
+            let expected = corner_00.to_vec() * (1.0 - p) * (1.0 - q)
+                + corner_01.to_vec() * (1.0 - p) * q
+                + corner_10.to_vec() * p * (1.0 - q)
+                + corner_11.to_vec() * p * q;
+            if sample.distance2(Point3::from_vec(expected)) > tolerance * tolerance {
+                split_u[u_index] = true;
+                split_v[v_index] = true;
+            }
+        }
+    }
+
+    let mut new_u_division = vec![u_division[0]];
+    for (u, split) in u_division.windows(2).zip(split_u) {
+        if split {
+            new_u_division.push((u[0] + u[1]) / 2.0);
+        }
+        new_u_division.push(u[1]);
+    }
+    let mut new_v_division = vec![v_division[0]];
+    for (v, split) in v_division.windows(2).zip(split_v) {
+        if split {
+            new_v_division.push((v[0] + v[1]) / 2.0);
+        }
+        new_v_division.push(v[1]);
+    }
+    if new_u_division.len() == u_division.len() && new_v_division.len() == v_division.len() {
+        return true;
+    }
+    let cells = (new_u_division.len() - 1).saturating_mul(new_v_division.len() - 1);
+    if cells > MAX_SURFACE_CELLS {
+        return false;
+    }
+    *u_division = new_u_division;
+    *v_division = new_v_division;
+    surface_sub_division(surface, (u_division, v_division), tolerance)
+}
+
+/// Drops faces that cannot be tessellated together with the edges and vertices
+/// that only they referenced, so `truck` never reaches the rejected geometry.
+/// Returns the number of faces that remain.
+fn prune_faces(shell: &mut CompressedShell<Point3, Curve3D, Surface>, valid: &[bool]) -> usize {
+    let CompressedShell {
+        vertices,
+        edges,
+        faces,
+    } = shell;
+    let mut face_index = 0;
+    faces.retain(|_| {
+        let keep = valid.get(face_index).copied().unwrap_or(false);
+        face_index += 1;
+        keep
+    });
+    if faces.is_empty() {
+        return 0;
+    }
+
+    let mut edge_map = vec![usize::MAX; edges.len()];
+    let mut kept_edges = Vec::new();
+    for face in faces.iter_mut() {
+        for boundary in &mut face.boundaries {
+            for index in boundary.iter_mut() {
+                let old = index.index;
+                let Some(edge) = edges.get(old) else {
+                    continue;
+                };
+                if edge_map[old] == usize::MAX {
+                    edge_map[old] = kept_edges.len();
+                    kept_edges.push(edge.clone());
+                }
+                index.index = edge_map[old];
+            }
+        }
+    }
+    *edges = kept_edges;
+
+    let mut vertex_map = vec![usize::MAX; vertices.len()];
+    let mut kept_vertices = Vec::new();
+    for edge in edges.iter_mut() {
+        for slot in [&mut edge.vertices.0, &mut edge.vertices.1] {
+            let old = *slot;
+            if old >= vertices.len() {
+                continue;
+            }
+            let point = vertices[old];
+            if vertex_map[old] == usize::MAX {
+                vertex_map[old] = kept_vertices.len();
+                kept_vertices.push(point);
+            }
+            *slot = vertex_map[old];
+        }
+    }
+    *vertices = kept_vertices;
+    faces.len()
+}
+
 /// Chooses a chordal tolerance relative to the model size so both a 5 mm part
 /// and a 5 m assembly tessellate sensibly.
 fn tessellation_tolerance(shell: &CompressedShell<Point3, Curve3D, Surface>, scale: f64) -> f64 {
@@ -649,22 +965,30 @@ fn append_polygon(
 
 /// Decides where every shell in the file sits in model space. Files without an
 /// assembly graph return each shell with the identity placement.
-fn shell_placements(raw: &RawEntities, table: &Table) -> Vec<(u64, Frame)> {
+fn shell_placements(raw: &RawEntities, table: &Table) -> Result<Vec<(u64, Frame)>> {
     let mut all: Vec<u64> = table.shell.keys().copied().collect();
     all.sort_unstable();
 
-    let graph = AssemblyGraph::build(raw);
+    let graph = AssemblyGraph::build(raw)?;
     if graph.occurrences.is_empty() && graph.representation_shells.is_empty() {
-        return all
+        return Ok(all
             .into_iter()
             .map(|shell_id| (shell_id, Frame::IDENTITY))
-            .collect();
+            .collect());
     }
 
     let mut placements = Vec::new();
     let mut visited = HashSet::new();
+    let mut budget = ShellBudget::default();
     for root in &graph.roots {
-        graph.collect(*root, &Frame::IDENTITY, 0, &mut placements, &mut visited);
+        graph.collect(
+            *root,
+            &Frame::IDENTITY,
+            0,
+            &mut placements,
+            &mut visited,
+            &mut budget,
+        )?;
     }
 
     let mut emitted = HashSet::new();
@@ -683,7 +1007,24 @@ fn shell_placements(raw: &RawEntities, table: &Table) -> Vec<(u64, Frame)> {
             result.push((shell_id, Frame::IDENTITY));
         }
     }
-    result
+    Ok(result)
+}
+
+/// Hard cap on the shell instances an assembly may expand to. Mapped items and
+/// shared sub-assemblies multiply per nesting level, so a deeply nested graph
+/// can request exponentially many instances before any tessellation work starts;
+/// the limit turns that into a user-facing error instead of unbounded memory.
+#[derive(Default)]
+struct ShellBudget {
+    used: usize,
+}
+
+impl ShellBudget {
+    fn take(&mut self, count: usize) -> Result<()> {
+        self.used = self.used.saturating_add(count);
+        ensure!(self.used <= MAX_SHELLS, i18n::t!("1bc6546baf14812c"));
+        Ok(())
+    }
 }
 
 fn frame_key(frame: &Frame) -> [u64; 12] {
@@ -713,16 +1054,17 @@ struct AssemblyGraph {
 }
 
 impl AssemblyGraph {
-    fn build(raw: &RawEntities) -> Self {
+    fn build(raw: &RawEntities) -> Result<Self> {
         let mut graph = Self::default();
-        graph.collect_representations(raw);
+        graph.collect_representations(raw)?;
         graph.collect_products(raw);
         graph.collect_transforms(raw);
         graph.collect_occurrences(raw);
-        graph
+        Ok(graph)
     }
 
-    fn collect_representations(&mut self, raw: &RawEntities) {
+    fn collect_representations(&mut self, raw: &RawEntities) -> Result<()> {
+        let mut budget = ShellBudget::default();
         for (id, entity) in raw {
             if !matches!(
                 entity.name.as_str(),
@@ -739,9 +1081,10 @@ impl AssemblyGraph {
                 continue;
             };
             let mut shells = Vec::new();
-            self.collect_items(raw, items, &Frame::IDENTITY, 0, &mut shells);
+            self.collect_items(raw, items, &Frame::IDENTITY, 0, &mut shells, &mut budget)?;
             self.representation_shells.insert(*id, shells);
         }
+        Ok(())
     }
 
     fn collect_items(
@@ -751,33 +1094,37 @@ impl AssemblyGraph {
         placement: &Frame,
         depth: usize,
         shells: &mut Vec<(u64, Frame)>,
-    ) {
+        budget: &mut ShellBudget,
+    ) -> Result<()> {
         if depth > MAX_ASSEMBLY_DEPTH {
-            return;
+            return Ok(());
         }
         match items {
             Parameter::List(items) => {
                 for item in items {
-                    self.collect_items(raw, item, placement, depth + 1, shells);
+                    self.collect_items(raw, item, placement, depth + 1, shells, budget)?;
                 }
             }
             Parameter::Ref(Name::Entity(item_id)) => {
                 let Some(entity) = raw.get(item_id) else {
-                    return;
+                    return Ok(());
                 };
                 match entity.name.as_str() {
                     "MANIFOLD_SOLID_BREP" => {
                         if let Some(shell) = entity.parameters.get(1).and_then(entity_ref) {
+                            budget.take(1)?;
                             shells.push((shell, *placement));
                         }
                     }
                     "BREP_WITH_VOIDS" => {
                         if let Some(shell) = entity.parameters.get(1).and_then(entity_ref) {
+                            budget.take(1)?;
                             shells.push((shell, *placement));
                         }
                         if let Some(Parameter::List(voids)) = entity.parameters.get(2) {
                             for void in voids {
                                 if let Some(shell) = entity_ref(void) {
+                                    budget.take(1)?;
                                     shells.push((shell, *placement));
                                 }
                             }
@@ -787,31 +1134,36 @@ impl AssemblyGraph {
                         if let Some(Parameter::List(shells_list)) = entity.parameters.get(1) {
                             for shell in shells_list {
                                 if let Some(shell) = entity_ref(shell) {
+                                    budget.take(1)?;
                                     shells.push((shell, *placement));
                                 }
                             }
                         }
                     }
-                    "CLOSED_SHELL" | "OPEN_SHELL" => shells.push((*item_id, *placement)),
+                    "CLOSED_SHELL" | "OPEN_SHELL" => {
+                        budget.take(1)?;
+                        shells.push((*item_id, *placement));
+                    }
                     "MAPPED_ITEM" => {
                         let mapped = mapped_item_frame(raw, entity);
                         let Some(mapping) = entity.parameters.get(1).and_then(entity_ref) else {
-                            return;
+                            return Ok(());
                         };
                         let Some(mapping_entity) = raw.get(&mapping) else {
-                            return;
+                            return Ok(());
                         };
                         let Some(mapped_representation) =
                             mapping_entity.parameters.get(1).and_then(entity_ref)
                         else {
-                            return;
+                            return Ok(());
                         };
                         let Some(children) = self.representation_shells.get(&mapped_representation)
                         else {
-                            return;
+                            return Ok(());
                         };
                         let combined = placement.then(&mapped);
                         for (shell, local) in children {
+                            budget.take(1)?;
                             shells.push((*shell, combined.then(local)));
                         }
                     }
@@ -820,6 +1172,7 @@ impl AssemblyGraph {
             }
             _ => {}
         }
+        Ok(())
     }
 
     fn collect_products(&mut self, raw: &RawEntities) {
@@ -939,9 +1292,10 @@ impl AssemblyGraph {
         depth: usize,
         shells: &mut Vec<(u64, Frame)>,
         visited: &mut HashSet<(u64, [u64; 12])>,
-    ) {
+        budget: &mut ShellBudget,
+    ) -> Result<()> {
         if depth > MAX_ASSEMBLY_DEPTH {
-            return;
+            return Ok(());
         }
         for representation in self
             .product_representations
@@ -955,6 +1309,7 @@ impl AssemblyGraph {
                 .into_iter()
                 .flatten()
             {
+                budget.take(1)?;
                 shells.push((*shell, placement.then(local)));
             }
         }
@@ -967,9 +1322,10 @@ impl AssemblyGraph {
                 .unwrap_or(Frame::IDENTITY);
             let combined = placement.then(&local);
             if visited.insert((*child, frame_key(&combined))) {
-                self.collect(*child, &combined, depth + 1, shells, visited);
+                self.collect(*child, &combined, depth + 1, shells, visited, budget)?;
             }
         }
+        Ok(())
     }
 
     fn occurrence_transform(&self, child: u64, parent: u64) -> Option<Frame> {
@@ -1601,5 +1957,271 @@ pub(crate) mod tests {
         let mut triangles = Vec::new();
         assert!(append_polygon(&polygon, &Frame::IDENTITY, 1.0, 0, &mut triangles).is_ok());
         assert!(triangles.is_empty());
+    }
+
+    struct PlaneFaceEntities {
+        text: String,
+        next_id: u32,
+        face_id: u32,
+    }
+
+    /// One 5x4 mm square face on a plane. A degenerate placement writes a
+    /// zero-length `ref_direction`; `truck` then builds a plane with non-finite
+    /// axes, and its recursive curve division never meets the tolerance.
+    fn plane_face_entities(mut next_id: u32, degenerate: bool) -> PlaneFaceEntities {
+        let mut text = String::new();
+        let mut next = || {
+            let value = next_id;
+            next_id += 1;
+            value
+        };
+        let origin = next();
+        text.push_str(&format!(
+            "#{origin}=CARTESIAN_POINT('',(0.0,0.0,0.0));\n"
+        ));
+        let normal = next();
+        text.push_str(&format!("#{normal}=DIRECTION('',(0.0,0.0,1.0));\n"));
+        let reference = next();
+        let reference_direction = if degenerate {
+            "(0.0,0.0,0.0)"
+        } else {
+            "(1.0,0.0,0.0)"
+        };
+        text.push_str(&format!(
+            "#{reference}=DIRECTION('',{reference_direction});\n"
+        ));
+        let placement = next();
+        text.push_str(&format!(
+            "#{placement}=AXIS2_PLACEMENT_3D('',#{origin},#{normal},#{reference});\n"
+        ));
+        let plane = next();
+        text.push_str(&format!("#{plane}=PLANE('',#{placement});\n"));
+        let context = next();
+        text.push_str(&format!(
+            "#{context}=(GEOMETRIC_REPRESENTATION_CONTEXT(2)\
+             PARAMETRIC_REPRESENTATION_CONTEXT()REPRESENTATION_CONTEXT('UV','2D'));\n"
+        ));
+
+        let corners = [[0.0, 0.0], [5.0, 0.0], [5.0, 4.0], [0.0, 4.0]];
+        let mut vertex_ids = Vec::new();
+        for [x, y] in corners {
+            let point = next();
+            text.push_str(&format!(
+                "#{point}=CARTESIAN_POINT('',({x:.1},{y:.1},0.0));\n"
+            ));
+            let vertex = next();
+            text.push_str(&format!("#{vertex}=VERTEX_POINT('',#{point});\n"));
+            vertex_ids.push(vertex);
+        }
+
+        let mut edge_ids = Vec::new();
+        for index in 0..4 {
+            let start = corners[index];
+            let end = corners[(index + 1) % 4];
+            let direction = [end[0] - start[0], end[1] - start[1]];
+            let line_origin = next();
+            text.push_str(&format!(
+                "#{line_origin}=CARTESIAN_POINT('',({:.1},{:.1},0.0));\n",
+                start[0], start[1]
+            ));
+            let line_direction = next();
+            text.push_str(&format!(
+                "#{line_direction}=DIRECTION('',({:.1},{:.1},0.0));\n",
+                direction[0], direction[1]
+            ));
+            let vector = next();
+            text.push_str(&format!("#{vector}=VECTOR('',#{line_direction},1.0);\n"));
+            let line = next();
+            text.push_str(&format!("#{line}=LINE('',#{line_origin},#{vector});\n"));
+
+            let pcurve_origin = next();
+            text.push_str(&format!(
+                "#{pcurve_origin}=CARTESIAN_POINT('',({:.1},{:.1}));\n",
+                start[0], start[1]
+            ));
+            let pcurve_direction = next();
+            text.push_str(&format!(
+                "#{pcurve_direction}=DIRECTION('',({:.1},{:.1}));\n",
+                direction[0], direction[1]
+            ));
+            let pcurve_vector = next();
+            text.push_str(&format!(
+                "#{pcurve_vector}=VECTOR('',#{pcurve_direction},1.0);\n"
+            ));
+            let pcurve_line = next();
+            text.push_str(&format!(
+                "#{pcurve_line}=LINE('',#{pcurve_origin},#{pcurve_vector});\n"
+            ));
+            let definitional = next();
+            text.push_str(&format!(
+                "#{definitional}=DEFINITIONAL_REPRESENTATION('',(#{pcurve_line}),#{context});\n"
+            ));
+            let pcurve = next();
+            text.push_str(&format!("#{pcurve}=PCURVE('',#{plane},#{definitional});\n"));
+            let surface_curve = next();
+            text.push_str(&format!(
+                "#{surface_curve}=SURFACE_CURVE('',#{line},(#{pcurve}),.PCURVE_S1.);\n"
+            ));
+            let edge = next();
+            text.push_str(&format!(
+                "#{edge}=EDGE_CURVE('',#{},#{},#{surface_curve},.T.);\n",
+                vertex_ids[index],
+                vertex_ids[(index + 1) % 4]
+            ));
+            let oriented = next();
+            text.push_str(&format!(
+                "#{oriented}=ORIENTED_EDGE('',$,$,#{edge},.T.);\n"
+            ));
+            edge_ids.push(oriented);
+        }
+
+        let edge_loop = next();
+        text.push_str(&format!(
+            "#{edge_loop}=EDGE_LOOP('',(#{},#{},#{},#{}));\n",
+            edge_ids[0], edge_ids[1], edge_ids[2], edge_ids[3]
+        ));
+        let outer_bound = next();
+        text.push_str(&format!(
+            "#{outer_bound}=FACE_OUTER_BOUND('',#{edge_loop},.T.);\n"
+        ));
+        let face = next();
+        text.push_str(&format!(
+            "#{face}=ADVANCED_FACE('',(#{outer_bound}),#{plane},.T.);\n"
+        ));
+        PlaneFaceEntities {
+            text,
+            next_id,
+            face_id: face,
+        }
+    }
+
+    fn shell_step(faces: &[PlaneFaceEntities], next_id: u32) -> String {
+        let mut entities = String::new();
+        for face in faces {
+            entities.push_str(&face.text);
+        }
+        let mut next = next_id;
+        let face_ids = faces
+            .iter()
+            .map(|face| format!("#{}", face.face_id))
+            .collect::<Vec<_>>()
+            .join(",");
+        entities.push_str(&format!("#{next}=OPEN_SHELL('',({face_ids}));\n"));
+        let shell = next;
+        next += 1;
+        entities.push_str(&format!(
+            "#{next}=SHELL_BASED_SURFACE_MODEL('',(#{shell}));\n"
+        ));
+        wrap_data(&format!("{}{entities}", millimetre_unit()))
+    }
+
+    #[test]
+    fn drops_a_face_whose_axis_direction_is_degenerate() {
+        let only_bad = plane_face_entities(1, true);
+        let text = shell_step(&[only_bad], 1000);
+        assert!(parse(text.as_bytes()).is_err());
+
+        let good = plane_face_entities(1, false);
+        let bad = plane_face_entities(good.next_id, true);
+        let text = shell_step(&[good, bad], 2000);
+        let mesh = parse(text.as_bytes()).expect("the tessellatable face still renders");
+        assert_eq!(mesh.triangles.len(), 2);
+    }
+
+    #[test]
+    fn rejects_a_curve_division_that_cannot_converge() {
+        let knots = || KnotVec::from(vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0]);
+        let ordinary = Curve3D::BSplineCurve(BSplineCurve::new(
+            knots(),
+            vec![
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(1.0, 1.0, 0.0),
+                Point3::new(2.0, -1.0, 0.0),
+                Point3::new(3.0, 0.0, 0.0),
+            ],
+        ));
+        assert!(curve_division_fits(&ordinary, (0.0, 1.0), 0.01));
+
+        let extreme = Curve3D::BSplineCurve(BSplineCurve::new(
+            knots(),
+            vec![
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(1.0, 0.0, 0.0),
+                Point3::new(1.0e100, 1.0e100, 1.0e100),
+                Point3::new(3.0, 0.0, 0.0),
+            ],
+        ));
+        assert!(!curve_division_fits(&extreme, (0.0, 1.0), 0.01));
+    }
+
+    #[test]
+    fn rejects_a_spline_surface_division_that_cannot_converge() {
+        let knots = || KnotVec::from(vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0]);
+        let net = |extreme: bool| {
+            (0..4)
+                .map(|row| {
+                    (0..4)
+                        .map(|column| {
+                            if extreme && (row, column) == (1, 1) {
+                                Point3::new(1.0e100, 1.0e100, 1.0e100)
+                            } else {
+                                Point3::new(column as f64 * 2.0, row as f64 * 2.0, 0.0)
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>()
+        };
+        let ordinary =
+            Surface::BSplineSurface(Box::new(BSplineSurface::new((knots(), knots()), net(false))));
+        assert!(spline_division_fits(&ordinary, 0.01));
+
+        let extreme =
+            Surface::BSplineSurface(Box::new(BSplineSurface::new((knots(), knots()), net(true))));
+        assert!(!spline_division_fits(&extreme, 0.01));
+    }
+
+    #[test]
+    fn rejects_an_assembly_expanding_past_the_instance_budget() {
+        let mapped_representation = 10;
+        let mapping = 20;
+        let mapped_item = 21;
+        let mut graph = AssemblyGraph::default();
+        graph.representation_shells.insert(
+            mapped_representation,
+            (0..MAX_SHELLS as u64 + 1)
+                .map(|shell| (shell, Frame::IDENTITY))
+                .collect(),
+        );
+        let mut raw = RawEntities::new();
+        raw.insert(
+            mapping,
+            RawEntity {
+                name: "REPRESENTATION_MAP".to_owned(),
+                parameters: vec![
+                    Parameter::String(String::new()),
+                    Parameter::Ref(Name::Entity(mapped_representation)),
+                ],
+            },
+        );
+        raw.insert(
+            mapped_item,
+            RawEntity {
+                name: "MAPPED_ITEM".to_owned(),
+                parameters: vec![
+                    Parameter::String(String::new()),
+                    Parameter::Ref(Name::Entity(mapping)),
+                    Parameter::Ref(Name::Entity(u32::MAX as u64)),
+                ],
+            },
+        );
+        let items = Parameter::List(vec![Parameter::Ref(Name::Entity(mapped_item))]);
+        let mut shells = Vec::new();
+        let mut budget = ShellBudget::default();
+        let error = graph
+            .collect_items(&raw, &items, &Frame::IDENTITY, 0, &mut shells, &mut budget)
+            .expect_err("the shell budget must reject an over-large expansion");
+        assert!(!error.to_string().is_empty());
+        assert!(shells.len() <= MAX_SHELLS);
     }
 }
