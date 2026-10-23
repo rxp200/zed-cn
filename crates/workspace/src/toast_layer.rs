@@ -43,6 +43,10 @@ pub fn init(cx: &mut App) {
 }
 
 pub trait ToastView: ManagedView {
+    fn dismiss_duration(&self) -> Duration {
+        DEFAULT_TOAST_DURATION
+    }
+
     fn action(&self) -> Option<ToastAction>;
 
     fn auto_dismiss(&self) -> bool {
@@ -136,6 +140,7 @@ impl ToastLayer {
     {
         let action = new_toast.read(cx).action();
         let auto_dismiss = new_toast.read(cx).auto_dismiss();
+        let dismiss_duration = new_toast.read(cx).dismiss_duration();
         let focus_handle = cx.focus_handle();
 
         self.active_toast = Some(ActiveToast {
@@ -149,7 +154,7 @@ impl ToastLayer {
         });
 
         if auto_dismiss {
-            self.start_dismiss_timer(DEFAULT_TOAST_DURATION, cx);
+            self.start_dismiss_timer(dismiss_duration, cx);
         }
 
         cx.notify();

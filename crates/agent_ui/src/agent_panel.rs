@@ -2270,7 +2270,8 @@ impl AgentPanel {
                 // The agent terminal's persisted working directory stays the
                 // spawn directory; only `TerminalView` follows a shell-observed
                 // remote cwd, so persisting that path here would break restore.
-                | TerminalEvent::WorkingDirectoryDetected(_) => {}
+                | TerminalEvent::WorkingDirectoryDetected(_)
+                | TerminalEvent::InputControlTaken => {}
             },
         );
 

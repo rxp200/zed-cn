@@ -671,6 +671,7 @@ pub fn insert_zed_terminal_env(
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Event {
     TitleChanged,
+    InputControlTaken,
     BreadcrumbsChanged,
     OutputReplaced,
     CloseTerminal,
@@ -908,9 +909,6 @@ const PERSISTENT_TERMINAL_INPUT_BACKLOG_FULL: &str = "persistent terminal input 
 /// (or is no longer) that controller, so they must never end the terminal.
 const PERSISTENT_TERMINAL_NOT_CONTROLLER: &str = "attachment does not control this terminal";
 const PERSISTENT_TERMINAL_STALE_CONTROL: &str = "terminal input control was taken over";
-/// Delay between retries of a batch rejected because another client controls the
-/// hosted terminal. Taking control again lets the held batch through.
-const INPUT_CONTROL_RETRY_INTERVAL: Duration = Duration::from_millis(500);
 /// Delay between retries of a batch the server rejected because its input
 /// backlog was full.
 const INPUT_BACKLOG_RETRY_INTERVAL: Duration = Duration::from_millis(200);
@@ -1014,7 +1012,7 @@ impl TerminalMode {
 pub struct TerminalBuilder {
     terminal: Terminal,
     events_rx: UnboundedReceiver<PtyEvent>,
-    remote_input_rx: Option<Receiver<Vec<u8>>>,
+    remote_input_rx: Option<Receiver<RemoteInput>>,
 }
 
 impl TerminalBuilder {
@@ -1197,6 +1195,7 @@ impl TerminalBuilder {
             input_backpressure_warned: std::cell::Cell::new(false),
             input_blocked_warned: std::cell::Cell::new(false),
             controls_input: std::cell::Cell::new(true),
+            user_input_pending: std::cell::Cell::new(false),
             session_ended: std::cell::Cell::new(false),
             input_task: None,
             output_task: None,
@@ -1553,6 +1552,19 @@ impl TerminalBuilder {
                 .remote_input_rx
                 .take()
                 .expect("remote terminals have an input receiver");
+            let (control_tx, control_rx) = async_channel::bounded(1);
+            cx.spawn(async move |terminal, cx| {
+                while control_rx.recv().await.is_ok() {
+                    terminal
+                        .update(cx, |terminal, cx| {
+                            terminal.set_remote_controls_input(true);
+                            cx.emit(Event::InputControlTaken);
+                            cx.notify();
+                        })
+                        .log_err();
+                }
+            })
+            .detach();
             let input_task = cx.spawn({
                 let client = client.clone();
                 let server_instance_id = server_instance_id.clone();
@@ -1565,6 +1577,7 @@ impl TerminalBuilder {
                         terminal_id,
                         input_rx,
                         executor,
+                        Some(control_tx),
                     )
                     .await
                     {
@@ -1665,7 +1678,7 @@ impl TerminalBuilder {
                                         terminal.clear_for_init_command(cx);
                                     }
                                     if skip < frame.data.len() {
-                                        terminal.write_raw_output(&frame.data[skip..], cx);
+                                        terminal.write_remote_output(&frame.data[skip..], frame.replay, cx);
                                     }
                                     if exited && terminal.child_exited.is_none() {
                                         terminal.register_task_finished(
@@ -1833,22 +1846,29 @@ async fn send_persistent_terminal_input(
     client: AnyProtoClient,
     server_instance_id: String,
     terminal_id: String,
-    input_rx: Receiver<Vec<u8>>,
+    input_rx: Receiver<RemoteInput>,
     executor: BackgroundExecutor,
+    control_tx: Option<Sender<()>>,
 ) -> Result<()> {
     let mut sequence = 1;
     let mut control_wait_reported = false;
     while let Ok(first) = input_rx.recv().await {
-        let mut data = first;
+        let mut user_initiated = first.user_initiated;
+        let mut data = first.data;
         while data.len() < MAX_COALESCED_INPUT_BYTES {
             match input_rx.try_recv() {
-                Ok(more) => data.extend_from_slice(&more),
+                Ok(more) => {
+                    user_initiated |= more.user_initiated;
+                    data.extend_from_slice(&more.data);
+                }
                 Err(_) => break,
             }
         }
         // Ordered transport does not order the server's background PTY writes.
         // Keep one batch in flight; replay of an unacknowledged batch is deduplicated
         // by the server, while typing during the round trip is coalesced here.
+        let mut took_control = false;
+        let mut accepted = false;
         loop {
             let result = client
                 .request(proto::PersistentTerminalInput {
@@ -1861,6 +1881,7 @@ async fn send_persistent_terminal_input(
             match result {
                 Ok(_) => {
                     control_wait_reported = false;
+                    accepted = true;
                     break;
                 }
                 Err(error) if persistent_terminal_input_backlog_is_full(&error) => {
@@ -1878,22 +1899,35 @@ async fn send_persistent_terminal_input(
                     return Ok(());
                 }
                 Err(error) if persistent_terminal_input_control_lost(&error) => {
-                    // Another client currently controls the hosted session. The
-                    // server did not record this sequence either, so hold the
-                    // batch until this view takes control back; failing here
-                    // would end the whole terminal view.
+                    // Never let device replies or a previously rejected batch
+                    // fight a newer user's takeover in another view.
+                    if !user_initiated || took_control {
+                        break;
+                    }
+                    took_control = true;
                     if !control_wait_reported {
                         control_wait_reported = true;
                         log::warn!(
                             "persistent terminal input waiting for input control: {error:#}"
                         );
                     }
-                    executor.timer(INPUT_CONTROL_RETRY_INTERVAL).await;
+                    client
+                        .request(proto::TakeHostedTerminalControl {
+                            session_id: String::new(),
+                            terminal_id: terminal_id.clone(),
+                            attachment_id: String::new(),
+                        })
+                        .await?;
+                    if let Some(control_tx) = &control_tx {
+                        control_tx.try_send(()).log_err();
+                    }
                 }
                 Err(error) => return Err(error),
             }
         }
-        sequence += 1;
+        if accepted {
+            sequence += 1;
+        }
     }
     Ok(())
 }
@@ -1950,11 +1984,25 @@ fn persistent_terminal_input_control_lost(error: &anyhow::Error) -> bool {
         })
 }
 
+struct RemoteInput {
+    data: Vec<u8>,
+    user_initiated: bool,
+}
+
+impl From<Vec<u8>> for RemoteInput {
+    fn from(data: Vec<u8>) -> Self {
+        Self {
+            data,
+            user_initiated: true,
+        }
+    }
+}
+
 struct RemoteTerminal {
     client: AnyProtoClient,
     server_instance_id: String,
     terminal_id: String,
-    input_tx: Sender<Vec<u8>>,
+    input_tx: Sender<RemoteInput>,
     /// Set after a failed input send so a persistently full queue warns once
     /// instead of once per keystroke.
     input_backpressure_warned: std::cell::Cell<bool>,
@@ -1964,6 +2012,7 @@ struct RemoteTerminal {
     /// Whether this view may type into its hosted terminal. Hosted sessions have
     /// a single controller; viewers are read-only until they take control.
     controls_input: std::cell::Cell<bool>,
+    user_input_pending: std::cell::Cell<bool>,
     /// Set once the remote session is gone (terminated, detached or already
     /// exited). Input is dropped and the output stream stops without reporting
     /// the terminal as unavailable, because no request can succeed any more.
@@ -2795,6 +2844,19 @@ impl Terminal {
         self.write_raw_output(&converted, cx);
     }
 
+    fn write_remote_output(&mut self, bytes: &[u8], replay: bool, cx: &mut Context<Self>) {
+        let osc52 = self.term_config.osc52;
+        if replay {
+            self.term_config.osc52 = Osc52::Disabled;
+            apply_config(&self.term, &self.term_config);
+        }
+        self.write_raw_output(bytes, cx);
+        if replay {
+            self.term_config.osc52 = osc52;
+            apply_config(&self.term, &self.term_config);
+        }
+    }
+
     /// Terminal byte streams already contain their control sequences and must not be normalized.
     pub fn write_raw_output(&mut self, bytes: &[u8], cx: &mut Context<Self>) {
         if self.is_remote_terminal
@@ -3038,7 +3100,8 @@ impl Terminal {
     fn write_to_pty(&self, input: impl Into<Cow<'static, [u8]>>) {
         let input = input.into();
         if let TerminalType::Remote(remote) = &self.terminal_type
-            && (remote.session_ended.get() || !remote.controls_input.get())
+            && (remote.session_ended.get()
+                || (!remote.controls_input.get() && !remote.user_input_pending.get()))
         {
             if !remote.input_blocked_warned.replace(true) {
                 log::warn!(
@@ -3063,7 +3126,10 @@ impl Terminal {
                 }
                 pty_tx.notify(input);
             }
-            TerminalType::Remote(remote) => match remote.input_tx.try_send(input.into_owned()) {
+            TerminalType::Remote(remote) => match remote.input_tx.try_send(RemoteInput {
+                data: input.into_owned(),
+                user_initiated: remote.user_input_pending.get(),
+            }) {
                 Ok(()) => remote.input_backpressure_warned.set(false),
                 Err(async_channel::TrySendError::Full(_)) => {
                     if !remote.input_backpressure_warned.replace(true) {
@@ -3212,7 +3278,13 @@ impl Terminal {
         #[cfg(any(test, feature = "test-support"))]
         self.input_log.push(input.to_vec());
 
+        if let TerminalType::Remote(remote) = &self.terminal_type {
+            remote.user_input_pending.set(true);
+        }
         self.write_to_pty(input);
+        if let TerminalType::Remote(remote) = &self.terminal_type {
+            remote.user_input_pending.set(false);
+        }
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -6376,6 +6448,25 @@ mod tests {
 
         let clipboard_text = cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text()));
         assert_eq!(clipboard_text.as_deref(), Some("overwritten"));
+        terminal.update(cx, |terminal, cx| {
+            terminal.write_remote_output(b"\x1b]52;c;cmVwbGF5", true, cx);
+            terminal.write_remote_output(b"ZWQ=\x07", true, cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text()))
+                .as_deref(),
+            Some("overwritten")
+        );
+        terminal.update(cx, |terminal, cx| {
+            terminal.write_remote_output(b"\x1b]52;c;bGl2ZQ==\x07", false, cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text()))
+                .as_deref(),
+            Some("live")
+        );
     }
 
     #[test]
@@ -8046,13 +8137,14 @@ mod tests {
             "terminal".into(),
             input_rx,
             cx.background_executor.clone(),
+            None,
         ));
-        input_tx.send(b"a".to_vec()).await.expect("input");
+        input_tx.send(b"a".to_vec().into()).await.expect("input");
         let (first, ack) = requests_rx.recv().await.expect("first batch");
         assert_eq!(first.sequence, 1);
         assert_eq!(first.data, b"a");
-        input_tx.send(b"b".to_vec()).await.expect("input");
-        input_tx.send(b"c".to_vec()).await.expect("input");
+        input_tx.send(b"b".to_vec().into()).await.expect("input");
+        input_tx.send(b"c".to_vec().into()).await.expect("input");
         cx.run_until_parked();
         assert!(requests_rx.try_recv().is_err());
         ack.send(()).expect("ack");
@@ -8080,10 +8172,11 @@ mod tests {
             "terminal".into(),
             input_rx,
             cx.background_executor.clone(),
+            None,
         ));
-        input_tx.send(b"a".to_vec()).await.expect("input");
+        input_tx.send(b"a".to_vec().into()).await.expect("input");
         let (_, ack) = requests_rx.recv().await.expect("first batch");
-        input_tx.send(b"b".to_vec()).await.expect("input");
+        input_tx.send(b"b".to_vec().into()).await.expect("input");
         drop(ack);
         assert!(task.await.is_err());
         assert!(requests_rx.try_recv().is_err());
@@ -8161,8 +8254,9 @@ mod tests {
             "terminal".into(),
             input_rx,
             cx.background_executor.clone(),
+            None,
         ));
-        input_tx.send(b"a".to_vec()).await.expect("input");
+        input_tx.send(b"a".to_vec().into()).await.expect("input");
 
         // Two rejected attempts, then a successful retry of the same sequence.
         for _ in 0..6 {
@@ -8193,6 +8287,20 @@ mod tests {
             envelope: proto::Envelope,
             request_type: &'static str,
         ) -> futures::future::BoxFuture<'static, Result<proto::Envelope>> {
+            if matches!(
+                &envelope.payload,
+                Some(proto::envelope::Payload::TakeHostedTerminalControl(_))
+            ) {
+                self.rejections
+                    .store(0, std::sync::atomic::Ordering::SeqCst);
+                return async {
+                    Ok(proto::TakeHostedTerminalControlResponse {
+                        controls_input: true,
+                    }
+                    .into_envelope(0, None, None))
+                }
+                .boxed();
+            }
             let Some(proto::envelope::Payload::PersistentTerminalInput(input)) = envelope.payload
             else {
                 return async move { anyhow::bail!("unexpected {request_type}") }.boxed();
@@ -8236,7 +8344,7 @@ mod tests {
     }
 
     #[gpui::test(iterations = 20)]
-    async fn persistent_terminal_input_waits_for_control_instead_of_failing(
+    async fn persistent_terminal_input_takes_control_and_preserves_the_first_batch(
         cx: &mut TestAppContext,
     ) {
         let (delivered_tx, delivered_rx) = async_channel::bounded(10);
@@ -8252,16 +8360,10 @@ mod tests {
             "terminal".into(),
             input_rx,
             cx.background_executor.clone(),
+            None,
         ));
-        input_tx.send(b"a".to_vec()).await.expect("input");
+        input_tx.send(b"a".to_vec().into()).await.expect("input");
 
-        // Two rejections while another client controls the session, then the
-        // same sequence is delivered once this view takes control back.
-        for _ in 0..6 {
-            cx.run_until_parked();
-            cx.background_executor
-                .advance_clock(INPUT_CONTROL_RETRY_INTERVAL * 2);
-        }
         cx.run_until_parked();
 
         let delivered = delivered_rx.recv().await.expect("batch held for control");
@@ -8332,8 +8434,9 @@ mod tests {
             "terminal".into(),
             input_rx,
             cx.background_executor.clone(),
+            None,
         ));
-        input_tx.send(b"a".to_vec()).await.expect("input");
+        input_tx.send(b"a".to_vec().into()).await.expect("input");
         // An ended session is not an unavailable terminal: the pump must finish
         // successfully instead of reporting the whole view as broken.
         task.await
@@ -8824,15 +8927,18 @@ mod tests {
 
         builder.terminal.set_remote_controls_input(false);
         assert!(!builder.terminal.remote_controls_input());
-        builder.terminal.input(b"blocked".to_vec());
+        builder.terminal.write_to_pty(b"device-reply".to_vec());
         assert!(input_rx.try_recv().is_err());
-        assert!(builder.terminal.pty_write_log.borrow().is_empty());
+        builder.terminal.input(b"first-character".to_vec());
+        let pending = input_rx.try_recv().expect("first user input is retained");
+        assert_eq!(pending.data, b"first-character");
+        assert!(pending.user_initiated);
 
         builder.terminal.set_remote_controls_input(true);
         assert!(builder.terminal.remote_controls_input());
         builder.terminal.input(b"typed".to_vec());
         assert_eq!(
-            input_rx.try_recv().expect("input after control"),
+            input_rx.try_recv().expect("input after control").data,
             b"typed".to_vec()
         );
 

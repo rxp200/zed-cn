@@ -43,8 +43,12 @@ impl HostedTerminals {
 
     async fn client(&self) -> Result<std::sync::Arc<HostedTerminalClient>> {
         let mut client = self.client.lock().await;
-        if let Some(client) = client.as_ref() {
-            return Ok(client.clone());
+        if let Some(connected) = client.as_ref() {
+            anyhow::ensure!(
+                connected.is_connected(),
+                "hosted terminal service connection was lost; reopen the remote project"
+            );
+            return Ok(connected.clone());
         }
         let connected = HostedTerminalClient::connect_or_spawn(&self.service_dir).await?;
         *client = Some(connected.clone());
@@ -129,7 +133,7 @@ impl HostedTerminals {
                 session_id: created.session_id,
                 attachment_id,
                 control_generation: 1,
-                hosted: request.hosted,
+                hosted: false,
                 controls_input: true,
             },
         );
@@ -203,7 +207,9 @@ impl HostedTerminals {
         self.require_instance(&request.server_instance_id)?;
         let (session_id, attachment_id, _) = self.link(&request.terminal_id)?;
         let client = self.client().await?;
-        client.subscribe(&session_id, &attachment_id).await
+        client
+            .subscribe(&session_id, &attachment_id, request.offset)
+            .await
     }
 
     /// Hosted terminals outlive the view, so closing only detaches them. An
@@ -264,6 +270,37 @@ impl HostedTerminals {
             session_id,
             name: request.name,
         })
+    }
+
+    pub async fn unhost(&self, request: proto::UnhostTerminal) -> Result<()> {
+        let (session_id, attachment_id, _) = self.link(&request.terminal_id)?;
+        let response = self
+            .client()
+            .await?
+            .request(proto::hosted_terminal_daemon_request::Kind::Unhost(
+                proto::UnhostTerminal {
+                    terminal_id: session_id.clone(),
+                    attachment_id: attachment_id.clone(),
+                },
+            ))
+            .await?;
+        let Some(proto::hosted_terminal_daemon_response::Kind::Control(control)) = response.kind
+        else {
+            anyhow::bail!("terminal service did not confirm cancellation");
+        };
+        let mut links = self.links()?;
+        for link in links
+            .terminals
+            .values_mut()
+            .filter(|link| link.session_id == session_id)
+        {
+            if link.attachment_id == attachment_id {
+                link.hosted = false;
+                link.controls_input = true;
+                link.control_generation = control.control_generation;
+            }
+        }
+        Ok(())
     }
 
     pub async fn list(
@@ -356,13 +393,18 @@ impl HostedTerminals {
         &self,
         request: proto::TakeHostedTerminalControl,
     ) -> Result<proto::TakeHostedTerminalControlResponse> {
-        let (attachment_id, _) = self.attachment_for_session(&request.session_id)?;
+        let (session_id, attachment_id, _) = self.link(&request.terminal_id)?;
+        anyhow::ensure!(
+            request.session_id.is_empty() || session_id == request.session_id,
+            "terminal session identity mismatch"
+        );
         let client = self.client().await?;
         let response = client
             .request(proto::hosted_terminal_daemon_request::Kind::TakeControl(
                 proto::TakeHostedTerminalControl {
-                    session_id: request.session_id.clone(),
+                    session_id,
                     attachment_id,
+                    terminal_id: String::new(),
                 },
             ))
             .await?;
@@ -371,10 +413,7 @@ impl HostedTerminals {
             return Err(anyhow!("hosted terminal service did not grant control"));
         };
         if let Ok(mut links) = self.links()
-            && let Some(link) = links
-                .terminals
-                .values_mut()
-                .find(|link| link.session_id == request.session_id)
+            && let Some(link) = links.terminals.get_mut(&request.terminal_id)
         {
             link.control_generation = control.control_generation;
             link.controls_input = control.controls_input;
@@ -501,6 +540,88 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn cancelling_hosting_keeps_the_same_shell_alive_and_input_usable() {
+        let (_daemon, service_dir, root) = daemon();
+        let hosted = HostedTerminals::new(service_dir);
+        smol::block_on(async {
+            let mut request = create_request(&root, "unhost-live-shell");
+            request.args = vec![
+                "-c".into(),
+                "printf 'before:%s\\n' $$; read value; printf 'after:%s:%s\\n' $$ \"$value\""
+                    .into(),
+            ];
+            let created = hosted.create(request).await.expect("create");
+            let promoted = hosted
+                .host(proto::HostTerminal {
+                    server_instance_id: created.server_instance_id.clone(),
+                    terminal_id: created.terminal_id.clone(),
+                    name: "live shell".into(),
+                    attachment_id: String::new(),
+                })
+                .await
+                .expect("host");
+            let output = hosted
+                .subscribe(proto::SubscribePersistentTerminal {
+                    server_instance_id: created.server_instance_id.clone(),
+                    terminal_id: created.terminal_id.clone(),
+                    offset: 0,
+                })
+                .await
+                .expect("subscribe");
+            let before = output_text(&drain(&output).await);
+            let pid = before
+                .lines()
+                .find_map(|line| line.strip_prefix("before:"))
+                .expect("shell pid")
+                .trim();
+            hosted
+                .unhost(proto::UnhostTerminal {
+                    terminal_id: created.terminal_id.clone(),
+                    attachment_id: String::new(),
+                })
+                .await
+                .expect("cancel hosting");
+            let root = hosted
+                .canonical_root(Some(&root.display().to_string()))
+                .await
+                .expect("root");
+            assert!(
+                hosted
+                    .list(proto::ListHostedTerminals {
+                        canonical_root: root
+                    })
+                    .await
+                    .expect("list")
+                    .sessions
+                    .iter()
+                    .all(|session| session.session_id != promoted.session_id)
+            );
+            hosted
+                .input(proto::PersistentTerminalInput {
+                    server_instance_id: created.server_instance_id.clone(),
+                    terminal_id: created.terminal_id.clone(),
+                    sequence: 1,
+                    data: b"still-alive\n".to_vec(),
+                })
+                .await
+                .expect("input after cancellation");
+            let after = output_text(&drain(&output).await);
+            assert!(
+                after.contains(&format!("after:{pid}:still-alive")),
+                "{before:?} {after:?}"
+            );
+            hosted
+                .close(proto::ClosePersistentTerminal {
+                    server_instance_id: created.server_instance_id,
+                    terminal_id: created.terminal_id,
+                })
+                .await
+                .expect("close");
+        });
+    }
+
     fn output_text(frames: &[proto::PersistentTerminalOutput]) -> String {
         let mut bytes = Vec::new();
         for frame in frames {
@@ -595,6 +716,7 @@ mod tests {
         assert_eq!(control.session_id, listed.sessions[0].session_id);
         assert!(!control.controls_input);
         let taken = smol::block_on(second.take_control(proto::TakeHostedTerminalControl {
+            terminal_id: control.terminal_id,
             session_id: listed.sessions[0].session_id.clone(),
             attachment_id: String::new(),
         }))

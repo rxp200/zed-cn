@@ -41,8 +41,8 @@ use remote::RemoteConnectionOptions;
 use settings::{Settings as _, SettingsStore};
 
 use std::any::TypeId;
-use std::rc::Rc;
 use std::path::Path;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 use theme::ActiveTheme;
@@ -455,6 +455,16 @@ impl Render for TitleBar {
 /// Tab titles are shell titles, so several terminals in the same folder share
 /// one name. Number repeated names so the hosted-terminal list never shows rows
 /// that cannot be told apart.
+fn visible_hosted_sessions(
+    sessions: &[rpc::proto::HostedTerminalSummary],
+) -> Vec<rpc::proto::HostedTerminalSummary> {
+    sessions
+        .iter()
+        .filter(|session| session.running)
+        .cloned()
+        .collect()
+}
+
 fn disambiguate_hosted_session_names(names: &[&str]) -> Vec<String> {
     let mut totals: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
     for name in names {
@@ -1196,8 +1206,8 @@ impl TitleBar {
         if !self.project.read(cx).supports_hosted_terminals(cx) {
             return None;
         }
-        let sessions = self.hosted_sessions.clone();
-        let count = sessions.iter().filter(|session| session.running).count();
+        let sessions = visible_hosted_sessions(&self.hosted_sessions);
+        let count = sessions.len();
         let label: SharedString = if count > 0 {
             format!("{} ({count})", i18n::t!("a9dc9b921c645f65")).into()
         } else {
@@ -1205,8 +1215,6 @@ impl TitleBar {
         };
         let project = self.project.clone();
         let title_bar = cx.entity().downgrade();
-        let menu_project = project.clone();
-        let menu_title_bar = title_bar.clone();
         let refresh_label: SharedString = i18n::t!("a9dc9b921c645f65").into();
         Some(
             PopoverMenu::new("hosted-terminals-menu")
@@ -1236,16 +1244,14 @@ impl TitleBar {
                                 .update(cx, |this, cx| {
                                     let changed = this.hosted_sessions.len()
                                         != response.sessions.len()
-                                        || this
-                                            .hosted_sessions
-                                            .iter()
-                                            .zip(&response.sessions)
-                                            .any(|(old, new)| {
+                                        || this.hosted_sessions.iter().zip(&response.sessions).any(
+                                            |(old, new)| {
                                                 old.session_id != new.session_id
                                                     || old.name != new.name
                                                     || old.running != new.running
                                                     || old.viewer_count != new.viewer_count
-                                            });
+                                            },
+                                        );
                                     this.hosted_sessions = response.sessions;
                                     cx.notify();
                                     changed
@@ -1258,12 +1264,10 @@ impl TitleBar {
                 })
                 .menu(move |window, cx| {
                     let sessions = sessions.clone();
-                    let project = menu_project.clone();
-                    let title_bar = menu_title_bar.clone();
                     Some(ContextMenu::build(window, cx, |menu, _, _| {
                         let menu = menu.header(i18n::t!("a9dc9b921c645f65"));
                         if sessions.is_empty() {
-                            return menu.label(i18n::t!("67f8c2977a77a09d")).separator();
+                            return menu.label(i18n::t!("7f1fdafea529e7cd")).separator();
                         }
                         let labels = disambiguate_hosted_session_names(
                             &sessions
@@ -1287,52 +1291,7 @@ impl TitleBar {
                                 );
                             })
                         });
-                        let ended: Vec<_> = sessions
-                            .iter()
-                            .zip(&labels)
-                            .filter(|(session, _)| !session.running)
-                            .collect();
-                        if ended.is_empty() {
-                            return menu;
-                        }
-                        ended.iter().fold(
-                            menu.separator().header(i18n::t!("ef6e108d77f3528b")),
-                            |menu, (session, label)| {
-                                let session_id = session.session_id.clone();
-                                let project = project.clone();
-                                let title_bar = title_bar.clone();
-                                let label: SharedString =
-                                    i18n::t!("2e0028d2ccba4855", name = label.as_str()).into();
-                                menu.entry(label, None, move |_, cx| {
-                                    let project = project.clone();
-                                    let session_id = session_id.clone();
-                                    let title_bar = title_bar.clone();
-                                    let Some(request) = project.read_with(cx, |project, cx| {
-                                        project.remote_client().map(|client| {
-                                            client.read(cx).delete_hosted_terminal(session_id)
-                                        })
-                                    }) else {
-                                        return;
-                                    };
-                                    cx.spawn(async move |cx| {
-                                        if let Err(error) = request.await {
-                                            eprintln!(
-                                                "failed to delete hosted terminal: {error:#}"
-                                            );
-                                            return;
-                                        }
-                                        title_bar
-                                            .update(cx, |this, cx| {
-                                                this.hosted_sessions
-                                                    .retain(|session| session.running);
-                                                cx.notify();
-                                            })
-                                            .ok();
-                                    })
-                                    .detach();
-                                })
-                            },
-                        )
+                        menu
                     }))
                 })
                 .trigger_with_tooltip(
@@ -1721,6 +1680,25 @@ impl TitleBar {
 mod tests {
     use super::*;
     use util::paths::PathStyle;
+
+    #[test]
+    fn hosted_menu_hides_ended_records_and_uses_empty_state_when_none_are_running() {
+        let ended = rpc::proto::HostedTerminalSummary {
+            name: "old".into(),
+            running: false,
+            ..Default::default()
+        };
+        let running = rpc::proto::HostedTerminalSummary {
+            name: "active".into(),
+            running: true,
+            ..Default::default()
+        };
+        assert!(visible_hosted_sessions(&[]).is_empty());
+        assert!(visible_hosted_sessions(&[ended.clone()]).is_empty());
+        let visible = visible_hosted_sessions(&[ended, running]);
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].name, "active");
+    }
 
     #[test]
     fn repeated_hosted_session_names_are_numbered() {

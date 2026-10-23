@@ -316,6 +316,7 @@ message PersistentTerminalOutput {
   bool history_truncated = 5;
   bool exited = 6;
   optional int32 exit_code = 7;
+  bool replay = 8;
 }
 
 message PersistentTerminalOutputCredit {
@@ -378,6 +379,12 @@ message AttachHostedTerminalResponse {
   string session_id = 6;
 }
 
+message UnhostTerminal {
+  string terminal_id = 1;
+  // Resolved by the project server, never trusted from the desktop client.
+  string attachment_id = 2;
+}
+
 message DetachHostedTerminal {
   string session_id = 1;
   // Server-internal attachment identity; ignored when sent by a client.
@@ -386,6 +393,7 @@ message DetachHostedTerminal {
 
 message TakeHostedTerminalControl {
   string session_id = 1;
+  string terminal_id = 3;
   // Server-internal attachment identity; ignored when sent by a client.
   string attachment_id = 2;
 }
@@ -441,6 +449,7 @@ message HostedTerminalDaemonRequest {
     HostedTerminalDaemonResize resize = 12;
     HostedTerminalDaemonCredit credit = 13;
     CloseHostedTerminal close = 14;
+    UnhostTerminal unhost = 15;
   }
 }
 
@@ -461,6 +470,7 @@ message CreateHostedTerminal {
 message SubscribeHostedTerminal {
   string session_id = 1;
   string attachment_id = 2;
+  uint64 offset = 3;
 }
 
 message HostedTerminalDaemonInput {

@@ -12,6 +12,7 @@ pub struct StatusToast {
     action: Option<ToastAction>,
     show_dismiss: bool,
     auto_dismiss: bool,
+    dismiss_duration: std::time::Duration,
     this_handle: Entity<Self>,
     focus_handle: FocusHandle,
 }
@@ -32,6 +33,7 @@ impl StatusToast {
                     action: None,
                     show_dismiss: false,
                     auto_dismiss: true,
+                    dismiss_duration: std::time::Duration::from_secs(10),
                     this_handle: cx.entity(),
                     focus_handle,
                 },
@@ -42,6 +44,11 @@ impl StatusToast {
 
     pub fn icon(mut self, icon: Icon) -> Self {
         self.icon = Some(icon);
+        self
+    }
+
+    pub fn dismiss_after(mut self, duration: std::time::Duration) -> Self {
+        self.dismiss_duration = duration;
         self
     }
 
@@ -128,6 +135,10 @@ impl Render for StatusToast {
 }
 
 impl ToastView for StatusToast {
+    fn dismiss_duration(&self) -> std::time::Duration {
+        self.dismiss_duration
+    }
+
     fn action(&self) -> Option<ToastAction> {
         self.action.clone()
     }

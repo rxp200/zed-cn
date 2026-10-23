@@ -216,18 +216,16 @@ pub struct HostTerminal;
 struct HostedTerminalActions {
     can_host: bool,
     can_manage: bool,
-    can_take_control: bool,
 }
 
 fn hosted_terminal_actions(
     hostable: bool,
     hosted: bool,
-    controls_input: bool,
+    _controls_input: bool,
 ) -> HostedTerminalActions {
     HostedTerminalActions {
         can_host: hostable && !hosted,
         can_manage: hosted,
-        can_take_control: hosted && !controls_input,
     }
 }
 
@@ -469,12 +467,7 @@ impl TerminalView {
 
     /// Promotion never restarts the shell: the remote server marks the existing
     /// session as hosted and only the closing behavior changes.
-    fn host_terminal(
-        &mut self,
-        _: &HostTerminal,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn host_terminal(&mut self, _: &HostTerminal, window: &mut Window, cx: &mut Context<Self>) {
         let Some(project) = self.project.upgrade() else {
             return;
         };
@@ -484,18 +477,18 @@ impl TerminalView {
         {
             return;
         }
-        let Some((server_instance_id, terminal_id)) = self
-            .terminal
-            .read(cx)
-            .remote_terminal_identity()
+        let Some((server_instance_id, terminal_id)) =
+            self.terminal.read(cx).remote_terminal_identity()
         else {
             return;
         };
         let name = self.display_title(false, cx);
         let request = project.update(cx, |project, cx| {
-            project
-                .remote_client()
-                .map(|client| client.read(cx).host_terminal(server_instance_id, terminal_id, name))
+            project.remote_client().map(|client| {
+                client
+                    .read(cx)
+                    .host_terminal(server_instance_id, terminal_id, name)
+            })
         });
         cx.spawn_in(window, async move |this, cx| {
             let Some(request) = request else {
@@ -530,30 +523,33 @@ impl TerminalView {
         let Some(session_id) = self.hosted_session_id.clone() else {
             return;
         };
+        let Some((_, terminal_id)) = self.terminal.read(cx).remote_terminal_identity() else {
+            return;
+        };
         let request = self.project.upgrade().and_then(|project| {
             project.read_with(cx, |project, cx| {
-                project
-                    .remote_client()
-                    .map(|client| client.read(cx).take_hosted_terminal_control(session_id))
+                project.remote_client().map(|client| {
+                    client
+                        .read(cx)
+                        .take_hosted_terminal_control(session_id, terminal_id)
+                })
             })
         });
         let Some(request) = request else {
             return;
         };
-        cx.spawn_in(window, async move |this, cx| {
-            match request.await {
-                Ok(response) => {
-                    this.update_in(cx, |this, _window, cx| {
-                        this.terminal.update(cx, |terminal, _| {
-                            terminal.set_remote_controls_input(response.controls_input);
-                        });
-                        cx.notify();
-                    })
-                    .ok();
-                }
-                Err(error) => {
-                    log::error!("failed to take hosted terminal control: {error:#}");
-                }
+        cx.spawn_in(window, async move |this, cx| match request.await {
+            Ok(response) => {
+                this.update_in(cx, |this, _window, cx| {
+                    this.terminal.update(cx, |terminal, _| {
+                        terminal.set_remote_controls_input(response.controls_input);
+                    });
+                    cx.notify();
+                })
+                .ok();
+            }
+            Err(error) => {
+                log::error!("failed to take hosted terminal control: {error:#}");
             }
         })
         .detach();
@@ -581,6 +577,7 @@ impl TerminalView {
             cx.spawn_in(window, async move |this, cx| {
                 if let Err(error) = request.await {
                     log::error!("failed to detach hosted terminal: {error:#}");
+                    return;
                 }
                 // Leaves only this view: the session keeps running on the remote
                 // host, so the tab that belonged to it must close, not whichever
@@ -605,14 +602,14 @@ impl TerminalView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(session_id) = self.hosted_session_id.clone() else {
+        let Some((_, terminal_id)) = self.terminal.read(cx).remote_terminal_identity() else {
             return;
         };
         let request = self.project.upgrade().and_then(|project| {
             project.read_with(cx, |project, cx| {
                 project
                     .remote_client()
-                    .map(|client| client.read(cx).terminate_hosted_terminal(session_id))
+                    .map(|client| client.read(cx).unhost_terminal(terminal_id))
             })
         });
         let Some(request) = request else {
@@ -621,21 +618,25 @@ impl TerminalView {
         cx.spawn_in(window, async move |this, cx| {
             match request.await {
                 Ok(()) => {
-                    // The remote program is gone, so this view must not keep
-                    // accepting input or claim the whole terminal is unavailable:
-                    // it keeps the scrollback and stops silently.
+                    // Only retention changes; the same PTY and foreground program survive.
                     this.update_in(cx, |this, _window, cx| {
                         this.hosted_session_id = None;
                         this.hosted = false;
                         this.terminal.update(cx, |terminal, _| {
-                            terminal.end_remote_session();
+                            terminal.set_remote_controls_input(true);
                         });
                         cx.notify();
                     })
                     .ok();
                 }
                 Err(error) => {
-                    log::error!("failed to terminate hosted terminal: {error:#}");
+                    log::error!("failed to cancel terminal hosting: {error:#}");
+                    this.update_in(cx, |this, _, cx| {
+                        if let Some(workspace) = this.workspace.upgrade() {
+                            workspace.update(cx, |workspace, cx| workspace.show_error(error, cx));
+                        }
+                    })
+                    .log_err();
                 }
             }
         })
@@ -1248,12 +1249,12 @@ impl TerminalView {
                 let name = label.clone().unwrap_or_default();
                 let project = self.project.upgrade()?;
                 let request = project.read_with(cx, |project, cx| {
-                    project
-                        .remote_client()
-                        .map(|client| client.read(cx).rename_hosted_terminal(
+                    project.remote_client().map(|client| {
+                        client.read(cx).rename_hosted_terminal(
                             self.hosted_session_id.clone().unwrap_or_default(),
                             name,
-                        ))
+                        )
+                    })
                 });
                 request
             });
@@ -1353,17 +1354,7 @@ impl TerminalView {
                         .separator()
                 })
                 .when(hosted_actions.can_manage, |menu| {
-                    menu
-                        .when(hosted_actions.can_take_control, |menu| {
-                            menu.action(
-                                i18n::t!("de5a8ab47de9e80d"),
-                                Box::new(TakeHostedTerminalControl),
-                            )
-                        })
-                        .action(
-                            i18n::t!("bf8e704f7a487c42"),
-                            Box::new(DetachHostedTerminal),
-                        )
+                    menu.action(i18n::t!("bf8e704f7a487c42"), Box::new(DetachHostedTerminal))
                         .action(
                             i18n::t!("2407c7a65bb97428"),
                             Box::new(TerminateHostedTerminal),
@@ -2133,6 +2124,18 @@ fn subscribe_for_terminal_events(
             }
 
             match event {
+                Event::InputControlTaken => {
+                    if let Some(workspace) = terminal_view.workspace.upgrade() {
+                        let toast = notifications::status_toast::StatusToast::new(
+                            i18n::t!("75a14bfa6851176f"),
+                            cx,
+                            |toast, _| toast.dismiss_after(std::time::Duration::from_millis(1500)),
+                        );
+                        workspace
+                            .update(cx, |workspace, cx| workspace.toggle_status_toast(toast, cx));
+                    }
+                    cx.emit(ItemEvent::UpdateTab);
+                }
                 Event::Wakeup => {
                     if terminal.read(cx).is_remote_terminal() {
                         let output = terminal.read(cx).last_n_non_empty_lines(12).join("\n");
@@ -2658,7 +2661,11 @@ impl Item for TerminalView {
                         .id("terminal-hosted-indicator")
                         .flex_shrink_0()
                         .tooltip(Tooltip::text(description))
-                        .child(Icon::new(IconName::Cloud).size(IconSize::XSmall).color(color)),
+                        .child(
+                            Icon::new(IconName::Cloud)
+                                .size(IconSize::XSmall)
+                                .color(color),
+                        ),
                 )
             })
             .when(!self.read_only, |this| {
@@ -2909,18 +2916,9 @@ impl Item for TerminalView {
         }
         let hosted_actions = self.hosted_terminal_actions(cx);
         if hosted_actions.can_host {
-            actions.push((
-                i18n::t!("69178944fb4ed4a8").into(),
-                Box::new(HostTerminal),
-            ));
+            actions.push((i18n::t!("69178944fb4ed4a8").into(), Box::new(HostTerminal)));
         }
         if hosted_actions.can_manage {
-            if hosted_actions.can_take_control {
-                actions.push((
-                    i18n::t!("de5a8ab47de9e80d").into(),
-                    Box::new(TakeHostedTerminalControl),
-                ));
-            }
             actions.push((
                 i18n::t!("bf8e704f7a487c42").into(),
                 Box::new(DetachHostedTerminal),
@@ -3165,18 +3163,16 @@ impl SerializableItem for TerminalView {
             // session. If it no longer exists, fall back to a fresh shell so the
             // tab is still usable, and the hosted reference is dropped.
             let restored = match hosted_session_id {
-                Some(session_id) => {
-                    project
-                        .update(cx, |project, cx| {
-                            project.attach_hosted_terminal(
-                                project.hosted_terminal_root(cx).unwrap_or_default(),
-                                session_id,
-                                cx,
-                            )
-                        })
-                        .await
-                        .ok()
-                }
+                Some(session_id) => project
+                    .update(cx, |project, cx| {
+                        project.attach_hosted_terminal(
+                            project.hosted_terminal_root(cx).unwrap_or_default(),
+                            session_id,
+                            cx,
+                        )
+                    })
+                    .await
+                    .ok(),
                 None => None,
             };
             let (terminal, hosted) = match restored {
@@ -5492,17 +5488,14 @@ mod tests {
         let unhosted = hosted_terminal_actions(true, false, true);
         assert!(unhosted.can_host);
         assert!(!unhosted.can_manage);
-        assert!(!unhosted.can_take_control);
 
         let controller = hosted_terminal_actions(true, true, true);
         assert!(!controller.can_host, "promotion must disappear once hosted");
         assert!(controller.can_manage);
-        assert!(!controller.can_take_control);
 
         let viewer = hosted_terminal_actions(true, true, false);
         assert!(!viewer.can_host);
         assert!(viewer.can_manage);
-        assert!(viewer.can_take_control);
 
         let local = hosted_terminal_actions(false, false, true);
         assert!(!local.can_host);

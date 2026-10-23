@@ -186,7 +186,7 @@ pub const PERSISTENT_TERMINALS_CAPABILITY: &str = "persistent_terminals_v1";
 pub const PERSISTENT_TERMINAL_STREAMING_CAPABILITY: &str = "persistent_terminal_streaming_v1";
 /// The server can keep promoted terminals alive independently of a client
 /// connection and let other clients of the same account attach them.
-pub const HOSTED_TERMINALS_CAPABILITY: &str = "hosted_terminals_v1";
+pub const HOSTED_TERMINALS_CAPABILITY: &str = "hosted_terminals_v2";
 /// The server can create a directory at an arbitrary path outside of any
 /// worktree, so the remote project picker can turn a typed new name into a
 /// usable project root.
@@ -1530,15 +1530,35 @@ impl RemoteClient {
         }
     }
 
+    pub fn unhost_terminal(&self, terminal_id: String) -> impl Future<Output = Result<()>> + use<> {
+        let supported = self.supports_hosted_terminals();
+        let client = self.proto_client();
+        async move {
+            anyhow::ensure!(
+                supported,
+                "remote server does not support cancelling terminal hosting; update the server"
+            );
+            client
+                .request(proto::UnhostTerminal {
+                    terminal_id,
+                    attachment_id: String::new(),
+                })
+                .await?;
+            Ok(())
+        }
+    }
+
     pub fn take_hosted_terminal_control(
         &self,
         session_id: String,
+        terminal_id: String,
     ) -> impl Future<Output = Result<proto::TakeHostedTerminalControlResponse>> + use<> {
         let client = self.proto_client();
         async move {
             client
                 .request(proto::TakeHostedTerminalControl {
                     session_id,
+                    terminal_id,
                     attachment_id: String::new(),
                 })
                 .await
