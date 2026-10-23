@@ -15354,6 +15354,7 @@ dependencies = [
  "workspace",
  "worktree",
  "zed_actions",
+ "zlog",
 ]
 
 [[package]]

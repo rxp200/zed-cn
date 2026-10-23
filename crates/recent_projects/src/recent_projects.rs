@@ -1145,6 +1145,11 @@ impl PickerDelegate for RecentProjectsDelegate {
     }
 
     fn confirm(&mut self, secondary: bool, window: &mut Window, cx: &mut Context<Picker<Self>>) {
+        let diagnostic = zlog::diagnostics::DiagnosticSpan::new("project_picker_confirm");
+        diagnostic.record(format_args!(
+            "selection={} secondary={secondary}",
+            self.selected_index
+        ));
         match self.filtered_entries.get(self.selected_index) {
             Some(ProjectPickerEntry::OpenFolder { index, .. }) => {
                 let Some(folder) = self.open_folders.get(*index) else {
@@ -1172,6 +1177,11 @@ impl PickerDelegate for RecentProjectsDelegate {
                     return;
                 }
 
+                diagnostic.record(format_args!(
+                    "project_group remote={} roots={}",
+                    key.host().is_some(),
+                    key.path_list().paths().len()
+                ));
                 let key = key.clone();
                 if let Some(handle) = window.window_handle().downcast::<MultiWorkspace>() {
                     cx.defer(move |cx| {
@@ -1245,6 +1255,7 @@ impl PickerDelegate for RecentProjectsDelegate {
             }
             _ => {}
         }
+        diagnostic.finish();
     }
 
     fn dismissed(&mut self, _window: &mut Window, _: &mut Context<Picker<Self>>) {}

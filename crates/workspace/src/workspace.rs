@@ -2236,6 +2236,8 @@ impl Workspace {
         open_mode: OpenMode,
         cx: &mut App,
     ) -> Task<anyhow::Result<OpenResult>> {
+        let diagnostic = zlog::diagnostics::DiagnosticSpan::new("open_local_workspace");
+        diagnostic.record(format_args!("roots={}", abs_paths.len()));
         let project_handle = Project::local(
             app_state.client.clone(),
             app_state.node_runtime.clone(),
@@ -2259,6 +2261,7 @@ impl Workspace {
                 }
             }
 
+            diagnostic.record(format_args!("lookup_saved_workspace"));
             let serialized_workspace = db.workspace_for_roots(paths_to_open.as_slice());
 
             if let Some(paths) = serialized_workspace.as_ref().map(|ws| &ws.paths) {
@@ -2283,6 +2286,10 @@ impl Workspace {
                 }
             }
 
+            diagnostic.record(format_args!(
+                "worktrees_loaded restoring={}",
+                serialized_workspace.is_some()
+            ));
             let workspace_id = if let Some(serialized_workspace) = serialized_workspace.as_ref() {
                 serialized_workspace.id
             } else {
@@ -2456,6 +2463,8 @@ impl Workspace {
                 .await
                 .unwrap_or_default();
 
+            diagnostic.record(format_args!("items_loaded"));
+
             // Restore default dock state for empty workspaces
             // Only restore if:
             // 1. This is an empty workspace (no paths), AND
@@ -2510,6 +2519,7 @@ impl Workspace {
                 })
                 .log_err();
 
+            diagnostic.finish();
             Ok(OpenResult {
                 window,
                 workspace,
@@ -8149,6 +8159,8 @@ impl Workspace {
         cx: &mut Context<Workspace>,
     ) -> Task<Result<Vec<Option<Box<dyn ItemHandle>>>>> {
         cx.spawn_in(window, async move |workspace, cx| {
+            let diagnostic = zlog::diagnostics::DiagnosticSpan::new("restore_workspace");
+            diagnostic.record(format_args!("workspace={:?}", serialized_workspace.id));
             let recent_navigation_history = serialized_workspace.recent_navigation_history.clone();
             workspace.update(cx, |workspace, _| {
                 workspace.persisted_recent_navigation_history = recent_navigation_history;
@@ -8169,6 +8181,7 @@ impl Workspace {
                 center_group = Some((group, active_pane))
             }
 
+            diagnostic.record(format_args!("restore_center_complete"));
             let mut items_by_project_path = HashMap::default();
             let mut item_ids_by_kind = HashMap::default();
             let mut all_deserialized_items = Vec::default();
@@ -8285,6 +8298,7 @@ impl Workspace {
                 })
                 .ok();
 
+            diagnostic.finish();
             Ok(opened_items)
         })
     }
