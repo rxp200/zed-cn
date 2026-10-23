@@ -1157,6 +1157,13 @@ impl MultiWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Task<Result<Entity<Workspace>>> {
+        let diagnostic = zlog::diagnostics::DiagnosticSpan::new("find_or_create_workspace");
+        diagnostic.record(format_args!(
+            "remote={} roots={}",
+            host.is_some(),
+            paths.paths().len()
+        ));
+        diagnostic.finish();
         let existing = self.workspace_for_open_request(
             &paths,
             host.as_ref(),
@@ -1402,8 +1409,15 @@ impl MultiWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let diagnostic = zlog::diagnostics::DiagnosticSpan::new("activate_workspace");
+        diagnostic.record(format_args!(
+            "from={:?} to={:?}",
+            self.workspace().entity_id(),
+            workspace.entity_id()
+        ));
         if self.workspace() == &workspace {
             self.focus_active_workspace(window, cx);
+            diagnostic.finish();
             return;
         }
 
@@ -1443,14 +1457,17 @@ impl MultiWorkspace {
         // The previously-active workspace left the title and edited indicator
         // reflecting its own state, so re-apply them from the newly-active
         // workspace (which is now the chrome owner per `owns_window_chrome`).
+        diagnostic.record(format_args!("refresh_window_state"));
         workspace.update(cx, |workspace, cx| {
             workspace.refresh_window_state(window, cx);
         });
 
         cx.emit(MultiWorkspaceEvent::ActiveWorkspaceChanged { source_workspace });
         self.serialize(cx);
+        diagnostic.record(format_args!("focus_active_workspace"));
         self.focus_active_workspace(window, cx);
         cx.notify();
+        diagnostic.finish();
     }
 
     /// Promotes the currently active workspace to persistent if it is

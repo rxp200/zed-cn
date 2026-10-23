@@ -42,6 +42,10 @@ pub struct Record<'a> {
     pub line: Option<u32>,
 }
 
+pub(crate) fn output_file_path() -> Option<&'static PathBuf> {
+    SINK_FILE_PATH.get().copied()
+}
+
 pub fn init_output_stdout() {
     // Use atomics here instead of just a `static mut`, since in the context
     // of tests these accesses can be multi-threaded.

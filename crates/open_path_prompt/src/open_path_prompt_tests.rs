@@ -504,6 +504,121 @@ async fn test_new_path_prompt_reports_create_failure(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+async fn test_create_directory_prompt_lists_matches_before_create_row(cx: &mut TestAppContext) {
+    let app_state = init_test(cx);
+    app_state
+        .fs
+        .as_fake()
+        .insert_tree(
+            path!("/root"),
+            json!({
+                "project-a": {},
+                "project-b": {},
+                "notes.txt": "N",
+            }),
+        )
+        .await;
+
+    let project = Project::test(app_state.fs.clone(), [path!("/root").as_ref()], cx).await;
+    let create_fs = app_state.fs.clone();
+    let create_directory: Arc<CreateDirectoryHandler> = Arc::new(move |path: String, cx: &App| {
+        let fs = create_fs.clone();
+        cx.spawn(async move |_| {
+            let path = std::path::PathBuf::from(path);
+            fs.create_dir(&path).await?;
+            Ok(fs.canonicalize(&path).await?.to_string_lossy().into_owned())
+        })
+    });
+    let (picker, mut confirmed, cx) = build_new_path_prompt(project, create_directory, cx);
+
+    // Typing a prefix of existing directories lists them first and the create
+    // row last, with the first match selected by default.
+    insert_query(path!("/root/project"), &picker, cx).await;
+    assert_eq!(
+        collect_match_candidates(&picker, cx),
+        vec!["project-a", "project-b", "project"]
+    );
+    assert_eq!(
+        picker.read_with(cx, |picker, _| picker.delegate.selected_index()),
+        0
+    );
+    picker.update_in(cx, |picker, window, cx| {
+        for index in 0..picker.delegate.match_count() {
+            assert!(
+                picker
+                    .delegate
+                    .render_match(index, false, window, cx)
+                    .is_some(),
+                "every rendered row resolves to a candidate"
+            );
+        }
+    });
+
+    // Enter enters the first match instead of creating the typed prefix.
+    assert_eq!(
+        confirm_update_query(&picker, cx),
+        Some(path!("/root/project-a/").to_string())
+    );
+    assert!(
+        !app_state
+            .fs
+            .is_dir(std::path::Path::new(path!("/root/project")))
+            .await,
+        "entering a match must not create the typed prefix"
+    );
+
+    // A matching file is still opened rather than turned into a directory.
+    insert_query(path!("/root/notes"), &picker, cx).await;
+    assert_eq!(
+        collect_match_candidates(&picker, cx),
+        vec!["notes.txt", "notes"]
+    );
+    picker.update_in(cx, |picker, window, cx| {
+        picker.delegate.confirm(false, window, cx)
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        confirmed.try_recv().ok().flatten(),
+        Some(Some(vec![std::path::PathBuf::from(path!(
+            "/root/notes.txt"
+        ))])),
+        "confirming a matched file opens it"
+    );
+    assert!(
+        !app_state
+            .fs
+            .is_dir(std::path::Path::new(path!("/root/notes")))
+            .await,
+        "a matched file is not replaced by a directory with the typed prefix"
+    );
+
+    // Selecting the create row explicitly creates the typed directory.
+    insert_query(path!("/root/project"), &picker, cx).await;
+    picker.update_in(cx, |picker, window, cx| {
+        picker.delegate.set_selected_index(2, window, cx)
+    });
+    picker.update_in(cx, |picker, window, cx| {
+        picker.delegate.confirm(false, window, cx)
+    });
+    cx.run_until_parked();
+    assert!(
+        app_state
+            .fs
+            .is_dir(std::path::Path::new(path!("/root/project")))
+            .await,
+        "the last row creates the typed directory"
+    );
+
+    // With no matches at all, the create row is the only row and comes first.
+    insert_query(path!("/root/brand-new"), &picker, cx).await;
+    assert_eq!(collect_match_candidates(&picker, cx), vec!["brand-new"]);
+    assert_eq!(
+        picker.read_with(cx, |picker, _| picker.delegate.selected_index()),
+        0
+    );
+}
+
+#[gpui::test]
 async fn test_open_path_prompt_panics_with_stale_highlight_positions(cx: &mut TestAppContext) {
     let app_state = init_test(cx);
     app_state
