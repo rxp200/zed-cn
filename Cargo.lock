@@ -19041,6 +19041,7 @@ dependencies = [
  "i18n",
  "icons",
  "livekit_client",
+ "log",
  "platform_title_bar",
  "project",
  "recent_projects",

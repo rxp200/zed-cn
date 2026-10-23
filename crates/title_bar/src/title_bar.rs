@@ -41,6 +41,7 @@ use remote::RemoteConnectionOptions;
 use settings::{Settings as _, SettingsStore};
 
 use std::any::TypeId;
+use std::future::Future;
 use std::path::Path;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -463,6 +464,74 @@ fn visible_hosted_sessions(
         .filter(|session| session.running)
         .cloned()
         .collect()
+}
+
+/// One row of the hosted-terminal popover: the label the user picks and the
+/// session it opens.
+#[derive(Debug, PartialEq, Eq)]
+struct HostedMenuEntry {
+    label: String,
+    session_id: String,
+}
+
+/// Rows of the popover for `sessions`. Ended records stay in the terminal menu
+/// so they can be deleted there, but they are not worth switching to.
+fn hosted_menu_entries(sessions: &[rpc::proto::HostedTerminalSummary]) -> Vec<HostedMenuEntry> {
+    let running = visible_hosted_sessions(sessions);
+    let labels = disambiguate_hosted_session_names(
+        &running
+            .iter()
+            .map(|session| session.name.as_str())
+            .collect::<Vec<_>>(),
+    );
+    running
+        .into_iter()
+        .zip(labels)
+        .map(|(session, label)| HostedMenuEntry {
+            label,
+            session_id: session.session_id,
+        })
+        .collect()
+}
+
+fn build_hosted_terminals_menu(
+    sessions: Vec<rpc::proto::HostedTerminalSummary>,
+    window: &mut Window,
+    cx: &mut App,
+) -> Entity<ContextMenu> {
+    ContextMenu::build(window, cx, move |menu, _, _| {
+        let menu = menu.header(i18n::t!("a9dc9b921c645f65"));
+        let entries = hosted_menu_entries(&sessions);
+        if entries.is_empty() {
+            return menu.label(i18n::t!("7f1fdafea529e7cd")).separator();
+        }
+        entries.into_iter().fold(menu, |menu, entry| {
+            let session_id = entry.session_id;
+            menu.entry(entry.label, None, move |window, cx| {
+                window.dispatch_action(
+                    Box::new(workspace::OpenHostedTerminal {
+                        session_id: session_id.clone(),
+                    }),
+                    cx,
+                );
+            })
+        })
+    })
+}
+
+/// Whether a fresh response would change the popover, i.e. whether an open menu
+/// has to be rebuilt to show it.
+fn hosted_sessions_changed(
+    old: &[rpc::proto::HostedTerminalSummary],
+    new: &[rpc::proto::HostedTerminalSummary],
+) -> bool {
+    old.len() != new.len()
+        || old.iter().zip(new).any(|(old, new)| {
+            old.session_id != new.session_id
+                || old.name != new.name
+                || old.running != new.running
+                || old.viewer_count != new.viewer_count
+        })
 }
 
 fn disambiguate_hosted_session_names(names: &[&str]) -> Vec<String> {
@@ -1213,86 +1282,13 @@ impl TitleBar {
         } else {
             i18n::t!("a9dc9b921c645f65").into()
         };
-        let project = self.project.clone();
         let title_bar = cx.entity().downgrade();
         let refresh_label: SharedString = i18n::t!("a9dc9b921c645f65").into();
         Some(
             PopoverMenu::new("hosted-terminals-menu")
                 .with_handle(self.hosted_menu.clone())
-                .on_open({
-                    let project = project.clone();
-                    let title_bar = title_bar.clone();
-                    let menu = self.hosted_menu.clone();
-                    Rc::new(move |_window, cx| {
-                        let Some(root) = project.read(cx).hosted_terminal_root(cx) else {
-                            return;
-                        };
-                        let Some(request) = project.read_with(cx, |project, cx| {
-                            project
-                                .remote_client()
-                                .map(|client| client.read(cx).list_hosted_terminals(root))
-                        }) else {
-                            return;
-                        };
-                        let title_bar = title_bar.clone();
-                        let menu = menu.clone();
-                        cx.spawn(async move |cx| {
-                            let Ok(response) = request.await else {
-                                return;
-                            };
-                            let changed = title_bar
-                                .update(cx, |this, cx| {
-                                    let changed = this.hosted_sessions.len()
-                                        != response.sessions.len()
-                                        || this.hosted_sessions.iter().zip(&response.sessions).any(
-                                            |(old, new)| {
-                                                old.session_id != new.session_id
-                                                    || old.name != new.name
-                                                    || old.running != new.running
-                                                    || old.viewer_count != new.viewer_count
-                                            },
-                                        );
-                                    this.hosted_sessions = response.sessions;
-                                    cx.notify();
-                                    changed
-                                })
-                                .unwrap_or(false);
-                            let _ = (changed, &menu);
-                        })
-                        .detach();
-                    })
-                })
                 .menu(move |window, cx| {
-                    let sessions = sessions.clone();
-                    Some(ContextMenu::build(window, cx, |menu, _, _| {
-                        let menu = menu.header(i18n::t!("a9dc9b921c645f65"));
-                        if sessions.is_empty() {
-                            return menu.label(i18n::t!("7f1fdafea529e7cd")).separator();
-                        }
-                        let labels = disambiguate_hosted_session_names(
-                            &sessions
-                                .iter()
-                                .map(|session| session.name.as_str())
-                                .collect::<Vec<_>>(),
-                        );
-                        let running: Vec<_> = sessions
-                            .iter()
-                            .zip(&labels)
-                            .filter(|(session, _)| session.running)
-                            .collect();
-                        let menu = running.iter().fold(menu, |menu, (session, label)| {
-                            let session_id = session.session_id.clone();
-                            menu.entry(label.to_string(), None, move |window, cx| {
-                                window.dispatch_action(
-                                    Box::new(workspace::OpenHostedTerminal {
-                                        session_id: session_id.clone(),
-                                    }),
-                                    cx,
-                                );
-                            })
-                        });
-                        menu
-                    }))
+                    Some(build_hosted_terminals_menu(sessions.clone(), window, cx))
                 })
                 .trigger_with_tooltip(
                     ui::Button::new("hosted_terminals_trigger", label)
@@ -1302,40 +1298,79 @@ impl TitleBar {
                                 .size(IconSize::XSmall)
                                 .color(Color::Muted),
                         )
-                        .on_click(move |_, _window, cx| {
-                            let Some(root) = project.read(cx).hosted_terminal_root(cx) else {
-                                return;
-                            };
-                            let Some(request) = project.read_with(cx, |project, cx| {
-                                project
-                                    .remote_client()
-                                    .map(|client| client.read(cx).list_hosted_terminals(root))
-                            }) else {
-                                return;
-                            };
-                            let title_bar = title_bar.clone();
-                            cx.spawn(async move |cx| {
-                                let sessions = match request.await {
-                                    Ok(response) => response.sessions,
-                                    Err(error) => {
-                                        eprintln!("failed to list hosted terminals: {error:#}");
-                                        Vec::new()
-                                    }
-                                };
-                                title_bar
-                                    .update(cx, |this, cx| {
-                                        this.hosted_sessions = sessions;
-                                        cx.notify();
-                                    })
-                                    .ok();
-                            })
-                            .detach();
+                        .on_click(move |_, window, cx| {
+                            title_bar
+                                .update(cx, |this, cx| this.refresh_hosted_sessions(window, cx))
+                                .ok();
                         }),
                     move |window, cx| Tooltip::text(refresh_label.clone())(window, cx),
                 )
                 .anchor(gpui::Anchor::TopLeft)
                 .into_any_element(),
         )
+    }
+
+    /// Requests the hosted sessions of this connection's project root.
+    ///
+    /// The response replaces the cached list, and a popover that is already
+    /// expanded is rebuilt from it, so a terminal hosted (or ended) after the
+    /// last request shows up in the menu that is open right now instead of the
+    /// next time the menu is expanded.
+    fn refresh_hosted_sessions(&self, window: &Window, cx: &mut Context<Self>) {
+        let Some(request) = self.list_hosted_sessions(cx) else {
+            return;
+        };
+        cx.spawn_in(window, async move |title_bar, cx| {
+            let response = match request.await {
+                Ok(response) => response,
+                Err(error) => {
+                    // A failed request is not evidence that every session is
+                    // gone, so keep the list the user may be looking at.
+                    log::error!("failed to list hosted terminals: {error:#}");
+                    return;
+                }
+            };
+            title_bar
+                .update_in(cx, |title_bar, window, cx| {
+                    title_bar.set_hosted_sessions(response.sessions, window, cx)
+                })
+                .ok();
+        })
+        .detach();
+    }
+
+    fn list_hosted_sessions(
+        &self,
+        cx: &Context<Self>,
+    ) -> Option<impl Future<Output = anyhow::Result<rpc::proto::ListHostedTerminalsResponse>> + use<>>
+    {
+        let root = self.project.read(cx).hosted_terminal_root(cx)?;
+        self.project.read_with(cx, |project, cx| {
+            project
+                .remote_client()
+                .map(|client| client.read(cx).list_hosted_terminals(root))
+        })
+    }
+
+    fn set_hosted_sessions(
+        &mut self,
+        sessions: Vec<rpc::proto::HostedTerminalSummary>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let changed = hosted_sessions_changed(&self.hosted_sessions, &sessions);
+        self.hosted_sessions = sessions;
+        if changed {
+            let sessions = self.hosted_sessions.clone();
+            self.hosted_menu.refresh_menu(
+                window,
+                cx,
+                Rc::new(move |window, cx| {
+                    Some(build_hosted_terminals_menu(sessions.clone(), window, cx))
+                }),
+            );
+        }
+        cx.notify();
     }
 
     fn active_call_changed(&mut self, cx: &mut Context<Self>) {
@@ -1694,7 +1729,7 @@ mod tests {
             ..Default::default()
         };
         assert!(visible_hosted_sessions(&[]).is_empty());
-        assert!(visible_hosted_sessions(&[ended.clone()]).is_empty());
+        assert!(visible_hosted_sessions(std::slice::from_ref(&ended)).is_empty());
         let visible = visible_hosted_sessions(&[ended, running]);
         assert_eq!(visible.len(), 1);
         assert_eq!(visible[0].name, "active");
@@ -1715,6 +1750,71 @@ mod tests {
             vec!["only".to_string()]
         );
         assert!(disambiguate_hosted_session_names(&[]).is_empty());
+    }
+
+    #[test]
+    fn hosted_menu_rows_follow_the_latest_response() {
+        let first = hosted_session("agent: ~/code/zed", "session-1", true);
+        let hosted_later = hosted_session("agent: ~/code/zed", "session-2", true);
+        let ended = hosted_session("agent: ~/code/zed", "session-3", false);
+
+        assert_eq!(
+            hosted_menu_entries(std::slice::from_ref(&first)),
+            vec![HostedMenuEntry {
+                label: "agent: ~/code/zed".into(),
+                session_id: "session-1".into(),
+            }]
+        );
+
+        // A session promoted after the cached list must reach the menu the user
+        // is looking at, with the shared tab title numbered against the sibling.
+        assert_eq!(
+            hosted_menu_entries(&[first, ended, hosted_later]),
+            vec![
+                HostedMenuEntry {
+                    label: "agent: ~/code/zed (1)".into(),
+                    session_id: "session-1".into(),
+                },
+                HostedMenuEntry {
+                    label: "agent: ~/code/zed (2)".into(),
+                    session_id: "session-2".into(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn hosted_session_changes_include_new_and_ended_sessions() {
+        let first = hosted_session("build", "session-1", true);
+        let second = hosted_session("test", "session-2", true);
+        let ended = hosted_session("test", "session-2", false);
+        let two_sessions = [first.clone(), second];
+
+        assert!(!hosted_sessions_changed(&[], &[]));
+        assert!(!hosted_sessions_changed(
+            std::slice::from_ref(&first),
+            std::slice::from_ref(&first)
+        ));
+        // A terminal hosted while the menu is open.
+        assert!(hosted_sessions_changed(
+            std::slice::from_ref(&first),
+            &two_sessions
+        ));
+        // A session that ended while the menu is open.
+        assert!(hosted_sessions_changed(&two_sessions, &[first, ended]));
+    }
+
+    fn hosted_session(
+        name: &str,
+        session_id: &str,
+        running: bool,
+    ) -> rpc::proto::HostedTerminalSummary {
+        rpc::proto::HostedTerminalSummary {
+            name: name.into(),
+            session_id: session_id.into(),
+            running,
+            ..Default::default()
+        }
     }
 
     #[test]
