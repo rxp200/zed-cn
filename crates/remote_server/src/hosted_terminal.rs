@@ -139,6 +139,13 @@ impl SessionLifecycle {
         Ok(())
     }
 
+    pub fn unhost(&mut self, attachment_id: &str) -> Result<(), SessionError> {
+        self.take_control(attachment_id)?;
+        self.hosted = false;
+        self.attachments.retain(|id, _| id == attachment_id);
+        Ok(())
+    }
+
     pub fn rename(&mut self, name: &str) -> Result<(), SessionError> {
         let name = name.trim();
         if name.is_empty() || name.len() > MAX_NAME_BYTES || name.chars().any(char::is_control) {
@@ -340,6 +347,9 @@ impl InputQueue {
 
     fn enqueue(&self, data: Vec<u8>) -> Result<(), SessionError> {
         let mut state = self.state.lock().map_err(|_| SessionError::NotFound)?;
+        if state.closed {
+            return Err(SessionError::AlreadyExited);
+        }
         if state.queued_bytes + data.len() > INPUT_BACKLOG_CAPACITY_BYTES {
             return Err(SessionError::InputBacklogFull);
         }
@@ -477,7 +487,8 @@ impl Session {
                 cursor.final_frame_sent,
                 cursor.replay_end,
             )
-        }) else {
+        })
+        else {
             return OutputPull::Superseded;
         };
         if next_offset < output_start {
@@ -486,25 +497,31 @@ impl Session {
         }
         let window_remaining = (credit + STREAM_WINDOW_BYTES).saturating_sub(next_offset);
         let available = output_end.saturating_sub(next_offset);
-        let count = available.min(window_remaining).min(STREAM_CHUNK_BYTES) as usize;
+        let replay_remaining = if next_offset < replay_end {
+            replay_end - next_offset
+        } else {
+            u64::MAX
+        };
+        let count = available
+            .min(window_remaining)
+            .min(STREAM_CHUNK_BYTES)
+            .min(replay_remaining) as usize;
         let drained = next_offset + count as u64 == output_end;
         if count > 0 {
             let start = (next_offset - output_start) as usize;
-            let mut data: Vec<u8> = state
+            let data: Vec<u8> = state
                 .output
                 .iter()
                 .skip(start)
                 .take(count)
                 .copied()
                 .collect();
-            if next_offset < replay_end {
-                strip_osc52(&mut data);
-            }
             let frame_exited = exited && drained;
             let frame = proto::PersistentTerminalOutput {
                 server_instance_id: attachment_id.to_owned(),
                 terminal_id: self.id.clone(),
                 offset: next_offset,
+                replay: next_offset < replay_end,
                 data,
                 history_truncated,
                 exited: frame_exited,
@@ -533,6 +550,7 @@ impl Session {
                 terminal_id: self.id.clone(),
                 offset: next_offset,
                 data: Vec::new(),
+                replay: false,
                 history_truncated,
                 exited: true,
                 exit_code,
@@ -723,6 +741,21 @@ impl HostedTerminalService {
         }
     }
 
+    pub fn unhost(&self, session_id: &str, attachment_id: &str) -> Result<(), SessionError> {
+        let session = self.session(session_id)?;
+        let mut state = session.state.lock().map_err(|_| SessionError::NotFound)?;
+        state.lifecycle.unhost(attachment_id)?;
+        state.cursors.retain(|id, _| id == attachment_id);
+        state.kicks.retain(|id, kick| {
+            if id == attachment_id {
+                return true;
+            }
+            kick.close();
+            false
+        });
+        Ok(())
+    }
+
     pub fn rename_for(&self, session_id: &str, attachment_id: &str) -> Result<(), SessionError> {
         self.check_attachment(session_id, attachment_id)
     }
@@ -760,6 +793,7 @@ impl HostedTerminalService {
         &self,
         session_id: &str,
         attachment_id: &str,
+        offset: u64,
     ) -> Result<async_channel::Receiver<()>, SessionError> {
         let session = self.session(session_id)?;
         let mut state = session.state.lock().map_err(|_| SessionError::NotFound)?;
@@ -771,6 +805,9 @@ impl HostedTerminalService {
         let replay_end = state.output_end;
         if let Some(cursor) = state.cursors.get_mut(attachment_id) {
             cursor.replay_end = replay_end;
+            cursor.next_offset = offset;
+            cursor.credit = offset;
+            cursor.final_frame_sent = false;
         }
         Ok(receiver)
     }
@@ -875,6 +912,12 @@ impl HostedTerminalService {
             kick.try_send(()).ok();
         }
         Ok(())
+    }
+
+    fn control_generation(&self, session_id: &str) -> Result<u64, SessionError> {
+        let session = self.session(session_id)?;
+        let state = session.state.lock().map_err(|_| SessionError::NotFound)?;
+        Ok(state.lifecycle.control_generation())
     }
 
     pub fn pull_output(&self, session_id: &str, attachment_id: &str) -> OutputPull {
@@ -1030,6 +1073,7 @@ fn spawn_io_threads(
                 while let Some(data) = input.recv() {
                     if let Err(error) = writer.write_all(&data) {
                         log::warn!("hosted terminal input write failed: {error:#}");
+                        input.close();
                         break;
                     }
                 }
@@ -1066,40 +1110,6 @@ fn spawn_io_threads(
             .map_err(|_| SessionError::SpawnFailed)?;
     }
     Ok(())
-}
-
-/// Removes OSC 52 (clipboard store/query) sequences. Replayed bytes must rebuild
-/// the screen without repeating clipboard writes that already happened. A
-/// sequence split exactly across two output chunks can still slip through, so
-/// this reduces rather than eliminates replay side effects.
-fn strip_osc52(data: &mut Vec<u8>) {
-    let mut index = 0;
-    while index + 4 <= data.len() {
-        if data[index] == 0x1b && data[index + 1] == b']' {
-            let payload_start = index + 2;
-            if data[payload_start..].starts_with(b"52;") {
-                let payload = &data[payload_start..];
-                let end = payload
-                    .iter()
-                    .position(|byte| *byte == 0x07)
-                    .map(|position| (payload_start + position + 1, payload_start + position + 1))
-                    .or_else(|| {
-                        payload
-                            .windows(2)
-                            .position(|window| window == b"\x1b\\")
-                            .map(|position| {
-                                (payload_start + position, payload_start + position + 2)
-                            })
-                    });
-                if let Some((end, after)) = end {
-                    data.drain(index..after);
-                    let _ = end;
-                    continue;
-                }
-            }
-        }
-        index += 1;
-    }
 }
 
 fn peer_is_current_user(_stream: &net::async_net::UnixStream) -> bool {
@@ -1152,11 +1162,11 @@ fn ensure_private_directory(path: &Path) -> Result<()> {
 }
 
 fn endpoint_path(state_dir: &Path) -> PathBuf {
-    state_dir.join("hosted-terminals.sock")
+    state_dir.join("hosted-terminals-v2.sock")
 }
 
 fn daemon_pid_path(state_dir: &Path) -> PathBuf {
-    state_dir.join("hosted-terminals.pid")
+    state_dir.join("hosted-terminals-v2.pid")
 }
 
 /// Serves the terminal service on its account-private local endpoint. Only the
@@ -1287,7 +1297,11 @@ async fn read_requests(
         let outbound = outbound.clone();
         match request.kind {
             Some(proto::hosted_terminal_daemon_request::Kind::Subscribe(subscribe)) => {
-                let kick = service.subscribe(&subscribe.session_id, &subscribe.attachment_id);
+                let kick = service.subscribe(
+                    &subscribe.session_id,
+                    &subscribe.attachment_id,
+                    subscribe.offset,
+                );
                 let service = service.clone();
                 let outbound = outbound.clone();
                 let attachment_id = subscribe.attachment_id;
@@ -1402,6 +1416,13 @@ fn dispatch(
         Some(Kind::Host(host)) => {
             service.host(&host.terminal_id, &host.attachment_id, &host.name)?;
             ResponseKind::Ack(ack)
+        }
+        Some(Kind::Unhost(unhost)) => {
+            service.unhost(&unhost.terminal_id, &unhost.attachment_id)?;
+            ResponseKind::Control(proto::HostedTerminalControl {
+                control_generation: service.control_generation(&unhost.terminal_id)?,
+                controls_input: true,
+            })
         }
         Some(Kind::List(list)) => ResponseKind::Sessions(proto::ListHostedTerminalsResponse {
             sessions: service.list(&list.canonical_root),
@@ -1518,6 +1539,7 @@ struct ClientShared {
     pending: Mutex<HashMap<u64, async_channel::Sender<HostedTerminalFrame>>>,
     subscriptions: Mutex<HashMap<u64, async_channel::Sender<proto::PersistentTerminalOutput>>>,
     next_request_id: AtomicU64,
+    disconnected: std::sync::atomic::AtomicBool,
 }
 
 /// Client side of the daemon endpoint. One instance belongs to a project server
@@ -1531,6 +1553,25 @@ pub struct HostedTerminalClient {
     reader_task: Option<smol::Task<()>>,
 }
 
+struct RequestRegistration {
+    shared: Arc<ClientShared>,
+    request_id: u64,
+    subscription: bool,
+}
+
+impl Drop for RequestRegistration {
+    fn drop(&mut self) {
+        if let Ok(mut pending) = self.shared.pending.lock() {
+            pending.remove(&self.request_id);
+        }
+        if self.subscription {
+            if let Ok(mut subscriptions) = self.shared.subscriptions.lock() {
+                subscriptions.remove(&self.request_id);
+            }
+        }
+    }
+}
+
 impl Drop for HostedTerminalClient {
     fn drop(&mut self) {
         drop(self.reader_task.take());
@@ -1542,6 +1583,10 @@ impl Drop for HostedTerminalClient {
     reason = "the daemon link runs outside GPUI, so its request deadlines use the process timer"
 )]
 impl HostedTerminalClient {
+    pub fn is_connected(&self) -> bool {
+        !self.shared.disconnected.load(SeqCst)
+    }
+
     /// Connects to the account's terminal service, starting it when absent.
     /// Starting is serialized by the daemon's own endpoint bind, so concurrent
     /// callers end up on one service instead of racing to replace each other.
@@ -1594,6 +1639,11 @@ impl HostedTerminalClient {
             .lock()
             .map_err(|_| anyhow::anyhow!("hosted terminal client is unavailable"))?
             .insert(request_id, response_tx);
+        let _registration = RequestRegistration {
+            shared: self.shared.clone(),
+            request_id,
+            subscription: false,
+        };
         self.send(request_id, kind).await?;
         let response = smol::future::or(async { response_rx.recv().await.ok() }, async {
             smol::Timer::after(DAEMON_REQUEST_TIMEOUT).await;
@@ -1619,26 +1669,41 @@ impl HostedTerminalClient {
         &self,
         session_id: &str,
         attachment_id: &str,
+        offset: u64,
     ) -> Result<async_channel::Receiver<proto::PersistentTerminalOutput>> {
         let request_id = self.shared.next_request_id.fetch_add(1, SeqCst);
         let (outputs, receiver) = async_channel::bounded(64);
-        self.shared
-            .subscriptions
-            .lock()
-            .map_err(|_| anyhow::anyhow!("hosted terminal client is unavailable"))?
-            .insert(request_id, outputs);
+        {
+            let mut subscriptions = self
+                .shared
+                .subscriptions
+                .lock()
+                .map_err(|_| anyhow::anyhow!("hosted terminal client is unavailable"))?;
+            subscriptions.retain(|_, sender| !sender.is_closed());
+            anyhow::ensure!(
+                subscriptions.len() < 1024,
+                "too many hosted terminal subscriptions"
+            );
+            subscriptions.insert(request_id, outputs);
+        }
         let (response_tx, response_rx) = async_channel::bounded(1);
         self.shared
             .pending
             .lock()
             .map_err(|_| anyhow::anyhow!("hosted terminal client is unavailable"))?
             .insert(request_id, response_tx);
+        let mut registration = RequestRegistration {
+            shared: self.shared.clone(),
+            request_id,
+            subscription: true,
+        };
         self.send(
             request_id,
             proto::hosted_terminal_daemon_request::Kind::Subscribe(
                 proto::SubscribeHostedTerminal {
                     session_id: session_id.to_owned(),
                     attachment_id: attachment_id.to_owned(),
+                    offset,
                 },
             ),
         )
@@ -1655,6 +1720,7 @@ impl HostedTerminalClient {
         if let Some(proto::hosted_terminal_daemon_response::Kind::Error(error)) = response.kind {
             anyhow::bail!("{}", error.message);
         }
+        registration.subscription = false;
         Ok(receiver)
     }
 
@@ -1710,7 +1776,13 @@ async fn read_client_frames(
                     .ok()
                     .and_then(|subscriptions| subscriptions.get(&frame.request_id).cloned());
                 if let Some(sender) = sender {
-                    sender.send(output).await.ok();
+                    if sender.try_send(output).is_err() {
+                        // Isolate a stalled consumer. Its next subscription resumes
+                        // from its acknowledged offset instead of blocking every RPC.
+                        if let Ok(mut subscriptions) = shared.subscriptions.lock() {
+                            subscriptions.remove(&frame.request_id);
+                        }
+                    }
                 }
             }
             Some(hosted_terminal_frame::Kind::Response(_)) => {
@@ -1726,6 +1798,7 @@ async fn read_client_frames(
             Some(hosted_terminal_frame::Kind::Request(_)) | None => break,
         }
     }
+    shared.disconnected.store(true, SeqCst);
     if let Ok(mut pending) = shared.pending.lock() {
         pending.clear();
     }
@@ -1814,6 +1887,101 @@ mod tests {
 
     fn session() -> SessionLifecycle {
         SessionLifecycle::new("first".into(), Duration::ZERO)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stalled_output_subscription_does_not_block_control_responses() {
+        smol::block_on(async {
+            use futures::AsyncWriteExt as _;
+            let (reader, mut writer) = net::async_net::UnixStream::pair().expect("socket pair");
+            let (reader, _) = futures::AsyncReadExt::split(reader);
+            let shared = Arc::new(ClientShared::default());
+            let (outputs, _slow_consumer) = async_channel::bounded(1);
+            shared
+                .subscriptions
+                .lock()
+                .expect("subscriptions")
+                .insert(1, outputs);
+            let (response, received) = async_channel::bounded(1);
+            shared.pending.lock().expect("pending").insert(2, response);
+            let reader = smol::spawn(read_client_frames(reader, shared));
+            for _ in 0..2 {
+                writer
+                    .write_all(&encode_frame(&HostedTerminalFrame {
+                        request_id: 1,
+                        kind: Some(hosted_terminal_frame::Kind::Output(
+                            proto::PersistentTerminalOutput::default(),
+                        )),
+                    }))
+                    .await
+                    .expect("output");
+            }
+            writer
+                .write_all(&encode_frame(&HostedTerminalFrame {
+                    request_id: 2,
+                    kind: Some(hosted_terminal_frame::Kind::Response(
+                        proto::HostedTerminalDaemonResponse::default(),
+                    )),
+                }))
+                .await
+                .expect("response");
+            let received = smol::future::or(async { received.recv().await.is_ok() }, async {
+                smol::Timer::after(Duration::from_secs(2)).await;
+                false
+            })
+            .await;
+            assert!(
+                received,
+                "slow terminal must not block another terminal's acknowledgements"
+            );
+            drop(reader);
+        });
+    }
+
+    #[test]
+    fn unhosting_preserves_the_live_attachment_and_revokes_other_viewers() {
+        let mut lifecycle = session();
+        lifecycle.host("first", "shell").expect("host");
+        lifecycle
+            .attach("viewer".into(), Duration::ZERO)
+            .expect("attach");
+        lifecycle.unhost("viewer").expect("unhost");
+        assert!(!lifecycle.is_hosted());
+        assert!(!lifecycle.is_exited());
+        assert!(lifecycle.controls("viewer"));
+        assert!(!lifecycle.has_attachment("first"));
+        lifecycle
+            .check_input("viewer", lifecycle.control_generation(), 1)
+            .expect("input still works");
+        lifecycle.unhost("viewer").expect("idempotent cancellation");
+        assert_eq!(
+            lifecycle.attach("new".into(), Duration::ZERO),
+            Err(SessionError::NotHosted)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn subscription_restart_replays_the_requested_offset_without_changing_bytes() {
+        let service = HostedTerminalService::new();
+        let id = create_session(&service, "replay", "/bin/sh", &["-c", "sleep 30"], "owner");
+        let session = service.session(&id).expect("session");
+        let bytes = b"abc\x1b]52;c;aGVsbG8=\x07def";
+        session.append_output(bytes);
+        let _kick = service.subscribe(&id, "owner", 0).expect("subscribe");
+        let OutputPull::Frame(first) = service.pull_output(&id, "owner") else {
+            panic!("output");
+        };
+        assert_eq!(first.data, bytes);
+        assert!(first.replay);
+        let _kick = service.subscribe(&id, "owner", 3).expect("resume");
+        let OutputPull::Frame(replayed) = service.pull_output(&id, "owner") else {
+            panic!("replay");
+        };
+        assert_eq!(replayed.offset, 3);
+        assert_eq!(replayed.data, &bytes[3..]);
+        service.terminate(&id).expect("cleanup");
     }
 
     #[test]
@@ -2254,7 +2422,7 @@ mod tests {
                 other => panic!("unexpected list response: {other:?}"),
             }
             let receiver = client
-                .subscribe(&session_id, "owner")
+                .subscribe(&session_id, "owner", 0)
                 .await
                 .expect("subscribe over socket");
             let frame = smol::future::or(async { receiver.recv().await.ok() }, async {
@@ -2267,25 +2435,12 @@ mod tests {
         });
         shutdown_tx.close();
         let deadline = Instant::now() + Duration::from_secs(5);
-        while state_dir.join("hosted-terminals.sock").exists() {
+        while endpoint_path(&state_dir).exists() {
             assert!(
                 Instant::now() < deadline,
                 "daemon did not release its endpoint"
             );
             std::thread::sleep(Duration::from_millis(20));
         }
-    }
-
-    #[test]
-    fn replayed_bytes_are_scrubbed_of_clipboard_side_effects() {
-        let mut data = b"before\x1b]52;c;SGVsbG8=\x07after".to_vec();
-        strip_osc52(&mut data);
-        assert_eq!(data, b"beforeafter");
-        let mut terminated = b"a\x1b]52;c;SGVsbG8=\x1b\\b".to_vec();
-        strip_osc52(&mut terminated);
-        assert_eq!(terminated, b"ab");
-        let mut other = b"keep\x1b]0;title\x07".to_vec();
-        strip_osc52(&mut other);
-        assert_eq!(other, b"keep\x1b]0;title\x07");
     }
 }

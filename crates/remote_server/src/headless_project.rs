@@ -559,6 +559,7 @@ impl HeadlessProject {
         session.add_request_handler(cx.weak_entity(), Self::handle_list_hosted_terminals);
         session.add_request_handler(cx.weak_entity(), Self::handle_attach_hosted_terminal);
         session.add_request_handler(cx.weak_entity(), Self::handle_detach_hosted_terminal);
+        session.add_request_handler(cx.weak_entity(), Self::handle_unhost_terminal);
         session.add_request_handler(cx.weak_entity(), Self::handle_take_hosted_terminal_control);
         session.add_request_handler(cx.weak_entity(), Self::handle_rename_hosted_terminal);
         session.add_request_handler(cx.weak_entity(), Self::handle_terminate_hosted_terminal);
@@ -1477,6 +1478,16 @@ impl HeadlessProject {
     ) -> Result<proto::AttachHostedTerminalResponse> {
         let hosted = this.read_with(&cx, |this, _| this.hosted_terminals.clone());
         hosted.attach(message.payload).await
+    }
+
+    async fn handle_unhost_terminal(
+        this: Entity<Self>,
+        message: TypedEnvelope<proto::UnhostTerminal>,
+        cx: AsyncApp,
+    ) -> Result<proto::Ack> {
+        let hosted = this.read_with(&cx, |this, _| this.hosted_terminals.clone());
+        hosted.unhost(message.payload).await?;
+        Ok(proto::Ack {})
     }
 
     async fn handle_detach_hosted_terminal(
