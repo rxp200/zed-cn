@@ -319,38 +319,46 @@ impl Render for TitleBar {
                 .map(|title_bar| {
                     let mut render_project_items = title_bar_settings.show_branch_name
                         || title_bar_settings.show_project_items;
+                    let title_bar = title_bar.when_some(
+                        self.application_menu.clone().filter(|_| !show_menus),
+                        |title_bar, menu| {
+                            // Hide the project/branch items to make room when the
+                            // menu bar is expanded -- except in accessible mode,
+                            // where the menu bar is always expanded but those
+                            // controls must still remain reachable.
+                            render_project_items &= !menu
+                                .update(cx, |menu, cx| menu.all_menus_shown(cx))
+                                || cx.accessible_mode();
+                            title_bar.child(menu)
+                        },
+                    );
+
+                    let items = project_item_visibility(
+                        title_bar_settings.show_project_items,
+                        render_project_items,
+                        repository.is_some() && is_git_enabled,
+                        self.project.read(cx).supports_hosted_terminals(cx),
+                    );
+
                     title_bar
+                        .children(self.render_restricted_mode(cx))
+                        .when(items.project_name, |title_bar| {
+                            title_bar
+                                .children(self.render_project_host(cx))
+                                .child(self.render_project_name(project_name, window, cx))
+                        })
                         .when_some(
-                            self.application_menu.clone().filter(|_| !show_menus),
-                            |title_bar, menu| {
-                                // Hide the project/branch items to make room when the
-                                // menu bar is expanded -- except in accessible mode,
-                                // where the menu bar is always expanded but those
-                                // controls must still remain reachable.
-                                render_project_items &= !menu
-                                    .update(cx, |menu, cx| menu.all_menus_shown(cx))
-                                    || cx.accessible_mode();
-                                title_bar.child(menu)
+                            repository.filter(|_| items.worktree_and_branch),
+                            |title_bar, repository| {
+                                title_bar.children(self.render_worktree_and_branch(
+                                    repository,
+                                    linked_worktree_name,
+                                    cx,
+                                ))
                             },
                         )
-                        .children(self.render_restricted_mode(cx))
-                        .when(render_project_items, |title_bar| {
-                            title_bar
-                                .when(title_bar_settings.show_project_items, |title_bar| {
-                                    title_bar
-                                        .children(self.render_project_host(cx))
-                                        .child(self.render_project_name(project_name, window, cx))
-                                })
-                                .when_some(
-                                    repository.filter(|_| is_git_enabled),
-                                    |title_bar, repository| {
-                                        title_bar.children(self.render_worktree_and_branch(
-                                            repository,
-                                            linked_worktree_name,
-                                            cx,
-                                        ))
-                                    },
-                                )
+                        .when(items.hosted_terminals, |title_bar| {
+                            title_bar.children(self.render_hosted_terminals_button(cx))
                         })
                 })
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -472,6 +480,39 @@ fn visible_hosted_sessions(
 struct HostedMenuEntry {
     label: String,
     session_id: String,
+}
+
+/// Which project controls the title bar renders for one frame.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct ProjectItemVisibility {
+    /// Remote host label and project name.
+    project_name: bool,
+    /// Worktree and branch pickers, which only exist for a repository.
+    worktree_and_branch: bool,
+    /// Hosted-terminal list.
+    hosted_terminals: bool,
+}
+
+/// Decides the project controls next to the application menu.
+///
+/// The hosted-terminal list is an entry point for a remote server capability,
+/// so it must not inherit the preconditions of the repository controls: a
+/// remote project that is not a git repository, has the worktree/branch labels
+/// hidden, or has the project items hidden to make room for an expanded menu
+/// bar still has to be able to attach its hosted sessions. The terminal context
+/// menu already offers hosting for every terminal of such a connection, so a
+/// narrower title bar rule also made the two entry points disagree.
+fn project_item_visibility(
+    show_project_items: bool,
+    render_project_items: bool,
+    has_git_repository: bool,
+    hosted_terminals_supported: bool,
+) -> ProjectItemVisibility {
+    ProjectItemVisibility {
+        project_name: show_project_items && render_project_items,
+        worktree_and_branch: render_project_items && has_git_repository,
+        hosted_terminals: hosted_terminals_supported,
+    }
 }
 
 /// Rows of the popover for `sessions`. Ended records stay in the terminal menu
@@ -1263,7 +1304,6 @@ impl TitleBar {
                     )
                 })
                 .children(branch_picker)
-                .children(self.render_hosted_terminals_button(cx))
                 .into_any_element(),
         )
     }
@@ -1271,6 +1311,11 @@ impl TitleBar {
     /// Lists terminals that were explicitly promoted on the remote host. The
     /// list is scoped to this connection's project root, so another work folder
     /// or another account never appears here.
+    ///
+    /// This is the only entry point for attaching a running session, so it is
+    /// rendered outside the worktree/branch group and only depends on the
+    /// remote server capability, not on a repository or on the title bar
+    /// project-item settings.
     fn render_hosted_terminals_button(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         if !self.project.read(cx).supports_hosted_terminals(cx) {
             return None;
@@ -1750,6 +1795,55 @@ mod tests {
             vec!["only".to_string()]
         );
         assert!(disambiguate_hosted_session_names(&[]).is_empty());
+    }
+
+    #[test]
+    fn hosted_terminals_stay_reachable_in_remote_projects_without_a_repository() {
+        // A remote project that is not a git repository: no worktree/branch
+        // group, but attaching a hosted session must still be possible from the
+        // title bar. This is what made the right-click menu the only entry point.
+        assert_eq!(
+            project_item_visibility(true, true, false, true),
+            ProjectItemVisibility {
+                project_name: true,
+                worktree_and_branch: false,
+                hosted_terminals: true,
+            }
+        );
+    }
+
+    #[test]
+    fn hosted_terminals_survive_the_project_item_settings() {
+        // Both project-item settings are off, and an expanded menu bar hides the
+        // remaining items: hosting is a server capability, so it stays available.
+        let hidden = project_item_visibility(false, false, true, true);
+        assert!(!hidden.project_name);
+        assert!(!hidden.worktree_and_branch);
+        assert!(hidden.hosted_terminals);
+
+        // The worktree/branch labels can also be hidden on their own.
+        let labels_hidden = project_item_visibility(true, false, true, true);
+        assert!(!labels_hidden.worktree_and_branch);
+        assert!(labels_hidden.hosted_terminals);
+    }
+
+    #[test]
+    fn projects_without_hosting_support_render_no_hosted_terminals() {
+        // Local projects and remote servers without the hosted-terminal
+        // capability keep the previous title bar; the context menu hides the
+        // hosted actions through the same capability check.
+        assert_eq!(
+            project_item_visibility(true, true, true, false),
+            ProjectItemVisibility {
+                project_name: true,
+                worktree_and_branch: true,
+                hosted_terminals: false,
+            }
+        );
+
+        let remote_without_hosting = project_item_visibility(true, true, false, false);
+        assert!(!remote_without_hosting.worktree_and_branch);
+        assert!(!remote_without_hosting.hosted_terminals);
     }
 
     #[test]

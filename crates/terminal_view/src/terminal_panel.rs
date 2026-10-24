@@ -198,6 +198,19 @@ impl TerminalPanel {
         }
     }
 
+    pub fn terminal_view_for(
+        &self,
+        terminal: &WeakEntity<Terminal>,
+        cx: &App,
+    ) -> Option<Entity<TerminalView>> {
+        let terminal_id = terminal.entity_id();
+        self.center.panes().into_iter().find_map(|pane| {
+            pane.read(cx)
+                .items_of_type::<TerminalView>()
+                .find(|view| view.read(cx).terminal().entity_id() == terminal_id)
+        })
+    }
+
     pub fn detect_ports(&mut self, output: &str, project: Entity<Project>, cx: &mut Context<Self>) {
         self.port_forward_manager.update(cx, |manager, cx| {
             manager.detect_from_terminal_output(output, project, cx);

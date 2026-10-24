@@ -51,6 +51,9 @@ pub struct ManagedSshKey {
     /// Original file name of an imported key, for display only.
     #[serde(default)]
     pub source_name: Option<String>,
+    /// User-facing name shown instead of the target address.
+    #[serde(default)]
+    pub nickname: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -294,6 +297,7 @@ async fn generate_managed_ssh_key_blocking(
         deployment_state: ManagedSshKeyDeploymentState::Pending,
         kind: ManagedSshKeyKind::Generated,
         source_name: None,
+        nickname: None,
     };
     manifest.keys.push(record.clone());
     save_manifest_in(&directory, &manifest)?;
@@ -411,6 +415,7 @@ async fn import_managed_ssh_key_into(
         deployment_state: ManagedSshKeyDeploymentState::Verified,
         kind: ManagedSshKeyKind::Imported,
         source_name: Some(source_name),
+        nickname: None,
     };
     manifest.keys.push(record.clone());
     save_manifest_in(&directory, &manifest)?;
@@ -886,6 +891,133 @@ fn restrict_windows_permissions(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Standard SSH fingerprint (`SHA256:...`), matching `ssh-keygen -lf`.
+pub fn public_key_fingerprint(public_key: &str) -> Option<String> {
+    use base64::Engine as _;
+
+    let mut parts = public_key.split_whitespace();
+    parts.next()?;
+    let encoded = parts.next()?;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .ok()?;
+    let digest = Sha256::digest(&bytes);
+    let fingerprint = base64::engine::general_purpose::STANDARD.encode(digest);
+    Some(format!("SHA256:{}", fingerprint.trim_end_matches('=')))
+}
+
+pub fn renamed_managed_ssh_key_nickname(nickname: Option<String>) -> Option<String> {
+    nickname
+        .map(|nickname| nickname.trim().to_string())
+        .filter(|nickname| !nickname.is_empty())
+}
+
+pub async fn rename_managed_ssh_key(
+    key_id: &str,
+    nickname: Option<String>,
+    cx: &AsyncApp,
+) -> Result<()> {
+    let key_id = key_id.to_owned();
+    cx.background_spawn(async move {
+        rename_managed_ssh_key_in(
+            &managed_ssh_key_directory(),
+            &key_id,
+            renamed_managed_ssh_key_nickname(nickname),
+        )
+    })
+    .await
+}
+
+fn rename_managed_ssh_key_in(
+    directory: &Path,
+    key_id: &str,
+    nickname: Option<String>,
+) -> Result<()> {
+    let mut manifest = load_or_create_manifest_in(directory)?;
+    let key = manifest
+        .keys
+        .iter_mut()
+        .find(|key| key.key_id == key_id)
+        .with_context(|| i18n::t!("d1e5d6f24ed51cee"))?;
+    key.nickname = nickname;
+    save_manifest_in(directory, &manifest)
+}
+
+fn verification_arguments(key: &ManagedSshKey, private_key_path: &Path) -> Vec<String> {
+    let destination = if key.ssh_destination.is_empty() {
+        let mut destination = String::new();
+        if let Some(username) = &key.requested_username {
+            destination.push_str(username);
+            destination.push('@');
+        }
+        destination.push_str(&key.host);
+        destination
+    } else {
+        key.ssh_destination.clone()
+    };
+
+    let mut arguments = vec!["-o".to_string(), "BatchMode=yes".to_string()];
+    arguments.extend(key.connection_args.iter().cloned());
+    arguments.push("-i".to_string());
+    arguments.push(private_key_path.to_string_lossy().into_owned());
+    if key.port != 22 {
+        arguments.push("-p".to_string());
+        arguments.push(key.port.to_string());
+    }
+    arguments.push(destination);
+    arguments.push("true".to_string());
+    arguments
+}
+
+/// Checks a stored identity with one non-interactive SSH call, then marks it
+/// verified. Errors keep the previous state so the user can fix the server or
+/// choose another key.
+pub async fn verify_managed_ssh_key(key_id: &str, cx: &AsyncApp) -> Result<()> {
+    let key_id = key_id.to_owned();
+    cx.background_spawn(async move { verify_managed_ssh_key_blocking(&key_id).await })
+        .await
+}
+
+async fn verify_managed_ssh_key_blocking(key_id: &str) -> Result<()> {
+    let directory = managed_ssh_key_directory();
+    let mut manifest = load_or_create_manifest_in(&directory)?;
+    let key = manifest
+        .keys
+        .iter()
+        .find(|key| key.key_id == key_id)
+        .cloned()
+        .with_context(|| i18n::t!("d1e5d6f24ed51cee"))?;
+    let private_key_path = directory.join(&key.private_key_file);
+    if !private_key_path.is_file() {
+        anyhow::bail!(i18n::t!("bd1be775e40703b6"));
+    }
+
+    let mut command = smol::process::Command::new("ssh");
+    command.args(verification_arguments(&key, &private_key_path));
+    let output = command
+        .output()
+        .await
+        .context(i18n::t!("65e95cf017105280"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stderr = stderr.trim();
+        if stderr.is_empty() {
+            anyhow::bail!(i18n::t!("54a367cd120b6bd0"));
+        }
+        anyhow::bail!("{stderr}");
+    }
+
+    if let Some(stored) = manifest
+        .keys
+        .iter_mut()
+        .find(|stored| stored.key_id == key_id)
+    {
+        stored.deployment_state = ManagedSshKeyDeploymentState::Verified;
+        stored.last_used_at = Some(utc_timestamp());
+    }
+    save_manifest_in(&directory, &manifest)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -933,7 +1065,70 @@ mod tests {
             deployment_state,
             kind: ManagedSshKeyKind::Generated,
             source_name: None,
+            nickname: None,
         }
+    }
+
+    #[test]
+    fn fingerprint_matches_the_ssh_keygen_format() {
+        let fingerprint = public_key_fingerprint("ssh-ed25519 AAAA test").unwrap();
+        assert!(fingerprint.starts_with("SHA256:"));
+        assert!(!fingerprint.ends_with('='));
+        assert!(public_key_fingerprint("ssh-ed25519 not-base64!").is_none());
+        assert!(public_key_fingerprint("ssh-ed25519").is_none());
+    }
+
+    #[test]
+    fn verification_command_uses_the_managed_identity() {
+        let mut key = test_key("ssh-ed25519:1", ManagedSshKeyDeploymentState::Pending);
+        key.port = 2222;
+        key.connection_args = vec!["-o".to_string(), "StrictHostKeyChecking=yes".to_string()];
+        let arguments = verification_arguments(&key, Path::new("/keys/zed-key"));
+
+        assert!(arguments.windows(2).any(|pair| pair == ["-o", "BatchMode=yes"]));
+        assert!(arguments
+            .windows(2)
+            .any(|pair| pair == ["-o", "StrictHostKeyChecking=yes"]));
+        assert!(arguments.windows(2).any(|pair| pair == ["-i", "/keys/zed-key"]));
+        assert!(arguments.windows(2).any(|pair| pair == ["-p", "2222"]));
+        assert_eq!(arguments.last().map(String::as_str), Some("true"));
+        assert!(arguments.contains(&"dev@example.com".to_string()));
+    }
+
+    #[test]
+    fn renaming_a_key_trims_and_clears_the_nickname() {
+        let directory = tempfile::tempdir().unwrap();
+        let directory = directory.path();
+        let mut manifest = load_or_create_manifest_in(directory).unwrap();
+        manifest
+            .keys
+            .push(test_key("ssh-ed25519:rename", ManagedSshKeyDeploymentState::Verified));
+        save_manifest_in(directory, &manifest).unwrap();
+
+        rename_managed_ssh_key_in(
+            directory,
+            "ssh-ed25519:rename",
+            renamed_managed_ssh_key_nickname(Some("  build key  ".to_string())),
+        )
+        .unwrap();
+        assert_eq!(
+            load_or_create_manifest_in(directory).unwrap().keys[0]
+                .nickname
+                .as_deref(),
+            Some("build key")
+        );
+
+        rename_managed_ssh_key_in(
+            directory,
+            "ssh-ed25519:rename",
+            renamed_managed_ssh_key_nickname(Some("  ".to_string())),
+        )
+        .unwrap();
+        assert!(
+            load_or_create_manifest_in(directory).unwrap().keys[0]
+                .nickname
+                .is_none()
+        );
     }
 
     #[test]
