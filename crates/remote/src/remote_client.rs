@@ -553,7 +553,7 @@ fn connection_options_with_settings(
             })
         })
     {
-        options.upload_binary_over_ssh = saved.upload_binary_over_ssh.unwrap_or_default();
+        options.upload_binary_over_ssh = saved.upload_binary_over_ssh.unwrap_or(true);
     }
     apply_remote_server_download_settings(connection_options, china_server_adaptation)
 }
@@ -2506,7 +2506,7 @@ mod tests {
         let RemoteConnectionOptions::Ssh(effective) = effective else {
             panic!("SSH");
         };
-        assert!(!effective.upload_binary_over_ssh);
+        assert!(effective.upload_binary_over_ssh);
     }
 
     #[gpui::test]

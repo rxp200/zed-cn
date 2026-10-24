@@ -11,14 +11,15 @@ use dev_container::{
     DevContainerConfig, DevContainerContext, find_devcontainer_configs,
     start_dev_container_with_config,
 };
-use editor::Editor;
+use editor::{Editor, EditorEvent};
 use extension_host::ExtensionStore;
 use filter::{FilterData, FilteredServer};
 use futures::{FutureExt, StreamExt as _, channel::oneshot, future::Shared};
 use gpui::{
     Action, AnyElement, App, ClickEvent, ClipboardItem, Context, DismissEvent, Entity,
     EventEmitter, ExternalPaths, FocusHandle, Focusable, FontWeight, PathPromptOptions,
-    PromptLevel, Rems, Subscription, Task, TaskExt, WeakEntity, Window,
+    KeyDownEvent, PromptLevel, Rems, ScrollHandle, Subscription, Task, TaskExt, WeakEntity,
+    Window,
 };
 use log::{debug, info};
 use open_path_prompt::OpenPathDelegate;
@@ -26,8 +27,11 @@ use paths::{global_ssh_config_file, user_ssh_config_file};
 use picker::{Picker, PickerDelegate, PickerEditorPosition};
 use project::{Fs, Project};
 use remote::{
-    RemoteClient, RemoteConnectionOptions, SshConnectionOptions, WslConnectionOptions,
-    remote_client::ConnectionIdentifier,
+    ManagedSshKey, ManagedSshKeyDeploymentState, ManagedSshKeyKind, RemoteClient,
+    RemoteConnectionOptions, SshConnectionOptions, WslConnectionOptions,
+    delete_local_managed_ssh_key, list_managed_ssh_keys, managed_ssh_key_directory,
+    public_key_fingerprint, remote_client::ConnectionIdentifier, rename_managed_ssh_key,
+    revoke_and_delete_managed_ssh_key,
 };
 use settings::{
     JumpHost, RemoteProject, RemoteSettingsContent, Settings as _, SettingsStore, SshAuthMethod,
@@ -119,6 +123,15 @@ fn form_editor(
     editor
 }
 
+fn set_editor_text(
+    editor: &Entity<Editor>,
+    text: String,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    editor.update(cx, |editor, cx| editor.set_text(text, window, cx));
+}
+
 fn trimmed_text(text: String) -> Option<String> {
     let text = text.trim().to_string();
     (!text.is_empty()).then_some(text)
@@ -141,6 +154,16 @@ fn ssh_connection_from_options(options: &remote::SshConnectionOptions) -> SshCon
         proxy: options.proxy.clone(),
         proxy_disabled: options.proxy_disabled,
     }
+}
+
+/// Keeps the state the connection form does not edit when replacing a saved
+/// host, so an edit never drops recent projects, SSH args, port forwards, or
+/// the saved upload preference.
+fn preserve_existing_connection_state(connection: &mut SshConnection, existing: &SshConnection) {
+    connection.projects = existing.projects.clone();
+    connection.args = existing.args.clone();
+    connection.port_forwards = existing.port_forwards.clone();
+    connection.upload_binary_over_ssh = existing.upload_binary_over_ssh;
 }
 
 fn auth_method_label(method: SshAuthMethod) -> &'static str {
@@ -319,6 +342,8 @@ struct CreateRemoteServerForm {
     error: Option<SharedString>,
     ssh_prompt: Option<Entity<RemoteConnectionPrompt>>,
     _creating: Option<Task<Option<()>>>,
+    /// Whether this form edits an existing saved host instead of creating one.
+    editing: bool,
 }
 
 impl CreateRemoteServerForm {
@@ -352,7 +377,75 @@ impl CreateRemoteServerForm {
             error: None,
             ssh_prompt: None,
             _creating: None,
+            editing: false,
         }
+    }
+
+    fn for_edit(
+        index: SshServerIndex,
+        connection: &remote::SshConnectionOptions,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Self {
+        let mut form = Self::new(window, cx);
+        set_editor_text(
+            &form.nickname_editor,
+            connection.nickname.clone().unwrap_or_default(),
+            window,
+            cx,
+        );
+        set_editor_text(
+            &form.host_editor,
+            connection.host.to_string(),
+            window,
+            cx,
+        );
+        set_editor_text(
+            &form.port_editor,
+            connection
+                .port
+                .map(|port| port.to_string())
+                .unwrap_or_default(),
+            window,
+            cx,
+        );
+        set_editor_text(
+            &form.username_editor,
+            connection.username.clone().unwrap_or_default(),
+            window,
+            cx,
+        );
+        set_editor_text(
+            &form.proxy_editor,
+            connection.proxy.clone().unwrap_or_default(),
+            window,
+            cx,
+        );
+        set_editor_text(
+            &form.timeout_editor,
+            connection
+                .connection_timeout
+                .map(|timeout| timeout.to_string())
+                .unwrap_or_default(),
+            window,
+            cx,
+        );
+        form.auth_method = connection.auth_method.unwrap_or_else(|| {
+            if connection.ssh_key_id.is_some() {
+                SshAuthMethod::Key
+            } else {
+                SshAuthMethod::Password
+            }
+        });
+        form.key_id = connection.ssh_key_id.clone();
+        form.jump_hosts = connection.jump_hosts.clone();
+        form.proxy_disabled = connection.proxy_disabled;
+        form.advanced_open = !form.jump_hosts.is_empty()
+            || connection.proxy.is_some()
+            || connection.connection_timeout.is_some();
+        form.saved_index = Some(index);
+        form.editing = true;
+        form
     }
 
     /// A summary of the non-default advanced values, shown while the section
@@ -424,14 +517,46 @@ impl CreateRemoteServerForm {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum JumpHostSource {
+    Saved,
+    SshConfig,
+}
+
 struct JumpHostCandidate {
     label: SharedString,
     host: String,
     username: Option<String>,
     port: Option<u16>,
+    source: JumpHostSource,
 }
 
 impl JumpHostCandidate {
+    fn saved(
+        label: SharedString,
+        host: String,
+        username: Option<String>,
+        port: Option<u16>,
+    ) -> Self {
+        Self {
+            label,
+            host,
+            username,
+            port,
+            source: JumpHostSource::Saved,
+        }
+    }
+
+    fn from_ssh_config(host: String) -> Self {
+        Self {
+            label: host.clone().into(),
+            host,
+            username: None,
+            port: None,
+            source: JumpHostSource::SshConfig,
+        }
+    }
+
     fn jump_host(&self) -> JumpHost {
         JumpHost {
             host: self.host.clone(),
@@ -453,6 +578,27 @@ impl JumpHostCandidate {
         }
         detail
     }
+}
+
+/// Combines the saved Zed hosts with the host aliases from `~/.ssh/config`.
+///
+/// A jump host may point at either kind, and the same target must not appear
+/// twice just because it is both saved and present in the SSH config.
+fn merge_jump_host_candidates(
+    saved: Vec<JumpHostCandidate>,
+    config_hosts: impl IntoIterator<Item = String>,
+) -> Vec<JumpHostCandidate> {
+    let mut seen: std::collections::BTreeSet<String> = saved
+        .iter()
+        .map(|candidate| candidate.host.to_lowercase())
+        .collect();
+    let mut candidates = saved;
+    for host in config_hosts {
+        if seen.insert(host.to_lowercase()) {
+            candidates.push(JumpHostCandidate::from_ssh_config(host));
+        }
+    }
+    candidates
 }
 
 struct JumpHostPickerDelegate {
@@ -584,6 +730,13 @@ impl PickerDelegate for JumpHostPickerDelegate {
                                 .color(Color::Muted),
                         ),
                 )
+                .when(candidate.source == JumpHostSource::SshConfig, |this| {
+                    this.end_slot(
+                        Label::new("~/.ssh/config")
+                            .size(LabelSize::Small)
+                            .color(Color::Muted),
+                    )
+                })
                 .into_any_element(),
         )
     }
@@ -1323,7 +1476,7 @@ enum ViewServerOptionsState {
     Ssh {
         connection: SshConnectionOptions,
         server_index: SshServerIndex,
-        entries: [NavigableEntry; 4],
+        entries: [NavigableEntry; 5],
     },
     Wsl {
         connection: WslConnectionOptions,
@@ -1341,6 +1494,31 @@ impl ViewServerOptionsState {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ManageServersFilter {
+    All,
+    Saved,
+    SshConfig,
+}
+
+struct ManageServersState {
+    filter: ManageServersFilter,
+    selected: usize,
+    search: Entity<Editor>,
+    scroll: ScrollHandle,
+    _search_subscription: Subscription,
+}
+
+struct ManageSshKeysState {
+    keys: Vec<ManagedSshKey>,
+    selected: usize,
+    loading: bool,
+    error: Option<SharedString>,
+    search: Entity<Editor>,
+    rename: Option<Entity<Editor>>,
+    _search_subscription: Subscription,
+}
+
 enum Mode {
     Default,
     ViewServerOptions(ViewServerOptionsState),
@@ -1348,6 +1526,8 @@ enum Mode {
     ProjectPicker(Entity<ProjectPicker>),
     CreateRemoteServer(CreateRemoteServer),
     CreateRemoteServerForm(CreateRemoteServerForm),
+    ManageServers(ManageServersState),
+    ManageSshKeys(ManageSshKeysState),
     CreateRemoteDevContainer(CreateRemoteDevContainer),
     #[cfg(target_os = "windows")]
     AddWslDistro(AddWslDistro),
@@ -1369,6 +1549,7 @@ enum RemoteMatch {
     AddWsl,
     EditSshConfig,
     ManageSshKeys,
+    ManageServers,
     PredownloadRemoteServer,
     Separator,
     /// A selectable server row. In the default view it is the only row for a
@@ -1664,6 +1845,15 @@ impl RemoteServerPickerDelegate {
                 }
             }
         } else if query.is_empty() {
+            if !self.state.servers.is_empty() {
+                for server_index in 0..self.state.servers.len() {
+                    matches.push(RemoteMatch::Server {
+                        server: server_index,
+                        host_positions: Vec::new(),
+                    });
+                }
+                matches.push(RemoteMatch::Separator);
+            }
             matches.push(RemoteMatch::AddServer);
             matches.push(RemoteMatch::AddServerForm);
             if has_open_project && is_local {
@@ -1674,16 +1864,8 @@ impl RemoteServerPickerDelegate {
             }
             matches.push(RemoteMatch::EditSshConfig);
             matches.push(RemoteMatch::ManageSshKeys);
+            matches.push(RemoteMatch::ManageServers);
             matches.push(RemoteMatch::PredownloadRemoteServer);
-            if !self.state.servers.is_empty() {
-                matches.push(RemoteMatch::Separator);
-                for server_index in 0..self.state.servers.len() {
-                    matches.push(RemoteMatch::Server {
-                        server: server_index,
-                        host_positions: Vec::new(),
-                    });
-                }
-            }
         } else {
             if let Some(results) = &self.state.filtered_servers {
                 for filtered in results {
@@ -2022,6 +2204,11 @@ impl PickerDelegate for RemoteServerPickerDelegate {
                     .update(cx, |this, cx| this.manage_ssh_keys(window, cx))
                     .log_err();
             }
+            RemoteMatch::ManageServers => {
+                remote_server_projects
+                    .update(cx, |this, cx| this.manage_servers(window, cx))
+                    .log_err();
+            }
             RemoteMatch::Project {
                 server, project, ..
             } => {
@@ -2205,6 +2392,12 @@ impl PickerDelegate for RemoteServerPickerDelegate {
                 ix,
                 IconName::Server,
                 i18n::t!("eeaf60325cae1c33"),
+                selected,
+            )),
+            RemoteMatch::ManageServers => Some(self.render_action_item(
+                ix,
+                IconName::Server,
+                i18n::t!("790f6599b5c867a9"),
                 selected,
             )),
             RemoteMatch::ManageSshKeys => Some(self.render_action_item(
@@ -2749,6 +2942,19 @@ impl RemoteServerProjects {
         cx.notify();
     }
 
+    fn open_edit_server_form(
+        &mut self,
+        index: SshServerIndex,
+        connection: SshConnectionOptions,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let form = CreateRemoteServerForm::for_edit(index, &connection, window, cx);
+        self.mode = Mode::CreateRemoteServerForm(form);
+        self.focus_handle(cx).focus(window, cx);
+        cx.notify();
+    }
+
     fn view_in_progress_dev_container(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.allow_dismissal = false;
         self.mode = Mode::CreateRemoteDevContainer(CreateRemoteDevContainer::new(
@@ -2865,7 +3071,10 @@ impl RemoteServerProjects {
 
     fn confirm(&mut self, _: &menu::Confirm, window: &mut Window, cx: &mut Context<Self>) {
         match &self.mode {
-            Mode::Default | Mode::ViewServerOptions(_) => {}
+            Mode::Default
+            | Mode::ViewServerOptions(_)
+            | Mode::ManageServers(_)
+            | Mode::ManageSshKeys(_) => {}
             Mode::ProjectPicker(_) => {}
             Mode::CreateRemoteServer(state) => {
                 if let Some(prompt) = state.ssh_prompt.as_ref() {
@@ -3272,19 +3481,53 @@ impl RemoteServerProjects {
     }
 
     fn open_jump_host_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let candidates = RemoteSettings::get_global(cx)
+        let saved = RemoteSettings::get_global(cx)
             .ssh_connections()
-            .map(|connection| JumpHostCandidate {
-                label: connection
-                    .nickname
-                    .clone()
-                    .unwrap_or_else(|| connection.host.clone())
-                    .into(),
-                host: connection.host.clone(),
-                username: connection.username.clone(),
-                port: connection.port,
+            .map(|connection| {
+                JumpHostCandidate::saved(
+                    connection
+                        .nickname
+                        .clone()
+                        .unwrap_or_else(|| connection.host.clone())
+                        .into(),
+                    connection.host.clone(),
+                    connection.username.clone(),
+                    connection.port,
+                )
             })
             .collect::<Vec<_>>();
+
+        let Ok(fs) = self
+            .workspace
+            .read_with(cx, |workspace, _| workspace.app_state().fs.clone())
+        else {
+            self.show_jump_host_picker(saved, window, cx);
+            return;
+        };
+
+        cx.spawn_in(window, async move |this, cx| {
+            let config_hosts = match fs.load(&user_ssh_config_file()).await {
+                Ok(contents) => parse_ssh_config_hosts(&contents),
+                Err(error) => {
+                    log::debug!("failed to read the SSH config for jump hosts: {error:#}");
+                    Default::default()
+                }
+            };
+            this.update_in(cx, |this, window, cx| {
+                let candidates = merge_jump_host_candidates(saved, config_hosts);
+                this.show_jump_host_picker(candidates, window, cx);
+            })
+            .log_err();
+        })
+        .detach();
+    }
+
+    fn show_jump_host_picker(
+        &mut self,
+        candidates: Vec<JumpHostCandidate>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let delegate = JumpHostPickerDelegate::new(candidates, cx.entity().downgrade());
         let picker = cx.new(|cx| Picker::uniform_list(delegate, window, cx).embedded());
         if let Mode::CreateRemoteServerForm(state) = &mut self.mode {
@@ -3381,9 +3624,9 @@ impl RemoteServerProjects {
             }
         };
 
-        let saved_index = match &self.mode {
-            Mode::CreateRemoteServerForm(state) => state.saved_index,
-            _ => None,
+        let (saved_index, editing) = match &self.mode {
+            Mode::CreateRemoteServerForm(state) => (state.saved_index, state.editing),
+            _ => (None, false),
         };
 
         if let Mode::CreateRemoteServerForm(state) = &mut self.mode {
@@ -3451,6 +3694,17 @@ impl RemoteServerProjects {
                     state.key_id = key_id;
                     state.key_file = None;
                 }
+                if editing {
+                    this.view_server_options(
+                        (
+                            ServerIndex::Ssh(index),
+                            RemoteConnectionOptions::Ssh(connection_options),
+                        ),
+                        window,
+                        cx,
+                    );
+                    return;
+                }
                 this.begin_form_connect(connection_options, window, cx);
             })
             .log_err();
@@ -3469,7 +3723,14 @@ impl RemoteServerProjects {
         existing_index: Option<SshServerIndex>,
         cx: &mut Context<Self>,
     ) -> SshServerIndex {
-        let connection = ssh_connection_from_options(connection_options);
+        let mut connection = ssh_connection_from_options(connection_options);
+        if let Some(existing_index) = existing_index
+            && let Some(existing) = RemoteSettings::get_global(cx)
+                .ssh_connections()
+                .nth(existing_index.0)
+        {
+            preserve_existing_connection_state(&mut connection, &existing);
+        }
         let index = existing_index.unwrap_or_else(|| {
             SshServerIndex(RemoteSettings::get_global(cx).ssh_connections().count())
         });
@@ -4453,6 +4714,12 @@ impl RemoteServerProjects {
                     )
             });
 
+        let submit_label = if state.editing {
+            i18n::t!("991bb7cfe5a81550")
+        } else {
+            i18n::t!("a5574109f0208e89")
+        };
+
         let footer = h_flex()
             .w_full()
             .p_2()
@@ -4472,7 +4739,7 @@ impl RemoteServerProjects {
                     })),
             )
             .child(
-                Button::new("connect-form", i18n::t!("a5574109f0208e89"))
+                Button::new("connect-form", submit_label)
                     .style(ButtonStyle::Tinted(TintColor::Accent))
                     .start_icon(Icon::new(IconName::ArrowRight).size(IconSize::XSmall))
                     .on_click(cx.listener(|this, _, window, cx| {
@@ -4490,18 +4757,50 @@ impl RemoteServerProjects {
                 }
             }))
             .child(
-                div()
-                    .id("create-remote-server-form-fields")
+                h_flex()
                     .flex_1()
-                    .overflow_y_scroll()
+                    .min_h_0()
+                    .child(
+                        div()
+                            .id("create-remote-server-form-fields")
+                            .flex_1()
+                            .min_h_0()
+                            .overflow_y_scroll()
+                            .child(
+                                v_flex()
+                                    .w_full()
+                                    .gap_3()
+                                    .p_3()
+                                    .child(connection_fields)
+                                    .child(advanced)
+                                    .child(banner),
+                            ),
+                    )
                     .child(
                         v_flex()
-                            .w_full()
-                            .gap_3()
+                            .w(rems_from_px(240_f32))
+                            .flex_none()
+                            .min_h_0()
+                            .gap_2()
                             .p_3()
-                            .child(connection_fields)
-                            .child(advanced)
-                            .child(banner),
+                            .border_l_1()
+                            .border_color(border_color)
+                            .child(
+                                Label::new(i18n::t!("13d61fea9f174905"))
+                                    .size(LabelSize::Small)
+                                    .color(Color::Muted),
+                            )
+                            .child(
+                                Label::new(state.ssh_preview(cx).unwrap_or_else(|| {
+                                    SharedString::from(i18n::t!("910bc0a393ff7a97"))
+                                }))
+                                .size(LabelSize::XSmall),
+                            )
+                            .child(
+                                Label::new(auth_hint)
+                                    .size(LabelSize::XSmall)
+                                    .color(Color::Muted),
+                            ),
                     ),
             )
             .child(footer)
@@ -4598,7 +4897,7 @@ impl RemoteServerProjects {
                         .child(ListSeparator)
                         .child({
                             div()
-                                .id("ssh-options-copy-server-address")
+                                .id("ssh-options-back")
                                 .track_focus(&last_entry.focus_handle)
                                 .on_action(cx.listener(|this, _: &menu::Confirm, window, cx| {
                                     this.mode = Mode::default_mode(&this.ssh_config_servers, cx);
@@ -4712,6 +5011,37 @@ impl RemoteServerProjects {
 
         v_flex()
             .child({
+                let connection_for_action = connection.clone();
+                let connection_for_click = connection.clone();
+                div()
+                    .id("ssh-options-edit-connection")
+                    .track_focus(&entries[0].focus_handle)
+                    .on_action(cx.listener(move |this, _: &menu::Confirm, window, cx| {
+                        this.open_edit_server_form(
+                            index,
+                            connection_for_action.clone(),
+                            window,
+                            cx,
+                        );
+                    }))
+                    .child(
+                        ListItem::new("edit-connection")
+                            .toggle_state(entries[0].focus_handle.contains_focused(window, cx))
+                            .inset(true)
+                            .spacing(ui::ListItemSpacing::Sparse)
+                            .start_slot(Icon::new(IconName::Pencil).color(Color::Muted))
+                            .child(Label::new(i18n::t!("8f9cfb91d0b4c48b")))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.open_edit_server_form(
+                                    index,
+                                    connection_for_click.clone(),
+                                    window,
+                                    cx,
+                                );
+                            })),
+                    )
+            })
+            .child({
                 let label = if connection.nickname.is_some() {
                     i18n::t!("6e34485973735c6d")
                 } else {
@@ -4719,14 +5049,14 @@ impl RemoteServerProjects {
                 };
                 div()
                     .id("ssh-options-add-nickname")
-                    .track_focus(&entries[0].focus_handle)
+                    .track_focus(&entries[1].focus_handle)
                     .on_action(cx.listener(move |this, _: &menu::Confirm, window, cx| {
                         this.mode = Mode::EditNickname(EditNicknameState::new(index, window, cx));
                         cx.notify();
                     }))
                     .child(
                         ListItem::new("add-nickname")
-                            .toggle_state(entries[0].focus_handle.contains_focused(window, cx))
+                            .toggle_state(entries[1].focus_handle.contains_focused(window, cx))
                             .inset(true)
                             .spacing(ui::ListItemSpacing::Sparse)
                             .start_slot(Icon::new(IconName::Pencil).color(Color::Muted))
@@ -4767,7 +5097,7 @@ impl RemoteServerProjects {
                 }
                 div()
                     .id("ssh-options-copy-server-address")
-                    .track_focus(&entries[1].focus_handle)
+                    .track_focus(&entries[2].focus_handle)
                     .on_action({
                         let connection_string = connection_string.clone();
                         let workspace = self.workspace.clone();
@@ -4777,7 +5107,7 @@ impl RemoteServerProjects {
                     })
                     .child(
                         ListItem::new("copy-server-address")
-                            .toggle_state(entries[1].focus_handle.contains_focused(window, cx))
+                            .toggle_state(entries[2].focus_handle.contains_focused(window, cx))
                             .inset(true)
                             .spacing(ui::ListItemSpacing::Sparse)
                             .start_slot(Icon::new(IconName::Copy).color(Color::Muted))
@@ -4825,8 +5155,8 @@ impl RemoteServerProjects {
                     .detach_and_log_err(cx);
                 }
                 div()
-                    .id("ssh-options-copy-server-address")
-                    .track_focus(&entries[2].focus_handle)
+                    .id("ssh-options-remove-server")
+                    .track_focus(&entries[3].focus_handle)
                     .on_action(cx.listener({
                         let connection_string = connection_string.clone();
                         move |_, _: &menu::Confirm, window, cx| {
@@ -4841,7 +5171,7 @@ impl RemoteServerProjects {
                     }))
                     .child(
                         ListItem::new("remove-server")
-                            .toggle_state(entries[2].focus_handle.contains_focused(window, cx))
+                            .toggle_state(entries[3].focus_handle.contains_focused(window, cx))
                             .inset(true)
                             .spacing(ui::ListItemSpacing::Sparse)
                             .start_slot(Icon::new(IconName::Trash).color(Color::Error))
@@ -4912,120 +5242,1324 @@ impl RemoteServerProjects {
     }
 
     fn manage_ssh_keys(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let keys = match remote::list_managed_ssh_keys() {
-            Ok(keys) => keys,
-            Err(error) => {
-                let confirmation = window.prompt(
-                    PromptLevel::Critical,
-                    i18n::t!("93d0989ced68c7dc"),
-                    Some(&error.to_string()),
-                    &[i18n::t!("fac2a67ad87807c4")],
+        let search = form_editor(i18n::t!("6bb234e5964a08ca"), window, cx);
+        let subscription = cx.subscribe(&search, |_, _, _: &EditorEvent, cx| cx.notify());
+        self.mode = Mode::ManageSshKeys(ManageSshKeysState {
+            keys: Vec::new(),
+            selected: 0,
+            loading: true,
+            error: None,
+            search,
+            rename: None,
+            _search_subscription: subscription,
+        });
+        self.focus_handle(cx).focus(window, cx);
+        self.reload_managed_ssh_keys(window, cx);
+        cx.notify();
+    }
+
+    fn manage_servers(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let search = form_editor(i18n::t!("893b185f6371e855"), window, cx);
+        let subscription = cx.subscribe(&search, |_, _, _: &EditorEvent, cx| cx.notify());
+        self.mode = Mode::ManageServers(ManageServersState {
+            filter: ManageServersFilter::All,
+            selected: 0,
+            search,
+            scroll: ScrollHandle::new(),
+            _search_subscription: subscription,
+        });
+        self.focus_handle(cx).focus(window, cx);
+        cx.notify();
+    }
+
+    fn open_managed_server_project(
+        &mut self,
+        connection: Connection,
+        index: Option<ServerIndex>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let index = match index {
+            Some(index) => index,
+            None => {
+                let Connection::Ssh(ssh) = &connection else {
+                    return;
+                };
+                ServerIndex::Ssh(self.create_host_from_ssh_config(
+                    &SharedString::from(ssh.host.clone()),
                     cx,
-                );
-                cx.spawn(async move |_, _| {
-                    confirmation.await.ok();
-                })
-                .detach();
-                return;
+                ))
             }
         };
-        if keys.is_empty() {
-            let confirmation = window.prompt(
-                PromptLevel::Info,
-                i18n::t!("641dd3307518e1b9"),
-                Some(i18n::t!("5021a7dc57179f13")),
-                &[i18n::t!("fac2a67ad87807c4")],
-                cx,
-            );
-            cx.spawn(async move |_, _| {
-                confirmation.await.ok();
-            })
-            .detach();
+        cx.emit(DismissEvent);
+        self.create_remote_project(index, connection.into(), window, cx);
+    }
+
+    fn edit_managed_server(
+        &mut self,
+        connection: Connection,
+        index: Option<ServerIndex>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Connection::Ssh(ssh) = connection else {
             return;
+        };
+        let index = match index {
+            Some(ServerIndex::Ssh(index)) => index,
+            _ => self.create_host_from_ssh_config(&SharedString::from(ssh.host.clone()), cx),
+        };
+        self.open_edit_server_form(index, SshConnectionOptions::from(ssh), window, cx);
+    }
+
+    fn remove_managed_server(
+        &mut self,
+        index: ServerIndex,
+        display: SharedString,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let confirmation = window.prompt(
+            PromptLevel::Warning,
+            &i18n::t_args!("d1fd2f8a98a29fca", display),
+            None,
+            &[i18n::t!("a0d088db90385b56"), i18n::t!("beb38893b76fefe3")],
+            cx,
+        );
+        cx.spawn_in(window, async move |this, cx| {
+            if confirmation.await.ok() == Some(0) {
+                this.update(cx, |this, cx| {
+                    match index {
+                        ServerIndex::Ssh(index) => this.delete_ssh_server(index, cx),
+                        ServerIndex::Wsl(index) => this.delete_wsl_distro(index, cx),
+                    }
+                    if let Mode::ManageServers(state) = &mut this.mode {
+                        state.selected = 0;
+                    }
+                    cx.notify();
+                })
+                .log_err();
+            }
+            anyhow::Ok(())
+        })
+        .detach_and_log_err(cx);
+    }
+
+    fn render_manage_servers(
+        &self,
+        state: &ManageServersState,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let colors = cx.theme().colors().clone();
+        let entries = self.default_picker.read(cx).delegate.state.servers.clone();
+
+        struct ManagedServerRow {
+            connection: Connection,
+            index: Option<ServerIndex>,
+            is_ssh_config: bool,
         }
 
-        let summary = keys
+        let rows: Vec<ManagedServerRow> = entries
+            .iter()
+            .map(|entry| match entry {
+                RemoteEntry::Project {
+                    connection, index, ..
+                } => ManagedServerRow {
+                    connection: connection.clone(),
+                    index: Some(*index),
+                    is_ssh_config: false,
+                },
+                RemoteEntry::SshConfig { .. } => ManagedServerRow {
+                    connection: entry.connection().into_owned(),
+                    index: None,
+                    is_ssh_config: true,
+                },
+            })
+            .collect();
+
+        let query = state.search.read(cx).text(cx).to_lowercase();
+        let filtered: Vec<&ManagedServerRow> = rows
+            .iter()
+            .filter(|row| {
+                let matches_filter = match state.filter {
+                    ManageServersFilter::All => true,
+                    ManageServersFilter::Saved => !row.is_ssh_config,
+                    ManageServersFilter::SshConfig => row.is_ssh_config,
+                };
+                if !matches_filter {
+                    return false;
+                }
+                if query.is_empty() {
+                    return true;
+                }
+                let (main, aux, _) = server_labels(&row.connection);
+                let details = match &row.connection {
+                    Connection::Ssh(ssh) => format!(
+                        "{} {} {}",
+                        ssh.host,
+                        ssh.username.clone().unwrap_or_default(),
+                        ssh.nickname.clone().unwrap_or_default()
+                    ),
+                    Connection::Wsl(wsl) => wsl.distro_name.clone(),
+                    Connection::DevContainer(container) => container.name.clone(),
+                };
+                main.to_lowercase().contains(&query)
+                    || aux
+                        .as_ref()
+                        .is_some_and(|aux| aux.to_lowercase().contains(&query))
+                    || details.to_lowercase().contains(&query)
+            })
+            .collect();
+        let selected_index = state.selected.min(filtered.len().saturating_sub(1));
+        let selected = filtered.get(selected_index).copied();
+
+        let list = filtered
+            .iter()
+            .enumerate()
+            .map(|(index, row)| {
+                let is_selected = index == selected_index;
+                let (main, aux, is_wsl) = server_labels(&row.connection);
+                h_flex()
+                    .id(SharedString::from(format!("managed-server-{index}")))
+                    .w_full()
+                    .px_2()
+                    .py_1p5()
+                    .gap_2()
+                    .rounded_md()
+                    .cursor_pointer()
+                    .when(is_selected, |this| this.bg(colors.element_selected))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if let Mode::ManageServers(state) = &mut this.mode {
+                            state.selected = index;
+                        }
+                        cx.notify();
+                    }))
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .child(
+                                h_flex()
+                                    .gap_1()
+                                    .when(is_wsl, |this| {
+                                        this.child(
+                                            Label::new(i18n::t!("41ed0a615790bb95"))
+                                                .size(LabelSize::XSmall)
+                                                .color(Color::Muted),
+                                        )
+                                    })
+                                    .when(row.is_ssh_config, |this| {
+                                        this.child(
+                                            Label::new(i18n::t!("8ff228346a640061"))
+                                                .size(LabelSize::XSmall)
+                                                .color(Color::Muted),
+                                        )
+                                    })
+                                    .child(Label::new(main).size(LabelSize::Small)),
+                            )
+                            .when_some(aux, |this, aux| {
+                                this.child(Label::new(aux).size(LabelSize::XSmall).color(Color::Muted))
+                            }),
+                    )
+                    .into_any_element()
+            })
+            .collect::<Vec<_>>();
+
+        let detail = if let Some(row) = selected {
+            let (main, aux, _) = server_labels(&row.connection);
+            let connection = row.connection.clone();
+            let index = row.index;
+            let is_config = row.is_ssh_config;
+            let can_edit = !matches!(row.connection, Connection::Wsl(_));
+            let display = SharedString::from(main.clone());
+            let address = match &row.connection {
+                Connection::Ssh(ssh) => SharedString::from(format!(
+                    "{}@{}:{}",
+                    ssh.username.clone().unwrap_or_default(),
+                    ssh.host,
+                    ssh.port.unwrap_or(22)
+                )),
+                Connection::Wsl(wsl) => SharedString::from(wsl.distro_name.clone()),
+                Connection::DevContainer(container) => SharedString::from(container.name.clone()),
+            };
+            let copy_address = address.clone();
+            let remove_index = index;
+
+            v_flex()
+                .gap_3()
+                .p_3()
+                .child(
+                    h_flex()
+                        .gap_2()
+                        .child(Label::new(main).size(LabelSize::Large))
+                        .when_some(aux, |this, aux| {
+                            this.child(Label::new(aux).size(LabelSize::Small).color(Color::Muted))
+                        }),
+                )
+                .child(Label::new(address).size(LabelSize::Small).color(Color::Muted))
+                .child(
+                    Label::new(if is_config {
+                        i18n::t!("8ff228346a640061")
+                    } else {
+                        i18n::t!("1bd91a7d0c53c936")
+                    })
+                    .size(LabelSize::XSmall)
+                    .color(Color::Muted),
+                )
+                .child(
+                    h_flex()
+                        .gap_2()
+                        .child(
+                            Button::new("managed-server-open", i18n::t!("fcf8b4bff0df782d"))
+                                .style(ButtonStyle::Tinted(TintColor::Accent))
+                                .on_click(cx.listener({
+                                    let connection = connection.clone();
+                                    move |this, _, window, cx| {
+                                        this.open_managed_server_project(
+                                            connection.clone(),
+                                            index,
+                                            window,
+                                            cx,
+                                        );
+                                    }
+                                })),
+                        )
+                        .when(can_edit, |this| {
+                            this.child(
+                                Button::new(
+                                    "managed-server-edit",
+                                    i18n::t!("8f9cfb91d0b4c48b"),
+                                )
+                                .on_click(cx.listener({
+                                    let connection = connection.clone();
+                                    move |this, _, window, cx| {
+                                        this.edit_managed_server(
+                                            connection.clone(),
+                                            index,
+                                            window,
+                                            cx,
+                                        );
+                                    }
+                                })),
+                            )
+                        })
+                        .child(
+                            Button::new(
+                                "managed-server-copy",
+                                i18n::t!("4c2614bc71a0cb77"),
+                            )
+                            .on_click(move |_, _, cx| {
+                                cx.write_to_clipboard(ClipboardItem::new_string(
+                                    copy_address.to_string(),
+                                ));
+                            }),
+                        )
+                        .when(!is_config, |this| {
+                            this.child(
+                                Button::new(
+                                    "managed-server-remove",
+                                    i18n::t!("cc98dc08f5e9a890"),
+                                )
+                                .style(ButtonStyle::Transparent)
+                                .color(Color::Error)
+                                .on_click(cx.listener({
+                                    move |this, _, window, cx| {
+                                        if let Some(index) = remove_index {
+                                            this.remove_managed_server(
+                                                index,
+                                                display.clone(),
+                                                window,
+                                                cx,
+                                            );
+                                        }
+                                    }
+                                })),
+                            )
+                        }),
+                )
+                .into_any_element()
+        } else {
+            v_flex()
+                .p_3()
+                .child(Label::new(i18n::t!("641dd3307518e1b9")).color(Color::Muted))
+                .into_any_element()
+        };
+
+        v_flex()
+            .size_full()
+            .track_focus(&self.focus_handle(cx))
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                let filter = match &this.mode {
+                    Mode::ManageServers(state) => state.filter,
+                    _ => return,
+                };
+                let query = match &this.mode {
+                    Mode::ManageServers(state) => {
+                        state.search.read(cx).text(cx).to_lowercase()
+                    }
+                    _ => return,
+                };
+                let count = {
+                    let entries = &this.default_picker.read(cx).delegate.state.servers;
+                    entries
+                        .iter()
+                        .filter(|entry| {
+                            let matches_filter = match filter {
+                                ManageServersFilter::All => true,
+                                ManageServersFilter::Saved => {
+                                    matches!(entry, RemoteEntry::Project { .. })
+                                }
+                                ManageServersFilter::SshConfig => {
+                                    matches!(entry, RemoteEntry::SshConfig { .. })
+                                }
+                            };
+                            if !matches_filter {
+                                return false;
+                            }
+                            if query.is_empty() {
+                                return true;
+                            }
+                            let connection = entry.connection();
+                            let details = match connection.as_ref() {
+                                Connection::Ssh(ssh) => format!(
+                                    "{} {} {}",
+                                    ssh.host,
+                                    ssh.username.clone().unwrap_or_default(),
+                                    ssh.nickname.clone().unwrap_or_default()
+                                ),
+                                Connection::Wsl(wsl) => wsl.distro_name.clone(),
+                                Connection::DevContainer(container) => container.name.clone(),
+                            };
+                            entry.display_host().to_lowercase().contains(&query)
+                                || entry
+                                    .host_alias()
+                                    .is_some_and(|alias| alias.to_lowercase().contains(&query))
+                                || details.to_lowercase().contains(&query)
+                        })
+                        .count()
+                };
+                let Mode::ManageServers(state) = &mut this.mode else {
+                    return;
+                };
+                match event.keystroke.key.as_str() {
+                    "up" => state.selected = state.selected.saturating_sub(1),
+                    "down" => {
+                        state.selected = (state.selected + 1).min(count.saturating_sub(1));
+                    }
+                    _ => return,
+                }
+                state.scroll.scroll_to_item(state.selected);
+                cx.stop_propagation();
+                cx.notify();
+            }))
+            .child(
+                h_flex()
+                    .w_full()
+                    .p_2()
+                    .gap_2()
+                    .items_center()
+                    .border_b_1()
+                    .border_color(colors.border_variant)
+                    .child(
+                        IconButton::new("manage-servers-back", IconName::ArrowLeft)
+                            .icon_size(IconSize::Small)
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.mode = Mode::default_mode(&this.ssh_config_servers, cx);
+                                cx.focus_self(window);
+                                cx.notify();
+                            })),
+                    )
+                    .child(Label::new(i18n::t!("790f6599b5c867a9")).size(LabelSize::Large).flex_1())
+                    .child(
+                        Button::new("manage-servers-close", i18n::t!("572cf45ba43634b3"))
+                            .style(ButtonStyle::Transparent)
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.mode = Mode::default_mode(&this.ssh_config_servers, cx);
+                                cx.focus_self(window);
+                                cx.notify();
+                            })),
+                    ),
+            )
+            .child(
+                h_flex()
+                    .flex_1()
+                    .min_h_0()
+                    .child(
+                        v_flex()
+                            .id("managed-servers-list")
+                            .w(rems_from_px(260_f32))
+                            .flex_none()
+                            .min_h_0()
+                            .border_r_1()
+                            .border_color(colors.border_variant)
+                            .child(
+                                div()
+                                    .p_2()
+                                    .child(form_input_surface(&state.search, false, cx)),
+                            )
+                            .child(
+                                h_flex()
+                                    .w_full()
+                                    .px_1()
+                                    .gap_1()
+                                    .children(
+                                        [
+                                            (ManageServersFilter::All, i18n::t!("5c55a67935af8f45")),
+                                            (ManageServersFilter::Saved, i18n::t!("1bd91a7d0c53c936")),
+                                            (ManageServersFilter::SshConfig, i18n::t!("8ff228346a640061")),
+                                        ]
+                                        .map(|(filter, label)| {
+                                            Button::new(
+                                                SharedString::from(format!(
+                                                    "managed-servers-filter-{filter:?}"
+                                                )),
+                                                label,
+                                            )
+                                            .style(if state.filter == filter {
+                                                ButtonStyle::Tinted(TintColor::Accent)
+                                            } else {
+                                                ButtonStyle::Transparent
+                                            })
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                if let Mode::ManageServers(state) = &mut this.mode {
+                                                    state.filter = filter;
+                                                    state.selected = 0;
+                                                }
+                                                cx.notify();
+                                            }))
+                                        }),
+                                    ),
+                            )
+                            .child(
+                                v_flex()
+                                    .id("managed-servers-scroll")
+                                    .flex_1()
+                                    .min_h_0()
+                                    .track_scroll(&state.scroll)
+                                    .overflow_y_scroll()
+                                    .p_1()
+                                    .gap_0p5()
+                                    .children(list),
+                            ),
+                    )
+                    .child(
+                        v_flex()
+                            .id("managed-servers-detail")
+                            .flex_1()
+                            .min_w_0()
+                            .overflow_y_scroll()
+                            .child(detail),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    fn reload_managed_ssh_keys(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        cx.spawn_in(window, async move |this, cx| {
+            let keys = cx
+                .background_spawn(async { list_managed_ssh_keys() })
+                .await;
+
+            this.update_in(cx, |this, window, cx| {
+                let Mode::ManageSshKeys(state) = &mut this.mode else {
+                    return;
+                };
+                state.loading = false;
+                match keys {
+                    Ok(keys) => {
+                        state.keys = keys;
+                        state.selected = state.selected.min(state.keys.len().saturating_sub(1));
+                        state.error = None;
+                    }
+                    Err(error) => {
+                        state.keys.clear();
+                        state.selected = 0;
+                        state.error = Some(SharedString::from(format!("{error:#}")));
+                    }
+                }
+                window.refresh();
+                cx.notify();
+            })
+            .log_err();
+        })
+        .detach();
+    }
+
+    fn verify_managed_key(
+        &mut self,
+        key_id: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let workspace = self.workspace.clone();
+        cx.spawn_in(window, async move |this, cx| {
+            let result = remote::verify_managed_ssh_key(&key_id, cx).await;
+            this.update_in(cx, |this, window, cx| {
+                match result {
+                    Ok(()) => {
+                        this.reload_managed_ssh_keys(window, cx);
+                        workspace
+                            .update(cx, |workspace, cx| {
+                                workspace.show_toast(
+                                    Toast::new(
+                                        NotificationId::unique::<ManagedSshKeyManagementToast>(),
+                                        i18n::t!("0a1b6f1b57f5198e"),
+                                    )
+                                    .autohide(),
+                                    cx,
+                                );
+                            })
+                            .ok();
+                    }
+                    Err(error) => {
+                        workspace
+                            .update(cx, |workspace, cx| {
+                                workspace.show_toast(
+                                    Toast::new(
+                                        NotificationId::unique::<ManagedSshKeyManagementToast>(),
+                                        format!("{error:#}"),
+                                    ),
+                                    cx,
+                                );
+                            })
+                            .ok();
+                    }
+                }
+                cx.notify();
+            })
+            .log_err();
+        })
+        .detach();
+    }
+
+    fn import_managed_key(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let workspace = self.workspace.clone();
+        let paths = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some(i18n::t!("75141f859dc99aa2").into()),
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let paths = match paths.await {
+                Ok(Ok(Some(paths))) => paths,
+                _ => return,
+            };
+            let Some(path) = paths.into_iter().next() else {
+                return;
+            };
+            let result =
+                remote::import_managed_ssh_key(path, String::new(), 0, None, cx).await;
+            this.update_in(cx, |this, window, cx| {
+                match result {
+                    Ok(_) => this.reload_managed_ssh_keys(window, cx),
+                    Err(error) => {
+                        workspace
+                            .update(cx, |workspace, cx| {
+                                workspace.show_toast(
+                                    Toast::new(
+                                        NotificationId::unique::<ManagedSshKeyManagementToast>(),
+                                        format!("{error:#}"),
+                                    ),
+                                    cx,
+                                );
+                            })
+                            .ok();
+                    }
+                }
+                cx.notify();
+            })
+            .log_err();
+        })
+        .detach();
+    }
+
+    fn save_managed_ssh_key_nickname(
+        &mut self,
+        key_id: String,
+        nickname: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let workspace = self.workspace.clone();
+        cx.spawn_in(window, async move |this, cx| {
+            let result = rename_managed_ssh_key(&key_id, Some(nickname.clone()), cx).await;
+            this.update_in(cx, |this, window, cx| {
+                match result {
+                    Ok(()) => {
+                        if let Mode::ManageSshKeys(state) = &mut this.mode {
+                            state.rename = None;
+                        }
+                        this.reload_managed_ssh_keys(window, cx);
+                        workspace
+                            .update(cx, |workspace, cx| {
+                                workspace.show_toast(
+                                    Toast::new(
+                                        NotificationId::unique::<ManagedSshKeyManagementToast>(),
+                                        i18n::t!("a3030bf8f16dc63c"),
+                                    )
+                                    .autohide(),
+                                    cx,
+                                );
+                            })
+                            .ok();
+                    }
+                    Err(error) => {
+                        workspace
+                            .update(cx, |workspace, cx| {
+                                workspace.show_toast(
+                                    Toast::new(
+                                        NotificationId::unique::<ManagedSshKeyManagementToast>(),
+                                        format!("{error:#}"),
+                                    ),
+                                    cx,
+                                );
+                            })
+                            .ok();
+                    }
+                }
+                cx.notify();
+            })
+            .log_err();
+        })
+        .detach();
+    }
+
+    fn confirm_remove_managed_ssh_key(
+        &mut self,
+        key_id: String,
+        username: String,
+        host: String,
+        port: u16,
+        revoke: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let title = if revoke {
+            i18n::t_args!("e56ec9128d0390c3", username, host, port)
+        } else {
+            i18n::t!("6f0bde02c11998ef").to_string()
+        };
+        let detail = if revoke {
+            i18n::t!("d0b7e7ca2da217f2")
+        } else {
+            i18n::t!("3e257353bdfc61d6")
+        };
+        let confirm_label = if revoke {
+            i18n::t!("2cd0f3be8738a86c")
+        } else {
+            i18n::t!("2f9daa828907b93f")
+        };
+
+        let confirmation = window.prompt(
+            PromptLevel::Warning,
+            &title,
+            Some(detail),
+            &[i18n::t!("56b27cbf4eea18e2"), confirm_label],
+            cx,
+        );
+        let workspace = self.workspace.clone();
+
+        cx.spawn_in(window, async move |this, cx| {
+            if confirmation.await.ok() != Some(1) {
+                return anyhow::Ok(());
+            }
+
+            let key_id_for_action = key_id.clone();
+            let result = if revoke {
+                revoke_and_delete_managed_ssh_key(&key_id_for_action, cx).await
+            } else {
+                delete_local_managed_ssh_key(&key_id_for_action, cx).await
+            };
+
+            this.update_in(cx, |this, _, cx| {
+                match result {
+                    Ok(()) => {
+                        if let Mode::ManageSshKeys(state) = &mut this.mode
+                            && let Some(index) = state
+                                .keys
+                                .iter()
+                                .position(|key| key.key_id == key_id)
+                        {
+                            state.keys.remove(index);
+                            state.selected = state
+                                .selected
+                                .min(state.keys.len().saturating_sub(1));
+                        }
+                        workspace
+                            .update(cx, |workspace, cx| {
+                                let message = if revoke {
+                                    i18n::t!("85e3a4825e340075")
+                                } else {
+                                    i18n::t!("c09a29a12d8a4bd3")
+                                };
+                                workspace.show_toast(
+                                    Toast::new(
+                                        NotificationId::unique::<ManagedSshKeyManagementToast>(),
+                                        message,
+                                    )
+                                    .autohide(),
+                                    cx,
+                                );
+                            })
+                            .ok();
+                    }
+                    Err(error) => {
+                        workspace
+                            .update(cx, |workspace, cx| {
+                                workspace.show_toast(
+                                    Toast::new(
+                                        NotificationId::unique::<ManagedSshKeyManagementToast>(),
+                                        format!("{error:#}"),
+                                    ),
+                                    cx,
+                                );
+                            })
+                            .ok();
+                    }
+                }
+                cx.notify();
+            })
+            .log_err();
+
+            anyhow::Ok(())
+        })
+        .detach_and_log_err(cx);
+    }
+
+    fn render_manage_ssh_keys(
+        &self,
+        state: &ManageSshKeysState,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let colors = cx.theme().colors().clone();
+        let query = state.search.read(cx).text(cx).to_lowercase();
+        let filtered: Vec<&ManagedSshKey> = state
+            .keys
+            .iter()
+            .filter(|key| {
+                query.is_empty()
+                    || key
+                        .nickname
+                        .as_deref()
+                        .unwrap_or_default()
+                        .to_lowercase()
+                        .contains(&query)
+                    || key.host.to_lowercase().contains(&query)
+                    || key.remote_username.to_lowercase().contains(&query)
+                    || key.key_id.to_lowercase().contains(&query)
+            })
+            .collect();
+        let selected_index = state.selected.min(filtered.len().saturating_sub(1));
+        let selected = filtered.get(selected_index).copied();
+
+        let rows = filtered
             .iter()
             .enumerate()
             .map(|(index, key)| {
-                i18n::t_args!(
-                    "7ba7b5706ee084b5",
-                    index + 1,
-                    key.remote_username,
-                    key.host,
-                    key.port,
-                    key.created_at,
-                    key.last_used_at
-                        .as_deref()
-                        .unwrap_or(i18n::t!("5594f4797ae55d1a")),
-                    key.key_id,
-                    match key.deployment_state {
-                        remote::ManagedSshKeyDeploymentState::Pending =>
-                            i18n::t!("76a2e875d985af84"),
-                        remote::ManagedSshKeyDeploymentState::Verified =>
-                            i18n::t!("0a1b6f1b57f5198e"),
+                let is_selected = index == selected_index;
+                let (status, status_color) = match key.deployment_state {
+                    ManagedSshKeyDeploymentState::Pending => {
+                        (i18n::t!("76a2e875d985af84"), Color::Warning)
                     }
-                )
+                    ManagedSshKeyDeploymentState::Verified => {
+                        (i18n::t!("0a1b6f1b57f5198e"), Color::Success)
+                    }
+                };
+                let kind = match key.kind {
+                    ManagedSshKeyKind::Generated => i18n::t!("4039f4ecabb9e265"),
+                    ManagedSshKeyKind::Imported => i18n::t!("576d81bb0631b165"),
+                };
+                h_flex()
+                    .id(SharedString::from(format!("managed-ssh-key-{index}")))
+                    .w_full()
+                    .px_2()
+                    .py_1p5()
+                    .gap_2()
+                    .rounded_md()
+                    .cursor_pointer()
+                    .when(is_selected, |this| this.bg(colors.element_selected))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if let Mode::ManageSshKeys(state) = &mut this.mode {
+                            state.selected = index;
+                            state.rename = None;
+                        }
+                        cx.notify();
+                    }))
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .gap_0p5()
+                            .child(
+                                Label::new(
+                                    key.nickname.clone().unwrap_or_else(|| {
+                                        format!(
+                                            "{}@{}:{}",
+                                            key.remote_username, key.host, key.port
+                                        )
+                                    }),
+                                )
+                                .size(LabelSize::Small),
+                            )
+                            .child(
+                                h_flex()
+                                    .gap_1()
+                                    .child(
+                                        Label::new(kind)
+                                            .size(LabelSize::XSmall)
+                                            .color(Color::Muted),
+                                    )
+                                    .child(
+                                        Label::new(status)
+                                            .size(LabelSize::XSmall)
+                                            .color(status_color),
+                                    ),
+                            ),
+                    )
+                    .into_any_element()
             })
-            .collect::<Vec<_>>()
-            .join("\n\n");
-        let workspace = self.workspace.clone();
-        cx.spawn_in(window, async move |_, cx| {
-            let mut target_buttons = vec![i18n::t!("3fd47edce45b3603").to_string()];
-            target_buttons.extend(
-                keys.iter()
-                    .map(|key| format!("{}@{}:{}", key.remote_username, key.host, key.port)),
-            );
-            let target_button_refs = target_buttons
-                .iter()
-                .map(String::as_str)
-                .collect::<Vec<_>>();
-            let selected = cx
-                .prompt(
-                    PromptLevel::Info,
-                    i18n::t!("9d823228218052ab"),
-                    Some(&summary),
-                    &target_button_refs,
+            .collect::<Vec<_>>();
+
+        let list = if state.loading {
+            v_flex()
+                .p_3()
+                .child(Label::new(i18n::t!("7b833c5df7bfe3ee")).color(Color::Muted))
+                .into_any_element()
+        } else if let Some(error) = &state.error {
+            v_flex()
+                .p_3()
+                .gap_1()
+                .child(
+                    Label::new(i18n::t!("93d0989ced68c7dc"))
+                        .size(LabelSize::Small)
+                        .color(Color::Error),
                 )
-                .await?;
-            if selected == 0 {
-                return Ok::<(), anyhow::Error>(());
-            }
-            let Some(key) = keys.get(selected - 1) else {
-                anyhow::bail!(i18n::t!("28d8d3cf78592487"));
+                .child(Label::new(error.clone()).size(LabelSize::XSmall).color(Color::Muted))
+                .into_any_element()
+        } else if state.keys.is_empty() {
+            v_flex()
+                .p_3()
+                .gap_1()
+                .child(Label::new(i18n::t!("641dd3307518e1b9")).size(LabelSize::Small))
+                .child(
+                    Label::new(i18n::t!("5021a7dc57179f13"))
+                        .size(LabelSize::XSmall)
+                        .color(Color::Muted),
+                )
+                .into_any_element()
+        } else {
+            v_flex()
+                .p_1()
+                .gap_0p5()
+                .children(rows)
+                .into_any_element()
+        };
+
+        let detail = if let Some(key) = selected {
+            let (status, status_color) = match key.deployment_state {
+                ManagedSshKeyDeploymentState::Pending => {
+                    (i18n::t!("76a2e875d985af84"), Color::Warning)
+                }
+                ManagedSshKeyDeploymentState::Verified => {
+                    (i18n::t!("0a1b6f1b57f5198e"), Color::Success)
+                }
             };
-            let answer = cx
-                .prompt(
-                    PromptLevel::Warning,
-                    &i18n::t_args!("e56ec9128d0390c3", key.remote_username, key.host, key.port),
-                    Some(i18n::t!("d0b7e7ca2da217f2")),
-                    &[
-                        i18n::t!("2cd0f3be8738a86c"),
-                        i18n::t!("6f0bde02c11998ef"),
-                        i18n::t!("56b27cbf4eea18e2"),
-                    ],
-                )
-                .await?;
-            match answer {
-                1 => remote::revoke_and_delete_managed_ssh_key(&key.key_id, cx).await?,
-                2 => remote::delete_local_managed_ssh_key(&key.key_id, cx).await?,
-                _ => return Ok(()),
-            }
-            if let Some(workspace) = workspace.upgrade() {
-                workspace.update(cx, |workspace, cx| {
-                    workspace.show_toast(
-                        Toast::new(
-                            NotificationId::unique::<ManagedSshKeyManagementToast>(),
-                            i18n::t!("ef5c1f17c13b506f"),
+            let workspace = self.workspace.clone();
+            let copy_key = key.public_key.clone();
+            let key_id = key.key_id.clone();
+            let username = key.remote_username.clone();
+            let host = key.host.clone();
+            let port = key.port;
+            let revoke_key_id = key_id.clone();
+            let revoke_username = username.clone();
+            let revoke_host = host.clone();
+
+            v_flex()
+                .gap_3()
+                .p_3()
+                .child(
+                    h_flex()
+                        .gap_2()
+                        .child(
+                            Label::new(
+                                key.nickname.clone().unwrap_or_else(|| {
+                                    format!("{}@{}:{}", key.remote_username, key.host, key.port)
+                                }),
+                            )
+                            .size(LabelSize::Large),
                         )
-                        .autohide(),
-                        cx,
-                    );
-                });
-            }
-            Ok(())
-        })
-        .detach_and_prompt_err(i18n::t!("d8732bec6533c2cc"), window, cx, |_, _, _| None);
+                        .child(Label::new(status).size(LabelSize::XSmall).color(status_color))
+                        .child(
+                            Button::new("rename-managed-ssh-key", i18n::t!("0d0cbac2eee54113"))
+                                .style(ButtonStyle::Transparent)
+                                .on_click(cx.listener({
+                                    let current = key.nickname.clone().unwrap_or_default();
+                                    move |this, _, window, cx| {
+                                        let editor = form_editor("", window, cx);
+                                        set_editor_text(&editor, current.clone(), window, cx);
+                                        editor.update(cx, |editor, cx| {
+                                            editor.focus_handle(cx).focus(window, cx);
+                                        });
+                                        if let Mode::ManageSshKeys(state) = &mut this.mode {
+                                            state.rename = Some(editor);
+                                        }
+                                        cx.notify();
+                                    }
+                                })),
+                        ),
+                )
+                .when_some(state.rename.clone(), |this, rename| {
+                    this.child(
+                        h_flex()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .child(form_input_surface(&rename, false, cx)),
+                            )
+                            .child(
+                                Button::new("save-managed-ssh-key-nickname", i18n::t!("a3030bf8f16dc63c"))
+                                    .style(ButtonStyle::Tinted(TintColor::Accent))
+                                    .on_click(cx.listener({
+                                        let key_id = key.key_id.clone();
+                                        move |this, _, window, cx| {
+                                            let nickname = match &this.mode {
+                                                Mode::ManageSshKeys(state) => state
+                                                    .rename
+                                                    .as_ref()
+                                                    .map(|editor| editor.read(cx).text(cx)),
+                                                _ => None,
+                                            };
+                                            if let Some(nickname) = nickname {
+                                                this.save_managed_ssh_key_nickname(
+                                                    key_id.clone(),
+                                                    nickname,
+                                                    window,
+                                                    cx,
+                                                );
+                                            }
+                                        }
+                                    })),
+                            )
+                            .child(
+                                Button::new("cancel-managed-ssh-key-nickname", i18n::t!("56b27cbf4eea18e2"))
+                                    .style(ButtonStyle::Transparent)
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        if let Mode::ManageSshKeys(state) = &mut this.mode {
+                                            state.rename = None;
+                                        }
+                                        cx.notify();
+                                    })),
+                            ),
+                    )
+                })
+                .child(
+                    v_flex()
+                        .gap_1()
+                        .child(
+                            Label::new(i18n::t!("af515cd999d17795"))
+                                .size(LabelSize::Small)
+                                .color(Color::Muted),
+                        )
+                        .child(
+                            v_flex()
+                                .p_2()
+                                .rounded_md()
+                                .border_1()
+                                .border_color(colors.border)
+                                .bg(colors.editor_background)
+                                .child(Label::new(key.public_key.clone()).size(LabelSize::XSmall)),
+                        )
+                        .child(
+                            Button::new("copy-managed-public-key", i18n::t!("f523545a6f48e3e6"))
+                                .size(ButtonSize::Default)
+                                .on_click(move |_, _, cx| {
+                                    cx.write_to_clipboard(ClipboardItem::new_string(
+                                        copy_key.clone(),
+                                    ));
+                                    workspace
+                                        .update(cx, |workspace, cx| {
+                                            workspace.show_toast(
+                                                Toast::new(
+                                                    NotificationId::unique::<
+                                                        ManagedSshKeyManagementToast,
+                                                    >(),
+                                                    i18n::t!("d81a799d56008274"),
+                                                )
+                                                .autohide(),
+                                                cx,
+                                            );
+                                        })
+                                        .ok();
+                                }),
+                        ),
+                )
+                .child(
+                    v_flex()
+                        .gap_1()
+                        .child(
+                            Label::new(i18n::t!("0d6a14a9ab254ec6"))
+                                .size(LabelSize::Small)
+                                .color(Color::Muted),
+                        )
+                        .child(
+                            Label::new(
+                                public_key_fingerprint(&key.public_key)
+                                    .unwrap_or_else(|| key.key_id.clone()),
+                            )
+                            .size(LabelSize::XSmall),
+                        ),
+                )
+                .child(
+                    v_flex()
+                        .gap_1()
+                        .child(
+                            Label::new(i18n::t!("301c9461c1d0d5dd"))
+                                .size(LabelSize::Small)
+                                .color(Color::Muted),
+                        )
+                        .child(Label::new(key.key_id.clone()).size(LabelSize::XSmall)),
+                )
+                .child(
+                    v_flex()
+                        .gap_1()
+                        .child(
+                            Label::new(i18n::t!("39a9046f9c8c993d"))
+                                .size(LabelSize::Small)
+                                .color(Color::Muted),
+                        )
+                        .child(
+                            Label::new(
+                                key.last_used_at
+                                    .clone()
+                                    .unwrap_or_else(|| i18n::t!("5594f4797ae55d1a").to_string()),
+                            )
+                            .size(LabelSize::XSmall),
+                        ),
+                )
+                .child(
+                    v_flex()
+                        .gap_1()
+                        .child(
+                            Label::new(i18n::t!("5108bde065ec6162"))
+                                .size(LabelSize::Small)
+                                .color(Color::Muted),
+                        )
+                        .child(Label::new(key.private_key_file.clone()).size(LabelSize::XSmall)),
+                )
+                .child(
+                    h_flex()
+                        .gap_2()
+                        .child(
+                            Button::new("verify-managed-ssh-key", i18n::t!("154723a1aa0a09a4"))
+                                .on_click(cx.listener({
+                                    let key_id = key.key_id.clone();
+                                    move |this, _, window, cx| {
+                                        this.verify_managed_key(key_id.clone(), window, cx);
+                                    }
+                                })),
+                        )
+                        .child(
+                            Button::new(
+                                "revoke-managed-ssh-key",
+                                i18n::t!("2cd0f3be8738a86c"),
+                            )
+                            .style(ButtonStyle::Tinted(TintColor::Error))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.confirm_remove_managed_ssh_key(
+                                    revoke_key_id.clone(),
+                                    revoke_username.clone(),
+                                    revoke_host.clone(),
+                                    port,
+                                    true,
+                                    window,
+                                    cx,
+                                );
+                            })),
+                        )
+                        .child(
+                            Button::new(
+                                "delete-local-managed-ssh-key",
+                                i18n::t!("6f0bde02c11998ef"),
+                            )
+                            .style(ButtonStyle::Transparent)
+                            .color(Color::Error)
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.confirm_remove_managed_ssh_key(
+                                    key_id.clone(),
+                                    username.clone(),
+                                    host.clone(),
+                                    port,
+                                    false,
+                                    window,
+                                    cx,
+                                );
+                            })),
+                        ),
+                )
+                .into_any_element()
+        } else if state.loading {
+            v_flex()
+                .p_3()
+                .child(Label::new(i18n::t!("7b833c5df7bfe3ee")).color(Color::Muted))
+                .into_any_element()
+        } else if state.keys.is_empty() {
+            v_flex()
+                .p_3()
+                .gap_1()
+                .child(
+                    Label::new(i18n::t!("5021a7dc57179f13"))
+                        .size(LabelSize::Small)
+                        .color(Color::Muted),
+                )
+                .into_any_element()
+        } else {
+            v_flex()
+                .p_3()
+                .child(
+                    Label::new(i18n::t!("f523545a6f48e3e6"))
+                        .size(LabelSize::Small)
+                        .color(Color::Muted),
+                )
+                .into_any_element()
+        };
+
+        let key_dir = managed_ssh_key_directory();
+        v_flex()
+            .size_full()
+            .track_focus(&self.focus_handle(cx))
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                let Mode::ManageSshKeys(state) = &mut this.mode else {
+                    return;
+                };
+                let query = state.search.read(cx).text(cx).to_lowercase();
+                let count = state
+                    .keys
+                    .iter()
+                    .filter(|key| {
+                        query.is_empty()
+                            || key
+                                .nickname
+                                .as_deref()
+                                .unwrap_or_default()
+                                .to_lowercase()
+                                .contains(&query)
+                            || key.host.to_lowercase().contains(&query)
+                            || key.remote_username.to_lowercase().contains(&query)
+                            || key.key_id.to_lowercase().contains(&query)
+                    })
+                    .count();
+                match event.keystroke.key.as_str() {
+                    "up" => {
+                        state.selected = state.selected.saturating_sub(1);
+                    }
+                    "down" => {
+                        state.selected = (state.selected + 1).min(count.saturating_sub(1));
+                    }
+                    "enter" => {
+                        if let Some(key) = state.keys.get(state.selected) {
+                            cx.write_to_clipboard(ClipboardItem::new_string(
+                                key.public_key.clone(),
+                            ));
+                        }
+                    }
+                    _ => return,
+                }
+                cx.stop_propagation();
+                cx.notify();
+            }))
+            .child(
+                h_flex()
+                    .w_full()
+                    .p_2()
+                    .gap_2()
+                    .items_center()
+                    .border_b_1()
+                    .border_color(colors.border_variant)
+                    .child(
+                        IconButton::new("manage-ssh-keys-back", IconName::ArrowLeft)
+                            .icon_size(IconSize::Small)
+                            .tooltip(Tooltip::text(i18n::t!("572cf45ba43634b3")))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.mode = Mode::default_mode(&this.ssh_config_servers, cx);
+                                cx.focus_self(window);
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        Label::new(i18n::t!("9d823228218052ab"))
+                            .size(LabelSize::Large)
+                            .flex_1(),
+                    )
+                    .child(
+                        Label::new(format!("{}", filtered.len()))
+                            .size(LabelSize::Small)
+                            .color(Color::Muted),
+                    )
+                    .child(
+                        Button::new("import-managed-ssh-key", i18n::t!("ee9fb07db7b8cef8"))
+                            .size(ButtonSize::Default)
+                            .start_icon(Icon::new(IconName::Plus).size(IconSize::XSmall))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.import_managed_key(window, cx);
+                            })),
+                    )
+                    .child(
+                        Button::new("open-managed-ssh-key-directory", i18n::t!("c4afa2406a1e8944"))
+                            .size(ButtonSize::Default)
+                            .start_icon(Icon::new(IconName::Folder).size(IconSize::XSmall))
+                            .on_click(move |_, _, cx| {
+                                cx.reveal_path(&key_dir);
+                            }),
+                    )
+                    .child(
+                        IconButton::new("manage-ssh-keys-close", IconName::Close)
+                            .icon_size(IconSize::Small)
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.mode = Mode::default_mode(&this.ssh_config_servers, cx);
+                                cx.focus_self(window);
+                                cx.notify();
+                            })),
+                    ),
+            )
+            .child(
+                h_flex()
+                    .flex_1()
+                    .min_h_0()
+                    .child(
+                        v_flex()
+                            .w(rems_from_px(280_f32))
+                            .flex_none()
+                            .min_h_0()
+                            .border_r_1()
+                            .border_color(colors.border_variant)
+                            .child(
+                                div()
+                                    .p_2()
+                                    .child(form_input_surface(&state.search, false, cx)),
+                            )
+                            .child(
+                                v_flex()
+                                    .id("managed-ssh-keys-list")
+                                    .flex_1()
+                                    .min_h_0()
+                                    .overflow_y_scroll()
+                                    .child(list),
+                            ),
+                    )
+                    .child(
+                        v_flex()
+                            .id("managed-ssh-keys-detail")
+                            .flex_1()
+                            .min_w_0()
+                            .overflow_y_scroll()
+                            .child(detail),
+                    ),
+            )
+            .into_any_element()
     }
 
     fn edit_local_ssh_config(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -5209,7 +6743,7 @@ impl RemoteServerProjects {
     /// the remaining modes with an empty band on the right.
     fn modal_width(&self) -> Rems {
         match &self.mode {
-            Mode::CreateRemoteServerForm(_) => rems(40.),
+            Mode::CreateRemoteServerForm(_) => rems(52.),
             _ => picker::DEFAULT_MODAL_WIDTH,
         }
     }
@@ -5242,6 +6776,12 @@ impl Render for RemoteServerProjects {
                     .into_any_element(),
                 Mode::CreateRemoteServerForm(state) => self
                     .render_create_remote_server_form(state, window, cx)
+                    .into_any_element(),
+                Mode::ManageServers(state) => self
+                    .render_manage_servers(state, window, cx)
+                    .into_any_element(),
+                Mode::ManageSshKeys(state) => self
+                    .render_manage_ssh_keys(state, window, cx)
                     .into_any_element(),
                 Mode::CreateRemoteDevContainer(state) => self
                     .render_create_dev_container(state, window, cx)
@@ -5348,6 +6888,55 @@ mod tests {
             editor::init(cx);
             state
         })
+    }
+
+    #[test]
+    fn editing_preserves_state_the_connection_form_does_not_edit() {
+        let existing = SshConnection {
+            host: "old.example.com".into(),
+            projects: vec![RemoteProject {
+                paths: vec!["/srv/api".into()],
+            }],
+            args: vec!["-o".into(), "ServerAliveInterval=30".into()],
+            upload_binary_over_ssh: Some(true),
+            ..Default::default()
+        };
+        let mut updated = SshConnection {
+            host: "new.example.com".into(),
+            ..Default::default()
+        };
+
+        preserve_existing_connection_state(&mut updated, &existing);
+
+        assert_eq!(updated.host, "new.example.com");
+        assert_eq!(updated.projects, existing.projects);
+        assert_eq!(updated.args, existing.args);
+        assert_eq!(updated.upload_binary_over_ssh, Some(true));
+    }
+
+    #[test]
+    fn jump_host_candidates_include_ssh_config_hosts_without_duplicates() {
+        let saved = vec![JumpHostCandidate::saved(
+            "bastion".into(),
+            "bastion.example.com".into(),
+            Some("ops".into()),
+            Some(22),
+        )];
+
+        let merged = merge_jump_host_candidates(
+            saved,
+            [
+                "build.example.com".to_string(),
+                "BASTION.EXAMPLE.COM".to_string(),
+            ],
+        );
+
+        assert_eq!(merged.len(), 2);
+        assert_eq!(merged[0].source, JumpHostSource::Saved);
+        assert_eq!(merged[1].label.as_ref(), "build.example.com");
+        assert_eq!(merged[1].source, JumpHostSource::SshConfig);
+        assert!(merged[1].username.is_none());
+        assert!(merged[1].port.is_none());
     }
 
     #[gpui::test]
@@ -5705,7 +7294,7 @@ mod tests {
         modal.update_in(cx, |modal, window, cx| {
             modal.mode = Mode::CreateRemoteServerForm(CreateRemoteServerForm::new(window, cx));
             assert!(
-                modal.modal_width() == rems(40.),
+                modal.modal_width() == rems(52.),
                 "the two-column form still gets the wider modal"
             );
         });
@@ -5872,6 +7461,59 @@ mod tests {
                 Some("ssh dev@target.example -p 2222 (ops@jump.example)"),
                 "a disabled proxy is left out of the preview"
             );
+        });
+    }
+
+    #[gpui::test]
+    async fn test_edit_server_form_prefills_the_existing_connection(cx: &mut TestAppContext) {
+        let app_state = init_test(cx);
+        let fs = app_state.fs.clone();
+        let project = Project::test(fs.clone(), [], cx).await;
+        let (workspace, cx) =
+            cx.add_window_view(|window, cx| Workspace::test_new(project, window, cx));
+        let modal = workspace.update_in(cx, |_workspace, window, cx| {
+            let workspace = cx.weak_entity();
+            cx.new(|cx| RemoteServerProjects::new(false, fs.clone(), window, workspace, cx))
+        });
+
+        modal.update_in(cx, |modal, window, cx| {
+            let connection = SshConnectionOptions {
+                host: "build.example.com".into(),
+                username: Some("dev".into()),
+                port: Some(2222),
+                nickname: Some("build".into()),
+                auth_method: Some(SshAuthMethod::Key),
+                ssh_key_id: Some("key-1".into()),
+                jump_hosts: vec![JumpHost {
+                    host: "jump.example".into(),
+                    username: Some("ops".into()),
+                    port: None,
+                }],
+                proxy: Some("socks5://127.0.0.1:1080".into()),
+                connection_timeout: Some(45),
+                ..Default::default()
+            };
+            let form =
+                CreateRemoteServerForm::for_edit(SshServerIndex(3), &connection, window, cx);
+
+            assert!(form.editing);
+            assert_eq!(form.saved_index.map(|index| index.0), Some(3));
+            assert_eq!(form.auth_method, SshAuthMethod::Key);
+            assert_eq!(form.key_id.as_deref(), Some("key-1"));
+            assert_eq!(form.jump_hosts.len(), 1);
+            assert!(form.advanced_open);
+            assert_eq!(form.nickname_editor.read(cx).text(cx), "build");
+            assert_eq!(form.host_editor.read(cx).text(cx), "build.example.com");
+            assert_eq!(form.port_editor.read(cx).text(cx), "2222");
+            assert_eq!(form.username_editor.read(cx).text(cx), "dev");
+            assert_eq!(
+                form.proxy_editor.read(cx).text(cx),
+                "socks5://127.0.0.1:1080"
+            );
+            assert_eq!(form.timeout_editor.read(cx).text(cx), "45");
+
+            modal.mode = Mode::CreateRemoteServerForm(form);
+            cx.notify();
         });
     }
 
@@ -6210,8 +7852,15 @@ mod picker_view_tests {
 
         assert!(matches!(
             delegate.matches.first(),
-            Some(RemoteMatch::AddServer)
+            Some(RemoteMatch::Server { .. })
         ));
+        assert!(
+            delegate
+                .matches
+                .iter()
+                .position(|entry| matches!(entry, RemoteMatch::AddServer))
+                .is_some_and(|position| position > 0)
+        );
         let server_rows: Vec<usize> = delegate
             .matches
             .iter()

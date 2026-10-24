@@ -282,7 +282,7 @@ impl From<settings_content::SshConnection> for SshConnectionOptions {
             password: None,
             args: Some(val.args),
             nickname: val.nickname,
-            upload_binary_over_ssh: val.upload_binary_over_ssh.unwrap_or_default(),
+            upload_binary_over_ssh: val.upload_binary_over_ssh.unwrap_or(true),
             port_forwards: val.port_forwards,
             connection_timeout: val.connection_timeout,
             auth_method: val.auth_method,
@@ -1189,7 +1189,7 @@ impl SshRemoteConnection {
     async fn ensure_server_binary(
         &self,
         delegate: &Arc<dyn RemoteClientDelegate>,
-        release_channel: ReleaseChannel,
+        _release_channel: ReleaseChannel,
         _version: Version,
         cx: &mut AsyncApp,
     ) -> Result<Arc<RelPath>> {
@@ -1224,7 +1224,7 @@ impl SshRemoteConnection {
         }
 
         #[cfg(any(debug_assertions, feature = "build-remote-server-binary"))]
-        if release_channel == ReleaseChannel::Dev
+        if _release_channel == ReleaseChannel::Dev
             && let Some(remote_server_path) = super::build_remote_server_from_source(
                 &self.ssh_platform,
                 delegate.as_ref(),

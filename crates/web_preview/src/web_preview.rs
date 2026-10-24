@@ -12,11 +12,12 @@ use std::{
 
 use anyhow::{Context as _, Result, bail};
 use editor::Editor;
-use gpui::{App, AppContext as _, Context, Entity, Global, Window};
+use gpui::{App, AppContext as _, Context, Entity, Global, Subscription, WeakEntity, Window};
 use percent_encoding::percent_decode_str;
-use project::{Project, ProjectItem as _, TaskSourceKind, trusted_worktrees::TrustedWorktrees};
+use project::{Project, ProjectItem as _, trusted_worktrees::TrustedWorktrees};
 use task::{RevealStrategy, SaveStrategy, Shell, TaskContext, TaskTemplate};
 use terminal_view::{
+    TerminalView,
     port_forwarding::{ForwardDirection, ForwardSource, ForwardStatus},
     terminal_panel::TerminalPanel,
 };
@@ -57,8 +58,8 @@ pub fn init(cx: &mut App) {
                     open_preview(workspace, state.clone(), window, cx)
                 }
             });
-            workspace.register_action(move |workspace, _: &StopPreview, _, cx| {
-                stop_preview(workspace, state.clone(), cx)
+            workspace.register_action(move |workspace, _: &StopPreview, window, cx| {
+                stop_preview(workspace, state.clone(), window, cx)
             });
         }
     })
@@ -69,13 +70,45 @@ pub fn init(cx: &mut App) {
 #[derive(Default)]
 pub struct PreviewState {
     local_server: Option<LocalServer>,
-    remote_port: Option<u16>,
-    remote_task_id: Option<task::TaskId>,
+    remote: Option<RemotePreview>,
+    // The eye toggle and the preview terminal are one unit: closing either of
+    // them must close the other.
+    _terminal_release: Option<Subscription>,
+}
+
+struct RemotePreview {
+    port: u16,
+    task_id: task::TaskId,
+    terminal_view: Option<WeakEntity<TerminalView>>,
+    forward_manager: Entity<terminal_view::port_forwarding::PortForwardManager>,
 }
 
 impl PreviewState {
     pub fn is_active(&self) -> bool {
-        self.local_server.is_some() || self.remote_port.is_some()
+        self.local_server.is_some() || self.remote.is_some()
+    }
+
+    fn track_remote(
+        &mut self,
+        remote: RemotePreview,
+        terminal_view: Option<Entity<TerminalView>>,
+        cx: &mut Context<Self>,
+    ) {
+        self._terminal_release = terminal_view.map(|terminal_view| {
+            cx.observe_release(&terminal_view, |state, _, cx| state.clear_remote(cx))
+        });
+        self.remote = Some(remote);
+        cx.notify();
+    }
+
+    fn clear_remote(&mut self, cx: &mut Context<Self>) {
+        let Some(remote) = self.remote.take() else {
+            return;
+        };
+        remote.forward_manager.update(cx, |manager, cx| {
+            manager.stop_preview(remote.port, cx);
+        });
+        cx.notify();
     }
 }
 
@@ -207,7 +240,9 @@ async fn start_remote_preview(
         })?
         .context(i18n::t!("0b0bfc39e5218a6c"))?;
 
-    let existing_port = state.read_with(cx, |state, _| state.remote_port);
+    let existing_port = state.read_with(cx, |state, _| {
+        state.remote.as_ref().map(|remote| remote.port)
+    });
     let remote_port = match existing_port {
         Some(port) => port,
         None => manager.update(cx, |manager, _| manager.available_remote_port())?,
@@ -226,23 +261,36 @@ async fn start_remote_preview(
     let resolved = remote_server_task(&root, remote_port, context)?;
     let task_id = resolved.id.clone();
 
-    workspace.update_in(cx, |workspace, window, cx| {
-        terminal_panel.update(cx, |panel, cx| {
+    let terminal = terminal_panel
+        .update_in(cx, |panel, window, cx| {
             panel.port_forward_manager().update(cx, |manager, cx| {
                 manager.add_preview(remote_port, project.clone(), cx);
             });
-        });
-        workspace.schedule_resolved_task(TaskSourceKind::UserInput, resolved, true, window, cx);
-    })?;
-    state.update(cx, |state, _| {
-        state.remote_port = Some(remote_port);
-        state.remote_task_id = Some(task_id);
+            panel.spawn_task(&resolved.resolved, window, cx)
+        })?
+        .await?;
+    let terminal_view =
+        terminal_panel.read_with(cx, |panel, cx| panel.terminal_view_for(&terminal, cx));
+
+    state.update(cx, |state, cx| {
+        state.track_remote(
+            RemotePreview {
+                port: remote_port,
+                task_id,
+                terminal_view: terminal_view.as_ref().map(|view| view.downgrade()),
+                forward_manager: manager.clone(),
+            },
+            terminal_view,
+            cx,
+        );
     });
 
-    let local_port = wait_for_forward(&manager, remote_port, cx).await?;
-    workspace.update(cx, |_, cx| {
-        cx.open_url(&preview_url(local_port, &relative_path));
-    })?;
+    let local_port = wait_for_forward(&manager, remote_port, cx).await;
+    if !state.read_with(cx, |state, _| state.remote.is_some()) {
+        return Ok(());
+    }
+    let url = preview_url(local_port?, &relative_path);
+    workspace.update(cx, |_, cx| cx.open_url(&url))?;
     Ok(())
 }
 
@@ -318,32 +366,40 @@ fn hex_encode(bytes: &[u8]) -> String {
 fn stop_preview(
     workspace: &mut Workspace,
     state: Entity<PreviewState>,
+    window: &mut Window,
     cx: &mut Context<Workspace>,
 ) {
     let project = workspace.project().clone();
-    let (stopped_local, remote_port, remote_task_id) = state.update(cx, |state, _| {
-        (
-            state.local_server.take().is_some(),
-            state.remote_port.take(),
-            state.remote_task_id.take(),
-        )
+    let (stopped_local, remote) = state.update(cx, |state, cx| {
+        let stopped_local = state.local_server.take().is_some();
+        let remote = state.remote.take();
+        if remote.is_some() {
+            cx.notify();
+        }
+        (stopped_local, remote)
     });
-    let stopped_remote = remote_port.is_some() || remote_task_id.is_some();
-    if !stopped_local && !stopped_remote {
+    if !stopped_local && remote.is_none() {
         return;
     }
-    if let Some(panel) = workspace.panel::<TerminalPanel>(cx) {
-        if let Some(remote_port) = remote_port {
-            panel
-                .read(cx)
-                .port_forward_manager()
-                .update(cx, |manager, cx| manager.stop_preview(remote_port, cx));
+    if let Some(remote) = remote {
+        remote.forward_manager.update(cx, |manager, cx| {
+            manager.stop_preview(remote.port, cx);
+        });
+        if let Some(panel) = workspace.panel::<TerminalPanel>(cx) {
+            panel.update(cx, |panel, cx| panel.stop_task(&remote.task_id, cx));
         }
-        if let Some(remote_task_id) = remote_task_id {
-            panel.update(cx, |panel, cx| panel.stop_task(&remote_task_id, cx));
+        if let Some(terminal_view) = remote
+            .terminal_view
+            .as_ref()
+            .and_then(|view| view.upgrade())
+            && let Some(pane) = workspace.pane_for(&terminal_view)
+        {
+            pane.update(cx, |pane, cx| {
+                pane.remove_item(terminal_view.entity_id(), true, false, window, cx);
+            });
         }
     }
-    let message = if stopped_remote || project.read(cx).is_via_remote_server() {
+    let message = if project.read(cx).is_via_remote_server() {
         i18n::t!("e7cbc50ff401ac92")
     } else {
         i18n::t!("64abf2619c75f34e")
@@ -674,6 +730,132 @@ fn is_html_path(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gpui::TestAppContext;
+    use task::TaskId;
+    use terminal::{
+        TerminalBuilder,
+        terminal_settings::{AlternateScroll, CursorShape},
+    };
+    use util::paths::PathStyle;
+    use workspace::{AppState, MultiWorkspace, dock::Panel as _};
+
+    async fn init_preview_test(cx: &mut TestAppContext) -> gpui::WindowHandle<MultiWorkspace> {
+        let params = cx.update(AppState::test);
+        cx.update(|cx| theme_settings::init(theme::LoadThemes::JustBase, cx));
+        let project = Project::test(params.fs.clone(), [], cx).await;
+        cx.add_window(|window, cx| MultiWorkspace::test_new(project, window, cx))
+    }
+
+    fn display_only_terminal_view(
+        window_handle: gpui::WindowHandle<MultiWorkspace>,
+        cx: &mut TestAppContext,
+    ) -> Entity<TerminalView> {
+        window_handle
+            .update(cx, |multi_workspace, window, cx| {
+                let workspace = multi_workspace.workspace().clone();
+                let project = workspace.read(cx).project().clone();
+                let terminal = cx.new(|cx| {
+                    TerminalBuilder::new_display_only(
+                        CursorShape::default(),
+                        AlternateScroll::On,
+                        None,
+                        0,
+                        cx.background_executor(),
+                        PathStyle::local(),
+                    )
+                    .subscribe(cx)
+                });
+                cx.new(|cx| {
+                    TerminalView::new(
+                        terminal,
+                        workspace.downgrade(),
+                        None,
+                        project.downgrade(),
+                        window,
+                        cx,
+                    )
+                })
+            })
+            .expect("window with preview terminal view")
+    }
+
+    fn remote_preview(view: &Entity<TerminalView>, cx: &mut TestAppContext) -> RemotePreview {
+        RemotePreview {
+            port: 49152,
+            task_id: TaskId("web-preview".into()),
+            terminal_view: Some(view.downgrade()),
+            forward_manager: cx
+                .update(|cx| cx.new(|_| terminal_view::port_forwarding::PortForwardManager::new())),
+        }
+    }
+
+    #[gpui::test]
+    async fn closing_preview_terminal_clears_preview_state(cx: &mut TestAppContext) {
+        let window_handle = init_preview_test(cx).await;
+        let view = display_only_terminal_view(window_handle, cx);
+        let state = cx.update(|cx| cx.new(|_| PreviewState::default()));
+
+        let remote = remote_preview(&view, cx);
+        state.update(cx, |state, cx| {
+            state.track_remote(remote, Some(view.clone()), cx)
+        });
+        assert!(state.read_with(cx, |state, _| state.is_active()));
+
+        drop(view);
+        // Flush the pending entity release so the release observer runs.
+        cx.update(|_| {});
+
+        assert!(
+            !state.read_with(cx, |state, _| state.is_active()),
+            "closing the preview terminal must turn the eye toggle off"
+        );
+    }
+
+    #[gpui::test]
+    async fn stopping_preview_closes_preview_terminal(cx: &mut TestAppContext) {
+        let window_handle = init_preview_test(cx).await;
+        let view = display_only_terminal_view(window_handle, cx);
+        let (_terminal_panel, pane) = window_handle
+            .update(cx, |multi_workspace, window, cx| {
+                let terminal_panel = multi_workspace.workspace().update(cx, |workspace, cx| {
+                    cx.new(|cx| TerminalPanel::new(workspace, window, cx))
+                });
+                let pane = terminal_panel
+                    .read_with(cx, |panel, _| panel.pane())
+                    .expect("terminal panel pane");
+                pane.update(cx, |pane, cx| {
+                    pane.add_item(Box::new(view.clone()), true, false, None, window, cx)
+                });
+                (terminal_panel, pane)
+            })
+            .expect("terminal panel with preview terminal");
+        // Flush the queued `AddItem` event so the workspace registers the tab's pane.
+        cx.update(|_| {});
+
+        let state = cx.update(|cx| cx.new(|_| PreviewState::default()));
+        let remote = remote_preview(&view, cx);
+        state.update(cx, |state, cx| {
+            state.track_remote(remote, Some(view.clone()), cx)
+        });
+
+        window_handle
+            .update(cx, |multi_workspace, window, cx| {
+                multi_workspace.workspace().update(cx, |workspace, cx| {
+                    stop_preview(workspace, state.clone(), window, cx)
+                })
+            })
+            .expect("workspace");
+
+        assert!(
+            !state.read_with(cx, |state, _| state.is_active()),
+            "stopping the preview must turn the eye toggle off"
+        );
+        assert_eq!(
+            pane.read_with(cx, |pane, _| pane.items_len()),
+            0,
+            "stopping the preview must close its terminal tab"
+        );
+    }
 
     fn test_project(name: &str) -> tempfile::TempDir {
         tempfile::Builder::new()

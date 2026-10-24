@@ -215,7 +215,7 @@ impl WslRemoteConnection {
     async fn ensure_server_binary(
         &self,
         delegate: &Arc<dyn RemoteClientDelegate>,
-        release_channel: ReleaseChannel,
+        _release_channel: ReleaseChannel,
         _version: Version,
         cx: &mut AsyncApp,
     ) -> Result<Arc<RelPath>> {
@@ -242,7 +242,7 @@ impl WslRemoteConnection {
         }
 
         #[cfg(any(debug_assertions, feature = "build-remote-server-binary"))]
-        if release_channel == ReleaseChannel::Dev
+        if _release_channel == ReleaseChannel::Dev
             && let Some(remote_server_path) =
                 super::build_remote_server_from_source(&self.platform, delegate.as_ref(), false, cx)
                     .await?

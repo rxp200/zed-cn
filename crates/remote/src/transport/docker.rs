@@ -206,7 +206,7 @@ impl DockerExecConnection {
     async fn ensure_server_binary(
         &self,
         delegate: &Arc<dyn RemoteClientDelegate>,
-        release_channel: ReleaseChannel,
+        _release_channel: ReleaseChannel,
         _version: SemanticVersion,
         remote_dir_for_server: &str,
         _commit: Option<AppCommitSha>,
@@ -230,7 +230,7 @@ impl DockerExecConnection {
         }
 
         #[cfg(any(debug_assertions, feature = "build-remote-server-binary"))]
-        if release_channel == ReleaseChannel::Dev
+        if _release_channel == ReleaseChannel::Dev
             && let Some(remote_server_path) = super::build_remote_server_from_source(
                 &remote_platform,
                 delegate.as_ref(),
