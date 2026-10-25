@@ -41,6 +41,7 @@ use remote::RemoteConnectionOptions;
 use settings::{Settings as _, SettingsStore};
 
 use std::any::TypeId;
+use std::cell::Cell;
 use std::future::Future;
 use std::path::Path;
 use std::rc::Rc;
@@ -224,6 +225,8 @@ pub struct TitleBar {
     screen_share_popover_handle: PopoverMenuHandle<ContextMenu>,
     hosted_sessions: Vec<rpc::proto::HostedTerminalSummary>,
     hosted_menu: PopoverMenuHandle<ContextMenu>,
+    /// Tracks a rebuild of the deployed popover. See [`HostedMenuRebuild`].
+    hosted_menu_rebuild: HostedMenuRebuild,
     _diagnostics_subscription: Option<gpui::Subscription>,
 }
 
@@ -560,6 +563,59 @@ fn build_hosted_terminals_menu(
     })
 }
 
+/// Tracks a rebuild of the deployed hosted-terminal popover.
+///
+/// [`PopoverMenuHandle::refresh_menu`] re-opens the popover, which runs its open
+/// callback again. That happens inside the update that adopts the new response,
+/// so the callback has to skip the request it would otherwise start: borrowing
+/// the title bar from there panics on the nested update.
+#[derive(Clone, Default)]
+struct HostedMenuRebuild(Rc<Cell<bool>>);
+
+impl HostedMenuRebuild {
+    fn during(&self, rebuild: impl FnOnce()) {
+        self.0.set(true);
+        rebuild();
+        self.0.set(false);
+    }
+
+    fn is_in_progress(&self) -> bool {
+        self.0.get()
+    }
+}
+
+/// The hosted-terminal popover.
+///
+/// `on_open` has to be attached through [`PopoverMenu::on_open`] rather than to
+/// the trigger button: `PopoverMenu` installs its own click handler on the
+/// trigger, and the button keeps a single handler, so a refresh installed on
+/// the button is dropped and the menu would open with the list cached at the
+/// first render.
+fn hosted_terminals_popover(
+    label: SharedString,
+    sessions: Vec<rpc::proto::HostedTerminalSummary>,
+    handle: PopoverMenuHandle<ContextMenu>,
+    on_open: Rc<dyn Fn(&mut Window, &mut App)>,
+) -> PopoverMenu<ContextMenu> {
+    PopoverMenu::new("hosted-terminals-menu")
+        .with_handle(handle)
+        .on_open(on_open)
+        .menu(move |window, cx| {
+            Some(build_hosted_terminals_menu(sessions.clone(), window, cx))
+        })
+        .trigger_with_tooltip(
+            ui::Button::new("hosted_terminals_trigger", label.clone())
+                .label_size(LabelSize::Small)
+                .start_icon(
+                    Icon::new(IconName::Terminal)
+                        .size(IconSize::XSmall)
+                        .color(Color::Muted),
+                ),
+            move |window, cx| Tooltip::text(label.clone())(window, cx),
+        )
+        .anchor(gpui::Anchor::TopLeft)
+}
+
 /// Whether a fresh response would change the popover, i.e. whether an open menu
 /// has to be rebuilt to show it.
 fn hosted_sessions_changed(
@@ -685,6 +741,7 @@ impl TitleBar {
             screen_share_popover_handle: PopoverMenuHandle::default(),
             hosted_sessions: Vec::new(),
             hosted_menu: PopoverMenuHandle::default(),
+            hosted_menu_rebuild: HostedMenuRebuild::default(),
             _diagnostics_subscription: None,
         };
 
@@ -1328,30 +1385,22 @@ impl TitleBar {
             i18n::t!("a9dc9b921c645f65").into()
         };
         let title_bar = cx.entity().downgrade();
-        let refresh_label: SharedString = i18n::t!("a9dc9b921c645f65").into();
+        let rebuild = self.hosted_menu_rebuild.clone();
         Some(
-            PopoverMenu::new("hosted-terminals-menu")
-                .with_handle(self.hosted_menu.clone())
-                .menu(move |window, cx| {
-                    Some(build_hosted_terminals_menu(sessions.clone(), window, cx))
-                })
-                .trigger_with_tooltip(
-                    ui::Button::new("hosted_terminals_trigger", label)
-                        .label_size(LabelSize::Small)
-                        .start_icon(
-                            Icon::new(IconName::Terminal)
-                                .size(IconSize::XSmall)
-                                .color(Color::Muted),
-                        )
-                        .on_click(move |_, window, cx| {
-                            title_bar
-                                .update(cx, |this, cx| this.refresh_hosted_sessions(window, cx))
-                                .ok();
-                        }),
-                    move |window, cx| Tooltip::text(refresh_label.clone())(window, cx),
-                )
-                .anchor(gpui::Anchor::TopLeft)
-                .into_any_element(),
+            hosted_terminals_popover(
+                label,
+                sessions,
+                self.hosted_menu.clone(),
+                Rc::new(move |window, cx| {
+                    if rebuild.is_in_progress() {
+                        return;
+                    }
+                    title_bar
+                        .update(cx, |this, cx| this.refresh_hosted_sessions(window, cx))
+                        .ok();
+                }),
+            )
+            .into_any_element(),
         )
     }
 
@@ -1407,13 +1456,16 @@ impl TitleBar {
         self.hosted_sessions = sessions;
         if changed {
             let sessions = self.hosted_sessions.clone();
-            self.hosted_menu.refresh_menu(
-                window,
-                cx,
-                Rc::new(move |window, cx| {
-                    Some(build_hosted_terminals_menu(sessions.clone(), window, cx))
-                }),
-            );
+            let handle = self.hosted_menu.clone();
+            self.hosted_menu_rebuild.during(|| {
+                handle.refresh_menu(
+                    window,
+                    cx,
+                    Rc::new(move |window, cx| {
+                        Some(build_hosted_terminals_menu(sessions.clone(), window, cx))
+                    }),
+                );
+            });
         }
         cx.notify();
     }
@@ -1759,7 +1811,116 @@ impl TitleBar {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gpui::TestAppContext;
     use util::paths::PathStyle;
+
+    /// The title bar requests the hosted sessions when its menu opens. A refresh
+    /// attached to the trigger button instead is dropped by `PopoverMenu`, which
+    /// installs its own click handler on that button, so the menu opened with the
+    /// list cached at the first render and a freshly hosted terminal never
+    /// appeared.
+    #[gpui::test]
+    async fn hosted_terminals_popover_requests_sessions_when_opened(cx: &mut TestAppContext) {
+        let (view, window) = open_hosted_popover(cx);
+        assert_eq!(
+            window.update(|_, cx| view.read(cx).opened()),
+            1,
+            "opening the menu must request the hosted sessions"
+        );
+        assert!(
+            window.update(|_, cx| view.read(cx).handle.is_deployed()),
+            "the trigger click must open the hosted terminal menu"
+        );
+    }
+
+    /// Rebuilding the deployed popover re-runs its open callback, and that rebuild
+    /// only shows the response that caused it: starting another request would
+    /// borrow the title bar from inside its own update.
+    #[gpui::test]
+    async fn rebuilding_the_open_popover_does_not_request_again(cx: &mut TestAppContext) {
+        let (view, window) = open_hosted_popover(cx);
+        window.update(|window, cx| {
+            let rebuild = view.read(cx).rebuild.clone();
+            let handle = view.read(cx).handle.clone();
+            rebuild.during(|| {
+                handle.refresh_menu(window, cx, Rc::new(|window, cx| {
+                    Some(build_hosted_terminals_menu(Vec::new(), window, cx))
+                }))
+            });
+        });
+        window.run_until_parked();
+
+        assert_eq!(
+            window.update(|_, cx| view.read(cx).opened()),
+            1,
+            "rebuilding the menu must not request the sessions again"
+        );
+        assert!(!window.update(|_, cx| view.read(cx).rebuild.is_in_progress()));
+
+        window.update(|_, cx| {
+            let handle = view.read(cx).handle.clone();
+            handle.hide(cx);
+        });
+        window.run_until_parked();
+        window.simulate_click(gpui::point(px(10.), px(10.)), gpui::Modifiers::none());
+        window.run_until_parked();
+        assert_eq!(
+            window.update(|_, cx| view.read(cx).opened()),
+            2,
+            "a later click must still request the sessions"
+        );
+    }
+
+    /// A window that only contains the hosted-terminal popover, opened once, so a
+    /// click at the window origin hits its trigger.
+    struct HostedPopover {
+        opened: Rc<Cell<usize>>,
+        rebuild: HostedMenuRebuild,
+        handle: PopoverMenuHandle<ContextMenu>,
+    }
+
+    impl HostedPopover {
+        fn opened(&self) -> usize {
+            self.opened.get()
+        }
+    }
+
+    impl Render for HostedPopover {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            let opened = self.opened.clone();
+            let rebuild = self.rebuild.clone();
+            hosted_terminals_popover(
+                i18n::t!("a9dc9b921c645f65").into(),
+                Vec::new(),
+                self.handle.clone(),
+                Rc::new(move |_window, _cx| {
+                    if rebuild.is_in_progress() {
+                        return;
+                    }
+                    opened.set(opened.get() + 1);
+                }),
+            )
+        }
+    }
+
+    fn open_hosted_popover(
+        cx: &mut TestAppContext,
+    ) -> (Entity<HostedPopover>, &mut gpui::VisualTestContext) {
+        cx.update(|cx| {
+            let settings_store = SettingsStore::test(cx);
+            cx.set_global(settings_store);
+            theme_settings::init(theme::LoadThemes::JustBase, cx);
+        });
+        let (view, window) = cx.add_window_view(|_window, _cx| HostedPopover {
+            opened: Rc::new(Cell::new(0)),
+            rebuild: HostedMenuRebuild::default(),
+            handle: PopoverMenuHandle::default(),
+        });
+        window.run_until_parked();
+        window.simulate_click(gpui::point(px(10.), px(10.)), gpui::Modifiers::none());
+        window.run_until_parked();
+        (view, window)
+    }
 
     #[test]
     fn hosted_menu_hides_ended_records_and_uses_empty_state_when_none_are_running() {
