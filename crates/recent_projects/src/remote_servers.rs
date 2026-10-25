@@ -17,8 +17,8 @@ use filter::{FilterData, FilteredServer};
 use futures::{FutureExt, StreamExt as _, channel::oneshot, future::Shared};
 use gpui::{
     Action, AnyElement, App, ClickEvent, ClipboardItem, Context, DismissEvent, Entity,
-    EventEmitter, ExternalPaths, FocusHandle, Focusable, FontWeight, PathPromptOptions,
-    KeyDownEvent, PromptLevel, Rems, ScrollHandle, Subscription, Task, TaskExt, WeakEntity,
+    EventEmitter, ExternalPaths, FocusHandle, Focusable, FontWeight, KeyDownEvent,
+    PathPromptOptions, PromptLevel, Rems, ScrollHandle, Subscription, Task, TaskExt, WeakEntity,
     Window,
 };
 use log::{debug, info};
@@ -45,9 +45,9 @@ use std::{
 };
 
 use ui::{
-    Checkbox, CommonAnimationExt, ElevationIndex, HighlightedLabel, IconButtonShape, KeyBinding,
-    ListItem, ListSeparator, ModalHeader, Navigable, NavigableEntry, TintColor, Tooltip,
-    prelude::*,
+    Checkbox, Chip, CommonAnimationExt, ElevationIndex, HighlightedLabel, IconButtonShape,
+    KeyBinding, ListItem, ListSeparator, ModalHeader, Navigable, NavigableEntry, TintColor,
+    Tooltip, prelude::*,
 };
 use util::{
     ResultExt,
@@ -111,11 +111,7 @@ impl CreateRemoteServer {
     }
 }
 
-fn form_editor(
-    placeholder: &str,
-    window: &mut Window,
-    cx: &mut App,
-) -> Entity<Editor> {
+fn form_editor(placeholder: &str, window: &mut Window, cx: &mut App) -> Entity<Editor> {
     let editor = cx.new(|cx| Editor::single_line(window, cx));
     editor.update(cx, |editor, cx| {
         editor.set_placeholder_text(placeholder, window, cx);
@@ -123,12 +119,7 @@ fn form_editor(
     editor
 }
 
-fn set_editor_text(
-    editor: &Entity<Editor>,
-    text: String,
-    window: &mut Window,
-    cx: &mut App,
-) {
+fn set_editor_text(editor: &Entity<Editor>, text: String, window: &mut Window, cx: &mut App) {
     editor.update(cx, |editor, cx| editor.set_text(text, window, cx));
 }
 
@@ -394,12 +385,7 @@ impl CreateRemoteServerForm {
             window,
             cx,
         );
-        set_editor_text(
-            &form.host_editor,
-            connection.host.to_string(),
-            window,
-            cx,
-        );
+        set_editor_text(&form.host_editor, connection.host.to_string(), window, cx);
         set_editor_text(
             &form.port_editor,
             connection
@@ -638,12 +624,7 @@ impl PickerDelegate for JumpHostPickerDelegate {
         self.selected_index
     }
 
-    fn set_selected_index(
-        &mut self,
-        index: usize,
-        _: &mut Window,
-        _: &mut Context<Picker<Self>>,
-    ) {
+    fn set_selected_index(&mut self, index: usize, _: &mut Window, _: &mut Context<Picker<Self>>) {
         self.selected_index = index;
     }
 
@@ -722,13 +703,11 @@ impl PickerDelegate for JumpHostPickerDelegate {
                 .toggle_state(selected)
                 .start_slot(Icon::new(IconName::Server).color(Color::Muted))
                 .child(
-                    v_flex()
-                        .child(Label::new(candidate.label.clone()))
-                        .child(
-                            Label::new(candidate.detail())
-                                .size(LabelSize::Small)
-                                .color(Color::Muted),
-                        ),
+                    v_flex().child(Label::new(candidate.label.clone())).child(
+                        Label::new(candidate.detail())
+                            .size(LabelSize::Small)
+                            .color(Color::Muted),
+                    ),
                 )
                 .when(candidate.source == JumpHostSource::SshConfig, |this| {
                     this.end_slot(
@@ -1505,6 +1484,34 @@ enum ManageServersFilter {
     SshConfig,
 }
 
+/// Detail tabs of the server manager. Overview and settings describe the same
+/// connection, so the tab selection survives moving between servers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ManageServerTab {
+    Overview,
+    Settings,
+    Keys,
+    RemoteServer,
+}
+
+impl ManageServerTab {
+    const ALL: [ManageServerTab; 4] = [
+        ManageServerTab::Overview,
+        ManageServerTab::Settings,
+        ManageServerTab::Keys,
+        ManageServerTab::RemoteServer,
+    ];
+
+    fn label(self) -> &'static str {
+        match self {
+            ManageServerTab::Overview => i18n::t!("d4b1ea5708dd5329"),
+            ManageServerTab::Settings => i18n::t!("b4ddb3c1ca6cd289"),
+            ManageServerTab::Keys => i18n::t!("f67bca8f42bcf073"),
+            ManageServerTab::RemoteServer => i18n::t!("68d0a2e10bc6df49"),
+        }
+    }
+}
+
 struct ServerProjectsState {
     entry: RemoteEntry,
     selected: usize,
@@ -1515,6 +1522,11 @@ struct ManageServersState {
     selected: usize,
     search: Entity<Editor>,
     scroll: ScrollHandle,
+    tab: ManageServerTab,
+    /// Managed keys, loaded once so the keys tab can show the ones bound to the
+    /// selected host without switching into the key manager.
+    keys: Vec<ManagedSshKey>,
+    keys_loading: bool,
     _search_subscription: Subscription,
 }
 
@@ -1974,9 +1986,7 @@ impl RemoteServerPickerDelegate {
                         .overflow_hidden()
                         .text_ellipsis()
                         .when(is_wsl, |this| {
-                            this.child(
-                                Label::new(i18n::t!("41ed0a615790bb95")).color(Color::Muted),
-                            )
+                            this.child(Label::new(i18n::t!("41ed0a615790bb95")).color(Color::Muted))
                         })
                         .child(HighlightedLabel::new(main_label, host_positions.to_vec()))
                         .children(aux_label.map(|label| Label::new(label).color(Color::Muted))),
@@ -2105,6 +2115,66 @@ fn managed_server_address(connection: &Connection) -> String {
     }
 }
 
+/// A bordered card with a small header, matching the remote flow design used by
+/// the server and key detail panes.
+fn detail_card(
+    title: impl Into<SharedString>,
+    subtitle: Option<SharedString>,
+    header_action: Option<AnyElement>,
+    body: AnyElement,
+    cx: &App,
+) -> AnyElement {
+    let colors = cx.theme().colors();
+    v_flex()
+        .w_full()
+        .rounded_md()
+        .border_1()
+        .border_color(colors.border_variant)
+        .overflow_hidden()
+        .child(
+            h_flex()
+                .w_full()
+                .px_3()
+                .py_2()
+                .gap_2()
+                .border_b_1()
+                .border_color(colors.border_variant)
+                .bg(colors.editor_background)
+                .child(
+                    Label::new(title.into())
+                        .size(LabelSize::XSmall)
+                        .color(Color::Muted),
+                )
+                .when_some(subtitle, |this, subtitle| {
+                    this.child(
+                        Label::new(subtitle)
+                            .size(LabelSize::XSmall)
+                            .color(Color::Placeholder),
+                    )
+                })
+                .child(div().flex_1())
+                .children(header_action),
+        )
+        .child(body)
+        .into_any_element()
+}
+
+/// One label/value line of a detail card.
+fn detail_kv_row(label: impl Into<SharedString>, value: AnyElement) -> AnyElement {
+    h_flex()
+        .items_start()
+        .gap_3()
+        .child(
+            div().w(rems_from_px(96_f32)).flex_none().child(
+                Label::new(label.into())
+                    .size(LabelSize::XSmall)
+                    .color(Color::Placeholder),
+            ),
+        )
+        .child(div().flex_1().min_w_0().child(value))
+        .into_any_element()
+}
+
 /// The display labels for a connection: primary label, an optional auxiliary
 /// label (the real host when a nickname hides it), and whether it's WSL.
 fn server_labels(connection: &Connection) -> (String, Option<SharedString>, bool) {
@@ -2216,9 +2286,7 @@ impl PickerDelegate for RemoteServerPickerDelegate {
                 let entry = self.state.servers.get(*server).cloned();
                 if let Some(entry) = entry {
                     remote_server_projects
-                        .update(cx, |this, cx| {
-                            this.open_server_projects(entry, window, cx)
-                        })
+                        .update(cx, |this, cx| this.open_server_projects(entry, window, cx))
                         .log_err();
                 }
             }
@@ -2418,36 +2486,30 @@ impl PickerDelegate for RemoteServerPickerDelegate {
             RemoteMatch::FocusedServerHeader { server } => {
                 self.render_focused_server_header(*server, cx)
             }
-            RemoteMatch::AddServer => {
-                Some(self.render_action_item(
-                    ix,
-                    IconName::Plus,
-                    i18n::t!("591480f799bfdc33"),
-                    selected,
-                ))
-            }
+            RemoteMatch::AddServer => Some(self.render_action_item(
+                ix,
+                IconName::Plus,
+                i18n::t!("591480f799bfdc33"),
+                selected,
+            )),
             RemoteMatch::AddServerForm => Some(self.render_action_item(
                 ix,
                 IconName::Plus,
                 i18n::t!("c362a97d314389cd"),
                 selected,
             )),
-            RemoteMatch::AddDevContainer => {
-                Some(self.render_action_item(
-                    ix,
-                    IconName::Plus,
-                    i18n::t!("8115d17d2638aa80"),
-                    selected,
-                ))
-            }
-            RemoteMatch::AddWsl => {
-                Some(self.render_action_item(
-                    ix,
-                    IconName::Plus,
-                    i18n::t!("52b35c9c3eff543a"),
-                    selected,
-                ))
-            }
+            RemoteMatch::AddDevContainer => Some(self.render_action_item(
+                ix,
+                IconName::Plus,
+                i18n::t!("8115d17d2638aa80"),
+                selected,
+            )),
+            RemoteMatch::AddWsl => Some(self.render_action_item(
+                ix,
+                IconName::Plus,
+                i18n::t!("52b35c9c3eff543a"),
+                selected,
+            )),
             RemoteMatch::EditSshConfig => Some(self.render_action_item(
                 ix,
                 IconName::Settings,
@@ -3717,8 +3779,10 @@ impl RemoteServerProjects {
                 {
                     Ok(imported) => Some(imported.record.key_id),
                     Err(error) => {
-                        let message =
-                            SharedString::from(i18n::t_args!("41b86c2b700f0a24", format!("{error:#}")));
+                        let message = SharedString::from(i18n::t_args!(
+                            "41b86c2b700f0a24",
+                            format!("{error:#}")
+                        ));
                         this.update(cx, |this, cx| this.set_form_error(message, cx))
                             .log_err();
                         import_failed = true;
@@ -3754,8 +3818,7 @@ impl RemoteServerProjects {
                     proxy_disabled: draft.proxy_disabled,
                 };
 
-                let index =
-                    this.persist_form_connection(&connection_options, saved_index, cx);
+                let index = this.persist_form_connection(&connection_options, saved_index, cx);
                 if let Mode::CreateRemoteServerForm(state) = &mut this.mode {
                     state.saved_index = Some(index);
                     state.key_id = key_id;
@@ -4608,25 +4671,21 @@ impl RemoteServerProjects {
                         .border_t_1()
                         .border_color(border_color)
                         .child(
-                            h_flex()
-                                .w_full()
-                                .gap_2()
-                                .items_start()
-                                .child(
-                                    v_flex()
-                                        .flex_1()
-                                        .min_w_0()
-                                        .gap_1()
-                                        .child(form_label(
-                                            i18n::t!("3899218664bb77ca"),
-                                            Some(i18n::t!("30928008029cdf5f").into()),
-                                        ))
-                                        .child(
-                                            div().debug_selector(|| "form-input-timeout".into()).child(
-                                                form_input_surface(&state.timeout_editor, false, cx),
-                                            ),
+                            h_flex().w_full().gap_2().items_start().child(
+                                v_flex()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .gap_1()
+                                    .child(form_label(
+                                        i18n::t!("3899218664bb77ca"),
+                                        Some(i18n::t!("30928008029cdf5f").into()),
+                                    ))
+                                    .child(
+                                        div().debug_selector(|| "form-input-timeout".into()).child(
+                                            form_input_surface(&state.timeout_editor, false, cx),
                                         ),
-                                ),
+                                    ),
+                            ),
                         )
                         .child(
                             v_flex()
@@ -4692,16 +4751,15 @@ impl RemoteServerProjects {
                                     )
                                 })
                                 .child(
-                                    Button::new(
-                                        "add-jump-host",
-                                        i18n::t!("a1e9b8ca998838e8"),
-                                    )
-                                    .size(ButtonSize::Default)
-                                    .label_size(LabelSize::Small)
-                                    .start_icon(Icon::new(IconName::Plus).size(IconSize::XSmall))
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.open_jump_host_picker(window, cx)
-                                    })),
+                                    Button::new("add-jump-host", i18n::t!("a1e9b8ca998838e8"))
+                                        .size(ButtonSize::Default)
+                                        .label_size(LabelSize::Small)
+                                        .start_icon(
+                                            Icon::new(IconName::Plus).size(IconSize::XSmall),
+                                        )
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.open_jump_host_picker(window, cx)
+                                        })),
                                 )
                                 .when_some(state.jump_host_picker.clone(), |this, picker| {
                                     this.child(
@@ -4732,16 +4790,16 @@ impl RemoteServerProjects {
                                             )
                                             .label(i18n::t!("6b8f6c6cb99b1f89"))
                                             .label_size(LabelSize::XSmall)
-                                            .on_click(cx.listener(
-                                                |this, toggle: &ToggleState, _, cx| {
+                                            .on_click(
+                                                cx.listener(|this, toggle: &ToggleState, _, cx| {
                                                     if let Mode::CreateRemoteServerForm(state) =
                                                         &mut this.mode
                                                     {
                                                         state.proxy_disabled = toggle.selected();
                                                     }
                                                     cx.notify();
-                                                },
-                                            )),
+                                                }),
+                                            ),
                                         ),
                                 )
                                 .child(
@@ -5146,8 +5204,7 @@ impl RemoteServerProjects {
                     workspace
                         .update(cx, |this, cx| {
                             struct SshServerAddressCopiedToClipboard;
-                            let notification =
-                                i18n::t_args!("4d975328c6b9d747", connection_string);
+                            let notification = i18n::t_args!("4d975328c6b9d747", connection_string);
 
                             this.show_toast(
                                 Toast::new(
@@ -5432,7 +5489,9 @@ impl RemoteServerProjects {
             let project = project.project.clone();
             rows.push(
                 h_flex()
-                    .id(SharedString::from(format!("server-project-{project_index}")))
+                    .id(SharedString::from(format!(
+                        "server-project-{project_index}"
+                    )))
                     .w_full()
                     .px_3()
                     .py_2()
@@ -5490,15 +5549,11 @@ impl RemoteServerProjects {
                         };
                         let ssh_index = match index {
                             Some(ServerIndex::Ssh(index)) => index,
-                            _ => this.create_host_from_ssh_config(
-                                &SharedString::from(host.clone()),
-                                cx,
-                            ),
+                            _ => this
+                                .create_host_from_ssh_config(&SharedString::from(host.clone()), cx),
                         };
                         cx.emit(DismissEvent);
-                        this.open_remote_terminal_workspace(
-                            ssh_index, ssh, false, window, cx,
-                        );
+                        this.open_remote_terminal_workspace(ssh_index, ssh, false, window, cx);
                     }))
                     .child(Icon::new(IconName::Terminal).color(Color::Muted))
                     .child(
@@ -5539,8 +5594,7 @@ impl RemoteServerProjects {
                     }
                     "down" => {
                         if let Mode::ServerProjects(state) = &mut this.mode {
-                            state.selected =
-                                (state.selected + 1).min(row_count.saturating_sub(1));
+                            state.selected = (state.selected + 1).min(row_count.saturating_sub(1));
                         }
                     }
                     "enter" => {
@@ -5564,9 +5618,7 @@ impl RemoteServerProjects {
                             ),
                         };
                         if state.selected == 0 {
-                            this.open_server_projects_folder(
-                                index, host, connection, window, cx,
-                            );
+                            this.open_server_projects_folder(index, host, connection, window, cx);
                         } else if let Some(project) = project
                             && let Some(index) = index
                         {
@@ -5582,15 +5634,12 @@ impl RemoteServerProjects {
                         } else if let Connection::Ssh(ssh) = connection {
                             let ssh_index = match index {
                                 Some(ServerIndex::Ssh(index)) => index,
-                                _ => this.create_host_from_ssh_config(
-                                    &SharedString::from(host),
-                                    cx,
-                                ),
+                                _ => {
+                                    this.create_host_from_ssh_config(&SharedString::from(host), cx)
+                                }
                             };
                             cx.emit(DismissEvent);
-                            this.open_remote_terminal_workspace(
-                                ssh_index, ssh, false, window, cx,
-                            );
+                            this.open_remote_terminal_workspace(ssh_index, ssh, false, window, cx);
                         }
                     }
                     "escape" => {
@@ -5613,8 +5662,7 @@ impl RemoteServerProjects {
                         IconButton::new("server-projects-back", IconName::ArrowLeft)
                             .icon_size(IconSize::Small)
                             .on_click(cx.listener(|this, _, _, cx| {
-                                this.mode =
-                                    Mode::default_mode(&this.ssh_config_servers, cx);
+                                this.mode = Mode::default_mode(&this.ssh_config_servers, cx);
                                 cx.notify();
                             })),
                     )
@@ -5633,17 +5681,11 @@ impl RemoteServerProjects {
                                     })
                                     .child(Label::new(main).size(LabelSize::Large)),
                             )
-                            .child(
-                                h_flex()
-                                    .gap_1()
-                                    .when_some(aux, |this, aux| {
-                                        this.child(
-                                            Label::new(aux)
-                                                .size(LabelSize::XSmall)
-                                                .color(Color::Muted),
-                                        )
-                                    }),
-                            ),
+                            .child(h_flex().gap_1().when_some(aux, |this, aux| {
+                                this.child(
+                                    Label::new(aux).size(LabelSize::XSmall).color(Color::Muted),
+                                )
+                            })),
                     )
                     .child(
                         Button::new("server-projects-open", i18n::t!("fcf8b4bff0df782d"))
@@ -5723,7 +5765,11 @@ impl RemoteServerProjects {
                             .size(LabelSize::XSmall)
                             .color(Color::Muted),
                     )
-                    .child(Label::new("Enter").size(LabelSize::XSmall).color(Color::Muted))
+                    .child(
+                        Label::new("Enter")
+                            .size(LabelSize::XSmall)
+                            .color(Color::Muted),
+                    )
                     .child(
                         Label::new(i18n::t!("fcf8b4bff0df782d"))
                             .size(LabelSize::XSmall)
@@ -5741,10 +5787,35 @@ impl RemoteServerProjects {
             selected: 0,
             search,
             scroll: ScrollHandle::new(),
+            tab: ManageServerTab::Overview,
+            keys: Vec::new(),
+            keys_loading: true,
             _search_subscription: subscription,
         });
         self.focus_handle(cx).focus(window, cx);
+        self.load_managed_keys_for_servers(window, cx);
         cx.notify();
+    }
+
+    /// Fills the keys tab of the server manager. The list is only read from the
+    /// local key store, so a failure leaves the tab with its empty state instead
+    /// of blocking the manager.
+    fn load_managed_keys_for_servers(&mut self, window: &Window, cx: &mut Context<Self>) {
+        cx.spawn_in(window, async move |this, cx| {
+            let keys = cx.background_spawn(async { list_managed_ssh_keys() }).await;
+            this.update_in(cx, |this, window, cx| {
+                if let Mode::ManageServers(state) = &mut this.mode {
+                    state.keys_loading = false;
+                    if let Ok(keys) = keys {
+                        state.keys = keys;
+                    }
+                }
+                window.refresh();
+                cx.notify();
+            })
+            .log_err();
+        })
+        .detach();
     }
 
     fn open_managed_server_project(
@@ -5760,10 +5831,9 @@ impl RemoteServerProjects {
                 let Connection::Ssh(ssh) = &connection else {
                     return;
                 };
-                ServerIndex::Ssh(self.create_host_from_ssh_config(
-                    &SharedString::from(ssh.host.clone()),
-                    cx,
-                ))
+                ServerIndex::Ssh(
+                    self.create_host_from_ssh_config(&SharedString::from(ssh.host.clone()), cx),
+                )
             }
         };
         cx.emit(DismissEvent);
@@ -5833,7 +5903,7 @@ impl RemoteServerProjects {
             connection: Connection,
             index: Option<ServerIndex>,
             is_ssh_config: bool,
-            projects: usize,
+            projects: Vec<ProjectEntry>,
         }
 
         let rows: Vec<ManagedServerRow> = entries
@@ -5848,13 +5918,13 @@ impl RemoteServerProjects {
                     connection: connection.clone(),
                     index: Some(*index),
                     is_ssh_config: false,
-                    projects: projects.len(),
+                    projects: projects.clone(),
                 },
                 RemoteEntry::SshConfig { .. } => ManagedServerRow {
                     connection: entry.connection().into_owned(),
                     index: None,
                     is_ssh_config: true,
-                    projects: 0,
+                    projects: Vec::new(),
                 },
             })
             .collect();
@@ -5901,6 +5971,7 @@ impl RemoteServerProjects {
             .map(|(index, row)| {
                 let is_selected = index == selected_index;
                 let (main, aux, is_wsl) = server_labels(&row.connection);
+                let stored_projects = row.projects.len();
                 h_flex()
                     .id(SharedString::from(format!("managed-server-{index}")))
                     .w_full()
@@ -5914,6 +5985,7 @@ impl RemoteServerProjects {
                             .border_l_2()
                             .border_color(colors.text_accent)
                     })
+                    .hover(|this| this.bg(colors.element_hover))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if let Mode::ManageServers(state) = &mut this.mode {
                             state.selected = index;
@@ -5927,31 +5999,56 @@ impl RemoteServerProjects {
                             .child(
                                 h_flex()
                                     .gap_1()
+                                    .child(Label::new(main).size(LabelSize::Small))
                                     .when(is_wsl, |this| {
                                         this.child(
                                             Label::new(i18n::t!("41ed0a615790bb95"))
                                                 .size(LabelSize::XSmall)
-                                                .color(Color::Muted),
+                                                .color(Color::Placeholder),
                                         )
                                     })
                                     .when(row.is_ssh_config, |this| {
                                         this.child(
                                             Label::new(i18n::t!("8ff228346a640061"))
                                                 .size(LabelSize::XSmall)
-                                                .color(Color::Muted),
+                                                .color(Color::Placeholder),
                                         )
-                                    })
-                                    .child(Label::new(main).size(LabelSize::Small)),
+                                    }),
                             )
                             .child(
-                                Label::new(managed_server_address(&row.connection))
-                                    .size(LabelSize::XSmall)
-                                    .color(Color::Muted),
-                            )
-                            .when_some(aux, |this, aux| {
-                                this.child(Label::new(aux).size(LabelSize::XSmall).color(Color::Muted))
-                            }),
+                                h_flex()
+                                    .gap_1()
+                                    .child(
+                                        Label::new(managed_server_address(&row.connection))
+                                            .size(LabelSize::XSmall)
+                                            .color(Color::Muted),
+                                    )
+                                    .when_some(aux, |this, aux| {
+                                        this.child(
+                                            Label::new(aux)
+                                                .size(LabelSize::XSmall)
+                                                .color(Color::Placeholder),
+                                        )
+                                    }),
+                            ),
                     )
+                    .when(stored_projects > 0, |this| {
+                        this.child(
+                            h_flex()
+                                .flex_none()
+                                .gap_1()
+                                .child(
+                                    Label::new(stored_projects.to_string())
+                                        .size(LabelSize::XSmall)
+                                        .color(Color::Placeholder),
+                                )
+                                .child(
+                                    Label::new(i18n::t!("04e2a9728af75840"))
+                                        .size(LabelSize::XSmall)
+                                        .color(Color::Placeholder),
+                                ),
+                        )
+                    })
                     .into_any_element()
             })
             .collect::<Vec<_>>();
@@ -5963,129 +6060,788 @@ impl RemoteServerProjects {
             let is_config = row.is_ssh_config;
             let can_edit = !matches!(row.connection, Connection::Wsl(_));
             let display = SharedString::from(main.clone());
-            let address = match &row.connection {
-                Connection::Ssh(ssh) => SharedString::from(format!(
-                    "{}@{}:{}",
-                    ssh.username.clone().unwrap_or_default(),
-                    ssh.host,
-                    ssh.port.unwrap_or(22)
-                )),
-                Connection::Wsl(wsl) => SharedString::from(wsl.distro_name.clone()),
-                Connection::DevContainer(container) => SharedString::from(container.name.clone()),
-            };
+            let address = SharedString::from(managed_server_address(&row.connection));
             let copy_address = address.clone();
             let remove_index = index;
-            let project_count = (row.projects > 0).then_some(row.projects);
+            let projects = row.projects.clone();
+            let project_count = projects.len();
+            let source: SharedString = match &row.connection {
+                Connection::Ssh(_) if is_config => i18n::t!("8ff228346a640061").into(),
+                Connection::Ssh(_) => i18n::t!("1bd91a7d0c53c936").into(),
+                Connection::Wsl(_) => i18n::t!("41ed0a615790bb95").into(),
+                Connection::DevContainer(_) => i18n::t!("5d76904f98924950").into(),
+            };
+            let icon = match &row.connection {
+                Connection::Ssh(_) => IconName::Server,
+                Connection::Wsl(_) => IconName::Screen,
+                Connection::DevContainer(_) => IconName::Box,
+            };
 
-            v_flex()
-                .gap_3()
-                .p_3()
-                .child(
-                    h_flex()
-                        .gap_2()
-                        .child(Label::new(main).size(LabelSize::Large))
-                        .when_some(aux, |this, aux| {
-                            this.child(Label::new(aux).size(LabelSize::Small).color(Color::Muted))
-                        }),
-                )
-                .child(Label::new(address).size(LabelSize::Small).color(Color::Muted))
-                .child(
-                    h_flex()
-                        .gap_2()
+            let recent_projects =
+                if projects.is_empty() {
+                    v_flex()
+                        .p_3()
                         .child(
-                            Label::new(if is_config {
-                                i18n::t!("8ff228346a640061")
-                            } else {
-                                i18n::t!("1bd91a7d0c53c936")
-                            })
-                            .size(LabelSize::XSmall)
-                            .color(if is_config { Color::Accent } else { Color::Muted }),
+                            Label::new(i18n::t!("a197581fd2ec00a2"))
+                                .size(LabelSize::XSmall)
+                                .color(Color::Muted),
                         )
-                        .when_some(project_count, |this, count| {
-                            this.child(
-                                Label::new(format!("{count} 个项目"))
-                                    .size(LabelSize::XSmall)
-                                    .color(Color::Muted),
-                            )
-                        }),
-                )
-                .child(
-                    h_flex()
-                        .gap_2()
-                        .flex_wrap()
-                        .child(
-                            Button::new("managed-server-open", i18n::t!("fcf8b4bff0df782d"))
-                                .style(ButtonStyle::Tinted(TintColor::Accent))
-                                .on_click(cx.listener({
-                                    let connection = connection.clone();
-                                    move |this, _, window, cx| {
-                                        this.open_managed_server_project(
-                                            connection.clone(),
-                                            index,
-                                            window,
-                                            cx,
-                                        );
-                                    }
-                                })),
-                        )
-                        .when(can_edit, |this| {
-                            this.child(
-                                Button::new(
-                                    "managed-server-edit",
-                                    i18n::t!("8f9cfb91d0b4c48b"),
-                                )
-                                .on_click(cx.listener({
-                                    let connection = connection.clone();
-                                    move |this, _, window, cx| {
-                                        this.edit_managed_server(
-                                            connection.clone(),
-                                            index,
-                                            window,
-                                            cx,
-                                        );
-                                    }
-                                })),
-                            )
-                        })
-                        .child(
-                            Button::new(
-                                "managed-server-copy",
-                                i18n::t!("4c2614bc71a0cb77"),
-                            )
-                            .on_click(move |_, _, cx| {
-                                cx.write_to_clipboard(ClipboardItem::new_string(
-                                    copy_address.to_string(),
-                                ));
-                            }),
-                        )
-                        .when(!is_config, |this| {
-                            this.child(
-                                Button::new(
-                                    "managed-server-remove",
-                                    i18n::t!("cc98dc08f5e9a890"),
-                                )
-                                .style(ButtonStyle::Transparent)
-                                .color(Color::Error)
-                                .on_click(cx.listener({
-                                    move |this, _, window, cx| {
-                                        if let Some(index) = remove_index {
-                                            this.remove_managed_server(
+                        .into_any_element()
+                } else {
+                    v_flex()
+                        .p_1()
+                        .gap_0p5()
+                        .children(projects.into_iter().enumerate().map(
+                            |(project_index, project)| {
+                                let path =
+                                    project.project.paths.first().cloned().unwrap_or_default();
+                                let connection = connection.clone();
+                                h_flex()
+                                    .id(SharedString::from(format!(
+                                        "managed-server-project-{project_index}"
+                                    )))
+                                    .w_full()
+                                    .px_2()
+                                    .py_1p5()
+                                    .gap_2()
+                                    .rounded_md()
+                                    .cursor_pointer()
+                                    .hover(|this| this.bg(colors.element_hover))
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        if let Some(index) = index {
+                                            this.open_remote_project_entry(
                                                 index,
-                                                display.clone(),
+                                                project.project.clone(),
+                                                connection.clone(),
+                                                false,
                                                 window,
                                                 cx,
                                             );
                                         }
-                                    }
-                                })),
+                                    }))
+                                    .child(
+                                        Icon::new(IconName::Folder)
+                                            .size(IconSize::XSmall)
+                                            .color(Color::Muted),
+                                    )
+                                    .child(
+                                        v_flex()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .child(
+                                                Label::new(path).size(LabelSize::Small).truncate(),
+                                            )
+                                            .child(
+                                                Label::new(i18n::t!("b6d7cbc94dba88c6"))
+                                                    .size(LabelSize::XSmall)
+                                                    .color(Color::Placeholder),
+                                            ),
+                                    )
+                                    .child(
+                                        Icon::new(IconName::ChevronRight)
+                                            .size(IconSize::XSmall)
+                                            .color(Color::Placeholder),
+                                    )
+                                    .into_any_element()
+                            },
+                        ))
+                        .into_any_element()
+                };
+
+            let ssh_host = match &row.connection {
+                Connection::Ssh(ssh) => Some(ssh.host.clone()),
+                _ => None,
+            };
+            let bound_keys: Vec<&ManagedSshKey> = match &row.connection {
+                Connection::Ssh(ssh) => {
+                    let port = ssh.port.unwrap_or(22);
+                    state
+                        .keys
+                        .iter()
+                        .filter(|key| {
+                            key.host == ssh.host
+                                && key.port == port
+                                && ssh
+                                    .username
+                                    .as_deref()
+                                    .is_none_or(|username| username == key.remote_username)
+                        })
+                        .collect()
+                }
+                _ => Vec::new(),
+            };
+
+            let settings_content = {
+                let unset = SharedString::from(i18n::t!("484d55613910eb8c").to_string());
+                let mut rows: Vec<AnyElement> = Vec::new();
+                match &row.connection {
+                    Connection::Ssh(ssh) => {
+                        rows.push(detail_kv_row(
+                            i18n::t!("37aac5b4e639b93b"),
+                            Label::new(address.clone())
+                                .size(LabelSize::XSmall)
+                                .into_any_element(),
+                        ));
+                        rows.push(detail_kv_row(
+                            i18n::t!("e3b89e9d33f88e52"),
+                            Label::new(
+                                ssh.username
+                                    .clone()
+                                    .map(SharedString::from)
+                                    .unwrap_or(unset.clone()),
                             )
+                            .size(LabelSize::XSmall)
+                            .into_any_element(),
+                        ));
+                        rows.push(detail_kv_row(
+                            i18n::t!("e71ac32b544b0ebf"),
+                            Label::new(ssh.port.unwrap_or(22).to_string())
+                                .size(LabelSize::XSmall)
+                                .into_any_element(),
+                        ));
+                        rows.push(detail_kv_row(
+                            i18n::t!("b19e02e9502bbe5a"),
+                            Label::new(
+                                ssh.nickname
+                                    .clone()
+                                    .map(SharedString::from)
+                                    .unwrap_or(unset.clone()),
+                            )
+                            .size(LabelSize::XSmall)
+                            .into_any_element(),
+                        ));
+                        let authentication = match ssh.auth_method {
+                            None => i18n::t!("844b8cc8dff7c1d8").to_string(),
+                            Some(SshAuthMethod::Password) => {
+                                i18n::t!("a621ab606db2a11f").to_string()
+                            }
+                            Some(SshAuthMethod::Key) => ssh
+                                .ssh_key_id
+                                .as_ref()
+                                .and_then(|key_id| {
+                                    state.keys.iter().find(|key| &key.key_id == key_id)
+                                })
+                                .and_then(|key| key.nickname.clone())
+                                .unwrap_or_else(|| i18n::t!("f67bca8f42bcf073").to_string()),
+                            Some(SshAuthMethod::Interactive) => {
+                                i18n::t!("c6a3393288ff13e8").to_string()
+                            }
+                        };
+                        rows.push(detail_kv_row(
+                            i18n::t!("52373e4342173705"),
+                            Label::new(authentication)
+                                .size(LabelSize::XSmall)
+                                .into_any_element(),
+                        ));
+                        rows.push(detail_kv_row(
+                            i18n::t!("b571ee80e19e68e7"),
+                            Label::new(if ssh.args.is_empty() {
+                                unset.to_string()
+                            } else {
+                                ssh.args.join(" ")
+                            })
+                            .size(LabelSize::XSmall)
+                            .into_any_element(),
+                        ));
+                        let jump_hosts = if ssh.jump_hosts.is_empty() {
+                            i18n::t!("28d0ad5455688db8").to_string()
+                        } else {
+                            ssh.jump_hosts
+                                .iter()
+                                .map(|hop| {
+                                    format!(
+                                        "{}@{}:{}",
+                                        hop.username.clone().unwrap_or_default(),
+                                        hop.host,
+                                        hop.port.unwrap_or(22)
+                                    )
+                                })
+                                .collect::<Vec<_>>()
+                                .join(" → ")
+                        };
+                        rows.push(detail_kv_row(
+                            i18n::t!("1031cfcb802afd94"),
+                            Label::new(jump_hosts)
+                                .size(LabelSize::XSmall)
+                                .into_any_element(),
+                        ));
+                        let proxy = match (&ssh.proxy, ssh.proxy_disabled) {
+                            (Some(proxy), true) => {
+                                format!("{proxy} · {}", i18n::t!("bc5a87a757a557d9"))
+                            }
+                            (Some(proxy), false) => proxy.clone(),
+                            (None, _) => unset.to_string(),
+                        };
+                        rows.push(detail_kv_row(
+                            i18n::t!("5e84ea61e8386af7"),
+                            Label::new(proxy).size(LabelSize::XSmall).into_any_element(),
+                        ));
+                        let forwards = ssh
+                            .port_forwards
+                            .as_ref()
+                            .filter(|forwards| !forwards.is_empty())
+                            .map(|forwards| {
+                                forwards
+                                    .iter()
+                                    .map(|forward| {
+                                        format!(
+                                            "{}:{} → {}:{}",
+                                            forward
+                                                .local_host
+                                                .clone()
+                                                .unwrap_or_else(|| "127.0.0.1".into()),
+                                            forward.local_port,
+                                            forward
+                                                .remote_host
+                                                .clone()
+                                                .unwrap_or_else(|| "127.0.0.1".into()),
+                                            forward.remote_port
+                                        )
+                                    })
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            })
+                            .unwrap_or_else(|| unset.to_string());
+                        rows.push(detail_kv_row(
+                            i18n::t!("dae851b6621c1d1c"),
+                            Label::new(forwards)
+                                .size(LabelSize::XSmall)
+                                .into_any_element(),
+                        ));
+                        rows.push(detail_kv_row(
+                            i18n::t!("8c3eace3dbeb78f2"),
+                            Label::new(match ssh.connection_timeout {
+                                Some(seconds) => {
+                                    format!("{seconds} {}", i18n::t!("381a8e9699052f3a"))
+                                }
+                                None => i18n::t!("844b8cc8dff7c1d8").to_string(),
+                            })
+                            .size(LabelSize::XSmall)
+                            .into_any_element(),
+                        ));
+                        rows.push(detail_kv_row(
+                            i18n::t!("c44aa112a5b03147"),
+                            Label::new(match ssh.upload_binary_over_ssh {
+                                Some(true) => i18n::t!("763610e2ab44bbed").to_string(),
+                                Some(false) => i18n::t!("fc38bc2576bfe5b5").to_string(),
+                                None => i18n::t!("844b8cc8dff7c1d8").to_string(),
+                            })
+                            .size(LabelSize::XSmall)
+                            .into_any_element(),
+                        ));
+                    }
+                    Connection::Wsl(wsl) => {
+                        rows.push(detail_kv_row(
+                            i18n::t!("37aac5b4e639b93b"),
+                            Label::new(wsl.distro_name.clone())
+                                .size(LabelSize::XSmall)
+                                .into_any_element(),
+                        ));
+                        rows.push(detail_kv_row(
+                            i18n::t!("e3b89e9d33f88e52"),
+                            Label::new(wsl.user.clone().map(SharedString::from).unwrap_or(unset))
+                                .size(LabelSize::XSmall)
+                                .into_any_element(),
+                        ));
+                    }
+                    Connection::DevContainer(container) => {
+                        rows.push(detail_kv_row(
+                            i18n::t!("37aac5b4e639b93b"),
+                            Label::new(container.name.clone())
+                                .size(LabelSize::XSmall)
+                                .into_any_element(),
+                        ));
+                        rows.push(detail_kv_row(
+                            i18n::t!("e3b89e9d33f88e52"),
+                            Label::new(SharedString::from(container.remote_user.clone()))
+                                .size(LabelSize::XSmall)
+                                .into_any_element(),
+                        ));
+                    }
+                }
+
+                v_flex()
+                    .w_full()
+                    .gap_3()
+                    .when(is_config, |this| {
+                        this.child(
+                            h_flex()
+                                .w_full()
+                                .gap_3()
+                                .px_3()
+                                .py_2()
+                                .rounded_md()
+                                .border_1()
+                                .border_color(colors.border_variant)
+                                .bg(colors.editor_background)
+                                .child(
+                                    Icon::new(IconName::Info)
+                                        .size(IconSize::XSmall)
+                                        .color(Color::Accent),
+                                )
+                                .child(
+                                    Label::new(i18n::t!("bb9a944d18f87827"))
+                                        .size(LabelSize::XSmall)
+                                        .color(Color::Muted)
+                                        .flex_1(),
+                                )
+                                .when_some(ssh_host.clone(), |this, host| {
+                                    this.child(
+                                        Button::new(
+                                            "managed-server-save-as-host",
+                                            i18n::t!("899c7416310c011c"),
+                                        )
+                                        .size(ButtonSize::Compact)
+                                        .on_click(
+                                            cx.listener({
+                                                let host = SharedString::from(host);
+                                                move |this, _, window, cx| {
+                                                    this.create_host_from_ssh_config(&host, cx);
+                                                    this.manage_servers(window, cx);
+                                                }
+                                            }),
+                                        ),
+                                    )
+                                }),
+                        )
+                    })
+                    .child(detail_card(
+                        i18n::t!("b4ddb3c1ca6cd289"),
+                        None,
+                        None,
+                        v_flex().p_3().gap_2().children(rows).into_any_element(),
+                        cx,
+                    ))
+                    .into_any_element()
+            };
+
+            let keys_content = v_flex()
+                .w_full()
+                .gap_3()
+                .child(detail_card(
+                    i18n::t!("f67bca8f42bcf073"),
+                    Some(SharedString::from(bound_keys.len().to_string())),
+                    Some(
+                        Button::new("managed-server-manage-keys", i18n::t!("8268827af7753da8"))
+                            .size(ButtonSize::Compact)
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.manage_ssh_keys(window, cx);
+                            }))
+                            .into_any_element(),
+                    ),
+                    if state.keys_loading {
+                        v_flex()
+                            .p_3()
+                            .child(
+                                Label::new(i18n::t!("7b833c5df7bfe3ee"))
+                                    .size(LabelSize::XSmall)
+                                    .color(Color::Muted),
+                            )
+                            .into_any_element()
+                    } else if bound_keys.is_empty() {
+                        v_flex()
+                            .p_3()
+                            .child(
+                                Label::new(i18n::t!("51c994675f5c2b87"))
+                                    .size(LabelSize::XSmall)
+                                    .color(Color::Muted),
+                            )
+                            .into_any_element()
+                    } else {
+                        v_flex()
+                            .p_1()
+                            .gap_0p5()
+                            .children(bound_keys.into_iter().map(|key| {
+                                let (status, status_color) = match key.deployment_state {
+                                    ManagedSshKeyDeploymentState::Pending => {
+                                        (i18n::t!("76a2e875d985af84"), Color::Warning)
+                                    }
+                                    ManagedSshKeyDeploymentState::Verified => {
+                                        (i18n::t!("0a1b6f1b57f5198e"), Color::Success)
+                                    }
+                                };
+                                let name = key.nickname.clone().unwrap_or_else(|| {
+                                    format!("{}@{}:{}", key.remote_username, key.host, key.port)
+                                });
+                                h_flex()
+                                    .w_full()
+                                    .px_2()
+                                    .py_1p5()
+                                    .gap_2()
+                                    .rounded_md()
+                                    .child(
+                                        Icon::new(IconName::Lock)
+                                            .size(IconSize::XSmall)
+                                            .color(Color::Muted),
+                                    )
+                                    .child(
+                                        v_flex()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .child(Label::new(name).size(LabelSize::Small))
+                                            .child(
+                                                Label::new(format!(
+                                                    "{}@{}:{}",
+                                                    key.remote_username, key.host, key.port
+                                                ))
+                                                .size(LabelSize::XSmall)
+                                                .color(Color::Muted),
+                                            ),
+                                    )
+                                    .child(
+                                        Label::new(status)
+                                            .size(LabelSize::XSmall)
+                                            .color(status_color),
+                                    )
+                                    .into_any_element()
+                            }))
+                            .into_any_element()
+                    },
+                    cx,
+                ))
+                .into_any_element();
+
+            let remote_server_content = v_flex()
+                .w_full()
+                .gap_3()
+                .child(detail_card(
+                    i18n::t!("68d0a2e10bc6df49"),
+                    None,
+                    None,
+                    v_flex()
+                        .p_3()
+                        .gap_2()
+                        .child(detail_kv_row(
+                            i18n::t!("c44aa112a5b03147"),
+                            Label::new(match &row.connection {
+                                Connection::Ssh(ssh) => match ssh.upload_binary_over_ssh {
+                                    Some(true) => i18n::t!("763610e2ab44bbed").to_string(),
+                                    Some(false) => i18n::t!("fc38bc2576bfe5b5").to_string(),
+                                    None => i18n::t!("844b8cc8dff7c1d8").to_string(),
+                                },
+                                Connection::Wsl(_) => i18n::t!("484d55613910eb8c").to_string(),
+                                Connection::DevContainer(_) => {
+                                    i18n::t!("484d55613910eb8c").to_string()
+                                }
+                            })
+                            .size(LabelSize::XSmall)
+                            .into_any_element(),
+                        ))
+                        .child(detail_kv_row(
+                            i18n::t!("8c3eace3dbeb78f2"),
+                            Label::new(match &row.connection {
+                                Connection::Ssh(ssh) => match ssh.connection_timeout {
+                                    Some(seconds) => {
+                                        format!("{seconds} {}", i18n::t!("381a8e9699052f3a"))
+                                    }
+                                    None => i18n::t!("844b8cc8dff7c1d8").to_string(),
+                                },
+                                _ => i18n::t!("844b8cc8dff7c1d8").to_string(),
+                            })
+                            .size(LabelSize::XSmall)
+                            .into_any_element(),
+                        ))
+                        .child(
+                            Label::new(i18n::t!("cf23c352bc7bb762"))
+                                .size(LabelSize::XSmall)
+                                .color(Color::Placeholder),
+                        )
+                        .into_any_element(),
+                    cx,
+                ))
+                .into_any_element();
+
+            v_flex()
+                .w_full()
+                .flex_1()
+                .min_h_0()
+                .child(
+                    v_flex()
+                        .w_full()
+                        .flex_none()
+                        .border_b_1()
+                        .border_color(colors.border_variant)
+                        .child(
+                            h_flex()
+                                .w_full()
+                                .items_start()
+                                .gap_3()
+                                .px_4()
+                                .py_3()
+                                .child(
+                                    div()
+                                        .w(rems_from_px(34_f32))
+                                        .h(rems_from_px(34_f32))
+                                        .flex_none()
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .rounded_md()
+                                        .border_1()
+                                        .border_color(colors.border_variant)
+                                        .bg(colors.element_background)
+                                        .child(
+                                            Icon::new(icon)
+                                                .size(IconSize::Small)
+                                                .color(Color::Accent),
+                                        ),
+                                )
+                                .child(
+                                    v_flex()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .gap_1()
+                                        .child(
+                                            h_flex()
+                                                .gap_2()
+                                                .flex_wrap()
+                                                .child(Label::new(main).size(LabelSize::Large))
+                                                .child(
+                                                    Chip::new(source.clone())
+                                                        .label_size(LabelSize::XSmall)
+                                                        .border_color(colors.border_variant)
+                                                        .label_color(Color::Muted),
+                                                )
+                                                .when(project_count > 0, |this| {
+                                                    this.child(
+                                                        Chip::new(project_count.to_string())
+                                                            .label_size(LabelSize::XSmall)
+                                                            .border_color(colors.border_variant)
+                                                            .label_color(Color::Muted),
+                                                    )
+                                                }),
+                                        )
+                                        .child(
+                                            h_flex()
+                                                .gap_2()
+                                                .flex_wrap()
+                                                .child(
+                                                    Label::new(address.clone())
+                                                        .size(LabelSize::XSmall)
+                                                        .color(Color::Muted),
+                                                )
+                                                .when_some(aux, |this, aux| {
+                                                    this.child(
+                                                        Label::new(aux)
+                                                            .size(LabelSize::XSmall)
+                                                            .color(Color::Placeholder),
+                                                    )
+                                                }),
+                                        ),
+                                )
+                                .child(
+                                    h_flex()
+                                        .flex_none()
+                                        .gap_2()
+                                        .flex_wrap()
+                                        .justify_end()
+                                        .child(
+                                            Button::new(
+                                                "managed-server-open",
+                                                i18n::t!("fcf8b4bff0df782d"),
+                                            )
+                                            .style(ButtonStyle::Tinted(TintColor::Accent))
+                                            .start_icon(
+                                                Icon::new(IconName::FolderOpen)
+                                                    .size(IconSize::XSmall),
+                                            )
+                                            .on_click(
+                                                cx.listener({
+                                                    let connection = connection.clone();
+                                                    move |this, _, window, cx| {
+                                                        this.open_managed_server_project(
+                                                            connection.clone(),
+                                                            index,
+                                                            window,
+                                                            cx,
+                                                        );
+                                                    }
+                                                }),
+                                            ),
+                                        )
+                                        .when(can_edit, |this| {
+                                            this.child(
+                                                Button::new(
+                                                    "managed-server-edit",
+                                                    i18n::t!("8f9cfb91d0b4c48b"),
+                                                )
+                                                .on_click(cx.listener({
+                                                    let connection = connection.clone();
+                                                    move |this, _, window, cx| {
+                                                        this.edit_managed_server(
+                                                            connection.clone(),
+                                                            index,
+                                                            window,
+                                                            cx,
+                                                        );
+                                                    }
+                                                })),
+                                            )
+                                        })
+                                        .child(
+                                            Button::new(
+                                                "managed-server-copy",
+                                                i18n::t!("4c2614bc71a0cb77"),
+                                            )
+                                            .on_click(
+                                                move |_, _, cx| {
+                                                    cx.write_to_clipboard(
+                                                        ClipboardItem::new_string(
+                                                            copy_address.to_string(),
+                                                        ),
+                                                    );
+                                                },
+                                            ),
+                                        )
+                                        .when(!is_config, |this| {
+                                            this.child(
+                                                IconButton::new(
+                                                    "managed-server-remove",
+                                                    IconName::Trash,
+                                                )
+                                                .icon_size(IconSize::Small)
+                                                .tooltip(Tooltip::text(i18n::t!(
+                                                    "cc98dc08f5e9a890"
+                                                )))
+                                                .on_click(cx.listener({
+                                                    move |this, _, window, cx| {
+                                                        if let Some(index) = remove_index {
+                                                            this.remove_managed_server(
+                                                                index,
+                                                                display.clone(),
+                                                                window,
+                                                                cx,
+                                                            );
+                                                        }
+                                                    }
+                                                })),
+                                            )
+                                        }),
+                                ),
+                        )
+                        .child(h_flex().w_full().gap_1().px_4().children(
+                            ManageServerTab::ALL.map(|tab| {
+                                let is_active = state.tab == tab;
+                                div()
+                                    .id(SharedString::from(format!("managed-server-tab-{tab:?}")))
+                                    .h(rems_from_px(30_f32))
+                                    .px_3()
+                                    .flex()
+                                    .items_center()
+                                    .cursor_pointer()
+                                    .border_b_2()
+                                    .border_color(if is_active {
+                                        colors.text_accent
+                                    } else {
+                                        gpui::transparent_black()
+                                    })
+                                    .hover(|this| this.bg(colors.element_hover))
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        if let Mode::ManageServers(state) = &mut this.mode {
+                                            state.tab = tab;
+                                        }
+                                        cx.notify();
+                                    }))
+                                    .child(Label::new(tab.label()).size(LabelSize::Small).color(
+                                        if is_active {
+                                            Color::Default
+                                        } else {
+                                            Color::Muted
+                                        },
+                                    ))
+                                    .into_any_element()
+                            }),
+                        )),
+                )
+                .child(
+                    v_flex()
+                        .id("managed-servers-detail")
+                        .flex_1()
+                        .min_h_0()
+                        .overflow_y_scroll()
+                        .p_4()
+                        .gap_3()
+                        .child(match state.tab {
+                            ManageServerTab::Overview => v_flex()
+                                .w_full()
+                                .gap_3()
+                                .child(detail_card(
+                                    i18n::t!("aef7de28d52977f1"),
+                                    None,
+                                    None,
+                                    v_flex()
+                                        .p_3()
+                                        .gap_2()
+                                        .child(detail_kv_row(
+                                            i18n::t!("37aac5b4e639b93b"),
+                                            Label::new(address)
+                                                .size(LabelSize::XSmall)
+                                                .into_any_element(),
+                                        ))
+                                        .child(detail_kv_row(
+                                            i18n::t!("a488e93d69cc1296"),
+                                            Label::new(source)
+                                                .size(LabelSize::XSmall)
+                                                .into_any_element(),
+                                        ))
+                                        .child(detail_kv_row(
+                                            i18n::t!("04e2a9728af75840"),
+                                            h_flex()
+                                                .gap_1()
+                                                .child(
+                                                    Label::new(project_count.to_string())
+                                                        .size(LabelSize::XSmall),
+                                                )
+                                                .child(
+                                                    Label::new(i18n::t!("04e2a9728af75840"))
+                                                        .size(LabelSize::XSmall)
+                                                        .color(Color::Muted),
+                                                )
+                                                .into_any_element(),
+                                        ))
+                                        .into_any_element(),
+                                    cx,
+                                ))
+                                .child(detail_card(
+                                    i18n::t!("0fb712ece2d74fee"),
+                                    Some(SharedString::from(project_count.to_string())),
+                                    Some(
+                                        Button::new(
+                                            "managed-server-projects-open-folder",
+                                            i18n::t!("fcf8b4bff0df782d"),
+                                        )
+                                        .size(ButtonSize::Compact)
+                                        .start_icon(
+                                            Icon::new(IconName::Plus).size(IconSize::XSmall),
+                                        )
+                                        .on_click(cx.listener(move |this, _, window, cx| {
+                                            this.open_managed_server_project(
+                                                connection.clone(),
+                                                index,
+                                                window,
+                                                cx,
+                                            );
+                                        }))
+                                        .into_any_element(),
+                                    ),
+                                    recent_projects,
+                                    cx,
+                                ))
+                                .into_any_element(),
+                            ManageServerTab::Settings => settings_content,
+                            ManageServerTab::Keys => keys_content,
+                            ManageServerTab::RemoteServer => remote_server_content,
                         }),
                 )
                 .into_any_element()
         } else {
             v_flex()
-                .p_3()
-                .child(Label::new(i18n::t!("641dd3307518e1b9")).color(Color::Muted))
+                .p_4()
+                .child(
+                    Label::new(i18n::t!("641dd3307518e1b9"))
+                        .size(LabelSize::Small)
+                        .color(Color::Muted),
+                )
                 .into_any_element()
         };
 
@@ -6093,14 +6849,31 @@ impl RemoteServerProjects {
             .size_full()
             .track_focus(&self.focus_handle(cx))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                // The design offers ⌘1–⌘4 (Ctrl on Linux/Windows) for the detail
+                // tabs, so the list keeps ↑↓ for selection.
+                if event.keystroke.modifiers.platform || event.keystroke.modifiers.control {
+                    let tab = match event.keystroke.key.as_str() {
+                        "1" => Some(ManageServerTab::Overview),
+                        "2" => Some(ManageServerTab::Settings),
+                        "3" => Some(ManageServerTab::Keys),
+                        "4" => Some(ManageServerTab::RemoteServer),
+                        _ => None,
+                    };
+                    if let Some(tab) = tab {
+                        if let Mode::ManageServers(state) = &mut this.mode {
+                            state.tab = tab;
+                        }
+                        cx.stop_propagation();
+                        cx.notify();
+                    }
+                    return;
+                }
                 let filter = match &this.mode {
                     Mode::ManageServers(state) => state.filter,
                     _ => return,
                 };
                 let query = match &this.mode {
-                    Mode::ManageServers(state) => {
-                        state.search.read(cx).text(cx).to_lowercase()
-                    }
+                    Mode::ManageServers(state) => state.search.read(cx).text(cx).to_lowercase(),
                     _ => return,
                 };
                 let count = {
@@ -6174,7 +6947,11 @@ impl RemoteServerProjects {
                             })),
                     )
                     .child(Icon::new(IconName::Server).color(Color::Accent))
-                    .child(Label::new(i18n::t!("790f6599b5c867a9")).size(LabelSize::Large).flex_1())
+                    .child(
+                        Label::new(i18n::t!("790f6599b5c867a9"))
+                            .size(LabelSize::Large)
+                            .flex_1(),
+                    )
                     .child(
                         Label::new(format!("{}", rows.len()))
                             .size(LabelSize::Small)
@@ -6191,14 +6968,19 @@ impl RemoteServerProjects {
                     ),
             )
             .child(
-                h_flex()
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_stretch()
                     .flex_1()
                     .min_h_0()
                     .child(
                         v_flex()
                             .id("managed-servers-list")
-                            .w(rems_from_px(260_f32))
+                            .debug_selector(|| "managed-servers-list".into())
+                            .w(rems_from_px(392_f32))
                             .flex_none()
+                            .h_full()
                             .min_h_0()
                             .border_r_1()
                             .border_color(colors.border_variant)
@@ -6210,35 +6992,55 @@ impl RemoteServerProjects {
                             .child(
                                 h_flex()
                                     .w_full()
-                                    .px_1()
+                                    .px_2()
+                                    .pb_2()
                                     .gap_1()
+                                    .flex_wrap()
                                     .children(
                                         [
-                                            (ManageServersFilter::All, i18n::t!("5c55a67935af8f45"), rows.len()),
-                                            (ManageServersFilter::Saved, i18n::t!("1bd91a7d0c53c936"), rows.iter().filter(|row| !row.is_ssh_config).count()),
-                                            (ManageServersFilter::SshConfig, i18n::t!("8ff228346a640061"), rows.iter().filter(|row| row.is_ssh_config).count()),
+                                            (
+                                                ManageServersFilter::All,
+                                                i18n::t!("5c55a67935af8f45"),
+                                                rows.len(),
+                                            ),
+                                            (
+                                                ManageServersFilter::Saved,
+                                                i18n::t!("1bd91a7d0c53c936"),
+                                                rows.iter()
+                                                    .filter(|row| !row.is_ssh_config)
+                                                    .count(),
+                                            ),
+                                            (
+                                                ManageServersFilter::SshConfig,
+                                                i18n::t!("8ff228346a640061"),
+                                                rows.iter().filter(|row| row.is_ssh_config).count(),
+                                            ),
                                         ]
-                                        .map(|(filter, label, count)| {
-                                            Button::new(
-                                                SharedString::from(format!(
-                                                    "managed-servers-filter-{filter:?}"
-                                                )),
-                                                format!("{label} {count}"),
-                                            )
-                                            .style(if state.filter == filter {
-                                                ButtonStyle::Tinted(TintColor::Accent)
-                                            } else {
-                                                ButtonStyle::Transparent
-                                            })
-                                            .label_size(LabelSize::XSmall)
-                                            .on_click(cx.listener(move |this, _, _, cx| {
-                                                if let Mode::ManageServers(state) = &mut this.mode {
-                                                    state.filter = filter;
-                                                    state.selected = 0;
-                                                }
-                                                cx.notify();
-                                            }))
-                                        }),
+                                        .map(
+                                            |(filter, label, count)| {
+                                                Button::new(
+                                                    SharedString::from(format!(
+                                                        "managed-servers-filter-{filter:?}"
+                                                    )),
+                                                    format!("{label} {count}"),
+                                                )
+                                                .style(if state.filter == filter {
+                                                    ButtonStyle::Tinted(TintColor::Accent)
+                                                } else {
+                                                    ButtonStyle::Transparent
+                                                })
+                                                .label_size(LabelSize::XSmall)
+                                                .on_click(cx.listener(move |this, _, _, cx| {
+                                                    if let Mode::ManageServers(state) =
+                                                        &mut this.mode
+                                                    {
+                                                        state.filter = filter;
+                                                        state.selected = 0;
+                                                    }
+                                                    cx.notify();
+                                                }))
+                                            },
+                                        ),
                                     ),
                             )
                             .child(
@@ -6251,14 +7053,35 @@ impl RemoteServerProjects {
                                     .p_1()
                                     .gap_0p5()
                                     .children(list),
+                            )
+                            .child(
+                                h_flex()
+                                    .flex_none()
+                                    .px_3()
+                                    .py_2()
+                                    .border_t_1()
+                                    .border_color(colors.border_variant)
+                                    .child(
+                                        Label::new(format!("{} / {}", filtered.len(), rows.len()))
+                                            .size(LabelSize::XSmall)
+                                            .color(Color::Placeholder),
+                                    )
+                                    .child(div().flex_1())
+                                    .child(
+                                        Label::new("↑↓")
+                                            .size(LabelSize::XSmall)
+                                            .color(Color::Placeholder),
+                                    ),
                             ),
                     )
                     .child(
                         v_flex()
-                            .id("managed-servers-detail")
+                            .id("managed-servers-detail-pane")
+                            .debug_selector(|| "managed-servers-detail-pane".into())
                             .flex_1()
                             .min_w_0()
-                            .overflow_y_scroll()
+                            .h_full()
+                            .min_h_0()
                             .child(detail),
                     ),
             )
@@ -6274,13 +7097,21 @@ impl RemoteServerProjects {
                             .size(LabelSize::XSmall)
                             .color(Color::Muted),
                     )
-                    .child(Label::new("Enter").size(LabelSize::XSmall).color(Color::Muted))
+                    .child(
+                        Label::new("Enter")
+                            .size(LabelSize::XSmall)
+                            .color(Color::Muted),
+                    )
                     .child(
                         Label::new(i18n::t!("051836569928a9f9"))
                             .size(LabelSize::XSmall)
                             .color(Color::Muted),
                     )
-                    .child(Label::new("Esc").size(LabelSize::XSmall).color(Color::Muted))
+                    .child(
+                        Label::new("Esc")
+                            .size(LabelSize::XSmall)
+                            .color(Color::Muted),
+                    )
                     .child(
                         Label::new(i18n::t!("572cf45ba43634b3"))
                             .size(LabelSize::XSmall)
@@ -6292,9 +7123,7 @@ impl RemoteServerProjects {
 
     fn reload_managed_ssh_keys(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         cx.spawn_in(window, async move |this, cx| {
-            let keys = cx
-                .background_spawn(async { list_managed_ssh_keys() })
-                .await;
+            let keys = cx.background_spawn(async { list_managed_ssh_keys() }).await;
 
             this.update_in(cx, |this, window, cx| {
                 let Mode::ManageSshKeys(state) = &mut this.mode else {
@@ -6321,12 +7150,7 @@ impl RemoteServerProjects {
         .detach();
     }
 
-    fn verify_managed_key(
-        &mut self,
-        key_id: String,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn verify_managed_key(&mut self, key_id: String, window: &mut Window, cx: &mut Context<Self>) {
         let workspace = self.workspace.clone();
         cx.spawn_in(window, async move |this, cx| {
             let result = remote::verify_managed_ssh_key(&key_id, cx).await;
@@ -6384,8 +7208,7 @@ impl RemoteServerProjects {
             let Some(path) = paths.into_iter().next() else {
                 return;
             };
-            let result =
-                remote::import_managed_ssh_key(path, String::new(), 0, None, cx).await;
+            let result = remote::import_managed_ssh_key(path, String::new(), 0, None, cx).await;
             this.update_in(cx, |this, window, cx| {
                 match result {
                     Ok(_) => this.reload_managed_ssh_keys(window, cx),
@@ -6512,15 +7335,11 @@ impl RemoteServerProjects {
                 match result {
                     Ok(()) => {
                         if let Mode::ManageSshKeys(state) = &mut this.mode
-                            && let Some(index) = state
-                                .keys
-                                .iter()
-                                .position(|key| key.key_id == key_id)
+                            && let Some(index) =
+                                state.keys.iter().position(|key| key.key_id == key_id)
                         {
                             state.keys.remove(index);
-                            state.selected = state
-                                .selected
-                                .min(state.keys.len().saturating_sub(1));
+                            state.selected = state.selected.min(state.keys.len().saturating_sub(1));
                         }
                         workspace
                             .update(cx, |workspace, cx| {
@@ -6603,10 +7422,6 @@ impl RemoteServerProjects {
                         (i18n::t!("0a1b6f1b57f5198e"), Color::Success)
                     }
                 };
-                let kind = match key.kind {
-                    ManagedSshKeyKind::Generated => i18n::t!("4039f4ecabb9e265"),
-                    ManagedSshKeyKind::Imported => i18n::t!("576d81bb0631b165"),
-                };
                 h_flex()
                     .id(SharedString::from(format!("managed-ssh-key-{index}")))
                     .w_full()
@@ -6620,6 +7435,7 @@ impl RemoteServerProjects {
                             .border_l_2()
                             .border_color(colors.text_accent)
                     })
+                    .hover(|this| this.bg(colors.element_hover))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if let Mode::ManageSshKeys(state) = &mut this.mode {
                             state.selected = index;
@@ -6633,15 +7449,25 @@ impl RemoteServerProjects {
                             .min_w_0()
                             .gap_0p5()
                             .child(
-                                Label::new(
-                                    key.nickname.clone().unwrap_or_else(|| {
-                                        format!(
-                                            "{}@{}:{}",
-                                            key.remote_username, key.host, key.port
-                                        )
-                                    }),
-                                )
-                                .size(LabelSize::Small),
+                                h_flex()
+                                    .gap_2()
+                                    .child(
+                                        div()
+                                            .w(rems_from_px(6_f32))
+                                            .h(rems_from_px(6_f32))
+                                            .flex_none()
+                                            .rounded_full()
+                                            .bg(status_color.color(cx)),
+                                    )
+                                    .child(
+                                        Label::new(key.nickname.clone().unwrap_or_else(|| {
+                                            format!(
+                                                "{}@{}:{}",
+                                                key.remote_username, key.host, key.port
+                                            )
+                                        }))
+                                        .size(LabelSize::Small),
+                                    ),
                             )
                             .child(
                                 Label::new(format!(
@@ -6650,21 +7476,12 @@ impl RemoteServerProjects {
                                 ))
                                 .size(LabelSize::XSmall)
                                 .color(Color::Muted),
-                            )
-                            .child(
-                                h_flex()
-                                    .gap_1()
-                                    .child(
-                                        Label::new(kind)
-                                            .size(LabelSize::XSmall)
-                                            .color(Color::Muted),
-                                    )
-                                    .child(
-                                        Label::new(status)
-                                            .size(LabelSize::XSmall)
-                                            .color(status_color),
-                                    ),
                             ),
+                    )
+                    .child(
+                        Label::new(status)
+                            .size(LabelSize::XSmall)
+                            .color(status_color),
                     )
                     .into_any_element()
             })
@@ -6684,7 +7501,11 @@ impl RemoteServerProjects {
                         .size(LabelSize::Small)
                         .color(Color::Error),
                 )
-                .child(Label::new(error.clone()).size(LabelSize::XSmall).color(Color::Muted))
+                .child(
+                    Label::new(error.clone())
+                        .size(LabelSize::XSmall)
+                        .color(Color::Muted),
+                )
                 .into_any_element()
         } else if state.keys.is_empty() {
             v_flex()
@@ -6698,11 +7519,7 @@ impl RemoteServerProjects {
                 )
                 .into_any_element()
         } else {
-            v_flex()
-                .p_1()
-                .gap_0p5()
-                .children(rows)
-                .into_any_element()
+            v_flex().p_1().gap_0p5().children(rows).into_any_element()
         };
 
         let detail = if let Some(key) = selected {
@@ -6714,240 +7531,313 @@ impl RemoteServerProjects {
                     (i18n::t!("0a1b6f1b57f5198e"), Color::Success)
                 }
             };
+            let kind = match key.kind {
+                ManagedSshKeyKind::Generated => i18n::t!("4039f4ecabb9e265"),
+                ManagedSshKeyKind::Imported => i18n::t!("576d81bb0631b165"),
+            };
+            let display_name = key
+                .nickname
+                .clone()
+                .unwrap_or_else(|| format!("{}@{}:{}", key.remote_username, key.host, key.port));
+            let address = format!("{}@{}:{}", key.remote_username, key.host, key.port);
+            let fingerprint =
+                public_key_fingerprint(&key.public_key).unwrap_or_else(|| key.key_id.clone());
+            let last_used = key
+                .last_used_at
+                .clone()
+                .unwrap_or_else(|| i18n::t!("5594f4797ae55d1a").to_string());
             let workspace = self.workspace.clone();
             let copy_key = key.public_key.clone();
-            let key_id = key.key_id.clone();
-            let username = key.remote_username.clone();
-            let host = key.host.clone();
-            let port = key.port;
-            let revoke_key_id = key_id.clone();
-            let revoke_username = username.clone();
-            let revoke_host = host.clone();
+            let copy_fingerprint = fingerprint.clone();
 
             v_flex()
+                .w_full()
                 .gap_3()
-                .p_3()
                 .child(
-                    h_flex()
-                        .gap_2()
+                    v_flex()
+                        .w_full()
+                        .gap_1()
                         .child(
-                            Label::new(
-                                key.nickname.clone().unwrap_or_else(|| {
-                                    format!("{}@{}:{}", key.remote_username, key.host, key.port)
-                                }),
-                            )
-                            .size(LabelSize::Large),
+                            h_flex()
+                                .gap_2()
+                                .flex_wrap()
+                                .child(Label::new(display_name).size(LabelSize::Large))
+                                .child(
+                                    Chip::new(status)
+                                        .label_size(LabelSize::XSmall)
+                                        .label_color(status_color)
+                                        .border_color(colors.border_variant),
+                                )
+                                .child(
+                                    Chip::new(kind)
+                                        .label_size(LabelSize::XSmall)
+                                        .label_color(Color::Muted)
+                                        .border_color(colors.border_variant),
+                                )
+                                .child(div().flex_1())
+                                .child(
+                                    IconButton::new("rename-managed-ssh-key", IconName::Pencil)
+                                        .icon_size(IconSize::Small)
+                                        .tooltip(Tooltip::text(i18n::t!("0d0cbac2eee54113")))
+                                        .on_click(cx.listener({
+                                            let current = key.nickname.clone().unwrap_or_default();
+                                            move |this, _, window, cx| {
+                                                let editor = form_editor("", window, cx);
+                                                set_editor_text(
+                                                    &editor,
+                                                    current.clone(),
+                                                    window,
+                                                    cx,
+                                                );
+                                                editor.update(cx, |editor, cx| {
+                                                    editor.focus_handle(cx).focus(window, cx);
+                                                });
+                                                if let Mode::ManageSshKeys(state) = &mut this.mode {
+                                                    state.rename = Some(editor);
+                                                }
+                                                cx.notify();
+                                            }
+                                        })),
+                                ),
                         )
-                        .child(Label::new(status).size(LabelSize::XSmall).color(status_color))
                         .child(
-                            Button::new("rename-managed-ssh-key", i18n::t!("0d0cbac2eee54113"))
-                                .style(ButtonStyle::Transparent)
-                                .on_click(cx.listener({
-                                    let current = key.nickname.clone().unwrap_or_default();
-                                    move |this, _, window, cx| {
-                                        let editor = form_editor("", window, cx);
-                                        set_editor_text(&editor, current.clone(), window, cx);
-                                        editor.update(cx, |editor, cx| {
-                                            editor.focus_handle(cx).focus(window, cx);
-                                        });
-                                        if let Mode::ManageSshKeys(state) = &mut this.mode {
-                                            state.rename = Some(editor);
+                            h_flex()
+                                .gap_2()
+                                .child(
+                                    Label::new(address)
+                                        .size(LabelSize::XSmall)
+                                        .color(Color::Muted),
+                                )
+                                .child(
+                                    IconButton::new(
+                                        "copy-managed-ssh-key-destination",
+                                        IconName::Copy,
+                                    )
+                                    .icon_size(IconSize::XSmall)
+                                    .tooltip(Tooltip::text(i18n::t!("63d90d977348ab1f")))
+                                    .on_click({
+                                        let address = format!(
+                                            "{}@{}:{}",
+                                            key.remote_username, key.host, key.port
+                                        );
+                                        move |_, _, cx| {
+                                            cx.write_to_clipboard(ClipboardItem::new_string(
+                                                address.clone(),
+                                            ));
                                         }
-                                        cx.notify();
-                                    }
-                                })),
+                                    }),
+                                ),
+                        )
+                        .child(
+                            h_flex()
+                                .gap_2()
+                                .flex_wrap()
+                                .child(
+                                    Label::new(i18n::t!("39a9046f9c8c993d"))
+                                        .size(LabelSize::XSmall)
+                                        .color(Color::Placeholder),
+                                )
+                                .child(
+                                    Label::new(last_used)
+                                        .size(LabelSize::XSmall)
+                                        .color(Color::Muted),
+                                ),
                         ),
                 )
                 .when_some(state.rename.clone(), |this, rename| {
                     this.child(
                         h_flex()
                             .gap_2()
+                            .child(div().flex_1().child(form_input_surface(&rename, false, cx)))
                             .child(
-                                div()
-                                    .flex_1()
-                                    .child(form_input_surface(&rename, false, cx)),
-                            )
-                            .child(
-                                Button::new("save-managed-ssh-key-nickname", i18n::t!("a3030bf8f16dc63c"))
-                                    .style(ButtonStyle::Tinted(TintColor::Accent))
-                                    .on_click(cx.listener({
-                                        let key_id = key.key_id.clone();
-                                        move |this, _, window, cx| {
-                                            let nickname = match &this.mode {
-                                                Mode::ManageSshKeys(state) => state
-                                                    .rename
-                                                    .as_ref()
-                                                    .map(|editor| editor.read(cx).text(cx)),
-                                                _ => None,
-                                            };
-                                            if let Some(nickname) = nickname {
-                                                this.save_managed_ssh_key_nickname(
-                                                    key_id.clone(),
-                                                    nickname,
-                                                    window,
-                                                    cx,
-                                                );
-                                            }
+                                Button::new(
+                                    "save-managed-ssh-key-nickname",
+                                    i18n::t!("a3030bf8f16dc63c"),
+                                )
+                                .style(ButtonStyle::Tinted(TintColor::Accent))
+                                .on_click(cx.listener({
+                                    let key_id = key.key_id.clone();
+                                    move |this, _, window, cx| {
+                                        let nickname = match &this.mode {
+                                            Mode::ManageSshKeys(state) => state
+                                                .rename
+                                                .as_ref()
+                                                .map(|editor| editor.read(cx).text(cx)),
+                                            _ => None,
+                                        };
+                                        if let Some(nickname) = nickname {
+                                            this.save_managed_ssh_key_nickname(
+                                                key_id.clone(),
+                                                nickname,
+                                                window,
+                                                cx,
+                                            );
                                         }
-                                    })),
+                                    }
+                                })),
                             )
                             .child(
-                                Button::new("cancel-managed-ssh-key-nickname", i18n::t!("56b27cbf4eea18e2"))
-                                    .style(ButtonStyle::Transparent)
-                                    .on_click(cx.listener(|this, _, _, cx| {
+                                Button::new(
+                                    "cancel-managed-ssh-key-nickname",
+                                    i18n::t!("56b27cbf4eea18e2"),
+                                )
+                                .style(ButtonStyle::Transparent)
+                                .on_click(cx.listener(
+                                    |this, _, _, cx| {
                                         if let Mode::ManageSshKeys(state) = &mut this.mode {
                                             state.rename = None;
                                         }
                                         cx.notify();
-                                    })),
+                                    },
+                                )),
                             ),
                     )
                 })
-                .child(
+                .child(detail_card(
+                    i18n::t!("af515cd999d17795"),
+                    None,
+                    Some(
+                        Button::new("copy-managed-public-key", i18n::t!("63d90d977348ab1f"))
+                            .size(ButtonSize::Compact)
+                            .start_icon(Icon::new(IconName::Copy).size(IconSize::XSmall))
+                            .on_click(move |_, _, cx| {
+                                cx.write_to_clipboard(ClipboardItem::new_string(copy_key.clone()));
+                                workspace
+                                    .update(cx, |workspace, cx| {
+                                        workspace.show_toast(
+                                            Toast::new(
+                                                NotificationId::unique::<
+                                                    ManagedSshKeyManagementToast,
+                                                >(),
+                                                i18n::t!("d81a799d56008274"),
+                                            )
+                                            .autohide(),
+                                            cx,
+                                        );
+                                    })
+                                    .ok();
+                            })
+                            .into_any_element(),
+                    ),
                     v_flex()
-                        .gap_1()
+                        .p_3()
+                        .gap_2()
                         .child(
-                            Label::new(i18n::t!("af515cd999d17795"))
-                                .size(LabelSize::Small)
-                                .color(Color::Muted),
-                        )
-                        .child(
-                            v_flex()
+                            div()
                                 .p_2()
-                                .rounded_md()
+                                .rounded_sm()
                                 .border_1()
                                 .border_color(colors.border)
                                 .bg(colors.editor_background)
                                 .child(Label::new(key.public_key.clone()).size(LabelSize::XSmall)),
                         )
                         .child(
-                            Button::new("copy-managed-public-key", i18n::t!("f523545a6f48e3e6"))
-                                .size(ButtonSize::Default)
-                                .on_click(move |_, _, cx| {
-                                    cx.write_to_clipboard(ClipboardItem::new_string(
-                                        copy_key.clone(),
-                                    ));
-                                    workspace
-                                        .update(cx, |workspace, cx| {
-                                            workspace.show_toast(
-                                                Toast::new(
-                                                    NotificationId::unique::<
-                                                        ManagedSshKeyManagementToast,
-                                                    >(),
-                                                    i18n::t!("d81a799d56008274"),
-                                                )
-                                                .autohide(),
-                                                cx,
-                                            );
-                                        })
-                                        .ok();
-                                }),
-                        ),
-                )
-                .child(
+                            Label::new(i18n::t!("3b8b36cb2deed55d"))
+                                .size(LabelSize::XSmall)
+                                .color(Color::Placeholder),
+                        )
+                        .into_any_element(),
+                    cx,
+                ))
+                .child(detail_card(
+                    i18n::t!("0d6a14a9ab254ec6"),
+                    None,
+                    None,
                     v_flex()
-                        .gap_1()
+                        .p_3()
                         .child(
-                            Label::new(i18n::t!("0d6a14a9ab254ec6"))
-                                .size(LabelSize::Small)
-                                .color(Color::Muted),
+                            h_flex()
+                                .gap_2()
+                                .child(
+                                    Label::new(fingerprint)
+                                        .size(LabelSize::XSmall)
+                                        .color(Color::Muted),
+                                )
+                                .child(div().flex_1())
+                                .child(
+                                    IconButton::new(
+                                        "copy-managed-ssh-key-fingerprint",
+                                        IconName::Copy,
+                                    )
+                                    .icon_size(IconSize::XSmall)
+                                    .tooltip(Tooltip::text(i18n::t!("63d90d977348ab1f")))
+                                    .on_click(
+                                        move |_, _, cx| {
+                                            cx.write_to_clipboard(ClipboardItem::new_string(
+                                                copy_fingerprint.clone(),
+                                            ));
+                                        },
+                                    ),
+                                ),
                         )
-                        .child(
-                            Label::new(
-                                public_key_fingerprint(&key.public_key)
-                                    .unwrap_or_else(|| key.key_id.clone()),
-                            )
-                            .size(LabelSize::XSmall),
-                        ),
-                )
-                .child(
+                        .into_any_element(),
+                    cx,
+                ))
+                .child(detail_card(
+                    i18n::t!("9ffac814fe3ca049"),
+                    None,
+                    None,
                     v_flex()
-                        .gap_1()
+                        .p_3()
                         .child(
-                            Label::new(i18n::t!("301c9461c1d0d5dd"))
-                                .size(LabelSize::Small)
-                                .color(Color::Muted),
+                            h_flex()
+                                .w_full()
+                                .px_2()
+                                .py_1p5()
+                                .gap_2()
+                                .rounded_sm()
+                                .border_1()
+                                .border_color(colors.border_variant)
+                                .child(
+                                    Icon::new(IconName::Server)
+                                        .size(IconSize::XSmall)
+                                        .color(Color::Muted),
+                                )
+                                .child(
+                                    Label::new(format!(
+                                        "{}@{}:{}",
+                                        key.remote_username, key.host, key.port
+                                    ))
+                                    .size(LabelSize::XSmall)
+                                    .color(Color::Muted),
+                                ),
                         )
-                        .child(Label::new(key.key_id.clone()).size(LabelSize::XSmall)),
-                )
-                .child(
-                    v_flex()
-                        .gap_1()
-                        .child(
-                            Label::new(i18n::t!("39a9046f9c8c993d"))
-                                .size(LabelSize::Small)
-                                .color(Color::Muted),
-                        )
-                        .child(
-                            Label::new(
-                                key.last_used_at
-                                    .clone()
-                                    .unwrap_or_else(|| i18n::t!("5594f4797ae55d1a").to_string()),
-                            )
-                            .size(LabelSize::XSmall),
-                        ),
-                )
-                .child(
-                    v_flex()
-                        .gap_1()
-                        .child(
-                            Label::new(i18n::t!("5108bde065ec6162"))
-                                .size(LabelSize::Small)
-                                .color(Color::Muted),
-                        )
-                        .child(Label::new(key.private_key_file.clone()).size(LabelSize::XSmall)),
-                )
-                .child(
-                    h_flex()
-                        .gap_2()
-                        .flex_wrap()
-                        .child(
-                            Button::new("verify-managed-ssh-key", i18n::t!("154723a1aa0a09a4"))
-                                .on_click(cx.listener({
-                                    let key_id = key.key_id.clone();
-                                    move |this, _, window, cx| {
-                                        this.verify_managed_key(key_id.clone(), window, cx);
-                                    }
-                                })),
-                        )
-                        .child(
-                            Button::new(
-                                "revoke-managed-ssh-key",
-                                i18n::t!("2cd0f3be8738a86c"),
-                            )
-                            .style(ButtonStyle::Tinted(TintColor::Error))
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.confirm_remove_managed_ssh_key(
-                                    revoke_key_id.clone(),
-                                    revoke_username.clone(),
-                                    revoke_host.clone(),
-                                    port,
-                                    true,
-                                    window,
-                                    cx,
-                                );
-                            })),
-                        )
-                        .child(
-                            Button::new(
-                                "delete-local-managed-ssh-key",
-                                i18n::t!("6f0bde02c11998ef"),
-                            )
+                        .into_any_element(),
+                    cx,
+                ))
+                .child(detail_card(
+                    i18n::t!("39932f24fe11a6ba"),
+                    None,
+                    Some(
+                        Button::new("reveal-managed-ssh-key-file", i18n::t!("da478765741ebb0d"))
+                            .size(ButtonSize::Compact)
                             .style(ButtonStyle::Transparent)
-                            .color(Color::Error)
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.confirm_remove_managed_ssh_key(
-                                    key_id.clone(),
-                                    username.clone(),
-                                    host.clone(),
-                                    port,
-                                    false,
-                                    window,
-                                    cx,
-                                );
-                            })),
-                        ),
-                )
+                            .on_click({
+                                let key_dir = managed_ssh_key_directory();
+                                move |_, _, cx| {
+                                    cx.reveal_path(&key_dir);
+                                }
+                            })
+                            .into_any_element(),
+                    ),
+                    v_flex()
+                        .p_3()
+                        .gap_2()
+                        .child(detail_kv_row(
+                            i18n::t!("477bf990a2b3a489"),
+                            Label::new(key.private_key_file.clone())
+                                .size(LabelSize::XSmall)
+                                .color(Color::Muted)
+                                .into_any_element(),
+                        ))
+                        .child(
+                            Label::new(i18n::t!("8fbe551d3eee00eb"))
+                                .size(LabelSize::XSmall)
+                                .color(Color::Placeholder),
+                        )
+                        .into_any_element(),
+                    cx,
+                ))
                 .into_any_element()
         } else if state.loading {
             v_flex()
@@ -6968,7 +7858,7 @@ impl RemoteServerProjects {
             v_flex()
                 .p_3()
                 .child(
-                    Label::new(i18n::t!("f523545a6f48e3e6"))
+                    Label::new(i18n::t!("a197581fd2ec00a2"))
                         .size(LabelSize::Small)
                         .color(Color::Muted),
                 )
@@ -7057,14 +7947,6 @@ impl RemoteServerProjects {
                             })),
                     )
                     .child(
-                        Button::new("open-managed-ssh-key-directory", i18n::t!("c4afa2406a1e8944"))
-                            .size(ButtonSize::Default)
-                            .start_icon(Icon::new(IconName::Folder).size(IconSize::XSmall))
-                            .on_click(move |_, _, cx| {
-                                cx.reveal_path(&key_dir);
-                            }),
-                    )
-                    .child(
                         IconButton::new("manage-ssh-keys-close", IconName::Close)
                             .icon_size(IconSize::Small)
                             .on_click(cx.listener(|this, _, window, cx| {
@@ -7075,13 +7957,19 @@ impl RemoteServerProjects {
                     ),
             )
             .child(
-                h_flex()
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_stretch()
                     .flex_1()
                     .min_h_0()
                     .child(
                         v_flex()
-                            .w(rems_from_px(280_f32))
+                            .id("managed-ssh-keys-list-pane")
+                            .debug_selector(|| "managed-ssh-keys-list-pane".into())
+                            .w(rems_from_px(320_f32))
                             .flex_none()
+                            .h_full()
                             .min_h_0()
                             .border_r_1()
                             .border_color(colors.border_variant)
@@ -7097,15 +7985,179 @@ impl RemoteServerProjects {
                                     .min_h_0()
                                     .overflow_y_scroll()
                                     .child(list),
+                            )
+                            .child(
+                                h_flex()
+                                    .flex_none()
+                                    .px_3()
+                                    .py_2()
+                                    .gap_2()
+                                    .border_t_1()
+                                    .border_color(colors.border_variant)
+                                    .child(
+                                        v_flex()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .gap_0p5()
+                                            .child(
+                                                Label::new(i18n::t!("04a3ac5ed5ba73a7"))
+                                                    .size(LabelSize::XSmall)
+                                                    .color(Color::Placeholder),
+                                            )
+                                            .child(
+                                                Label::new(key_dir.display().to_string())
+                                                    .size(LabelSize::XSmall)
+                                                    .color(Color::Muted)
+                                                    .truncate(),
+                                            ),
+                                    )
+                                    .child(
+                                        Button::new(
+                                            "open-managed-ssh-key-directory",
+                                            i18n::t!("c4afa2406a1e8944"),
+                                        )
+                                        .size(ButtonSize::Compact)
+                                        .on_click({
+                                            let key_dir = key_dir.clone();
+                                            move |_, _, cx| {
+                                                cx.reveal_path(&key_dir);
+                                            }
+                                        }),
+                                    ),
                             ),
                     )
                     .child(
                         v_flex()
-                            .id("managed-ssh-keys-detail")
+                            .id("managed-ssh-keys-detail-pane")
+                            .debug_selector(|| "managed-ssh-keys-detail-pane".into())
                             .flex_1()
                             .min_w_0()
-                            .overflow_y_scroll()
-                            .child(detail),
+                            .h_full()
+                            .min_h_0()
+                            .child(
+                                v_flex()
+                                    .id("managed-ssh-keys-detail")
+                                    .flex_1()
+                                    .min_h_0()
+                                    .overflow_y_scroll()
+                                    .p_4()
+                                    .gap_3()
+                                    .child(detail),
+                            )
+                            .when_some(filtered.get(selected_index).copied(), |this, key| {
+                                let hint: SharedString = match key.deployment_state {
+                                    ManagedSshKeyDeploymentState::Pending => {
+                                        i18n::t!("8f57a8881af4fbee").into()
+                                    }
+                                    ManagedSshKeyDeploymentState::Verified => {
+                                        i18n::t!("d101620cd62b2f35").into()
+                                    }
+                                };
+                                let dot_color = match key.deployment_state {
+                                    ManagedSshKeyDeploymentState::Pending => colors.text_muted,
+                                    ManagedSshKeyDeploymentState::Verified => {
+                                        cx.theme().status().success
+                                    }
+                                };
+                                let key_id = key.key_id.clone();
+                                let username = key.remote_username.clone();
+                                let host = key.host.clone();
+                                let port = key.port;
+                                this.child(
+                                    h_flex()
+                                        .flex_none()
+                                        .px_4()
+                                        .py_2()
+                                        .gap_2()
+                                        .flex_wrap()
+                                        .border_t_1()
+                                        .border_color(colors.border_variant)
+                                        .child(
+                                            div()
+                                                .w(rems_from_px(6_f32))
+                                                .h(rems_from_px(6_f32))
+                                                .flex_none()
+                                                .rounded_full()
+                                                .bg(dot_color),
+                                        )
+                                        .child(
+                                            Label::new(hint)
+                                                .size(LabelSize::XSmall)
+                                                .color(Color::Muted),
+                                        )
+                                        .child(div().flex_1())
+                                        .child(
+                                            Button::new(
+                                                "verify-managed-ssh-key",
+                                                i18n::t!("7b840072a1e440b8"),
+                                            )
+                                            .size(ButtonSize::Compact)
+                                            .start_icon(
+                                                Icon::new(IconName::Check).size(IconSize::XSmall),
+                                            )
+                                            .on_click(
+                                                cx.listener({
+                                                    let key_id = key_id.clone();
+                                                    move |this, _, window, cx| {
+                                                        this.verify_managed_key(
+                                                            key_id.clone(),
+                                                            window,
+                                                            cx,
+                                                        );
+                                                    }
+                                                }),
+                                            ),
+                                        )
+                                        .child(
+                                            Button::new(
+                                                "revoke-managed-ssh-key",
+                                                i18n::t!("6f0bde02c11998ef"),
+                                            )
+                                            .size(ButtonSize::Compact)
+                                            .style(ButtonStyle::Tinted(TintColor::Error))
+                                            .on_click(
+                                                cx.listener({
+                                                    let key_id = key_id.clone();
+                                                    let username = username.clone();
+                                                    let host = host.clone();
+                                                    move |this, _, window, cx| {
+                                                        this.confirm_remove_managed_ssh_key(
+                                                            key_id.clone(),
+                                                            username.clone(),
+                                                            host.clone(),
+                                                            port,
+                                                            true,
+                                                            window,
+                                                            cx,
+                                                        );
+                                                    }
+                                                }),
+                                            ),
+                                        )
+                                        .child(
+                                            Button::new(
+                                                "delete-local-managed-ssh-key",
+                                                i18n::t!("56b27cbf4eea18e2"),
+                                            )
+                                            .size(ButtonSize::Compact)
+                                            .style(ButtonStyle::Transparent)
+                                            .color(Color::Error)
+                                            .on_click(
+                                                cx.listener(move |this, _, window, cx| {
+                                                    this.confirm_remove_managed_ssh_key(
+                                                        key_id.clone(),
+                                                        username.clone(),
+                                                        host.clone(),
+                                                        port,
+                                                        false,
+                                                        window,
+                                                        cx,
+                                                    );
+                                                }),
+                                            ),
+                                        ),
+                                )
+                            }),
                     ),
             )
             .child(
@@ -7120,13 +8172,21 @@ impl RemoteServerProjects {
                             .size(LabelSize::XSmall)
                             .color(Color::Muted),
                     )
-                    .child(Label::new("Enter").size(LabelSize::XSmall).color(Color::Muted))
+                    .child(
+                        Label::new("Enter")
+                            .size(LabelSize::XSmall)
+                            .color(Color::Muted),
+                    )
                     .child(
                         Label::new(i18n::t!("f523545a6f48e3e6"))
                             .size(LabelSize::XSmall)
                             .color(Color::Muted),
                     )
-                    .child(Label::new("Esc").size(LabelSize::XSmall).color(Color::Muted))
+                    .child(
+                        Label::new("Esc")
+                            .size(LabelSize::XSmall)
+                            .color(Color::Muted),
+                    )
                     .child(
                         Label::new(i18n::t!("572cf45ba43634b3"))
                             .size(LabelSize::XSmall)
@@ -7841,14 +8901,14 @@ mod tests {
             state.host_editor.update(cx, |editor, cx| {
                 editor.set_text("target.example", window, cx)
             });
-            state.port_editor.update(cx, |editor, cx| {
-                editor.set_text("not-a-port", window, cx)
-            });
+            state
+                .port_editor
+                .update(cx, |editor, cx| editor.set_text("not-a-port", window, cx));
             assert!(modal.read_form_draft(cx).is_err());
 
-            state.port_editor.update(cx, |editor, cx| {
-                editor.set_text("2222", window, cx)
-            });
+            state
+                .port_editor
+                .update(cx, |editor, cx| editor.set_text("2222", window, cx));
             state.proxy_editor.update(cx, |editor, cx| {
                 editor.set_text("ftp://127.0.0.1:21", window, cx)
             });
@@ -7857,9 +8917,9 @@ mod tests {
             state.proxy_editor.update(cx, |editor, cx| {
                 editor.set_text("socks5://127.0.0.1:1080", window, cx)
             });
-            state.timeout_editor.update(cx, |editor, cx| {
-                editor.set_text("30", window, cx)
-            });
+            state
+                .timeout_editor
+                .update(cx, |editor, cx| editor.set_text("30", window, cx));
             let draft = modal.read_form_draft(cx).expect("a valid draft");
             assert_eq!(draft.host, "target.example");
             assert_eq!(draft.port, Some(2222));
@@ -7949,10 +9009,7 @@ mod tests {
             assert_eq!(connection.jump_hosts.len(), 1);
             assert_eq!(connection.jump_hosts[0].host, "jump.example");
             assert_eq!(connection.jump_hosts[0].username.as_deref(), Some("ops"));
-            assert_eq!(
-                connection.proxy.as_deref(),
-                Some("socks5://127.0.0.1:1080")
-            );
+            assert_eq!(connection.proxy.as_deref(), Some("socks5://127.0.0.1:1080"));
             assert_eq!(connection.connection_timeout, Some(30));
         });
     }
@@ -8089,8 +9146,7 @@ mod tests {
                 connection_timeout: Some(45),
                 ..Default::default()
             };
-            let form =
-                CreateRemoteServerForm::for_edit(SshServerIndex(3), &connection, window, cx);
+            let form = CreateRemoteServerForm::for_edit(SshServerIndex(3), &connection, window, cx);
 
             assert!(form.editing);
             assert_eq!(form.saved_index.map(|index| index.0), Some(3));
@@ -8211,9 +9267,7 @@ mod tests {
     }
 
     #[gpui::test]
-    async fn test_add_server_form_explains_the_default_key_for_key_auth(
-        cx: &mut TestAppContext,
-    ) {
+    async fn test_add_server_form_explains_the_default_key_for_key_auth(cx: &mut TestAppContext) {
         let app_state = init_test(cx);
         let fs = app_state.fs.as_fake();
         let project = Project::test(fs.clone(), [], cx).await;
@@ -8343,6 +9397,93 @@ mod tests {
                 "every non-default advanced value stays visible while collapsed"
             );
         });
+    }
+
+    /// The server and key managers are two-column windows: both columns take the
+    /// full height of the body and start at its top edge. Centring the row (the
+    /// default of `h_flex`) shrank each column to its content and pushed short
+    /// detail panes into the middle of the window.
+    #[gpui::test]
+    async fn manager_columns_fill_the_body_instead_of_being_centred(cx: &mut TestAppContext) {
+        let app_state = init_test(cx);
+        let fs = app_state.fs.clone();
+        let project = Project::test(fs.clone(), [], cx).await;
+        let (multi_workspace, cx) = cx.add_window_view(|window, cx| {
+            let workspace = cx.new(|cx| Workspace::test_new(project, window, cx));
+            MultiWorkspace::new(workspace, window, cx)
+        });
+        let workspace =
+            multi_workspace.read_with(cx, |multi_workspace, _| multi_workspace.workspace().clone());
+        workspace.update_in(cx, |workspace, window, cx| {
+            let weak = cx.weak_entity();
+            workspace.toggle_modal(window, cx, |window, cx| {
+                RemoteServerProjects::new(false, fs.clone(), window, weak, cx)
+            });
+        });
+        cx.run_until_parked();
+        let modal = workspace
+            .read_with(cx, |workspace, cx| {
+                workspace.active_modal::<RemoteServerProjects>(cx)
+            })
+            .expect("remote projects modal is open");
+
+        modal.update_in(cx, |modal, window, cx| modal.manage_servers(window, cx));
+        cx.run_until_parked();
+
+        let list = cx
+            .debug_bounds("managed-servers-list")
+            .expect("the server list column is laid out");
+        let detail = cx
+            .debug_bounds("managed-servers-detail-pane")
+            .expect("the server detail pane is laid out");
+        assert_eq!(list.top(), detail.top(), "both columns share one top edge");
+        assert_eq!(
+            list.bottom(),
+            detail.bottom(),
+            "both columns stretch to the body's bottom edge"
+        );
+        assert!(
+            list.size.height > px(200.),
+            "the columns fill the body instead of shrinking to their content: {list:?}"
+        );
+
+        modal.update_in(cx, |modal, window, cx| {
+            let search = form_editor("", window, cx);
+            let subscription = cx.subscribe(&search, |_, _, _: &EditorEvent, cx| cx.notify());
+            modal.mode = Mode::ManageSshKeys(ManageSshKeysState {
+                keys: Vec::new(),
+                selected: 0,
+                loading: false,
+                error: None,
+                search,
+                rename: None,
+                _search_subscription: subscription,
+            });
+            modal.focus_handle(cx).focus(window, cx);
+            cx.notify();
+        });
+        cx.run_until_parked();
+
+        let list = cx
+            .debug_bounds("managed-ssh-keys-list-pane")
+            .expect("the key list column is laid out");
+        let detail = cx
+            .debug_bounds("managed-ssh-keys-detail-pane")
+            .expect("the key detail pane is laid out");
+        assert_eq!(
+            list.top(),
+            detail.top(),
+            "both key columns share one top edge"
+        );
+        assert_eq!(
+            list.bottom(),
+            detail.bottom(),
+            "both key columns stretch to the body's bottom edge"
+        );
+        assert!(
+            list.size.width < detail.size.width,
+            "the key list keeps its fixed column width"
+        );
     }
 }
 
