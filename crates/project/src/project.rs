@@ -2435,6 +2435,13 @@ impl Project {
         })
     }
 
+    /// The root that scopes this project's hosted terminals.
+    ///
+    /// A Remote Server stores this same root as the scope of every session the
+    /// project creates, so a shell started in a subdirectory of the worktree is
+    /// still listed and re-attached here. Both sides derive it from the first
+    /// worktree, which keeps sessions of the project's other folders together
+    /// while excluding another project's sessions.
     pub fn hosted_terminal_root(&self, cx: &App) -> Option<String> {
         self.worktrees(cx)
             .next()

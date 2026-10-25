@@ -5644,5 +5644,9 @@
   "6bb234e5964a08ca": "Search host, user or nickname",
   "893b185f6371e855": "Search server name or address",
   "13d61fea9f174905": "Preview",
-  "910bc0a393ff7a97": "Enter a host to see the SSH command"
+  "910bc0a393ff7a97": "Enter a host to see the SSH command",
+  "0d6fad8138e77630": "Choose Folder",
+  "b6d7cbc94dba88c6": "Recently Opened",
+  "eb210d49f5f0cbbb": "These paths live on the remote host.",
+  "6fc31d19597eedca": "Choose a folder on the remote host"
 }

@@ -799,7 +799,11 @@ impl AddWslDistro {
         use crate::wsl_picker::{WslDistroSelected, WslPickerDelegate, WslPickerDismissed};
 
         let delegate = WslPickerDelegate::new();
-        let picker = cx.new(|cx| Picker::uniform_list(delegate, window, cx).embedded());
+        let picker = cx.new(|cx| {
+            Picker::uniform_list(delegate, window, cx)
+                .embedded()
+                .max_height(rems(40.))
+        });
 
         cx.subscribe_in(
             &picker,
@@ -1501,6 +1505,11 @@ enum ManageServersFilter {
     SshConfig,
 }
 
+struct ServerProjectsState {
+    entry: RemoteEntry,
+    selected: usize,
+}
+
 struct ManageServersState {
     filter: ManageServersFilter,
     selected: usize,
@@ -1526,6 +1535,7 @@ enum Mode {
     ProjectPicker(Entity<ProjectPicker>),
     CreateRemoteServer(CreateRemoteServer),
     CreateRemoteServerForm(CreateRemoteServerForm),
+    ServerProjects(ServerProjectsState),
     ManageServers(ManageServersState),
     ManageSshKeys(ManageSshKeysState),
     CreateRemoteDevContainer(CreateRemoteDevContainer),
@@ -1693,6 +1703,7 @@ impl RemoteServerPickerDelegate {
     }
 
     /// Shows the dedicated view for the given server.
+    #[cfg(test)]
     fn focus_server(&mut self, server: usize) {
         if let Some(entry) = self.state.servers.get(server) {
             let identity = entry.identity();
@@ -1970,7 +1981,42 @@ impl RemoteServerPickerDelegate {
                         .child(HighlightedLabel::new(main_label, host_positions.to_vec()))
                         .children(aux_label.map(|label| Label::new(label).color(Color::Muted))),
                 )
-                .end_slot(Icon::new(IconName::ChevronRight).color(Color::Muted))
+                .end_slot(
+                    h_flex()
+                        .gap_2()
+                        .child(
+                            Label::new(match &server {
+                                RemoteEntry::Project {
+                                    connection,
+                                    projects,
+                                    ..
+                                } => {
+                                    let address = match connection {
+                                        Connection::Ssh(ssh) => format!(
+                                            "{}@{}{}",
+                                            ssh.username.clone().unwrap_or_default(),
+                                            ssh.host,
+                                            ssh.port
+                                                .filter(|port| *port != 22)
+                                                .map(|port| format!(":{port}"))
+                                                .unwrap_or_default()
+                                        ),
+                                        Connection::Wsl(wsl) => wsl.distro_name.clone(),
+                                        Connection::DevContainer(container) => {
+                                            container.name.clone()
+                                        }
+                                    };
+                                    format!("{address} · {} 个项目", projects.len())
+                                }
+                                RemoteEntry::SshConfig { host } => {
+                                    format!("{host} · SSH 配置")
+                                }
+                            })
+                            .size(LabelSize::XSmall)
+                            .color(Color::Muted),
+                        )
+                        .child(Icon::new(IconName::ChevronRight).color(Color::Muted)),
+                )
                 .into_any_element(),
         )
     }
@@ -2043,6 +2089,19 @@ impl RemoteServerPickerDelegate {
             .start_slot(Icon::new(icon).color(Color::Muted))
             .child(Label::new(label))
             .into_any_element()
+    }
+}
+
+fn managed_server_address(connection: &Connection) -> String {
+    match connection {
+        Connection::Ssh(ssh) => format!(
+            "{}@{}:{}",
+            ssh.username.clone().unwrap_or_default(),
+            ssh.host,
+            ssh.port.unwrap_or(22)
+        ),
+        Connection::Wsl(wsl) => wsl.distro_name.clone(),
+        Connection::DevContainer(container) => container.name.clone(),
     }
 }
 
@@ -2154,9 +2213,14 @@ impl PickerDelegate for RemoteServerPickerDelegate {
         match entry {
             RemoteMatch::Separator | RemoteMatch::FocusedServerHeader { .. } => {}
             RemoteMatch::Server { server, .. } => {
-                let server = *server;
-                self.focus_server(server);
-                cx.notify();
+                let entry = self.state.servers.get(*server).cloned();
+                if let Some(entry) = entry {
+                    remote_server_projects
+                        .update(cx, |this, cx| {
+                            this.open_server_projects(entry, window, cx)
+                        })
+                        .log_err();
+                }
             }
             RemoteMatch::AddServer => {
                 remote_server_projects
@@ -2308,17 +2372,19 @@ impl PickerDelegate for RemoteServerPickerDelegate {
 
     fn select_child(
         &mut self,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Picker<Self>>,
     ) -> Option<String> {
         let Some(RemoteMatch::Server { server, .. }) = self.matches.get(self.selected_index) else {
             return None;
         };
-        let server = *server;
-        self.focus_server(server);
-        cx.notify();
-        // Keep the active query when drilling in so a location matched from the
-        // search view stays filtered and highlighted inside the server.
+        let entry = self.state.servers.get(*server).cloned();
+        let remote_server_projects = self.remote_server_projects.clone();
+        if let Some(entry) = entry {
+            remote_server_projects
+                .update(cx, |this, cx| this.open_server_projects(entry, window, cx))
+                .log_err();
+        }
         Some(self.query.clone())
     }
 
@@ -3073,6 +3139,7 @@ impl RemoteServerProjects {
         match &self.mode {
             Mode::Default
             | Mode::ViewServerOptions(_)
+            | Mode::ServerProjects(_)
             | Mode::ManageServers(_)
             | Mode::ManageSshKeys(_) => {}
             Mode::ProjectPicker(_) => {}
@@ -5258,6 +5325,414 @@ impl RemoteServerProjects {
         cx.notify();
     }
 
+    fn open_server_projects(
+        &mut self,
+        entry: RemoteEntry,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.mode = Mode::ServerProjects(ServerProjectsState { entry, selected: 0 });
+        self.focus_handle(cx).focus(window, cx);
+        cx.notify();
+    }
+
+    fn open_server_projects_folder(
+        &mut self,
+        index: Option<ServerIndex>,
+        host: String,
+        connection: Connection,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let index = index.unwrap_or_else(|| {
+            ServerIndex::Ssh(self.create_host_from_ssh_config(&SharedString::from(host), cx))
+        });
+        cx.emit(DismissEvent);
+        self.create_remote_project(index, connection.into(), window, cx);
+    }
+
+    fn render_server_projects(
+        &self,
+        state: &ServerProjectsState,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let colors = cx.theme().colors().clone();
+        let entry_connection = state.entry.connection().into_owned();
+        let (main, aux, is_wsl) = server_labels(&entry_connection);
+        let (projects, connection, index, host) = match &state.entry {
+            RemoteEntry::Project {
+                projects,
+                connection,
+                index,
+            } => (
+                projects.clone(),
+                connection.clone(),
+                Some(*index),
+                match connection {
+                    Connection::Ssh(ssh) => ssh.host.clone(),
+                    Connection::Wsl(wsl) => wsl.distro_name.clone(),
+                    Connection::DevContainer(container) => container.name.clone(),
+                },
+            ),
+            RemoteEntry::SshConfig { host } => (
+                Vec::new(),
+                state.entry.connection().into_owned(),
+                None,
+                host.to_string(),
+            ),
+        };
+        let is_ssh = matches!(connection, Connection::Ssh(_));
+        let row_count = 1 + projects.len() + usize::from(is_ssh && !is_wsl);
+        let selected = state.selected.min(row_count.saturating_sub(1));
+
+        let mut rows = Vec::new();
+        rows.push(
+            h_flex()
+                .id("server-projects-open-folder")
+                .w_full()
+                .px_3()
+                .py_2()
+                .gap_2()
+                .rounded_md()
+                .cursor_pointer()
+                .when(selected == 0, |this| this.bg(colors.element_selected))
+                .on_click(cx.listener({
+                    let connection = connection.clone();
+                    let host = host.clone();
+                    move |this, _, window, cx| {
+                        this.open_server_projects_folder(
+                            index,
+                            host.clone(),
+                            connection.clone(),
+                            window,
+                            cx,
+                        );
+                    }
+                }))
+                .child(Icon::new(IconName::Folder).color(Color::Accent))
+                .child(
+                    v_flex()
+                        .flex_1()
+                        .child(Label::new(i18n::t!("fcf8b4bff0df782d")).size(LabelSize::Small))
+                        .child(
+                            Label::new(i18n::t!("6fc31d19597eedca"))
+                                .size(LabelSize::XSmall)
+                                .color(Color::Muted),
+                        ),
+                )
+                .child(Icon::new(IconName::ChevronRight).color(Color::Muted))
+                .into_any_element(),
+        );
+
+        for (project_index, project) in projects.iter().enumerate() {
+            let is_selected = selected == project_index + 1;
+            let path = project.project.paths.first().cloned().unwrap_or_default();
+            let connection = connection.clone();
+            let project = project.project.clone();
+            rows.push(
+                h_flex()
+                    .id(SharedString::from(format!("server-project-{project_index}")))
+                    .w_full()
+                    .px_3()
+                    .py_2()
+                    .gap_2()
+                    .rounded_md()
+                    .cursor_pointer()
+                    .when(is_selected, |this| this.bg(colors.element_selected))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        if let Some(index) = index {
+                            cx.emit(DismissEvent);
+                            this.open_remote_project_entry(
+                                index,
+                                project.clone(),
+                                connection.clone(),
+                                false,
+                                window,
+                                cx,
+                            );
+                        }
+                    }))
+                    .child(Icon::new(IconName::Folder).color(Color::Muted))
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .child(Label::new(path).size(LabelSize::Small))
+                            .child(
+                                Label::new(i18n::t!("b6d7cbc94dba88c6"))
+                                    .size(LabelSize::XSmall)
+                                    .color(Color::Muted),
+                            ),
+                    )
+                    .child(Icon::new(IconName::ChevronRight).color(Color::Muted))
+                    .into_any_element(),
+            );
+        }
+
+        if is_ssh && !is_wsl {
+            let is_selected = selected == row_count - 1;
+            let connection = connection.clone();
+            let host = host.clone();
+            rows.push(
+                h_flex()
+                    .id("server-projects-terminal")
+                    .w_full()
+                    .px_3()
+                    .py_2()
+                    .gap_2()
+                    .rounded_md()
+                    .cursor_pointer()
+                    .when(is_selected, |this| this.bg(colors.element_selected))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        let Connection::Ssh(ssh) = connection.clone() else {
+                            return;
+                        };
+                        let ssh_index = match index {
+                            Some(ServerIndex::Ssh(index)) => index,
+                            _ => this.create_host_from_ssh_config(
+                                &SharedString::from(host.clone()),
+                                cx,
+                            ),
+                        };
+                        cx.emit(DismissEvent);
+                        this.open_remote_terminal_workspace(
+                            ssh_index, ssh, false, window, cx,
+                        );
+                    }))
+                    .child(Icon::new(IconName::Terminal).color(Color::Muted))
+                    .child(
+                        Label::new(i18n::t!("136cbc80612aee9b"))
+                            .size(LabelSize::Small)
+                            .flex_1(),
+                    )
+                    .child(Icon::new(IconName::ChevronRight).color(Color::Muted))
+                    .into_any_element(),
+            );
+        }
+
+        v_flex()
+            .size_full()
+            .track_focus(&self.focus_handle(cx))
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                let Mode::ServerProjects(state) = &this.mode else {
+                    return;
+                };
+                let (projects, is_wsl, is_ssh) = match &state.entry {
+                    RemoteEntry::Project {
+                        projects,
+                        connection,
+                        ..
+                    } => (
+                        projects.len(),
+                        matches!(connection, Connection::Wsl(_)),
+                        matches!(connection, Connection::Ssh(_)),
+                    ),
+                    RemoteEntry::SshConfig { .. } => (0, false, true),
+                };
+                let row_count = 1 + projects + usize::from(is_ssh && !is_wsl);
+                match event.keystroke.key.as_str() {
+                    "up" => {
+                        if let Mode::ServerProjects(state) = &mut this.mode {
+                            state.selected = state.selected.saturating_sub(1);
+                        }
+                    }
+                    "down" => {
+                        if let Mode::ServerProjects(state) = &mut this.mode {
+                            state.selected =
+                                (state.selected + 1).min(row_count.saturating_sub(1));
+                        }
+                    }
+                    "enter" => {
+                        let (connection, host, index, project) = match &state.entry {
+                            RemoteEntry::Project {
+                                connection,
+                                index,
+                                projects,
+                                ..
+                            } => (
+                                connection.clone(),
+                                String::new(),
+                                Some(*index),
+                                projects.get(state.selected.saturating_sub(1)).cloned(),
+                            ),
+                            RemoteEntry::SshConfig { host } => (
+                                state.entry.connection().into_owned(),
+                                host.to_string(),
+                                None,
+                                None,
+                            ),
+                        };
+                        if state.selected == 0 {
+                            this.open_server_projects_folder(
+                                index, host, connection, window, cx,
+                            );
+                        } else if let Some(project) = project
+                            && let Some(index) = index
+                        {
+                            cx.emit(DismissEvent);
+                            this.open_remote_project_entry(
+                                index,
+                                project.project,
+                                connection,
+                                false,
+                                window,
+                                cx,
+                            );
+                        } else if let Connection::Ssh(ssh) = connection {
+                            let ssh_index = match index {
+                                Some(ServerIndex::Ssh(index)) => index,
+                                _ => this.create_host_from_ssh_config(
+                                    &SharedString::from(host),
+                                    cx,
+                                ),
+                            };
+                            cx.emit(DismissEvent);
+                            this.open_remote_terminal_workspace(
+                                ssh_index, ssh, false, window, cx,
+                            );
+                        }
+                    }
+                    "escape" => {
+                        this.mode = Mode::default_mode(&this.ssh_config_servers, cx);
+                        cx.notify();
+                    }
+                    _ => return,
+                }
+                cx.stop_propagation();
+                cx.notify();
+            }))
+            .child(
+                h_flex()
+                    .p_2()
+                    .gap_2()
+                    .items_center()
+                    .border_b_1()
+                    .border_color(colors.border_variant)
+                    .child(
+                        IconButton::new("server-projects-back", IconName::ArrowLeft)
+                            .icon_size(IconSize::Small)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.mode =
+                                    Mode::default_mode(&this.ssh_config_servers, cx);
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .child(
+                                h_flex()
+                                    .gap_1()
+                                    .when(is_wsl, |this| {
+                                        this.child(
+                                            Label::new(i18n::t!("41ed0a615790bb95"))
+                                                .size(LabelSize::Small)
+                                                .color(Color::Muted),
+                                        )
+                                    })
+                                    .child(Label::new(main).size(LabelSize::Large)),
+                            )
+                            .child(
+                                h_flex()
+                                    .gap_1()
+                                    .when_some(aux, |this, aux| {
+                                        this.child(
+                                            Label::new(aux)
+                                                .size(LabelSize::XSmall)
+                                                .color(Color::Muted),
+                                        )
+                                    }),
+                            ),
+                    )
+                    .child(
+                        Button::new("server-projects-open", i18n::t!("fcf8b4bff0df782d"))
+                            .style(ButtonStyle::Tinted(TintColor::Accent))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.open_server_projects_folder(
+                                    index,
+                                    host.clone(),
+                                    connection.clone(),
+                                    window,
+                                    cx,
+                                );
+                            })),
+                    ),
+            )
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_h_0()
+                    .p_3()
+                    .gap_2()
+                    .child(
+                        div()
+                            .w_full()
+                            .rounded_lg()
+                            .border_1()
+                            .border_color(colors.border_variant)
+                            .child(
+                                h_flex()
+                                    .p_2()
+                                    .gap_2()
+                                    .border_b_1()
+                                    .border_color(colors.border_variant)
+                                    .child(
+                                        Label::new(i18n::t!("0d6fad8138e77630"))
+                                            .size(LabelSize::Small)
+                                            .color(Color::Muted),
+                                    )
+                                    .child(
+                                        Label::new(format!("{}", projects.len()))
+                                            .size(LabelSize::XSmall)
+                                            .color(Color::Muted),
+                                    ),
+                            )
+                            .child(v_flex().p_1().gap_0p5().children(rows)),
+                    )
+                    .child(
+                        h_flex()
+                            .w_full()
+                            .px_2()
+                            .py_1p5()
+                            .gap_2()
+                            .rounded_md()
+                            .bg(cx.theme().status().info_background)
+                            .child(
+                                Icon::new(IconName::Info)
+                                    .size(IconSize::Small)
+                                    .color(Color::Accent),
+                            )
+                            .child(
+                                Label::new(i18n::t!("eb210d49f5f0cbbb"))
+                                    .size(LabelSize::XSmall)
+                                    .color(Color::Muted)
+                                    .flex_1(),
+                            ),
+                    ),
+            )
+            .child(
+                h_flex()
+                    .p_2()
+                    .gap_3()
+                    .border_t_1()
+                    .border_color(colors.border_variant)
+                    .child(Label::new("↑↓").size(LabelSize::XSmall).color(Color::Muted))
+                    .child(
+                        Label::new(i18n::t!("5c55a67935af8f45"))
+                            .size(LabelSize::XSmall)
+                            .color(Color::Muted),
+                    )
+                    .child(Label::new("Enter").size(LabelSize::XSmall).color(Color::Muted))
+                    .child(
+                        Label::new(i18n::t!("fcf8b4bff0df782d"))
+                            .size(LabelSize::XSmall)
+                            .color(Color::Muted),
+                    ),
+            )
+            .into_any_element()
+    }
+
     fn manage_servers(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let search = form_editor(i18n::t!("893b185f6371e855"), window, cx);
         let subscription = cx.subscribe(&search, |_, _, _: &EditorEvent, cx| cx.notify());
@@ -5358,22 +5833,28 @@ impl RemoteServerProjects {
             connection: Connection,
             index: Option<ServerIndex>,
             is_ssh_config: bool,
+            projects: usize,
         }
 
         let rows: Vec<ManagedServerRow> = entries
             .iter()
             .map(|entry| match entry {
                 RemoteEntry::Project {
-                    connection, index, ..
+                    connection,
+                    index,
+                    projects,
+                    ..
                 } => ManagedServerRow {
                     connection: connection.clone(),
                     index: Some(*index),
                     is_ssh_config: false,
+                    projects: projects.len(),
                 },
                 RemoteEntry::SshConfig { .. } => ManagedServerRow {
                     connection: entry.connection().into_owned(),
                     index: None,
                     is_ssh_config: true,
+                    projects: 0,
                 },
             })
             .collect();
@@ -5428,7 +5909,11 @@ impl RemoteServerProjects {
                     .gap_2()
                     .rounded_md()
                     .cursor_pointer()
-                    .when(is_selected, |this| this.bg(colors.element_selected))
+                    .when(is_selected, |this| {
+                        this.bg(colors.element_selected)
+                            .border_l_2()
+                            .border_color(colors.text_accent)
+                    })
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if let Mode::ManageServers(state) = &mut this.mode {
                             state.selected = index;
@@ -5458,6 +5943,11 @@ impl RemoteServerProjects {
                                     })
                                     .child(Label::new(main).size(LabelSize::Small)),
                             )
+                            .child(
+                                Label::new(managed_server_address(&row.connection))
+                                    .size(LabelSize::XSmall)
+                                    .color(Color::Muted),
+                            )
                             .when_some(aux, |this, aux| {
                                 this.child(Label::new(aux).size(LabelSize::XSmall).color(Color::Muted))
                             }),
@@ -5485,6 +5975,7 @@ impl RemoteServerProjects {
             };
             let copy_address = address.clone();
             let remove_index = index;
+            let project_count = (row.projects > 0).then_some(row.projects);
 
             v_flex()
                 .gap_3()
@@ -5499,17 +5990,29 @@ impl RemoteServerProjects {
                 )
                 .child(Label::new(address).size(LabelSize::Small).color(Color::Muted))
                 .child(
-                    Label::new(if is_config {
-                        i18n::t!("8ff228346a640061")
-                    } else {
-                        i18n::t!("1bd91a7d0c53c936")
-                    })
-                    .size(LabelSize::XSmall)
-                    .color(Color::Muted),
+                    h_flex()
+                        .gap_2()
+                        .child(
+                            Label::new(if is_config {
+                                i18n::t!("8ff228346a640061")
+                            } else {
+                                i18n::t!("1bd91a7d0c53c936")
+                            })
+                            .size(LabelSize::XSmall)
+                            .color(if is_config { Color::Accent } else { Color::Muted }),
+                        )
+                        .when_some(project_count, |this, count| {
+                            this.child(
+                                Label::new(format!("{count} 个项目"))
+                                    .size(LabelSize::XSmall)
+                                    .color(Color::Muted),
+                            )
+                        }),
                 )
                 .child(
                     h_flex()
                         .gap_2()
+                        .flex_wrap()
                         .child(
                             Button::new("managed-server-open", i18n::t!("fcf8b4bff0df782d"))
                                 .style(ButtonStyle::Tinted(TintColor::Accent))
@@ -5670,7 +6173,13 @@ impl RemoteServerProjects {
                                 cx.notify();
                             })),
                     )
+                    .child(Icon::new(IconName::Server).color(Color::Accent))
                     .child(Label::new(i18n::t!("790f6599b5c867a9")).size(LabelSize::Large).flex_1())
+                    .child(
+                        Label::new(format!("{}", rows.len()))
+                            .size(LabelSize::Small)
+                            .color(Color::Muted),
+                    )
                     .child(
                         Button::new("manage-servers-close", i18n::t!("572cf45ba43634b3"))
                             .style(ButtonStyle::Transparent)
@@ -5705,22 +6214,23 @@ impl RemoteServerProjects {
                                     .gap_1()
                                     .children(
                                         [
-                                            (ManageServersFilter::All, i18n::t!("5c55a67935af8f45")),
-                                            (ManageServersFilter::Saved, i18n::t!("1bd91a7d0c53c936")),
-                                            (ManageServersFilter::SshConfig, i18n::t!("8ff228346a640061")),
+                                            (ManageServersFilter::All, i18n::t!("5c55a67935af8f45"), rows.len()),
+                                            (ManageServersFilter::Saved, i18n::t!("1bd91a7d0c53c936"), rows.iter().filter(|row| !row.is_ssh_config).count()),
+                                            (ManageServersFilter::SshConfig, i18n::t!("8ff228346a640061"), rows.iter().filter(|row| row.is_ssh_config).count()),
                                         ]
-                                        .map(|(filter, label)| {
+                                        .map(|(filter, label, count)| {
                                             Button::new(
                                                 SharedString::from(format!(
                                                     "managed-servers-filter-{filter:?}"
                                                 )),
-                                                label,
+                                                format!("{label} {count}"),
                                             )
                                             .style(if state.filter == filter {
                                                 ButtonStyle::Tinted(TintColor::Accent)
                                             } else {
                                                 ButtonStyle::Transparent
                                             })
+                                            .label_size(LabelSize::XSmall)
                                             .on_click(cx.listener(move |this, _, _, cx| {
                                                 if let Mode::ManageServers(state) = &mut this.mode {
                                                     state.filter = filter;
@@ -5750,6 +6260,31 @@ impl RemoteServerProjects {
                             .min_w_0()
                             .overflow_y_scroll()
                             .child(detail),
+                    ),
+            )
+            .child(
+                h_flex()
+                    .p_2()
+                    .gap_3()
+                    .border_t_1()
+                    .border_color(colors.border_variant)
+                    .child(Label::new("↑↓").size(LabelSize::XSmall).color(Color::Muted))
+                    .child(
+                        Label::new(i18n::t!("c11330b85234f9c0"))
+                            .size(LabelSize::XSmall)
+                            .color(Color::Muted),
+                    )
+                    .child(Label::new("Enter").size(LabelSize::XSmall).color(Color::Muted))
+                    .child(
+                        Label::new(i18n::t!("051836569928a9f9"))
+                            .size(LabelSize::XSmall)
+                            .color(Color::Muted),
+                    )
+                    .child(Label::new("Esc").size(LabelSize::XSmall).color(Color::Muted))
+                    .child(
+                        Label::new(i18n::t!("572cf45ba43634b3"))
+                            .size(LabelSize::XSmall)
+                            .color(Color::Muted),
                     ),
             )
             .into_any_element()
@@ -6080,7 +6615,11 @@ impl RemoteServerProjects {
                     .gap_2()
                     .rounded_md()
                     .cursor_pointer()
-                    .when(is_selected, |this| this.bg(colors.element_selected))
+                    .when(is_selected, |this| {
+                        this.bg(colors.element_selected)
+                            .border_l_2()
+                            .border_color(colors.text_accent)
+                    })
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if let Mode::ManageSshKeys(state) = &mut this.mode {
                             state.selected = index;
@@ -6103,6 +6642,14 @@ impl RemoteServerProjects {
                                     }),
                                 )
                                 .size(LabelSize::Small),
+                            )
+                            .child(
+                                Label::new(format!(
+                                    "{}@{}:{}",
+                                    key.remote_username, key.host, key.port
+                                ))
+                                .size(LabelSize::XSmall)
+                                .color(Color::Muted),
                             )
                             .child(
                                 h_flex()
@@ -6353,6 +6900,7 @@ impl RemoteServerProjects {
                 .child(
                     h_flex()
                         .gap_2()
+                        .flex_wrap()
                         .child(
                             Button::new("verify-managed-ssh-key", i18n::t!("154723a1aa0a09a4"))
                                 .on_click(cx.listener({
@@ -6489,6 +7037,7 @@ impl RemoteServerProjects {
                                 cx.notify();
                             })),
                     )
+                    .child(Icon::new(IconName::Lock).color(Color::Accent))
                     .child(
                         Label::new(i18n::t!("9d823228218052ab"))
                             .size(LabelSize::Large)
@@ -6557,6 +7106,31 @@ impl RemoteServerProjects {
                             .min_w_0()
                             .overflow_y_scroll()
                             .child(detail),
+                    ),
+            )
+            .child(
+                h_flex()
+                    .p_2()
+                    .gap_3()
+                    .border_t_1()
+                    .border_color(colors.border_variant)
+                    .child(Label::new("↑↓").size(LabelSize::XSmall).color(Color::Muted))
+                    .child(
+                        Label::new(i18n::t!("c11330b85234f9c0"))
+                            .size(LabelSize::XSmall)
+                            .color(Color::Muted),
+                    )
+                    .child(Label::new("Enter").size(LabelSize::XSmall).color(Color::Muted))
+                    .child(
+                        Label::new(i18n::t!("f523545a6f48e3e6"))
+                            .size(LabelSize::XSmall)
+                            .color(Color::Muted),
+                    )
+                    .child(Label::new("Esc").size(LabelSize::XSmall).color(Color::Muted))
+                    .child(
+                        Label::new(i18n::t!("572cf45ba43634b3"))
+                            .size(LabelSize::XSmall)
+                            .color(Color::Muted),
                     ),
             )
             .into_any_element()
@@ -6743,8 +7317,22 @@ impl RemoteServerProjects {
     /// the remaining modes with an empty band on the right.
     fn modal_width(&self) -> Rems {
         match &self.mode {
-            Mode::CreateRemoteServerForm(_) => rems(52.),
+            Mode::Default => rems(40.),
+            Mode::CreateRemoteServerForm(_) => rems(56.),
+            Mode::ServerProjects(_) => rems(52.),
+            Mode::ManageServers(_) => rems(64.),
+            Mode::ManageSshKeys(_) => rems(60.),
             _ => picker::DEFAULT_MODAL_WIDTH,
+        }
+    }
+
+    fn modal_height(&self) -> Option<Rems> {
+        match &self.mode {
+            Mode::CreateRemoteServerForm(_)
+            | Mode::ServerProjects(_)
+            | Mode::ManageServers(_)
+            | Mode::ManageSshKeys(_) => Some(rems(40.)),
+            _ => None,
         }
     }
 }
@@ -6754,6 +7342,11 @@ impl Render for RemoteServerProjects {
         div()
             .elevation_3(cx)
             .w(self.modal_width())
+            .when_some(self.modal_height(), |this, height| {
+                this.h(height).max_w(relative(0.94))
+            })
+            .rounded_lg()
+            .overflow_hidden()
             .key_context("RemoteServerModal")
             .on_action(cx.listener(Self::cancel))
             .on_action(cx.listener(Self::confirm))
@@ -6776,6 +7369,9 @@ impl Render for RemoteServerProjects {
                     .into_any_element(),
                 Mode::CreateRemoteServerForm(state) => self
                     .render_create_remote_server_form(state, window, cx)
+                    .into_any_element(),
+                Mode::ServerProjects(state) => self
+                    .render_server_projects(state, window, cx)
                     .into_any_element(),
                 Mode::ManageServers(state) => self
                     .render_manage_servers(state, window, cx)
@@ -7286,15 +7882,15 @@ mod tests {
 
         modal.read_with(cx, |modal, _cx| {
             assert!(
-                modal.modal_width() == picker::DEFAULT_MODAL_WIDTH,
-                "the default picker keeps the standard picker width instead of leaving an empty band on the right"
+                modal.modal_width() == rems(40.),
+                "the remote project picker uses the wider palette width"
             );
         });
 
         modal.update_in(cx, |modal, window, cx| {
             modal.mode = Mode::CreateRemoteServerForm(CreateRemoteServerForm::new(window, cx));
             assert!(
-                modal.modal_width() == rems(52.),
+                modal.modal_width() == rems(56.),
                 "the two-column form still gets the wider modal"
             );
         });
@@ -8249,7 +8845,7 @@ mod drill_in_tests {
 
         let picker = modal.read_with(cx, |modal, _| modal.default_picker.clone());
 
-        // Confirming a server row opens that server's own view.
+        // Confirming a server row opens the dedicated projects view.
         picker.update_in(cx, |picker, window, cx| {
             let server_row = picker
                 .delegate
@@ -8260,99 +8856,27 @@ mod drill_in_tests {
             picker.delegate.selected_index = server_row;
             picker.delegate.confirm(false, window, cx);
         });
-        picker.update(cx, |picker, _| {
-            assert!(picker.delegate.focused_server.is_some());
-            assert!(matches!(
-                picker.delegate.matches.get(1),
-                Some(RemoteMatch::OpenFolder { server: 0 })
-            ));
-            let project_rows = picker
-                .delegate
-                .matches
-                .iter()
-                .filter(|entry| matches!(entry, RemoteMatch::Project { .. }))
-                .count();
-            assert_eq!(
-                project_rows, MAX_RECENT_PROJECTS_PER_SERVER,
-                "recent locations are capped for display"
-            );
-        });
-
-        // Typing a query keeps filtering the focused server's own view instead
-        // of leaving it, so the hierarchy stays intact.
-        picker.update_in(cx, |picker, window, cx| {
-            picker.set_query("host-a", window, cx);
-        });
         cx.run_until_parked();
-        picker.update(cx, |picker, _| {
-            assert!(
-                picker.delegate.focused_server.is_some(),
-                "typing keeps filtering the focused server's own view"
-            );
-            assert!(picker.delegate.state.filtered_servers.is_some());
-            assert!(
-                picker
-                    .delegate
-                    .matches
-                    .iter()
-                    .any(|entry| matches!(entry, RemoteMatch::FocusedServerHeader { server: 0 })),
-                "the server's own view is still shown"
-            );
-        });
-
-        // Stepping back leaves the server's own view but keeps the query, so
-        // the filtered server list is shown again.
-        picker.update_in(cx, |picker, window, cx| {
-            picker.cancel(&menu::Cancel, window, cx);
-        });
-        cx.run_until_parked();
-        picker.update(cx, |picker, _| {
-            assert!(picker.delegate.focused_server.is_none());
-            assert!(
-                picker
-                    .delegate
-                    .matches
-                    .iter()
-                    .any(|entry| matches!(entry, RemoteMatch::Server { server: 0, .. })),
-                "the filtered server list is shown again"
-            );
+        modal.read_with(cx, |modal, _cx| {
+            let Mode::ServerProjects(state) = &modal.mode else {
+                panic!("confirming a server opens its projects view");
+            };
+            let RemoteEntry::Project { projects, .. } = &state.entry else {
+                panic!("expected a saved server");
+            };
+            assert!(projects.len() <= MAX_RECENT_PROJECTS_PER_SERVER);
         });
         assert_eq!(dismiss_count.load(Ordering::SeqCst), 0);
 
-        // Re-enter the server's view, then step back with Cancel instead of
-        // dismissing the modal.
-        picker.update_in(cx, |picker, window, cx| {
-            picker.set_query("", window, cx);
+        // Going back shows the server list again without dismissing the modal.
+        modal.update_in(cx, |modal, _window, cx| {
+            modal.mode = Mode::default_mode(&modal.ssh_config_servers, cx);
+            cx.notify();
         });
         cx.run_until_parked();
-        picker.update_in(cx, |picker, window, cx| {
-            let server_row = picker
-                .delegate
-                .matches
-                .iter()
-                .position(|entry| matches!(entry, RemoteMatch::Server { server: 0, .. }))
-                .expect("a selectable row per server");
-            picker.delegate.selected_index = server_row;
-            picker.delegate.confirm(false, window, cx);
-            assert!(picker.delegate.focused_server.is_some());
-            picker.cancel(&menu::Cancel, window, cx);
+        modal.read_with(cx, |modal, _cx| {
+            assert!(matches!(modal.mode, Mode::Default));
         });
-        cx.run_until_parked();
-        picker.update(cx, |picker, _| {
-            assert!(
-                picker.delegate.focused_server.is_none(),
-                "Cancel steps back to the server list"
-            );
-            assert!(
-                picker
-                    .delegate
-                    .matches
-                    .iter()
-                    .any(|entry| matches!(entry, RemoteMatch::Server { server: 0, .. })),
-                "the server list is shown again"
-            );
-        });
-        assert_eq!(dismiss_count.load(Ordering::SeqCst), 0);
 
         // Cancel on the server list dismisses the modal.
         picker.update_in(cx, |picker, window, cx| {

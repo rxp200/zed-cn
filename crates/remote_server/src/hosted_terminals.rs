@@ -93,16 +93,44 @@ impl HostedTerminals {
         Ok(canonical.display().to_string())
     }
 
+    /// The root that scopes a new session. The project root wins so a shell
+    /// opened below it stays visible to the project that owns it; a project
+    /// without a worktree, or a root that no longer resolves, falls back to the
+    /// terminal's working directory.
+    async fn session_root(
+        &self,
+        project_root: Option<&str>,
+        working_directory: Option<&str>,
+    ) -> String {
+        if let Some(project_root) = project_root.filter(|root| !root.is_empty())
+            && let Ok(root) = self.canonical_root(Some(project_root)).await
+        {
+            return root;
+        }
+        self.canonical_root(working_directory)
+            .await
+            .unwrap_or_default()
+    }
+
     /// Creates a terminal inside the independent service. `hosted` records that
     /// this client understands promotion; it does not host the session yet.
+    ///
+    /// `project_root` is the first worktree of the project that asked for the
+    /// terminal, and it scopes the session: the client lists and re-attaches by
+    /// that same root, so a shell opened in a subdirectory (or by a task) would
+    /// otherwise be invisible to its own project. It comes from the server's own
+    /// worktree store, not from the client.
     pub async fn create(
         &self,
         request: proto::CreatePersistentTerminal,
+        project_root: Option<String>,
     ) -> Result<proto::CreatePersistentTerminalResponse> {
         let canonical_root = self
-            .canonical_root(request.working_directory.as_deref())
-            .await
-            .unwrap_or_default();
+            .session_root(
+                project_root.as_deref(),
+                request.working_directory.as_deref(),
+            )
+            .await;
         let attachment_id = Uuid::new_v4().to_string();
         let client = self.client().await?;
         let response = client
@@ -552,7 +580,7 @@ mod tests {
                 "printf 'before:%s\\n' $$; read value; printf 'after:%s:%s\\n' $$ \"$value\""
                     .into(),
             ];
-            let created = hosted.create(request).await.expect("create");
+            let created = hosted.create(request, None).await.expect("create");
             let promoted = hosted
                 .host(proto::HostTerminal {
                     server_instance_id: created.server_instance_id.clone(),
@@ -652,7 +680,8 @@ mod tests {
     fn created_terminal_runs_in_the_service_and_can_be_hosted_and_attached_elsewhere() {
         let (_daemon, service_dir, root) = daemon();
         let first = HostedTerminals::new(service_dir.clone());
-        let created = smol::block_on(first.create(create_request(&root, "one"))).expect("create");
+        let created =
+            smol::block_on(first.create(create_request(&root, "one"), None)).expect("create");
         assert_eq!(created.server_instance_id, HOSTED_INSTANCE_ID);
         let subscribed = smol::block_on(first.subscribe(proto::SubscribePersistentTerminal {
             server_instance_id: created.server_instance_id.clone(),
@@ -749,7 +778,7 @@ mod tests {
         let canonical_root = root.display().to_string();
         let first = HostedTerminals::new(service_dir.clone());
         let created =
-            smol::block_on(first.create(create_request(&root, "reconnect"))).expect("create");
+            smol::block_on(first.create(create_request(&root, "reconnect"), None)).expect("create");
         let hosted = smol::block_on(first.host(proto::HostTerminal {
             server_instance_id: created.server_instance_id,
             terminal_id: created.terminal_id,
@@ -807,8 +836,8 @@ mod tests {
     fn detaching_a_session_makes_its_pseudo_terminal_unaddressable() {
         let (_daemon, service_dir, root) = daemon();
         let terminals = HostedTerminals::new(service_dir.clone());
-        let created =
-            smol::block_on(terminals.create(create_request(&root, "detach"))).expect("create");
+        let created = smol::block_on(terminals.create(create_request(&root, "detach"), None))
+            .expect("create");
         let hosted = smol::block_on(terminals.host(proto::HostTerminal {
             server_instance_id: created.server_instance_id,
             terminal_id: created.terminal_id.clone(),
@@ -860,7 +889,7 @@ mod tests {
         let terminals = HostedTerminals::new(service_dir);
         let mut request = create_request(&root, "closing");
         request.hosted = false;
-        let created = smol::block_on(terminals.create(request)).expect("create");
+        let created = smol::block_on(terminals.create(request, None)).expect("create");
         smol::block_on(terminals.close(proto::ClosePersistentTerminal {
             server_instance_id: created.server_instance_id,
             terminal_id: created.terminal_id,
@@ -876,12 +905,95 @@ mod tests {
         );
     }
 
+    /// A hosted terminal belongs to the project that created it, not to the
+    /// directory its shell started in. The client lists and re-attaches a
+    /// session by its project's first worktree, so a shell opened in a
+    /// subdirectory has to stay in that scope, and another project must still not
+    /// see or attach it.
+    #[test]
+    fn a_terminal_opened_below_the_project_root_stays_in_the_project_scope() {
+        let (_daemon, service_dir, root) = daemon();
+        let project_root = root.display().to_string();
+        let subdirectory = root.join("crates").join("agent");
+        std::fs::create_dir_all(&subdirectory).expect("subdirectory");
+        let other_project = root.with_file_name("another-project");
+        std::fs::create_dir_all(&other_project).expect("other project");
+
+        let terminals = HostedTerminals::new(service_dir);
+        let created = smol::block_on(terminals.create(
+            create_request(&subdirectory, "nested"),
+            Some(project_root.clone()),
+        ))
+        .expect("create in a subdirectory");
+        let hosted = smol::block_on(terminals.host(proto::HostTerminal {
+            server_instance_id: created.server_instance_id,
+            terminal_id: created.terminal_id,
+            name: "agent".into(),
+            attachment_id: String::new(),
+        }))
+        .expect("host");
+
+        // The project's own root lists the session and can re-attach it.
+        let listed = smol::block_on(terminals.list(proto::ListHostedTerminals {
+            canonical_root: project_root.clone(),
+        }))
+        .expect("list");
+        assert_eq!(listed.sessions.len(), 1, "{listed:?}");
+        assert_eq!(listed.sessions[0].session_id, hosted.session_id);
+        smol::block_on(terminals.attach(proto::AttachHostedTerminal {
+            canonical_root: project_root.clone(),
+            session_id: hosted.session_id.clone(),
+        }))
+        .expect("attach from the project root");
+
+        // Another project sees neither the list entry nor a way to attach it.
+        let elsewhere = other_project.display().to_string();
+        assert!(
+            smol::block_on(terminals.list(proto::ListHostedTerminals {
+                canonical_root: elsewhere.clone(),
+            }))
+            .expect("list")
+            .sessions
+            .is_empty()
+        );
+        let error = smol::block_on(terminals.attach(proto::AttachHostedTerminal {
+            canonical_root: elsewhere,
+            session_id: hosted.session_id,
+        }))
+        .expect_err("another project must not attach the session");
+        assert!(error.to_string().contains("invalid"), "{error:#}");
+
+        // Without a project root the session keeps the working directory as its
+        // scope, which is the behaviour for projects without a folder.
+        let unscoped =
+            smol::block_on(terminals.create(create_request(&subdirectory, "unscoped"), None))
+                .expect("create without a project root");
+        smol::block_on(terminals.host(proto::HostTerminal {
+            server_instance_id: unscoped.server_instance_id,
+            terminal_id: unscoped.terminal_id,
+            name: "unscoped".into(),
+            attachment_id: String::new(),
+        }))
+        .expect("host");
+        let listed = smol::block_on(terminals.list(proto::ListHostedTerminals {
+            canonical_root: project_root,
+        }))
+        .expect("list");
+        assert_eq!(listed.sessions.len(), 1, "{listed:?}");
+        let listed = smol::block_on(terminals.list(proto::ListHostedTerminals {
+            canonical_root: subdirectory.display().to_string(),
+        }))
+        .expect("list");
+        assert_eq!(listed.sessions.len(), 1, "{listed:?}");
+        assert_eq!(listed.sessions[0].name, "unscoped");
+    }
+
     #[test]
     fn foreign_instance_ids_cannot_drive_a_hosted_terminal() {
         let (_daemon, service_dir, root) = daemon();
         let terminals = HostedTerminals::new(service_dir);
-        let created =
-            smol::block_on(terminals.create(create_request(&root, "foreign"))).expect("create");
+        let created = smol::block_on(terminals.create(create_request(&root, "foreign"), None))
+            .expect("create");
         let error = smol::block_on(terminals.input(proto::PersistentTerminalInput {
             server_instance_id: "not-hosted".into(),
             terminal_id: created.terminal_id,

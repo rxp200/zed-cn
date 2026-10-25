@@ -1438,16 +1438,25 @@ impl HeadlessProject {
         message: TypedEnvelope<proto::CreatePersistentTerminal>,
         cx: AsyncApp,
     ) -> Result<proto::CreatePersistentTerminalResponse> {
-        let (manager, hosted) = this.read_with(&cx, |this, _| {
+        // A hosted session belongs to the project that created it rather than to
+        // the shell's working directory, which may be a subdirectory of the
+        // worktree. The client lists and re-attaches by this same first worktree,
+        // so both sides have to agree on it.
+        let (manager, hosted, project_root) = this.read_with(&cx, |this, cx| {
             (
                 this.persistent_terminals.clone(),
                 this.hosted_terminals.clone(),
+                this.worktree_store
+                    .read(cx)
+                    .worktrees()
+                    .next()
+                    .map(|worktree| worktree.read(cx).abs_path().display().to_string()),
             )
         });
         if message.payload.hosted {
             // New clients create their terminals in the independent service so a
             // later promotion never has to move a running PTY.
-            return hosted.create(message.payload).await;
+            return hosted.create(message.payload, project_root).await;
         }
         cx.background_spawn(async move { manager.create(message.payload) })
             .await
