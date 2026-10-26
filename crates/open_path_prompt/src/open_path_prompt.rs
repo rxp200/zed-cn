@@ -49,6 +49,10 @@ pub struct OpenPathDelegate {
     create_prompt: Task<()>,
     create_directory: Option<Arc<CreateDirectoryHandler>>,
     create_error: Option<SharedString>,
+    /// Whether the most recent directory listing failed. Create-capable prompts
+    /// only prepend the current-directory row after a successful listing, so a
+    /// failed listing cannot offer to open a directory that was not read.
+    listing_failed: bool,
     render_footer:
         Arc<dyn Fn(&mut Window, &mut Context<Picker<Self>>) -> Option<AnyElement> + 'static>,
     hidden_entries: bool,
@@ -87,6 +91,7 @@ impl OpenPathDelegate {
             create_prompt: Task::ready(()),
             create_directory: None,
             create_error: None,
+            listing_failed: false,
             render_footer: Arc::new(|_, _| None),
             hidden_entries: false,
             sort_mode,
@@ -428,6 +433,7 @@ impl PickerDelegate for OpenPathDelegate {
 
                 if this
                     .update(cx, |this, _| {
+                        let listing_failed = paths.is_err();
                         let new_state = match &this.delegate.directory_state {
                             DirectoryState::None { create: false }
                             | DirectoryState::List { .. } => match paths {
@@ -487,6 +493,7 @@ impl PickerDelegate for OpenPathDelegate {
                             },
                         };
                         this.delegate.directory_state = new_state;
+                        this.delegate.listing_failed = listing_failed;
                     })
                     .is_err()
                 {
@@ -526,7 +533,7 @@ impl PickerDelegate for OpenPathDelegate {
                         !input_is_empty
                             && match &picker.delegate.directory_state {
                                 DirectoryState::List { error, .. } => error.is_none(),
-                                DirectoryState::Create { .. } => false,
+                                DirectoryState::Create { .. } => !picker.delegate.listing_failed,
                                 DirectoryState::None { .. } => false,
                             }
                     })
