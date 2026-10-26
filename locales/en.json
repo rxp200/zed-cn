@@ -5677,5 +5677,7 @@
   "cf23c352bc7bb762": "The remote server version is fixed when connecting: the client installs the Zed CN server matching this version and verifies its release digest.",
   "bb9a944d18f87827": "These values come from your SSH config. Save this host as a Zed host to override them.",
   "899c7416310c011c": "Save as Zed host",
-  "c44aa112a5b03147": "Download mode"
+  "c44aa112a5b03147": "Download mode",
+  "9db93c44c2811476": "Show All {} Servers",
+  "56dd5f5ac4495ea9": "Show Only the First {}"
 }
