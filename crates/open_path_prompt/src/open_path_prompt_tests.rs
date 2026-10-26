@@ -435,6 +435,30 @@ async fn test_new_path_prompt_creates_missing_directory(cx: &mut TestAppContext)
         app_state.fs.is_dir(&created).await,
         "confirming a typed, nonexistent name creates that directory"
     );
+    assert_eq!(
+        picker.read_with(cx, |picker, _| picker.delegate.current_query.clone()),
+        path!("/root/new-project/").to_string(),
+        "the first Enter descends into the created directory"
+    );
+    assert!(
+        matches!(confirmed.try_recv(), Ok(None)),
+        "creating a directory does not open it before the user is done"
+    );
+    assert!(
+        picker.read_with(cx, |picker, _| picker.delegate.create_error.is_none()),
+        "a successful creation reports no error"
+    );
+
+    // The created directory is now the listed parent and the `./` row is
+    // selected, so a second Enter opens it.
+    assert_eq!(
+        picker.read_with(cx, |picker, _| picker.delegate.selected_index()),
+        0
+    );
+    picker.update_in(cx, |picker, window, cx| {
+        picker.delegate.confirm(false, window, cx)
+    });
+    cx.run_until_parked();
     let confirmed_path = confirmed
         .try_recv()
         .expect("confirmation is delivered")
@@ -452,11 +476,52 @@ async fn test_new_path_prompt_creates_missing_directory(cx: &mut TestAppContext)
             .canonicalize(&created)
             .await
             .expect("the created path exists"),
-        "one Enter creates the directory and returns it to be opened"
+        "the second Enter opens the directory created by the first"
     );
+}
+
+#[gpui::test]
+async fn test_new_path_prompt_creates_each_segment_of_a_deep_path(cx: &mut TestAppContext) {
+    let app_state = init_test(cx);
+    app_state
+        .fs
+        .as_fake()
+        .insert_tree(path!("/root"), json!({}))
+        .await;
+
+    let project = Project::test(app_state.fs.clone(), [path!("/root").as_ref()], cx).await;
+    let create_fs = app_state.fs.clone();
+    let create_directory: Arc<CreateDirectoryHandler> = Arc::new(move |path: String, cx: &App| {
+        let fs = create_fs.clone();
+        cx.spawn(async move |_| {
+            let path = std::path::PathBuf::from(path);
+            fs.create_dir(&path).await?;
+            Ok(fs.canonicalize(&path).await?.to_string_lossy().into_owned())
+        })
+    });
+    let (picker, _confirmed, cx) = build_new_path_prompt(project, create_directory, cx);
+
+    let mut path = String::from("/root");
+    for segment in ["one", "two", "three"] {
+        path.push('/');
+        path.push_str(segment);
+        insert_query(&path, &picker, cx).await;
+        picker.update_in(cx, |picker, window, cx| {
+            picker.delegate.confirm(false, window, cx)
+        });
+        cx.run_until_parked();
+    }
+
     assert!(
-        picker.read_with(cx, |picker, _| picker.delegate.create_error.is_none()),
-        "a successful creation reports no error"
+        app_state
+            .fs
+            .is_dir(std::path::Path::new(path!("/root/one/two/three")))
+            .await,
+        "every Enter creates and descends into one more path segment"
+    );
+    assert_eq!(
+        picker.read_with(cx, |picker, _| picker.delegate.current_query.clone()),
+        path!("/root/one/two/three/").to_string()
     );
 }
 

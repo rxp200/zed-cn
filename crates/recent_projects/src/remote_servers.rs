@@ -65,6 +65,16 @@ struct ManagedSshKeyManagementToast;
 /// Max number of recent project locations kept per remote server.
 pub(crate) const MAX_RECENT_PROJECTS_PER_SERVER: usize = 5;
 
+/// Servers listed before the picker adds a "show all servers" row. Keeping the
+/// collapsed list short leaves the fixed action rows reachable without
+/// scrolling on a default-size window.
+const COLLAPSED_SERVER_ROWS: usize = 6;
+
+/// Width shared by the remote-project modal shell and its embedded picker. The
+/// picker sizes itself independently of the shell, so both must use the same
+/// value or the results stop short of the modal edge.
+const DEFAULT_PICKER_WIDTH: Rems = rems(40.);
+
 /// Records `project` as the most recently used location on a server,
 /// deduplicating by value and evicting the least recently used entries once
 /// the per-server limit is exceeded. The list is ordered most recently used
@@ -1564,6 +1574,35 @@ impl Mode {
     }
 }
 
+/// The effect of confirming a row in a server's own view.
+enum ServerProjectsAction {
+    OpenFolder {
+        index: Option<ServerIndex>,
+        host: String,
+        connection: Connection,
+    },
+    OpenProject {
+        index: ServerIndex,
+        project: RemoteProject,
+        connection: Connection,
+    },
+    OpenTerminal {
+        index: Option<ServerIndex>,
+        host: String,
+        connection: Connection,
+    },
+}
+
+/// Movement requested by the global `menu::Select*` actions in the manager
+/// views, which do not use a `Picker`.
+#[derive(Clone, Copy)]
+enum SelectionTarget {
+    Next,
+    Previous,
+    First,
+    Last,
+}
+
 enum RemoteMatch {
     AddServer,
     AddServerForm,
@@ -1581,6 +1620,12 @@ enum RemoteMatch {
     Server {
         server: usize,
         host_positions: Vec<usize>,
+    },
+    /// Expands or collapses the default server list when it exceeds
+    /// [`COLLAPSED_SERVER_ROWS`].
+    ToggleServerList {
+        total: usize,
+        expanded: bool,
     },
     /// The non-selectable title row of a server's own view.
     FocusedServerHeader {
@@ -1650,6 +1695,9 @@ struct RemoteServerPickerDelegate {
     query: String,
     has_open_project: bool,
     is_local: bool,
+    /// Whether the default view lists every server instead of only the first
+    /// [`COLLAPSED_SERVER_ROWS`]. Searching always shows every match.
+    servers_expanded: bool,
 }
 
 impl RemoteServerPickerDelegate {
@@ -1669,6 +1717,7 @@ impl RemoteServerPickerDelegate {
             query: String::new(),
             has_open_project,
             is_local,
+            servers_expanded: false,
         };
         this.rebuild_matches();
         this
@@ -1868,11 +1917,32 @@ impl RemoteServerPickerDelegate {
                 }
             }
         } else if query.is_empty() {
-            if !self.state.servers.is_empty() {
-                for server_index in 0..self.state.servers.len() {
+            let total = self.state.servers.len();
+            if total > 0 {
+                // The expanded list carries its collapse row at the top so the
+                // first server stays visible; the collapsed list carries the
+                // show-all row at the bottom of the servers, as requested.
+                if self.servers_expanded && total > COLLAPSED_SERVER_ROWS {
+                    matches.push(RemoteMatch::ToggleServerList {
+                        total,
+                        expanded: true,
+                    });
+                }
+                let visible = if self.servers_expanded {
+                    total
+                } else {
+                    total.min(COLLAPSED_SERVER_ROWS)
+                };
+                for server_index in 0..visible {
                     matches.push(RemoteMatch::Server {
                         server: server_index,
                         host_positions: Vec::new(),
+                    });
+                }
+                if !self.servers_expanded && total > COLLAPSED_SERVER_ROWS {
+                    matches.push(RemoteMatch::ToggleServerList {
+                        total,
+                        expanded: false,
                     });
                 }
                 matches.push(RemoteMatch::Separator);
@@ -1960,6 +2030,20 @@ impl RemoteServerPickerDelegate {
                     .position(|entry| entry.is_selectable(searching))
             })
             .unwrap_or(0);
+    }
+
+    /// Expands or collapses the default server list. Called from the row's
+    /// confirm handler so both click and Enter share one path.
+    fn toggle_server_list(&mut self) {
+        self.servers_expanded = !self.servers_expanded;
+        self.rebuild_matches();
+        if let Some(first_server) = self
+            .matches
+            .iter()
+            .position(|entry| matches!(entry, RemoteMatch::Server { .. }))
+        {
+            self.selected_index = first_server;
+        }
     }
 
     /// A selectable server row; confirming it opens the server's own view.
@@ -2089,7 +2173,7 @@ impl RemoteServerPickerDelegate {
         &self,
         ix: usize,
         icon: IconName,
-        label: &'static str,
+        label: impl Into<SharedString>,
         selected: bool,
     ) -> AnyElement {
         ListItem::new(("remote-action", ix))
@@ -2097,9 +2181,56 @@ impl RemoteServerPickerDelegate {
             .inset(true)
             .spacing(ui::ListItemSpacing::Sparse)
             .start_slot(Icon::new(icon).color(Color::Muted))
-            .child(Label::new(label))
+            .child(Label::new(label.into()))
             .into_any_element()
     }
+}
+
+/// Whether a saved server belongs in the server manager under the active
+/// filter and search query. Shared by rendering, keyboard selection and the
+/// selected-row action so the three cannot disagree about what is visible.
+fn managed_server_matches(entry: &RemoteEntry, filter: ManageServersFilter, query: &str) -> bool {
+    let matches_filter = match filter {
+        ManageServersFilter::All => true,
+        ManageServersFilter::Saved => matches!(entry, RemoteEntry::Project { .. }),
+        ManageServersFilter::SshConfig => matches!(entry, RemoteEntry::SshConfig { .. }),
+    };
+    if !matches_filter {
+        return false;
+    }
+    if query.is_empty() {
+        return true;
+    }
+    let connection = entry.connection();
+    let details = match connection.as_ref() {
+        Connection::Ssh(ssh) => format!(
+            "{} {} {}",
+            ssh.host,
+            ssh.username.clone().unwrap_or_default(),
+            ssh.nickname.clone().unwrap_or_default()
+        ),
+        Connection::Wsl(wsl) => wsl.distro_name.clone(),
+        Connection::DevContainer(container) => container.name.clone(),
+    };
+    entry.display_host().to_lowercase().contains(query)
+        || entry
+            .host_alias()
+            .is_some_and(|alias| alias.to_lowercase().contains(query))
+        || details.to_lowercase().contains(query)
+}
+
+/// Whether a managed SSH key matches the manager's search query.
+fn managed_ssh_key_matches(key: &ManagedSshKey, query: &str) -> bool {
+    query.is_empty()
+        || key
+            .nickname
+            .as_deref()
+            .unwrap_or_default()
+            .to_lowercase()
+            .contains(query)
+        || key.host.to_lowercase().contains(query)
+        || key.remote_username.to_lowercase().contains(query)
+        || key.key_id.to_lowercase().contains(query)
 }
 
 fn managed_server_address(connection: &Connection) -> String {
@@ -2289,6 +2420,10 @@ impl PickerDelegate for RemoteServerPickerDelegate {
                         .update(cx, |this, cx| this.open_server_projects(entry, window, cx))
                         .log_err();
                 }
+            }
+            RemoteMatch::ToggleServerList { .. } => {
+                self.toggle_server_list();
+                cx.notify();
             }
             RemoteMatch::AddServer => {
                 remote_server_projects
@@ -2483,6 +2618,20 @@ impl PickerDelegate for RemoteServerPickerDelegate {
                 server,
                 host_positions,
             } => self.render_server_row(ix, *server, host_positions, selected),
+            RemoteMatch::ToggleServerList { total, expanded } => Some(self.render_action_item(
+                ix,
+                if *expanded {
+                    IconName::ChevronUp
+                } else {
+                    IconName::ChevronDown
+                },
+                if *expanded {
+                    i18n::t_args!("56dd5f5ac4495ea9", COLLAPSED_SERVER_ROWS)
+                } else {
+                    i18n::t_args!("9db93c44c2811476", total)
+                },
+                selected,
+            )),
             RemoteMatch::FocusedServerHeader { server } => {
                 self.render_focused_server_header(*server, cx)
             }
@@ -2795,7 +2944,9 @@ impl RemoteServerProjects {
                 true,
                 cx,
             );
-            Picker::list(delegate, window, cx).embedded()
+            Picker::list(delegate, window, cx)
+                .embedded()
+                .initial_width(DEFAULT_PICKER_WIDTH)
         });
         let mut read_ssh_config = RemoteSettings::get_global(cx).read_ssh_config;
         let ssh_config_updates = if read_ssh_config {
@@ -3197,14 +3348,174 @@ impl RemoteServerProjects {
         })
     }
 
+    /// Handles Enter for the full-window manager views that are not backed by a
+    /// picker. Returns `true` when the mode consumed the action, so the picker
+    /// path below is skipped.
+    fn confirm_custom_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if matches!(&self.mode, Mode::ServerProjects(_)) {
+            self.confirm_server_projects(window, cx);
+            return true;
+        }
+        if matches!(&self.mode, Mode::ManageServers(_)) {
+            self.edit_selected_managed_server(window, cx);
+            return true;
+        }
+        if matches!(&self.mode, Mode::ManageSshKeys(_)) {
+            self.copy_selected_managed_key(cx);
+            return true;
+        }
+        false
+    }
+
+    fn select_next(&mut self, _: &menu::SelectNext, _: &mut Window, cx: &mut Context<Self>) {
+        self.apply_selection(SelectionTarget::Next, cx);
+    }
+
+    fn select_previous(
+        &mut self,
+        _: &menu::SelectPrevious,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.apply_selection(SelectionTarget::Previous, cx);
+    }
+
+    fn select_first(&mut self, _: &menu::SelectFirst, _: &mut Window, cx: &mut Context<Self>) {
+        self.apply_selection(SelectionTarget::First, cx);
+    }
+
+    fn select_last(&mut self, _: &menu::SelectLast, _: &mut Window, cx: &mut Context<Self>) {
+        self.apply_selection(SelectionTarget::Last, cx);
+    }
+
+    /// Moves the selected row in the manager views. Up/Down/Enter are global
+    /// key bindings dispatched as menu actions, so the views cannot rely on
+    /// `on_key_down` for them.
+    fn apply_selection(&mut self, target: SelectionTarget, cx: &mut Context<Self>) {
+        let Some((current, count)) = self.selection_position(cx) else {
+            return;
+        };
+        if count == 0 {
+            return;
+        }
+        let next = match target {
+            SelectionTarget::Next => (current + 1) % count,
+            SelectionTarget::Previous => (current + count - 1) % count,
+            SelectionTarget::First => 0,
+            SelectionTarget::Last => count - 1,
+        };
+        match &mut self.mode {
+            Mode::ServerProjects(state) => state.selected = next,
+            Mode::ManageServers(state) => {
+                state.selected = next;
+                state.scroll.scroll_to_item(next);
+            }
+            Mode::ManageSshKeys(state) => state.selected = next,
+            _ => return,
+        }
+        cx.stop_propagation();
+        cx.notify();
+    }
+
+    fn selection_position(&self, cx: &App) -> Option<(usize, usize)> {
+        let (selected, count) = match &self.mode {
+            Mode::ServerProjects(state) => (state.selected, self.server_projects_row_count()),
+            Mode::ManageServers(state) => (state.selected, self.manage_server_count(cx)),
+            Mode::ManageSshKeys(state) => {
+                (state.selected, self.filtered_managed_key_indices(cx).len())
+            }
+            _ => return None,
+        };
+        Some((selected.min(count.saturating_sub(1)), count))
+    }
+
+    fn manage_server_count(&self, cx: &App) -> usize {
+        let Mode::ManageServers(state) = &self.mode else {
+            return 0;
+        };
+        let query = state.search.read(cx).text(cx).to_lowercase();
+        self.default_picker
+            .read(cx)
+            .delegate
+            .state
+            .servers
+            .iter()
+            .filter(|entry| managed_server_matches(entry, state.filter, &query))
+            .count()
+    }
+
+    fn filtered_managed_key_indices(&self, cx: &App) -> Vec<usize> {
+        let Mode::ManageSshKeys(state) = &self.mode else {
+            return Vec::new();
+        };
+        let query = state.search.read(cx).text(cx).to_lowercase();
+        state
+            .keys
+            .iter()
+            .enumerate()
+            .filter(|(_, key)| managed_ssh_key_matches(key, &query))
+            .map(|(index, _)| index)
+            .collect()
+    }
+
+    fn selected_managed_server(&self, cx: &App) -> Option<RemoteEntry> {
+        let Mode::ManageServers(state) = &self.mode else {
+            return None;
+        };
+        let query = state.search.read(cx).text(cx).to_lowercase();
+        let visible = self
+            .default_picker
+            .read(cx)
+            .delegate
+            .state
+            .servers
+            .iter()
+            .filter(|entry| managed_server_matches(entry, state.filter, &query))
+            .collect::<Vec<_>>();
+        visible
+            .get(state.selected.min(visible.len().saturating_sub(1)))
+            .map(|entry| (*entry).clone())
+    }
+
+    fn edit_selected_managed_server(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(entry) = self.selected_managed_server(cx) else {
+            return;
+        };
+        let connection = entry.connection().into_owned();
+        let index = match &entry {
+            RemoteEntry::Project { index, .. } => Some(*index),
+            RemoteEntry::SshConfig { .. } => None,
+        };
+        self.edit_managed_server(connection, index, window, cx);
+    }
+
+    fn copy_selected_managed_key(&self, cx: &mut Context<Self>) {
+        let Mode::ManageSshKeys(state) = &self.mode else {
+            return;
+        };
+        let indices = self.filtered_managed_key_indices(cx);
+        let Some(key_index) = indices
+            .get(state.selected.min(indices.len().saturating_sub(1)))
+            .copied()
+        else {
+            return;
+        };
+        if let Some(key) = state.keys.get(key_index) {
+            cx.write_to_clipboard(ClipboardItem::new_string(key.public_key.clone()));
+        }
+    }
+
     fn confirm(&mut self, _: &menu::Confirm, window: &mut Window, cx: &mut Context<Self>) {
+        if self.confirm_custom_mode(window, cx) {
+            return;
+        }
         match &self.mode {
             Mode::Default
             | Mode::ViewServerOptions(_)
+            | Mode::ProjectPicker(_)
             | Mode::ServerProjects(_)
             | Mode::ManageServers(_)
             | Mode::ManageSshKeys(_) => {}
-            Mode::ProjectPicker(_) => {}
             Mode::CreateRemoteServer(state) => {
                 if let Some(prompt) = state.ssh_prompt.as_ref() {
                     prompt.update(cx, |prompt, cx| {
@@ -5408,6 +5719,115 @@ impl RemoteServerProjects {
         self.create_remote_project(index, connection.into(), window, cx);
     }
 
+    /// Number of selectable rows in the server's own view: Open Folder, its
+    /// recent projects, and the remote-terminal row for SSH hosts.
+    fn server_projects_row_count(&self) -> usize {
+        let Mode::ServerProjects(state) = &self.mode else {
+            return 0;
+        };
+        match &state.entry {
+            RemoteEntry::Project {
+                projects,
+                connection,
+                ..
+            } => {
+                let has_terminal = matches!(connection, Connection::Ssh(_))
+                    && !matches!(connection, Connection::Wsl(_));
+                1 + projects.len() + usize::from(has_terminal)
+            }
+            RemoteEntry::SshConfig { .. } => 2,
+        }
+    }
+
+    /// The action represented by the selected row of the server's own view.
+    /// Kept separate from execution so the row mapping is testable without a
+    /// live connection.
+    fn server_projects_action(&self) -> Option<ServerProjectsAction> {
+        let Mode::ServerProjects(state) = &self.mode else {
+            return None;
+        };
+        let selected = state.selected;
+        let (connection, host, index, project) = match &state.entry {
+            RemoteEntry::Project {
+                connection,
+                index,
+                projects,
+                ..
+            } => (
+                connection.clone(),
+                String::new(),
+                Some(*index),
+                projects.get(selected.saturating_sub(1)).cloned(),
+            ),
+            RemoteEntry::SshConfig { host } => (
+                state.entry.connection().into_owned(),
+                host.to_string(),
+                None,
+                None,
+            ),
+        };
+        if selected == 0 {
+            Some(ServerProjectsAction::OpenFolder {
+                index,
+                host,
+                connection,
+            })
+        } else if let Some(project) = project
+            && let Some(index) = index
+        {
+            Some(ServerProjectsAction::OpenProject {
+                index,
+                project: project.project,
+                connection,
+            })
+        } else if matches!(connection, Connection::Ssh(_)) {
+            Some(ServerProjectsAction::OpenTerminal {
+                index,
+                host,
+                connection,
+            })
+        } else {
+            None
+        }
+    }
+
+    /// Confirms the selected row of the server's own view. Enter is dispatched
+    /// as `menu::Confirm` from the global keymap, so this must live in the
+    /// action handler rather than in `on_key_down`.
+    fn confirm_server_projects(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match self.server_projects_action() {
+            Some(ServerProjectsAction::OpenFolder {
+                index,
+                host,
+                connection,
+            }) => self.open_server_projects_folder(index, host, connection, window, cx),
+            Some(ServerProjectsAction::OpenProject {
+                index,
+                project,
+                connection,
+            }) => {
+                cx.emit(DismissEvent);
+                self.open_remote_project_entry(index, project, connection, false, window, cx);
+            }
+            Some(ServerProjectsAction::OpenTerminal {
+                index,
+                host,
+                connection,
+            }) => {
+                let Connection::Ssh(ssh) = connection else {
+                    return;
+                };
+                let ssh_index = match index {
+                    Some(ServerIndex::Ssh(index)) => index,
+                    _ => self.create_host_from_ssh_config(&SharedString::from(host), cx),
+                };
+                cx.emit(DismissEvent);
+                self.open_remote_terminal_workspace(ssh_index, ssh, false, window, cx);
+            }
+            None => {}
+        }
+    }
+
     fn render_server_projects(
         &self,
         state: &ServerProjectsState,
@@ -5569,85 +5989,15 @@ impl RemoteServerProjects {
         v_flex()
             .size_full()
             .track_focus(&self.focus_handle(cx))
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                let Mode::ServerProjects(state) = &this.mode else {
+            // Enter, Up and Down are global key bindings, so they arrive as
+            // `menu` actions (see `confirm`, `select_next` and
+            // `select_previous`) rather than as raw key-down events. Only the
+            // bindings that have no menu action remain here.
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                if event.keystroke.key.as_str() != "escape" {
                     return;
-                };
-                let (projects, is_wsl, is_ssh) = match &state.entry {
-                    RemoteEntry::Project {
-                        projects,
-                        connection,
-                        ..
-                    } => (
-                        projects.len(),
-                        matches!(connection, Connection::Wsl(_)),
-                        matches!(connection, Connection::Ssh(_)),
-                    ),
-                    RemoteEntry::SshConfig { .. } => (0, false, true),
-                };
-                let row_count = 1 + projects + usize::from(is_ssh && !is_wsl);
-                match event.keystroke.key.as_str() {
-                    "up" => {
-                        if let Mode::ServerProjects(state) = &mut this.mode {
-                            state.selected = state.selected.saturating_sub(1);
-                        }
-                    }
-                    "down" => {
-                        if let Mode::ServerProjects(state) = &mut this.mode {
-                            state.selected = (state.selected + 1).min(row_count.saturating_sub(1));
-                        }
-                    }
-                    "enter" => {
-                        let (connection, host, index, project) = match &state.entry {
-                            RemoteEntry::Project {
-                                connection,
-                                index,
-                                projects,
-                                ..
-                            } => (
-                                connection.clone(),
-                                String::new(),
-                                Some(*index),
-                                projects.get(state.selected.saturating_sub(1)).cloned(),
-                            ),
-                            RemoteEntry::SshConfig { host } => (
-                                state.entry.connection().into_owned(),
-                                host.to_string(),
-                                None,
-                                None,
-                            ),
-                        };
-                        if state.selected == 0 {
-                            this.open_server_projects_folder(index, host, connection, window, cx);
-                        } else if let Some(project) = project
-                            && let Some(index) = index
-                        {
-                            cx.emit(DismissEvent);
-                            this.open_remote_project_entry(
-                                index,
-                                project.project,
-                                connection,
-                                false,
-                                window,
-                                cx,
-                            );
-                        } else if let Connection::Ssh(ssh) = connection {
-                            let ssh_index = match index {
-                                Some(ServerIndex::Ssh(index)) => index,
-                                _ => {
-                                    this.create_host_from_ssh_config(&SharedString::from(host), cx)
-                                }
-                            };
-                            cx.emit(DismissEvent);
-                            this.open_remote_terminal_workspace(ssh_index, ssh, false, window, cx);
-                        }
-                    }
-                    "escape" => {
-                        this.mode = Mode::default_mode(&this.ssh_config_servers, cx);
-                        cx.notify();
-                    }
-                    _ => return,
                 }
+                this.mode = Mode::default_mode(&this.ssh_config_servers, cx);
                 cx.stop_propagation();
                 cx.notify();
             }))
@@ -5932,35 +6282,9 @@ impl RemoteServerProjects {
         let query = state.search.read(cx).text(cx).to_lowercase();
         let filtered: Vec<&ManagedServerRow> = rows
             .iter()
-            .filter(|row| {
-                let matches_filter = match state.filter {
-                    ManageServersFilter::All => true,
-                    ManageServersFilter::Saved => !row.is_ssh_config,
-                    ManageServersFilter::SshConfig => row.is_ssh_config,
-                };
-                if !matches_filter {
-                    return false;
-                }
-                if query.is_empty() {
-                    return true;
-                }
-                let (main, aux, _) = server_labels(&row.connection);
-                let details = match &row.connection {
-                    Connection::Ssh(ssh) => format!(
-                        "{} {} {}",
-                        ssh.host,
-                        ssh.username.clone().unwrap_or_default(),
-                        ssh.nickname.clone().unwrap_or_default()
-                    ),
-                    Connection::Wsl(wsl) => wsl.distro_name.clone(),
-                    Connection::DevContainer(container) => container.name.clone(),
-                };
-                main.to_lowercase().contains(&query)
-                    || aux
-                        .as_ref()
-                        .is_some_and(|aux| aux.to_lowercase().contains(&query))
-                    || details.to_lowercase().contains(&query)
-            })
+            .zip(entries.iter())
+            .filter(|(_, entry)| managed_server_matches(entry, state.filter, &query))
+            .map(|(row, _)| row)
             .collect();
         let selected_index = state.selected.min(filtered.len().saturating_sub(1));
         let selected = filtered.get(selected_index).copied();
@@ -6868,66 +7192,8 @@ impl RemoteServerProjects {
                     }
                     return;
                 }
-                let filter = match &this.mode {
-                    Mode::ManageServers(state) => state.filter,
-                    _ => return,
-                };
-                let query = match &this.mode {
-                    Mode::ManageServers(state) => state.search.read(cx).text(cx).to_lowercase(),
-                    _ => return,
-                };
-                let count = {
-                    let entries = &this.default_picker.read(cx).delegate.state.servers;
-                    entries
-                        .iter()
-                        .filter(|entry| {
-                            let matches_filter = match filter {
-                                ManageServersFilter::All => true,
-                                ManageServersFilter::Saved => {
-                                    matches!(entry, RemoteEntry::Project { .. })
-                                }
-                                ManageServersFilter::SshConfig => {
-                                    matches!(entry, RemoteEntry::SshConfig { .. })
-                                }
-                            };
-                            if !matches_filter {
-                                return false;
-                            }
-                            if query.is_empty() {
-                                return true;
-                            }
-                            let connection = entry.connection();
-                            let details = match connection.as_ref() {
-                                Connection::Ssh(ssh) => format!(
-                                    "{} {} {}",
-                                    ssh.host,
-                                    ssh.username.clone().unwrap_or_default(),
-                                    ssh.nickname.clone().unwrap_or_default()
-                                ),
-                                Connection::Wsl(wsl) => wsl.distro_name.clone(),
-                                Connection::DevContainer(container) => container.name.clone(),
-                            };
-                            entry.display_host().to_lowercase().contains(&query)
-                                || entry
-                                    .host_alias()
-                                    .is_some_and(|alias| alias.to_lowercase().contains(&query))
-                                || details.to_lowercase().contains(&query)
-                        })
-                        .count()
-                };
-                let Mode::ManageServers(state) = &mut this.mode else {
-                    return;
-                };
-                match event.keystroke.key.as_str() {
-                    "up" => state.selected = state.selected.saturating_sub(1),
-                    "down" => {
-                        state.selected = (state.selected + 1).min(count.saturating_sub(1));
-                    }
-                    _ => return,
-                }
-                state.scroll.scroll_to_item(state.selected);
-                cx.stop_propagation();
-                cx.notify();
+                // Up/Down/Enter are global menu actions handled by
+                // `select_previous`, `select_next` and `confirm`.
             }))
             .child(
                 h_flex()
@@ -7393,18 +7659,7 @@ impl RemoteServerProjects {
         let filtered: Vec<&ManagedSshKey> = state
             .keys
             .iter()
-            .filter(|key| {
-                query.is_empty()
-                    || key
-                        .nickname
-                        .as_deref()
-                        .unwrap_or_default()
-                        .to_lowercase()
-                        .contains(&query)
-                    || key.host.to_lowercase().contains(&query)
-                    || key.remote_username.to_lowercase().contains(&query)
-                    || key.key_id.to_lowercase().contains(&query)
-            })
+            .filter(|key| managed_ssh_key_matches(key, &query))
             .collect();
         let selected_index = state.selected.min(filtered.len().saturating_sub(1));
         let selected = filtered.get(selected_index).copied();
@@ -7869,46 +8124,6 @@ impl RemoteServerProjects {
         v_flex()
             .size_full()
             .track_focus(&self.focus_handle(cx))
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
-                let Mode::ManageSshKeys(state) = &mut this.mode else {
-                    return;
-                };
-                let query = state.search.read(cx).text(cx).to_lowercase();
-                let count = state
-                    .keys
-                    .iter()
-                    .filter(|key| {
-                        query.is_empty()
-                            || key
-                                .nickname
-                                .as_deref()
-                                .unwrap_or_default()
-                                .to_lowercase()
-                                .contains(&query)
-                            || key.host.to_lowercase().contains(&query)
-                            || key.remote_username.to_lowercase().contains(&query)
-                            || key.key_id.to_lowercase().contains(&query)
-                    })
-                    .count();
-                match event.keystroke.key.as_str() {
-                    "up" => {
-                        state.selected = state.selected.saturating_sub(1);
-                    }
-                    "down" => {
-                        state.selected = (state.selected + 1).min(count.saturating_sub(1));
-                    }
-                    "enter" => {
-                        if let Some(key) = state.keys.get(state.selected) {
-                            cx.write_to_clipboard(ClipboardItem::new_string(
-                                key.public_key.clone(),
-                            ));
-                        }
-                    }
-                    _ => return,
-                }
-                cx.stop_propagation();
-                cx.notify();
-            }))
             .child(
                 h_flex()
                     .w_full()
@@ -8377,7 +8592,7 @@ impl RemoteServerProjects {
     /// the remaining modes with an empty band on the right.
     fn modal_width(&self) -> Rems {
         match &self.mode {
-            Mode::Default => rems(40.),
+            Mode::Default => DEFAULT_PICKER_WIDTH,
             Mode::CreateRemoteServerForm(_) => rems(56.),
             Mode::ServerProjects(_) => rems(52.),
             Mode::ManageServers(_) => rems(64.),
@@ -8410,6 +8625,10 @@ impl Render for RemoteServerProjects {
             .key_context("RemoteServerModal")
             .on_action(cx.listener(Self::cancel))
             .on_action(cx.listener(Self::confirm))
+            .on_action(cx.listener(Self::select_next))
+            .on_action(cx.listener(Self::select_previous))
+            .on_action(cx.listener(Self::select_first))
+            .on_action(cx.listener(Self::select_last))
             .capture_any_mouse_down(cx.listener(|this, _, window, cx| {
                 this.focus_handle(cx).focus(window, cx);
             }))
@@ -8486,6 +8705,7 @@ mod filter_tests {
             query: String::new(),
             has_open_project: false,
             is_local: true,
+            servers_expanded: false,
         };
         delegate.rebuild_matches();
         assert!(
@@ -8529,6 +8749,75 @@ mod filter_tests {
 
         state.filter_sync("");
         assert!(state.filtered_servers.is_none());
+    }
+
+    #[test]
+    fn server_list_collapses_until_show_all_is_confirmed() {
+        let entries: Vec<RemoteEntry> = (0..10)
+            .map(|index| RemoteEntry::SshConfig {
+                host: SharedString::from(format!("host-{index}.example")),
+            })
+            .collect();
+        let mut delegate = RemoteServerPickerDelegate {
+            remote_server_projects: WeakEntity::new_invalid(),
+            state: DefaultState {
+                filter_data: Arc::new(FilterData::build(&entries)),
+                servers: entries,
+                filtered_servers: None,
+            },
+            focused_server: None,
+            matches: Vec::new(),
+            selected_index: 0,
+            query: String::new(),
+            has_open_project: false,
+            is_local: true,
+            servers_expanded: false,
+        };
+        delegate.rebuild_matches();
+
+        assert_eq!(count_server_rows(&delegate), COLLAPSED_SERVER_ROWS);
+        assert!(
+            matches!(
+                delegate.matches.get(COLLAPSED_SERVER_ROWS),
+                Some(RemoteMatch::ToggleServerList {
+                    total: 10,
+                    expanded: false
+                })
+            ),
+            "the show-all row sits directly below the capped server rows"
+        );
+
+        delegate.toggle_server_list();
+        assert_eq!(count_server_rows(&delegate), 10);
+        assert!(
+            matches!(
+                delegate.matches.first(),
+                Some(RemoteMatch::ToggleServerList {
+                    total: 10,
+                    expanded: true
+                })
+            ),
+            "the expanded list keeps its collapse row at the top"
+        );
+        assert!(
+            matches!(
+                delegate.matches.get(1),
+                Some(RemoteMatch::Server { server: 0, .. })
+            ),
+            "expansion does not select the collapse row"
+        );
+        assert_eq!(delegate.selected_index, 1);
+
+        delegate.toggle_server_list();
+        assert_eq!(count_server_rows(&delegate), COLLAPSED_SERVER_ROWS);
+    }
+
+    fn count_server_rows(delegate: &RemoteServerPickerDelegate) -> usize {
+        delegate
+            .matches
+            .iter()
+            .filter(|entry| matches!(entry, RemoteMatch::Server { .. }))
+            .count()
     }
 }
 
@@ -8942,8 +9231,8 @@ mod tests {
 
         modal.read_with(cx, |modal, _cx| {
             assert!(
-                modal.modal_width() == rems(40.),
-                "the remote project picker uses the wider palette width"
+                modal.modal_width() == DEFAULT_PICKER_WIDTH,
+                "the remote project picker uses the shared palette width"
             );
         });
 
@@ -9524,6 +9813,7 @@ mod picker_view_tests {
             query: String::new(),
             has_open_project: false,
             is_local: true,
+            servers_expanded: false,
         }
     }
 
@@ -10008,6 +10298,33 @@ mod drill_in_tests {
             assert!(projects.len() <= MAX_RECENT_PROJECTS_PER_SERVER);
         });
         assert_eq!(dismiss_count.load(Ordering::SeqCst), 0);
+
+        // Enter/arrow keys are menu actions. The selected row decides whether
+        // the view opens a folder, a recent project, or the remote terminal.
+        modal.update_in(cx, |modal, window, cx| {
+            assert!(matches!(
+                modal.server_projects_action(),
+                Some(ServerProjectsAction::OpenFolder { .. })
+            ));
+            modal.select_next(&menu::SelectNext, window, cx);
+            assert!(matches!(
+                modal.server_projects_action(),
+                Some(ServerProjectsAction::OpenProject { .. })
+            ));
+            modal.select_last(&menu::SelectLast, window, cx);
+            assert!(matches!(
+                modal.server_projects_action(),
+                Some(ServerProjectsAction::OpenTerminal { .. })
+            ));
+            modal.select_first(&menu::SelectFirst, window, cx);
+            assert_eq!(
+                match &modal.mode {
+                    Mode::ServerProjects(state) => state.selected,
+                    _ => panic!("still in the server view"),
+                },
+                0
+            );
+        });
 
         // Going back shows the server list again without dismissing the modal.
         modal.update_in(cx, |modal, _window, cx| {

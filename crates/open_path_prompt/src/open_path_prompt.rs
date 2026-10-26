@@ -218,6 +218,37 @@ impl OpenPathDelegate {
         }
     }
 
+    /// The directory whose contents are currently listed, when the query ends
+    /// at a directory boundary and the selected row is that same directory (the
+    /// synthetic `./` row) or there is no row to select. Creating a directory
+    /// descends into it, so a following Enter opens the created directory
+    /// instead of doing nothing or descending again.
+    fn current_directory_path(&self, cx: &App) -> Option<PathBuf> {
+        let selected_is_current_dir = match self.get_entry(self.selected_index) {
+            Some(candidate) => candidate.path.string == self.current_dir(),
+            None => true,
+        };
+        if !selected_is_current_dir {
+            return None;
+        }
+
+        let (dir, suffix) = get_dir_and_suffix(self.current_query.clone(), self.path_style);
+        if !suffix.is_empty() {
+            return None;
+        }
+        let parent_path = match &self.directory_state {
+            DirectoryState::List { parent_path, .. }
+            | DirectoryState::Create { parent_path, .. } => parent_path,
+            DirectoryState::None { .. } => return None,
+        };
+        if parent_path != &dir {
+            return None;
+        }
+        Some(PathBuf::from(
+            self.lister.resolve_tilde(parent_path, cx).as_ref(),
+        ))
+    }
+
     fn confirmed_directory_path(
         &self,
         parent_path: &String,
@@ -739,6 +770,14 @@ impl PickerDelegate for OpenPathDelegate {
     }
 
     fn confirm(&mut self, _: bool, window: &mut Window, cx: &mut Context<Picker<Self>>) {
+        if let Some(current_directory) = self.current_directory_path(cx) {
+            if let Some(tx) = self.tx.take() {
+                tx.send(Some(vec![current_directory])).ok();
+            }
+            cx.emit(gpui::DismissEvent);
+            return;
+        }
+
         let Some(candidate) = self.get_entry(self.selected_index) else {
             return;
         };
@@ -817,16 +856,19 @@ impl PickerDelegate for OpenPathDelegate {
                         self.create_prompt = cx.spawn_in(window, async move |picker, cx| {
                             let result = create_task.await;
                             picker
-                                .update_in(cx, |picker, _window, cx| {
+                                .update_in(cx, |picker, window, cx| {
                                     picker.delegate.should_dismiss = true;
                                     match result {
                                         Ok(created_path) => {
                                             picker.delegate.create_error = None;
-                                            if let Some(tx) = picker.delegate.tx.take() {
-                                                tx.send(Some(vec![PathBuf::from(created_path)]))
-                                                    .ok();
-                                            }
-                                            cx.emit(gpui::DismissEvent);
+                                            let separator =
+                                                picker.delegate.path_style.primary_separator();
+                                            let query = if created_path.ends_with(separator) {
+                                                created_path
+                                            } else {
+                                                format!("{created_path}{separator}")
+                                            };
+                                            picker.set_query(&query, window, cx);
                                         }
                                         Err(error) => {
                                             log::error!(
