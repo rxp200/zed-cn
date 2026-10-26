@@ -526,6 +526,69 @@ async fn test_new_path_prompt_creates_each_segment_of_a_deep_path(cx: &mut TestA
 }
 
 #[gpui::test]
+async fn test_create_capable_prompt_opens_the_current_directory(cx: &mut TestAppContext) {
+    let app_state = init_test(cx);
+    app_state
+        .fs
+        .as_fake()
+        .insert_tree(path!("/root"), json!({ "dir1": {}, "dir2": {} }))
+        .await;
+
+    let project = Project::test(app_state.fs.clone(), [path!("/root").as_ref()], cx).await;
+    let create_fs = app_state.fs.clone();
+    let create_directory: Arc<CreateDirectoryHandler> = Arc::new(move |path: String, cx: &App| {
+        let fs = create_fs.clone();
+        cx.spawn(async move |_| {
+            let path = std::path::PathBuf::from(path);
+            fs.create_dir(&path).await?;
+            Ok(fs.canonicalize(&path).await?.to_string_lossy().into_owned())
+        })
+    });
+    let (picker, mut confirmed, cx) = build_new_path_prompt(project, create_directory, cx);
+
+    #[cfg(not(windows))]
+    let current_dir = "./";
+    #[cfg(windows)]
+    let current_dir = ".\\";
+
+    insert_query(path!("/root/"), &picker, cx).await;
+    assert_eq!(
+        collect_match_candidates(&picker, cx),
+        vec![current_dir, "dir1", "dir2"],
+        "a create-capable prompt lists the current directory first when the query ends at a boundary"
+    );
+    assert_eq!(
+        picker.read_with(cx, |picker, _| picker.delegate.selected_index()),
+        0,
+        "the current-directory row is selected so Enter opens it"
+    );
+
+    picker.update_in(cx, |picker, window, cx| {
+        picker.delegate.confirm(false, window, cx)
+    });
+    cx.run_until_parked();
+
+    let confirmed_path = confirmed
+        .try_recv()
+        .expect("confirmation is delivered")
+        .expect("confirmation is not cancelled")
+        .expect("a path is confirmed");
+    assert_eq!(
+        app_state
+            .fs
+            .canonicalize(&confirmed_path[0])
+            .await
+            .expect("the confirmed path exists"),
+        app_state
+            .fs
+            .canonicalize(std::path::Path::new(path!("/root")))
+            .await
+            .expect("the current directory exists"),
+        "Enter with an empty suffix opens the typed directory instead of its first child"
+    );
+}
+
+#[gpui::test]
 async fn test_new_path_prompt_reports_create_failure(cx: &mut TestAppContext) {
     let app_state = init_test(cx);
     app_state
