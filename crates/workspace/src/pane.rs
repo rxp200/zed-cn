@@ -1108,7 +1108,19 @@ impl Pane {
     }
 
     pub fn handle_item_edit(&mut self, item_id: EntityId, cx: &App) {
-        self.retain_item(item_id);
+        // `ItemEvent::Edit` is not reserved for user edits: attaching a file's git diff
+        // right after it opens, toggling diff hunks, and syncing multibuffer excerpts all
+        // emit it while the buffer stays unmodified. Keeping the tab on those synthetic
+        // events would leave every tracked file permanently un-reusable, so only an item
+        // that actually carries unsaved changes is retained here.
+        let item_was_modified = self
+            .items
+            .iter()
+            .find(|item| item.item_id() == item_id)
+            .is_some_and(|item| item.is_dirty(cx));
+        if item_was_modified {
+            self.retain_item(item_id);
+        }
         if let Some(preview_item) = self.preview_item()
             && preview_item.item_id() == item_id
             && !preview_item.preserve_preview(cx)
@@ -7673,10 +7685,6 @@ mod tests {
         let item_id = pane.read_with(cx, |pane, _| {
             pane.active_item().expect("an active item").item_id()
         });
-        pane.update_in(cx, |pane, window, cx| {
-            pane.handle_item_edit(item_id, cx);
-            pane.activate_item(0, true, true, window, cx);
-        });
         let item = pane.read_with(cx, |pane, _cx| {
             let index = pane.index_for_item_id(item_id).expect("item index");
             pane.items[index]
@@ -7685,9 +7693,46 @@ mod tests {
                 .expect("test item")
         });
         item.update(cx, |item, _| item.is_dirty = true);
+        pane.update_in(cx, |pane, window, cx| {
+            pane.handle_item_edit(item_id, cx);
+            pane.activate_item(0, true, true, window, cx);
+        });
+        // Saving clears the dirty flag, but the tab stays kept because the user edited it.
+        item.update(cx, |item, _| item.is_dirty = false);
 
         open_test_file(&pane, 2, "second.rs", true, cx);
-        assert_item_labels(&pane, ["first.rs^", "second.rs*"], cx);
+        assert_item_labels(&pane, ["first.rs", "second.rs*"], cx);
+    }
+
+    #[gpui::test]
+    async fn test_opening_file_replaces_tab_on_unmodified_edit_event(cx: &mut TestAppContext) {
+        init_test(cx);
+        // Preview tabs are turned off so that replacing the tab can only come from the
+        // reuse path, not from the preview slot fallback.
+        cx.update_global::<SettingsStore, ()>(|store, cx| {
+            store.update_user_settings(cx, |settings| {
+                settings.preview_tabs.get_or_insert_default().enabled = Some(false);
+            });
+        });
+        let project = Project::test(FakeFs::new(cx.executor()), None, cx).await;
+        let (workspace, cx) =
+            cx.add_window_view(|window, cx| Workspace::test_new(project.clone(), window, cx));
+        let pane = workspace.read_with(cx, |workspace, _| workspace.active_pane().clone());
+
+        open_test_file(&pane, 1, "first.rs", true, cx);
+        let item_id = pane.read_with(cx, |pane, _| {
+            pane.active_item().expect("an active item").item_id()
+        });
+        // Editors emit `ItemEvent::Edit` for non-user work such as attaching the file's git
+        // diff; that must not turn the tab into one the next file cannot replace.
+        pane.update_in(cx, |pane, window, cx| {
+            pane.handle_item_edit(item_id, cx);
+            pane.activate_item(0, true, true, window, cx);
+        });
+        assert_item_labels(&pane, ["first.rs*"], cx);
+
+        open_test_file(&pane, 2, "second.rs", true, cx);
+        assert_item_labels(&pane, ["second.rs*"], cx);
     }
 
     #[gpui::test]

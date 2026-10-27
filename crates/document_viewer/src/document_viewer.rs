@@ -10,14 +10,17 @@ mod pdf_reader;
 mod step_reader;
 mod word_reader;
 
-use std::{path::Path, sync::Arc};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use anyhow::{Context as _, Result, anyhow};
 use editor::{EditorSettings, items::entry_git_aware_label_color};
 use file_icons::FileIcons;
 use gpui::{
-    AnyElement, App, Context, Entity, EventEmitter, FocusHandle, Focusable, Font, SharedString,
-    Subscription, Task, WeakEntity, Window,
+    AnyElement, App, AsyncApp, Context, Entity, EventEmitter, FocusHandle, Focusable, Font,
+    SharedString, Subscription, Task, WeakEntity, Window,
 };
 use language::File as _;
 use project::{Project, ProjectPath, git_store::GitStoreEvent};
@@ -624,6 +627,33 @@ impl DocumentView {
         }
     }
 
+    /// Reopens the document a restored tab recorded. The document is opened from
+    /// a plain `App` context, never from inside a `Project` update: [`DocumentItem::open`]
+    /// reads the project, and GPUI panics when an entity that is being updated is
+    /// read, which killed the whole app while a workspace with a document tab was
+    /// restored.
+    async fn open_saved_document(
+        project: Entity<Project>,
+        document_path: PathBuf,
+        cx: &mut AsyncApp,
+    ) -> Result<Entity<DocumentItem>> {
+        let (worktree, relative_path) = project
+            .update(cx, |project, cx| {
+                project.find_or_create_worktree(document_path, false, cx)
+            })
+            .await
+            .context("Path not found")?;
+        let worktree_id = worktree.update(cx, |worktree, _cx| worktree.id());
+
+        let project_path = ProjectPath {
+            worktree_id,
+            path: relative_path,
+        };
+
+        cx.update(|cx| DocumentItem::open(project, project_path, cx))
+            .await
+    }
+
     /// Reloads the open reader in place. Each reader keeps its own view state
     /// (scroll position, zoom, camera), so the tab stays where the user left it.
     fn reload_child(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -949,25 +979,8 @@ impl SerializableItem for DocumentView {
                 .get_document_path(item_id, workspace_id)?
                 .context("No document path found")?;
 
-            let (worktree, relative_path) = project
-                .update(cx, |project, cx| {
-                    project.find_or_create_worktree(document_path.clone(), false, cx)
-                })
-                .await
-                .context("Path not found")?;
-            let worktree_id = worktree.update(cx, |worktree, _cx| worktree.id());
-
-            let project_path = ProjectPath {
-                worktree_id,
-                path: relative_path,
-            };
-
-            let project_for_open = project.clone();
-            let item = project
-                .update(cx, |_, cx| {
-                    DocumentItem::open(project_for_open, project_path, cx)
-                })
-                .await?;
+            let item =
+                DocumentView::open_saved_document(project.clone(), document_path, cx).await?;
             cx.update(|window, cx| Ok(cx.new(|cx| DocumentView::new(item, project, window, cx))))?
         })
     }
@@ -1855,6 +1868,38 @@ mod tests {
             "DWG is not previewable and must not be claimed"
         );
         assert_eq!(DocumentFormat::from_extension("txt"), None);
+    }
+
+    /// A workspace with an open document tab restores that tab from the saved
+    /// host path. Opening the item must not run inside a `Project` update: the
+    /// item reads the project while it opens, and GPUI aborts the app on that
+    /// double lease, so every project whose pane still had a document tab
+    /// crashed while its workspace was being restored.
+    #[gpui::test]
+    async fn test_open_saved_document_path_for_restore(cx: &mut TestAppContext) {
+        init_test(cx);
+        let (project, _) =
+            test_document_project(cx, "data.xlsx", crate::excel_reader::tests::minimal_xlsx())
+                .await;
+
+        let open = cx.update(|cx| {
+            let project = project.clone();
+            cx.spawn(async move |cx| {
+                DocumentView::open_saved_document(project, PathBuf::from("/root/data.xlsx"), cx)
+                    .await
+            })
+        });
+        let item = open.await.expect("a saved document path must reopen");
+        cx.run_until_parked();
+
+        item.read_with(cx, |item, cx| {
+            assert_eq!(item.format, DocumentFormat::Spreadsheet);
+            assert_eq!(item.host_path(cx), Path::new("/root/data.xlsx"));
+            assert!(
+                !item.contents.is_empty(),
+                "the restored tab must load the document bytes"
+            );
+        });
     }
 
     #[gpui::test]
