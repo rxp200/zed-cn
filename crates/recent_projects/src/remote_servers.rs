@@ -1543,6 +1543,7 @@ struct ManageServersState {
 struct ManageSshKeysState {
     keys: Vec<ManagedSshKey>,
     selected: usize,
+    scroll: ScrollHandle,
     loading: bool,
     error: Option<SharedString>,
     search: Entity<Editor>,
@@ -2231,6 +2232,68 @@ fn managed_ssh_key_matches(key: &ManagedSshKey, query: &str) -> bool {
         || key.host.to_lowercase().contains(query)
         || key.remote_username.to_lowercase().contains(query)
         || key.key_id.to_lowercase().contains(query)
+}
+
+/// `user@host:port` of a managed key.
+///
+/// Keys imported straight into the key store have no target host, so callers
+/// must not render their destination as `@:0` or offer actions that need one.
+fn managed_ssh_key_address(key: &ManagedSshKey) -> Option<SharedString> {
+    if key.host.trim().is_empty() {
+        return None;
+    }
+    Some(SharedString::from(format!(
+        "{}@{}:{}",
+        key.remote_username, key.host, key.port
+    )))
+}
+
+/// Nickname, else destination, else the imported file name or key id.
+fn managed_ssh_key_display_name(key: &ManagedSshKey) -> SharedString {
+    if let Some(nickname) = key
+        .nickname
+        .as_deref()
+        .filter(|nickname| !nickname.trim().is_empty())
+    {
+        return SharedString::from(nickname.to_owned());
+    }
+    managed_ssh_key_address(key).unwrap_or_else(|| {
+        SharedString::from(
+            key.source_name
+                .clone()
+                .unwrap_or_else(|| key.key_id.clone()),
+        )
+    })
+}
+
+/// Index of the destructive answer in [`managed_ssh_key_removal_prompt`].
+///
+/// The prompt preselects its first answer and Enter confirms the selection, so
+/// the delete action must never be the first one.
+const MANAGED_KEY_REMOVAL_CONFIRM_ANSWER: usize = 1;
+
+/// Title, detail and button labels of the managed-key removal confirmation.
+fn managed_ssh_key_removal_prompt(
+    username: &str,
+    host: &str,
+    port: u16,
+    revoke: bool,
+) -> (String, &'static str, [&'static str; 2]) {
+    let (title, detail, confirm_label) = if revoke {
+        (
+            i18n::t_args!("fe823082b33cd64a", username, host, port),
+            i18n::t!("d0b7e7ca2da217f2"),
+            i18n::t!("6f0bde02c11998ef"),
+        )
+    } else {
+        (
+            i18n::t!("4513b6efd063c6ec").to_string(),
+            i18n::t!("17d8d38084816ec2"),
+            i18n::t!("2f9daa828907b93f"),
+        )
+    };
+
+    (title, detail, [i18n::t!("2cd0f3be8738a86c"), confirm_label])
 }
 
 fn managed_server_address(connection: &Connection) -> String {
@@ -3410,7 +3473,10 @@ impl RemoteServerProjects {
                 state.selected = next;
                 state.scroll.scroll_to_item(next);
             }
-            Mode::ManageSshKeys(state) => state.selected = next,
+            Mode::ManageSshKeys(state) => {
+                state.selected = next;
+                state.scroll.scroll_to_item(next);
+            }
             _ => return,
         }
         cx.stop_propagation();
@@ -5682,6 +5748,7 @@ impl RemoteServerProjects {
         self.mode = Mode::ManageSshKeys(ManageSshKeysState {
             keys: Vec::new(),
             selected: 0,
+            scroll: ScrollHandle::new(),
             loading: true,
             error: None,
             search,
@@ -6382,7 +6449,7 @@ impl RemoteServerProjects {
             let connection = row.connection.clone();
             let index = row.index;
             let is_config = row.is_ssh_config;
-            let can_edit = !matches!(row.connection, Connection::Wsl(_));
+            let can_edit = matches!(row.connection, Connection::Ssh(_));
             let display = SharedString::from(main.clone());
             let address = SharedString::from(managed_server_address(&row.connection));
             let copy_address = address.clone();
@@ -7560,33 +7627,14 @@ impl RemoteServerProjects {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let title = if revoke {
-            i18n::t_args!("e56ec9128d0390c3", username, host, port)
-        } else {
-            i18n::t!("6f0bde02c11998ef").to_string()
-        };
-        let detail = if revoke {
-            i18n::t!("d0b7e7ca2da217f2")
-        } else {
-            i18n::t!("3e257353bdfc61d6")
-        };
-        let confirm_label = if revoke {
-            i18n::t!("2cd0f3be8738a86c")
-        } else {
-            i18n::t!("2f9daa828907b93f")
-        };
+        let (title, detail, answers) =
+            managed_ssh_key_removal_prompt(&username, &host, port, revoke);
 
-        let confirmation = window.prompt(
-            PromptLevel::Warning,
-            &title,
-            Some(detail),
-            &[i18n::t!("56b27cbf4eea18e2"), confirm_label],
-            cx,
-        );
+        let confirmation = window.prompt(PromptLevel::Warning, &title, Some(detail), &answers, cx);
         let workspace = self.workspace.clone();
 
         cx.spawn_in(window, async move |this, cx| {
-            if confirmation.await.ok() != Some(1) {
+            if confirmation.await.ok() != Some(MANAGED_KEY_REMOVAL_CONFIRM_ANSWER) {
                 return anyhow::Ok(());
             }
 
@@ -7715,20 +7763,15 @@ impl RemoteServerProjects {
                                             .bg(status_color.color(cx)),
                                     )
                                     .child(
-                                        Label::new(key.nickname.clone().unwrap_or_else(|| {
-                                            format!(
-                                                "{}@{}:{}",
-                                                key.remote_username, key.host, key.port
-                                            )
-                                        }))
-                                        .size(LabelSize::Small),
+                                        Label::new(managed_ssh_key_display_name(key))
+                                            .size(LabelSize::Small),
                                     ),
                             )
                             .child(
-                                Label::new(format!(
-                                    "{}@{}:{}",
-                                    key.remote_username, key.host, key.port
-                                ))
+                                Label::new(
+                                    managed_ssh_key_address(key)
+                                        .unwrap_or_else(|| i18n::t!("6423d2692cc7a9d0").into()),
+                                )
                                 .size(LabelSize::XSmall)
                                 .color(Color::Muted),
                             ),
@@ -7790,11 +7833,8 @@ impl RemoteServerProjects {
                 ManagedSshKeyKind::Generated => i18n::t!("4039f4ecabb9e265"),
                 ManagedSshKeyKind::Imported => i18n::t!("576d81bb0631b165"),
             };
-            let display_name = key
-                .nickname
-                .clone()
-                .unwrap_or_else(|| format!("{}@{}:{}", key.remote_username, key.host, key.port));
-            let address = format!("{}@{}:{}", key.remote_username, key.host, key.port);
+            let display_name = managed_ssh_key_display_name(key);
+            let address = managed_ssh_key_address(key);
             let fingerprint =
                 public_key_fingerprint(&key.public_key).unwrap_or_else(|| key.key_id.clone());
             let last_used = key
@@ -7859,29 +7899,31 @@ impl RemoteServerProjects {
                             h_flex()
                                 .gap_2()
                                 .child(
-                                    Label::new(address)
-                                        .size(LabelSize::XSmall)
-                                        .color(Color::Muted),
-                                )
-                                .child(
-                                    IconButton::new(
-                                        "copy-managed-ssh-key-destination",
-                                        IconName::Copy,
+                                    Label::new(
+                                        address
+                                            .clone()
+                                            .unwrap_or_else(|| i18n::t!("6423d2692cc7a9d0").into()),
                                     )
-                                    .icon_size(IconSize::XSmall)
-                                    .tooltip(Tooltip::text(i18n::t!("63d90d977348ab1f")))
-                                    .on_click({
-                                        let address = format!(
-                                            "{}@{}:{}",
-                                            key.remote_username, key.host, key.port
-                                        );
-                                        move |_, _, cx| {
-                                            cx.write_to_clipboard(ClipboardItem::new_string(
-                                                address.clone(),
-                                            ));
-                                        }
-                                    }),
-                                ),
+                                    .size(LabelSize::XSmall)
+                                    .color(Color::Muted),
+                                )
+                                .when_some(address.clone(), |this, address| {
+                                    this.child(
+                                        IconButton::new(
+                                            "copy-managed-ssh-key-destination",
+                                            IconName::Copy,
+                                        )
+                                        .icon_size(IconSize::XSmall)
+                                        .tooltip(Tooltip::text(i18n::t!("63d90d977348ab1f")))
+                                        .on_click(
+                                            move |_, _, cx| {
+                                                cx.write_to_clipboard(ClipboardItem::new_string(
+                                                    address.to_string(),
+                                                ));
+                                            },
+                                        ),
+                                    )
+                                }),
                         )
                         .child(
                             h_flex()
@@ -7934,7 +7976,7 @@ impl RemoteServerProjects {
                             .child(
                                 Button::new(
                                     "cancel-managed-ssh-key-nickname",
-                                    i18n::t!("56b27cbf4eea18e2"),
+                                    i18n::t!("2cd0f3be8738a86c"),
                                 )
                                 .style(ButtonStyle::Transparent)
                                 .on_click(cx.listener(
@@ -8032,32 +8074,39 @@ impl RemoteServerProjects {
                     i18n::t!("9ffac814fe3ca049"),
                     None,
                     None,
-                    v_flex()
-                        .p_3()
-                        .child(
-                            h_flex()
-                                .w_full()
-                                .px_2()
-                                .py_1p5()
-                                .gap_2()
-                                .rounded_sm()
-                                .border_1()
-                                .border_color(colors.border_variant)
-                                .child(
-                                    Icon::new(IconName::Server)
-                                        .size(IconSize::XSmall)
-                                        .color(Color::Muted),
-                                )
-                                .child(
-                                    Label::new(format!(
-                                        "{}@{}:{}",
-                                        key.remote_username, key.host, key.port
-                                    ))
+                    match &address {
+                        Some(address) => v_flex()
+                            .p_3()
+                            .child(
+                                h_flex()
+                                    .w_full()
+                                    .px_2()
+                                    .py_1p5()
+                                    .gap_2()
+                                    .rounded_sm()
+                                    .border_1()
+                                    .border_color(colors.border_variant)
+                                    .child(
+                                        Icon::new(IconName::Server)
+                                            .size(IconSize::XSmall)
+                                            .color(Color::Muted),
+                                    )
+                                    .child(
+                                        Label::new(address.clone())
+                                            .size(LabelSize::XSmall)
+                                            .color(Color::Muted),
+                                    ),
+                            )
+                            .into_any_element(),
+                        None => v_flex()
+                            .p_3()
+                            .child(
+                                Label::new(i18n::t!("6423d2692cc7a9d0"))
                                     .size(LabelSize::XSmall)
                                     .color(Color::Muted),
-                                ),
-                        )
-                        .into_any_element(),
+                            )
+                            .into_any_element(),
+                    },
                     cx,
                 ))
                 .child(detail_card(
@@ -8068,9 +8117,10 @@ impl RemoteServerProjects {
                             .size(ButtonSize::Compact)
                             .style(ButtonStyle::Transparent)
                             .on_click({
-                                let key_dir = managed_ssh_key_directory();
+                                let private_key_path =
+                                    managed_ssh_key_directory().join(key.private_key_file.clone());
                                 move |_, _, cx| {
-                                    cx.reveal_path(&key_dir);
+                                    cx.reveal_path(&private_key_path);
                                 }
                             })
                             .into_any_element(),
@@ -8198,6 +8248,7 @@ impl RemoteServerProjects {
                                     .id("managed-ssh-keys-list")
                                     .flex_1()
                                     .min_h_0()
+                                    .track_scroll(&state.scroll)
                                     .overflow_y_scroll()
                                     .child(list),
                             )
@@ -8278,6 +8329,7 @@ impl RemoteServerProjects {
                                 let username = key.remote_username.clone();
                                 let host = key.host.clone();
                                 let port = key.port;
+                                let has_destination = managed_ssh_key_address(key).is_some();
                                 this.child(
                                     h_flex()
                                         .flex_none()
@@ -8301,17 +8353,18 @@ impl RemoteServerProjects {
                                                 .color(Color::Muted),
                                         )
                                         .child(div().flex_1())
-                                        .child(
-                                            Button::new(
-                                                "verify-managed-ssh-key",
-                                                i18n::t!("7b840072a1e440b8"),
-                                            )
-                                            .size(ButtonSize::Compact)
-                                            .start_icon(
-                                                Icon::new(IconName::Check).size(IconSize::XSmall),
-                                            )
-                                            .on_click(
-                                                cx.listener({
+                                        .when(has_destination, |this| {
+                                            this.child(
+                                                Button::new(
+                                                    "verify-managed-ssh-key",
+                                                    i18n::t!("7b840072a1e440b8"),
+                                                )
+                                                .size(ButtonSize::Compact)
+                                                .start_icon(
+                                                    Icon::new(IconName::Check)
+                                                        .size(IconSize::XSmall),
+                                                )
+                                                .on_click(cx.listener({
                                                     let key_id = key_id.clone();
                                                     move |this, _, window, cx| {
                                                         this.verify_managed_key(
@@ -8320,18 +8373,16 @@ impl RemoteServerProjects {
                                                             cx,
                                                         );
                                                     }
-                                                }),
-                                            ),
-                                        )
-                                        .child(
-                                            Button::new(
-                                                "revoke-managed-ssh-key",
-                                                i18n::t!("6f0bde02c11998ef"),
+                                                })),
                                             )
-                                            .size(ButtonSize::Compact)
-                                            .style(ButtonStyle::Tinted(TintColor::Error))
-                                            .on_click(
-                                                cx.listener({
+                                            .child(
+                                                Button::new(
+                                                    "revoke-managed-ssh-key",
+                                                    i18n::t!("6f0bde02c11998ef"),
+                                                )
+                                                .size(ButtonSize::Compact)
+                                                .style(ButtonStyle::Tinted(TintColor::Error))
+                                                .on_click(cx.listener({
                                                     let key_id = key_id.clone();
                                                     let username = username.clone();
                                                     let host = host.clone();
@@ -8346,9 +8397,9 @@ impl RemoteServerProjects {
                                                             cx,
                                                         );
                                                     }
-                                                }),
-                                            ),
-                                        )
+                                                })),
+                                            )
+                                        })
                                         .child(
                                             Button::new(
                                                 "delete-local-managed-ssh-key",
@@ -9742,6 +9793,7 @@ mod tests {
             modal.mode = Mode::ManageSshKeys(ManageSshKeysState {
                 keys: Vec::new(),
                 selected: 0,
+                scroll: ScrollHandle::new(),
                 loading: false,
                 error: None,
                 search,
@@ -9772,6 +9824,86 @@ mod tests {
         assert!(
             list.size.width < detail.size.width,
             "the key list keeps its fixed column width"
+        );
+    }
+
+    /// The removal prompt preselects its first answer, so the dismissive label
+    /// has to come first and the destructive action has to stay behind it.
+    #[test]
+    fn managed_key_removal_prompt_keeps_the_delete_answer_second() {
+        let cancel = i18n::t!("2cd0f3be8738a86c");
+
+        let (title, detail, answers) =
+            managed_ssh_key_removal_prompt("root", "example.com", 2222, true);
+        assert!(title.contains("root@example.com:2222"), "{title}");
+        assert!(!detail.is_empty());
+        assert_eq!(answers[0], cancel);
+        assert_eq!(
+            answers[MANAGED_KEY_REMOVAL_CONFIRM_ANSWER],
+            i18n::t!("6f0bde02c11998ef")
+        );
+
+        let (title, detail, answers) =
+            managed_ssh_key_removal_prompt("root", "example.com", 2222, false);
+        assert!(!detail.is_empty());
+        assert_ne!(
+            title,
+            i18n::t!("6f0bde02c11998ef"),
+            "the local prompt must not be titled like the remote revoke action"
+        );
+        assert_eq!(answers[0], cancel);
+        assert_eq!(
+            answers[MANAGED_KEY_REMOVAL_CONFIRM_ANSWER],
+            i18n::t!("2f9daa828907b93f")
+        );
+    }
+
+    fn test_managed_key(host: &str, port: u16, username: &str) -> ManagedSshKey {
+        ManagedSshKey {
+            key_id: "ssh-ed25519:test".to_string(),
+            host: host.to_string(),
+            port,
+            requested_username: None,
+            connection_args: Vec::new(),
+            ssh_destination: String::new(),
+            remote_username: username.to_string(),
+            private_key_file: "zed-remote-test".to_string(),
+            public_key: String::new(),
+            created_at: String::new(),
+            last_used_at: None,
+            deployment_state: ManagedSshKeyDeploymentState::Verified,
+            kind: ManagedSshKeyKind::Imported,
+            source_name: Some("id_ed25519".to_string()),
+            nickname: None,
+        }
+    }
+
+    /// A key imported through the key manager has no host. Its destination must
+    /// not render as `@:0`, and the actions that need a host must be hidden.
+    #[test]
+    fn managed_key_without_a_host_has_no_destination_or_destination_actions() {
+        let imported = test_managed_key("", 0, "");
+        assert_eq!(managed_ssh_key_address(&imported), None);
+        assert_eq!(
+            managed_ssh_key_display_name(&imported),
+            SharedString::from("id_ed25519")
+        );
+
+        let mut generated = test_managed_key("example.com", 2222, "dev");
+        generated.kind = ManagedSshKeyKind::Generated;
+        assert_eq!(
+            managed_ssh_key_address(&generated),
+            Some(SharedString::from("dev@example.com:2222"))
+        );
+        assert_eq!(
+            managed_ssh_key_display_name(&generated),
+            SharedString::from("dev@example.com:2222")
+        );
+
+        generated.nickname = Some("build".to_string());
+        assert_eq!(
+            managed_ssh_key_display_name(&generated),
+            SharedString::from("build")
         );
     }
 }

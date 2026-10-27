@@ -1113,7 +1113,7 @@ fn spawn_io_threads(
 }
 
 fn peer_is_current_user(_stream: &net::async_net::UnixStream) -> bool {
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     {
         use std::os::fd::AsRawFd as _;
         let mut credentials = libc::ucred {
@@ -1138,6 +1138,25 @@ fn peer_is_current_user(_stream: &net::async_net::UnixStream) -> bool {
         }
         // SAFETY: geteuid has no preconditions.
         credentials.uid == unsafe { libc::geteuid() }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::fd::AsRawFd as _;
+        let mut uid: libc::uid_t = 0;
+        let mut gid: libc::gid_t = 0;
+        // SAFETY: the stream owns the descriptor for the duration of the call,
+        // and uid/gid point to valid writable memory.
+        let result = unsafe { libc::getpeereid(_stream.as_raw_fd(), &mut uid, &mut gid) };
+        if result != 0 {
+            return false;
+        }
+        // SAFETY: geteuid has no preconditions.
+        uid == unsafe { libc::geteuid() }
+    }
+    #[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
+    {
+        // Reject connections until a platform-specific peer check is available.
+        false
     }
     #[cfg(not(unix))]
     {
