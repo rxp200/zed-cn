@@ -1,0 +1,112 @@
+name: Repair r32 Linux x86_64 Remote Server
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [repair/r32-remote-server]
+    paths: [.github/workflows/repair-r32-remote-server.yml]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: repair-r32-linux-x86_64-remote-server
+  cancel-in-progress: false
+
+jobs:
+  remote_server:
+    if: github.repository == 'rxp200/zed-cn'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_BUILD_JOBS: "2"
+      CARGO_TERM_COLOR: always
+      RUST_BACKTRACE: "1"
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
+      ZED_BUNDLE: "true"
+      RELEASE_VERSION: "1.25.0"
+      ZED_COMMIT_SHA: df306584cd1c5bd5cbca5c861e7e40b390968335
+      ZED_CUSTOM_RELEASE_TAG: zed-cn-dev-v1.25.0-r32
+      CC: clang
+      CXX: clang++
+      CC_x86_64_unknown_linux_musl: musl-gcc
+    steps:
+      - name: Check out immutable r32 tag
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          ref: refs/tags/zed-cn-dev-v1.25.0-r32
+          persist-credentials: false
+      - name: Assert r32 source and identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$ZED_COMMIT_SHA"
+          test "$(cat crates/zed/RELEASE_CHANNEL)" = stable
+          python3 - <<'PY'
+          import pathlib, re
+          manifest = pathlib.Path('crates/zed/Cargo.toml').read_text()
+          package = manifest.split('[package]', 1)[1].split('\n[', 1)[0]
+          assert re.search(r'^version\s*=\s*"1\.25\.0"\s*$', package, re.M)
+          PY
+          df -h /
+      - name: Free expendable runner disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/local/.ghcup /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+      - name: Install Linux build dependencies
+        run: ./script/linux
+      - name: Download WASI SDK
+        run: ./script/download-wasi-sdk
+      - name: Generate licenses and build only remote_server
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup target add x86_64-unknown-linux-musl
+          ./script/generate-licenses
+          cargo --config .cargo/bundle-config.toml build --release --target x86_64-unknown-linux-musl --package remote_server
+      - name: Verify and package static r32 server
+        shell: bash
+        run: |
+          set -euo pipefail
+          binary="$CARGO_TARGET_DIR/x86_64-unknown-linux-musl/release/remote_server"
+          test "$("$binary" version)" = "$RELEASE_VERSION"
+          python3 - "$binary" <<'PY'
+          import os, pathlib, subprocess, sys
+          binary = pathlib.Path(sys.argv[1])
+          assert os.environ['ZED_COMMIT_SHA'].encode() in binary.read_bytes(), 'Source SHA missing'
+          headers = subprocess.check_output(['readelf', '-l', str(binary)], text=True)
+          dynamic = subprocess.check_output(['readelf', '-d', str(binary)], text=True)
+          assert 'INTERP' not in headers, 'Dynamic interpreter found'
+          assert '(NEEDED)' not in dynamic, 'Dynamic library dependency found'
+          PY
+          mkdir -p dist
+          llvm-objcopy --strip-debug --discard-all "$binary" dist/remote_server
+          test "$(dist/remote_server version)" = "$RELEASE_VERSION"
+          gzip --stdout --best --no-name dist/remote_server > dist/zed-remote-server-linux-x86_64.gz
+          gzip --test dist/zed-remote-server-linux-x86_64.gz
+          rm dist/remote_server
+          (cd dist && sha256sum zed-remote-server-linux-x86_64.gz > SHA256SUMS.txt && sha256sum --check SHA256SUMS.txt)
+          python3 - <<'PY'
+          import json, os, pathlib
+          pathlib.Path('dist/source.json').write_text(json.dumps({
+              'source_sha': os.environ['ZED_COMMIT_SHA'],
+              'release_tag': os.environ['ZED_CUSTOM_RELEASE_TAG'],
+              'version': os.environ['RELEASE_VERSION'],
+              'target': 'x86_64-unknown-linux-musl',
+              'run_id': os.environ['GITHUB_RUN_ID'],
+          }, indent=2) + '\n')
+          PY
+      - name: Upload verified server without modifying Release
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: r32-remote-server-linux-x86_64
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Remove Cargo build outputs
+        if: always()
+        shell: bash
+        run: |
+          rm -rf -- "$CARGO_TARGET_DIR"
+          df -h /
