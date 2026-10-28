@@ -71,6 +71,7 @@ impl RenderOnce for ProjectEmptyState {
                         Button::new("open_project", i18n::t!("c565a6aa55bd3ccf"))
                             .full_width()
                             .key_binding(self.open_project_key_binding)
+                            .wrap_key_binding(true)
                             .when_some(self.on_open_project, |button, handler| {
                                 button.on_click(handler)
                             }),

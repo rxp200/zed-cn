@@ -19,6 +19,7 @@ test-support = ["workspace/test-support"]
 
 [dependencies]
 i18n.workspace = true
+acp_thread.workspace = true
 agent-client-protocol.workspace = true
 agent_servers.workspace = true
 agent_ui.workspace = true

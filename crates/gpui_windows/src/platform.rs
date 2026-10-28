@@ -113,6 +113,7 @@ struct PlatformCallbacks {
     keyboard_layout_change: Cell<Option<Box<dyn FnMut()>>>,
     system_sleep: Cell<Option<Box<dyn FnMut()>>>,
     system_wake: Cell<Option<Box<dyn FnMut()>>>,
+    displays_changed: Cell<Option<Box<dyn FnMut()>>>,
 }
 
 impl WindowsPlatformState {
@@ -218,9 +219,12 @@ impl WindowsPlatform {
             directx_devices: None,
             dispatcher: None,
         };
+        // A hidden top-level window rather than a message-only one, since only
+        // top-level windows receive system broadcasts such as `WM_DISPLAYCHANGE`
+        // and `WM_ENDSESSION`, which the app needs even with no windows open.
         let result = unsafe {
             CreateWindowExW(
-                WINDOW_EX_STYLE(0),
+                WS_EX_TOOLWINDOW,
                 PLATFORM_WINDOW_CLASS_NAME,
                 None,
                 WINDOW_STYLE(0),
@@ -228,7 +232,7 @@ impl WindowsPlatform {
                 0,
                 0,
                 0,
-                Some(HWND_MESSAGE),
+                None,
                 None,
                 None,
                 Some(&raw const context as *const _),
@@ -286,11 +290,7 @@ impl WindowsPlatform {
     }
 
     pub(crate) fn window_from_hwnd(&self, hwnd: HWND) -> Option<Rc<WindowsWindowInner>> {
-        self.raw_window_handles
-            .read()
-            .iter()
-            .find(|entry| entry.as_raw() == hwnd)
-            .and_then(|hwnd| window_from_hwnd(hwnd.as_raw()))
+        self.inner.window_from_hwnd(hwnd)
     }
 
     #[inline]
@@ -497,22 +497,6 @@ impl WindowsPlatform {
     }
 }
 
-fn translate_accelerator(msg: &MSG) -> Option<()> {
-    if msg.message != WM_KEYDOWN && msg.message != WM_SYSKEYDOWN {
-        return None;
-    }
-
-    let result = unsafe {
-        SendMessageW(
-            msg.hwnd,
-            WM_GPUI_KEYDOWN,
-            Some(msg.wParam),
-            Some(msg.lParam),
-        )
-    };
-    (result.0 == 0).then_some(())
-}
-
 fn encode_restart_arguments(arguments: &[OsString]) -> OsString {
     // `Start-Process` accepts a single native command line, so quote each argument according to
     // the Windows argv parsing rules before passing the complete string through the environment.
@@ -547,6 +531,13 @@ fn encode_restart_arguments(arguments: &[OsString]) -> OsString {
 }
 
 impl Platform for WindowsPlatform {
+    fn platform_info(&self) -> gpui::PlatformInfo {
+        gpui::PlatformInfo {
+            os: gpui::OperatingSystem::Windows,
+            target: gpui::PlatformTarget::Native,
+        }
+    }
+
     fn background_executor(&self) -> BackgroundExecutor {
         self.background_executor.clone()
     }
@@ -601,7 +592,7 @@ impl Platform for WindowsPlatform {
         let mut msg = MSG::default();
         unsafe {
             while GetMessageW(&mut msg, None, 0, 0).as_bool() {
-                if translate_accelerator(&msg).is_none() {
+                if !self.inner.translate_accelerator(&msg) {
                     _ = TranslateMessage(&msg);
                     DispatchMessageW(&msg);
                 }
@@ -731,6 +722,14 @@ impl Platform for WindowsPlatform {
 
     fn primary_display(&self) -> Option<Rc<dyn PlatformDisplay>> {
         WindowsDisplay::primary_monitor().map(|display| Rc::new(display) as Rc<dyn PlatformDisplay>)
+    }
+
+    fn on_displays_changed(&self, callback: Box<dyn FnMut()>) {
+        self.inner
+            .state
+            .callbacks
+            .displays_changed
+            .set(Some(callback));
     }
 
     #[cfg(feature = "screen-capture")]
@@ -975,7 +974,7 @@ impl Platform for WindowsPlatform {
         if self.inner.state.current_cursor.get().map(|c| c.0) != hcursor.map(|c| c.0) {
             self.post_message(
                 WM_GPUI_CURSOR_STYLE_CHANGED,
-                WPARAM(0),
+                WPARAM(self.inner.validation_number),
                 LPARAM(hcursor.map_or(0, |c| c.0 as isize)),
             );
             self.inner.state.current_cursor.set(hcursor);
@@ -1156,6 +1155,24 @@ impl WindowsPlatformInner {
         }))
     }
 
+    fn window_from_hwnd(&self, hwnd: HWND) -> Option<Rc<WindowsWindowInner>> {
+        self.raw_window_handles
+            .upgrade()?
+            .read()
+            .iter()
+            .find(|window| window.as_raw() == hwnd)
+            .and_then(|window| window_from_hwnd(window.as_raw()))
+    }
+
+    fn translate_accelerator(&self, msg: &MSG) -> bool {
+        if msg.message != WM_KEYDOWN && msg.message != WM_SYSKEYDOWN {
+            return false;
+        }
+
+        self.window_from_hwnd(msg.hwnd)
+            .is_some_and(|window| window.handle_keydown_msg(msg.wParam, msg.lParam) == Some(0))
+    }
+
     /// Calls `project` to project to the corresponding callback field, removes it from callbacks, calls `f` with the callback and then puts the callback back.
     fn with_callback<T>(
         &self,
@@ -1182,9 +1199,14 @@ impl WindowsPlatformInner {
             | WM_GPUI_TASK_DISPATCHED_ON_MAIN_THREAD
             | WM_GPUI_DOCK_MENU_ACTION
             | WM_GPUI_KEYBOARD_LAYOUT_CHANGED
-            | WM_GPUI_GPU_DEVICE_LOST
-            | WM_GPUI_END_SESSION => self.handle_gpui_events(wnd_proc_guard, msg, wparam, lparam),
+            | WM_GPUI_DISPLAYS_CHANGED
+            | WM_GPUI_GPU_DEVICE_LOST => {
+                self.handle_gpui_events(wnd_proc_guard, msg, wparam, lparam)
+            }
             WM_POWERBROADCAST => self.handle_power_broadcast(wparam),
+            WM_DISPLAYCHANGE => self.handle_display_change(handle),
+            WM_QUERYENDSESSION => Some(1),
+            WM_ENDSESSION if wparam.0 != 0 => self.handle_end_session(),
             _ => None,
         };
         if let Some(result) = handled {
@@ -1213,10 +1235,33 @@ impl WindowsPlatformInner {
             WM_GPUI_TASK_DISPATCHED_ON_MAIN_THREAD => self.handle_foreground_task(wnd_proc_guard),
             WM_GPUI_DOCK_MENU_ACTION => self.handle_dock_action_event(lparam.0 as _),
             WM_GPUI_KEYBOARD_LAYOUT_CHANGED => self.handle_keyboard_layout_change(),
+            WM_GPUI_DISPLAYS_CHANGED => self.handle_displays_changed(),
             WM_GPUI_GPU_DEVICE_LOST => self.handle_device_lost(lparam),
-            WM_GPUI_END_SESSION => self.handle_end_session(),
             _ => unreachable!(),
         }
+    }
+
+    fn handle_display_change(&self, handle: HWND) -> Option<isize> {
+        // Broadcasts can be delivered while the app is mid-update, e.g. inside a
+        // COM call, so report the change from the message loop instead.
+        unsafe {
+            PostMessageW(
+                Some(handle),
+                WM_GPUI_DISPLAYS_CHANGED,
+                WPARAM(self.validation_number),
+                LPARAM(0),
+            )
+            .log_err();
+        }
+        Some(0)
+    }
+
+    fn handle_displays_changed(&self) -> Option<isize> {
+        self.with_callback(
+            |callbacks| &callbacks.displays_changed,
+            |callback| callback(),
+        );
+        Some(0)
     }
 
     fn handle_end_session(&self) -> Option<isize> {
@@ -1276,7 +1321,7 @@ impl WindowsPlatformInner {
                     // if we don't we might not for example process window quit events
                     let mut msg = MSG::default();
                     let process_message = |msg: &_| {
-                        if translate_accelerator(msg).is_none() {
+                        if !self.translate_accelerator(msg) {
                             _ = unsafe { TranslateMessage(msg) };
                             unsafe { DispatchMessageW(msg) };
                         }

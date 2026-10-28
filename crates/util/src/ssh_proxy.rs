@@ -106,24 +106,25 @@ impl ProxyEndpoint {
     pub fn parse(url: &str) -> Result<Self> {
         let url = url.trim();
         if url.is_empty() {
-            bail!("代理地址为空");
+            bail!(i18n::t!("0f1043d65a01f4ce"));
         }
-        let parsed = url::Url::parse(url).context("代理地址不是有效的 URL")?;
+        let parsed = url::Url::parse(url).context(i18n::t!("84c956292a993074"))?;
 
-        if parsed.scheme() != "socks5" && parsed.scheme() != "socks5h" && parsed.scheme() != "http" {
-            bail!("不支持的代理协议：{}", parsed.scheme());
+        if parsed.scheme() != "socks5" && parsed.scheme() != "socks5h" && parsed.scheme() != "http"
+        {
+            bail!(i18n::t_args!("1869095a6ed978ae", parsed.scheme()));
         }
         if !parsed.path().is_empty() && parsed.path() != "/" {
-            bail!("代理地址不能包含路径：{}", parsed.path());
+            bail!(i18n::t_args!("e48f9b7c70065b43", parsed.path()));
         }
         if parsed.query().is_some() || parsed.fragment().is_some() {
-            bail!("代理地址不能包含查询参数或片段");
+            bail!(i18n::t!("66458507a7b79efe"));
         }
 
         let host = parsed
             .host_str()
             .filter(|host| !host.is_empty())
-            .context("代理地址缺少主机名")?
+            .context(i18n::t!("23f47b2c605ab860"))?
             .to_string();
         validate_proxy_host(&host)?;
 
@@ -134,7 +135,7 @@ impl ProxyEndpoint {
         };
         let port = parsed.port().unwrap_or_else(|| protocol.default_port());
         if port == 0 {
-            bail!("代理端口无效");
+            bail!(i18n::t!("8d871da4b285441b"));
         }
 
         let username = decode_userinfo(parsed.username())?;
@@ -182,24 +183,25 @@ impl ProxyEndpoint {
     }
 
     fn connect(&self, target_host: &str, target_port: u16) -> Result<TcpStream> {
-        let stream = TcpStream::connect((self.host.as_str(), self.port)).with_context(|| {
-            format!("无法连接代理 {}:{}", self.host, self.port)
-        })?;
+        let stream = TcpStream::connect((self.host.as_str(), self.port))
+            .with_context(|| i18n::t_args!("16c6e165544048c7", self.host, self.port))?;
         if let Err(error) = stream.set_nodelay(true) {
             log::debug!("failed to set TCP_NODELAY on the SSH proxy socket: {error}");
         }
         stream
             .set_read_timeout(Some(HANDSHAKE_TIMEOUT))
-            .context("无法设置代理握手超时")?;
+            .context(i18n::t!("23738924e7e1b57b"))?;
         stream
             .set_write_timeout(Some(HANDSHAKE_TIMEOUT))
-            .context("无法设置代理握手超时")?;
+            .context(i18n::t!("23738924e7e1b57b"))?;
 
         match self.protocol {
             ProxyProtocol::Socks5 | ProxyProtocol::Socks5Hostname => {
                 socks5_handshake(stream, self, target_host, target_port)
             }
-            ProxyProtocol::HttpConnect => http_connect_handshake(stream, self, target_host, target_port),
+            ProxyProtocol::HttpConnect => {
+                http_connect_handshake(stream, self, target_host, target_port)
+            }
         }
     }
 }
@@ -211,7 +213,7 @@ pub fn run(proxy_url: &str, target_host: &str, target_port: &str) -> Result<()> 
     let target_port: u16 = target_port
         .trim()
         .parse()
-        .with_context(|| format!("无效的 SSH 端口：{target_port}"))?;
+        .with_context(|| i18n::t!("75f732a512580c32", target_port = target_port))?;
 
     let stream = endpoint.connect(target_host, target_port)?;
     if let Err(error) = stream.set_read_timeout(None) {
@@ -227,7 +229,7 @@ pub fn run(proxy_url: &str, target_host: &str, target_port: &str) -> Result<()> 
 fn helper_program() -> Result<PathBuf> {
     crate::get_zed_cli_path().or_else(|error| {
         log::debug!("falling back to the running executable for the SSH proxy helper: {error:#}");
-        std::env::current_exe().context("无法确定 Zed 可执行文件路径")
+        std::env::current_exe().context(i18n::t!("02a796fd2ef80975"))
     })
 }
 
@@ -251,11 +253,11 @@ fn quote_program(path: &std::path::Path) -> String {
 }
 
 fn validate_proxy_host(host: &str) -> Result<()> {
-    let valid = host
-        .chars()
-        .all(|character| character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_' | ':'));
+    let valid = host.chars().all(|character| {
+        character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_' | ':')
+    });
     if !valid {
-        bail!("代理主机名包含不支持的字符：{host}");
+        bail!(i18n::t!("b426d7b4bfa14ca9", host = host));
     }
     Ok(())
 }
@@ -269,7 +271,7 @@ fn decode_userinfo(value: &str) -> Result<Option<String>> {
     }
     match percent_decode_str(value).decode_utf8() {
         Ok(value) => Ok(Some(value.into_owned())),
-        Err(_) => bail!("代理用户名或密码不是有效的 UTF-8"),
+        Err(_) => bail!(i18n::t!("06174a4aab782931")),
     }
 }
 
@@ -287,27 +289,27 @@ fn socks5_handshake(
     };
     stream
         .write_all(greeting)
-        .context("无法向 SOCKS5 代理发送握手")?;
+        .context(i18n::t!("3817a84a141f7c56"))?;
 
     let mut selection = [0u8; 2];
     stream
         .read_exact(&mut selection)
-        .context("SOCKS5 代理没有返回认证方式")?;
+        .context(i18n::t!("2a457147b84e0ac8"))?;
     if selection[0] != 0x05 {
-        bail!("SOCKS5 代理返回了无效的版本：{}", selection[0]);
+        bail!(i18n::t_args!("244dcd560cf14f49", selection[0]));
     }
     match selection[1] {
         0x00 => {}
         0x02 => authenticate_socks5(&mut stream, endpoint)?,
-        0xff => bail!("SOCKS5 代理不接受当前认证方式"),
-        method => bail!("SOCKS5 代理要求不支持的认证方式：{method}"),
+        0xff => bail!(i18n::t!("8c51fe3699ece029")),
+        method => bail!(i18n::t!("7adff409bae4e2bf", method = method)),
     }
 
     let mut request = vec![0x05, 0x01, 0x00];
     match endpoint.protocol {
         ProxyProtocol::Socks5Hostname => {
             if target_host.len() > u8::MAX as usize || !target_host.is_ascii() {
-                bail!("SOCKS5h 代理不支持该目标主机名：{target_host}");
+                bail!(i18n::t!("919231f106598ded", target_host = target_host));
             }
             request.push(0x03);
             request.push(target_host.len() as u8);
@@ -316,9 +318,9 @@ fn socks5_handshake(
         _ => {
             let address = (target_host, target_port)
                 .to_socket_addrs()
-                .with_context(|| format!("无法解析目标主机：{target_host}"))?
+                .with_context(|| i18n::t!("26e9d0a0c2692219", target_host = target_host))?
                 .next()
-                .with_context(|| format!("目标主机没有可用地址：{target_host}"))?;
+                .with_context(|| i18n::t!("72a9251eac7c4321", target_host = target_host))?;
             match address {
                 std::net::SocketAddr::V4(address) => {
                     request.push(0x01);
@@ -334,34 +336,37 @@ fn socks5_handshake(
     request.extend_from_slice(&target_port.to_be_bytes());
     stream
         .write_all(&request)
-        .context("无法向 SOCKS5 代理发送连接请求")?;
+        .context(i18n::t!("cea1a145cccc500f"))?;
 
     let mut header = [0u8; 4];
     stream
         .read_exact(&mut header)
-        .context("SOCKS5 代理没有返回连接结果")?;
+        .context(i18n::t!("34e4f901183471d5"))?;
     if header[0] != 0x05 {
-        bail!("SOCKS5 代理返回了无效的版本：{}", header[0]);
+        bail!(i18n::t_args!("244dcd560cf14f49", header[0]));
     }
     if header[1] != 0x00 {
-        bail!("SOCKS5 代理拒绝了连接：{}", socks5_error(header[1]));
+        bail!(i18n::t_args!("c15caf825377b4f6", socks5_error(header[1])));
     }
 
-    let mut skip = vec![0u8; match header[3] {
-        0x01 => 4 + 2,
-        0x04 => 16 + 2,
-        0x03 => {
-            let mut length = [0u8; 1];
-            stream
-                .read_exact(&mut length)
-                .context("SOCKS5 代理返回了截断的地址")?;
-            length[0] as usize + 2
+    let mut skip = vec![
+        0u8;
+        match header[3] {
+            0x01 => 4 + 2,
+            0x04 => 16 + 2,
+            0x03 => {
+                let mut length = [0u8; 1];
+                stream
+                    .read_exact(&mut length)
+                    .context(i18n::t!("d3bc19485883a80a"))?;
+                length[0] as usize + 2
+            }
+            atyp => bail!(i18n::t!("b2ca98ef0a8e5c43", atyp = atyp)),
         }
-        atyp => bail!("SOCKS5 代理返回了不支持的地址类型：{atyp}"),
-    }];
+    ];
     stream
         .read_exact(&mut skip)
-        .context("SOCKS5 代理返回了截断的地址")?;
+        .context(i18n::t!("d3bc19485883a80a"))?;
 
     Ok(stream)
 }
@@ -370,7 +375,7 @@ fn authenticate_socks5(stream: &mut TcpStream, endpoint: &ProxyEndpoint) -> Resu
     let username = endpoint.username.clone().unwrap_or_default();
     let password = endpoint.password.clone().unwrap_or_default();
     if username.len() > u8::MAX as usize || password.len() > u8::MAX as usize {
-        bail!("SOCKS5 代理用户名或密码过长");
+        bail!(i18n::t!("896925204fac0b0f"));
     }
 
     let mut request = vec![0x01, username.len() as u8];
@@ -379,29 +384,29 @@ fn authenticate_socks5(stream: &mut TcpStream, endpoint: &ProxyEndpoint) -> Resu
     request.extend_from_slice(password.as_bytes());
     stream
         .write_all(&request)
-        .context("无法向 SOCKS5 代理发送用户名密码")?;
+        .context(i18n::t!("b85a3837a3562d47"))?;
 
     let mut response = [0u8; 2];
     stream
         .read_exact(&mut response)
-        .context("SOCKS5 代理没有返回认证结果")?;
+        .context(i18n::t!("cb0c8fc7282c4e3d"))?;
     if response[1] != 0x00 {
-        bail!("SOCKS5 代理认证失败");
+        bail!(i18n::t!("d91741a7e857ab6e"));
     }
     Ok(())
 }
 
 fn socks5_error(code: u8) -> &'static str {
     match code {
-        0x01 => "通用故障",
-        0x02 => "规则不允许",
-        0x03 => "网络不可达",
-        0x04 => "主机不可达",
-        0x05 => "连接被拒绝",
-        0x06 => "TTL 过期",
-        0x07 => "不支持的命令",
-        0x08 => "不支持的地址类型",
-        _ => "未知错误",
+        0x01 => i18n::t!("c52a2c85451cc429"),
+        0x02 => i18n::t!("44978bd5dcd6140d"),
+        0x03 => i18n::t!("314fabd4fdc3dace"),
+        0x04 => i18n::t!("977c7c73f771153d"),
+        0x05 => i18n::t!("3e13b80beb4bf2b6"),
+        0x06 => i18n::t!("54d220a1c0946893"),
+        0x07 => i18n::t!("6a9c930be875a49a"),
+        0x08 => i18n::t!("7dff98142d9cbb6f"),
+        _ => i18n::t!("13a46616e16fe5e6"),
     }
 }
 
@@ -430,20 +435,20 @@ fn http_connect_handshake(
     request.push_str("\r\n");
     stream
         .write_all(request.as_bytes())
-        .context("无法向 HTTP 代理发送 CONNECT 请求")?;
+        .context(i18n::t!("552cf73f546addad"))?;
 
     let mut headers = Vec::new();
     let mut byte = [0u8; 1];
     loop {
         stream
             .read_exact(&mut byte)
-            .context("HTTP 代理在返回完整响应前关闭了连接")?;
+            .context(i18n::t!("4f01f9e1a03b1fa0"))?;
         headers.push(byte[0]);
         if headers.ends_with(b"\r\n\r\n") {
             break;
         }
         if headers.len() > MAX_HTTP_HEADER_BYTES {
-            bail!("HTTP 代理响应头过长");
+            bail!(i18n::t!("ce1e9fcb0c7f1002"));
         }
     }
 
@@ -453,36 +458,37 @@ fn http_connect_handshake(
         .split_whitespace()
         .nth(1)
         .and_then(|code| code.parse::<u16>().ok())
-        .with_context(|| format!("无法解析 HTTP 代理响应：{status_line}"))?;
+        .with_context(|| i18n::t!("77e5ab643310e84e", status_line = status_line))?;
     if !(200..300).contains(&status) {
-        bail!("HTTP 代理拒绝了连接：{status_line}");
+        bail!(i18n::t!("e9993e04f476ce46", status_line = status_line));
     }
 
     Ok(stream)
 }
 
 fn pipe_stdio(stream: TcpStream) -> Result<()> {
-    let mut read_stream = stream.try_clone().context("无法复制代理连接")?;
+    let mut read_stream = stream.try_clone().context(i18n::t!("9cb12063dcb7f66f"))?;
     let mut write_stream = stream;
 
     let to_stdout = std::thread::spawn(move || -> Result<()> {
         let stdout = std::io::stdout();
         let mut stdout = stdout.lock();
-        std::io::copy(&mut read_stream, &mut stdout).context("转发代理响应失败")?;
-        stdout.flush().context("刷新标准输出失败")?;
+        std::io::copy(&mut read_stream, &mut stdout).context(i18n::t!("af098cf5e3d542e0"))?;
+        stdout.flush().context(i18n::t!("df848a4c14e44334"))?;
         Ok(())
     });
 
     let stdin = std::io::stdin();
     let mut stdin = stdin.lock();
-    let copy_result = std::io::copy(&mut stdin, &mut write_stream).context("转发标准输入失败");
+    let copy_result =
+        std::io::copy(&mut stdin, &mut write_stream).context(i18n::t!("cc125468c7393f7d"));
     if let Err(error) = write_stream.shutdown(Shutdown::Write) {
         log::debug!("failed to half-close the SSH proxy socket: {error}");
     }
 
     let stdout_result = to_stdout
         .join()
-        .map_err(|_| anyhow::anyhow!("转发代理响应的线程异常退出"))?;
+        .map_err(|_| anyhow::anyhow!(i18n::t!("75fcc1e847828f85")))?;
 
     copy_result?;
     stdout_result?;
@@ -523,10 +529,7 @@ fn base64(first: &[u8], second: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        net::TcpListener,
-        thread,
-    };
+    use std::{net::TcpListener, thread};
 
     use super::*;
 
@@ -561,7 +564,10 @@ mod tests {
             "http://ho st:3128",
             "http://127.0.0.1:3128?token=1",
         ] {
-            assert!(ProxyEndpoint::parse(url).is_err(), "expected {url:?} to fail");
+            assert!(
+                ProxyEndpoint::parse(url).is_err(),
+                "expected {url:?} to fail"
+            );
         }
     }
 
@@ -580,10 +586,7 @@ mod tests {
     fn proxy_command_has_no_shell_metacharacters() {
         let endpoint =
             ProxyEndpoint::parse("http://user:p;ass$(x)`y`@proxy.example.com:8080").unwrap();
-        assert_eq!(
-            endpoint.username.as_deref(),
-            Some("user"),
-        );
+        assert_eq!(endpoint.username.as_deref(), Some("user"),);
         let command = endpoint.canonical_url();
         assert!(
             !command.contains(';') && !command.contains('$') && !command.contains('`'),
@@ -676,8 +679,7 @@ mod tests {
             String::from_utf8(request).unwrap()
         });
 
-        let endpoint =
-            ProxyEndpoint::parse(&format!("http://user:pass@127.0.0.1:{port}")).unwrap();
+        let endpoint = ProxyEndpoint::parse(&format!("http://user:pass@127.0.0.1:{port}")).unwrap();
         let mut stream = endpoint.connect("target.example.com", 2222).unwrap();
         stream.write_all(b"ping").unwrap();
         stream.shutdown(Shutdown::Write).unwrap();

@@ -2,7 +2,6 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use crate::{AgentTool, ToolCallEventStream, ToolInput};
-use agent_client_protocol::schema::v1 as acp;
 use agent_client_protocol::schema::v2 as acp_v2;
 use anyhow::Result;
 use gpui::{App, SharedString, Task};
@@ -75,8 +74,8 @@ impl AgentTool for AskUserTool {
 
     const NAME: &'static str = "ask_user";
 
-    fn kind() -> acp::ToolKind {
-        acp::ToolKind::Other
+    fn kind() -> acp_v2::ToolKind {
+        acp_v2::ToolKind::Other
     }
 
     fn initial_title(
@@ -145,10 +144,9 @@ impl AgentTool for AskUserTool {
                 }
             };
 
-            event_stream.update_fields(
-                acp::ToolCallUpdateFields::new()
-                    .title(i18n::t!("506225cf16411e86", selected = selected)),
-            );
+            event_stream.update_fields(|update| {
+                update.title(i18n::t!("506225cf16411e86", selected = selected))
+            });
 
             Ok(AskUserToolOutput::Answered { selected })
         })

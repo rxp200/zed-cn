@@ -127,7 +127,7 @@ fn developer_page(cx: &App) -> SettingsPage {
         items.push(SettingsPageItem::SectionHeader("Feature Flags"));
         items.push(SettingsPageItem::SubPageLink(SubPageLink {
             title: i18n::t!("50f87e4af37fb572").into(),
-icon: IconName::BoltOutlined,
+            icon: IconName::BoltOutlined,
             r#type: Default::default(),
             description: None,
             search_aliases: &[],
@@ -211,8 +211,8 @@ fn general_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: i18n::t!("430a1ffc7492b510"),
-                description: i18n::t!("bf39996e71a45bf3"),
+                title: i18n::t!("6ee56f280ce94da7"),
+                description: i18n::t!("338ec62cb68746b9"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("on_new_window"),
@@ -1392,6 +1392,7 @@ fn appearance_page() -> SettingsPage {
                             .as_ref()?
                             .font_family
                             .as_ref()
+                            .or(settings_content.theme.ui_font_family.as_ref())
                     },
                     write: |settings_content, value, _| {
                         settings_content
@@ -1415,6 +1416,7 @@ fn appearance_page() -> SettingsPage {
                             .as_ref()?
                             .code_font_family
                             .as_ref()
+                            .or(settings_content.theme.buffer_font_family.as_ref())
                     },
                     write: |settings_content, value, _| {
                         settings_content
@@ -1501,7 +1503,7 @@ fn appearance_page() -> SettingsPage {
         ]
     }
 
-    fn text_rendering_section() -> [SettingsPageItem; 2] {
+    fn text_rendering_section() -> [SettingsPageItem; 3] {
         [
             SettingsPageItem::SectionHeader(i18n::t!("72bb8c9e6023e181")),
             SettingsPageItem::SettingItem(SettingItem {
@@ -1515,6 +1517,20 @@ fn appearance_page() -> SettingsPage {
                     },
                     write: |settings_content, value, _| {
                         settings_content.workspace.text_rendering_mode = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: "Display P3",
+                description: "(macOS only) render windows using the Display P3 color space.",
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("use_display_p3"),
+                    pick: |settings_content| settings_content.workspace.use_display_p3.as_ref(),
+                    write: |settings_content, value, _| {
+                        settings_content.workspace.use_display_p3 = value;
                     },
                 }),
                 metadata: None,
@@ -4243,7 +4259,7 @@ fn languages_and_tools_page(cx: &App) -> SettingsPage {
             let link = format!("languages.{language_name}");
             SettingsPageItem::SubPageLink(SubPageLink {
                 title: language_name,
-icon: IconName::Code,
+                icon: IconName::Code,
                 r#type: crate::SubPageType::Language,
                 description: None,
                 search_aliases: &[],
@@ -9681,7 +9697,7 @@ fn ai_page(cx: &App) -> SettingsPage {
             }),
             SettingsPageItem::SubPageLink(SubPageLink {
                 title: i18n::t!("1eabe31d01dca963").into(),
-icon: IconName::Server,
+                icon: IconName::Server,
                 r#type: Default::default(),
                 json_path: Some("llm_providers"),
                 description: Some(i18n::t!("edaa7302dd7d8531").into()),
@@ -9717,7 +9733,7 @@ icon: IconName::Server,
             }),
             SettingsPageItem::SubPageLink(SubPageLink {
                 title: i18n::t!("8dc040d2283eab03").into(),
-icon: IconName::ZedAgent,
+                icon: IconName::ZedAgent,
                 r#type: Default::default(),
                 json_path: Some("agent_servers"),
                 description: Some(i18n::t!("735025642c0d702c").into()),
@@ -9743,7 +9759,7 @@ icon: IconName::ZedAgent,
             }),
             SettingsPageItem::SubPageLink(SubPageLink {
                 title: i18n::t!("a203f86cf6a6a841").into(),
-icon: IconName::Blocks,
+                icon: IconName::Blocks,
                 r#type: Default::default(),
                 json_path: Some("context_servers"),
                 description: Some(i18n::t!("02e19b1c0aebe736").into()),
@@ -12201,7 +12217,7 @@ fn edit_prediction_language_settings_section() -> [SettingsPageItem; 5] {
         SettingsPageItem::SectionHeader(i18n::t!("34627253269ac8a6")),
         SettingsPageItem::SubPageLink(SubPageLink {
             title: i18n::t!("4b08b9a69dd7a595").into(),
-icon: IconName::ZedPredict,
+            icon: IconName::ZedPredict,
             r#type: Default::default(),
             json_path: Some("edit_predictions.providers"),
             description: Some(i18n::t!("bc1739d9f184f06d").into()),

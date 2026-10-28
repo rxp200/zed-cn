@@ -2235,11 +2235,10 @@ mod tests {
     }
 
     fn scroll_by_wheel(cx: &mut VisualTestContext, position: gpui::Point<gpui::Pixels>) {
-        cx.simulate_event(gpui::ScrollWheelEvent {
+        cx.simulate_event(gpui::ScrollEvent {
             position,
             delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(-10_000.))),
-            modifiers: gpui::Modifiers::default(),
-            touch_phase: gpui::TouchPhase::Moved,
+            ..gpui::ScrollEvent::default()
         });
         cx.run_until_parked();
     }

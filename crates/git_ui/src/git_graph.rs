@@ -26,8 +26,8 @@ use git::{
 use gpui::{
     Action, Anchor, AnyElement, App, Bounds, ClickEvent, ClipboardItem, DefiniteLength,
     DismissEvent, DragMoveEvent, ElementId, Empty, Entity, EventEmitter, FocusHandle, Focusable,
-    Hsla, MouseButton, MouseDownEvent, PathBuilder, Pixels, Point, ScrollHandle, ScrollStrategy,
-    ScrollWheelEvent, SharedString, Stateful, Subscription, Task, TextRun, TextStyleRefinement,
+    Hsla, MouseButton, MouseDownEvent, PathBuilder, Pixels, Point, ScrollEvent, ScrollHandle,
+    ScrollStrategy, SharedString, Stateful, Subscription, Task, TextRun, TextStyleRefinement,
     UniformListScrollHandle, WeakEntity, Window, actions, anchored, deferred, point, prelude::*,
     px, uniform_list,
 };
@@ -5430,7 +5430,7 @@ impl GitGraph {
 
     fn handle_graph_scroll(
         &mut self,
-        event: &ScrollWheelEvent,
+        event: &ScrollEvent,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -5907,7 +5907,7 @@ impl Render for GitGraph {
                                                         .min_w_0()
                                                         .overflow_hidden()
                                                         .cursor_pointer()
-                                                        .on_scroll_wheel(
+                                                        .on_scroll(
                                                             cx.listener(Self::handle_graph_scroll),
                                                         )
                                                         .on_mouse_move(cx.listener(

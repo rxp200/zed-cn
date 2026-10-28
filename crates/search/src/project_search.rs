@@ -1920,8 +1920,9 @@ impl ProjectSearchView {
         cx: &mut Context<Self>,
     ) {
         if self.results_editor.read(cx).workspace().is_none() {
-            self.results_editor
-                .update(cx, |editor, cx| editor.added_to_workspace(workspace, window, cx));
+            self.results_editor.update(cx, |editor, cx| {
+                editor.added_to_workspace(workspace, window, cx)
+            });
         }
     }
 
@@ -4290,15 +4291,24 @@ impl ProjectSearchView {
     }
 }
 
-enum QuerySeed {
-    /// Content of the buffer search bar: already query syntax, with
-    /// escaping already applied if it was seeded in regex mode, so it
-    /// must never be re-escaped. It's carried over verbatim even if
-    /// the buffer search's mode differs from the project search's.
+pub(crate) enum QuerySeed {
+    /// Content of a search bar: already query syntax, with escaping already
+    /// applied if it was seeded in regex mode, so it must never be re-escaped.
+    /// It's carried over verbatim even if the source search's mode differs.
     Query(String),
-    /// Raw text from the editor's selection or the word under the
-    /// cursor, so it gets escaped when entering a regex query.
+    /// Raw text from a selection or the word under the cursor, so it gets
+    /// escaped when entering a regex query.
     Text(String),
+}
+
+impl QuerySeed {
+    pub(crate) fn into_query(self, options: SearchOptions) -> String {
+        match self {
+            QuerySeed::Query(query) => query,
+            QuerySeed::Text(text) if options.contains(SearchOptions::REGEX) => regex::escape(&text),
+            QuerySeed::Text(text) => text,
+        }
+    }
 }
 
 /// Computes the query seed for a newly deployed project search from the
@@ -11234,11 +11244,7 @@ pub mod tests {
             .expect("the search panel should have created its view")
     }
 
-    fn run_panel_search(
-        view: &Entity<ProjectSearchView>,
-        query: &str,
-        cx: &mut VisualTestContext,
-    ) {
+    fn run_panel_search(view: &Entity<ProjectSearchView>, query: &str, cx: &mut VisualTestContext) {
         view.update_in(cx, |view, window, cx| {
             view.query_editor
                 .update(cx, |editor, cx| editor.set_text(query, window, cx));
@@ -11284,7 +11290,12 @@ pub mod tests {
             .read_with(&cx, |view, cx| {
                 let range = view.entity.read(cx).match_ranges.first()?.clone();
                 let buffer_id = range.start.buffer_id()?;
-                let buffer = view.results_editor.read(cx).buffer().read(cx).buffer(buffer_id)?;
+                let buffer = view
+                    .results_editor
+                    .read(cx)
+                    .buffer()
+                    .read(cx)
+                    .buffer(buffer_id)?;
                 Some(buffer.read(cx).file()?.path().to_string())
             })
             .expect("the search should have produced a match with a file");
