@@ -12,7 +12,7 @@ use std::{
 
 use acp_thread::{AcpThread, AcpThreadEvent, MentionUri, line_range_suffix};
 use agent::{ContextServerRegistry, SharedThread, ThreadStore};
-use agent_client_protocol::schema::v2 as acp_v2;
+use agent_client_protocol::schema::{v1 as acp, v2 as acp_v2};
 use agent_servers::AgentServer;
 use agent_settings::UserAgentsMd;
 use collections::HashSet;
@@ -56,7 +56,7 @@ use crate::{
     conversation_view::{
         AcpThreadViewEvent, RootThreadUpdated, ThreadView, reset_fast_mode_warnings,
     },
-    ui::{AgentNotification, AgentNotificationEvent, EndTrialUpsell},
+    ui::EndTrialUpsell,
 };
 use agent_settings::AgentSettings;
 use ai_onboarding::AgentPanelOnboarding;
@@ -82,6 +82,9 @@ use gpui::{
 use language::LanguageRegistry;
 use language_model::LanguageModelRegistry;
 use notifications::status_toast::StatusToast;
+use notifications::{
+    PopupNotification as AgentNotification, PopupNotificationEvent as AgentNotificationEvent,
+};
 use project::{Project, ProjectPath, Worktree};
 use settings::{NotifyWhenAgentWaiting, Settings, SettingsStore, update_settings_file};
 
@@ -363,6 +366,29 @@ pub fn init(cx: &mut App) {
     cx.observe_new(
         |workspace: &mut Workspace, _window, _cx: &mut Context<Workspace>| {
             workspace
+                .register_action(
+                    |workspace,
+                     action: &zed_actions::assistant::FollowUpCodeExplanation,
+                     window,
+                     cx| {
+                        if project::DisableAiSettings::get_global(cx).disable_ai {
+                            return;
+                        }
+                        let Some(prompt) = ExternalSourcePrompt::new(&action.text) else {
+                            return;
+                        };
+                        if let Some(panel) = workspace.panel::<AgentPanel>(cx) {
+                            panel.update(cx, |panel, cx| {
+                                panel.new_agent_thread_with_external_source_prompt(
+                                    Some(prompt),
+                                    window,
+                                    cx,
+                                )
+                            });
+                            workspace.focus_panel::<AgentPanel>(window, cx);
+                        }
+                    },
+                )
                 .register_action(|workspace, _: &NewThread, window, cx| {
                     if let Some(panel) = workspace.panel::<AgentPanel>(cx) {
                         panel.update(cx, |panel, cx| {
@@ -772,9 +798,8 @@ fn mention_path_for_terminal(
     match (abs_path, working_directory) {
         (Some(abs_path), Some(working_directory)) => path_style
             .strip_prefix(&abs_path, working_directory)
-            .unwrap_or(&abs_path)
-            .to_string_lossy()
-            .into_owned(),
+            .map(|relative| relative.display(path_style).into_owned())
+            .unwrap_or_else(|| abs_path.to_string_lossy().into_owned()),
         (Some(abs_path), None) => abs_path.to_string_lossy().into_owned(),
         (None, _) => project_path.path.display(path_style).into_owned(),
     }
@@ -803,7 +828,7 @@ fn build_conflict_resolution_prompt(conflicts: &[ConflictContent]) -> Vec<acp_v2
         let conflict = &conflicts[0];
 
         blocks.push(acp_v2::ContentBlock::Text(acp_v2::TextContent::new(
-            "Please resolve the following merge conflict in ",
+            i18n::t!("27c9a7308cb0d806"),
         )));
         let mention = MentionUri::File {
             abs_path: PathBuf::from(conflict.file_path.clone()),
@@ -1336,7 +1361,7 @@ impl AgentPanel {
                             let thread_id = store.read_with(cx, |store, _cx| {
                                 let primary = info.thread_id.and_then(|tid| store.entry(tid));
                                 let fallback = info.session_id.as_ref().and_then(|sid| {
-                                    store.entry_by_session(&acp_v2::SessionId::new(sid.clone()))
+                                    store.entry_by_session(&acp::SessionId::new(sid.clone()))
                                 });
                                 primary
                                     .or(fallback)
@@ -1662,7 +1687,7 @@ impl AgentPanel {
 
     pub fn open_thread(
         &mut self,
-        session_id: acp_v2::SessionId,
+        session_id: acp::SessionId,
         work_dirs: Option<PathList>,
         title: Option<SharedString>,
         window: &mut Window,
@@ -1705,7 +1730,7 @@ impl AgentPanel {
     fn external_thread_by_session(
         &mut self,
         agent: Agent,
-        session_id: acp_v2::SessionId,
+        session_id: acp::SessionId,
         work_dirs: Option<PathList>,
         title: Option<SharedString>,
         focus: bool,
@@ -2241,7 +2266,12 @@ impl AgentPanel {
                 | TerminalEvent::OutputReplaced
                 | TerminalEvent::SelectionsChanged
                 | TerminalEvent::NewNavigationTarget(_)
-                | TerminalEvent::Open(_) => {}
+                | TerminalEvent::Open(_)
+                // The agent terminal's persisted working directory stays the
+                // spawn directory; only `TerminalView` follows a shell-observed
+                // remote cwd, so persisting that path here would break restore.
+                | TerminalEvent::WorkingDirectoryDetected(_)
+                | TerminalEvent::InputControlTaken => {}
             },
         );
 
@@ -3520,7 +3550,7 @@ impl AgentPanel {
     }
 
     fn initial_content_for_thread_summary(
-        session_id: acp_v2::SessionId,
+        session_id: acp::SessionId,
         cx: &App,
     ) -> Option<AgentInitialContent> {
         let thread = ThreadStore::global(cx)
@@ -3891,7 +3921,7 @@ impl AgentPanel {
         };
 
         let db_thread = shared_thread.to_db_thread();
-        let session_id = acp_v2::SessionId::new(uuid::Uuid::new_v4().to_string());
+        let session_id = acp::SessionId::new(uuid::Uuid::new_v4().to_string());
         let thread_store = self.thread_store.clone();
         let title = db_thread.title.clone();
         let workspace = self.workspace.clone();
@@ -3940,7 +3970,7 @@ impl AgentPanel {
         };
 
         let Some(store) = ThreadMetadataStore::try_global(cx) else {
-            Self::show_deferred_toast(&self.workspace, "Thread metadata store not available", cx);
+            Self::show_deferred_toast(&self.workspace, "线程元数据存储不可用", cx);
             return;
         };
 
@@ -3963,7 +3993,7 @@ impl AgentPanel {
         cx: &mut Context<Self>,
     ) {
         let Some(store) = ThreadMetadataStore::try_global(cx) else {
-            Self::show_deferred_toast(&self.workspace, "Thread metadata store not available", cx);
+            Self::show_deferred_toast(&self.workspace, "线程元数据存储不可用", cx);
             return;
         };
 
@@ -4618,7 +4648,7 @@ impl AgentPanel {
         &mut self,
         agent: Agent,
         server_override: Option<Rc<dyn AgentServer>>,
-        resume_session_id: acp_v2::SessionId,
+        resume_session_id: acp::SessionId,
         work_dirs: Option<PathList>,
         title: Option<SharedString>,
         initial_content: Option<AgentInitialContent>,
@@ -4646,7 +4676,7 @@ impl AgentPanel {
         agent: Agent,
         server_override: Option<Rc<dyn AgentServer>>,
         resume_thread_id: Option<ThreadId>,
-        resume_session_id: Option<acp_v2::SessionId>,
+        resume_session_id: Option<acp::SessionId>,
         work_dirs: Option<PathList>,
         title: Option<SharedString>,
         initial_content: Option<AgentInitialContent>,
@@ -5553,7 +5583,7 @@ impl AgentPanel {
                             .into_any_element()
                     }
                 } else {
-                    Label::new("Terminal").into_any_element()
+                    Label::new(i18n::t!("e2a76ef1f12e147f")).into_any_element()
                 }
             }
 
@@ -5591,7 +5621,7 @@ impl AgentPanel {
                             .child(
                                 IconButton::new("edit_tile", IconName::Pencil)
                                     .icon_size(IconSize::Small)
-                                    .tooltip(Tooltip::text("Edit Thread Title")),
+                                    .tooltip(Tooltip::text(i18n::t!("b39b3fc80557edf3"))),
                             ),
                     )
             })
@@ -5693,7 +5723,7 @@ impl AgentPanel {
                     .icon_size(IconSize::Small),
                 move |_window, cx| {
                     Tooltip::for_action_in(
-                        "Toggle Agent Menu",
+                        i18n::t!("f4ba358ebbd6020e"),
                         &ToggleOptionsMenu,
                         &focus_handle,
                         cx,
@@ -5708,11 +5738,11 @@ impl AgentPanel {
                         menu = menu.context(menu_action_context.clone());
 
                         if has_thread_messages {
-                            menu = menu.header("Current Thread");
+                            menu = menu.header(i18n::t!("ad1c91c999047311"));
 
                             if let Some(conversation_view) = conversation_view.as_ref() {
                                 if can_regenerate_thread_title {
-                                    menu = menu.entry("Regenerate Thread Title", None, {
+                                    menu = menu.entry(i18n::t!("a5757b7f8ddee9ea"), None, {
                                         let conversation_view = conversation_view.clone();
                                         let workspace = workspace.clone();
                                         move |_, cx| {
@@ -5729,7 +5759,7 @@ impl AgentPanel {
                                     conversation_view.read(cx).root_thread_view();
                                 if let Some(thread_view) = root_thread_view {
                                     let workspace = workspace.clone();
-                                    menu = menu.entry("Open Thread as Markdown", None, {
+                                    menu = menu.entry(i18n::t!("aeeb3355c38db4fe"), None, {
                                         move |window, cx| {
                                             if let Some(workspace) = workspace.upgrade() {
                                                 thread_view.update(cx, |thread_view, cx| {
@@ -5750,16 +5780,16 @@ impl AgentPanel {
 
                         if !showing_terminal {
                             menu = menu
-                                .header("MCP Servers")
+                                .header(i18n::t!("a203f86cf6a6a841"))
                                 .action(
-                                    "Add Server…",
+                                    i18n::t!("af7cafd08bb53e27"),
                                     Box::new(zed_actions::OpenSettingsAt {
                                         path: "context_servers".to_string(),
                                         target: None,
                                     }),
                                 )
                                 .action(
-                                    "Install New Servers…",
+                                    i18n::t!("86e8e116a4ce27f0"),
                                     Box::new(zed_actions::Extensions {
                                         category_filter: Some(
                                             zed_actions::ExtensionCategoryFilter::ContextServers,
@@ -5768,8 +5798,8 @@ impl AgentPanel {
                                     }),
                                 )
                                 .separator()
-                                .header("Context")
-                                .action("Skills", Box::new(ManageSkills));
+                                .header(i18n::t!("6fc38ef3602fe789"))
+                                .action(i18n::t!("99aea2f9131ad6da"), Box::new(ManageSkills));
 
                             if project_agents_md_path.is_some() || global_agents_md_loaded {
                                 if global_agents_md_loaded {
@@ -5780,7 +5810,7 @@ impl AgentPanel {
                                             h_flex()
                                                 .w_full()
                                                 .gap_1()
-                                                .child(Label::new("Open Global Rules"))
+                                                .child(Label::new(i18n::t!("5427cdb02d0a4363")))
                                                 .child(
                                                     Label::new("(AGENTS.md)")
                                                         .color(Color::Muted)
@@ -5805,7 +5835,7 @@ impl AgentPanel {
                                             h_flex()
                                                 .w_full()
                                                 .gap_1()
-                                                .child(Label::new("Open Project Rules"))
+                                                .child(Label::new(i18n::t!("89cddba827794deb")))
                                                 .child(
                                                     Label::new("(AGENTS.md)")
                                                         .color(Color::Muted)
@@ -5824,28 +5854,33 @@ impl AgentPanel {
                                 }
                             }
 
-                            menu = menu
-                                .separator()
-                                .action("Profiles", Box::new(ManageProfiles::default()));
+                            menu = menu.separator().action(
+                                i18n::t!("1d27f02ed278ebc9"),
+                                Box::new(ManageProfiles::default()),
+                            );
                         }
 
                         menu = menu
-                            .action("Settings", Box::new(OpenSettings))
+                            .action(i18n::t!("df3d58c7d84b85f2"), Box::new(OpenSettings))
                             .separator()
-                            .action("Toggle Threads Sidebar", Box::new(ToggleWorkspaceSidebar));
+                            .action(
+                                i18n::t!("4c011ccc6394bfa0"),
+                                Box::new(ToggleWorkspaceSidebar),
+                            );
 
                         if has_auth_methods || supports_logout {
                             menu = menu.separator()
                         }
                         if has_auth_methods {
-                            menu = menu.action("Reauthenticate", Box::new(ReauthenticateAgent))
+                            menu = menu
+                                .action(i18n::t!("35a2ff292bb198af"), Box::new(ReauthenticateAgent))
                         }
                         if supports_logout {
-                            menu = menu.action("Log Out", Box::new(LogoutAgent))
+                            menu = menu.action(i18n::t!("057f31bc16c89da7"), Box::new(LogoutAgent))
                         }
 
                         if let Some(conversation_view) = conversation_view.as_ref() {
-                            menu = menu.entry("Reload Agent", None, {
+                            menu = menu.entry(i18n::t!("5b9e367e9ecdfc40"), None, {
                                 let conversation_view = conversation_view.clone();
                                 move |window, cx| {
                                     conversation_view.update(cx, |conversation_view, cx| {
@@ -5865,7 +5900,7 @@ impl AgentPanel {
         let focus_handle = self.focus_handle(cx);
 
         ProjectEmptyState::new(
-            "Agent Panel",
+            i18n::t!("3bb0698e654c0693"),
             focus_handle.clone(),
             KeyBinding::for_action_in(&workspace::Open::default(), &focus_handle, cx),
         )
@@ -5922,7 +5957,7 @@ impl AgentPanel {
                 Some(ContextMenu::build(window, cx, |menu, _window, cx| {
                     menu.context(focus_handle.clone())
                         .item(
-                            ContextMenuEntry::new("Zed Agent")
+                            ContextMenuEntry::new(i18n::t!("dd80bcc0e9bef38b"))
                                 .when(
                                     !showing_terminal && is_agent_selected(Agent::NativeAgent),
                                     |this| this.action(Box::new(NewThread)),
@@ -5954,7 +5989,7 @@ impl AgentPanel {
                         )
                         .when(supports_terminal, |menu| {
                             menu.item(
-                                ContextMenuEntry::new("Terminal")
+                                ContextMenuEntry::new(i18n::t!("e0926fdac700b094"))
                                     .when(showing_terminal, |this| this.action(Box::new(NewThread)))
                                     .when(!showing_terminal, |this| {
                                         this.action(Box::new(NewTerminalThread))
@@ -6015,7 +6050,7 @@ impl AgentPanel {
                                 .collect::<Vec<_>>();
 
                             if !agent_items.is_empty() {
-                                menu = menu.separator().header("External Agents");
+                                menu = menu.separator().header(i18n::t!("6cff961c366454dd"));
                             }
                             for item in &agent_items {
                                 let mut entry = ContextMenuEntry::new(item.display_name.clone());
@@ -6075,7 +6110,7 @@ impl AgentPanel {
                         })
                         .separator()
                         .item(
-                            ContextMenuEntry::new("Add More Agents")
+                            ContextMenuEntry::new(i18n::t!("3e4b088988b35901"))
                                 .icon(IconName::Plus)
                                 .icon_color(Color::Muted)
                                 .handler({
@@ -6121,7 +6156,7 @@ impl AgentPanel {
                 Tooltip::with_meta(
                     selected_agent_label_for_tooltip.clone(),
                     None,
-                    "Selected Agent",
+                    i18n::t!("3df4e3e94508deea"),
                     cx,
                 )
             });
@@ -6156,9 +6191,9 @@ impl AgentPanel {
 
         let is_full_screen = self.is_zoomed(window, cx);
         let (icon_name, tooltip_text) = if is_full_screen {
-            (IconName::Minimize, "Disable Full Screen")
+            (IconName::Minimize, i18n::t!("0f1505b6ad3fafe4"))
         } else {
-            (IconName::Maximize, "Enable Full Screen")
+            (IconName::Maximize, i18n::t!("ecf3e461f6a2c194"))
         };
         let full_screen_button = IconButton::new("toggle-full-screen", icon_name)
             .icon_size(IconSize::Small)
@@ -6180,7 +6215,7 @@ impl AgentPanel {
             .justify_between();
 
         let empty_thread_title = matches!(mode, ToolbarMode::EmptyThread).then(|| {
-            Label::new(format!("New {} Thread", selected_agent_label))
+            Label::new(i18n::t_args!("e17a49b539d2b2cd", selected_agent_label))
                 .color(Color::Muted)
                 .truncate()
                 .into_any_element()
@@ -6773,7 +6808,7 @@ impl AgentPanel {
     pub fn open_restored_thread_with_server(
         &mut self,
         server: Rc<dyn AgentServer>,
-        resume_session_id: acp_v2::SessionId,
+        resume_session_id: acp::SessionId,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -6992,6 +7027,25 @@ impl AgentPanel {
             cx.emit(TerminalEvent::CloseTerminal);
         });
     }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn emit_test_terminal_working_directory_detected(
+        &mut self,
+        terminal_id: TerminalId,
+        working_directory: PathBuf,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(terminal_entity) = self
+            .terminals
+            .get(&terminal_id)
+            .map(|terminal| terminal.view.read(cx).terminal().clone())
+        else {
+            return;
+        };
+        terminal_entity.update(cx, |_terminal, cx| {
+            cx.emit(TerminalEvent::WorkingDirectoryDetected(working_directory));
+        });
+    }
 }
 
 #[cfg(test)]
@@ -7005,7 +7059,6 @@ mod tests {
     };
     use acp_thread::{AgentConnection, StubAgentConnection, ThreadStatus};
     use action_log::ActionLog;
-    use agent_client_protocol::schema::v1 as acp;
     use anyhow::{Result, anyhow};
     use feature_flags::FeatureFlagAppExt;
     use fs::FakeFs;
@@ -7096,7 +7149,7 @@ mod tests {
     #[derive(Clone, Default)]
     struct SessionTrackingConnection {
         next_session_number: Arc<Mutex<usize>>,
-        sessions: Arc<Mutex<HashSet<acp_v2::SessionId>>>,
+        sessions: Arc<Mutex<HashSet<acp::SessionId>>>,
     }
 
     impl SessionTrackingConnection {
@@ -7106,7 +7159,7 @@ mod tests {
 
         fn create_session(
             self: Rc<Self>,
-            session_id: acp_v2::SessionId,
+            session_id: acp::SessionId,
             project: Entity<Project>,
             work_dirs: PathList,
             title: Option<SharedString>,
@@ -7153,7 +7206,7 @@ mod tests {
         ) -> Task<Result<Entity<AcpThread>>> {
             let session_id = {
                 let mut next_session_number = self.next_session_number.lock();
-                let session_id = acp_v2::SessionId::new(format!(
+                let session_id = acp::SessionId::new(format!(
                     "session-tracking-session-{}",
                     *next_session_number
                 ));
@@ -7170,7 +7223,7 @@ mod tests {
 
         fn load_session(
             self: Rc<Self>,
-            session_id: acp_v2::SessionId,
+            session_id: acp::SessionId,
             project: Entity<Project>,
             work_dirs: PathList,
             title: Option<SharedString>,
@@ -7204,7 +7257,7 @@ mod tests {
 
         fn close_session(
             self: Rc<Self>,
-            session_id: &acp_v2::SessionId,
+            session_id: &acp::SessionId,
             _cx: &mut App,
         ) -> Task<Result<()>> {
             self.sessions.lock().remove(session_id);
@@ -7228,7 +7281,7 @@ mod tests {
             params: acp_v2::PromptRequest,
             _cx: &mut App,
         ) -> Task<Result<acp::PromptResponse>> {
-            let session_id = params.session_id;
+            let session_id = acp::SessionId::new(params.session_id.0);
             if !self.sessions.lock().contains(&session_id) {
                 return Task::ready(Err(anyhow!("Session not found")));
             }
@@ -7236,7 +7289,7 @@ mod tests {
             Task::ready(Ok(acp::PromptResponse::new(acp::StopReason::EndTurn)))
         }
 
-        fn cancel(&self, _session_id: &acp_v2::SessionId, _cx: &mut App) {}
+        fn cancel(&self, _session_id: &acp::SessionId, _cx: &mut App) {}
 
         fn into_any(self: Rc<Self>) -> Rc<dyn Any> {
             self
@@ -7275,12 +7328,12 @@ mod tests {
         open_thread_with_connection(&panel, connection.clone(), cx);
 
         let session_id = active_session_id(&panel, cx);
-        let tool_call_id = acp_v2::ToolCallId::new("tool-call-output-focus-regression");
+        let tool_call_id = acp::ToolCallId::new("tool-call-output-focus-regression");
         cx.update(|_window, cx| {
             connection.send_update(
                 session_id.clone(),
                 acp::SessionUpdate::ToolCall(
-                    acp::ToolCall::new(acp::ToolCallId::new(tool_call_id.0.clone()), "Read file")
+                    acp::ToolCall::new(tool_call_id.clone(), "Read file")
                         .kind(acp::ToolKind::Fetch)
                         .status(acp::ToolCallStatus::InProgress),
                 ),
@@ -7289,7 +7342,7 @@ mod tests {
             connection.send_update(
                 session_id,
                 acp::SessionUpdate::ToolCallUpdate(acp::ToolCallUpdate::new(
-                    acp::ToolCallId::new(tool_call_id.0.clone()),
+                    tool_call_id.clone(),
                     acp::ToolCallUpdateFields::new()
                         .status(acp::ToolCallStatus::Completed)
                         .content(vec![acp::ToolCallContent::Content(acp::Content::new(
@@ -7666,6 +7719,38 @@ mod tests {
                     .into_iter()
                     .any(|terminal| terminal.id == terminal_id),
                 "active terminal metadata should be restored into the loaded panel"
+            );
+        });
+    }
+
+    #[gpui::test]
+    async fn test_working_directory_detected_event_keeps_agent_terminal_spawn_directory(
+        cx: &mut TestAppContext,
+    ) {
+        let (panel, mut cx) = setup_panel(cx).await;
+        let terminal_id = panel
+            .update_in(&mut cx, |panel, window, cx| {
+                panel.insert_test_terminal("Dev Server", true, window, cx)
+            })
+            .expect("test terminal should be inserted");
+
+        panel.update(&mut cx, |panel, cx| {
+            panel.emit_test_terminal_working_directory_detected(
+                terminal_id,
+                PathBuf::from("/remote/workspace"),
+                cx,
+            );
+        });
+        cx.run_until_parked();
+
+        panel.read_with(&cx, |panel, _cx| {
+            let terminal = panel
+                .terminals
+                .get(&terminal_id)
+                .expect("terminal should still exist");
+            assert_eq!(
+                terminal.working_directory, None,
+                "a detected remote cwd must not overwrite the agent terminal's spawn directory"
             );
         });
     }
@@ -8241,7 +8326,7 @@ mod tests {
         let cx = &mut VisualTestContext::from_window(multi_workspace.into(), cx);
 
         // Simulate a previous run that persisted metadata for this session.
-        let resume_session_id = acp_v2::SessionId::new("persistent-session");
+        let resume_session_id = acp::SessionId::new("persistent-session");
         cx.update(|_window, cx| {
             ThreadMetadataStore::global(cx).update(cx, |store, cx| {
                 store.save(
@@ -8782,7 +8867,7 @@ mod tests {
         panel: &Entity<AgentPanel>,
         connection: &StubAgentConnection,
         cx: &mut VisualTestContext,
-    ) -> (acp_v2::SessionId, ThreadId) {
+    ) -> (acp::SessionId, ThreadId) {
         open_thread_with_custom_connection(panel, connection.clone(), cx);
         let session_id = active_session_id(panel, cx);
         let thread_id = active_thread_id(panel, cx);
@@ -8802,7 +8887,7 @@ mod tests {
         panel: &Entity<AgentPanel>,
         connection: &StubAgentConnection,
         cx: &mut VisualTestContext,
-    ) -> (acp_v2::SessionId, ThreadId) {
+    ) -> (acp::SessionId, ThreadId) {
         open_thread_with_custom_connection(panel, connection.clone(), cx);
         let session_id = active_session_id(panel, cx);
         let thread_id = active_thread_id(panel, cx);
@@ -10223,7 +10308,7 @@ mod tests {
         cx.run_until_parked();
 
         assert!(
-            cx.debug_bounds("MENU_ITEM-Skills").is_some(),
+            cx.debug_bounds("MENU_ITEM-技能").is_some(),
             "Skills menu item should be visible"
         );
         assert!(
@@ -11710,7 +11795,7 @@ mod tests {
             language_model::LanguageModelRegistry::test(cx);
         });
 
-        let source_session_id = acp_v2::SessionId::new("source-thread-session");
+        let source_session_id = acp::SessionId::new("source-thread-session");
         let source_title: SharedString = "Source Thread Title".into();
         let db_thread = agent::DbThread {
             title: source_title.clone(),
@@ -11776,7 +11861,7 @@ mod tests {
         // Unknown session ids should still produce no content.
         let missing = cx.update(|cx| {
             AgentPanel::initial_content_for_thread_summary(
-                acp_v2::SessionId::new("does-not-exist"),
+                acp::SessionId::new("does-not-exist"),
                 cx,
             )
         });
@@ -13957,9 +14042,9 @@ mod tests {
     #[derive(Clone, Default)]
     struct DisassociationTrackingConnection {
         next_session_number: Arc<Mutex<usize>>,
-        sessions: Arc<Mutex<HashSet<acp_v2::SessionId>>>,
-        closed_sessions: Arc<Mutex<Vec<acp_v2::SessionId>>>,
-        missing_prompt_sessions: Arc<Mutex<Vec<acp_v2::SessionId>>>,
+        sessions: Arc<Mutex<HashSet<acp::SessionId>>>,
+        closed_sessions: Arc<Mutex<Vec<acp::SessionId>>>,
+        missing_prompt_sessions: Arc<Mutex<Vec<acp::SessionId>>>,
     }
 
     impl DisassociationTrackingConnection {
@@ -13969,7 +14054,7 @@ mod tests {
 
         fn create_session(
             self: Rc<Self>,
-            session_id: acp_v2::SessionId,
+            session_id: acp::SessionId,
             project: Entity<Project>,
             work_dirs: PathList,
             title: Option<SharedString>,
@@ -14016,7 +14101,7 @@ mod tests {
         ) -> Task<Result<Entity<AcpThread>>> {
             let session_id = {
                 let mut next_session_number = self.next_session_number.lock();
-                let session_id = acp_v2::SessionId::new(format!(
+                let session_id = acp::SessionId::new(format!(
                     "disassociation-tracking-session-{}",
                     *next_session_number
                 ));
@@ -14033,7 +14118,7 @@ mod tests {
 
         fn load_session(
             self: Rc<Self>,
-            session_id: acp_v2::SessionId,
+            session_id: acp::SessionId,
             project: Entity<Project>,
             work_dirs: PathList,
             title: Option<SharedString>,
@@ -14067,7 +14152,7 @@ mod tests {
 
         fn close_session(
             self: Rc<Self>,
-            session_id: &acp_v2::SessionId,
+            session_id: &acp::SessionId,
             _cx: &mut App,
         ) -> Task<Result<()>> {
             self.sessions.lock().remove(session_id);
@@ -14092,7 +14177,7 @@ mod tests {
             params: acp_v2::PromptRequest,
             _cx: &mut App,
         ) -> Task<Result<acp::PromptResponse>> {
-            let session_id = params.session_id;
+            let session_id = acp::SessionId::new(params.session_id.0);
             if !self.sessions.lock().contains(&session_id) {
                 self.missing_prompt_sessions.lock().push(session_id);
                 return Task::ready(Err(anyhow!("Session not found")));
@@ -14101,7 +14186,7 @@ mod tests {
             Task::ready(Ok(acp::PromptResponse::new(acp::StopReason::EndTurn)))
         }
 
-        fn cancel(&self, _session_id: &acp_v2::SessionId, _cx: &mut App) {}
+        fn cancel(&self, _session_id: &acp::SessionId, _cx: &mut App) {}
 
         fn into_any(self: Rc<Self>) -> Rc<dyn Any> {
             self

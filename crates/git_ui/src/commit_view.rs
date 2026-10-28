@@ -15,8 +15,8 @@ use git::{
 use gpui::{
     AnyElement, App, AppContext as _, AsyncWindowContext, ClipboardItem, Context, Entity,
     EventEmitter, FocusHandle, Focusable, InteractiveElement, IntoElement, ParentElement,
-    PromptLevel, Render, ScrollHandle, StatefulInteractiveElement as _, Styled, Task, WeakEntity,
-    Window, actions,
+    PromptLevel, Render, ScrollHandle, StatefulInteractiveElement as _, Styled, Subscription, Task,
+    WeakEntity, Window, actions,
 };
 use language::{
     Buffer, Capability, DiskState, File, LanguageRegistry, LineEnding, OffsetRangeExt as _,
@@ -87,6 +87,8 @@ pub struct CommitView {
     remote: Option<GitRemote>,
     is_shallow_boundary: bool,
     file_filter: Option<RepoPath>,
+    explanation_controller: Entity<crate::diff_explanations::DiffExplanationController>,
+    _explanation_subscription: Subscription,
     _load_diff_task: Task<Result<()>>,
 }
 
@@ -165,7 +167,7 @@ impl Addon for CommitDiffAddon {
         menu.when_some(file_to_open, |menu, file| {
             let commit_view = self.commit_view.clone();
             menu.entry(
-                "Open File in Project",
+                i18n::t!("5ab3a0a567587dd0"),
                 Some(Box::new(OpenFileAtHead)),
                 move |window, cx| {
                     commit_view
@@ -180,6 +182,11 @@ impl Addon for CommitDiffAddon {
 const FILE_NAMESPACE_SORT_PREFIX: u64 = 1;
 
 impl CommitView {
+    #[cfg(test)]
+    pub(crate) fn commit_sha_for_test(&self) -> &str {
+        self.commit.sha.as_ref()
+    }
+
     pub fn open(
         commit_sha: String,
         repo: WeakEntity<Repository>,
@@ -257,30 +264,43 @@ impl CommitView {
 
                         let pane = workspace.active_pane();
                         pane.update(cx, |pane, cx| {
-                            let ix = pane.items().position(|item| {
-                                let commit_view = item.downcast::<CommitView>();
-                                commit_view
-                                    .is_some_and(|view| view.read(cx).commit.sha == commit_sha)
-                            });
-                            if let Some(ix) = ix {
-                                let existing = pane
-                                    .items()
-                                    .filter_map(|item| item.downcast::<CommitView>())
-                                    .find(|view| view.read(cx).commit.sha == commit_sha)
-                                    .unwrap();
-
-                                pane.remove_item(existing.item_id(), false, false, window, cx);
-                                pane.add_item(
-                                    Box::new(commit_view),
-                                    true,
-                                    true,
-                                    Some(ix),
-                                    window,
-                                    cx,
-                                );
-                            } else {
-                                pane.add_item(Box::new(commit_view), true, true, None, window, cx);
+                            // Browsing commits from the git history should not pile up tabs: a new
+                            // commit diff replaces the previously opened one unless the user pinned
+                            // it. A view for the exact same commit is always reused in place.
+                            let mut same_commit_item = None;
+                            let mut reusable_item = None;
+                            for item in pane.items() {
+                                let Some(view) = item.downcast::<CommitView>() else {
+                                    continue;
+                                };
+                                let item_id = view.item_id();
+                                if view.read(cx).commit.sha == commit_sha {
+                                    same_commit_item = Some(item_id);
+                                    break;
+                                }
+                                if reusable_item.is_none() && !pane.is_item_pinned(item_id) {
+                                    reusable_item = Some(item_id);
+                                }
                             }
+
+                            let destination_index = same_commit_item
+                                .or(reusable_item)
+                                .and_then(|item_id| {
+                                    let index = pane
+                                        .items()
+                                        .position(|item| item.item_id() == item_id)?;
+                                    pane.remove_item(item_id, false, false, window, cx);
+                                    Some(index)
+                                });
+
+                            pane.add_item(
+                                Box::new(commit_view),
+                                true,
+                                true,
+                                destination_index,
+                                window,
+                                cx,
+                            );
                         })
                     })
                     .log_err()
@@ -337,6 +357,9 @@ impl CommitView {
             editor
         });
         let commit_sha = Arc::<str>::from(commit.sha.as_ref());
+        let explanation_controller =
+            cx.new(|_| crate::diff_explanations::DiffExplanationController::default());
+        let explanation_subscription = cx.observe(&explanation_controller, |_, _, cx| cx.notify());
 
         let repository_clone = repository.clone();
         let project_clone = project.clone();
@@ -493,6 +516,7 @@ impl CommitView {
                         });
                     });
                 }
+                this.schedule_explanations(crate::diff_explanations::DiffExplanationMode::Sync, cx);
             })?;
 
             anyhow::Ok(())
@@ -527,8 +551,87 @@ impl CommitView {
             remote,
             is_shallow_boundary,
             file_filter,
+            explanation_controller,
+            _explanation_subscription: explanation_subscription,
             _load_diff_task: load_diff_task,
         }
+    }
+
+    fn schedule_explanations(
+        &mut self,
+        mode: crate::diff_explanations::DiffExplanationMode,
+        cx: &mut Context<Self>,
+    ) {
+        let snapshot = self.multibuffer.read(cx).snapshot(cx);
+        let mut files = Vec::new();
+        for (buffer_snapshot, _) in snapshot.buffers_with_paths() {
+            let Some(file) = buffer_snapshot.file() else {
+                continue;
+            };
+            let Some(diff) = snapshot.diff_for_buffer_id(buffer_snapshot.remote_id()) else {
+                continue;
+            };
+            let mut hunks = Vec::new();
+            for (index, hunk) in diff
+                .hunks_intersecting_range(
+                    language::Anchor::min_max_range_for_buffer(buffer_snapshot.remote_id()),
+                    buffer_snapshot,
+                )
+                .enumerate()
+            {
+                let old_range = hunk.diff_base_byte_range.clone();
+                let new_range = hunk.buffer_range.to_offset(buffer_snapshot);
+                let anchor = snapshot
+                    .anchor_in_excerpt(hunk.buffer_range.start)
+                    .unwrap_or(multi_buffer::Anchor::Min);
+                hunks.push(crate::diff_explanations::DiffHunkInput {
+                    identifier: index + 1,
+                    old_start_line: diff.base_text().offset_to_point(old_range.start).row,
+                    new_start_line: buffer_snapshot.offset_to_point(new_range.start).row,
+                    old_text: diff.base_text().text_for_range(old_range).collect(),
+                    new_text: buffer_snapshot.text_for_range(new_range).collect(),
+                    anchor,
+                });
+            }
+            if hunks.is_empty() {
+                continue;
+            }
+            let anchor = snapshot
+                .excerpts_for_buffer(buffer_snapshot.remote_id())
+                .next()
+                .and_then(|excerpt| snapshot.anchor_in_excerpt(excerpt.context.start))
+                .unwrap_or_else(|| hunks[0].anchor);
+            files.push(crate::diff_explanations::DiffFileInput {
+                path: file.path().display(PathStyle::local()).to_string(),
+                language: buffer_snapshot
+                    .language()
+                    .map(|language| language.name().to_string())
+                    .unwrap_or_default(),
+                old_text: diff.base_text().text(),
+                new_text: buffer_snapshot.text(),
+                hunks,
+                anchor,
+                private: file.is_private(),
+                worktree_id: file.worktree_id(cx),
+            });
+        }
+        files.sort_by(|left, right| left.path.cmp(&right.path));
+        let refresh: crate::diff_explanations::DiffExplanationRefresh = Arc::new({
+            let view = cx.entity().downgrade();
+            move |mode, cx| {
+                view.update(cx, |view, cx| view.schedule_explanations(mode, cx))
+                    .log_err();
+            }
+        });
+        crate::diff_explanations::DiffExplanationController::update_from_view(
+            &self.explanation_controller,
+            self.editor.read(cx).rhs_editor().clone(),
+            self.project.clone(),
+            files,
+            mode,
+            refresh,
+            cx,
+        );
     }
 
     fn render_shallow_boundary_notice(&self, cx: &App) -> impl IntoElement {
@@ -547,12 +650,11 @@ impl CommitView {
             .justify_center()
             .gap_2()
             .child(
-                Label::new("This commit is at the boundary of a shallow clone.")
-                    .color(Color::Muted),
+                Label::new(i18n::t!("e7b4c723a42de198")).color(Color::Muted),
             )
             .child(
                 Label::new(
-                    "Its parent history was not fetched, so the changes it introduced cannot be shown.",
+                    i18n::t!("9ce0aeb96cc0f7fa"),
                 )
                 .color(Color::Muted),
             )
@@ -568,15 +670,15 @@ impl CommitView {
                             Button::new(
                                 "fetch-unshallow",
                                 if fetch_in_flight {
-                                    "Fetching…"
+                                    i18n::t!("85ab30269d8fc924")
                                 } else {
-                                    "Fetch Missing History"
+                                    i18n::t!("9ce16a4ad8542f62")
                                 },
                             )
                                 .style(ButtonStyle::Filled)
                                 .disabled(fetch_in_flight)
                                 .tooltip(Tooltip::text(
-                                    "Run `git fetch --unshallow` to download the full history, then show this commit's changes.",
+                                    i18n::t!("bbe9dc9817752172"),
                                 ))
                                 .on_click(move |_, window, cx| {
                                     let fetch = crate::commit_tooltip::fetch_unshallow(
@@ -830,7 +932,7 @@ impl CommitView {
                     )
                     .when(self.stash.is_none(), |this| {
                         this.child(
-                            Button::new("sha", "Commit SHA")
+                            Button::new("sha", i18n::t!("bafc39af1e84c72a"))
                                 .start_icon(
                                     Icon::new(copy_icon)
                                         .size(IconSize::Small)
@@ -840,7 +942,7 @@ impl CommitView {
                                     let commit_sha = commit_sha.clone();
                                     move |_, cx| {
                                         Tooltip::with_meta(
-                                            "Copy Commit SHA",
+                                            i18n::t!("867dbb14725075d6"),
                                             None,
                                             commit_sha.clone(),
                                             cx,
@@ -910,7 +1012,7 @@ impl CommitView {
     fn apply_stash(workspace: &mut Workspace, window: &mut Window, cx: &mut App) {
         Self::stash_action(
             workspace,
-            "Apply",
+            i18n::t!("63c73c4730f4473e"),
             window,
             cx,
             async move |repository, sha, stash, commit_view, workspace, cx| {
@@ -937,7 +1039,7 @@ impl CommitView {
     fn pop_stash(workspace: &mut Workspace, window: &mut Window, cx: &mut App) {
         Self::stash_action(
             workspace,
-            "Pop",
+            i18n::t!("05cfd6ba003530c6"),
             window,
             cx,
             async move |repository, sha, stash, commit_view, workspace, cx| {
@@ -964,7 +1066,7 @@ impl CommitView {
     fn remove_stash(workspace: &mut Workspace, window: &mut Window, cx: &mut App) {
         Self::stash_action(
             workspace,
-            "Drop",
+            i18n::t!("b16f71b55691cdc3"),
             window,
             cx,
             async move |repository, sha, stash, commit_view, workspace, cx| {
@@ -1361,6 +1463,10 @@ impl Item for CommitView {
                     cx,
                 )
             });
+            let explanation_controller =
+                cx.new(|_| crate::diff_explanations::DiffExplanationController::default());
+            let explanation_subscription =
+                cx.observe(&explanation_controller, |_, _, cx| cx.notify());
             Self {
                 editor,
                 message,
@@ -1375,6 +1481,8 @@ impl Item for CommitView {
                 remote: self.remote.clone(),
                 is_shallow_boundary: self.is_shallow_boundary,
                 file_filter: self.file_filter.clone(),
+                explanation_controller,
+                _explanation_subscription: explanation_subscription,
                 _load_diff_task: Task::ready(Ok(())),
             }
         })))
@@ -1384,6 +1492,7 @@ impl Item for CommitView {
 impl Render for CommitView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let is_stash = self.stash.is_some();
+        let editor_is_empty = self.editor.read(cx).rhs_editor().read(cx).is_empty(cx);
 
         v_flex()
             .key_context(if is_stash { "StashDiff" } else { "CommitDiff" })
@@ -1391,10 +1500,20 @@ impl Render for CommitView {
             .size_full()
             .bg(cx.theme().colors().editor_background)
             .child(self.render_header(window, cx))
-            .when(
-                !self.editor.read(cx).rhs_editor().read(cx).is_empty(cx),
-                |this| this.child(div().flex_grow(1.).child(self.editor.clone())),
+            .when_some(
+                crate::diff_explanations::render_explanation_controls(
+                    &self.explanation_controller,
+                    cx,
+                ),
+                |this, controls| this.child(controls),
             )
+            // The advertised editor focus must remain in the tree even before diff loading completes.
+            .when(editor_is_empty, |this| {
+                this.track_focus(&self.editor.focus_handle(cx))
+            })
+            .when(!editor_is_empty, |this| {
+                this.child(div().flex_grow(1.).child(self.editor.clone()))
+            })
             .when(self.is_shallow_boundary, |this| {
                 this.child(self.render_shallow_boundary_notice(cx))
             })
@@ -1461,7 +1580,7 @@ impl Render for CommitViewToolbar {
                     .icon_size(IconSize::Small)
                     .tooltip(move |_, cx| {
                         Tooltip::for_action(
-                            "Buffer Search",
+                            i18n::t!("cd05d19e22d994e8"),
                             &zed_actions::buffer_search::Deploy::find(),
                             cx,
                         )
@@ -1477,7 +1596,7 @@ impl Render for CommitViewToolbar {
                 this.child(
                     IconButton::new("show-in-git-graph", IconName::GitGraph)
                         .icon_size(IconSize::Small)
-                        .tooltip(Tooltip::text("Show in Git Graph"))
+                        .tooltip(Tooltip::text(i18n::t!("fafd39406ffc961b")))
                         .on_click(move |_, window, cx| {
                             window.dispatch_action(
                                 Box::new(crate::git_graph::OpenAtCommit {
@@ -1492,7 +1611,10 @@ impl Render for CommitViewToolbar {
 
                     IconButton::new("view_on_provider", icon)
                         .icon_size(IconSize::Small)
-                        .tooltip(Tooltip::text(format!("View on {}", provider_name)))
+                        .tooltip(Tooltip::text(i18n::t_args!(
+                            "f2245eadbe3b33f0",
+                            provider_name
+                        )))
                         .on_click(move |_, _, cx| cx.open_url(&url))
                 }))
             })
@@ -1534,10 +1656,234 @@ fn stash_matches_index(sha: &str, stash_index: usize, repo: &Repository) -> bool
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fs::FakeFs;
     use gpui::{EmptyView, TestAppContext};
     use indoc::indoc;
     use language::{Language, LanguageConfig, LanguageMatcher, markdown_lang};
     use settings::SettingsStore;
+    use std::path::Path;
+
+    #[gpui::test]
+    async fn test_commit_view_focus_survives_diff_loading(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            let settings_store = SettingsStore::test(cx);
+            cx.set_global(settings_store);
+            theme_settings::init(theme::LoadThemes::JustBase, cx);
+            language_model::init(cx);
+            crate::init(cx);
+        });
+        let fs = FakeFs::new(cx.executor());
+        fs.insert_tree(
+            Path::new("/project"),
+            serde_json::json!({".git": {}, "file.txt": "content"}),
+        )
+        .await;
+        let project = Project::test(fs, [Path::new("/project")], cx).await;
+        cx.run_until_parked();
+        let repository = project.read_with(cx, |project, cx| {
+            project.active_repository(cx).expect("repository")
+        });
+        let (multi_workspace, cx) = cx.add_window_view(|window, cx| {
+            workspace::MultiWorkspace::test_new(project.clone(), window, cx)
+        });
+        let workspace = multi_workspace.read_with(cx, |multi, _| multi.workspace().clone());
+        let view = cx.new_window_entity(|window, cx| {
+            let view = CommitView::new(
+                CommitDetails {
+                    sha: "0101010101010101010101010101010101010101".into(),
+                    message: "Commit message".into(),
+                    ..Default::default()
+                },
+                CommitDiff {
+                    files: vec![project::git_store::CommitFile {
+                        path: RepoPath::new("file.txt").expect("path"),
+                        old_text: None,
+                        new_text: Some("content".into()),
+                        is_binary: false,
+                    }],
+                    is_shallow_boundary: false,
+                },
+                repository.clone(),
+                project.clone(),
+                workspace.clone(),
+                workspace.downgrade(),
+                None,
+                None,
+                window,
+                cx,
+            );
+            assert!(view.editor.read(cx).rhs_editor().read(cx).is_empty(cx));
+            view
+        });
+        workspace.update_in(cx, |workspace, window, cx| {
+            workspace.add_item_to_active_pane(Box::new(view.clone()), None, true, window, cx);
+        });
+        let load_task = view.update(cx, |view, _| {
+            std::mem::replace(&mut view._load_diff_task, Task::ready(Ok(())))
+        });
+        load_task.await.expect("diff should load");
+        cx.run_until_parked();
+        view.update_in(cx, |view, window, cx| {
+            let editor = view.editor.read(cx).rhs_editor();
+            assert!(!editor.read(cx).is_empty(cx));
+            assert!(view.focus_handle(cx).is_focused(window));
+        });
+        cx.run_until_parked();
+        view.update_in(cx, |view, window, cx| {
+            assert!(view.focus_handle(cx).is_focused(window))
+        });
+    }
+
+    #[gpui::test]
+    async fn test_opening_another_commit_reuses_unpinned_commit_view(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            let settings_store = SettingsStore::test(cx);
+            cx.set_global(settings_store);
+            theme_settings::init(theme::LoadThemes::JustBase, cx);
+            language_model::init(cx);
+            crate::init(cx);
+        });
+        let fs = FakeFs::new(cx.executor());
+        fs.insert_tree(
+            Path::new("/project"),
+            serde_json::json!({".git": {}, "file.txt": "content"}),
+        )
+        .await;
+        let project = Project::test(fs, [Path::new("/project")], cx).await;
+        cx.run_until_parked();
+        let repository = project.read_with(cx, |project, cx| {
+            project.active_repository(cx).expect("repository")
+        });
+        let (multi_workspace, cx) = cx.add_window_view(|window, cx| {
+            workspace::MultiWorkspace::test_new(project.clone(), window, cx)
+        });
+        let workspace = multi_workspace.read_with(cx, |multi, _| multi.workspace().clone());
+
+        let first_sha = "0101010101010101010101010101010101010101";
+        let second_sha = "0202020202020202020202020202020202020202";
+
+        for sha in [first_sha, second_sha] {
+            workspace.update_in(cx, |_, window, cx| {
+                CommitView::open(
+                    sha.to_string(),
+                    repository.downgrade(),
+                    cx.weak_entity(),
+                    None,
+                    None,
+                    window,
+                    cx,
+                );
+            });
+            cx.run_until_parked();
+        }
+
+        let pane = workspace.read_with(cx, |workspace, _| workspace.active_pane().clone());
+        pane.read_with(cx, |pane, cx| {
+            let commit_views = pane
+                .items()
+                .filter_map(|item| item.downcast::<CommitView>())
+                .collect::<Vec<_>>();
+            assert_eq!(
+                commit_views.len(),
+                1,
+                "opening another commit should reuse the unpinned commit diff tab"
+            );
+            assert_eq!(commit_views[0].read(cx).commit.sha, second_sha);
+        });
+    }
+
+    #[gpui::test]
+    async fn test_pinned_commit_view_is_not_replaced(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            let settings_store = SettingsStore::test(cx);
+            cx.set_global(settings_store);
+            theme_settings::init(theme::LoadThemes::JustBase, cx);
+            language_model::init(cx);
+            crate::init(cx);
+        });
+        let fs = FakeFs::new(cx.executor());
+        fs.insert_tree(
+            Path::new("/project"),
+            serde_json::json!({".git": {}, "file.txt": "content"}),
+        )
+        .await;
+        let project = Project::test(fs, [Path::new("/project")], cx).await;
+        cx.run_until_parked();
+        let repository = project.read_with(cx, |project, cx| {
+            project.active_repository(cx).expect("repository")
+        });
+        let (multi_workspace, cx) = cx.add_window_view(|window, cx| {
+            workspace::MultiWorkspace::test_new(project.clone(), window, cx)
+        });
+        let workspace = multi_workspace.read_with(cx, |multi, _| multi.workspace().clone());
+
+        let first_sha = "0101010101010101010101010101010101010101";
+        let second_sha = "0202020202020202020202020202020202020202";
+
+        workspace.update_in(cx, |_, window, cx| {
+            CommitView::open(
+                first_sha.to_string(),
+                repository.downgrade(),
+                cx.weak_entity(),
+                None,
+                None,
+                window,
+                cx,
+            );
+        });
+        cx.run_until_parked();
+
+        let pane = workspace.read_with(cx, |workspace, _| workspace.active_pane().clone());
+        let pane_focus_handle = pane.read_with(cx, |pane, cx| pane.focus_handle(cx));
+        workspace.update_in(cx, |_, window, cx| {
+            pane_focus_handle.dispatch_action(&workspace::pane::TogglePinTab, window, cx);
+        });
+        cx.run_until_parked();
+        pane.read_with(cx, |pane, _| {
+            assert!(
+                pane.is_active_item_pinned(),
+                "dispatching TogglePinTab should pin the active commit view"
+            );
+        });
+        cx.run_until_parked();
+
+        workspace.update_in(cx, |_, window, cx| {
+            CommitView::open(
+                second_sha.to_string(),
+                repository.downgrade(),
+                cx.weak_entity(),
+                None,
+                None,
+                window,
+                cx,
+            );
+        });
+        cx.run_until_parked();
+
+        pane.read_with(cx, |pane, cx| {
+            let commit_views = pane
+                .items()
+                .filter_map(|item| item.downcast::<CommitView>())
+                .collect::<Vec<_>>();
+            assert_eq!(
+                commit_views.len(),
+                2,
+                "a pinned commit view must not be replaced by the next commit"
+            );
+            assert!(
+                commit_views
+                    .iter()
+                    .any(|view| view.read(cx).commit.sha == first_sha),
+                "the pinned commit view should still be open"
+            );
+            assert!(
+                commit_views
+                    .iter()
+                    .any(|view| view.read(cx).commit.sha == second_sha),
+                "the newly opened commit view should be open as well"
+            );
+        });
+    }
 
     #[gpui::test]
     async fn test_build_buffer_resolves_injected_languages(cx: &mut TestAppContext) {

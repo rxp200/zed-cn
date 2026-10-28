@@ -13,10 +13,11 @@ use gpui::{
     Entity, FocusHandle, Focusable, Global, KeyContext, ListState, ReadGlobal as _, Role,
     ScrollHandle, Stateful, Subscription, Task, TitlebarOptions, UniformListScrollHandle,
     WeakEntity, Window, WindowBounds, WindowHandle, WindowOptions, actions, container_query, div,
-    list, point, prelude::*, px, uniform_list,
+    list, point, prelude::*, px, rems, uniform_list,
 };
 
 use language::Buffer;
+use language_model::{LanguageModelProviderId, LanguageModelRegistry};
 use platform_title_bar::PlatformTitleBar;
 use project::{Project, ProjectPath, Worktree, WorktreeId};
 use release_channel::ReleaseChannel;
@@ -38,9 +39,9 @@ use std::{
 };
 use theme_settings::ThemeSettings;
 use ui::{
-    Banner, ContextMenu, Divider, DropdownMenu, DropdownStyle, IconButtonShape, KeyBinding,
-    KeybindingHint, PopoverMenu, Scrollbars, Switch, Tooltip, TreeViewItem, WithScrollbar,
-    prelude::*,
+    Banner, ContextMenu, DropdownMenu, DropdownStyle, HighlightedLabel, IconButtonShape,
+    KeyBinding, KeybindingHint, PopoverMenu, Scrollbars, Switch, Tooltip, TreeViewItem,
+    WithScrollbar, prelude::*,
 };
 
 use util::{ResultExt as _, paths::PathStyle, rel_path::RelPath};
@@ -56,7 +57,7 @@ use zed_actions::{
 use crate::components::{
     EnumVariantDropdown, NumberField, NumberFieldMode, NumberFieldType, SettingsInputField,
     SettingsSectionHeader, font_picker, icon_theme_picker, render_ollama_model_picker,
-    text_field_a11y_state, theme_picker,
+    text_field_a11y_state, theme_picker, translation_picker,
 };
 use crate::pages::{
     CustomAgentForm, LlmProviderForm, McpServerForm, render_input_audio_device_dropdown,
@@ -74,6 +75,10 @@ const CONTENT_GROUP_TAB_INDEX: isize = 5;
 
 const SIDEBAR_WIDTH: Pixels = px(226.);
 const CONTENT_MIN_WIDTH: Pixels = px(400.);
+
+fn is_llm_providers_page(json_path: Option<&str>) -> bool {
+    json_path == Some("llm_providers")
+}
 
 actions!(
     settings_editor,
@@ -531,7 +536,7 @@ fn init_renderers(cx: &mut App) {
                     settings_window,
                     item,
                     settings_file,
-                    Button::new("open-in-settings-file", "Edit in settings.json")
+                    Button::new("open-in-settings-file", i18n::t!("d467612e914e9ddf"))
                         .style(ButtonStyle::Outlined)
                         .size(ButtonSize::Medium)
                         .tab_index(0_isize)
@@ -552,7 +557,9 @@ fn init_renderers(cx: &mut App) {
         .add_basic_renderer::<bool>(render_toggle_button)
         .add_basic_renderer::<String>(render_text_field)
         .add_basic_renderer::<SharedString>(render_text_field)
+        .add_basic_renderer::<settings::UiLanguage>(render_language_dropdown)
         .add_basic_renderer::<settings::SaturatingBool>(render_toggle_button)
+        .add_basic_renderer::<settings::UpdateChannel>(render_dropdown)
         .add_basic_renderer::<settings::CursorShape>(render_dropdown)
         .add_basic_renderer::<settings::RestoreOnStartupBehavior>(render_dropdown)
         .add_basic_renderer::<settings::OnNewWindow>(render_dropdown)
@@ -612,6 +619,7 @@ fn init_renderers(cx: &mut App) {
         .add_basic_renderer::<settings::TerminalBlink>(render_dropdown)
         .add_basic_renderer::<settings::CursorShapeContent>(render_dropdown)
         .add_basic_renderer::<settings::EditPredictionPromptFormatContent>(render_dropdown)
+        .add_basic_renderer::<settings::OpenAiCompatibleApiTypeContent>(render_dropdown)
         .add_basic_renderer::<settings::EditPredictionDataCollectionChoice>(render_dropdown)
         .add_basic_renderer::<f32>(render_editable_number_field)
         .add_basic_renderer::<settings::AutoCompactThreshold>(render_text_field)
@@ -673,6 +681,8 @@ fn init_renderers(cx: &mut App) {
         .add_basic_renderer::<settings::ScanSymlinksSetting>(render_dropdown)
         .add_basic_renderer::<settings::FontSize>(render_editable_number_field)
         .add_basic_renderer::<settings::OllamaModelName>(render_ollama_model_picker)
+        .add_basic_renderer::<settings::TranslationProviderSetting>(render_translation_provider_picker)
+        .add_basic_renderer::<settings::TranslationModelSetting>(render_translation_model_picker)
         .add_basic_renderer::<settings::SemanticTokens>(render_dropdown)
         .add_basic_renderer::<settings::DocumentFoldingRanges>(render_dropdown)
         .add_basic_renderer::<settings::DocumentSymbols>(render_dropdown)
@@ -1000,6 +1010,8 @@ pub struct SettingsWindow {
     /// focus ring when the page auto-focuses it on open (which happens via mouse,
     /// where `focus_visible` styling would otherwise be suppressed).
     pub(crate) llm_provider_add_focus_handle: FocusHandle,
+    /// Scroll state for the LLM provider list on the left of the AI providers page.
+    pub(crate) llm_provider_navigation_scroll_handle: ScrollHandle,
     /// State for the active "add/edit custom MCP server" form sub-page, if open.
     pub(crate) mcp_server_form: Option<McpServerForm>,
     /// Stable focus handle for the MCP "Add Server" button, so it can show a
@@ -1024,6 +1036,15 @@ struct SearchIndex {
     documents: Vec<SearchDocument>,
     fuzzy_match_candidates: Vec<StringMatchCandidate>,
     key_lut: Vec<SearchKeyLUTEntry>,
+}
+
+fn search_document_matches(document: &SearchDocument, query_words: &[&str]) -> bool {
+    query_words.iter().all(|query_word| {
+        document
+            .words
+            .iter()
+            .any(|document_word| document_word.contains(query_word))
+    })
 }
 
 struct SearchKeyLUTEntry {
@@ -1078,6 +1099,16 @@ struct NavBarEntry {
     focus_handle: FocusHandle,
 }
 
+/// 侧栏导航中页面所属的分组。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SettingsNavGroup {
+    General,
+    Workspace,
+    Tools,
+    Ai,
+    System,
+}
+
 struct SettingsPage {
     title: &'static str,
     items: Box<[SettingsPageItem]>,
@@ -1124,20 +1155,29 @@ impl SettingsPageItem {
         &self,
         settings_window: &SettingsWindow,
         item_index: usize,
-        bottom_border: bool,
-        extra_bottom_padding: bool,
+        carded: bool,
+        card_top: bool,
+        card_bottom: bool,
         window: &mut Window,
         cx: &mut Context<SettingsWindow>,
     ) -> AnyElement {
         let file = settings_window.current_file.clone();
+        let search_query = settings_window.search_bar.read(cx).text(cx);
 
-        let apply_padding = |element: Stateful<Div>| -> Stateful<Div> {
-            let element = element.pt_4();
-            if extra_bottom_padding {
-                element.pb_10()
-            } else {
-                element.pb_4()
-            }
+        let apply_padding = |element: Stateful<Div>| -> Stateful<Div> { element.py_3() };
+
+        // 同一小节内的条目共享一张卡片：小节标题是卡片头部，
+        // 条目行用卡片的上边框作为分隔线，小节末尾封闭卡片。
+        let card_container = |cx: &mut Context<SettingsWindow>| -> Div {
+            div().w_full().when(carded, |this| {
+                this.bg(cx.theme().colors().surface_background)
+                    .border_l_1()
+                    .border_r_1()
+                    .border_t_1()
+                    .border_color(cx.theme().colors().border_variant)
+                    .when(card_top, |this| this.rounded_t_md())
+                    .when(card_bottom, |this| this.rounded_b_md().border_b_1())
+            })
         };
 
         let mut render_setting_item_inner =
@@ -1199,9 +1239,14 @@ impl SettingsPageItem {
             };
 
         match self {
-            SettingsPageItem::SectionHeader(header) => {
-                SettingsSectionHeader::new(SharedString::new_static(header)).into_any_element()
-            }
+            SettingsPageItem::SectionHeader(header) => v_flex()
+                .when(carded, |this| this.px_8().pt_4())
+                .child(
+                    SettingsSectionHeader::new(SharedString::new_static(header))
+                        .highlight_ranges(search_highlight_ranges(header, &search_query))
+                        .carded(carded, card_bottom),
+                )
+                .into_any_element(),
             SettingsPageItem::SettingItem(setting_item) => {
                 let (field_with_padding, _) =
                     render_setting_item_inner(setting_item, true, false, cx);
@@ -1209,89 +1254,121 @@ impl SettingsPageItem {
                 v_flex()
                     .group("setting-item")
                     .px_8()
-                    .child(field_with_padding)
-                    .when(bottom_border, |this| this.child(Divider::horizontal()))
+                    .child(
+                        card_container(cx).child(
+                            div()
+                                .when(carded, |this| this.px_4())
+                                .child(field_with_padding),
+                        ),
+                    )
                     .into_any_element()
             }
-            SettingsPageItem::SubPageLink(sub_page_link) => v_flex()
-                .group("setting-item")
-                .px_8()
-                .child(
-                    h_flex()
-                        .id(sub_page_link.title.clone())
-                        .w_full()
-                        .min_w_0()
-                        .justify_between()
-                        .map(apply_padding)
-                        .child(
-                            v_flex()
-                                .relative()
-                                .w_full()
-                                .max_w_1_2()
-                                .child(Label::new(sub_page_link.title.clone()))
-                                .when_some(
-                                    sub_page_link.description.as_ref(),
-                                    |this, description| {
-                                        this.child(
-                                            Label::new(description.clone())
-                                                .size(LabelSize::Small)
-                                                .color(Color::Muted),
+            SettingsPageItem::SubPageLink(sub_page_link) => {
+                // 整行可点击的子页面入口：图标 + 标题/描述 + 右侧箭头。
+                v_flex()
+                    .group("setting-item")
+                    .px_8()
+                    .child(
+                        card_container(cx)
+                            .overflow_hidden()
+                            .child(
+                                h_flex()
+                                    .id(sub_page_link.title.clone())
+                                    .w_full()
+                                    .min_w_0()
+                                    .gap_3()
+                                    .items_center()
+                                    .map(apply_padding)
+                                    .when(carded, |this| this.px_4())
+                                    .cursor_pointer()
+                                    .hover(|this| {
+                                        this.bg(cx.theme().colors().element_hover)
+                                    })
+                                    .child(
+                                        h_flex()
+                                            .w_8()
+                                            .h_8()
+                                            .flex_none()
+                                            .justify_center()
+                                            .rounded_md()
+                                            .bg(cx.theme().colors().editor_background)
+                                            .border_1()
+                                            .border_color(cx.theme().colors().border)
+                                            .child(
+                                                Icon::new(sub_page_link.icon)
+                                                    .size(IconSize::Small)
+                                                    .color(Color::Accent),
+                                            ),
+                                    )
+                                    .child(
+                                        v_flex()
+                                            .relative()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .child(render_search_highlighted_label(
+                                                sub_page_link.title.clone(),
+                                                &search_query,
+                                                None,
+                                                None,
+                                                false,
+                                            ))
+                                            .when_some(
+                                                sub_page_link.description.as_ref(),
+                                                |this, description| {
+                                                    this.child(render_search_highlighted_label(
+                                                        description.clone(),
+                                                        &search_query,
+                                                        Some(LabelSize::Small),
+                                                        Some(Color::Muted),
+                                                        false,
+                                                    ))
+                                                },
+                                            ),
+                                    )
+                                    .child(
+                                        IconButton::new(
+                                            ("sub-page".into(), sub_page_link.title.clone()),
+                                            IconName::ChevronRight,
                                         )
-                                    },
-                                ),
-                        )
-                        .child(
-                            Button::new(
-                                ("sub-page".into(), sub_page_link.title.clone()),
-                                "Configure",
-                            )
-                            .aria_label(format!("Configure {}", sub_page_link.title))
-                            .tab_index(0_isize)
-                            .end_icon(
-                                Icon::new(IconName::ChevronRight)
-                                    .size(IconSize::Small)
-                                    .color(Color::Muted),
-                            )
-                            .style(ButtonStyle::OutlinedGhost)
-                            .size(ButtonSize::Medium)
-                            .on_click({
-                                let sub_page_link = sub_page_link.clone();
-                                cx.listener(move |this, _, window, cx| {
-                                    let header_text = this
-                                        .sub_page_stack
-                                        .last()
-                                        .map(|sub_page| sub_page.link.title.clone())
-                                        .or_else(|| {
-                                            this.current_page()
-                                                .items
-                                                .iter()
-                                                .take(item_index)
-                                                .rev()
-                                                .find_map(|item| {
-                                                    item.header_text().map(SharedString::new_static)
-                                                })
-                                        });
-
-                                    let Some(header) = header_text else {
-                                        unreachable!(
-                                            "All items always have a section header above them"
-                                        )
-                                    };
-
-                                    this.push_sub_page(sub_page_link.clone(), header, window, cx)
-                                })
-                            }),
-                        )
-                        .child(render_settings_item_link(
-                            sub_page_link.title.clone(),
-                            sub_page_link.json_path,
-                            false,
-                            settings_window,
-                            cx,
-                        )),
-                )
-                .when(bottom_border, |this| this.child(Divider::horizontal()))
-                .into_any_element(),
+                                        .icon_color(Color::Muted)
+                                        .icon_size(IconSize::Small)
+                                        .shape(IconButtonShape::Square)
+                                        .aria_label(format!("Configure {}", sub_page_link.title))
+                                        .tab_index(0_isize)
+                                        .on_click({
+                                            let sub_page_link = sub_page_link.clone();
+                                            cx.listener(move |this, _, window, cx| {
+                                                this.open_sub_page_link(
+                                                    item_index,
+                                                    sub_page_link.clone(),
+                                                    window,
+                                                    cx,
+                                                )
+                                            })
+                                        }),
+                                    )
+                                    .on_click({
+                                        let sub_page_link = sub_page_link.clone();
+                                        cx.listener(move |this, _, window, cx| {
+                                            this.open_sub_page_link(
+                                                item_index,
+                                                sub_page_link.clone(),
+                                                window,
+                                                cx,
+                                            )
+                                        })
+                                    })
+                                    .child(render_settings_item_link(
+                                        sub_page_link.title.clone(),
+                                        sub_page_link.json_path,
+                                        false,
+                                        settings_window,
+                                        cx,
+                                    )),
+                            ),
+                    )
+                    .into_any_element()
+            }
             SettingsPageItem::DynamicItem(DynamicItem {
                 discriminant: discriminant_setting_item,
                 pick_discriminant,
@@ -1308,17 +1385,12 @@ impl SettingsPageItem {
                 let has_sub_fields =
                     rendered_ok && discriminant.is_some_and(|d| !fields[d].is_empty());
 
-                let mut content = v_flex()
-                    .id("dynamic-item")
-                    .child(
-                        div()
-                            .group("setting-item")
-                            .px_8()
-                            .child(discriminant_element.when(has_sub_fields, |this| this.pb_4())),
-                    )
-                    .when(!has_sub_fields && bottom_border, |this| {
-                        this.child(h_flex().px_8().child(Divider::horizontal()))
-                    });
+                let mut card = card_container(cx).child(
+                    div()
+                        .group("setting-item")
+                        .when(carded, |this| this.px_4())
+                        .child(discriminant_element.when(has_sub_fields, |this| this.pb_1())),
+                );
 
                 if rendered_ok {
                     let discriminant =
@@ -1326,53 +1398,66 @@ impl SettingsPageItem {
                     let sub_fields = &fields[discriminant];
                     let sub_field_count = sub_fields.len();
 
-                    for (index, field) in sub_fields.iter().enumerate() {
-                        let is_last_sub_field = index == sub_field_count - 1;
+                    for field in sub_fields.iter() {
                         let (raw_field, _) = render_setting_item_inner(field, false, true, cx);
 
-                        content = content.child(
+                        card = card.child(
                             raw_field
                                 .group("setting-sub-item")
-                                .mx_8()
+                                .when(carded, |this| this.mx_4())
                                 .p_4()
                                 .border_t_1()
-                                .when(is_last_sub_field, |this| this.border_b_1())
-                                .when(is_last_sub_field && extra_bottom_padding, |this| {
-                                    this.mb_8()
-                                })
                                 .border_dashed()
                                 .border_color(cx.theme().colors().border_variant)
                                 .bg(cx.theme().colors().element_background.opacity(0.2)),
                         );
                     }
+
+                    if carded && sub_field_count > 0 {
+                        card = card.child(div().h_3());
+                    }
                 }
 
-                return content.into_any_element();
+                return v_flex()
+                    .id("dynamic-item")
+                    .px_8()
+                    .child(card)
+                    .into_any_element();
             }
             SettingsPageItem::ActionLink(action_link) => v_flex()
                 .group("setting-item")
                 .px_8()
                 .child(
-                    h_flex()
-                        .id(action_link.title.clone())
-                        .w_full()
-                        .min_w_0()
-                        .justify_between()
-                        .map(apply_padding)
+                    card_container(cx).child(
+                        h_flex()
+                            .id(action_link.title.clone())
+                            .w_full()
+                            .min_w_0()
+                            .justify_between()
+                            .when(carded, |this| this.px_4())
+                            .map(apply_padding)
                         .child(
                             v_flex()
                                 .relative()
                                 .w_full()
                                 .max_w_1_2()
-                                .child(Label::new(action_link.title.clone()))
+                                .child(render_search_highlighted_label(
+                                    action_link.title.clone(),
+                                    &search_query,
+                                    None,
+                                    None,
+                                    false,
+                                ))
                                 .when_some(
                                     action_link.description.as_ref(),
                                     |this, description| {
-                                        this.child(
-                                            Label::new(description.clone())
-                                                .size(LabelSize::Small)
-                                                .color(Color::Muted),
-                                        )
+                                        this.child(render_search_highlighted_label(
+                                            description.clone(),
+                                            &search_query,
+                                            Some(LabelSize::Small),
+                                            Some(Color::Muted),
+                                            false,
+                                        ))
                                     },
                                 ),
                         )
@@ -1396,8 +1481,8 @@ impl SettingsPageItem {
                                 })
                             }),
                         ),
+                    ),
                 )
-                .when(bottom_border, |this| this.child(Divider::horizontal()))
                 .into_any_element(),
         }
     }
@@ -1407,6 +1492,71 @@ impl SettingsPageItem {
 ///
 /// Renders title + description on the left, control on the right, with
 /// optional reset button and copy-link icon.
+fn search_highlight_ranges(text: &str, query: &str) -> Vec<Range<usize>> {
+    let mut normalized_text = String::new();
+    let mut source_ranges = Vec::new();
+
+    for (start, character) in text.char_indices() {
+        let end = start + character.len_utf8();
+        for normalized_character in character.to_lowercase() {
+            let normalized_start = normalized_text.len();
+            normalized_text.push(normalized_character);
+            source_ranges.extend((normalized_start..normalized_text.len()).map(|_| start..end));
+        }
+    }
+
+    let mut ranges = query
+        .split_whitespace()
+        .map(str::to_lowercase)
+        .filter(|word| !word.is_empty())
+        .flat_map(|word| {
+            normalized_text
+                .match_indices(&word)
+                .filter_map(|(start, matched)| {
+                    let end = start + matched.len();
+                    Some(source_ranges.get(start)?.start..source_ranges.get(end - 1)?.end)
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    ranges.sort_unstable_by_key(|range| (range.start, range.end));
+    ranges.dedup();
+    ranges
+}
+
+fn render_search_highlighted_label(
+    text: impl Into<SharedString>,
+    query: &str,
+    size: Option<LabelSize>,
+    color: Option<Color>,
+    render_code_spans: bool,
+) -> AnyElement {
+    let text = text.into();
+    let ranges = search_highlight_ranges(&text, query);
+    if ranges.is_empty() {
+        let label = Label::new(text);
+        return match (size, color, render_code_spans) {
+            (Some(size), Some(color), true) => label
+                .size(size)
+                .color(color)
+                .render_code_spans()
+                .into_any_element(),
+            (Some(size), Some(color), false) => label.size(size).color(color).into_any_element(),
+            (Some(size), None, _) => label.size(size).into_any_element(),
+            (None, Some(color), _) => label.color(color).into_any_element(),
+            (None, None, _) => label.into_any_element(),
+        };
+    }
+
+    let label = HighlightedLabel::from_ranges(text, ranges);
+    match (size, color) {
+        (Some(size), Some(color)) => label.size(size).color(color).into_any_element(),
+        (Some(size), None) => label.size(size).into_any_element(),
+        (None, Some(color)) => label.color(color).into_any_element(),
+        (None, None) => label.into_any_element(),
+    }
+}
+
 fn render_settings_item_layout(
     settings_window: &SettingsWindow,
     title: &'static str,
@@ -1418,6 +1568,8 @@ fn render_settings_item_layout(
     sub_field: bool,
     cx: &mut Context<'_, SettingsWindow>,
 ) -> Stateful<Div> {
+    let search_query = settings_window.search_bar.read(cx).text(cx);
+
     // Note: the row itself is intentionally not exposed as a labeled group.
     // Each control names and describes itself (via the setting title and
     // description), so adding a group with the same label here would make
@@ -1436,14 +1588,20 @@ fn render_settings_item_layout(
                     h_flex()
                         .w_full()
                         .gap_1()
-                        .child(Label::new(SharedString::new_static(title)))
+                        .child(render_search_highlighted_label(
+                            SharedString::new_static(title),
+                            &search_query,
+                            None,
+                            None,
+                            false,
+                        ))
                         .when_some(reset_fn, |this, reset_to_default| {
                             this.child(
                                 IconButton::new("reset-to-default-btn", IconName::Undo)
                                     .icon_color(Color::Muted)
                                     .icon_size(IconSize::Small)
-                                    .aria_label("Reset to Default")
-                                    .tooltip(Tooltip::text("Reset to Default"))
+                                    .aria_label(i18n::t!("7e2f65b12a520a5c"))
+                                    .tooltip(Tooltip::text(i18n::t!("7e2f65b12a520a5c")))
                                     .on_click(move |_, window, cx| {
                                         reset_to_default(window, cx);
                                     }),
@@ -1455,25 +1613,26 @@ fn render_settings_item_layout(
                                     .color(Color::Muted)
                                     .size(LabelSize::Small),
                             )
+                        })
+                        .when(settings_window.sub_page_stack.is_empty(), |this| {
+                            this.child(render_settings_item_link(
+                                title,
+                                json_path,
+                                sub_field,
+                                settings_window,
+                                cx,
+                            ))
                         }),
                 )
-                .child(
-                    Label::new(SharedString::new_static(description))
-                        .size(LabelSize::Small)
-                        .color(Color::Muted)
-                        .render_code_spans(),
-                ),
+                .child(render_search_highlighted_label(
+                    SharedString::new_static(description),
+                    &search_query,
+                    Some(LabelSize::Small),
+                    Some(Color::Muted),
+                    true,
+                )),
         )
         .child(control)
-        .when(settings_window.sub_page_stack.is_empty(), |this| {
-            this.child(render_settings_item_link(
-                description,
-                json_path,
-                sub_field,
-                settings_window,
-                cx,
-            ))
-        })
 }
 
 fn render_settings_item(
@@ -1557,16 +1716,14 @@ fn render_settings_item_link(
         (IconName::Link, Color::Muted)
     };
 
+    // 悬停条目时内联显示在标题行，不再绝对定位到条目左侧
+    // （卡片化布局后左侧没有足够的空白容纳它）。
     div()
-        .absolute()
-        .top(rems_from_px(18_f32))
         .map(|this| {
             if sub_field {
                 this.visible_on_hover("setting-sub-item")
-                    .left(rems_from_px(-8.5_f32))
             } else {
                 this.visible_on_hover("setting-item")
-                    .left(rems_from_px(-22.0_f32))
             }
         })
         .child(
@@ -1574,8 +1731,8 @@ fn render_settings_item_link(
                 .icon_color(link_icon_color)
                 .icon_size(IconSize::Small)
                 .shape(IconButtonShape::Square)
-                .aria_label("Copy Link")
-                .tooltip(Tooltip::text("Copy Link"))
+                .aria_label(i18n::t!("8e86f9b1d54f2c51"))
+                .tooltip(Tooltip::text(i18n::t!("8e86f9b1d54f2c51")))
                 .when_some(json_path, |this, path| {
                     this.on_click(cx.listener(move |this, _, _, cx| {
                         let link = format!("zed://settings/{}", path);
@@ -1678,6 +1835,7 @@ enum SubPageType {
 #[derive(Clone)]
 struct SubPageLink {
     title: SharedString,
+    icon: IconName,
     r#type: SubPageType,
     description: Option<SharedString>,
     search_aliases: &'static [&'static str],
@@ -1798,7 +1956,7 @@ impl SettingsWindow {
         let current_file = SettingsUiFile::User;
         let search_bar = cx.new(|cx| {
             let mut editor = Editor::single_line(window, cx);
-            editor.set_placeholder_text("Search settings…", window, cx);
+            editor.set_placeholder_text(i18n::t!("f4b3b1bead678176"), window, cx);
             editor
         });
         cx.subscribe(&search_bar, |this, _, event: &EditorEvent, cx| {
@@ -2030,6 +2188,7 @@ impl SettingsWindow {
             last_copied_skill_directory_path: None,
             llm_provider_form: None,
             llm_provider_add_focus_handle: cx.focus_handle(),
+            llm_provider_navigation_scroll_handle: ScrollHandle::new(),
             mcp_server_form: None,
             mcp_add_server_focus_handle: cx.focus_handle(),
             custom_agent_form: None,
@@ -2345,13 +2504,7 @@ impl SettingsWindow {
                     search_index
                         .documents
                         .iter()
-                        .filter(|doc| {
-                            query_words.iter().all(|query_word| {
-                                doc.words
-                                    .iter()
-                                    .any(|doc_word| doc_word.starts_with(query_word))
-                            })
-                        })
+                        .filter(|document| search_document_matches(document, &query_words))
                         .map(|doc| doc.id)
                         .collect::<Vec<usize>>()
                 }
@@ -2400,10 +2553,16 @@ impl SettingsWindow {
         fn split_into_words(parts: &[&str]) -> Vec<String> {
             parts
                 .iter()
-                .flat_map(|s| {
-                    s.split(|c: char| !c.is_alphanumeric())
-                        .filter(|w| !w.is_empty())
-                        .map(|w| w.to_lowercase())
+                .flat_map(|part| {
+                    let mut words = part
+                        .split(|character: char| !character.is_alphanumeric())
+                        .filter(|word| !word.is_empty())
+                        .map(str::to_lowercase)
+                        .collect::<Vec<_>>();
+                    if let Some(initials) = fuzzy::PinyinInitials::from_text(part) {
+                        words.extend(initials.variants().map(|(variant, _)| variant.to_string()));
+                    }
+                    words
                 })
                 .collect()
         }
@@ -2419,6 +2578,11 @@ impl SettingsWindow {
         ) {
             for word in input.split_ascii_whitespace() {
                 fuzzy_match_candidates.push(StringMatchCandidate::new(key_index, word));
+            }
+            if let Some(initials) = fuzzy::PinyinInitials::from_text(input) {
+                for (variant, _) in initials.variants() {
+                    fuzzy_match_candidates.push(StringMatchCandidate::new(key_index, variant));
+                }
             }
         }
 
@@ -2870,12 +3034,11 @@ impl SettingsWindow {
                 }
             })
             .unwrap_or(OVERFLOW_LIMIT);
-        let edit_in_json_id = SharedString::new(format!("edit-in-json-{}", selected_file_ix));
 
         h_flex()
             .id("settings-ui-files-header")
             .role(Role::Group)
-            .aria_label("Settings File")
+            .aria_label(i18n::t!("7c3708f655821a4c"))
             .w_full()
             .gap_1()
             .justify_between()
@@ -2940,7 +3103,7 @@ impl SettingsWindow {
                                         }),
                                     )
                                     .style(DropdownStyle::Subtle)
-                                    .trigger_tooltip(Tooltip::text("View Other Projects"))
+                                    .trigger_tooltip(Tooltip::text(i18n::t!("9fbbd0a506507669")))
                                     .trigger_icon(IconName::ChevronDown)
                                     .attach(gpui::Anchor::BottomLeft)
                                     .offset(gpui::Point {
@@ -2951,19 +3114,6 @@ impl SettingsWindow {
                                 )
                             })
                     }),
-            )
-            .child(
-                Button::new(edit_in_json_id, "Edit in settings.json")
-                    .tab_index(0_isize)
-                    .style(ButtonStyle::OutlinedGhost)
-                    .tooltip(Tooltip::for_action_title_in(
-                        "Edit in settings.json",
-                        &OpenCurrentFile,
-                        &self.focus_handle,
-                    ))
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.open_current_settings_file(window, cx);
-                    })),
             )
     }
 
@@ -3013,6 +3163,93 @@ impl SettingsWindow {
     //     }
     // }
 
+    /// 打开子页面入口：找到条目所属小节标题并压入子页面栈。
+    fn open_sub_page_link(
+        &mut self,
+        item_index: usize,
+        sub_page_link: SubPageLink,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let header_text = self
+            .sub_page_stack
+            .last()
+            .map(|sub_page| sub_page.link.title.clone())
+            .or_else(|| {
+                self.current_page()
+                    .items
+                    .iter()
+                    .take(item_index)
+                    .rev()
+                    .find_map(|item| item.header_text().map(SharedString::new_static))
+            });
+
+        let Some(header) = header_text else {
+            unreachable!("All items always have a section header above them")
+        };
+
+        self.push_sub_page(sub_page_link, header, window, cx)
+    }
+
+    /// 顶部横栏：全局搜索框与「在 settings.json 中编辑」按钮。
+    /// 搜索从侧栏移到这里，侧栏空间全部留给导航。
+    fn render_topbar(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<SettingsWindow>,
+    ) -> impl IntoElement {
+        let show_json_button = self
+            .sub_page_stack
+            .last()
+            .map(|sub_page| sub_page.link.in_json)
+            .unwrap_or(true);
+
+        h_flex()
+            .id("settings-ui-topbar")
+            .w_full()
+            .py_2()
+            .px_3()
+            .gap_3()
+            .items_center()
+            .flex_none()
+            .justify_between()
+            .border_b_1()
+            .border_color(cx.theme().colors().border)
+            .bg(cx.theme().colors().panel_background)
+            // macOS 红绿灯按钮悬浮在窗口左上角，避开
+            .when(cfg!(target_os = "macos"), |this| this.pl(px(72.)))
+            .child(
+                h_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .gap_3()
+                    .items_center()
+                    .child(Label::new(i18n::t!("df3d58c7d84b85f2")))
+                    .child(
+                        div()
+                            .w_full()
+                            .max_w(rems(35.))
+                            .child(self.render_search(window, cx)),
+                    ),
+            )
+            .when(show_json_button, |this| {
+                this.child(
+                    Button::new("edit-in-json-topbar", i18n::t!("d467612e914e9ddf"))
+                        .tab_index(0_isize)
+                        .style(ButtonStyle::OutlinedGhost)
+                        .start_icon(Icon::new(IconName::Pencil).size(IconSize::Small))
+                        .tooltip(Tooltip::for_action_title_in(
+                            "Edit in settings.json",
+                            &OpenCurrentFile,
+                            &self.focus_handle,
+                        ))
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.open_current_settings_file(window, cx);
+                        })),
+                )
+            })
+    }
+
     fn render_search(
         &self,
         window: &mut Window,
@@ -3025,7 +3262,7 @@ impl SettingsWindow {
         h_flex()
             .id("settings-ui-search")
             .role(Role::SearchInput)
-            .aria_label("Search Settings")
+            .aria_label(i18n::t!("2874151bd36be9a3"))
             .aria_value(a11y_value)
             .track_focus(&self.search_bar.focus_handle(cx))
             .a11y_synthetic_children(a11y_text_runs)
@@ -3033,7 +3270,6 @@ impl SettingsWindow {
             .pl_1p5()
             .pr_0p5()
             .h_7()
-            .mb_3()
             .gap_1p5()
             .rounded_sm()
             .bg(cx.theme().colors().editor_background)
@@ -3046,12 +3282,21 @@ impl SettingsWindow {
                     IconButton::new("clear-btn", IconName::Close)
                         .icon_color(Color::Muted)
                         .icon_size(IconSize::Small)
-                        .tooltip(Tooltip::text("Clear"))
+                        .tooltip(Tooltip::text(i18n::t!("bce2377283c2455a")))
                         .on_click(cx.listener(|settings_window, _, window, cx| {
                             settings_window.clear_search(window, cx);
                         })),
                 )
             })
+    }
+
+    /// 页面在侧栏导航中的分组与图标；仅内置页面有元数据，
+    /// 测试构造的页面回退到默认分组。
+    fn nav_meta(page_index: usize) -> (SettingsNavGroup, IconName) {
+        page_data::nav_metadata()
+            .get(page_index)
+            .copied()
+            .unwrap_or((SettingsNavGroup::General, IconName::Settings))
     }
 
     fn render_nav(
@@ -3203,17 +3448,15 @@ impl SettingsWindow {
             .w(SIDEBAR_WIDTH)
             .h_full()
             .p_2p5()
-            .when(cfg!(target_os = "macos"), |this| this.pt_10())
             .flex_none()
             .border_r_1()
             .border_color(cx.theme().colors().border)
             .bg(cx.theme().colors().panel_background)
-            .child(self.render_search(window, cx))
             .child(
                 v_flex()
                     .id("settings-ui-nav")
                     .role(Role::Tree)
-                    .aria_label("Settings Navigation")
+                    .aria_label(i18n::t!("00127e834a9b9a85"))
                     .flex_1()
                     .overflow_hidden()
                     .track_focus(&self.navbar_focus_handle.focus_handle(cx))
@@ -3228,13 +3471,22 @@ impl SettingsWindow {
                                     .skip(range.start.saturating_sub(1))
                                     .take(range.len())
                                     .map(|(entry_index, entry)| {
-                                        TreeViewItem::new(
+                                        let selected =
+                                            this.is_navbar_entry_selected(entry_index);
+                                        let (_, nav_icon) = Self::nav_meta(entry.page_index);
+
+                                        let tree_item = TreeViewItem::new(
                                             ("settings-ui-navbar-entry", entry_index),
                                             entry.title,
                                         )
+                                        .when(entry.is_root, |item| item.icon(nav_icon))
+                                        .highlight_ranges(search_highlight_ranges(
+                                            entry.title,
+                                            &this.search_bar.read(cx).text(cx),
+                                        ))
                                         .track_focus(&entry.focus_handle)
                                         .root_item(entry.is_root)
-                                        .toggle_state(this.is_navbar_entry_selected(entry_index))
+                                        .toggle_state(selected)
                                         .when(entry.is_root, |item| {
                                             item.expanded(entry.expanded || this.has_query)
                                                 .on_toggle(cx.listener(
@@ -3277,7 +3529,35 @@ impl SettingsWindow {
                                                     cx,
                                                 );
                                             })
-                                        })
+                                        });
+
+                                        // UniformList measures one row for every entry, so group
+                                        // headings must not be embedded in individual rows.
+                                        v_flex()
+                                            .w_full()
+                                            .debug_selector(move || format!("settings-nav-row-{entry_index}"))
+                                            .child(
+                                                div()
+                                                    .w_full()
+                                                    .relative()
+                                                    .when(selected && entry.is_root, |this| {
+                                                        this.child(
+                                                            div()
+                                                                .absolute()
+                                                                .left(px(2.))
+                                                                .top(px(6.))
+                                                                .bottom(px(6.))
+                                                                .w(px(2.5))
+                                                                .rounded_full()
+                                                                .bg(
+                                                                    cx.theme()
+                                                                        .colors()
+                                                                        .text_accent,
+                                                                ),
+                                                        )
+                                                    })
+                                                    .child(tree_item),
+                                            )
                                     })
                                     .collect()
                             }),
@@ -3493,7 +3773,7 @@ impl SettingsWindow {
                 "sub-page-scope-picker",
                 scope_name,
                 ContextMenu::build(window, cx, move |mut menu, _, _| {
-                    menu = menu.header("Scope");
+                    menu = menu.header(i18n::t!("91d422af707c61f4"));
 
                     for ix in allowed_file_indices {
                         let (file, focus_handle) = &self.files[ix];
@@ -3523,7 +3803,7 @@ impl SettingsWindow {
                 }),
             )
             .style(DropdownStyle::Subtle)
-            .trigger_tooltip(Tooltip::text("Change Scope"))
+            .trigger_tooltip(Tooltip::text(i18n::t!("61d0478587a9284a")))
             .attach(gpui::Anchor::BottomLeft)
             .offset(gpui::Point {
                 x: px(0.0),
@@ -3570,9 +3850,9 @@ impl SettingsWindow {
             .items_center()
             .justify_center()
             .gap_1()
-            .child(Label::new("No Results"))
+            .child(Label::new(i18n::t!("f1c9cc430f6e6725")))
             .child(
-                Label::new(format!("No settings match \"{}\"", search_query))
+                Label::new(i18n::t_args!("1e06439ec2306ac8", search_query))
                     .size(LabelSize::Small)
                     .color(Color::Muted),
             )
@@ -3594,7 +3874,7 @@ impl SettingsWindow {
             }))
             .id("settings-ui-page")
             .role(Role::Group)
-            .aria_label("Settings Content")
+            .aria_label(i18n::t!("ed39c8a121d70a95"))
             .size_full();
 
         let has_active_search = !self.search_bar.read(cx).is_empty(cx);
@@ -3603,20 +3883,13 @@ impl SettingsWindow {
         if has_no_results {
             page_content = page_content.child(self.render_no_results(cx))
         } else {
-            let last_non_header_index = self
-                .visible_page_items()
-                .filter_map(|(index, item)| {
-                    (!matches!(item, SettingsPageItem::SectionHeader(_))).then_some(index)
-                })
-                .last();
-
             let root_nav_label = self
                 .navbar_entries
                 .iter()
                 .find(|entry| entry.is_root && entry.page_index == self.current_page_index())
                 .map(|entry| entry.title);
 
-            let render_item = cx.processor(move |settings_window, index, window, cx| {
+            let render_item = cx.processor(move |settings_window, index: usize, window, cx| {
                 if index == 0 {
                     return div()
                         .px_8()
@@ -3629,23 +3902,38 @@ impl SettingsWindow {
                         .into_any_element();
                 }
 
-                let mut visible_items = settings_window.visible_page_items();
-                let Some((actual_item_index, item)) = visible_items.nth(index - 1) else {
+                let page_index = settings_window.current_page_index();
+                let visible_items: Vec<(usize, &SettingsPageItem)> =
+                    settings_window.visible_page_items().collect();
+                let Some(&(actual_item_index, item)) = visible_items.get(index - 1) else {
                     return div()
                         .h(settings_window.bottom_spacer_height)
                         .into_any_element();
                 };
 
-                let next_is_header = visible_items
-                    .next()
-                    .map(|(_, item)| matches!(item, SettingsPageItem::SectionHeader(_)))
-                    .unwrap_or(false);
+                let page_items = &settings_window.pages[page_index].items;
+                // 条目所属小节由完整列表中最近的上一小节标题决定，
+                // 这样即使搜索过滤掉了标题，条目仍能正确封闭卡片。
+                let section_of = |item_index: usize| -> usize {
+                    (0..=item_index)
+                        .rev()
+                        .find(|&i| {
+                            matches!(page_items[i], SettingsPageItem::SectionHeader(_))
+                        })
+                        .unwrap_or(usize::MAX)
+                };
+                let section = section_of(actual_item_index);
+                let previous_section = index
+                    .checked_sub(2)
+                    .and_then(|previous| visible_items.get(previous))
+                    .map(|&(item_index, _)| section_of(item_index));
+                let next_section = visible_items
+                    .get(index)
+                    .map(|&(item_index, _)| section_of(item_index));
 
-                let is_last = Some(actual_item_index) == last_non_header_index;
-                let is_last_in_section = next_is_header || is_last;
-
-                let bottom_border = !is_last_in_section;
-                let extra_bottom_padding = is_last_in_section;
+                let card_top = matches!(item, SettingsPageItem::SectionHeader(_))
+                    || previous_section != Some(section);
+                let card_bottom = next_section != Some(section);
 
                 let item_focus_handle = settings_window.content_handles[current_page_index]
                     [actual_item_index]
@@ -3659,8 +3947,9 @@ impl SettingsWindow {
                     .child(item.render(
                         settings_window,
                         actual_item_index,
-                        bottom_border,
-                        extra_bottom_padding,
+                        true,
+                        card_top,
+                        card_bottom,
                         window,
                         cx,
                     ))
@@ -3763,18 +4052,20 @@ impl SettingsWindow {
         if has_no_results {
             page_content.child(self.render_no_results(cx))
         } else {
-            let last_non_header_index = items
-                .iter()
-                .enumerate()
-                .rev()
-                .find(|(_, (_, item))| !matches!(item, SettingsPageItem::SectionHeader(_)))
-                .map(|(index, _)| index);
-
             let root_nav_label = self
                 .navbar_entries
                 .iter()
                 .find(|entry| entry.is_root && entry.page_index == self.current_page_index())
                 .map(|entry| entry.title);
+
+            // 小节归属按传入条目序列中最近的上一小节标题计算；
+            // 没有标题的条目各自独占一张卡片。
+            let section_of = |position: usize| -> usize {
+                (0..=position)
+                    .rev()
+                    .find(|&i| matches!(items[i].1, SettingsPageItem::SectionHeader(_)))
+                    .unwrap_or(usize::MAX)
+            };
 
             page_content
                 .when(self.sub_page_stack.is_empty(), |this| {
@@ -3782,26 +4073,26 @@ impl SettingsWindow {
                         this.child(Label::new(title).size(LabelSize::Large).mt_2().mb_3())
                     })
                 })
-                .children(items.clone().into_iter().enumerate().map(
+                .children(items.iter().enumerate().map(
                     |(index, (actual_item_index, item))| {
-                        let is_last_item = Some(index) == last_non_header_index;
-                        let next_is_header = items.get(index + 1).is_some_and(|(_, next_item)| {
-                            matches!(next_item, SettingsPageItem::SectionHeader(_))
-                        });
-                        let bottom_border = !is_inline_section && !next_is_header && !is_last_item;
+                        let section = section_of(index);
+                        let previous_section = index.checked_sub(1).map(section_of);
+                        let next_section = (index + 1 < items.len()).then(|| section_of(index + 1));
 
-                        let extra_bottom_padding =
-                            !is_inline_section && (next_is_header || is_last_item);
+                        let card_top = matches!(item, SettingsPageItem::SectionHeader(_))
+                            || previous_section != Some(section);
+                        let card_bottom = next_section != Some(section);
 
                         v_flex()
                             .w_full()
                             .min_w_0()
-                            .id(("settings-page-item", actual_item_index))
+                            .id(("settings-page-item", *actual_item_index))
                             .child(item.render(
                                 self,
-                                actual_item_index,
-                                bottom_border,
-                                extra_bottom_padding,
+                                *actual_item_index,
+                                !is_inline_section,
+                                card_top,
+                                card_bottom,
                                 window,
                                 cx,
                             ))
@@ -3821,8 +4112,8 @@ impl SettingsWindow {
         if let Some(current_sub_page) = self.sub_page_stack.last() {
             let is_skills_page =
                 current_sub_page.link.json_path == Some(AGENT_SKILLS_SETTINGS_PATH);
-            let is_llm_providers_page = current_sub_page.link.json_path == Some("llm_providers")
-                && current_sub_page.link.title.as_ref() == "LLM Providers";
+            let is_llm_providers_page = self.sub_page_stack.len() == 1
+                && is_llm_providers_page(current_sub_page.link.json_path);
             let is_external_agents_page = current_sub_page.link.json_path == Some("agent_servers");
             let is_mcp_servers_page = current_sub_page.link.json_path == Some("context_servers");
 
@@ -3848,27 +4139,12 @@ impl SettingsWindow {
                 .child(
                     div()
                         .flex_shrink_0()
-                        .when(current_sub_page.link.in_json, |this| {
-                            this.child(
-                                Button::new("open-in-settings-file", "Edit in settings.json")
-                                    .tab_index(0_isize)
-                                    .style(ButtonStyle::OutlinedGhost)
-                                    .tooltip(Tooltip::for_action_title_in(
-                                        "Edit in settings.json",
-                                        &OpenCurrentFile,
-                                        &self.focus_handle,
-                                    ))
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.open_current_settings_file(window, cx);
-                                    })),
-                            )
-                        })
                         .when(is_llm_providers_page, |this| {
                             this.child(pages::render_add_llm_provider_popover(self, window, cx))
                         })
                         .when(is_skills_page, |this| {
                             this.child(
-                                Button::new("open-skill-creator", "Create Skill")
+                                Button::new("open-skill-creator", i18n::t!("04bcc5bd9b5e543d"))
                                     .tab_index(0_isize)
                                     .style(ButtonStyle::OutlinedGhost)
                                     .on_click(cx.listener(|this, _, window, cx| {
@@ -3926,7 +4202,7 @@ impl SettingsWindow {
                     )
                     .action_slot(
                         div().pr_1().pb_1().child(
-                            Button::new("fix-in-json", "Fix in settings.json")
+                            Button::new("fix-in-json", i18n::t!("a0c11a7031d160d8"))
                                 .tab_index(0_isize)
                                 .style(ButtonStyle::Tinted(ui::TintColor::Warning))
                                 .on_click(cx.listener(|this, _, window, cx| {
@@ -3943,7 +4219,7 @@ impl SettingsWindow {
                 .gap_2()
                 .when_some(parse_error, |this, err| {
                     this.child(banner(
-                        "Failed to load your settings. Some values may be incorrect and changes may be lost.",
+                        i18n::t!("4d9634dc8759199f"),
                         err,
                         &mut self.shown_errors,
                         cx,
@@ -3951,17 +4227,20 @@ impl SettingsWindow {
                 })
                 .map(|this| match &error.migration_status {
                     settings::MigrationStatus::Succeeded => this.child(banner(
-                        "Your settings are out of date, and need to be updated.",
+                        i18n::t!("fb0694f55e32ec85"),
                         match &self.current_file {
-                            SettingsUiFile::User => "They can be automatically migrated to the latest version.",
-                            SettingsUiFile::Server(_) | SettingsUiFile::Project(_)  => "They must be manually migrated to the latest version."
-                        }.to_string(),
+                            SettingsUiFile::User => i18n::t!("1a0e78504c64a352"),
+                            SettingsUiFile::Server(_) | SettingsUiFile::Project(_) => {
+                                i18n::t!("7795a0e99ddf3af7")
+                            }
+                        }
+                        .to_string(),
                         &mut self.shown_errors,
                         cx,
                     )),
                     settings::MigrationStatus::Failed { error: err } if !parse_failed => this
                         .child(banner(
-                            "Your settings file is out of date, automatic migration failed",
+                            i18n::t!("646097ebf2c465de"),
                             err.clone(),
                             &mut self.shown_errors,
                             cx,
@@ -3993,7 +4272,7 @@ impl SettingsWindow {
                         v_flex()
                             .my_0p5()
                             .gap_0p5()
-                            .child(Label::new("Restricted Mode"))
+                            .child(Label::new(i18n::t!("7453d4c7fedb2942")))
                             .child(
                                 Label::new(
                                     "This project is in restricted mode. Some project settings may not apply.",
@@ -4004,7 +4283,7 @@ impl SettingsWindow {
                     )
                     .action_slot(
                         div().pr_2().pb_1().child(
-                            Button::new("manage-trust", "Manage Trust")
+                            Button::new("manage-trust", i18n::t!("1c141c529e80e288"))
                                 .style(ButtonStyle::Tinted(ui::TintColor::Warning))
                                 .on_click(cx.listener(move |_this, _, window, cx| {
                                     if let Some(original_window) = original_window {
@@ -4373,6 +4652,7 @@ impl SettingsWindow {
         self.regex_validation_error = None;
         let sub_page_link = SubPageLink {
             title: title.into(),
+            icon: IconName::Settings,
             r#type: SubPageType::default(),
             description: None,
             search_aliases: &[],
@@ -4430,7 +4710,8 @@ impl SettingsWindow {
         self.skill_creator_page = Some((page.clone(), subscription));
 
         let sub_page_link = SubPageLink {
-            title: "Create Skill".into(),
+            title: i18n::t!("04bcc5bd9b5e543d").into(),
+            icon: IconName::Pencil,
             r#type: SubPageType::SkillCreator,
             description: None,
             search_aliases: &[],
@@ -4554,10 +4835,16 @@ impl SettingsWindow {
     pub(crate) fn pop_sub_page(&mut self, window: &mut Window, cx: &mut Context<SettingsWindow>) {
         self.regex_validation_error = None;
         self.sandbox_host_validation_error = None;
-        if let Some(popped) = self.sub_page_stack.pop()
-            && popped.link.r#type == SubPageType::SkillCreator
-        {
-            self.skill_creator_page = None;
+        if let Some(popped) = self.sub_page_stack.pop() {
+            if popped.link.r#type == SubPageType::SkillCreator {
+                self.skill_creator_page = None;
+            }
+            if popped.link.json_path == Some("llm_providers")
+                && (popped.link.title.starts_with(i18n::t!("7a8a11ead50742a2"))
+                    || popped.link.title.starts_with(i18n::t!("100eee7abac56bb0")))
+            {
+                self.llm_provider_form = None;
+            }
         }
         self.content_focus_handle.focus_handle(cx).focus(window, cx);
         cx.notify();
@@ -4701,7 +4988,7 @@ impl Render for SettingsWindow {
                             window.focus_prev(cx);
                         })
                         .flex()
-                        .flex_row()
+                        .flex_col()
                         .flex_1()
                         .min_h_0()
                         .font(ui_font)
@@ -4710,8 +4997,18 @@ impl Render for SettingsWindow {
                         .when(!cfg!(target_os = "macos"), |this| {
                             this.border_t_1().border_color(cx.theme().colors().border)
                         })
-                        .child(self.render_nav(window, cx))
-                        .child(self.render_page(window, cx)),
+                        .child(self.render_topbar(window, cx))
+                        .child(
+                            // 不能用 h_flex()：它的 items_center 会让页面内容收缩成
+                            // min-content 高度并垂直居中，列表拿不到高度。
+                            div()
+                                .flex()
+                                .flex_row()
+                                .flex_1()
+                                .min_h_0()
+                                .child(self.render_nav(window, cx))
+                                .child(self.render_page(window, cx)),
+                        ),
                 ),
             window,
             cx,
@@ -5209,6 +5506,80 @@ where
     .into_any_element()
 }
 
+fn render_language_dropdown(
+    field: SettingField<settings::UiLanguage>,
+    file: SettingsUiFile,
+    _metadata: Option<&SettingsFieldMetadata>,
+    title: &'static str,
+    description: &'static str,
+    window: &mut Window,
+    cx: &mut App,
+) -> AnyElement {
+    let current_id: SharedString = SettingsStore::global(cx)
+        .get_value_from_file(file.to_settings(), field.pick)
+        .1
+        .map(|language| SharedString::from(language.as_str()))
+        .unwrap_or_else(|| SharedString::from(i18n::Locale::DEFAULT.id()));
+
+    let options: Vec<(SharedString, SharedString)> = i18n::language_names()
+        .into_iter()
+        .map(|(id, name)| (SharedString::from(id), SharedString::from(name)))
+        .collect();
+
+    let current_label = options
+        .iter()
+        .find(|(id, _)| *id == current_id)
+        .map(|(_, label)| label.clone())
+        .unwrap_or_else(|| current_id.clone());
+
+    let context_menu = window.use_keyed_state(current_id.clone(), cx, move |window, cx| {
+        ContextMenu::new(window, cx, move |mut menu, _, _| {
+            for (id, label) in options.iter() {
+                let id = id.clone();
+                let file = file.clone();
+                let selected = id == current_id;
+                menu = menu.toggleable_entry(
+                    label.clone(),
+                    selected,
+                    IconPosition::End,
+                    None,
+                    move |window, cx| {
+                        let id = id.clone();
+                        update_settings_file(
+                            file.clone(),
+                            field.json_path,
+                            window,
+                            cx,
+                            move |settings, app| {
+                                (field.write)(
+                                    settings,
+                                    Some(settings::UiLanguage(id.to_string())),
+                                    app,
+                                );
+                            },
+                        )
+                        .log_err();
+                    },
+                );
+            }
+            menu
+        })
+    });
+
+    DropdownMenu::new("interface-language-dropdown", current_label, context_menu)
+        .aria_label(title)
+        .when(!description.is_empty(), |this| {
+            this.aria_description(description)
+        })
+        .trigger_size(ButtonSize::Medium)
+        .style(DropdownStyle::Outlined)
+        .offset(gpui::Point {
+            x: px(0.0),
+            y: px(2.0),
+        })
+        .into_any_element()
+}
+
 fn render_picker_trigger_button(id: SharedString, label: SharedString) -> Button {
     Button::new(id, label)
         .aria_role(Role::ComboBox)
@@ -5298,6 +5669,203 @@ fn render_font_picker(
             y: px(2.0),
         })
         .with_handle(handle)
+        .into_any_element()
+}
+
+/// The language model providers configured under `language_models`, limited to
+/// those that are currently usable (authenticated, or reachable local
+/// servers). Returns `(provider_id, display_name)` pairs.
+fn translation_provider_options(cx: &App) -> Vec<(SharedString, SharedString)> {
+    let Some(registry) = LanguageModelRegistry::try_read_global(cx) else {
+        return Vec::new();
+    };
+    registry
+        .visible_providers()
+        .into_iter()
+        .filter(|provider| provider.is_authenticated(cx))
+        .map(|provider| {
+            (
+                SharedString::from(provider.id().0.as_ref()),
+                SharedString::from(provider.name().0.as_ref()),
+            )
+        })
+        .collect()
+}
+
+/// The models provided by the given translation provider, as `(model_id,
+/// display_name)` pairs.
+fn translation_model_options(cx: &App, provider_id: &str) -> Vec<(SharedString, SharedString)> {
+    if provider_id.is_empty() {
+        return Vec::new();
+    }
+    let Some(registry) = LanguageModelRegistry::try_read_global(cx) else {
+        return Vec::new();
+    };
+    let Some(provider) = registry.provider(&LanguageModelProviderId(provider_id.into())) else {
+        return Vec::new();
+    };
+    provider
+        .provided_models(cx)
+        .into_iter()
+        .map(|model| {
+            (
+                SharedString::from(model.id().0.as_ref()),
+                SharedString::from(model.name().0.as_ref()),
+            )
+        })
+        .collect()
+}
+
+fn render_translation_provider_picker(
+    field: SettingField<settings::TranslationProviderSetting>,
+    file: SettingsUiFile,
+    _metadata: Option<&SettingsFieldMetadata>,
+    title: &'static str,
+    description: &'static str,
+    _window: &mut Window,
+    cx: &mut App,
+) -> AnyElement {
+    let (_, value) = SettingsStore::global(cx).get_value_from_file(file.to_settings(), field.pick);
+    let current_value: SharedString = value
+        .map(|provider| provider.0.as_str().into())
+        .unwrap_or_default();
+
+    let trigger_value: SharedString = if current_value.is_empty() {
+        i18n::t!("b97606e7830ef8b2").into()
+    } else {
+        current_value.clone()
+    };
+
+    PopoverMenu::new("translation-provider-picker")
+        .trigger(
+            render_picker_trigger_button(
+                "translation_provider_picker_trigger".into(),
+                trigger_value,
+            )
+            .aria_label(title)
+            .when(!description.is_empty(), |this| {
+                this.aria_description(description)
+            }),
+        )
+        .menu(move |window, cx| {
+            let file = file.clone();
+            let current_value = current_value.clone();
+            let options = translation_provider_options(cx);
+            Some(cx.new(move |cx| {
+                translation_picker(
+                    options,
+                    current_value,
+                    move |provider_id, window, cx| {
+                        update_settings_file(
+                            file.clone(),
+                            field.json_path,
+                            window,
+                            cx,
+                            move |settings, app| {
+                                (field.write)(
+                                    settings,
+                                    Some(settings::TranslationProviderSetting(
+                                        provider_id.to_string(),
+                                    )),
+                                    app,
+                                );
+                            },
+                        )
+                        .log_err();
+                    },
+                    window,
+                    cx,
+                )
+            }))
+        })
+        .anchor(gpui::Anchor::TopLeft)
+        .offset(gpui::Point {
+            x: px(0.0),
+            y: px(2.0),
+        })
+        .with_handle(ui::PopoverMenuHandle::default())
+        .into_any_element()
+}
+
+fn render_translation_model_picker(
+    field: SettingField<settings::TranslationModelSetting>,
+    file: SettingsUiFile,
+    _metadata: Option<&SettingsFieldMetadata>,
+    title: &'static str,
+    description: &'static str,
+    _window: &mut Window,
+    cx: &mut App,
+) -> AnyElement {
+    let store = SettingsStore::global(cx);
+    let (_, provider_value) = if field.json_path == Some("code_explanations.model") {
+        store.get_value_from_file(file.to_settings(), |content| {
+            content.code_explanations.as_ref()?.provider.as_ref()
+        })
+    } else {
+        store.get_value_from_file(file.to_settings(), |content| {
+            content.hover_translation.as_ref()?.provider.as_ref()
+        })
+    };
+    let provider_id: SharedString = provider_value
+        .map(|provider| provider.0.as_str().into())
+        .unwrap_or_default();
+
+    let (_, value) = store.get_value_from_file(file.to_settings(), field.pick);
+    let current_value: SharedString = value
+        .map(|model| model.0.as_str().into())
+        .unwrap_or_default();
+
+    let trigger_value: SharedString = if provider_id.is_empty() {
+        i18n::t!("8b4c4da881f0a4ab").into()
+    } else if current_value.is_empty() {
+        i18n::t!("ea98dd3eea22f57e").into()
+    } else {
+        current_value.clone()
+    };
+
+    PopoverMenu::new("translation-model-picker")
+        .trigger(
+            render_picker_trigger_button("translation_model_picker_trigger".into(), trigger_value)
+                .aria_label(title)
+                .when(!description.is_empty(), |this| {
+                    this.aria_description(description)
+                }),
+        )
+        .menu(move |window, cx| {
+            let file = file.clone();
+            let current_value = current_value.clone();
+            let options = translation_model_options(cx, provider_id.as_ref());
+            Some(cx.new(move |cx| {
+                translation_picker(
+                    options,
+                    current_value,
+                    move |model_id, window, cx| {
+                        update_settings_file(
+                            file.clone(),
+                            field.json_path,
+                            window,
+                            cx,
+                            move |settings, app| {
+                                (field.write)(
+                                    settings,
+                                    Some(settings::TranslationModelSetting(model_id.to_string())),
+                                    app,
+                                );
+                            },
+                        )
+                        .log_err();
+                    },
+                    window,
+                    cx,
+                )
+            }))
+        })
+        .anchor(gpui::Anchor::TopLeft)
+        .offset(gpui::Point {
+            x: px(0.0),
+            y: px(2.0),
+        })
+        .with_handle(ui::PopoverMenuHandle::default())
         .into_any_element()
 }
 
@@ -5486,6 +6054,7 @@ pub mod test {
                 last_copied_skill_directory_path: None,
                 llm_provider_form: None,
                 llm_provider_add_focus_handle: cx.focus_handle(),
+                llm_provider_navigation_scroll_handle: ScrollHandle::new(),
                 mcp_server_form: None,
                 mcp_add_server_focus_handle: cx.focus_handle(),
                 custom_agent_form: None,
@@ -5493,6 +6062,42 @@ pub mod test {
                 skill_creator_page: None,
             }
         }
+    }
+
+    #[test]
+    fn localized_llm_providers_page_keeps_add_button() {
+        assert!(is_llm_providers_page(Some("llm_providers")));
+        assert!(!is_llm_providers_page(Some("agent_servers")));
+        assert!(!is_llm_providers_page(None));
+    }
+
+    #[test]
+    fn settings_search_matches_substrings() {
+        let document = SearchDocument {
+            id: 0,
+            words: vec![
+                "无障碍".to_string(),
+                "模式".to_string(),
+                "wzams".to_string(),
+            ],
+        };
+
+        assert!(search_document_matches(&document, &["障碍"]));
+        assert!(search_document_matches(&document, &["模式"]));
+        assert!(search_document_matches(&document, &["wzam"]));
+        assert!(!search_document_matches(&document, &["显示"]));
+    }
+
+    #[test]
+    fn settings_search_highlights_case_insensitive_substrings() {
+        assert_eq!(
+            search_highlight_ranges("无障碍模式", "障碍 模式"),
+            vec![3..9, 9..15]
+        );
+        assert_eq!(
+            search_highlight_ranges("Accessibility Mode", "BILITY mode"),
+            vec![7..13, 14..18]
+        );
     }
 
     impl PartialEq for NavBarEntry {
@@ -5626,6 +6231,7 @@ pub mod test {
             last_copied_skill_directory_path: None,
             llm_provider_form: None,
             llm_provider_add_focus_handle: cx.focus_handle(),
+            llm_provider_navigation_scroll_handle: ScrollHandle::new(),
             mcp_server_form: None,
             mcp_add_server_focus_handle: cx.focus_handle(),
             custom_agent_form: None,
@@ -5865,7 +6471,7 @@ pub mod test {
                 .flat_map(|page| Vec::from(page.items))
                 .find(|item| match item {
                     SettingsPageItem::DynamicItem(item) => {
-                        item.discriminant.title == "Disable Git Integration"
+                        item.discriminant.title == i18n::t!("6b116198324968d2")
                     }
                     _ => false,
                 })
@@ -5905,29 +6511,32 @@ pub mod test {
             cx.run_until_parked();
             let viewport = list_state.viewport_bounds();
             if clipped {
-                let status_bounds = cx.debug_bounds("Enable Git Status").unwrap();
+                let status_bounds = cx.debug_bounds(i18n::t!("a50f2d9ab0491514")).unwrap();
                 settings_window.update(cx, |_, cx| {
                     list_state.scroll_by(status_bounds.bottom() - viewport.bottom() + px(1.));
                     cx.notify();
                 });
                 cx.run_until_parked();
             }
-            let status_handle = control_handles.borrow()["Enable Git Status"].clone();
-            let diff_handle = control_handles.borrow()["Enable Git Diff"].clone();
+            let status_handle = control_handles.borrow()[i18n::t!("a50f2d9ab0491514")].clone();
+            let diff_handle = control_handles.borrow()[i18n::t!("6059874f6c760f94")].clone();
             cx.update(|window, cx| {
                 status_handle.focus(window, cx);
                 window.focus_next(cx);
             });
             cx.run_until_parked();
             cx.update(|window, cx| assert!(status_handle.contains_focused(window, cx)));
-            let status_bounds = cx.debug_bounds("Enable Git Status").unwrap();
+            let status_bounds = cx.debug_bounds(i18n::t!("a50f2d9ab0491514")).unwrap();
             let initial_row_bounds = list_state.bounds_for_item(4).unwrap();
             let initial_offset = list_state.scroll_px_offset_for_scrollbar();
             assert!(status_bounds.top() >= viewport.top());
             assert!(status_bounds.bottom() <= viewport.bottom());
             if clipped {
                 assert_eq!(status_bounds.bottom(), viewport.bottom() - px(1.));
-                assert!(cx.debug_bounds("Enable Git Diff").unwrap().top() > viewport.bottom());
+                assert!(
+                    cx.debug_bounds(i18n::t!("6059874f6c760f94")).unwrap().top()
+                        > viewport.bottom()
+                );
             } else {
                 assert!(initial_row_bounds.top() >= viewport.top());
                 assert_eq!(initial_row_bounds.bottom(), viewport.bottom());
@@ -5947,7 +6556,7 @@ pub mod test {
                 cx.run_until_parked();
             }
             cx.update(|window, cx| assert!(diff_handle.contains_focused(window, cx)));
-            let diff_bounds = cx.debug_bounds("Enable Git Diff").unwrap();
+            let diff_bounds = cx.debug_bounds(i18n::t!("6059874f6c760f94")).unwrap();
             assert_eq!(
                 list_state.bounds_for_item(4).unwrap().bottom(),
                 viewport.bottom()
@@ -5979,7 +6588,9 @@ pub mod test {
                 .into_iter()
                 .flat_map(|page| Vec::from(page.items))
                 .find(|item| match item {
-                    SettingsPageItem::SettingItem(item) => item.title == "Fallback Branch Name",
+                    SettingsPageItem::SettingItem(item) => {
+                        item.title == i18n::t!("379d53bc64cfede1")
+                    }
                     _ => false,
                 })
                 .unwrap();
@@ -6073,6 +6684,59 @@ pub mod test {
     }
 
     #[gpui::test]
+    fn nav_metadata_covers_all_builtin_pages(cx: &mut gpui::TestAppContext) {
+        // 侧栏分组/图标表与内置页面按顺序一一对应；
+        // 在 settings_data 中增删页面或调整顺序时必须同步更新 nav_metadata。
+        cx.update(|cx| {
+            register_settings(cx);
+            let app_state = AppState::test(cx);
+            AppState::set_global(app_state, cx);
+            let pages = page_data::settings_data(cx);
+            assert_eq!(pages.len(), page_data::nav_metadata().len());
+        });
+    }
+
+    #[gpui::test]
+    fn sub_page_link_opens_sub_page_with_section_header(cx: &mut gpui::TestAppContext) {
+        // 子页面入口行（整行与箭头按钮共用同一逻辑）必须压入正确的子页面与小节标题。
+        let (settings_window, cx) = cx.add_window_view(|window, cx| {
+            register_settings(cx);
+            let link = SubPageLink {
+                title: "Providers".into(),
+                icon: IconName::Server,
+                r#type: SubPageType::Other,
+                description: None,
+                search_aliases: &[],
+                json_path: None,
+                in_json: false,
+                files: USER,
+                render: |_, _, _, _| gpui::Empty.into_any_element(),
+            };
+            settings_window_with_items(
+                vec![
+                    SettingsPageItem::SectionHeader("Agent"),
+                    SettingsPageItem::SubPageLink(link),
+                ],
+                window,
+                cx,
+            )
+        });
+        cx.run_until_parked();
+        settings_window.update_in(cx, |settings_window, window, cx| {
+            let link = match &settings_window.pages[0].items[1] {
+                SettingsPageItem::SubPageLink(link) => link.clone(),
+                _ => panic!("expected sub page link"),
+            };
+            settings_window.open_sub_page_link(1, link, window, cx);
+        });
+        settings_window.read_with(cx, |settings_window, _| {
+            let sub_page = settings_window.sub_page_stack.last().unwrap();
+            assert_eq!(sub_page.link.title.as_ref(), "Providers");
+            assert_eq!(sub_page.section_header.as_ref(), "Agent");
+        });
+    }
+
+    #[gpui::test]
     fn navbar_selection_follows_content_scroll(cx: &mut gpui::TestAppContext) {
         let window = cx.add_empty_window();
         window.update(|window, cx| {
@@ -6129,6 +6793,7 @@ pub mod test {
             settings_window.sub_page_stack.push(SubPage::new(
                 SubPageLink {
                     title: "Details".into(),
+                    icon: IconName::Settings,
                     r#type: SubPageType::Other,
                     description: None,
                     search_aliases: &[],
@@ -6503,6 +7168,34 @@ pub mod test {
         > Appearance & Behavior
         "
     );
+
+    #[gpui::test]
+    fn navbar_rows_are_compact_and_fill_sidebar(cx: &mut gpui::TestAppContext) {
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            register_settings(cx);
+            let mut settings_window = parse(
+                "v General*\n- One\n- Two\nv Appearance\n- Theme",
+                window,
+                cx,
+            );
+            settings_window.build_content_handles(window, cx);
+            settings_window
+        });
+        cx.run_until_parked();
+        cx.refresh().expect("refresh navigation layout");
+        let first = cx.debug_bounds("settings-nav-row-0").expect("first row");
+        let second = cx.debug_bounds("settings-nav-row-1").expect("second row");
+        let third = cx.debug_bounds("settings-nav-row-2").expect("third row");
+        assert!(
+            second.top() - first.top() <= px(32.),
+            "navigation rows must not inherit a group heading's height: {first:?} {second:?}"
+        );
+        assert!(third.top() - second.top() <= px(32.));
+        assert!(
+            second.size.width >= SIDEBAR_WIDTH - px(24.),
+            "selection must span the sidebar: {second:?}"
+        );
+    }
 
     #[gpui::test]
     fn navbar_double_click_toggle(cx: &mut gpui::TestAppContext) {
@@ -7089,7 +7782,7 @@ pub mod test {
                 1,
                 "Skills sub-page should stay open when switching scope"
             );
-            assert_eq!(settings_window.sub_page_stack[0].link.title, "Skills");
+            assert_eq!(settings_window.sub_page_stack[0].link.title, "技能");
             assert_eq!(
                 displayed_skill_names(settings_window, cx),
                 ["project-skill"]
@@ -7186,7 +7879,7 @@ pub mod test {
                 .collect();
             assert_eq!(
                 titles,
-                ["Skills", "Create Skill"],
+                ["技能", "创建技能"],
                 "skill creator should be pushed on top of the skills page"
             );
             assert!(
@@ -7279,7 +7972,7 @@ pub mod test {
                     .collect();
                 assert_eq!(
                     titles,
-                    ["Skills", "Create Skill"],
+                    ["技能", "创建技能"],
                     "skill creator should be pushed on top of the skills page"
                 );
             })

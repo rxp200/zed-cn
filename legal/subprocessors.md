@@ -3,6 +3,8 @@ title: Subprocessor List
 slug: subprocessors
 ---
 
+> **Upstream notice:** This is Zed Industries, Inc.'s subprocessor list for official Zed services. It is preserved from upstream for users who choose those services; it does not describe vendors contracted or operated by Zed CN. Zed CN is an unofficial community fork and is not operated, sponsored, or endorsed by Zed Industries.
+
 Zed uses select third-party subprocessors to deliver core product functionality. Each subprocessor processes customer personal data only as necessary to provide its service, and all are subject to appropriate data protection agreements.
 
 ### How Zed Uses Subprocessors

@@ -142,7 +142,9 @@ impl RenderOnce for AlertModal {
             modal = modal.child(footer);
         } else if has_default_footer {
             let primary_action = self.primary_action.unwrap_or_else(|| "OK".into());
-            let dismiss_label = self.dismiss_label.unwrap_or_else(|| "Cancel".into());
+            let dismiss_label = self
+                .dismiss_label
+                .unwrap_or_else(|| i18n::t!("2cd0f3be8738a86c").into());
 
             modal = modal.child(
                 h_flex()
@@ -175,7 +177,7 @@ impl Component for AlertModal {
     }
 
     fn description() -> &'static str {
-        "A modal dialog that presents an alert message with primary and dismiss actions."
+        i18n::t!("581b9f2b19decf6f")
     }
 
     fn preview(_window: &mut Window, cx: &mut App) -> AnyElement {
@@ -184,18 +186,18 @@ impl Component for AlertModal {
                 .p_4()
                 .children(vec![
                     example_group(vec![single_example(
-                        "Basic Alert",
+                        i18n::t!("ec51167263cf2f72"),
                         AlertModal::new("simple-modal")
-                            .title("Do you want to leave the current call?")
+                            .title(i18n::t!("bb74a4300d908eb9"))
                             .child(
-                                "The current window will be closed, and connections to any shared projects will be terminated."
+                                i18n::t!("82b45da3777bb82f")
                             )
-                            .primary_action("Leave Call")
-                            .dismiss_label("Cancel")
+                            .primary_action(i18n::t!("3446876b684782f8"))
+                            .dismiss_label(i18n::t!("2cd0f3be8738a86c"))
                             .into_any_element(),
                     )]),
                     example_group(vec![single_example(
-                        "Custom Header",
+                        i18n::t!("99ea19febe21c40c"),
                         AlertModal::new("custom-header-modal")
                             .header(
                                 v_flex()
@@ -206,7 +208,7 @@ impl Component for AlertModal {
                                         h_flex()
                                             .gap_1()
                                             .child(Icon::new(IconName::Warning).color(Color::Warning))
-                                            .child(Headline::new("Unrecognized Workspace").size(HeadlineSize::Small))
+                                            .child(Headline::new(i18n::t!("c38886c07f73630d")).size(HeadlineSize::Small))
                                     )
                                     .child(
                                         h_flex()
@@ -221,10 +223,10 @@ Review .zed/settings.json for any extensions or commands configured by this proj
                             .child(
                                 v_flex()
                                     .mt_1()
-                                    .child(Label::new("Restricted mode prevents:").color(Color::Muted))
-                                    .child(ListBulletItem::new("Project settings from being applied"))
-                                    .child(ListBulletItem::new("Language servers from running"))
-                                    .child(ListBulletItem::new("MCP integrations from installing"))
+                                    .child(Label::new(i18n::t!("8a9bf1e30f256317")).color(Color::Muted))
+                                    .child(ListBulletItem::new(i18n::t!("1026d9417051b164")))
+                                    .child(ListBulletItem::new(i18n::t!("f8baa675efb1604a")))
+                                    .child(ListBulletItem::new(i18n::t!("99a8ea274b0e5c8a")))
                             )
                             .footer(
                                 h_flex()
@@ -232,13 +234,13 @@ Review .zed/settings.json for any extensions or commands configured by this proj
                                     .justify_between()
                                     .child(
                                         Checkbox::new("trust-parent", ToggleState::Unselected)
-                                            .label("Trust all projects in parent directory")
+                                            .label(i18n::t!("f03cae31f21311fc"))
                                     )
                                     .child(
                                         h_flex()
                                             .gap_1()
-                                            .child(Button::new("restricted", "Stay in Restricted Mode").color(Color::Muted))
-                                            .child(Button::new("trust", "Trust and Continue").style(ButtonStyle::Filled))
+                                            .child(Button::new("restricted", i18n::t!("26cdeb4b4b278314")).color(Color::Muted))
+                                            .child(Button::new("trust", i18n::t!("1ac3a881cb626809")).style(ButtonStyle::Filled))
                                     )
                             )
                             .width(rems(40.))

@@ -8912,44 +8912,6 @@ async fn test_manipulate_text(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-async fn test_multicursor_manipulate_text(cx: &mut TestAppContext) {
-    init_test(cx, |_| {});
-    let mut cx = EditorTestContext::new(cx).await;
-
-    let mut failures = Vec::new();
-    for (before, expected, to_upper) in [
-        ("some_ˇvariˇable_naˇme", "«SOME_VARIABLE_NAMEˇ»", true),
-        ("some_ˇvariˇable naˇme", "«SOME_VARIABLEˇ» «NAMEˇ»", true),
-        ("SOME_ˇVARIˇABLE_NAˇME", "«some_variable_nameˇ»", false),
-        ("SOME_ˇVARIˇABLE NAˇME", "«some_variableˇ» «nameˇ»", false),
-        ("«word1ˇ» woˇr«d2 word3ˇ»", "«WORD1ˇ» «WORD2 WORD3ˇ»", true),
-        ("«aˇ»b«cdˇ»eˇf", "«ABCDEFˇ»", true),
-        ("hello woˇrˇld", "hello woˇrˇld", false),
-    ] {
-        cx.set_state(before);
-        cx.update_editor(|editor, window, cx| {
-            if to_upper {
-                editor.convert_to_upper_case(&ConvertToUpperCase, window, cx)
-            } else {
-                editor.convert_to_lower_case(&ConvertToLowerCase, window, cx)
-            }
-        });
-        let actual = cx.editor_state();
-        if actual != expected {
-            failures.push(format!(
-                "before:   {before}\nexpected: {expected}\nactual:   {actual}"
-            ));
-        }
-    }
-    assert!(
-        failures.is_empty(),
-        "{} case(s) failed:\n\n{}",
-        failures.len(),
-        failures.join("\n\n")
-    );
-}
-
-#[gpui::test]
 fn test_duplicate_line(cx: &mut TestAppContext) {
     init_test(cx, |_| {});
 
@@ -31764,187 +31726,6 @@ async fn test_row_highlights_for_empty_conflict_side_after_edit(
 }
 
 #[gpui::test]
-async fn test_jumps_unfold_enclosing_sections(cx: &mut TestAppContext) {
-    use workspace::item::Item;
-
-    init_test(cx, |_| {});
-    let mut cx = EditorTestContext::new(cx).await;
-    cx.set_state("ˇfirst\nouter\ninner\ntarget\nend\nunrelated\nend\nlast");
-
-    let outer = Point::new(1, 0)..Point::new(4, 0);
-    let inner = Point::new(2, 0)..Point::new(3, 6);
-    let unrelated = Point::new(5, 0)..Point::new(6, 3);
-    let target = Point::new(3, 2);
-
-    for use_history in [false, true] {
-        for already_selected in [false, true] {
-            cx.update_editor(|editor, window, cx| {
-                editor.unfold_ranges(&[Point::zero()..Point::new(7, 4)], false, false, cx);
-                let initial = if already_selected {
-                    target
-                } else {
-                    Point::zero()
-                };
-                editor.change_selections(SelectionEffects::no_scroll(), window, cx, |selections| {
-                    selections.select_ranges([initial..initial]);
-                });
-                editor.fold_ranges(
-                    vec![outer.clone(), inner.clone(), unrelated.clone()],
-                    false,
-                    window,
-                    cx,
-                );
-                let snapshot = editor.display_snapshot(cx);
-                assert_eq!(
-                    snapshot
-                        .folds_in_range(Point::zero()..Point::new(7, 4))
-                        .count(),
-                    3
-                );
-
-                if use_history {
-                    let snapshot = editor.buffer.read(cx).snapshot(cx);
-                    assert!(editor.navigate(
-                        Arc::new(NavigationData {
-                            cursor_anchor: snapshot.anchor_before(target),
-                            cursor_position: target,
-                            scroll_anchor: ScrollAnchor {
-                                anchor: snapshot.anchor_before(Point::zero()),
-                                offset: Default::default(),
-                            },
-                            scroll_top_row: 0,
-                        }),
-                        window,
-                        cx,
-                    ));
-                } else {
-                    editor.go_to_singleton_buffer_point(target, window, cx);
-                }
-
-                let snapshot = editor.display_snapshot(cx);
-                assert_eq!(editor.selections.newest::<Point>(&snapshot).head(), target);
-                let remaining_folds = snapshot
-                    .folds_in_range(Point::zero()..Point::new(7, 4))
-                    .map(|fold| {
-                        fold.range.start.to_point(snapshot.buffer_snapshot())
-                            ..fold.range.end.to_point(snapshot.buffer_snapshot())
-                    })
-                    .collect::<Vec<_>>();
-                assert_eq!(remaining_folds, vec![unrelated.clone()]);
-            });
-        }
-    }
-
-    cx.update_editor(|editor, window, cx| {
-        editor.fold_ranges(vec![outer.clone(), inner.clone()], false, window, cx);
-        editor.change_selections(Default::default(), window, cx, |selections| {
-            selections.select_ranges([target..target]);
-        });
-        let snapshot = editor.display_snapshot(cx);
-        assert_eq!(
-            snapshot
-                .folds_in_range(Point::zero()..Point::new(7, 4))
-                .count(),
-            3
-        );
-        editor.go_to_singleton_buffer_point(outer.start, window, cx);
-        let snapshot = editor.display_snapshot(cx);
-        assert_eq!(
-            snapshot
-                .folds_in_range(Point::zero()..Point::new(7, 4))
-                .count(),
-            3
-        );
-        editor.go_to_singleton_buffer_point(outer.end, window, cx);
-        let snapshot = editor.display_snapshot(cx);
-        assert_eq!(
-            snapshot
-                .folds_in_range(Point::zero()..Point::new(7, 4))
-                .count(),
-            3
-        );
-    });
-}
-
-#[gpui::test]
-async fn test_selection_effects_unfold_opt_in(cx: &mut TestAppContext) {
-    init_test(cx, |_| {});
-    let mut cx = EditorTestContext::new(cx).await;
-    cx.set_state("ˇfirst\nouter\ninner\ntarget\nend\nunrelated\nend\nlast");
-    let target = Point::new(3, 2);
-    let unrelated = Point::new(5, 0)..Point::new(6, 3);
-    let folds = vec![
-        Point::new(1, 0)..Point::new(4, 0),
-        Point::new(2, 0)..Point::new(3, 6),
-        unrelated.clone(),
-    ];
-
-    for deferred in [false, true] {
-        cx.update_editor(|editor, window, cx| {
-            editor.unfold_ranges(&[Point::zero()..Point::new(7, 4)], false, false, cx);
-            editor.change_selections(SelectionEffects::no_scroll(), window, cx, |selections| {
-                selections.select_ranges([target..target]);
-            });
-            editor.fold_ranges(folds.clone(), false, window, cx);
-            editor.change_selections(SelectionEffects::no_scroll(), window, cx, |_| {});
-            assert_eq!(
-                editor
-                    .display_snapshot(cx)
-                    .folds_in_range(target..target)
-                    .count(),
-                2
-            );
-
-            if deferred {
-                editor.with_selection_effects_deferred(window, cx, |editor, window, cx| {
-                    editor.change_selections(
-                        SelectionEffects::no_scroll().unfold(),
-                        window,
-                        cx,
-                        |selections| selections.select_ranges([Point::zero()..Point::zero()]),
-                    );
-                    editor.change_selections(
-                        SelectionEffects::no_scroll(),
-                        window,
-                        cx,
-                        |selections| {
-                            let snapshot = selections.display_snapshot();
-                            let anchor = snapshot.buffer_snapshot().anchor_before(target);
-                            selections.select_anchor_ranges([anchor..anchor]);
-                        },
-                    );
-                    assert_eq!(
-                        editor
-                            .display_snapshot(cx)
-                            .folds_in_range(target..target)
-                            .count(),
-                        2
-                    );
-                });
-            } else {
-                editor.change_selections(
-                    SelectionEffects::no_scroll().unfold(),
-                    window,
-                    cx,
-                    |_| {},
-                );
-            }
-
-            let snapshot = editor.display_snapshot(cx);
-            let remaining_folds = snapshot
-                .folds_in_range(Point::zero()..Point::new(7, 4))
-                .map(|fold| {
-                    fold.range.start.to_point(snapshot.buffer_snapshot())
-                        ..fold.range.end.to_point(snapshot.buffer_snapshot())
-                })
-                .collect::<Vec<_>>();
-            assert_eq!(remaining_folds, vec![unrelated.clone()]);
-            assert_eq!(editor.selections.newest::<Point>(&snapshot).head(), target);
-        });
-    }
-}
-
-#[gpui::test]
 async fn test_go_to_singleton_buffer_point_with_expanded_deleted_hunks(
     executor: BackgroundExecutor,
     cx: &mut TestAppContext,
@@ -36580,17 +36361,17 @@ fn test_gutter_button_tooltip_renders_modifier_transitions(cx: &mut TestAppConte
         assert!(!meta.contains("-click to add a breakpoint"), "got: {meta}");
     };
 
-    assert_render("Set Breakpoint");
+    assert_render(&i18n::t!("587c60ff7b52bd83"));
 
     cx.simulate_modifiers_change(Modifiers::secondary_key());
     tooltip.update_in(cx, |_, _window, cx| cx.notify());
     cx.run_until_parked();
-    assert_render("Set Bookmark");
+    assert_render(&i18n::t!("d6042b9049c7853b"));
 
     cx.simulate_modifiers_change(Modifiers::none());
     tooltip.update_in(cx, |_, _window, cx| cx.notify());
     cx.run_until_parked();
-    assert_render("Set Breakpoint");
+    assert_render(&i18n::t!("587c60ff7b52bd83"));
 }
 
 #[gpui::test]
@@ -50089,6 +49870,54 @@ async fn test_lsp_show_document_external(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+async fn test_lsp_show_document_rejects_path_outside_project(cx: &mut TestAppContext) {
+    init_test(cx, |_| {});
+    let cx = EditorLspTestContext::new_rust(lsp::ServerCapabilities::default(), cx).await;
+
+    let target_path = path!("/outside/untrusted.rs");
+    let response = cx
+        .lsp
+        .server
+        .request::<lsp::request::ShowDocument>(
+            lsp::ShowDocumentParams {
+                uri: lsp::Uri::from_file_path(target_path).unwrap(),
+                external: None,
+                take_focus: None,
+                selection: None,
+            },
+            DEFAULT_LSP_REQUEST_TIMEOUT,
+        )
+        .await
+        .into_response()
+        .expect("show document request should not error");
+    assert_eq!(response, lsp::ShowDocumentResult { success: false });
+}
+
+#[gpui::test]
+async fn test_lsp_show_document_rejects_unsafe_external_uri(cx: &mut TestAppContext) {
+    init_test(cx, |_| {});
+    let cx = EditorLspTestContext::new_rust(lsp::ServerCapabilities::default(), cx).await;
+
+    let response = cx
+        .lsp
+        .server
+        .request::<lsp::request::ShowDocument>(
+            lsp::ShowDocumentParams {
+                uri: "file:///tmp/untrusted".parse::<lsp::Uri>().unwrap(),
+                external: Some(true),
+                take_focus: None,
+                selection: None,
+            },
+            DEFAULT_LSP_REQUEST_TIMEOUT,
+        )
+        .await
+        .into_response()
+        .expect("show document request should not error");
+    assert_eq!(response, lsp::ShowDocumentResult { success: false });
+    assert_eq!(cx.opened_url(), None);
+}
+
+#[gpui::test]
 async fn test_lsp_show_document_without_take_focus(cx: &mut TestAppContext) {
     init_test(cx, |_| {});
     let mut cx = EditorLspTestContext::new_rust(lsp::ServerCapabilities::default(), cx).await;
@@ -50663,4 +50492,80 @@ async fn test_soft_wrap_indent_updated_on_file_move_between_directories(
         .update(cx, |editor, window, cx| editor.snapshot(window, cx))
         .unwrap();
     assert_eq!(snapshot.soft_wrap_indent(DisplayRow(0)), Some(0));
+}
+
+#[gpui::test]
+async fn test_expand_and_undo_bracket_selection(cx: &mut TestAppContext) {
+    init_test(cx, |_| {});
+
+    let language = Arc::new(
+        Language::new(
+            LanguageConfig::default(),
+            Some(tree_sitter_rust::LANGUAGE.into()),
+        )
+        .with_brackets_query(indoc! {r#"
+            ("(" @open ")" @close)
+            ("{" @open "}" @close)
+        "#})
+        .unwrap(),
+    );
+
+    let text = "fn main() {\n    let a = (1, 2);\n}\n";
+    let buffer = cx.new(|cx| Buffer::local(text, cx).with_language(language, cx));
+    let buffer = cx.new(|cx| MultiBuffer::singleton(buffer, cx));
+    let (editor, cx) = cx.add_window_view(|window, cx| build_editor(buffer, window, cx));
+
+    editor
+        .condition::<crate::EditorEvent>(cx, |editor, cx| !editor.buffer.read(cx).is_parsing(cx))
+        .await;
+
+    editor.update_in(cx, |editor, window, cx| {
+        editor.change_selections(SelectionEffects::no_scroll(), window, cx, |s| {
+            s.select_display_ranges([
+                DisplayPoint::new(DisplayRow(1), 14)..DisplayPoint::new(DisplayRow(1), 14)
+            ]);
+        });
+        editor.expand_bracket_selection(&ExpandBracketSelection, window, cx);
+    });
+    editor.update(cx, |editor, cx| {
+        assert_text_with_selections(
+            editor,
+            indoc! {r#"
+                fn main() {
+                    let a = («1, 2ˇ»);
+                }
+            "#},
+            cx,
+        );
+    });
+
+    editor.update_in(cx, |editor, window, cx| {
+        editor.expand_bracket_selection(&ExpandBracketSelection, window, cx);
+    });
+    editor.update(cx, |editor, cx| {
+        assert_text_with_selections(
+            editor,
+            indoc! {r#"
+                fn main() {«
+                    let a = (1, 2);
+                ˇ»}
+            "#},
+            cx,
+        );
+    });
+
+    editor.update_in(cx, |editor, window, cx| {
+        editor.undo_bracket_selection(&UndoBracketSelection, window, cx);
+    });
+    editor.update(cx, |editor, cx| {
+        assert_text_with_selections(
+            editor,
+            indoc! {r#"
+                fn main() {
+                    let a = («1, 2ˇ»);
+                }
+            "#},
+            cx,
+        );
+    });
 }

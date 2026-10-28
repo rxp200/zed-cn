@@ -1,6 +1,6 @@
 use crate::{AgentTool, ToolCallEventStream, ToolInput};
 use acp_thread::MentionUri;
-use agent_client_protocol::schema::v2 as acp;
+use agent_client_protocol::schema::v1 as acp;
 use anyhow::{Result, anyhow};
 use futures::FutureExt as _;
 use gpui::{App, AppContext, Entity, SharedString, Task};
@@ -144,11 +144,11 @@ impl AgentTool for FindPathTool {
                 ..cmp::min(input.offset + RESULTS_PER_PAGE, matches.len())];
 
             event_stream.update_fields(
-                |update| update
+                acp::ToolCallUpdateFields::new()
                     .title(if paginated_matches.is_empty() {
-                        "No matches".to_string()
+                        "No matches".into()
                     } else if paginated_matches.len() == 1 {
-                        "1 match".to_string()
+                        "1 match".into()
                     } else {
                         format!("{} matches", paginated_matches.len())
                     })
@@ -159,12 +159,12 @@ impl AgentTool for FindPathTool {
                                 let uri = MentionUri::File {
                                     abs_path: path.clone(),
                                 };
-                                acp::ToolCallContent::from(
+                                acp::ToolCallContent::Content(acp::Content::new(
                                     acp::ContentBlock::ResourceLink(acp::ResourceLink::new(
                                         path.to_string_lossy(),
                                         uri.to_uri().to_string(),
                                     )),
-                                )
+                                ))
                             })
                             .collect::<Vec<_>>(),
                     ),

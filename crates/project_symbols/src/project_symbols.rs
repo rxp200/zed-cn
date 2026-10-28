@@ -162,7 +162,7 @@ impl PickerDelegate for ProjectSymbolsDelegate {
                             return;
                         };
                         editor.change_selections(
-                            SelectionEffects::scroll(Autoscroll::center()).unfold(),
+                            SelectionEffects::scroll(Autoscroll::center()),
                             window,
                             cx,
                             |s| s.select_ranges([anchor..anchor]),

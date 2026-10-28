@@ -393,7 +393,7 @@ impl PickerDelegate for LspCommandSelectorDelegate {
                 .map(|footer| match &self.execution {
                     Execution::Idle => footer,
                     Execution::Running { .. } => footer.child(
-                        Label::new("Executing command…")
+                        Label::new(i18n::t!("718a47264fea7a6f"))
                             .size(LabelSize::Small)
                             .color(Color::Muted),
                     ),

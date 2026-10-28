@@ -1,4 +1,4 @@
-use auto_update::{AutoUpdater, release_notes_url};
+use auto_update::{AutoUpdater, custom_release_notes, release_notes_url};
 use db::kvp::Dismissable;
 use editor::{Editor, MultiBuffer};
 use gpui::{
@@ -70,7 +70,7 @@ fn notify_release_notes_failed_to_show(
 
     impl WorkspaceError for ReleaseNotesError {
         fn primary_message(&self) -> SharedString {
-            "Couldn't load release notes".into()
+            i18n::t!("5e295b3507164b6b").into()
         }
         fn severity(&self) -> ErrorSeverity {
             ErrorSeverity::Error
@@ -78,7 +78,7 @@ fn notify_release_notes_failed_to_show(
         fn primary_action(&self) -> ErrorAction {
             self.url
                 .clone()
-                .map(|url| ErrorAction::link("View in Browser", url))
+                .map(|url| ErrorAction::link(i18n::t!("863910b4ff1717af"), url))
                 .unwrap_or_else(ErrorAction::dismiss)
         }
     }
@@ -103,6 +103,7 @@ fn view_release_notes_locally(
         return;
     }
 
+    let custom_release_tag = release_channel::CustomReleaseTag::current(cx);
     let version = AppVersion::global(cx).to_string();
 
     let client = client::Client::global(cx).http_client();
@@ -119,21 +120,29 @@ fn view_release_notes_locally(
 
     cx.spawn_in(window, async move |workspace, cx| {
         let markdown = markdown.await.log_err();
-        let response = client.get(&url, Default::default(), true).await;
-        let Some(mut response) = response.log_err() else {
-            workspace
-                .update_in(cx, notify_release_notes_failed_to_show)
-                .log_err();
-            return;
+        let body = if let Some(tag) = custom_release_tag {
+            custom_release_notes(client.clone(), &tag, cx.background_executor())
+                .await
+                .map(|notes| ReleaseNotesBody {
+                    title: notes.title,
+                    release_notes: notes.body,
+                })
+        } else {
+            let response = client.get(&url, Default::default(), true).await;
+            let Some(mut response) = response.log_err() else {
+                workspace
+                    .update_in(cx, notify_release_notes_failed_to_show)
+                    .log_err();
+                return;
+            };
+
+            let mut body = Vec::new();
+            response.body_mut().read_to_end(&mut body).await.ok();
+            serde_json::from_slice(body.as_slice()).log_err()
         };
 
-        let mut body = Vec::new();
-        response.body_mut().read_to_end(&mut body).await.ok();
-
-        let body: serde_json::Result<ReleaseNotesBody> = serde_json::from_slice(body.as_slice());
-
         let res: Option<()> = maybe!(async {
-            let body = body.ok()?;
+            let body = body?;
             let project = workspace
                 .read_with(cx, |workspace, _| workspace.project().clone())
                 .ok()?;
@@ -211,17 +220,15 @@ fn announcement_for_version(version: &Version, cx: &App) -> Option<AnnouncementC
     }
 
     Some(AnnouncementContent {
-        heading: "Introducing Delta".into(),
-        description:
-            "Built on DeltaDB, so your threads and code stay in sync across machines and teammates."
-                .into(),
+        heading: i18n::t!("2c842b92d946046b").into(),
+        description: i18n::t!("233bb5172065660d").into(),
         bullet_items: vec![
-            "Made by the Zed team, with the same quality and performance".into(),
-            "Work with teammates and agents in the same thread, live or later".into(),
-            "Pick up your thread on the web or your phone, without committing or pushing".into(),
+            i18n::t!("5ad3110b18b5dd3d").into(),
+            i18n::t!("3ee779f935b82381").into(),
+            i18n::t!("d084da980d612dcf").into(),
         ],
-        primary_action_label: "Try Delta".into(),
-        secondary_action_label: "Learn More".into(),
+        primary_action_label: i18n::t!("e93d126acd0c40f4").into(),
+        secondary_action_label: i18n::t!("8d8cd546b58d91c3").into(),
         primary_action_url: "https://delta.dev/".into(),
         secondary_action_url: "https://delta.dev/docs/getting-started".into(),
     })
@@ -324,8 +331,11 @@ fn show_update_notification(cx: &mut App) {
             move |cx| {
                 let workspace_handle = cx.entity().downgrade();
                 cx.new(|cx| {
-                    MessageNotification::new(format!("Updated to {app_name} {}", version), cx)
-                        .primary_message("View Release Notes")
+                    MessageNotification::new(
+                        i18n::t_mix!("7650f13b97d7af82"; version; app_name = app_name),
+                        cx,
+                    )
+                    .primary_message(i18n::t!("750579fa007c5b29"))
                         .primary_on_click(move |window, cx| {
                             if let Some(workspace) = workspace_handle.upgrade() {
                                 workspace.update(cx, |workspace, cx| {

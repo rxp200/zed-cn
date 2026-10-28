@@ -173,10 +173,6 @@ impl<'a> Components<'a> {
         }
     }
 
-    pub(crate) fn prefix(&self) -> Option<Prefix<'_>> {
-        self.prefix
-    }
-
     fn has_prefixes(&self) -> bool {
         self.path_style.has_prefixes()
     }
@@ -252,7 +248,7 @@ impl<'a> Components<'a> {
         unsafe { Path::new(OsStr::from_encoded_bytes_unchecked(comps.path)) }
     }
 
-    pub(crate) fn has_root(&self) -> bool {
+    fn has_root(&self) -> bool {
         if self.has_physical_root {
             return true;
         }

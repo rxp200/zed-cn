@@ -18,6 +18,7 @@ default = []
 schemars = ["dep:schemars"]
 
 [dependencies]
+i18n.workspace = true
 anyhow.workspace = true
 futures.workspace = true
 google_ai.workspace = true

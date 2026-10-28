@@ -41,14 +41,18 @@ use remote::RemoteConnectionOptions;
 use settings::{Settings as _, SettingsStore};
 
 use std::any::TypeId;
+use std::cell::Cell;
+use std::future::Future;
 use std::path::Path;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 use theme::ActiveTheme;
 use title_bar_settings::TitleBarSettings;
 use ui::{
-    Avatar, ButtonLike, ContextMenu, ContextMenuEntry, IconWithIndicator, Indicator, PopoverMenu,
-    PopoverMenuHandle, TintColor, Tooltip, prelude::*, utils::platform_title_bar_height,
+    Avatar, ButtonLike, ContextMenu, ContextMenuEntry, IconButtonShape, IconWithIndicator,
+    Indicator, PopoverMenu, PopoverMenuHandle, TintColor, Tooltip, prelude::*,
+    utils::platform_title_bar_height,
 };
 use update_version::UpdateVersion;
 use util::ResultExt;
@@ -219,6 +223,10 @@ pub struct TitleBar {
     banner: Option<Entity<OnboardingBanner>>,
     update_version: Entity<UpdateVersion>,
     screen_share_popover_handle: PopoverMenuHandle<ContextMenu>,
+    hosted_sessions: Vec<rpc::proto::HostedTerminalSummary>,
+    hosted_menu: PopoverMenuHandle<ContextMenu>,
+    /// Tracks a rebuild of the deployed popover. See [`HostedMenuRebuild`].
+    hosted_menu_rebuild: HostedMenuRebuild,
     _diagnostics_subscription: Option<gpui::Subscription>,
 }
 
@@ -314,38 +322,46 @@ impl Render for TitleBar {
                 .map(|title_bar| {
                     let mut render_project_items = title_bar_settings.show_branch_name
                         || title_bar_settings.show_project_items;
+                    let title_bar = title_bar.when_some(
+                        self.application_menu.clone().filter(|_| !show_menus),
+                        |title_bar, menu| {
+                            // Hide the project/branch items to make room when the
+                            // menu bar is expanded -- except in accessible mode,
+                            // where the menu bar is always expanded but those
+                            // controls must still remain reachable.
+                            render_project_items &= !menu
+                                .update(cx, |menu, cx| menu.all_menus_shown(cx))
+                                || cx.accessible_mode();
+                            title_bar.child(menu)
+                        },
+                    );
+
+                    let items = project_item_visibility(
+                        title_bar_settings.show_project_items,
+                        render_project_items,
+                        repository.is_some() && is_git_enabled,
+                        self.project.read(cx).supports_hosted_terminals(cx),
+                    );
+
                     title_bar
+                        .children(self.render_restricted_mode(cx))
+                        .when(items.project_name, |title_bar| {
+                            title_bar
+                                .children(self.render_project_host(cx))
+                                .child(self.render_project_name(project_name, window, cx))
+                        })
                         .when_some(
-                            self.application_menu.clone().filter(|_| !show_menus),
-                            |title_bar, menu| {
-                                // Hide the project/branch items to make room when the
-                                // menu bar is expanded -- except in accessible mode,
-                                // where the menu bar is always expanded but those
-                                // controls must still remain reachable.
-                                render_project_items &= !menu
-                                    .update(cx, |menu, cx| menu.all_menus_shown(cx))
-                                    || cx.accessible_mode();
-                                title_bar.child(menu)
+                            repository.filter(|_| items.worktree_and_branch),
+                            |title_bar, repository| {
+                                title_bar.children(self.render_worktree_and_branch(
+                                    repository,
+                                    linked_worktree_name,
+                                    cx,
+                                ))
                             },
                         )
-                        .children(self.render_restricted_mode(cx))
-                        .when(render_project_items, |title_bar| {
-                            title_bar
-                                .when(title_bar_settings.show_project_items, |title_bar| {
-                                    title_bar
-                                        .children(self.render_project_host(cx))
-                                        .child(self.render_project_name(project_name, window, cx))
-                                })
-                                .when_some(
-                                    repository.filter(|_| is_git_enabled),
-                                    |title_bar, repository| {
-                                        title_bar.children(self.render_worktree_and_branch(
-                                            repository,
-                                            linked_worktree_name,
-                                            cx,
-                                        ))
-                                    },
-                                )
+                        .when(items.hosted_terminals, |title_bar| {
+                            title_bar.children(self.render_hosted_terminals_button(cx))
                         })
                 })
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -392,7 +408,7 @@ impl Render for TitleBar {
                 )
                 .when(is_signing_in, |this| {
                     this.child(
-                        Label::new("Signing in…")
+                        Label::new(i18n::t!("680b5441ecb079ca"))
                             .size(LabelSize::Small)
                             .color(Color::Muted)
                             .with_animation(
@@ -448,6 +464,192 @@ impl Render for TitleBar {
     }
 }
 
+/// Tab titles are shell titles, so several terminals in the same folder share
+/// one name. Number repeated names so the hosted-terminal list never shows rows
+/// that cannot be told apart.
+fn visible_hosted_sessions(
+    sessions: &[rpc::proto::HostedTerminalSummary],
+) -> Vec<rpc::proto::HostedTerminalSummary> {
+    sessions
+        .iter()
+        .filter(|session| session.running)
+        .cloned()
+        .collect()
+}
+
+/// One row of the hosted-terminal popover: the label the user picks and the
+/// session it opens.
+#[derive(Debug, PartialEq, Eq)]
+struct HostedMenuEntry {
+    label: String,
+    session_id: String,
+}
+
+/// Which project controls the title bar renders for one frame.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct ProjectItemVisibility {
+    /// Remote host label and project name.
+    project_name: bool,
+    /// Worktree and branch pickers, which only exist for a repository.
+    worktree_and_branch: bool,
+    /// Hosted-terminal list.
+    hosted_terminals: bool,
+}
+
+/// Decides the project controls next to the application menu.
+///
+/// The hosted-terminal list is an entry point for a remote server capability,
+/// so it must not inherit the preconditions of the repository controls: a
+/// remote project that is not a git repository, has the worktree/branch labels
+/// hidden, or has the project items hidden to make room for an expanded menu
+/// bar still has to be able to attach its hosted sessions. The terminal context
+/// menu already offers hosting for every terminal of such a connection, so a
+/// narrower title bar rule also made the two entry points disagree.
+fn project_item_visibility(
+    show_project_items: bool,
+    render_project_items: bool,
+    has_git_repository: bool,
+    hosted_terminals_supported: bool,
+) -> ProjectItemVisibility {
+    ProjectItemVisibility {
+        project_name: show_project_items && render_project_items,
+        worktree_and_branch: render_project_items && has_git_repository,
+        hosted_terminals: hosted_terminals_supported,
+    }
+}
+
+/// Rows of the popover for `sessions`. Ended records stay in the terminal menu
+/// so they can be deleted there, but they are not worth switching to.
+fn hosted_menu_entries(sessions: &[rpc::proto::HostedTerminalSummary]) -> Vec<HostedMenuEntry> {
+    let running = visible_hosted_sessions(sessions);
+    let labels = disambiguate_hosted_session_names(
+        &running
+            .iter()
+            .map(|session| session.name.as_str())
+            .collect::<Vec<_>>(),
+    );
+    running
+        .into_iter()
+        .zip(labels)
+        .map(|(session, label)| HostedMenuEntry {
+            label,
+            session_id: session.session_id,
+        })
+        .collect()
+}
+
+fn build_hosted_terminals_menu(
+    sessions: Vec<rpc::proto::HostedTerminalSummary>,
+    window: &mut Window,
+    cx: &mut App,
+) -> Entity<ContextMenu> {
+    ContextMenu::build(window, cx, move |menu, _, _| {
+        let menu = menu.header(i18n::t!("a9dc9b921c645f65"));
+        let entries = hosted_menu_entries(&sessions);
+        if entries.is_empty() {
+            return menu.label(i18n::t!("7f1fdafea529e7cd")).separator();
+        }
+        entries.into_iter().fold(menu, |menu, entry| {
+            let session_id = entry.session_id;
+            menu.entry(entry.label, None, move |window, cx| {
+                window.dispatch_action(
+                    Box::new(workspace::OpenHostedTerminal {
+                        session_id: session_id.clone(),
+                    }),
+                    cx,
+                );
+            })
+        })
+    })
+}
+
+/// Tracks a rebuild of the deployed hosted-terminal popover.
+///
+/// [`PopoverMenuHandle::refresh_menu`] re-opens the popover, which runs its open
+/// callback again. That happens inside the update that adopts the new response,
+/// so the callback has to skip the request it would otherwise start: borrowing
+/// the title bar from there panics on the nested update.
+#[derive(Clone, Default)]
+struct HostedMenuRebuild(Rc<Cell<bool>>);
+
+impl HostedMenuRebuild {
+    fn during(&self, rebuild: impl FnOnce()) {
+        self.0.set(true);
+        rebuild();
+        self.0.set(false);
+    }
+
+    fn is_in_progress(&self) -> bool {
+        self.0.get()
+    }
+}
+
+/// The hosted-terminal popover.
+///
+/// `on_open` has to be attached through [`PopoverMenu::on_open`] rather than to
+/// the trigger button: `PopoverMenu` installs its own click handler on the
+/// trigger, and the button keeps a single handler, so a refresh installed on
+/// the button is dropped and the menu would open with the list cached at the
+/// first render.
+fn hosted_terminals_popover(
+    label: SharedString,
+    sessions: Vec<rpc::proto::HostedTerminalSummary>,
+    handle: PopoverMenuHandle<ContextMenu>,
+    on_open: Rc<dyn Fn(&mut Window, &mut App)>,
+) -> PopoverMenu<ContextMenu> {
+    PopoverMenu::new("hosted-terminals-menu")
+        .with_handle(handle)
+        .on_open(on_open)
+        .menu(move |window, cx| {
+            Some(build_hosted_terminals_menu(sessions.clone(), window, cx))
+        })
+        .trigger_with_tooltip(
+            ui::Button::new("hosted_terminals_trigger", label.clone())
+                .label_size(LabelSize::Small)
+                .start_icon(
+                    Icon::new(IconName::Terminal)
+                        .size(IconSize::XSmall)
+                        .color(Color::Muted),
+                ),
+            move |window, cx| Tooltip::text(label.clone())(window, cx),
+        )
+        .anchor(gpui::Anchor::TopLeft)
+}
+
+/// Whether a fresh response would change the popover, i.e. whether an open menu
+/// has to be rebuilt to show it.
+fn hosted_sessions_changed(
+    old: &[rpc::proto::HostedTerminalSummary],
+    new: &[rpc::proto::HostedTerminalSummary],
+) -> bool {
+    old.len() != new.len()
+        || old.iter().zip(new).any(|(old, new)| {
+            old.session_id != new.session_id
+                || old.name != new.name
+                || old.running != new.running
+                || old.viewer_count != new.viewer_count
+        })
+}
+
+fn disambiguate_hosted_session_names(names: &[&str]) -> Vec<String> {
+    let mut totals: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    for name in names {
+        *totals.entry(name).or_default() += 1;
+    }
+    let mut seen: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    names
+        .iter()
+        .map(|name| {
+            if totals.get(name).copied().unwrap_or_default() < 2 {
+                return (*name).to_owned();
+            }
+            let index = seen.entry(name).or_default();
+            *index += 1;
+            format!("{name} ({index})")
+        })
+        .collect()
+}
+
 impl TitleBar {
     pub fn new(
         id: impl Into<ElementId>,
@@ -482,6 +684,9 @@ impl TitleBar {
                 cx.notify()
             }),
         );
+        if let Some(remote_client) = project.read(cx).remote_client() {
+            subscriptions.push(cx.observe(&remote_client, |_, _, cx| cx.notify()));
+        }
 
         subscriptions.push(cx.observe(&active_call, |this, _, cx| this.active_call_changed(cx)));
         subscriptions.push(
@@ -534,6 +739,9 @@ impl TitleBar {
             banner,
             update_version,
             screen_share_popover_handle: PopoverMenuHandle::default(),
+            hosted_sessions: Vec::new(),
+            hosted_menu: PopoverMenuHandle::default(),
+            hosted_menu_rebuild: HostedMenuRebuild::default(),
             _diagnostics_subscription: None,
         };
 
@@ -631,7 +839,9 @@ impl TitleBar {
 
         let nickname = nickname.unwrap_or_else(|| host.clone());
 
-        let (indicator_color, meta) = match self.project.read(cx).remote_connection_state(cx)? {
+        let connection_state = self.project.read(cx).remote_connection_state(cx)?;
+        let show_reconnect_button = connection_state.can_reconnect_manually();
+        let (indicator_color, meta) = match connection_state {
             remote::ConnectionState::Connecting => (Color::Info, format!("Connecting to: {host}")),
             remote::ConnectionState::Connected => (Color::Success, format!("Connected to: {host}")),
             remote::ConnectionState::HeartbeatMissed => (
@@ -647,7 +857,7 @@ impl TitleBar {
             }
         };
 
-        let icon_color = match self.project.read(cx).remote_connection_state(cx)? {
+        let icon_color = match connection_state {
             remote::ConnectionState::Connecting => Color::Info,
             remote::ConnectionState::Connected => Color::Default,
             remote::ConnectionState::HeartbeatMissed => Color::Warning,
@@ -687,7 +897,40 @@ impl TitleBar {
                                     ))
                                     .into_any_element(),
                                 )
-                                .child(Label::new(nickname).size(LabelSize::Small).truncate()),
+                                .child(Label::new(nickname).size(LabelSize::Small).truncate())
+                                .when(show_reconnect_button, |this| {
+                                    let project = self.project.downgrade();
+                                    this.child(
+                                        IconButton::new(
+                                            "manual-remote-reconnect",
+                                            IconName::RotateCw,
+                                        )
+                                        .shape(IconButtonShape::Square)
+                                        .size(ButtonSize::None)
+                                        .icon_size(IconSize::XSmall)
+                                        .icon_color(Color::Warning)
+                                        .aria_label(i18n::t!("2a1e632e53eff23e"))
+                                        .tooltip(Tooltip::text(i18n::t!("928f38ec2cd79b34")))
+                                        .on_click(
+                                            move |_, _, cx| {
+                                                cx.stop_propagation();
+                                                let Some(project) = project.upgrade() else {
+                                                    return;
+                                                };
+                                                let Some(remote_client) =
+                                                    project.read(cx).remote_client()
+                                                else {
+                                                    return;
+                                                };
+                                                remote_client
+                                                    .update(cx, |remote_client, cx| {
+                                                        remote_client.reconnect_now(cx)
+                                                    })
+                                                    .log_err();
+                                            },
+                                        ),
+                                    )
+                                }),
                         ),
                     move |_window, cx| {
                         Tooltip::with_meta(
@@ -710,7 +953,7 @@ impl TitleBar {
             return None;
         }
 
-        let button = Button::new("restricted_mode_trigger", "Restricted Mode")
+        let button = Button::new("restricted_mode_trigger", i18n::t!("7453d4c7fedb2942"))
             .style(ButtonStyle::Tinted(TintColor::Warning))
             .label_size(LabelSize::Small)
             .color(Color::Warning)
@@ -752,7 +995,7 @@ impl TitleBar {
 
         if self.project.read(cx).is_disconnected(cx) {
             return Some(
-                Button::new("disconnected", "Disconnected")
+                Button::new("disconnected", i18n::t!("1f0ac6953e0411c0"))
                     .disabled(true)
                     .color(Color::Disabled)
                     .label_size(LabelSize::Small)
@@ -779,7 +1022,7 @@ impl TitleBar {
                         host_user.username
                     );
 
-                    Tooltip::with_meta(tooltip_title, None, "Click to Follow", cx)
+                    Tooltip::with_meta(tooltip_title, None, i18n::t!("42f07c0a5ad4f8d4"), cx)
                 })
                 .on_click({
                     let host_peer_id = host.peer_id;
@@ -869,7 +1112,11 @@ impl TitleBar {
                     .selected_style(ButtonStyle::Tinted(TintColor::Accent))
                     .when(!is_project_selected, |s| s.color(Color::Muted)),
                 move |_window, cx| {
-                    Tooltip::for_action("Recent Projects", &zed_actions::OpenRecent::default(), cx)
+                    Tooltip::for_action(
+                        i18n::t!("0fb712ece2d74fee"),
+                        &zed_actions::OpenRecent::default(),
+                        cx,
+                    )
                 },
             )
             .anchor(gpui::Anchor::TopLeft)
@@ -921,7 +1168,11 @@ impl TitleBar {
                     .selected_style(ButtonStyle::Tinted(TintColor::Accent))
                     .when(!is_project_selected, |s| s.color(Color::Muted)),
                 move |_window, cx| {
-                    Tooltip::for_action("Recent Projects", &zed_actions::OpenRecent::default(), cx)
+                    Tooltip::for_action(
+                        i18n::t!("0fb712ece2d74fee"),
+                        &zed_actions::OpenRecent::default(),
+                        cx,
+                    )
                 },
             )
             .anchor(gpui::Anchor::TopLeft)
@@ -1043,7 +1294,7 @@ impl TitleBar {
                 };
 
                 let trigger = if is_detached_head {
-                    Button::new("project_branch_trigger", "Create Branch")
+                    Button::new("project_branch_trigger", i18n::t!("c6fe4bf1b98122a1"))
                         .selected_style(ButtonStyle::Tinted(TintColor::Accent))
                         .label_size(LabelSize::Small)
                         .tab_index(0isize)
@@ -1114,6 +1365,111 @@ impl TitleBar {
         )
     }
 
+    /// Lists terminals that were explicitly promoted on the remote host. The
+    /// list is scoped to this connection's project root, so another work folder
+    /// or another account never appears here.
+    ///
+    /// This is the only entry point for attaching a running session, so it is
+    /// rendered outside the worktree/branch group and only depends on the
+    /// remote server capability, not on a repository or on the title bar
+    /// project-item settings.
+    fn render_hosted_terminals_button(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if !self.project.read(cx).supports_hosted_terminals(cx) {
+            return None;
+        }
+        let sessions = visible_hosted_sessions(&self.hosted_sessions);
+        let count = sessions.len();
+        let label: SharedString = if count > 0 {
+            format!("{} ({count})", i18n::t!("a9dc9b921c645f65")).into()
+        } else {
+            i18n::t!("a9dc9b921c645f65").into()
+        };
+        let title_bar = cx.entity().downgrade();
+        let rebuild = self.hosted_menu_rebuild.clone();
+        Some(
+            hosted_terminals_popover(
+                label,
+                sessions,
+                self.hosted_menu.clone(),
+                Rc::new(move |window, cx| {
+                    if rebuild.is_in_progress() {
+                        return;
+                    }
+                    title_bar
+                        .update(cx, |this, cx| this.refresh_hosted_sessions(window, cx))
+                        .ok();
+                }),
+            )
+            .into_any_element(),
+        )
+    }
+
+    /// Requests the hosted sessions of this connection's project root.
+    ///
+    /// The response replaces the cached list, and a popover that is already
+    /// expanded is rebuilt from it, so a terminal hosted (or ended) after the
+    /// last request shows up in the menu that is open right now instead of the
+    /// next time the menu is expanded.
+    fn refresh_hosted_sessions(&self, window: &Window, cx: &mut Context<Self>) {
+        let Some(request) = self.list_hosted_sessions(cx) else {
+            return;
+        };
+        cx.spawn_in(window, async move |title_bar, cx| {
+            let response = match request.await {
+                Ok(response) => response,
+                Err(error) => {
+                    // A failed request is not evidence that every session is
+                    // gone, so keep the list the user may be looking at.
+                    log::error!("failed to list hosted terminals: {error:#}");
+                    return;
+                }
+            };
+            title_bar
+                .update_in(cx, |title_bar, window, cx| {
+                    title_bar.set_hosted_sessions(response.sessions, window, cx)
+                })
+                .ok();
+        })
+        .detach();
+    }
+
+    fn list_hosted_sessions(
+        &self,
+        cx: &Context<Self>,
+    ) -> Option<impl Future<Output = anyhow::Result<rpc::proto::ListHostedTerminalsResponse>> + use<>>
+    {
+        let root = self.project.read(cx).hosted_terminal_root(cx)?;
+        self.project.read_with(cx, |project, cx| {
+            project
+                .remote_client()
+                .map(|client| client.read(cx).list_hosted_terminals(root))
+        })
+    }
+
+    fn set_hosted_sessions(
+        &mut self,
+        sessions: Vec<rpc::proto::HostedTerminalSummary>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let changed = hosted_sessions_changed(&self.hosted_sessions, &sessions);
+        self.hosted_sessions = sessions;
+        if changed {
+            let sessions = self.hosted_sessions.clone();
+            let handle = self.hosted_menu.clone();
+            self.hosted_menu_rebuild.during(|| {
+                handle.refresh_menu(
+                    window,
+                    cx,
+                    Rc::new(move |window, cx| {
+                        Some(build_hosted_terminals_menu(sessions.clone(), window, cx))
+                    }),
+                );
+            });
+        }
+        cx.notify();
+    }
+
     fn active_call_changed(&mut self, cx: &mut Context<Self>) {
         self.observe_diagnostics(cx);
         cx.notify();
@@ -1162,7 +1518,7 @@ impl TitleBar {
                 div()
                     .id("disconnected")
                     .child(Icon::new(IconName::Disconnected).size(IconSize::Small))
-                    .tooltip(Tooltip::text("Disconnected"))
+                    .tooltip(Tooltip::text(i18n::t!("1f0ac6953e0411c0")))
                     .into_any_element(),
             ),
             client::Status::UpgradeRequired => {
@@ -1199,7 +1555,7 @@ impl TitleBar {
     pub fn render_sign_in_button(&mut self, _: &mut Context<Self>) -> Button {
         let client = self.client.clone();
         let workspace = self.workspace.clone();
-        Button::new("sign_in", "Sign In")
+        Button::new("sign_in", i18n::t!("1e2df9c3075ae9e4"))
             .label_size(LabelSize::Small)
             .tab_index(0isize)
             .on_click(move |_, window, cx| {
@@ -1318,7 +1674,10 @@ impl TitleBar {
                                     .w_full()
                                     .gap_1()
                                     .justify_between()
-                                    .child(Label::new("Restart to update Zed").color(Color::Accent))
+                                    .child(
+                                        Label::new(i18n::t!("edd4c7bf841e2ece"))
+                                            .color(Color::Accent),
+                                    )
                                     .child(
                                         Icon::new(IconName::Download)
                                             .size(IconSize::Small)
@@ -1386,8 +1745,14 @@ impl TitleBar {
 
                         this.separator()
                     })
-                    .action("Settings", zed_actions::OpenSettings.boxed_clone())
-                    .action("Keymap", Box::new(zed_actions::OpenKeymap))
+                    .action(
+                        i18n::t!("df3d58c7d84b85f2"),
+                        zed_actions::OpenSettings.boxed_clone(),
+                    )
+                    .action(
+                        i18n::t!("166f65a9ea0b7fa3"),
+                        Box::new(zed_actions::OpenKeymap),
+                    )
                     .action(
                         "Themes…",
                         zed_actions::theme_selector::Toggle::default().boxed_clone(),
@@ -1401,8 +1766,9 @@ impl TitleBar {
                         zed_actions::Extensions::default().boxed_clone(),
                     )
                     .when(ai_enabled, |menu| {
-                        menu.separator()
-                            .submenu("Panel Layout", move |menu, _window, _cx| {
+                        menu.separator().submenu(
+                            i18n::t!("f85ff10a6cc0dd8b"),
+                            move |menu, _window, _cx| {
                                 menu.toggleable_entry(
                                     "Classic",
                                     is_editor,
@@ -1423,16 +1789,17 @@ impl TitleBar {
                                 )
                                 .when(is_custom, |menu| {
                                     menu.item(
-                                        ContextMenuEntry::new("Custom")
+                                        ContextMenuEntry::new(i18n::t!("4eafa9e925b30bcd"))
                                             .toggleable(IconPosition::Start, true)
                                             .disabled(true),
                                     )
                                 })
-                            })
+                            },
+                        )
                     })
                     .when(is_signed_in, |this| {
                         this.separator()
-                            .action("Sign Out", client::SignOut.boxed_clone())
+                            .action(i18n::t!("057f31bc16c89da7"), client::SignOut.boxed_clone())
                     })
                 })
                 .into()
@@ -1444,7 +1811,266 @@ impl TitleBar {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gpui::TestAppContext;
     use util::paths::PathStyle;
+
+    /// The title bar requests the hosted sessions when its menu opens. A refresh
+    /// attached to the trigger button instead is dropped by `PopoverMenu`, which
+    /// installs its own click handler on that button, so the menu opened with the
+    /// list cached at the first render and a freshly hosted terminal never
+    /// appeared.
+    #[gpui::test]
+    async fn hosted_terminals_popover_requests_sessions_when_opened(cx: &mut TestAppContext) {
+        let (view, window) = open_hosted_popover(cx);
+        assert_eq!(
+            window.update(|_, cx| view.read(cx).opened()),
+            1,
+            "opening the menu must request the hosted sessions"
+        );
+        assert!(
+            window.update(|_, cx| view.read(cx).handle.is_deployed()),
+            "the trigger click must open the hosted terminal menu"
+        );
+    }
+
+    /// Rebuilding the deployed popover re-runs its open callback, and that rebuild
+    /// only shows the response that caused it: starting another request would
+    /// borrow the title bar from inside its own update.
+    #[gpui::test]
+    async fn rebuilding_the_open_popover_does_not_request_again(cx: &mut TestAppContext) {
+        let (view, window) = open_hosted_popover(cx);
+        window.update(|window, cx| {
+            let rebuild = view.read(cx).rebuild.clone();
+            let handle = view.read(cx).handle.clone();
+            rebuild.during(|| {
+                handle.refresh_menu(window, cx, Rc::new(|window, cx| {
+                    Some(build_hosted_terminals_menu(Vec::new(), window, cx))
+                }))
+            });
+        });
+        window.run_until_parked();
+
+        assert_eq!(
+            window.update(|_, cx| view.read(cx).opened()),
+            1,
+            "rebuilding the menu must not request the sessions again"
+        );
+        assert!(!window.update(|_, cx| view.read(cx).rebuild.is_in_progress()));
+
+        window.update(|_, cx| {
+            let handle = view.read(cx).handle.clone();
+            handle.hide(cx);
+        });
+        window.run_until_parked();
+        window.simulate_click(gpui::point(px(10.), px(10.)), gpui::Modifiers::none());
+        window.run_until_parked();
+        assert_eq!(
+            window.update(|_, cx| view.read(cx).opened()),
+            2,
+            "a later click must still request the sessions"
+        );
+    }
+
+    /// A window that only contains the hosted-terminal popover, opened once, so a
+    /// click at the window origin hits its trigger.
+    struct HostedPopover {
+        opened: Rc<Cell<usize>>,
+        rebuild: HostedMenuRebuild,
+        handle: PopoverMenuHandle<ContextMenu>,
+    }
+
+    impl HostedPopover {
+        fn opened(&self) -> usize {
+            self.opened.get()
+        }
+    }
+
+    impl Render for HostedPopover {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            let opened = self.opened.clone();
+            let rebuild = self.rebuild.clone();
+            hosted_terminals_popover(
+                i18n::t!("a9dc9b921c645f65").into(),
+                Vec::new(),
+                self.handle.clone(),
+                Rc::new(move |_window, _cx| {
+                    if rebuild.is_in_progress() {
+                        return;
+                    }
+                    opened.set(opened.get() + 1);
+                }),
+            )
+        }
+    }
+
+    fn open_hosted_popover(
+        cx: &mut TestAppContext,
+    ) -> (Entity<HostedPopover>, &mut gpui::VisualTestContext) {
+        cx.update(|cx| {
+            let settings_store = SettingsStore::test(cx);
+            cx.set_global(settings_store);
+            theme_settings::init(theme::LoadThemes::JustBase, cx);
+        });
+        let (view, window) = cx.add_window_view(|_window, _cx| HostedPopover {
+            opened: Rc::new(Cell::new(0)),
+            rebuild: HostedMenuRebuild::default(),
+            handle: PopoverMenuHandle::default(),
+        });
+        window.run_until_parked();
+        window.simulate_click(gpui::point(px(10.), px(10.)), gpui::Modifiers::none());
+        window.run_until_parked();
+        (view, window)
+    }
+
+    #[test]
+    fn hosted_menu_hides_ended_records_and_uses_empty_state_when_none_are_running() {
+        let ended = rpc::proto::HostedTerminalSummary {
+            name: "old".into(),
+            running: false,
+            ..Default::default()
+        };
+        let running = rpc::proto::HostedTerminalSummary {
+            name: "active".into(),
+            running: true,
+            ..Default::default()
+        };
+        assert!(visible_hosted_sessions(&[]).is_empty());
+        assert!(visible_hosted_sessions(std::slice::from_ref(&ended)).is_empty());
+        let visible = visible_hosted_sessions(&[ended, running]);
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].name, "active");
+    }
+
+    #[test]
+    fn repeated_hosted_session_names_are_numbered() {
+        assert_eq!(
+            disambiguate_hosted_session_names(&["agent: ~/code/zed", "agent: ~/code/zed"]),
+            vec!["agent: ~/code/zed (1)", "agent: ~/code/zed (2)"]
+        );
+        assert_eq!(
+            disambiguate_hosted_session_names(&["build", "test", "build"]),
+            vec!["build (1)", "test", "build (2)"]
+        );
+        assert_eq!(
+            disambiguate_hosted_session_names(&["only"]),
+            vec!["only".to_string()]
+        );
+        assert!(disambiguate_hosted_session_names(&[]).is_empty());
+    }
+
+    #[test]
+    fn hosted_terminals_stay_reachable_in_remote_projects_without_a_repository() {
+        // A remote project that is not a git repository: no worktree/branch
+        // group, but attaching a hosted session must still be possible from the
+        // title bar. This is what made the right-click menu the only entry point.
+        assert_eq!(
+            project_item_visibility(true, true, false, true),
+            ProjectItemVisibility {
+                project_name: true,
+                worktree_and_branch: false,
+                hosted_terminals: true,
+            }
+        );
+    }
+
+    #[test]
+    fn hosted_terminals_survive_the_project_item_settings() {
+        // Both project-item settings are off, and an expanded menu bar hides the
+        // remaining items: hosting is a server capability, so it stays available.
+        let hidden = project_item_visibility(false, false, true, true);
+        assert!(!hidden.project_name);
+        assert!(!hidden.worktree_and_branch);
+        assert!(hidden.hosted_terminals);
+
+        // The worktree/branch labels can also be hidden on their own.
+        let labels_hidden = project_item_visibility(true, false, true, true);
+        assert!(!labels_hidden.worktree_and_branch);
+        assert!(labels_hidden.hosted_terminals);
+    }
+
+    #[test]
+    fn projects_without_hosting_support_render_no_hosted_terminals() {
+        // Local projects and remote servers without the hosted-terminal
+        // capability keep the previous title bar; the context menu hides the
+        // hosted actions through the same capability check.
+        assert_eq!(
+            project_item_visibility(true, true, true, false),
+            ProjectItemVisibility {
+                project_name: true,
+                worktree_and_branch: true,
+                hosted_terminals: false,
+            }
+        );
+
+        let remote_without_hosting = project_item_visibility(true, true, false, false);
+        assert!(!remote_without_hosting.worktree_and_branch);
+        assert!(!remote_without_hosting.hosted_terminals);
+    }
+
+    #[test]
+    fn hosted_menu_rows_follow_the_latest_response() {
+        let first = hosted_session("agent: ~/code/zed", "session-1", true);
+        let hosted_later = hosted_session("agent: ~/code/zed", "session-2", true);
+        let ended = hosted_session("agent: ~/code/zed", "session-3", false);
+
+        assert_eq!(
+            hosted_menu_entries(std::slice::from_ref(&first)),
+            vec![HostedMenuEntry {
+                label: "agent: ~/code/zed".into(),
+                session_id: "session-1".into(),
+            }]
+        );
+
+        // A session promoted after the cached list must reach the menu the user
+        // is looking at, with the shared tab title numbered against the sibling.
+        assert_eq!(
+            hosted_menu_entries(&[first, ended, hosted_later]),
+            vec![
+                HostedMenuEntry {
+                    label: "agent: ~/code/zed (1)".into(),
+                    session_id: "session-1".into(),
+                },
+                HostedMenuEntry {
+                    label: "agent: ~/code/zed (2)".into(),
+                    session_id: "session-2".into(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn hosted_session_changes_include_new_and_ended_sessions() {
+        let first = hosted_session("build", "session-1", true);
+        let second = hosted_session("test", "session-2", true);
+        let ended = hosted_session("test", "session-2", false);
+        let two_sessions = [first.clone(), second];
+
+        assert!(!hosted_sessions_changed(&[], &[]));
+        assert!(!hosted_sessions_changed(
+            std::slice::from_ref(&first),
+            std::slice::from_ref(&first)
+        ));
+        // A terminal hosted while the menu is open.
+        assert!(hosted_sessions_changed(
+            std::slice::from_ref(&first),
+            &two_sessions
+        ));
+        // A session that ended while the menu is open.
+        assert!(hosted_sessions_changed(&two_sessions, &[first, ended]));
+    }
+
+    fn hosted_session(
+        name: &str,
+        session_id: &str,
+        running: bool,
+    ) -> rpc::proto::HostedTerminalSummary {
+        rpc::proto::HostedTerminalSummary {
+            name: name.into(),
+            session_id: session_id.into(),
+            running,
+            ..Default::default()
+        }
+    }
 
     #[test]
     fn test_foreign_path_style_does_not_use_repository_identity_as_name_anchor() {

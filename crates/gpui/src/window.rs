@@ -1,3 +1,5 @@
+// Modified by the Zed CN project, 2026. See MODIFICATIONS.md.
+
 #[cfg(feature = "profiler")]
 use crate::DebugFrameOverlayMode;
 #[cfg(any(feature = "inspector", debug_assertions))]
@@ -29,16 +31,14 @@ use crate::gestures::{GestureTuning, RecognizedTouchGesture, TouchGestureRecogni
 use crate::interactive::TouchEvent;
 use anyhow::{Context as _, Result, anyhow};
 use collections::{FxHashMap, FxHashSet};
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+use core_video::pixel_buffer::CVPixelBuffer;
 use derive_more::{Deref, DerefMut};
 use futures::channel::oneshot;
 use gpui_util::post_inc;
 use gpui_util::{ResultExt, measure};
 use itertools::FoldWhile::{Continue, Done};
 use itertools::Itertools;
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-use objc2_core_foundation::CFRetained;
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-use objc2_core_video::CVPixelBuffer;
 use parking_lot::RwLock;
 use raw_window_handle::{HandleError, HasDisplayHandle, HasWindowHandle};
 use refineable::Refineable;
@@ -278,6 +278,10 @@ impl WindowInvalidator {
 
     pub fn not_drawing(&self) -> bool {
         self.inner.borrow().draw_phase == DrawPhase::None
+    }
+
+    pub fn has_dirty_views(&self) -> bool {
+        !self.inner.borrow().dirty_views.is_empty()
     }
 
     #[track_caller]
@@ -1218,8 +1222,7 @@ pub struct Window {
     pub(crate) invalidator: WindowInvalidator,
     pub(crate) removed: bool,
     pub(crate) platform_window: Box<dyn PlatformWindow>,
-    pub(crate) display_id: Option<DisplayId>,
-    pub(crate) display_observers: SubscriberSet<(), AnyObserver>,
+    display_id: Option<DisplayId>,
     is_resizable: bool,
     is_minimizable: bool,
     sprite_atlas: Arc<dyn PlatformAtlas>,
@@ -1277,7 +1280,7 @@ pub struct Window {
     /// Used to selectively enable VRR optimization only when input rate exceeds 60fps.
     pub(crate) input_rate_tracker: Rc<RefCell<InputRateTracker>>,
     #[cfg(feature = "profiler")]
-    pub(crate) window_profiler: profiler::WindowProfiler,
+    window_profiler: profiler::WindowProfiler,
     last_input_modality: InputModality,
     touch_gestures: TouchGestureRecognizer,
     touch_prediction_enabled: bool,
@@ -1886,10 +1889,6 @@ impl Window {
                     measure("frame duration", || {
                         handle
                             .update(&mut cx, |_, window, cx| {
-                                #[cfg(feature = "profiler")]
-                                window
-                                    .window_profiler
-                                    .record_frame_signal(request_frame_options.signal_at);
                                 if force_render {
                                     // Bypass cached view reuse so we don't replay stale
                                     // atlas tile references after a GPU device recovery.
@@ -1967,10 +1966,6 @@ impl Window {
                     .update(&mut cx, |_, window, cx| window.bounds_changed(cx))
                     .log_err();
             }
-        }));
-        platform_window.on_display_changed(Box::new({
-            let cx = cx.to_async();
-            move || cx.update(|cx| Window::display_changed(handle, cx))
         }));
         platform_window.on_appearance_changed(Box::new({
             let cx = cx.to_async();
@@ -2127,7 +2122,6 @@ impl Window {
             removed: false,
             platform_window,
             display_id,
-            display_observers: SubscriberSet::new(),
             is_resizable,
             is_minimizable,
             sprite_atlas,
@@ -2791,6 +2785,7 @@ impl Window {
     pub fn bounds_changed(&mut self, cx: &mut App) {
         self.scale_factor = self.platform_window.scale_factor();
         self.viewport_size = self.platform_window.content_size();
+        self.display_id = self.platform_window.display().map(|display| display.id());
         self.mouse_position = self.platform_window.mouse_position();
 
         self.refresh();
@@ -2798,65 +2793,6 @@ impl Window {
         self.bounds_observers
             .clone()
             .retain(&(), |callback| callback(self, cx));
-    }
-
-    fn display_changed(handle: AnyWindowHandle, cx: &mut App) {
-        let moved_to = handle
-            .update(cx, |_, window, _| {
-                let display_id = window.platform_window.display().map(|display| display.id());
-                let moved = display_id != window.display_id;
-                window.display_id = display_id;
-                moved.then_some(display_id)
-            })
-            .log_err()
-            .flatten();
-        let Some(display_id) = moved_to else {
-            return;
-        };
-        // The platform's notifications about the window and about displays
-        // arrive in no guaranteed order, so make sure App knows the display
-        // before the window's observers read its state.
-        if let Some(display_id) = display_id
-            && !cx.knows_display(display_id)
-        {
-            cx.displays_changed();
-        }
-        handle
-            .update(cx, |_, window, cx| window.notify_display_observers(cx))
-            .log_err();
-    }
-
-    pub(crate) fn notify_display_observers(&mut self, cx: &mut App) {
-        self.display_observers
-            .clone()
-            .retain(&(), |callback| callback(self, cx));
-    }
-
-    /// The time between refreshes of the display the window is on, as of the
-    /// platform's last display change notification. Variable refresh rate
-    /// displays report their maximum rate. Returns `None` when the platform
-    /// doesn't report it.
-    pub fn refresh_interval(&self, cx: &App) -> Option<Duration> {
-        cx.display_refresh_interval(self.display_id?)
-    }
-
-    /// Registers a callback invoked when the window moves to another display
-    /// or its display's properties change, for example its refresh
-    /// interval. [`Self::refresh_interval`] already returns the new value
-    /// when the callback runs.
-    pub fn observe_window_display(
-        &self,
-        mut callback: impl FnMut(&mut Window, &mut App) + 'static,
-    ) -> Subscription {
-        let (subscription, activate) = self.display_observers.insert(
-            (),
-            Box::new(move |window, cx| {
-                callback(window, cx);
-                true
-            }),
-        );
-        activate();
-        subscription
     }
 
     /// Returns the bounds of the current window in the global coordinate space, which could span across multiple displays.
@@ -3554,6 +3490,12 @@ impl Window {
         self.reset_cursor_style(cx);
         self.refreshing = false;
         self.invalidator.set_phase(DrawPhase::None);
+        // Invalidations raised after this draw drained `dirty_views` were not applied to
+        // the frame being built. Re-arm the window so they cannot remain pending until
+        // unrelated platform input requests another frame.
+        if self.invalidator.has_dirty_views() {
+            self.refresh();
+        }
         // Focus listeners may move focus (e.g. a dock forwarding focus to its active
         // panel). `Window::focus` suppresses `refresh` while a draw is in progress, so
         // schedule another frame here to render the new focus state and dispatch the
@@ -3565,8 +3507,6 @@ impl Window {
 
         #[cfg(feature = "profiler")]
         {
-            self.window_profiler
-                .set_refresh_interval(self.refresh_interval(cx));
             let draw_duration = self
                 .window_profiler
                 .end_draw(frame_dirty.dirty_at, frame_dirty.invalidations);
@@ -3697,12 +3637,8 @@ impl Window {
         // stretches to fill the viewport unless explicitly sized, window roots
         // fill the window when their size is `auto`.
         let scale_factor = self.scale_factor();
-        #[cfg(feature = "profiler")]
-        let request_layout_start = Instant::now();
         let mut root_element = self.root.as_ref().unwrap().clone().into_any_element();
         let root_layout_id = root_element.request_layout(self, cx);
-        #[cfg(feature = "profiler")]
-        let prepaint_start = Instant::now();
         self.layout_engine
             .as_mut()
             .unwrap()
@@ -3740,8 +3676,6 @@ impl Window {
         self.mouse_hit_test = self.next_frame.hit_test(self.mouse_position);
 
         // Now actually paint the elements.
-        #[cfg(feature = "profiler")]
-        let paint_start = Instant::now();
         self.invalidator.set_phase(DrawPhase::Paint);
         root_element.paint(self, cx);
 
@@ -3760,14 +3694,6 @@ impl Window {
 
         #[cfg(any(feature = "inspector", debug_assertions))]
         self.paint_inspector_hitbox(cx);
-
-        #[cfg(feature = "profiler")]
-        self.window_profiler
-            .record_draw_phases(profiler::DrawPhases {
-                request_layout: prepaint_start.duration_since(request_layout_start),
-                prepaint: paint_start.duration_since(prepaint_start),
-                paint: Instant::now().duration_since(paint_start),
-            });
 
         // a11y may have been activated/deactivated halfway through the frame
         let a11y_active_start_of_frame = self.a11y.is_active();
@@ -5152,11 +5078,7 @@ impl Window {
     ///
     /// This method should only be called as part of the paint phase of element drawing.
     #[cfg(any(target_os = "macos", target_os = "ios"))]
-    pub fn paint_surface(
-        &mut self,
-        bounds: Bounds<Pixels>,
-        image_buffer: CFRetained<CVPixelBuffer>,
-    ) {
+    pub fn paint_surface(&mut self, bounds: Bounds<Pixels>, image_buffer: CVPixelBuffer) {
         use crate::PaintSurface;
 
         self.invalidator.debug_assert_paint();
@@ -5666,6 +5588,7 @@ impl Window {
                             cursor_offset: position,
                             cursor_style: None,
                             external_payload_source: None,
+                            release_outside_source: None,
                         });
                     }
                     PlatformInput::MouseMove(MouseMoveEvent {
@@ -5971,10 +5894,15 @@ impl Window {
                 // If this was a mouse move event, redraw the window so that the
                 // active drag can follow the mouse cursor.
                 self.refresh();
-            } else if event.is::<MouseUpEvent>() {
-                // If this was a mouse up event, cancel the active drag and redraw
-                // the window.
-                cx.active_drag = None;
+            } else if let Some(mouse_up) = event.downcast_ref::<MouseUpEvent>() {
+                let drag = cx.active_drag.take();
+                if let Some(mut drag) = drag
+                    && !Bounds::new(Point::default(), self.viewport_size)
+                        .contains(&mouse_up.position)
+                    && let Some(release_outside_source) = drag.release_outside_source.take()
+                {
+                    release_outside_source(drag.value.as_ref(), self, cx);
+                }
                 self.refresh();
             }
         }
@@ -7878,6 +7806,8 @@ mod tests {
         time::Duration,
     };
 
+    use collections::FxHashSet;
+
     use crate::{
         AnyWindowHandle, AppContext as _, Bounds, ContentMask, Context, DispatchPhase,
         DragMoveEvent, Empty, ExternalDragPayload, ExternalPaths, FileDragPaths, FileDropEvent,
@@ -8090,118 +8020,6 @@ mod tests {
             .update(cx, |_, window, _| assert!(window.is_visible()))
             .unwrap();
         assert_eq!(test_window.frame_wake_count(), frame_wake_count);
-    }
-
-    /// App learns display state from the platform's display notifications,
-    /// and a window from the platform's report of which display it is on.
-    #[gpui::test]
-    fn test_display_tracking(cx: &mut TestAppContext) {
-        use crate::{DisplayChanges, DisplayEvent, DisplayId, Subscription};
-
-        let sixty_hertz = Duration::from_secs(1) / 60;
-        let one_hundred_twenty_hertz = Duration::from_secs(1) / 120;
-        let one_hundred_forty_four_hertz = Duration::from_secs(1) / 144;
-
-        let display_events = Rc::new(RefCell::new(Vec::new()));
-        let _display_subscription = cx.update({
-            let display_events = display_events.clone();
-            move |cx| cx.observe_displays(move |event, _| display_events.borrow_mut().push(event))
-        });
-
-        let window = cx.add_window(|window, cx| DisplayTracker {
-            refresh_intervals: Vec::new(),
-            _subscription: cx.observe_window_display(
-                window,
-                |tracker: &mut DisplayTracker, window, cx| {
-                    tracker.refresh_intervals.push(window.refresh_interval(cx));
-                },
-            ),
-        });
-        let window_notifications = Rc::new(RefCell::new(Vec::new()));
-        let _window_subscription = window
-            .update(cx, {
-                let window_notifications = window_notifications.clone();
-                move |_, window, cx| {
-                    assert_eq!(window.refresh_interval(cx), Some(sixty_hertz));
-                    window.observe_window_display(move |window, cx| {
-                        window_notifications
-                            .borrow_mut()
-                            .push((window.display_id, window.refresh_interval(cx)));
-                    })
-                }
-            })
-            .unwrap();
-        let test_window = cx.test_window(window.into());
-
-        // The window may hear that it moved before App hears the display was
-        // connected. App learns about the display before the window's
-        // observers run, and the platform's later notification changes
-        // nothing.
-        cx.test_platform()
-            .connect_display(DisplayId(2), Some(one_hundred_twenty_hertz));
-        test_window.simulate_move_to_display(DisplayId(2));
-        assert_eq!(
-            window_notifications.take(),
-            [(Some(DisplayId(2)), Some(one_hundred_twenty_hertz))]
-        );
-        assert_eq!(display_events.take(), [DisplayEvent::Added(DisplayId(2))]);
-        cx.simulate_display_refresh_interval_change(DisplayId(2), Some(one_hundred_twenty_hertz));
-        assert!(window_notifications.borrow().is_empty());
-
-        // Platforms may report a move that isn't one.
-        test_window.simulate_move_to_display(DisplayId(2));
-        assert!(window_notifications.borrow().is_empty());
-
-        cx.simulate_display_refresh_interval_change(
-            DisplayId(2),
-            Some(one_hundred_forty_four_hertz),
-        );
-        assert_eq!(
-            window_notifications.take(),
-            [(Some(DisplayId(2)), Some(one_hundred_forty_four_hertz))]
-        );
-
-        // Changes to a display the window isn't on don't notify it.
-        cx.simulate_display_refresh_interval_change(DisplayId(1), Some(one_hundred_twenty_hertz));
-        cx.simulate_display_removed(DisplayId(1));
-        assert!(window_notifications.borrow().is_empty());
-
-        assert_eq!(
-            display_events.take(),
-            [
-                DisplayEvent::Changed {
-                    id: DisplayId(2),
-                    changes: DisplayChanges::REFRESH_INTERVAL,
-                },
-                DisplayEvent::Changed {
-                    id: DisplayId(1),
-                    changes: DisplayChanges::REFRESH_INTERVAL,
-                },
-                DisplayEvent::Removed(DisplayId(1)),
-            ]
-        );
-        window
-            .update(cx, |tracker, _, _| {
-                assert_eq!(
-                    tracker.refresh_intervals,
-                    [
-                        Some(one_hundred_twenty_hertz),
-                        Some(one_hundred_forty_four_hertz)
-                    ]
-                );
-            })
-            .unwrap();
-
-        struct DisplayTracker {
-            refresh_intervals: Vec<Option<Duration>>,
-            _subscription: Subscription,
-        }
-
-        impl Render for DisplayTracker {
-            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-                Empty
-            }
-        }
     }
 
     #[gpui::test]
@@ -8428,6 +8246,66 @@ mod tests {
         assert!(
             test_window.frame_wake_count() > baseline,
             "scheduling a next-frame callback in an idle window must wake the frame source"
+        );
+    }
+
+    struct InvalidatesDuringPaint {
+        render_count: Rc<Cell<usize>>,
+        invalidate: Rc<Cell<bool>>,
+    }
+
+    impl Render for InvalidatesDuringPaint {
+        fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            self.render_count.set(self.render_count.get() + 1);
+            let this = cx.entity();
+            let invalidate = self.invalidate.clone();
+            canvas(
+                |_, _, _| {},
+                move |_, _, _, cx| {
+                    if invalidate.replace(false) {
+                        this.update(cx, |_, cx| cx.notify());
+                    }
+                },
+            )
+        }
+    }
+
+    #[test]
+    fn test_invalidation_during_draw_requests_a_follow_up_frame() {
+        let mut cx = TestAppContext::single();
+        let render_count = Rc::new(Cell::new(0));
+        let invalidate = Rc::new(Cell::new(false));
+        let window = cx.add_window({
+            let render_count = render_count.clone();
+            let invalidate = invalidate.clone();
+            move |_, _| InvalidatesDuringPaint {
+                render_count,
+                invalidate,
+            }
+        });
+
+        cx.update_window(window.into(), |_, window, cx| window.draw(cx).clear(cx))
+            .unwrap();
+        invalidate.set(true);
+        cx.update_window(window.into(), |root, window, cx| {
+            window.invalidator.set_dirty(true);
+            window
+                .invalidator
+                .replace_views(FxHashSet::from_iter([root.entity_id()]));
+            window.draw(cx).clear(cx);
+            assert!(
+                window.invalidator.is_dirty(),
+                "an invalidation raised during draw must keep frame demand armed"
+            );
+        })
+        .unwrap();
+
+        let render_count_after_draw = render_count.get();
+        cx.update_window(window.into(), |_, window, cx| window.draw(cx).clear(cx))
+            .unwrap();
+        assert!(
+            render_count.get() > render_count_after_draw,
+            "the follow-up frame must consume the draw-time invalidation"
         );
     }
 

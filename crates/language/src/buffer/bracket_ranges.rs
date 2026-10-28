@@ -23,6 +23,17 @@ pub struct BracketMatch {
     pub newline_only: bool,
     pub syntax_layer_depth: usize,
     pub color_index: Option<usize>,
+    /// Identifies the bracket pair pattern. Two matches with equal values are
+    /// the same kind of bracket pair (e.g. `()` as opposed to `[]`).
+    pub bracket_type: u64,
+    /// Nesting depth counting only brackets of the same `bracket_type`.
+    pub type_color_index: Option<usize>,
+    /// Number of opening brackets that precede this one, in document order.
+    pub sequence_index: Option<usize>,
+    /// Number of opening brackets of the same `bracket_type` that precede this one.
+    pub type_sequence_index: Option<usize>,
+    /// Whether the pair could not be verified as properly nested.
+    pub unmatched: bool,
 }
 
 impl BracketMatch {
@@ -63,6 +74,12 @@ impl BracketMatchCandidate {
 struct BracketPatternKey {
     grammar_index: usize,
     pattern_index: usize,
+}
+
+impl BracketPatternKey {
+    fn id(&self) -> u64 {
+        ((self.grammar_index as u64) << 32) | (self.pattern_index as u64 & 0xffff_ffff)
+    }
 }
 
 /// One delimiter (open or close) of a bracket pair candidate.
@@ -334,6 +351,11 @@ impl<'a> ChunkBrackets<'a> {
                         syntax_layer_depth,
                         newline_only: pattern.newline_only,
                         color_index: None,
+                        bracket_type: pattern_key.id(),
+                        type_color_index: None,
+                        sequence_index: None,
+                        type_sequence_index: None,
+                        unmatched: false,
                     },
                     pattern: pattern_key,
                     rainbow_exclude: pattern.rainbow_exclude,
@@ -685,6 +707,11 @@ impl<'a> ChunkBrackets<'a> {
                             newline_only: pattern.newline_only,
                             syntax_layer_depth,
                             color_index: None,
+                            bracket_type: close.pattern.id(),
+                            type_color_index: None,
+                            sequence_index: None,
+                            type_sequence_index: None,
+                            unmatched: false,
                         },
                         pattern: close.pattern,
                         rainbow_exclude: pattern.rainbow_exclude,
@@ -760,6 +787,11 @@ impl<'a> ChunkBrackets<'a> {
                         .or_else(|| self.syntax_layer_depths_by_delimiter.get(&close).copied())
                         .unwrap_or(0),
                     color_index: None,
+                    bracket_type: open.pattern.id(),
+                    type_color_index: None,
+                    sequence_index: None,
+                    type_sequence_index: None,
+                    unmatched: false,
                 },
                 pattern: open.pattern,
                 rainbow_exclude: pattern.rainbow_exclude,
@@ -806,33 +838,58 @@ impl<'a> ChunkBrackets<'a> {
                     && (bracket_match.open_range.len() == 1
                         || bracket_match.close_range.len() == 1);
                 if should_color {
-                    opens.push(bracket_match.open_range.clone());
+                    opens.push((bracket_match.open_range.clone(), candidate.pattern));
                     color_pairs.push((
                         bracket_match.open_range.clone(),
                         bracket_match.close_range.clone(),
                         index,
+                        candidate.pattern,
                     ));
                 }
                 bracket_match
             })
             .collect::<Vec<_>>();
 
-        opens.sort_unstable_by_key(|r| (r.start, r.end));
-        opens.dedup_by(|a, b| a.start == b.start && a.end == b.end);
-        color_pairs.sort_by_key(|(_, close, _)| close.end);
+        opens.sort_unstable_by_key(|(range, _)| (range.start, range.end));
+        opens.dedup_by(|a, b| a.0.start == b.0.start && a.0.end == b.0.end);
+        color_pairs.sort_by_key(|(_, close, _, _)| close.end);
 
-        let mut open_stack = Vec::new();
+        // Open brackets still waiting for their close, in document order.
+        let mut open_stack: Vec<(Range<usize>, BracketPatternKey, usize, usize)> = Vec::new();
         let mut open_index = 0;
-        for (open, close, index) in color_pairs {
-            while open_index < opens.len() && opens[open_index].start < close.start {
-                open_stack.push(opens[open_index].clone());
+        let mut global_sequence = 0;
+        let mut type_sequences: HashMap<BracketPatternKey, usize> = HashMap::default();
+        for (open, close, index, _pattern) in color_pairs {
+            while open_index < opens.len() && opens[open_index].0.start < close.start {
+                let (range, open_pattern) = opens[open_index].clone();
+                let type_sequence = {
+                    let counter = type_sequences.entry(open_pattern).or_default();
+                    let value = *counter;
+                    *counter += 1;
+                    value
+                };
+                open_stack.push((range, open_pattern, global_sequence, type_sequence));
+                global_sequence += 1;
                 open_index += 1;
             }
 
-            if open_stack.last() == Some(&open) {
-                let depth_index = open_stack.len() - 1;
+            if open_stack
+                .last()
+                .is_some_and(|(range, _, _, _)| range == &open)
+            {
+                let (_, pattern, sequence_index, type_sequence_index) =
+                    open_stack.pop().expect("checked above");
+                let depth_index = open_stack.len();
+                let type_depth_index = open_stack
+                    .iter()
+                    .filter(|(_, open_pattern, _, _)| *open_pattern == pattern)
+                    .count();
                 all_brackets[index].color_index = Some(depth_index);
-                open_stack.pop();
+                all_brackets[index].type_color_index = Some(type_depth_index);
+                all_brackets[index].sequence_index = Some(sequence_index);
+                all_brackets[index].type_sequence_index = Some(type_sequence_index);
+            } else {
+                all_brackets[index].unmatched = true;
             }
         }
 

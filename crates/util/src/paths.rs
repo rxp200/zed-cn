@@ -364,6 +364,19 @@ impl Display for RemotePathBuf {
     }
 }
 
+pub fn is_absolute(path_like: &str, path_style: PathStyle) -> bool {
+    path_like.starts_with('/')
+        || path_style == PathStyle::Windows
+            && (path_like.starts_with('\\')
+                || path_like
+                    .chars()
+                    .next()
+                    .is_some_and(|c| c.is_ascii_alphabetic())
+                    && path_like[1..]
+                        .strip_prefix(':')
+                        .is_some_and(|path| path.starts_with('/') || path.starts_with('\\')))
+}
+
 #[derive(Debug, PartialEq)]
 #[non_exhaustive]
 pub struct NormalizeError;
@@ -1401,7 +1414,7 @@ impl UrlExt for url::Url {
 
             let path = String::from_utf8(bytes).map_err(|_| ())?;
             debug_assert!(
-                PathStyle::Unix.is_absolute(Path::new(&path)),
+                PathStyle::Unix.is_absolute(&path),
                 "to_file_path() failed to produce an absolute Path"
             );
 
@@ -1472,7 +1485,7 @@ impl UrlExt for url::Url {
                 );
             }
             debug_assert!(
-                PathStyle::Windows.is_absolute(Path::new(&string)),
+                PathStyle::Windows.is_absolute(&string),
                 "to_file_path() failed to produce an absolute Path"
             );
             let path = PathBuf::from(string);

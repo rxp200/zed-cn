@@ -10,7 +10,6 @@ workspace = true
 
 [lib]
 path = "src/system_specs.rs"
-test = false
 doctest = false
 
 [features]
@@ -20,10 +19,11 @@ default = []
 anyhow.workspace = true
 gpui.workspace = true
 human_bytes.workspace = true
+log.workspace = true
 release_channel.workspace = true
 semver.workspace = true
 serde.workspace = true
-sysinfo.workspace = true
+sysinfo = { workspace = true, features = ["component"] }
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
 pciid-parser.workspace = true

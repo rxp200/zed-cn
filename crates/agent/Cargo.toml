@@ -18,6 +18,7 @@ e2e = []
 workspace = true
 
 [dependencies]
+i18n.workspace = true
 acp_thread.workspace = true
 action_log.workspace = true
 async-channel.workspace = true

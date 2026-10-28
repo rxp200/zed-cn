@@ -1,3 +1,4 @@
+mod about_version;
 mod app_menus;
 pub mod edit_prediction_registry;
 #[cfg(target_os = "macos")]
@@ -489,6 +490,7 @@ pub fn initialize_workspace(app_state: Arc<AppState>, cx: &mut App) {
         })
         .detach();
 
+        let auxiliary = _multi_workspace.workspace().read(cx).is_auxiliary();
         let multi_workspace_handle = cx.entity().downgrade();
         window.on_window_should_close(cx, move |window, cx| {
             multi_workspace_handle
@@ -534,17 +536,19 @@ pub fn initialize_workspace(app_state: Arc<AppState>, cx: &mut App) {
         )
         .detach();
 
-        cx.defer(move |cx| {
-            window_handle
-                .update(cx, |_, window, cx| {
-                    let sidebar =
-                        cx.new(|cx| Sidebar::new(multi_workspace_handle.clone(), window, cx));
-                    multi_workspace_handle.update(cx, |multi_workspace, cx| {
-                        multi_workspace.register_sidebar(sidebar, cx);
-                    });
-                })
-                .ok();
-        });
+        if !auxiliary {
+            cx.defer(move |cx| {
+                window_handle
+                    .update(cx, |_, window, cx| {
+                        let sidebar =
+                            cx.new(|cx| Sidebar::new(multi_workspace_handle.clone(), window, cx));
+                        multi_workspace_handle.update(cx, |multi_workspace, cx| {
+                            multi_workspace.register_sidebar(sidebar, cx);
+                        });
+                    })
+                    .ok();
+            });
+        }
     })
     .detach();
 
@@ -556,6 +560,7 @@ pub fn initialize_workspace(app_state: Arc<AppState>, cx: &mut App) {
         let workspace_handle = cx.entity();
         let center_pane = workspace.active_pane().clone();
         initialize_pane(workspace, &center_pane, window, cx);
+        let is_auxiliary = workspace.is_auxiliary();
 
         cx.subscribe_in(&workspace_handle, window, {
             move |workspace, _, event, window, cx| match event {
@@ -567,6 +572,18 @@ pub fn initialize_workspace(app_state: Arc<AppState>, cx: &mut App) {
                     title,
                     language,
                 } => open_bundled_file(workspace, text.clone(), title, language, window, cx),
+                workspace::Event::PanelAdded(panel) => {
+                    if let Ok(terminal_panel) = panel.clone().downcast::<TerminalPanel>()
+                        && let Some(system_monitor_panel) =
+                            workspace
+                                .panel::<activity_indicator::system_monitor::SystemMonitorPanel>(cx)
+                    {
+                        let port_forward_manager = terminal_panel.read(cx).port_forward_manager();
+                        system_monitor_panel.update(cx, |panel, cx| {
+                            panel.set_port_forward_manager(port_forward_manager, cx);
+                        });
+                    }
+                }
                 _ => {}
             }
         })
@@ -581,6 +598,14 @@ pub fn initialize_workspace(app_state: Arc<AppState>, cx: &mut App) {
             if let Some(crash_client) = cx.try_global::<CrashHandler>() {
                 crashes::set_gpu_info(&crash_client.0, specs);
             }
+        }
+
+        if is_auxiliary {
+            register_actions(app_state.clone(), workspace, window, cx);
+            if !workspace.has_active_modal(window, cx) {
+                workspace.focus_handle(cx).focus(window, cx);
+            }
+            return;
         }
 
         let edit_prediction_menu_handle = PopoverMenuHandle::default();
@@ -604,6 +629,35 @@ pub fn initialize_workspace(app_state: Arc<AppState>, cx: &mut App) {
             cx.new(|cx| diagnostics::items::DiagnosticIndicator::new(workspace, cx));
         let active_file_name = cx.new(|_| workspace::active_file_name::ActiveFileName::new());
         let activity_indicator = activity_indicator::ActivityIndicator::new(workspace, window, cx);
+        let file_transfer_indicator =
+            activity_indicator::file_transfer::FileTransferIndicator::new(workspace, cx);
+        let system_monitor_data =
+            activity_indicator::system_monitor::SystemMonitorData::new(workspace, cx);
+        let system_monitor = cx.new(|cx| {
+            activity_indicator::system_monitor::SystemMonitor::new(
+                system_monitor_data.clone(),
+                workspace.right_dock().clone(),
+                cx,
+            )
+        });
+        workspace.register_action(
+            |workspace, _: &activity_indicator::system_monitor::ToggleFocus, window, cx| {
+                workspace.toggle_panel_visibility::<
+                    activity_indicator::system_monitor::SystemMonitorPanel,
+                >(window, cx);
+            },
+        );
+        let port_forward_manager = workspace
+            .panel::<TerminalPanel>(cx)
+            .map(|panel| panel.read(cx).port_forward_manager());
+        let system_monitor_panel = cx.new(|cx| {
+            activity_indicator::system_monitor::SystemMonitorPanel::new(
+                system_monitor_data,
+                port_forward_manager,
+                cx,
+            )
+        });
+        workspace.add_panel(system_monitor_panel, window, cx);
         let active_buffer_encoding =
             cx.new(|_| encoding_selector::ActiveBufferEncoding::new(workspace));
         let active_buffer_language =
@@ -639,6 +693,14 @@ pub fn initialize_workspace(app_state: Arc<AppState>, cx: &mut App) {
             status_bar.add_left_item(git_blame_status, window, cx);
             status_bar.add_left_item(merge_conflict_indicator, window, cx);
             status_bar.add_left_item(activity_indicator, window, cx);
+            status_bar.add_left_item(file_transfer_indicator, window, cx);
+            let explanations = cx.new(|cx| {
+                cx.observe_global::<settings::SettingsStore>(|_, cx| cx.notify())
+                    .detach();
+                editor::code_explanations::CodeExplanationIndicator::default()
+            });
+            status_bar.add_right_item(explanations, window, cx);
+            status_bar.add_right_item(system_monitor, window, cx);
             status_bar.add_right_item(edit_prediction_ui, window, cx);
             status_bar.add_right_item(active_buffer_encoding, window, cx);
             status_bar.add_right_item(active_buffer_language, window, cx);
@@ -666,19 +728,12 @@ pub fn initialize_workspace(app_state: Arc<AppState>, cx: &mut App) {
 #[allow(unused)]
 fn initialize_file_watcher(fs: &dyn Fs, window: &mut Window, cx: &mut Context<Workspace>) {
     if let Err(e) = fs.start_native_watcher() {
-        let message = format!(
-            db::indoc! {r#"
-            inotify_init returned {}
-
-            This may be due to system-wide limits on inotify instances. For troubleshooting see: https://zed.dev/docs/linux
-            "#},
-            e
-        );
+        let message = i18n::t_args!("0937d7289ff349a9", e);
         let prompt = window.prompt(
             PromptLevel::Critical,
-            "Could not start inotify",
+            i18n::t!("ce619cb8ff567b6d"),
             Some(&message),
-            &["Troubleshoot and Quit"],
+            &[i18n::t!("3fcd24e7ea5b3d2d")],
             cx,
         );
         cx.spawn(async move |_, cx| {
@@ -697,19 +752,12 @@ fn initialize_file_watcher(fs: &dyn Fs, window: &mut Window, cx: &mut Context<Wo
 #[allow(unused)]
 fn initialize_file_watcher(fs: &dyn Fs, window: &mut Window, cx: &mut Context<Workspace>) {
     if let Err(e) = fs.start_native_watcher() {
-        let message = format!(
-            db::indoc! {r#"
-            ReadDirectoryChangesW initialization failed: {}
-
-            This may occur on network filesystems and WSL paths. For troubleshooting see: https://zed.dev/docs/windows
-            "#},
-            e
-        );
+        let message = i18n::t_args!("fa34a4067465b180", e);
         let prompt = window.prompt(
             PromptLevel::Critical,
-            "Could not start ReadDirectoryChangesW",
+            i18n::t!("23351d48d7415574"),
             Some(&message),
-            &["Troubleshoot and Quit"],
+            &[i18n::t!("3fcd24e7ea5b3d2d")],
             cx,
         );
         cx.spawn(async move |_, cx| {
@@ -743,23 +791,17 @@ fn show_software_emulation_warning_if_needed(
                 "https://zed.dev/docs/linux#zed-fails-to-open-windows",
             )
         };
-        let message = format!(
-            db::indoc! {r#"
-            Zed uses {} for rendering and requires a compatible GPU.
-
-            Currently you are using a software emulated GPU ({}) which
-            will result in awful performance.
-
-            For troubleshooting see: {}
-            Set ZED_ALLOW_EMULATED_GPU=1 env var to permanently override.
-            "#},
-            graphics_api, specs.device_name, docs_url
+        let message = i18n::t_args!(
+            "4c21b811b64703d6",
+            graphics_api,
+            specs.device_name,
+            docs_url
         );
         let prompt = window.prompt(
             PromptLevel::Critical,
-            "Unsupported GPU",
+            i18n::t!("4cf71ffff25fcf81"),
             Some(&message),
-            &["Skip", "Troubleshoot and Quit"],
+            &[i18n::t!("fc50a99caae0cddc"), i18n::t!("3fcd24e7ea5b3d2d")],
             cx,
         );
         cx.spawn(async move |_, cx| {
@@ -780,6 +822,10 @@ fn initialize_panels(window: &mut Window, cx: &mut Context<Workspace>) -> Task<a
         let outline_panel = OutlinePanel::load(workspace_handle.clone(), cx.clone());
         let terminal_panel = TerminalPanel::load(workspace_handle.clone(), cx.clone());
         let git_panel = GitPanel::load(workspace_handle.clone(), cx.clone());
+        let git_history_panel = git_ui::git_history_panel::GitHistoryPanel::load(
+            workspace_handle.clone(),
+            cx.clone(),
+        );
         let channels_panel =
             collab_ui::collab_panel::CollabPanel::load(workspace_handle.clone(), cx.clone());
         let debug_panel = DebugPanel::load(workspace_handle.clone(), cx);
@@ -804,10 +850,20 @@ fn initialize_panels(window: &mut Window, cx: &mut Context<Workspace>) -> Task<a
             add_panel_when_ready(outline_panel, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(terminal_panel, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(git_panel, workspace_handle.clone(), cx.clone()),
+            add_panel_when_ready(git_history_panel, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(channels_panel, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(debug_panel, workspace_handle.clone(), cx.clone()),
             initialize_agent_panel(workspace_handle.clone(), cx.clone()).map(|r| r.log_err()),
         );
+
+        workspace_handle.update_in(cx, |workspace, window, cx| {
+            let weak_workspace = cx.entity().downgrade();
+            let project = workspace.project().clone();
+            let search_panel = cx.new(|cx| {
+                search::project_search::ProjectSearchPanel::new(weak_workspace, project, cx)
+            });
+            workspace.add_panel(search_panel, window, cx);
+        })?;
 
         workspace_handle.update(cx, |workspace, cx| {
             workspace.finish_dock_restoration(cx);
@@ -1521,6 +1577,8 @@ fn initialize_pane(
             toolbar.add_item(basedpyright_banner, window, cx);
             let image_view_toolbar = cx.new(|_| image_viewer::ImageViewToolbarControls::new());
             toolbar.add_item(image_view_toolbar, window, cx);
+            let document_toolbar = cx.new(|_| document_viewer::DocumentToolbarControls::new());
+            toolbar.add_item(document_toolbar, window, cx);
         })
     });
 }
@@ -1557,6 +1615,12 @@ fn open_about_window(cx: &mut App) {
             let release_channel_name = release_channel.display_name();
             let full_version: SharedString = AppVersion::global(cx).to_string().into();
             let version = env!("CARGO_PKG_VERSION");
+            let version = if release_channel == ReleaseChannel::Stable {
+                about_version::custom_version(version, option_env!("ZED_CUSTOM_RELEASE_TAG"))
+                    .unwrap_or(version)
+            } else {
+                version
+            };
 
             let debug = if cfg!(debug_assertions) {
                 "(debug)"
@@ -1625,14 +1689,14 @@ fn open_about_window(cx: &mut App) {
                             .child(Headline::new(self.message.clone()))
                             .when_some(self.commit.clone(), |this, commit| {
                                 this.child(
-                                    Label::new("Commit")
+                                    Label::new(i18n::t!("08a85f4ab4bab9ca"))
                                         .color(Color::Muted)
                                         .size(LabelSize::XSmall),
                                 )
                                 .child(Label::new(commit).size(LabelSize::Small))
                             })
                             .child(
-                                Label::new("Version")
+                                Label::new(i18n::t!("5f76b2bf82dd2c5d"))
                                     .color(Color::Muted)
                                     .size(LabelSize::XSmall),
                             )
@@ -1650,7 +1714,7 @@ fn open_about_window(cx: &mut App) {
                                         window.remove_window();
                                     }))
                                     .child(
-                                        Button::new("ok", "OK")
+                                        Button::new("ok", i18n::t!("fac2a67ad87807c4"))
                                             .full_width()
                                             .style(ButtonStyle::OutlinedGhost)
                                             .toggle_state(ok_is_focused)
@@ -1670,7 +1734,7 @@ fn open_about_window(cx: &mut App) {
                                         },
                                     ))
                                     .child(
-                                        Button::new("copy", "Copy")
+                                        Button::new("copy", i18n::t!("63d90d977348ab1f"))
                                             .full_width()
                                             .style(ButtonStyle::Tinted(TintColor::Accent))
                                             .toggle_state(copy_is_focused)
@@ -1775,9 +1839,9 @@ fn quit(_: &Quit, cx: &mut App) {
                 .update(cx, |_, window, cx| {
                     window.prompt(
                         PromptLevel::Info,
-                        "Are you sure you want to quit?",
+                        i18n::t!("a79e9f721dfd7f14"),
                         None,
-                        &["Quit", "Cancel"],
+                        &[i18n::t!("498e1d59b4d787ee"), i18n::t!("2cd0f3be8738a86c")],
                         cx,
                     )
                 })
@@ -1936,8 +2000,8 @@ fn notify_settings_errors(result: settings::SettingsParseResult, is_user: bool, 
             } else {
                 show_app_notification(id, cx, move |cx| {
                     cx.new(|cx| {
-                        MessageNotification::new(format!("Invalid user settings file\n{error}"), cx)
-                            .primary_message("Open Settings File")
+                        MessageNotification::new(i18n::t!("393088b05f8e0e9b", error = error), cx)
+                            .primary_message(i18n::t!("3018cf131663ad3f"))
                             .primary_icon(IconName::Settings)
                             .primary_on_click(|window, cx| {
                                 window.dispatch_action(
@@ -1973,7 +2037,7 @@ fn notify_settings_errors(result: settings::SettingsParseResult, is_user: bool, 
                             ),
                             cx,
                         )
-                        .primary_message("Open Settings File")
+                        .primary_message(i18n::t!("3018cf131663ad3f"))
                         .primary_icon(IconName::Settings)
                         .primary_on_click(|window, cx| {
                             window.dispatch_action(zed_actions::OpenSettingsFile.boxed_clone(), cx);
@@ -1991,12 +2055,12 @@ fn init_global_config_error_notifications(cx: &mut App) {
         cx.subscribe_self::<SettingsObserverEvent>(|_, event, cx| {
             let (result, file_kind, on_click): (_, _, fn(&mut Window, &mut App)) = match event {
                 SettingsObserverEvent::GlobalTasksUpdated(result) => {
-                    (result, "tasks", |window, cx| {
+                    (result, i18n::t!("5253040db8643c85"), |window, cx| {
                         window.dispatch_action(OpenTasks.boxed_clone(), cx)
                     })
                 }
                 SettingsObserverEvent::GlobalDebugScenariosUpdated(result) => {
-                    (result, "debug scenarios", |window, cx| {
+                    (result, i18n::t!("ff7e1d20f987f473"), |window, cx| {
                         window.dispatch_action(OpenDebugTasks.boxed_clone(), cx)
                     })
                 }
@@ -2006,11 +2070,12 @@ fn init_global_config_error_notifications(cx: &mut App) {
             match result {
                 Ok(_) => dismiss_app_notification(&id, cx),
                 Err(error) => {
-                    let message = format!("Invalid global {file_kind} file\n{error}");
+                    let message =
+                        i18n::t!("6eca6a89f828a519", file_kind = file_kind, error = error);
                     show_app_notification(id, cx, move |cx| {
                         cx.new(|cx| {
                             MessageNotification::new(message.clone(), cx)
-                                .primary_message("Open File")
+                                .primary_message(i18n::t!("4c8a4e3da39e5c2a"))
                                 .primary_icon(IconName::Settings)
                                 .primary_on_click(move |window, cx| {
                                     on_click(window, cx);
@@ -2260,7 +2325,7 @@ fn show_keymap_file_json_error(
     show_app_notification(notification_id, cx, move |cx| {
         cx.new(|cx| {
             MessageNotification::new(message.clone(), cx)
-                .primary_message("Open Keymap File")
+                .primary_message(i18n::t!("2eb78760a7b5a326"))
                 .primary_icon(IconName::Settings)
                 .primary_on_click(|window, cx| {
                     window.dispatch_action(zed_actions::OpenKeymapFile.boxed_clone(), cx);
@@ -2646,7 +2711,7 @@ fn open_local_file(
         struct NoOpenFolders;
 
         workspace.show_notification(NotificationId::unique::<NoOpenFolders>(), cx, |cx| {
-            cx.new(|cx| MessageNotification::new("This project has no folders open.", cx))
+            cx.new(|cx| MessageNotification::new(i18n::t!("09f9b7e4ab735cda"), cx))
         });
         None
     }
@@ -2971,7 +3036,7 @@ mod tests {
         indicator.update(cx, |indicator, cx| {
             assert_eq!(
                 indicator.message_to_render(cx),
-                Some("Partial file index".to_string())
+                Some("部分文件按需索引".to_string())
             );
         });
 
@@ -2988,7 +3053,7 @@ mod tests {
         indicator.update(cx, |indicator, cx| {
             assert_eq!(
                 indicator.message_to_render(cx),
-                Some("Partial file index".to_string())
+                Some("部分文件按需索引".to_string())
             );
         });
 
@@ -3549,7 +3614,7 @@ mod tests {
             .unwrap();
         executor.run_until_parked();
 
-        cx.simulate_prompt_answer("Don't Save");
+        cx.simulate_prompt_answer("不保存");
         close.await.unwrap();
 
         // Advance the clock to ensure that the item has been serialized and dropped from the queue
@@ -3615,7 +3680,7 @@ mod tests {
         assert_eq!(cx.update(|cx| cx.windows().len()), 1);
 
         // The window is successfully closed after the user dismisses the prompt.
-        cx.simulate_prompt_answer("Don't Save");
+        cx.simulate_prompt_answer("不保存");
         executor.run_until_parked();
         assert_eq!(cx.update(|cx| cx.windows().len()), 0);
     }
@@ -4477,7 +4542,7 @@ mod tests {
             })
             .unwrap();
         cx.background_executor.run_until_parked();
-        cx.simulate_prompt_answer("Overwrite");
+        cx.simulate_prompt_answer("覆盖");
         save_task.await.unwrap();
         window
             .update(cx, |_, _, cx| {
@@ -4803,7 +4868,7 @@ mod tests {
             close_pinned: false,
         });
         cx.background_executor.run_until_parked();
-        cx.simulate_prompt_answer("Don't Save");
+        cx.simulate_prompt_answer("不保存");
         cx.background_executor.run_until_parked();
 
         workspace.read_with(cx, |workspace, cx| {
@@ -7011,7 +7076,7 @@ mod tests {
             "Case 1: Should prompt to save dirty item in active workspace"
         );
 
-        cx.simulate_prompt_answer("Cancel");
+        cx.simulate_prompt_answer("取消");
         cx.run_until_parked();
 
         assert_eq!(
@@ -7031,7 +7096,7 @@ mod tests {
             })
             .unwrap();
         cx.run_until_parked();
-        cx.simulate_prompt_answer("Don't Save");
+        cx.simulate_prompt_answer("不保存");
         close_task.await.ok();
         cx.run_until_parked();
 
@@ -7093,7 +7158,7 @@ mod tests {
             "Case 2: Should prompt to save dirty item in non-active workspace"
         );
 
-        cx.simulate_prompt_answer("Cancel");
+        cx.simulate_prompt_answer("取消");
         cx.run_until_parked();
 
         assert_eq!(
@@ -7113,7 +7178,7 @@ mod tests {
             })
             .unwrap();
         cx.run_until_parked();
-        cx.simulate_prompt_answer("Don't Save");
+        cx.simulate_prompt_answer("不保存");
         close_task.await.ok();
         cx.run_until_parked();
 
@@ -7177,7 +7242,7 @@ mod tests {
             "Case 3: Should prompt to save dirty item in non-active window"
         );
 
-        cx.simulate_prompt_answer("Cancel");
+        cx.simulate_prompt_answer("取消");
         cx.run_until_parked();
 
         assert_eq!(
@@ -8172,7 +8237,7 @@ mod tests {
         cx.update(|cx| reload_keymaps(cx, Vec::new()));
         cx.update(|cx| {
             assert!(
-                has_view_item(cx, "Agent Panel"),
+                has_view_item(cx, "Agent 面板"),
                 "expected Agent Panel in the View menu when AI is enabled"
             );
             assert!(
@@ -8193,7 +8258,7 @@ mod tests {
         });
         cx.update(|cx| {
             assert!(
-                !has_view_item(cx, "Agent Panel"),
+                !has_view_item(cx, "Agent 面板"),
                 "expected Agent Panel to be removed from the View menu after disabling AI"
             );
             assert!(
@@ -8212,7 +8277,7 @@ mod tests {
         cx.update(|cx| reload_keymaps(cx, Vec::new()));
         cx.update(|cx| {
             assert!(
-                has_view_item(cx, "Agent Panel"),
+                has_view_item(cx, "Agent 面板"),
                 "expected Agent Panel back in the View menu after re-enabling AI"
             );
             assert!(
@@ -8229,7 +8294,7 @@ mod tests {
         cx.update(|cx| reload_keymaps(cx, Vec::new()));
         cx.update(|cx| {
             assert!(
-                has_view_item(cx, "Agent Panel"),
+                has_view_item(cx, "Agent 面板"),
                 "expected Agent Panel before disabling AI"
             );
             assert!(
@@ -8274,7 +8339,7 @@ mod tests {
 
         cx.update(|cx| {
             assert!(
-                !has_view_item(cx, "Agent Panel"),
+                !has_view_item(cx, "Agent 面板"),
                 "expected Agent Panel removed even though the keymap file is malformed"
             );
             assert!(
@@ -8296,7 +8361,7 @@ mod tests {
 
         cx.update(|cx| {
             assert!(
-                has_view_item(cx, "Agent Panel"),
+                has_view_item(cx, "Agent 面板"),
                 "expected Agent Panel added back even though the keymap file is malformed"
             );
             assert!(
@@ -8310,7 +8375,7 @@ mod tests {
         cx.get_menus()
             .expect("reload_keymaps should populate the menu bar")
             .iter()
-            .find(|menu| menu.name == "View")
+            .find(|menu| menu.name == "视图")
             .expect("expected a View menu")
             .items
             .iter()

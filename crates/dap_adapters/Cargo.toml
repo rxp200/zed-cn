@@ -21,6 +21,7 @@ path = "src/dap_adapters.rs"
 doctest = false
 
 [dependencies]
+i18n.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true
 collections.workspace = true

@@ -46,7 +46,7 @@ impl OnboardingBanner {
                 action,
                 icon_name,
                 label: label.into(),
-                subtitle: subtitle.or(Some(SharedString::from("Introducing:"))),
+                subtitle: subtitle.or(Some(SharedString::from(i18n::t!("f96c714a462b2e95")))),
             },
             visible_when: None,
             dismissed: get_dismissed(source, cx),

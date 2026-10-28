@@ -257,6 +257,12 @@ impl BenchReport {
 
         eprintln!("GPUI bench report (all observed iterations): {benchmark_name}");
         eprintln!("  note: includes Criterion warmup/calibration");
+        if let Some(bytes) = bench_metrics::resident_memory_bytes() {
+            eprintln!(
+                "  process resident memory (snapshot): {:.1} MiB",
+                bytes as f64 / (1024.0 * 1024.0)
+            );
+        }
         self.metrics.print("  ");
         self.print_histogram("window dirty-to-draw", &frame_snapshot.dirty_to_draw);
         self.print_histogram("window draw", &frame_snapshot.draw);

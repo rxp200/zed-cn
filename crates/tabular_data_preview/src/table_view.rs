@@ -13,7 +13,8 @@ use std::{
 };
 
 use gpui::{
-    App, AppContext, Entity, FocusHandle, Focusable, ListAlignment, ListState, Point, Task, Window,
+    App, AppContext, Entity, EventEmitter, FocusHandle, Focusable, ListAlignment, ListState, Point,
+    Subscription, Task, Window,
 };
 use ui::{
     AbsoluteLength, ResizableColumnsState, SharedString, TableInteractionState,
@@ -21,10 +22,10 @@ use ui::{
 };
 
 use crate::{
-    MoveFocusedCell, NavigationDirection,
+    EditCell, MoveFocusedCell, NavigationDirection,
     settings::TableViewSettings,
     table_data_engine::{DisplayToDataMapping, TableDataEngine},
-    types::{AnyColumn, DataCellId, DisplayRow, TableLikeContent},
+    types::{AnyColumn, DataCellId, DisplayRow, TableCell, TableLikeContent},
 };
 
 /// The keyboard cursor: which cell is currently focused for navigation.
@@ -94,6 +95,26 @@ impl PerformanceMetrics {
     }
 }
 
+/// Emitted when a user commits an inline cell edit.
+///
+/// Producers that can write edits back (a delimited-text file backing a buffer, for example)
+/// subscribe to this and translate the value into their own storage. Producers that only
+/// render content never enable editing and therefore never see this event.
+pub struct CellEdited {
+    pub cell: DataCellId,
+    pub value: SharedString,
+}
+
+impl EventEmitter<CellEdited> for TableView {}
+
+/// The inline editor for the cell currently being edited.
+pub(crate) struct CellEditState {
+    pub(crate) cell: DataCellId,
+    pub(crate) editor: Entity<editor::Editor>,
+    /// Commits the edit when the inline editor loses focus, as spreadsheets do.
+    _blur_subscription: Subscription,
+}
+
 pub struct TableView {
     pub(crate) engine: TableDataEngine,
     pub(crate) focus_handle: FocusHandle,
@@ -115,6 +136,11 @@ pub struct TableView {
     pub(crate) is_loading: bool,
     /// The keyboard navigation cursor. `None` until the user first navigates.
     pub(crate) selection: Option<CellSelection>,
+    /// Whether the producer accepts edited cell values. Disabled by default so read-only
+    /// content (spreadsheets, database result sets, ...) cannot be edited by accident.
+    pub(crate) editable: bool,
+    /// The cell currently being edited inline, if any.
+    pub(crate) editing: Option<CellEditState>,
 }
 
 impl TableView {
@@ -146,6 +172,8 @@ impl TableView {
             row_height,
             is_loading: false,
             selection: None,
+            editable: false,
+            editing: None,
         }
     }
 
@@ -240,7 +268,138 @@ impl TableView {
 
     #[inline]
     pub(crate) fn is_selection_enabled(&self) -> bool {
-        cfg!(any(test, debug_assertions))
+        self.editable || cfg!(any(test, debug_assertions))
+    }
+
+    /// Allow or forbid inline cell editing. A producer that does not call this keeps the grid
+    /// read-only, which is the default for every non-delimited source.
+    pub fn set_editable(&mut self, editable: bool, cx: &mut Context<Self>) {
+        if self.editable == editable {
+            return;
+        }
+        self.editable = editable;
+        if !editable {
+            self.editing = None;
+        }
+        cx.notify();
+    }
+
+    /// The value an inline editor starts from: the decoded cell content, without the quoting
+    /// the source file may use for it. A padding cell starts empty.
+    pub(crate) fn cell_display_value(&self, cell: DataCellId) -> Option<SharedString> {
+        match self.engine.contents.get_row(cell.row)?.get(cell.col)? {
+            TableCell::Real { cached_value, .. } => Some(cached_value.clone()),
+            TableCell::Generated(value) => Some(value.clone()),
+            TableCell::Virtual => Some(SharedString::default()),
+        }
+    }
+
+    /// Opens an inline editor over `cell`.
+    pub(crate) fn begin_cell_edit(
+        &mut self,
+        cell: DataCellId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.editable {
+            return;
+        }
+        // Committing first keeps the previous value from being silently dropped when the user
+        // double-clicks straight from one cell into another.
+        self.commit_cell_edit(cx);
+
+        let Some(value) = self.cell_display_value(cell) else {
+            return;
+        };
+
+        let editor = cx.new(|cx| {
+            let mut editor = editor::Editor::single_line(window, cx);
+            editor.set_text(value.as_ref(), window, cx);
+            editor.select_all(&editor::actions::SelectAll, window, cx);
+            editor
+        });
+
+        let blur_subscription = cx.subscribe(&editor, |this, _, event: &editor::EditorEvent, cx| {
+            if matches!(event, editor::EditorEvent::Blurred) {
+                this.commit_cell_edit(cx);
+            }
+        });
+
+        let focus_handle = editor.read(cx).focus_handle(cx);
+        window.focus(&focus_handle, cx);
+
+        self.selection = Some(CellSelection::single_cell(cell));
+        self.editing = Some(CellEditState {
+            cell,
+            editor,
+            _blur_subscription: blur_subscription,
+        });
+        cx.notify();
+    }
+
+    /// Sends the inline editor's text to the producer and closes the editor.
+    pub(crate) fn commit_cell_edit(&mut self, cx: &mut Context<Self>) {
+        let Some(state) = self.editing.take() else {
+            return;
+        };
+        let value: SharedString = state.editor.read(cx).text(cx).into();
+        cx.emit(CellEdited {
+            cell: state.cell,
+            value,
+        });
+        cx.notify();
+    }
+
+    /// Closes the inline editor without reporting a value.
+    pub(crate) fn cancel_cell_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.editing.take().is_none() {
+            return;
+        }
+        self.focus_handle.focus(window, cx);
+        cx.notify();
+    }
+
+    /// Opens an inline editor over the focused cell (Enter, F2).
+    pub(crate) fn edit_focused_cell(
+        &mut self,
+        _: &EditCell,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(selection) = self.selection else {
+            return;
+        };
+        self.begin_cell_edit(selection.focus, window, cx);
+    }
+
+    /// Commits the inline editor (Enter). Propagates so an unrelated `menu::Confirm` still
+    /// reaches handlers outside the grid.
+    pub(crate) fn confirm_cell_edit(
+        &mut self,
+        _: &menu::Confirm,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.editing.is_none() {
+            cx.propagate();
+            return;
+        }
+        self.commit_cell_edit(cx);
+        self.focus_handle.focus(window, cx);
+    }
+
+    /// Discards the inline editor (Escape).
+    pub(crate) fn cancel_inline_edit(
+        &mut self,
+        _: &editor::actions::Cancel,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.editing.is_none() {
+            cx.propagate();
+            return;
+        }
+        self.cancel_cell_edit(window, cx);
     }
 
     pub(crate) fn move_focused_cell(

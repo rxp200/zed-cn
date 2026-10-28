@@ -147,7 +147,7 @@ pub fn wrap_with_abbreviation(
     let confirm_ranges = ranges.clone();
     let preview_ranges = ranges;
     editor.show_inline_input(
-        "Emmet abbreviation, e.g. ul>li*",
+        i18n::t!("09644ffd167ed0e9"),
         position,
         preview_language,
         history,
@@ -457,7 +457,10 @@ fn expansion_text(expansion: &str) -> String {
 }
 
 fn no_expansion_message(abbreviation: &str) -> String {
-    format!("No Emmet expansion for {abbreviation:?}")
+    i18n::t!(
+        "ad106b1c6106f4c5",
+        abbreviation = format!("{abbreviation:?}")
+    )
 }
 
 fn remember_abbreviation(abbreviation: SharedString, cx: &mut App) {
@@ -640,7 +643,7 @@ mod tests {
                     .as_ref()
                     .and_then(|state| state.preview.clone()),
                 Some(InlineInputPreview::Error(
-                    "No Emmet expansion for \"@invalid@\"".to_string()
+                    "没有适用于 \"@invalid@\" 的 Emmet 展开结果".to_string()
                 )),
                 "the failure should show up next to the input"
             );

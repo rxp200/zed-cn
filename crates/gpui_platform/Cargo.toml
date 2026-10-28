@@ -13,10 +13,7 @@ path = "src/gpui_platform.rs"
 doctest = false
 
 [features]
-default = ["multithreaded"]
-# Threads in the browser: needs a nightly toolchain and a cross-origin-isolated
-# page. Off, gpui_web builds on stable.
-multithreaded = ["gpui_web/multithreaded"]
+default = []
 bench-support = ["gpui/bench-support", "gpui_macos/bench-support", "gpui_wgpu/bench-support"]
 font-kit = ["gpui_macos/font-kit"]
 inspector = ["gpui/inspector"]

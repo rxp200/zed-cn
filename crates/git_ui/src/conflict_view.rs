@@ -346,45 +346,51 @@ fn render_conflict_buttons(
         .gap_1()
         .bg(cx.theme().colors().editor_background)
         .child(
-            Button::new("head", format!("Use {}", conflict.ours_branch_name))
-                .label_size(LabelSize::Small)
-                .on_click({
-                    let editor = editor.clone();
-                    let conflict = conflict.clone();
-                    let ours = conflict.ours.clone();
-                    move |_, window, cx| {
-                        resolve_conflict(
-                            editor.clone(),
-                            conflict.clone(),
-                            vec![ours.clone()],
-                            window,
-                            cx,
-                        )
-                        .detach()
-                    }
-                }),
+            Button::new(
+                "head",
+                i18n::t_args!("e31ac2986ecac7b6", conflict.ours_branch_name),
+            )
+            .label_size(LabelSize::Small)
+            .on_click({
+                let editor = editor.clone();
+                let conflict = conflict.clone();
+                let ours = conflict.ours.clone();
+                move |_, window, cx| {
+                    resolve_conflict(
+                        editor.clone(),
+                        conflict.clone(),
+                        vec![ours.clone()],
+                        window,
+                        cx,
+                    )
+                    .detach()
+                }
+            }),
         )
         .child(
-            Button::new("origin", format!("Use {}", conflict.theirs_branch_name))
-                .label_size(LabelSize::Small)
-                .on_click({
-                    let editor = editor.clone();
-                    let conflict = conflict.clone();
-                    let theirs = conflict.theirs.clone();
-                    move |_, window, cx| {
-                        resolve_conflict(
-                            editor.clone(),
-                            conflict.clone(),
-                            vec![theirs.clone()],
-                            window,
-                            cx,
-                        )
-                        .detach()
-                    }
-                }),
+            Button::new(
+                "origin",
+                i18n::t_args!("e31ac2986ecac7b6", conflict.theirs_branch_name),
+            )
+            .label_size(LabelSize::Small)
+            .on_click({
+                let editor = editor.clone();
+                let conflict = conflict.clone();
+                let theirs = conflict.theirs.clone();
+                move |_, window, cx| {
+                    resolve_conflict(
+                        editor.clone(),
+                        conflict.clone(),
+                        vec![theirs.clone()],
+                        window,
+                        cx,
+                    )
+                    .detach()
+                }
+            }),
         )
         .child(
-            Button::new("both", "Use Both")
+            Button::new("both", i18n::t!("2a07393a7c6c855c"))
                 .label_size(LabelSize::Small)
                 .on_click({
                     let editor = editor.clone();
@@ -405,7 +411,7 @@ fn render_conflict_buttons(
         )
         .when(is_ai_enabled, |this| {
             this.child(Divider::vertical()).child(
-                Button::new("resolve-with-agent", "Resolve with Agent")
+                Button::new("resolve-with-agent", i18n::t!("765e348559f77ae4"))
                     .label_size(LabelSize::Small)
                     .start_icon(
                         Icon::new(IconName::ZedAssistant)
@@ -669,7 +675,7 @@ impl Render for MergeConflictIndicator {
                         Tooltip::with_meta(
                             tooltip_label.clone(),
                             None,
-                            "Click to Resolve with Agent",
+                            i18n::t!("fc9b4a674874af13"),
                             cx,
                         )
                     })

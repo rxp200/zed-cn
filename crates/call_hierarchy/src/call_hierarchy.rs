@@ -536,19 +536,19 @@ impl PickerDelegate for CallHierarchyDelegate {
     type ListItem = ListItem;
 
     fn name() -> &'static str {
-        "call hierarchy"
+        i18n::t!("9b05add60f67a49e")
     }
 
     fn placeholder_text(&self, _window: &mut Window, _cx: &mut App) -> Arc<str> {
         match (&self.root_item, self.mode) {
             (Some(root), CallHierarchyMode::Incoming) => {
-                Arc::from(format!("Search calls to `{}`...", root.name))
+                Arc::from(i18n::t_args!("b9efef0fbfc291b0", root.name))
             }
             (Some(root), CallHierarchyMode::Outgoing) => {
-                Arc::from(format!("Search calls from `{}`...", root.name))
+                Arc::from(i18n::t_args!("8a81239e38769353", root.name))
             }
-            (None, CallHierarchyMode::Incoming) => Arc::from("Search incoming calls..."),
-            (None, CallHierarchyMode::Outgoing) => Arc::from("Search outgoing calls..."),
+            (None, CallHierarchyMode::Incoming) => Arc::from(i18n::t!("db7eb3e6b8484ec0")),
+            (None, CallHierarchyMode::Outgoing) => Arc::from(i18n::t!("1b73745e841173a3")),
         }
     }
 
@@ -562,16 +562,16 @@ impl PickerDelegate for CallHierarchyDelegate {
 
     fn no_matches_text(&self, _window: &mut Window, _cx: &mut App) -> Option<SharedString> {
         Some(SharedString::new_static(match self.state {
-            FetchState::Loading => "Fetching call hierarchy…",
-            FetchState::NoSymbol => "No callable symbol under the cursor",
+            FetchState::Loading => i18n::t!("07f15566382e0879"),
+            FetchState::NoSymbol => i18n::t!("0761063ca196ccdc"),
             FetchState::Loaded => {
                 if self.calls.is_empty() {
                     match self.mode {
-                        CallHierarchyMode::Incoming => "No incoming calls found",
-                        CallHierarchyMode::Outgoing => "No outgoing calls found",
+                        CallHierarchyMode::Incoming => i18n::t!("6264b4d81c83575d"),
+                        CallHierarchyMode::Outgoing => i18n::t!("f17bf670c3e1c67e"),
                     }
                 } else {
-                    "No matches"
+                    i18n::t!("336cba9a92414d13")
                 }
             }
         }))
@@ -697,8 +697,8 @@ impl PickerDelegate for CallHierarchyDelegate {
         }
         let focus_handle = self.focus_handle.clone();
         let expand_label = match self.mode {
-            CallHierarchyMode::Incoming => "Show Callers",
-            CallHierarchyMode::Outgoing => "Show Callees",
+            CallHierarchyMode::Incoming => i18n::t!("4927c84269b8a769"),
+            CallHierarchyMode::Outgoing => i18n::t!("95af978f789dc461"),
         };
         Some(
             h_flex()
@@ -711,7 +711,7 @@ impl PickerDelegate for CallHierarchyDelegate {
                 .border_color(cx.theme().colors().border_variant)
                 .when(!self.root_stack.is_empty(), |this| {
                     this.child(
-                        Button::new("collapse-call", "Back")
+                        Button::new("collapse-call", i18n::t!("572cf45ba43634b3"))
                             .key_binding(
                                 KeyBinding::for_action_in(&menu::SelectParent, &focus_handle, cx)
                                     .map(|key_binding| key_binding.size(rems_from_px(12_f32))),
@@ -734,7 +734,7 @@ impl PickerDelegate for CallHierarchyDelegate {
                     )
                 })
                 .child(
-                    Button::new("toggle-direction", "Switch Direction")
+                    Button::new("toggle-direction", i18n::t!("14c2d57b1803e5d9"))
                         .key_binding(
                             KeyBinding::for_action_in(&ToggleDirection, &focus_handle, cx)
                                 .map(|key_binding| key_binding.size(rems_from_px(12_f32))),

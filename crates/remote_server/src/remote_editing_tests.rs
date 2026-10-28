@@ -358,6 +358,13 @@ async fn test_remote_telemetry_event_forwarding(
         })
         .detach();
 
+    // Forwarding is opt-in; do not rely on the application's privacy defaults.
+    cx.update_global(|settings_store: &mut SettingsStore, cx| {
+        settings_store.set_user_settings(r#"{"telemetry":{"metrics":true}}"#, cx)
+    })
+    .expect("enable metrics for forwarding test");
+    cx.run_until_parked();
+
     // The remote server forwards a bare `FlexibleEvent` as JSON; mirror that
     // here by sending the proto message the forwarding task would send.
     let event_json = json!({
@@ -469,6 +476,530 @@ impl gpui::Render for RemoteImageTestView {
     ) -> impl gpui::IntoElement {
         img(self.source.clone())
     }
+}
+
+#[gpui::test]
+async fn test_remote_document_loading(cx: &mut TestAppContext, server_cx: &mut TestAppContext) {
+    let fs = FakeFs::new(server_cx.executor());
+    fs.insert_tree(path!("/code"), json!({"project": {}})).await;
+    let bytes = vec![37; project::DOCUMENT_CHUNK_SIZE + 17];
+    for name in ["book.epub", "document.pdf", "sheet.xlsx", "empty.ods"] {
+        fs.insert_file(
+            &format!("/code/project/{name}"),
+            if name == "empty.ods" {
+                Vec::new()
+            } else {
+                bytes.clone()
+            },
+        )
+        .await;
+    }
+    let (project, _headless) = init_test(&fs, cx, server_cx).await;
+    let (worktree, _) = project
+        .update(cx, |project, cx| {
+            project.find_or_create_worktree(path!("/code/project"), true, cx)
+        })
+        .await
+        .expect("open remote worktree");
+    let worktree_id = worktree.read_with(cx, |worktree, _| worktree.id());
+    assert!(
+        worktree
+            .update(cx, |worktree, cx| worktree
+                .load_binary_file(rel_path("book.epub"), cx))
+            .await
+            .is_err(),
+        "the old document loading path cannot read remote files"
+    );
+    let client = project.read_with(cx, |project, cx| {
+        project
+            .remote_client()
+            .expect("remote client")
+            .read(cx)
+            .proto_client()
+    });
+    let first = client
+        .request(proto::ReadDocumentChunk {
+            worktree_id: worktree_id.to_proto(),
+            path: "book.epub".into(),
+            offset: 0,
+            expected_size: 0,
+            expected_mtime: None,
+        })
+        .await
+        .expect("first chunk");
+    let old_mtime = first.file.expect("file metadata").mtime;
+    fs.insert_file("/code/project/book.epub", vec![38; 5]).await;
+    assert!(
+        client
+            .request(proto::ReadDocumentChunk {
+                worktree_id: worktree_id.to_proto(),
+                path: "book.epub".into(),
+                offset: project::DOCUMENT_CHUNK_SIZE as u64,
+                expected_size: first.total_size,
+                expected_mtime: old_mtime,
+            })
+            .await
+            .is_err(),
+        "changed files must not produce mixed snapshots"
+    );
+    fs.insert_file("/code/project/book.epub", bytes.clone())
+        .await;
+    // `plan.dwg` is a real DWG container, which this fork does not preview.
+    for invalid_path in [
+        "../book.epub",
+        "/code/project/book.epub",
+        "unsupported.txt",
+        "plan.dwg",
+    ] {
+        assert!(
+            client
+                .request(proto::ReadDocumentChunk {
+                    worktree_id: worktree_id.to_proto(),
+                    path: invalid_path.into(),
+                    offset: 0,
+                    expected_size: 0,
+                    expected_mtime: None,
+                })
+                .await
+                .is_err()
+        );
+    }
+    for name in ["book.epub", "document.pdf", "sheet.xlsx", "empty.ods"] {
+        let progress = Rc::new(RefCell::new(Vec::new()));
+        let loaded = project
+            .update(cx, |project, cx| {
+                let progress = progress.clone();
+                project.load_document_file(
+                    ProjectPath {
+                        worktree_id,
+                        path: rel_path(name).into(),
+                    },
+                    Some(Box::new(move |_, transferred, total| {
+                        progress.borrow_mut().push((transferred, total));
+                    })),
+                    cx,
+                )
+            })
+            .expect("remote document support")
+            .await
+            .expect("load remote document");
+        assert!(!loaded.file.is_local);
+        assert_eq!(
+            loaded.content,
+            if name == "empty.ods" {
+                Vec::new()
+            } else {
+                bytes.clone()
+            }
+        );
+        assert_eq!(loaded.file.path.as_unix_str(), name);
+        let progress = progress.borrow();
+        assert!(!progress.is_empty(), "{name} must report transfer progress");
+        assert!(
+            progress.windows(2).all(|pair| pair[0].0 <= pair[1].0),
+            "{name} progress must not go backwards: {progress:?}"
+        );
+        let (transferred, total) = *progress.last().expect("progress");
+        assert_eq!(transferred, loaded.content.len() as u64, "{name}");
+        assert_eq!(transferred, total, "{name}");
+    }
+    for name in ["missing.epub", "unsupported.txt"] {
+        let load = project.update(cx, |project, cx| {
+            project.load_document_file(
+                ProjectPath {
+                    worktree_id,
+                    path: rel_path(name).into(),
+                },
+                None,
+                cx,
+            )
+        });
+        // Unsupported extensions are rejected before a tab is opened; files
+        // that vanish are only detected once the transfer starts.
+        if let Ok(load) = load {
+            assert!(load.await.is_err(), "{name} must fail to load");
+        }
+    }
+}
+
+#[gpui::test]
+async fn test_create_remote_directory_creates_missing_paths(
+    cx: &mut TestAppContext,
+    server_cx: &mut TestAppContext,
+) {
+    let fs = FakeFs::new(server_cx.executor());
+    fs.insert_tree(
+        path!("/code"),
+        json!({ "project": { "README.md": "# project" } }),
+    )
+    .await;
+    let (project, headless) = init_test(&fs, cx, server_cx).await;
+
+    assert!(
+        project.read_with(cx, |project, cx| project
+            .supports_create_remote_directory(cx)),
+        "a matching server advertises the capability"
+    );
+
+    let target = path!("/code/new-project/nested");
+    let created = project
+        .update(cx, |project, cx| {
+            project.create_remote_directory(target.to_string(), cx)
+        })
+        .await
+        .expect("create a missing remote directory");
+    assert_eq!(created, target);
+    assert!(
+        fs.is_dir(Path::new(target)).await,
+        "the server creates missing parent directories"
+    );
+
+    // Re-creating the same directory is not an error, so a retried confirmation
+    // cannot fail just because the first one already succeeded.
+    let created_again = project
+        .update(cx, |project, cx| {
+            project.create_remote_directory(target.to_string(), cx)
+        })
+        .await
+        .expect("creating an existing directory is idempotent");
+    assert_eq!(created_again, target);
+
+    let relative = project
+        .update(cx, |project, cx| {
+            project.create_remote_directory("relative/path".to_string(), cx)
+        })
+        .await
+        .expect_err("relative paths are refused by the server");
+    assert!(
+        relative.to_string().contains("absolute"),
+        "unexpected error: {relative:#}"
+    );
+
+    headless
+        .update(server_cx, |headless, _| {
+            headless.session.send(proto::RemoteStarted {
+                capabilities: Vec::new(),
+            })
+        })
+        .expect("advertise an older server");
+    cx.run_until_parked();
+    assert!(
+        !project.read_with(cx, |project, cx| project
+            .supports_create_remote_directory(cx)),
+        "an official or older server must not be treated as capable"
+    );
+    let unsupported_target = path!("/code/unsupported");
+    project
+        .update(cx, |project, cx| {
+            project.create_remote_directory(unsupported_target.to_string(), cx)
+        })
+        .await
+        .expect_err("creating a remote directory requires the capability");
+    assert!(
+        !fs.is_dir(Path::new(unsupported_target)).await,
+        "no request may reach a server without the capability"
+    );
+}
+
+#[gpui::test]
+async fn test_remote_model_loading(cx: &mut TestAppContext, server_cx: &mut TestAppContext) {
+    let fs = FakeFs::new(server_cx.executor());
+    fs.insert_tree(path!("/code"), json!({"project": {}})).await;
+    let mut bytes = b"solid test\nfacet normal 0 0 1\nouter loop\nvertex 0 0 0\nvertex 1 0 0\nvertex 0 1 0\nendloop\nendfacet\nendsolid test\n".to_vec();
+    bytes.resize(project::DOCUMENT_CHUNK_SIZE + 17, b' ');
+    fs.insert_file("/code/project/model.STL", bytes.clone())
+        .await;
+    let (project, headless) = init_test(&fs, cx, server_cx).await;
+    let (worktree, _) = project
+        .update(cx, |project, cx| {
+            project.find_or_create_worktree(path!("/code/project"), true, cx)
+        })
+        .await
+        .expect("remote worktree");
+    let path = ProjectPath {
+        worktree_id: worktree.read_with(cx, |worktree, _| worktree.id()),
+        path: rel_path("model.STL").into(),
+    };
+    let loaded = project
+        .update(cx, |project, cx| {
+            project.load_document_file(path.clone(), None, cx)
+        })
+        .expect("model transfer support")
+        .await
+        .expect("load multi-chunk remote STL");
+    assert_eq!(loaded.content, bytes);
+    assert!(!loaded.file.is_local);
+    assert_eq!(loaded.file.path.as_unix_str(), "model.STL");
+
+    for capabilities in [
+        vec![remote::remote_client::DOCUMENT_CHUNKS_CAPABILITY.to_owned()],
+        Vec::new(),
+    ] {
+        headless
+            .update(server_cx, |headless, _| {
+                headless.session.send(proto::RemoteStarted { capabilities })
+            })
+            .expect("advertise an older server");
+        cx.run_until_parked();
+        let error = project
+            .update(cx, |project, cx| {
+                project.load_document_file(path.clone(), None, cx)
+            })
+            .expect_err("document support alone must not enable models");
+        assert_eq!(error.to_string(), i18n::t!("3eb2f17c6a2710fa"));
+    }
+    headless
+        .update(server_cx, |headless, _| {
+            headless.session.send(proto::RemoteStarted {
+                capabilities: vec![remote::remote_client::MODEL_CHUNKS_CAPABILITY.to_owned()],
+            })
+        })
+        .expect("restore model capability");
+    cx.run_until_parked();
+    fs.remove_file(
+        Path::new(path!("/code/project/model.STL")),
+        Default::default(),
+    )
+    .await
+    .expect("remove model");
+    assert!(
+        project
+            .update(cx, |project, cx| {
+                project.load_document_file(path, None, cx)
+            })
+            .expect("document support")
+            .await
+            .is_err()
+    );
+}
+
+#[gpui::test]
+async fn test_remote_cad_loading(cx: &mut TestAppContext, server_cx: &mut TestAppContext) {
+    let fs = FakeFs::new(server_cx.executor());
+    fs.insert_tree(path!("/code"), json!({"project": {}})).await;
+    let mut bytes = b"0\nSECTION\n2\nENTITIES\n0\nLINE\n8\n0\n10\n0.0\n20\n0.0\n11\n10.0\n21\n5.0\n0\nENDSEC\n0\nEOF\n".to_vec();
+    bytes.resize(project::DOCUMENT_CHUNK_SIZE + 17, b' ');
+    fs.insert_file("/code/project/plan.DXF", bytes.clone())
+        .await;
+    let (project, headless) = init_test(&fs, cx, server_cx).await;
+    let (worktree, _) = project
+        .update(cx, |project, cx| {
+            project.find_or_create_worktree(path!("/code/project"), true, cx)
+        })
+        .await
+        .expect("remote worktree");
+    let path = ProjectPath {
+        worktree_id: worktree.read_with(cx, |worktree, _| worktree.id()),
+        path: rel_path("plan.DXF").into(),
+    };
+    let loaded = project
+        .update(cx, |project, cx| {
+            project.load_document_file(path.clone(), None, cx)
+        })
+        .expect("drawing transfer support")
+        .await
+        .expect("load multi-chunk remote DXF");
+    assert_eq!(loaded.content, bytes);
+    assert!(!loaded.file.is_local);
+    assert_eq!(loaded.file.path.as_unix_str(), "plan.DXF");
+
+    for capabilities in [
+        vec![remote::remote_client::DOCUMENT_CHUNKS_CAPABILITY.to_owned()],
+        vec![remote::remote_client::MODEL_CHUNKS_CAPABILITY.to_owned()],
+        Vec::new(),
+    ] {
+        headless
+            .update(server_cx, |headless, _| {
+                headless.session.send(proto::RemoteStarted { capabilities })
+            })
+            .expect("advertise an older server");
+        cx.run_until_parked();
+        let error = project
+            .update(cx, |project, cx| {
+                project.load_document_file(path.clone(), None, cx)
+            })
+            .expect_err("other capabilities must not enable drawings");
+        assert_eq!(error.to_string(), i18n::t!("86eb01ea60817189"));
+    }
+    headless
+        .update(server_cx, |headless, _| {
+            headless.session.send(proto::RemoteStarted {
+                capabilities: vec![remote::remote_client::CAD_DOCUMENTS_CAPABILITY.to_owned()],
+            })
+        })
+        .expect("restore CAD capability");
+    cx.run_until_parked();
+    assert!(
+        project
+            .update(cx, |project, cx| {
+                project.load_document_file(path, None, cx)
+            })
+            .expect("drawing support")
+            .await
+            .is_ok()
+    );
+}
+
+#[gpui::test]
+async fn test_remote_epub_entries(cx: &mut TestAppContext, server_cx: &mut TestAppContext) {
+    use std::io::{Cursor, Write as _};
+    let fs = FakeFs::new(server_cx.executor());
+    fs.insert_tree(path!("/code"), json!({"project": {}})).await;
+    let mut archive = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    archive
+        .start_file("chapter.xhtml", zip::write::FileOptions::default())
+        .expect("entry");
+    archive
+        .write_all(&vec![b'x'; project::epub::EPUB_CHUNK_SIZE + 7])
+        .expect("write");
+    fs.insert_file(
+        "/code/project/book.epub",
+        archive.finish().expect("ZIP").into_inner(),
+    )
+    .await;
+    let (project, _headless) = init_test(&fs, cx, server_cx).await;
+    let (worktree, _) = project
+        .update(cx, |project, cx| {
+            project.find_or_create_worktree(path!("/code/project"), true, cx)
+        })
+        .await
+        .expect("worktree");
+    let path = ProjectPath {
+        worktree_id: worktree.read_with(cx, |worktree, _| worktree.id()),
+        path: rel_path("book.epub").into(),
+    };
+    let first = project
+        .update(cx, |project, cx| {
+            project.read_epub_entry(path.clone(), "chapter.xhtml".into(), 0, None, cx)
+        })
+        .await
+        .expect("first chunk");
+    assert_eq!(first.content.len(), project::epub::EPUB_CHUNK_SIZE);
+    let snapshot = (
+        first.total_size,
+        first.file.expect("metadata").mtime.expect("mtime"),
+    );
+    let last = project
+        .update(cx, |project, cx| {
+            project.read_epub_entry(
+                path.clone(),
+                "chapter.xhtml".into(),
+                project::epub::EPUB_CHUNK_SIZE as u64,
+                Some(snapshot),
+                cx,
+            )
+        })
+        .await
+        .expect("last chunk");
+    assert_eq!(last.content, vec![b'x'; 7]);
+    fs.insert_file("/code/project/book.epub", b"changed".to_vec())
+        .await;
+    assert!(
+        project
+            .update(cx, |project, cx| project.read_epub_entry(
+                path.clone(),
+                "chapter.xhtml".into(),
+                0,
+                Some(snapshot),
+                cx
+            ))
+            .await
+            .is_err()
+    );
+}
+
+#[gpui::test]
+async fn test_remote_office_entries(cx: &mut TestAppContext, server_cx: &mut TestAppContext) {
+    use std::io::{Cursor, Write as _};
+    let fs = FakeFs::new(server_cx.executor());
+    fs.insert_tree(path!("/code"), json!({"project": {}})).await;
+    let mut archive = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    archive
+        .start_file("word/document.xml", zip::write::FileOptions::default())
+        .expect("entry");
+    archive
+        .write_all(&vec![b'x'; project::epub::OFFICE_CHUNK_SIZE + 7])
+        .expect("write");
+    fs.insert_file(
+        "/code/project/report.docx",
+        archive.finish().expect("ZIP").into_inner(),
+    )
+    .await;
+    let (project, headless) = init_test(&fs, cx, server_cx).await;
+    let (worktree, _) = project
+        .update(cx, |project, cx| {
+            project.find_or_create_worktree(path!("/code/project"), true, cx)
+        })
+        .await
+        .expect("worktree");
+    let path = ProjectPath {
+        worktree_id: worktree.read_with(cx, |worktree, _| worktree.id()),
+        path: rel_path("report.docx").into(),
+    };
+    let first = project
+        .update(cx, |project, cx| {
+            project.read_office_entry(path.clone(), "word/document.xml".into(), 0, None, cx)
+        })
+        .await
+        .expect("first office chunk");
+    assert_eq!(first.content.len(), project::epub::OFFICE_CHUNK_SIZE);
+    let snapshot = (
+        first.total_size,
+        first.file.expect("metadata").mtime.expect("mtime"),
+    );
+    let last = project
+        .update(cx, |project, cx| {
+            project.read_office_entry(
+                path.clone(),
+                "word/document.xml".into(),
+                project::epub::OFFICE_CHUNK_SIZE as u64,
+                Some(snapshot),
+                cx,
+            )
+        })
+        .await
+        .expect("last office chunk");
+    assert_eq!(last.content, vec![b'x'; 7]);
+
+    // A server that only knows EPUB archives must be refused before any
+    // request reaches it, and the office capability alone restores access.
+    headless
+        .update(server_cx, |headless, _| {
+            headless.session.send(proto::RemoteStarted {
+                capabilities: vec![remote::remote_client::EPUB_ENTRIES_CAPABILITY.to_owned()],
+            })
+        })
+        .expect("advertise an EPUB-only server");
+    cx.run_until_parked();
+    let error = project
+        .update(cx, |project, cx| {
+            project.read_office_entry(path.clone(), "word/document.xml".into(), 0, None, cx)
+        })
+        .await
+        .expect_err("EPUB support alone must not enable office documents");
+    assert_eq!(error.to_string(), i18n::t!("05720b24baa5d61e"));
+    headless
+        .update(server_cx, |headless, _| {
+            headless.session.send(proto::RemoteStarted {
+                capabilities: vec![remote::remote_client::OFFICE_ENTRIES_CAPABILITY.to_owned()],
+            })
+        })
+        .expect("restore office capability");
+    cx.run_until_parked();
+    fs.insert_file("/code/project/report.docx", b"changed".to_vec())
+        .await;
+    assert!(
+        project
+            .update(cx, |project, cx| project.read_office_entry(
+                path.clone(),
+                "word/document.xml".into(),
+                0,
+                Some(snapshot),
+                cx
+            ))
+            .await
+            .is_err()
+    );
 }
 
 #[gpui::test]
@@ -3466,6 +3997,20 @@ async fn test_reconnect(cx: &mut TestAppContext, server_cx: &mut TestAppContext)
     });
 
     let client = cx.read(|cx| project.read(cx).remote_client().unwrap());
+    let reconnect_status_seen = Arc::new(AtomicBool::new(false));
+    let _status_subscription = cx.update(|cx| {
+        let reconnect_status_seen = reconnect_status_seen.clone();
+        cx.observe(&client, move |client, cx| {
+            let client = client.read(cx);
+            if client.connection_state() == remote::ConnectionState::Reconnecting
+                && client
+                    .reconnect_status()
+                    .is_some_and(|status| !status.is_empty())
+            {
+                reconnect_status_seen.store(true, Ordering::SeqCst);
+            }
+        })
+    });
     let reconnected = Arc::new(AtomicBool::new(false));
     let _subscription = cx.update(|cx| {
         let reconnected = reconnected.clone();
@@ -3496,6 +4041,8 @@ async fn test_reconnect(cx: &mut TestAppContext, server_cx: &mut TestAppContext)
         reconnected.load(Ordering::SeqCst),
         "a successful reconnect should emit RemoteClientEvent::Reconnected"
     );
+    assert!(reconnect_status_seen.load(Ordering::SeqCst));
+    client.read_with(cx, |client, _| assert!(!client.was_manual_reconnect()));
 }
 
 #[gpui::test]
@@ -3636,15 +4183,23 @@ async fn test_copy_file_into_remote_project(
         )
         .await;
 
+    let transferred_entries = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let observer = transferred_entries.clone();
     worktree
         .update(cx, |worktree, cx| {
-            worktree.copy_external_entries(
+            worktree.copy_external_entries_with_progress(
                 rel_path("src").into(),
                 vec![
                     Path::new(path!("/local-code/dir1/file1")).into(),
                     Path::new(path!("/local-code/dir1/dir2")).into(),
                 ],
                 local_fs.clone(),
+                worktree::RemoteUploadOptions::default(),
+                Some(Arc::new(move |event| {
+                    if matches!(event, worktree::FileTransferProgress::Finished) {
+                        observer.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    }
+                })),
                 cx,
             )
         })
@@ -3670,6 +4225,10 @@ async fn test_copy_file_into_remote_project(
         ]
     );
     assert_eq!(
+        transferred_entries.load(std::sync::atomic::Ordering::SeqCst),
+        6
+    );
+    assert_eq!(
         remote_fs
             .load(path!("/code/project1/src/file1").as_ref())
             .await
@@ -3689,6 +4248,546 @@ async fn test_copy_file_into_remote_project(
             .await
             .unwrap(),
         ""
+    );
+}
+
+#[gpui::test]
+async fn test_chunked_upload_writes_large_file_into_remote_project(
+    cx: &mut TestAppContext,
+    server_cx: &mut TestAppContext,
+) {
+    let remote_fs = FakeFs::new(server_cx.executor());
+    remote_fs
+        .insert_tree(
+            path!("/code"),
+            json!({
+                "project1": {
+                    ".git": {},
+                },
+            }),
+        )
+        .await;
+
+    let (project, _) = init_test(&remote_fs, cx, server_cx).await;
+    let (worktree, _) = project
+        .update(cx, |project, cx| {
+            project.find_or_create_worktree(path!("/code/project1"), true, cx)
+        })
+        .await
+        .unwrap();
+    cx.run_until_parked();
+
+    assert!(
+        project.read_with(cx, |project, cx| project
+            .supports_remote_chunked_uploads(cx)),
+        "the mock server advertises the chunked upload capability"
+    );
+
+    let expected_content = "0123456789abcdef".repeat(96 * 1024);
+    let local_fs = project
+        .read_with(cx, |project, _| project.fs().clone())
+        .as_fake();
+    local_fs
+        .insert_tree(
+            path!("/local-code"),
+            json!({
+                "large.bin": expected_content,
+            }),
+        )
+        .await;
+
+    // The source file is larger than one idle-sized chunk, so this upload
+    // cannot complete with a single chunk request.
+    let copied_entries = worktree
+        .update(cx, |worktree, cx| {
+            worktree.copy_external_entries_with_progress(
+                rel_path("").into(),
+                vec![Path::new(path!("/local-code/large.bin")).into()],
+                local_fs.clone(),
+                worktree::RemoteUploadOptions {
+                    chunked_uploads: true,
+                },
+                None,
+                cx,
+            )
+        })
+        .await
+        .unwrap();
+    cx.run_until_parked();
+
+    assert_eq!(copied_entries.len(), 1);
+    assert_eq!(
+        remote_fs
+            .load(path!("/code/project1/large.bin").as_ref())
+            .await
+            .unwrap(),
+        "0123456789abcdef".repeat(96 * 1024)
+    );
+}
+
+#[gpui::test]
+async fn test_chunked_upload_abort_discards_the_staged_file(
+    cx: &mut TestAppContext,
+    server_cx: &mut TestAppContext,
+) {
+    let remote_fs = FakeFs::new(server_cx.executor());
+    remote_fs
+        .insert_tree(
+            path!("/code"),
+            json!({
+                "project1": {
+                    ".git": {},
+                },
+            }),
+        )
+        .await;
+
+    let (project, _) = init_test(&remote_fs, cx, server_cx).await;
+    let (worktree, _) = project
+        .update(cx, |project, cx| {
+            project.find_or_create_worktree(path!("/code/project1"), true, cx)
+        })
+        .await
+        .unwrap();
+    cx.run_until_parked();
+
+    let client = project.read_with(cx, |project, cx| {
+        project
+            .remote_client()
+            .expect("remote client")
+            .read(cx)
+            .proto_client()
+    });
+    let worktree_id = worktree.read_with(cx, |worktree, _| worktree.id().to_proto());
+    let project_id = proto::REMOTE_SERVER_PROJECT_ID;
+    let upload_id = 0xfeed_beefu64;
+
+    client
+        .request(proto::BeginProjectEntryUpload {
+            project_id,
+            worktree_id,
+            path: "partial.bin".into(),
+            total_size: 8,
+            upload_id,
+        })
+        .await
+        .unwrap();
+    client
+        .request(proto::WriteProjectEntryChunk {
+            project_id,
+            worktree_id,
+            upload_id,
+            offset: 0,
+            content: b"1234".to_vec(),
+        })
+        .await
+        .unwrap();
+    client
+        .request(proto::AbortProjectEntryUpload {
+            project_id,
+            worktree_id,
+            upload_id,
+        })
+        .await
+        .unwrap();
+    cx.run_until_parked();
+    server_cx.run_until_parked();
+
+    assert!(
+        !remote_fs
+            .is_file(path!("/code/project1/partial.bin").as_ref())
+            .await,
+        "an aborted upload must not publish a partial entry"
+    );
+    assert!(
+        !remote_fs
+            .paths(true)
+            .iter()
+            .any(|path| path.to_string_lossy().contains("zed-upload-")),
+        "an aborted upload must remove its staged file"
+    );
+
+    let error = client
+        .request(proto::WriteProjectEntryChunk {
+            project_id,
+            worktree_id,
+            upload_id,
+            offset: 4,
+            content: b"5678".to_vec(),
+        })
+        .await
+        .expect_err("a chunk after abort is rejected");
+    assert!(format!("{error}").contains("unknown entry upload"));
+}
+
+#[gpui::test]
+async fn test_chunked_upload_rejects_invalid_chunks(
+    cx: &mut TestAppContext,
+    server_cx: &mut TestAppContext,
+) {
+    let remote_fs = FakeFs::new(server_cx.executor());
+    remote_fs
+        .insert_tree(
+            path!("/code"),
+            json!({
+                "project1": {
+                    ".git": {},
+                },
+            }),
+        )
+        .await;
+
+    let (project, _) = init_test(&remote_fs, cx, server_cx).await;
+    let (worktree, _) = project
+        .update(cx, |project, cx| {
+            project.find_or_create_worktree(path!("/code/project1"), true, cx)
+        })
+        .await
+        .unwrap();
+    cx.run_until_parked();
+
+    let client = project.read_with(cx, |project, cx| {
+        project
+            .remote_client()
+            .expect("remote client")
+            .read(cx)
+            .proto_client()
+    });
+    let worktree_id = worktree.read_with(cx, |worktree, _| worktree.id().to_proto());
+    let project_id = proto::REMOTE_SERVER_PROJECT_ID;
+
+    let oversized = client
+        .request(proto::BeginProjectEntryUpload {
+            project_id,
+            worktree_id,
+            path: "too-large.bin".into(),
+            total_size: 5 * 1024 * 1024 * 1024,
+            upload_id: 1,
+        })
+        .await
+        .expect_err("entries larger than the cap are rejected");
+    assert!(format!("{oversized}").contains("too large"));
+
+    let upload_id = 0x1234_5678u64;
+    client
+        .request(proto::BeginProjectEntryUpload {
+            project_id,
+            worktree_id,
+            path: "validated.bin".into(),
+            total_size: 8,
+            upload_id,
+        })
+        .await
+        .unwrap();
+
+    let oversized_chunk = client
+        .request(proto::WriteProjectEntryChunk {
+            project_id,
+            worktree_id,
+            upload_id,
+            offset: 0,
+            content: vec![0; 8 * 1024 * 1024 + 1],
+        })
+        .await
+        .expect_err("a chunk larger than the chunk cap is rejected");
+    assert!(format!("{oversized_chunk}").contains("too large"));
+
+    let skipped = client
+        .request(proto::WriteProjectEntryChunk {
+            project_id,
+            worktree_id,
+            upload_id,
+            offset: 4,
+            content: b"5678".to_vec(),
+        })
+        .await
+        .expect_err("a chunk that skips ahead is rejected");
+    assert!(format!("{skipped}").contains("out of order"));
+
+    let exceeding = client
+        .request(proto::WriteProjectEntryChunk {
+            project_id,
+            worktree_id,
+            upload_id,
+            offset: 0,
+            content: b"123456789".to_vec(),
+        })
+        .await
+        .expect_err("a chunk larger than the declared size is rejected");
+    assert!(format!("{exceeding}").contains("exceeds"));
+
+    let empty = client
+        .request(proto::WriteProjectEntryChunk {
+            project_id,
+            worktree_id,
+            upload_id,
+            offset: 0,
+            content: Vec::new(),
+        })
+        .await
+        .expect_err("an empty chunk is rejected");
+    assert!(format!("{empty}").contains("empty"));
+
+    let incomplete = client
+        .request(proto::FinishProjectEntryUpload {
+            project_id,
+            worktree_id,
+            upload_id,
+        })
+        .await
+        .expect_err("finishing before all bytes arrived is rejected");
+    assert!(format!("{incomplete}").contains("before all bytes arrived"));
+
+    assert!(
+        !remote_fs
+            .is_file(path!("/code/project1/validated.bin").as_ref())
+            .await,
+        "a rejected upload must not publish an entry"
+    );
+    assert!(
+        client
+            .request(proto::AbortProjectEntryUpload {
+                project_id,
+                worktree_id,
+                upload_id,
+            })
+            .await
+            .is_ok()
+    );
+}
+
+#[gpui::test]
+async fn test_chunked_download_streams_large_remote_file(
+    cx: &mut TestAppContext,
+    server_cx: &mut TestAppContext,
+) {
+    // The destination is a real local file, so the blocking thread pool wakes
+    // this task from another thread.
+    cx.executor().allow_parking();
+    let remote_fs = FakeFs::new(server_cx.executor());
+    remote_fs
+        .insert_tree(
+            path!("/code"),
+            json!({
+                "project1": {
+                    ".git": {},
+                },
+            }),
+        )
+        .await;
+
+    let (project, _) = init_test(&remote_fs, cx, server_cx).await;
+    let (worktree, _) = project
+        .update(cx, |project, cx| {
+            project.find_or_create_worktree(path!("/code/project1"), true, cx)
+        })
+        .await
+        .unwrap();
+    cx.run_until_parked();
+
+    assert!(
+        project.read_with(cx, |project, cx| project
+            .supports_remote_chunked_downloads(cx)),
+        "the mock server advertises the chunked download capability"
+    );
+
+    // Larger than one idle-sized chunk, so the download cannot complete with a
+    // single request.
+    let expected_content = "0123456789abcdef".repeat(96 * 1024);
+    remote_fs
+        .insert_file(
+            path!("/code/project1/large.bin"),
+            expected_content.clone().into_bytes(),
+        )
+        .await;
+
+    let destination_dir = tempfile::tempdir().expect("temporary directory");
+    let destination = destination_dir.path().join("nested/large.bin");
+    let worktree_id = worktree.read_with(cx, |worktree, _| worktree.id());
+    let download = project.update(cx, |project, cx| {
+        project.download_file(
+            worktree_id,
+            rel_path("large.bin").into(),
+            destination.clone(),
+            cx,
+        )
+    });
+    download.await.expect("chunked download");
+    cx.run_until_parked();
+
+    assert_eq!(
+        std::fs::read(&destination).expect("downloaded file"),
+        expected_content.as_bytes()
+    );
+    let leftovers: Vec<_> = std::fs::read_dir(destination.parent().unwrap())
+        .expect("destination directory")
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .contains("zed-download-")
+        })
+        .collect();
+    assert!(
+        leftovers.is_empty(),
+        "the staging file must be renamed away, found {leftovers:?}"
+    );
+}
+
+#[gpui::test]
+async fn test_chunked_download_rejects_invalid_requests(
+    cx: &mut TestAppContext,
+    server_cx: &mut TestAppContext,
+) {
+    let remote_fs = FakeFs::new(server_cx.executor());
+    remote_fs
+        .insert_tree(
+            path!("/code"),
+            json!({
+                "project1": {
+                    ".git": {},
+                    "subdir": {},
+                },
+            }),
+        )
+        .await;
+
+    let (project, _) = init_test(&remote_fs, cx, server_cx).await;
+    let (worktree, _) = project
+        .update(cx, |project, cx| {
+            project.find_or_create_worktree(path!("/code/project1"), true, cx)
+        })
+        .await
+        .unwrap();
+    cx.run_until_parked();
+    let client = project.read_with(cx, |project, cx| {
+        project
+            .remote_client()
+            .expect("remote client")
+            .read(cx)
+            .proto_client()
+    });
+    let worktree_id = worktree.read_with(cx, |worktree, _| worktree.id().to_proto());
+    remote_fs
+        .insert_file(path!("/code/project1/data.bin"), b"0123456789".to_vec())
+        .await;
+
+    let chunk = |path: &str, offset: u64, max_bytes: u32| proto::DownloadFileChunk {
+        worktree_id,
+        path: path.to_owned(),
+        offset,
+        expected_size: 0,
+        expected_mtime: None,
+        max_bytes,
+    };
+
+    assert!(
+        client.request(chunk("subdir", 0, 0)).await.is_err(),
+        "directories cannot be downloaded"
+    );
+    assert!(
+        client.request(chunk("missing.bin", 0, 0)).await.is_err(),
+        "missing files are rejected"
+    );
+    assert!(
+        client.request(chunk("data.bin", 11, 0)).await.is_err(),
+        "an offset past the end of the file is rejected"
+    );
+
+    let limited = client
+        .request(chunk("data.bin", 0, 4))
+        .await
+        .expect("bounded chunk");
+    assert_eq!(limited.content, b"0123");
+    assert_eq!(limited.total_size, 10);
+
+    let first = client
+        .request(chunk("data.bin", 0, 0))
+        .await
+        .expect("whole file");
+    assert_eq!(first.content, b"0123456789");
+    assert_eq!(first.total_size, 10);
+    let mtime = first.file.as_ref().expect("file metadata").mtime;
+
+    remote_fs
+        .insert_file(path!("/code/project1/data.bin"), b"changed".to_vec())
+        .await;
+    let mut changed = chunk("data.bin", 1, 0);
+    changed.expected_size = 10;
+    changed.expected_mtime = mtime;
+    assert!(
+        client.request(changed).await.is_err(),
+        "a file that changed mid-download must not produce a mixed snapshot"
+    );
+}
+
+#[gpui::test]
+async fn test_download_falls_back_without_the_chunk_capability(
+    cx: &mut TestAppContext,
+    server_cx: &mut TestAppContext,
+) {
+    // The legacy path writes a real local file through the blocking thread pool.
+    cx.executor().allow_parking();
+    let remote_fs = FakeFs::new(server_cx.executor());
+    remote_fs
+        .insert_tree(
+            path!("/code"),
+            json!({
+                "project1": {
+                    ".git": {},
+                },
+            }),
+        )
+        .await;
+
+    let (project, headless) = init_test(&remote_fs, cx, server_cx).await;
+    let (worktree, _) = project
+        .update(cx, |project, cx| {
+            project.find_or_create_worktree(path!("/code/project1"), true, cx)
+        })
+        .await
+        .unwrap();
+    cx.run_until_parked();
+
+    headless
+        .update(server_cx, |headless, _| {
+            headless.session.send(proto::RemoteStarted {
+                capabilities: Vec::new(),
+            })
+        })
+        .expect("advertise an older server");
+    cx.run_until_parked();
+    assert!(
+        !project.read_with(cx, |project, cx| project
+            .supports_remote_chunked_downloads(cx)),
+        "an older server must keep the legacy download path"
+    );
+
+    let expected_content = "legacy download payload".repeat(4096);
+    remote_fs
+        .insert_file(
+            path!("/code/project1/legacy.bin"),
+            expected_content.clone().into_bytes(),
+        )
+        .await;
+
+    let destination_dir = tempfile::tempdir().expect("temporary directory");
+    let destination = destination_dir.path().join("legacy.bin");
+    let worktree_id = worktree.read_with(cx, |worktree, _| worktree.id());
+    let download = project.update(cx, |project, cx| {
+        project.download_file(
+            worktree_id,
+            rel_path("legacy.bin").into(),
+            destination.clone(),
+            cx,
+        )
+    });
+    download.await.expect("legacy download");
+    cx.run_until_parked();
+    assert_eq!(
+        std::fs::read(&destination).expect("downloaded file"),
+        expected_content.as_bytes()
     );
 }
 
@@ -4860,8 +5959,8 @@ async fn test_adding_remote_skill(cx: &mut TestAppContext, server_cx: &mut TestA
     authorization
         .response
         .send(acp_thread::SelectedPermissionOutcome::new(
-            agent_client_protocol::schema::v2::PermissionOptionId::new("allow"),
-            agent_client_protocol::schema::v2::PermissionOptionKind::AllowOnce,
+            agent_client_protocol::schema::v1::PermissionOptionId::new("allow"),
+            agent_client_protocol::schema::v1::PermissionOptionKind::AllowOnce,
         ))
         .unwrap();
 
@@ -4910,8 +6009,8 @@ async fn test_adding_remote_skill(cx: &mut TestAppContext, server_cx: &mut TestA
     authorization
         .response
         .send(acp_thread::SelectedPermissionOutcome::new(
-            agent_client_protocol::schema::v2::PermissionOptionId::new("allow"),
-            agent_client_protocol::schema::v2::PermissionOptionKind::AllowOnce,
+            agent_client_protocol::schema::v1::PermissionOptionId::new("allow"),
+            agent_client_protocol::schema::v1::PermissionOptionKind::AllowOnce,
         ))
         .unwrap();
 
@@ -6338,4 +7437,148 @@ fn build_project(ssh: Entity<RemoteClient>, cx: &mut TestAppContext) -> Entity<P
     });
 
     cx.update(|cx| Project::remote(ssh, client, node, user_store, languages, fs, false, cx))
+}
+
+#[gpui::test]
+async fn test_persistent_terminal_input_resumes_after_reconnect(
+    cx: &mut TestAppContext,
+    server_cx: &mut TestAppContext,
+) {
+    use rpc::AnyProtoClient;
+    use std::time::Duration as StdDuration;
+    use terminal::{
+        TerminalBuilder, TerminalMode,
+        terminal_settings::{AlternateScroll, CursorShape},
+    };
+
+    // The persistent terminal owns real OS threads (PTY reader and child wait),
+    // so the test scheduler must permit those threads to wake GPUI tasks.
+    cx.executor().allow_parking();
+
+    let fs = FakeFs::new(server_cx.executor());
+    fs.insert_tree(
+        path!("/code"),
+        json!({
+            "project1": {
+                ".git": {},
+                "README.md": "# project 1",
+            },
+        }),
+    )
+    .await;
+    let (project, _headless) = init_test(&fs, cx, server_cx).await;
+
+    let remote_client = cx.read(|cx| project.read(cx).remote_client().unwrap());
+    let proto_client = cx.read(|cx| remote_client.read(cx).proto_client());
+
+    let created = proto_client
+        .request(proto::CreatePersistentTerminal {
+            creation_id: "reconnect-input".to_string(),
+            program: "cat".to_string(),
+            args: Vec::new(),
+            env: std::collections::HashMap::new(),
+            working_directory: None,
+            rows: 24,
+            columns: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+            hosted: false,
+        })
+        .await
+        .expect("create persistent terminal");
+    let server_instance_id = created.server_instance_id.clone();
+    let terminal_id = created.terminal_id.clone();
+
+    let terminal = cx.new(|cx| {
+        TerminalBuilder::new_remote(
+            TerminalMode::interactive(),
+            task::Shell::Program("cat".to_string()),
+            CursorShape::default(),
+            AlternateScroll::On,
+            None,
+            Vec::new(),
+            StdDuration::from_millis(0),
+            0,
+            PathStyle::local(),
+            proto_client.clone(),
+            server_instance_id.clone(),
+            terminal_id.clone(),
+            cx.background_executor(),
+        )
+        .subscribe(cx)
+    });
+
+    async fn read_all(
+        proto_client: &AnyProtoClient,
+        server_instance_id: &str,
+        terminal_id: &str,
+    ) -> Vec<u8> {
+        proto_client
+            .request(proto::ReadPersistentTerminal {
+                server_instance_id: server_instance_id.to_string(),
+                terminal_id: terminal_id.to_string(),
+                offset: 0,
+                max_bytes: 256 * 1024,
+            })
+            .await
+            .expect("read persistent terminal")
+            .data
+    }
+
+    terminal.update(cx, |terminal, _| terminal.input(b"first-ok\r".to_vec()));
+    let mut saw_first = false;
+    for _ in 0..50 {
+        cx.run_until_parked();
+        if String::from_utf8_lossy(
+            &read_all(&proto_client, &server_instance_id, &terminal_id).await,
+        )
+        .contains("first-ok")
+        {
+            saw_first = true;
+            break;
+        }
+        std::thread::sleep(StdDuration::from_millis(20));
+    }
+    assert!(saw_first, "input must reach the remote terminal");
+
+    remote_client
+        .update(cx, |client, cx| client.simulate_disconnect(cx))
+        .detach();
+    for _ in 0..20 {
+        terminal.update(cx, |terminal, _| terminal.input(b"buffered-".to_vec()));
+    }
+
+    for _ in 0..100 {
+        cx.run_until_parked();
+        if remote_client.read_with(cx, |client, _| client.connection_state())
+            == ConnectionState::Connected
+        {
+            break;
+        }
+        std::thread::sleep(StdDuration::from_millis(20));
+    }
+    assert_eq!(
+        remote_client.read_with(cx, |client, _| client.connection_state()),
+        ConnectionState::Connected,
+        "the mock transport should reconnect"
+    );
+
+    terminal.update(cx, |terminal, _| terminal.input(b"second-ok\r".to_vec()));
+    let mut saw_second = false;
+    for _ in 0..100 {
+        cx.run_until_parked();
+        if String::from_utf8_lossy(
+            &read_all(&proto_client, &server_instance_id, &terminal_id).await,
+        )
+        .contains("second-ok")
+        {
+            saw_second = true;
+            break;
+        }
+        std::thread::sleep(StdDuration::from_millis(20));
+    }
+    assert!(
+        saw_second,
+        "input must resume after the remote connection reconnects"
+    );
 }

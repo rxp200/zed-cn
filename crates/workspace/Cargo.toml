@@ -26,6 +26,7 @@ test-support = [
 ]
 
 [dependencies]
+i18n.workspace = true
 any_vec.workspace = true
 agent_settings.workspace = true
 anyhow.workspace = true
@@ -72,6 +73,7 @@ url.workspace = true
 util.workspace = true
 uuid.workspace = true
 zed_actions.workspace = true
+zlog.workspace = true
 
 [dev-dependencies]
 client = { workspace = true, features = ["test-support"] }
@@ -87,4 +89,3 @@ pretty_assertions.workspace = true
 proptest.workspace = true
 proptest-derive.workspace = true
 tempfile.workspace = true
-zlog.workspace = true

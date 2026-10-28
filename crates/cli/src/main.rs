@@ -153,6 +153,11 @@ struct Args {
     /// by having Zed act like netcat communicating over a Unix socket.
     #[arg(long, hide = true)]
     askpass: Option<String>,
+
+    /// Connects to an SSH target through an HTTP CONNECT or SOCKS5 proxy, acting as ssh's
+    /// `ProxyCommand` helper.
+    #[arg(long, hide = true, num_args = 3, value_names = ["PROXY_URL", "HOST", "PORT"])]
+    ssh_proxy: Option<Vec<String>>,
 }
 
 /// Parses a path containing a position (e.g. `path:line:column`)
@@ -515,6 +520,15 @@ fn run() -> Result<()> {
     // `zed --askpass` Makes zed operate in nc/netcat mode for use with askpass
     if let Some(socket) = &args.askpass {
         askpass::main(socket);
+        return Ok(());
+    }
+
+    // `zed --ssh-proxy` tunnels an SSH connection through an HTTP or SOCKS5 proxy.
+    if let Some(values) = &args.ssh_proxy {
+        let [proxy_url, host, port] = values.as_slice() else {
+            anyhow::bail!("--ssh-proxy requires PROXY_URL, HOST and PORT");
+        };
+        util::ssh_proxy::run(proxy_url, host, port)?;
         return Ok(());
     }
 

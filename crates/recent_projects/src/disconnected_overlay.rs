@@ -1,7 +1,10 @@
-use gpui::{ClickEvent, DismissEvent, EventEmitter, FocusHandle, Focusable, Render, WeakEntity};
+use gpui::{
+    ClickEvent, DismissEvent, EventEmitter, FocusHandle, Focusable, Render, TaskExt, WeakEntity,
+};
 use project::project_settings::ProjectSettings;
 use remote::RemoteConnectionOptions;
 use settings::Settings;
+use std::{path::PathBuf, sync::Mutex};
 use ui::{ElevationIndex, Modal, ModalFooter, ModalHeader, Section, prelude::*};
 use workspace::{
     ModalView, MultiWorkspace, OpenOptions, Workspace, notifications::DetachAndPromptErr,
@@ -60,19 +63,30 @@ impl DisconnectedOverlay {
                 ) {
                     return;
                 }
-                let handle = cx.entity().downgrade();
 
                 let remote_connection_options = project.read(cx).remote_connection_options(cx);
+                let server_not_running = matches!(
+                    event,
+                    project::Event::DisconnectedFromRemote {
+                        server_not_running: true
+                    }
+                );
+
+                // A confirmed-dead server can never accept the old worktree and
+                // buffer ids again, so retrying only spends the reconnect budget on
+                // a session that is already gone. Recreate it on a fresh server
+                // instead of stranding the workspace on a disconnected overlay.
+                if server_not_running
+                    && let Some(connection_options) = remote_connection_options.clone()
+                {
+                    recreate_remote_project(connection_options, workspace, window, cx, false);
+                    return;
+                }
+
+                let handle = cx.entity().downgrade();
+
                 let host = if let Some(remote_connection_options) = remote_connection_options {
-                    Host::RemoteServerProject(
-                        remote_connection_options,
-                        matches!(
-                            event,
-                            project::Event::DisconnectedFromRemote {
-                                server_not_running: true
-                            }
-                        ),
-                    )
+                    Host::RemoteServerProject(remote_connection_options, server_not_running)
                 } else {
                     Host::CollabGuestProject
                 };
@@ -106,40 +120,95 @@ impl DisconnectedOverlay {
         let Some(workspace) = self.workspace.upgrade() else {
             return;
         };
-
-        let Some(window_handle) = window.window_handle().downcast::<MultiWorkspace>() else {
-            return;
-        };
-
-        let app_state = workspace.read(cx).app_state().clone();
-        let paths = workspace
-            .read(cx)
-            .root_paths(cx)
-            .iter()
-            .map(|path| path.to_path_buf())
-            .collect();
-
-        cx.spawn_in(window, async move |_, cx| {
-            open_remote_project(
-                connection_options,
-                paths,
-                app_state,
-                OpenOptions {
-                    requesting_window: Some(window_handle),
-                    ..Default::default()
-                },
-                cx,
-            )
-            .await?;
-            Ok(())
-        })
-        .detach_and_prompt_err("Failed to reconnect", window, cx, |_, _, _| None);
+        workspace.update(cx, |workspace, cx| {
+            recreate_remote_project(connection_options, workspace, window, cx, true);
+        });
     }
 
     fn cancel(&mut self, _: &menu::Cancel, _: &mut Window, cx: &mut Context<Self>) {
         self.finished = true;
         cx.emit(DismissEvent)
     }
+}
+
+/// Rebuild a remote session whose server is confirmed gone. Worktree and buffer
+/// ids belong to the dead server and cannot be replayed into a fresh one, so this
+/// opens the same remote project through a new connection instead of leaving the
+/// workspace stuck on a session that can never be resumed.
+fn recreate_remote_project(
+    connection_options: RemoteConnectionOptions,
+    workspace: &mut Workspace,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+    prompt_on_error: bool,
+) {
+    if !claim_remote_project_recreation(&connection_options) {
+        log::debug!(
+            "skipping remote project recreation: one is already in flight for this connection"
+        );
+        return;
+    }
+
+    let Some(window_handle) = window.window_handle().downcast::<MultiWorkspace>() else {
+        release_remote_project_recreation(&connection_options);
+        return;
+    };
+
+    let app_state = workspace.app_state().clone();
+    let paths: Vec<PathBuf> = workspace
+        .root_paths(cx)
+        .iter()
+        .map(|path| path.to_path_buf())
+        .collect();
+
+    let task = cx.spawn_in(window, async move |_, cx| {
+        let result = open_remote_project(
+            connection_options.clone(),
+            paths,
+            app_state,
+            OpenOptions {
+                requesting_window: Some(window_handle),
+                ..Default::default()
+            },
+            cx,
+        )
+        .await;
+        release_remote_project_recreation(&connection_options);
+        result.map(|_| ())
+    });
+
+    // A user-initiated reconnect should report a failure, while the automatic
+    // recovery only records it and leaves the disconnected overlay to the user.
+    if prompt_on_error {
+        task.detach_and_prompt_err("Failed to reconnect", window, cx, |_, _, _| None);
+    } else {
+        task.detach_and_log_err(cx);
+    }
+}
+
+/// A single confirmed-dead server can emit more than one disconnect event; only
+/// the first should start a recreation for that connection.
+static REMOTE_PROJECT_RECREATIONS_IN_FLIGHT: Mutex<Vec<RemoteConnectionOptions>> =
+    Mutex::new(Vec::new());
+
+fn claim_remote_project_recreation(connection_options: &RemoteConnectionOptions) -> bool {
+    let mut in_flight = match REMOTE_PROJECT_RECREATIONS_IN_FLIGHT.lock() {
+        Ok(in_flight) => in_flight,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    if in_flight.contains(connection_options) {
+        return false;
+    }
+    in_flight.push(connection_options.clone());
+    true
+}
+
+fn release_remote_project_recreation(connection_options: &RemoteConnectionOptions) {
+    let mut in_flight = match REMOTE_PROJECT_RECREATIONS_IN_FLIGHT.lock() {
+        Ok(in_flight) => in_flight,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    in_flight.retain(|options| options != connection_options);
 }
 
 impl Render for DisconnectedOverlay {
@@ -155,19 +224,15 @@ impl Render for DisconnectedOverlay {
                     .session
                     .restore_unsaved_buffers
                 {
-                    "\nUnsaved changes are stored locally."
+                    i18n::t!("6713004a0a7508fb")
                 } else {
                     ""
                 };
-                let reason = if *server_not_running {
-                    "process exiting unexpectedly"
+                if *server_not_running {
+                    i18n::t_mix!("98eef38ee3b2b415"; options.display_name(); autosave = autosave)
                 } else {
-                    "not responding"
-                };
-                format!(
-                    "Your connection to {} has been lost due to the server {reason}.{autosave}",
-                    options.display_name(),
-                )
+                    i18n::t_mix!("13b16c2c7a11c848"; options.display_name(); autosave = autosave)
+                }
             }
         };
 
@@ -180,18 +245,16 @@ impl Render for DisconnectedOverlay {
             .max_h(rems(40.))
             .child(
                 Modal::new("disconnected", None)
-                    .header(
-                        ModalHeader::new()
-                            .show_dismiss_button(true)
-                            .child(Headline::new("Disconnected").size(HeadlineSize::Small)),
-                    )
+                    .header(ModalHeader::new().show_dismiss_button(true).child(
+                        Headline::new(i18n::t!("7727668c83e96ea6")).size(HeadlineSize::Small),
+                    ))
                     .section(Section::new().child(Label::new(message)))
                     .footer(
                         ModalFooter::new().end_slot(
                             h_flex()
                                 .gap_2()
                                 .child(
-                                    Button::new("close-window", "Close Window")
+                                    Button::new("close-window", i18n::t!("1ae6b0a0f8266382"))
                                         .style(ButtonStyle::Filled)
                                         .layer(ElevationIndex::ModalSurface)
                                         .on_click(cx.listener(move |_, _, window, _| {
@@ -200,7 +263,7 @@ impl Render for DisconnectedOverlay {
                                 )
                                 .when(can_reconnect, |el| {
                                     el.child(
-                                        Button::new("reconnect", "Reconnect")
+                                        Button::new("reconnect", i18n::t!("68891ab35cab9663"))
                                             .style(ButtonStyle::Filled)
                                             .layer(ElevationIndex::ModalSurface)
                                             .start_icon(Icon::new(IconName::ArrowCircle))

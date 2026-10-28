@@ -11,7 +11,7 @@ use crate::{
 };
 use acp_thread::MentionUri;
 use agent::ThreadStore;
-use agent_client_protocol::schema::v2 as acp_v2;
+use agent_client_protocol::schema::{v1 as acp_v1, v2 as acp_v2};
 use anyhow::{Result, anyhow};
 use base64::Engine as _;
 use editor::{
@@ -499,14 +499,17 @@ impl MessageEditor {
                 let has_selection = editor.has_non_empty_selection(&editor.display_snapshot(cx));
 
                 Some(ContextMenu::build(window, cx, |menu, _, _| {
-                    menu.action("Cut", Box::new(editor::actions::Cut))
+                    menu.action(i18n::t!("410a8e8a6bf253ac"), Box::new(editor::actions::Cut))
                         .action_disabled_when(
                             !has_selection,
-                            "Copy",
+                            i18n::t!("63d90d977348ab1f"),
                             Box::new(editor::actions::Copy),
                         )
-                        .action("Paste", Box::new(editor::actions::Paste))
-                        .action("Paste as Plain Text", Box::new(PasteRaw))
+                        .action(
+                            i18n::t!("33517926747180e6"),
+                            Box::new(editor::actions::Paste),
+                        )
+                        .action(i18n::t!("293151e2a232bc87"), Box::new(PasteRaw))
                 }))
             });
 
@@ -682,7 +685,7 @@ impl MessageEditor {
 
     pub fn insert_thread_summary(
         &mut self,
-        session_id: acp_v2::SessionId,
+        session_id: acp_v1::SessionId,
         title: Option<SharedString>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -2299,7 +2302,7 @@ mod tests {
     use super::PromptLocalCommand;
     use acp_thread::MentionUri;
     use agent::{ThreadStore, outline};
-    use agent_client_protocol::schema::v2 as acp_v2;
+    use agent_client_protocol::schema::{v1 as acp_v1, v2 as acp_v2};
     use base64::Engine as _;
     use editor::{
         AnchorRangeExt as _, Editor, EditorMode, MultiBufferOffset, SelectionEffects,
@@ -3532,7 +3535,7 @@ mod tests {
         language_registry.add(plain_text_language);
 
         let mut fake_language_servers = language_registry.register_fake_lsp(
-            "Plain Text",
+            "纯文本",
             language::FakeLspAdapter {
                 capabilities: lsp::ServerCapabilities {
                     workspace_symbol_provider: Some(lsp::OneOf::Left(true)),
@@ -3878,7 +3881,7 @@ mod tests {
 
         let thread_store = Some(cx.new(|cx| ThreadStore::new(cx)));
 
-        let session_id = acp_v2::SessionId::new("thread-123");
+        let session_id = acp_v1::SessionId::new("thread-123");
         let title = Some("Previous Conversation".into());
 
         let message_editor = cx.update(|window, cx| {
@@ -3966,7 +3969,7 @@ mod tests {
                     cx,
                 );
                 editor.insert_thread_summary(
-                    acp_v2::SessionId::new("thread-123"),
+                    acp_v1::SessionId::new("thread-123"),
                     Some("Previous Conversation".into()),
                     window,
                     cx,

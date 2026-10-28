@@ -84,7 +84,7 @@ pub fn format_output(action: &RemoteAction, output: RemoteCommandOutput) -> Succ
         RemoteAction::Fetch(remote) => {
             if output.stderr.is_empty() {
                 SuccessMessage {
-                    message: "Fetch: Already up to date".into(),
+                    message: i18n::t!("cceb5d2b8829d33d").into(),
                     style: SuccessStyle::Toast,
                 }
             } else {
@@ -117,7 +117,7 @@ pub fn format_output(action: &RemoteAction, output: RemoteCommandOutput) -> Succ
             };
             if output.stdout.ends_with("Already up to date.\n") {
                 SuccessMessage {
-                    message: "Pull: Already up to date".into(),
+                    message: i18n::t!("624de533a38f85a6").into(),
                     style: SuccessStyle::Toast,
                 }
             } else if output.stdout.starts_with("Updating") {
@@ -167,7 +167,7 @@ pub fn format_output(action: &RemoteAction, output: RemoteCommandOutput) -> Succ
         RemoteAction::Push(branch_name, remote_ref) => {
             if output.stderr.ends_with("Everything up-to-date\n") {
                 SuccessMessage {
-                    message: "Push: Everything is up-to-date".to_string(),
+                    message: i18n::t!("541ac1dc15d586ec").to_string(),
                     style: SuccessStyle::Toast,
                 }
             } else if let Some((label, url)) = extract_pull_request_link(&output) {

@@ -520,7 +520,7 @@ impl PickerDelegate for ColumnFilterDelegate {
                         .id("table-filter-clear-all")
                         .cursor_pointer()
                         .child(
-                            Label::new("Clear all")
+                            Label::new(i18n::t!("55f1033fab699842"))
                                 .size(LabelSize::Small)
                                 .color(Color::Accent),
                         )
@@ -591,7 +591,7 @@ impl TableView {
                 with_copy_on_right_click(
                     header_text_cell,
                     header_text,
-                    "Right click to copy column name",
+                    vec![i18n::t!("8720ec2f91e9d499").into()],
                 )
                 .child(displayed_header)
             })
@@ -695,7 +695,7 @@ impl TableView {
             })
             .toggle_state(has_active_filters),
             Tooltip::text(if has_active_filters {
-                "Column has active filters. Click to manage"
+                i18n::t!("fb3c49d3cda03b92")
             } else {
                 "No filters applied. Click to add filters"
             }),

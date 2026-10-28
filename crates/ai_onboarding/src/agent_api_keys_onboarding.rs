@@ -69,7 +69,8 @@ impl Render for ApiKeysWithProviders {
             .border_color(cx.theme().colors().border.opacity(0.5))
             .bg(cx.theme().colors().background.alpha(0.5))
             .shadow(vec![
-                gpui::BoxShadow::new(px(1.), px(-1.), gpui::black().opacity(0.15)).blur_radius(px(3.)),
+                gpui::BoxShadow::new(px(1.), px(-1.), gpui::black().opacity(0.15))
+                    .blur_radius(px(3.)),
             ])
             .child(
                 h_flex()
@@ -90,18 +91,13 @@ impl Render for ApiKeysWithProviders {
                             .child(
                                 Icon::new(IconName::Info)
                                     .size(IconSize::XSmall)
-                                    .color(Color::Muted)
+                                    .color(Color::Muted),
                             )
-                            .child(
-                                div()
-                                    .w_full()
-                                    .child(
-                                        Label::new("Start now using API keys from your environment for the following providers:")
-                                            .color(Color::Muted)
-                                    )
-                            )
+                            .child(div().w_full().child(
+                                Label::new(i18n::t!("d22a315cf85d7152")).color(Color::Muted),
+                            )),
                     )
-                    .children(configured_providers_list)
+                    .children(configured_providers_list),
             )
     }
 }
@@ -124,7 +120,7 @@ impl RenderOnce for ApiKeysWithoutProviders {
                 h_flex()
                     .gap_2()
                     .child(
-                        Label::new("API Keys")
+                        Label::new(i18n::t!("5f600b307b4eb0fb"))
                             .size(LabelSize::Small)
                             .color(Color::Muted)
                             .buffer_font(cx),
@@ -135,7 +131,7 @@ impl RenderOnce for ApiKeysWithoutProviders {
                 "Add your own keys to use AI without signing in.",
             )))
             .child(
-                Button::new("configure-providers", "Configure Providers")
+                Button::new("configure-providers", i18n::t!("efdddd439f891712"))
                     .full_width()
                     .style(ButtonStyle::Outlined)
                     .on_click(move |_, window, cx| {

@@ -148,7 +148,6 @@ enum IconSource {
 pub struct Icon {
     source: IconSource,
     color: Color,
-    group_hover_color: Option<Color>,
     size: Rems,
     transformation: Transformation,
 }
@@ -158,7 +157,6 @@ impl Icon {
         Self {
             source: IconSource::Embedded(icon.path().into()),
             color: Color::default(),
-            group_hover_color: None,
             size: IconSize::default().rems(),
             transformation: Transformation::default(),
         }
@@ -177,7 +175,6 @@ impl Icon {
         Self {
             source,
             color: Color::default(),
-            group_hover_color: None,
             size: IconSize::default().rems(),
             transformation: Transformation::default(),
         }
@@ -187,7 +184,6 @@ impl Icon {
         Self {
             source: IconSource::ExternalSvg(svg),
             color: Color::default(),
-            group_hover_color: None,
             size: IconSize::default().rems(),
             transformation: Transformation::default(),
         }
@@ -209,15 +205,6 @@ impl Icon {
         self
     }
 
-    /// Sets the color used while the enclosing unnamed (`""`) group is hovered,
-    /// such as the one set up by [`crate::ButtonLike`].
-    ///
-    /// Not to be exposed outside of the `ui` crate.
-    pub(crate) fn group_hover_color(mut self, color: impl Into<Option<Color>>) -> Self {
-        self.group_hover_color = color.into();
-        self
-    }
-
     /// Sets a custom size for the icon, in [`Rems`].
     ///
     /// Not to be exposed outside of the `ui` crate.
@@ -236,28 +223,27 @@ impl Transformable for Icon {
 
 impl RenderOnce for Icon {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
-        let color = self.color.color(cx);
-        let svg = match self.source {
-            IconSource::Embedded(path) => svg().path(path),
-            IconSource::ExternalSvg(path) => svg().external_path(path),
-            IconSource::External(path) => {
-                return img(path)
-                    .size(self.size)
-                    .flex_none()
-                    .text_color(color)
-                    .into_any_element();
-            }
-        };
-        let group_hover_color = self.group_hover_color.map(|color| color.color(cx));
-
-        svg.with_transformation(self.transformation)
-            .size(self.size)
-            .flex_none()
-            .text_color(color)
-            .when_some(group_hover_color, |this, hover_color| {
-                this.group_hover("", |style| style.text_color(hover_color))
-            })
-            .into_any_element()
+        match self.source {
+            IconSource::Embedded(path) => svg()
+                .with_transformation(self.transformation)
+                .size(self.size)
+                .flex_none()
+                .path(path)
+                .text_color(self.color.color(cx))
+                .into_any_element(),
+            IconSource::ExternalSvg(path) => svg()
+                .external_path(path)
+                .with_transformation(self.transformation)
+                .size(self.size)
+                .flex_none()
+                .text_color(self.color.color(cx))
+                .into_any_element(),
+            IconSource::External(path) => img(path)
+                .size(self.size)
+                .flex_none()
+                .text_color(self.color.color(cx))
+                .into_any_element(),
+        }
     }
 }
 
@@ -305,15 +291,29 @@ impl RenderOnce for IconWithIndicator {
             .relative()
             .child(self.icon)
             .when_some(self.indicator, |this, indicator| {
+                let content_sized = indicator.is_custom();
                 this.child(
                     div()
                         .absolute()
-                        .size_2p5()
-                        .border_2()
-                        .border_color(indicator_border_color)
                         .rounded_full()
-                        .bottom_neg_0p5()
-                        .right_neg_0p5()
+                        .border_color(indicator_border_color)
+                        // A custom indicator supplies its own content, so it
+                        // gets a content-sized pill; anchored inside the icon so
+                        // the status-bar overflow clip cannot cut its border.
+                        .when(content_sized, |badge| {
+                            badge
+                                .bottom_0()
+                                .right_0()
+                                .h_3p5()
+                                .min_w_3p5()
+                                .p_px()
+                                .border_1()
+                                .items_center()
+                                .justify_center()
+                        })
+                        .when(!content_sized, |badge| {
+                            badge.bottom_neg_0p5().right_neg_0p5().size_2p5().border_2()
+                        })
                         .child(indicator),
                 )
             })

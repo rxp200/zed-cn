@@ -154,12 +154,7 @@ pub fn stream_completion(
             }
 
             if model.supports_adaptive_thinking() {
-                if matches!(
-                    anthropic_request.thinking,
-                    Some(
-                        anthropic::Thinking::Enabled { .. } | anthropic::Thinking::Adaptive { .. }
-                    )
-                ) {
+                if anthropic_request.thinking.is_some() {
                     anthropic_request.thinking = Some(anthropic::Thinking::Adaptive {
                         display: Some(anthropic::AdaptiveThinkingDisplay::Summarized),
                         // Thinking block binding needs a beta header on

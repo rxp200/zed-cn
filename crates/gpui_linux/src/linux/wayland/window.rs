@@ -55,7 +55,6 @@ pub(crate) struct Callbacks {
     hover_status_change: Option<Box<dyn FnMut(bool)>>,
     resize: Option<Box<dyn FnMut(Size<Pixels>, f32)>>,
     moved: Option<Box<dyn FnMut()>>,
-    display_changed: Option<Box<dyn FnMut()>>,
     should_close: Option<Box<dyn FnMut() -> bool>>,
     close: Option<Box<dyn FnOnce()>>,
     appearance_changed: Option<Box<dyn FnMut()>>,
@@ -662,12 +661,7 @@ impl WaylandWindowState {
 
     pub fn primary_output_scale(&mut self) -> i32 {
         let mut scale = 1;
-        // Keep the display the surface last left only while it is on no
-        // other output.
-        let mut current_output = self
-            .display
-            .take()
-            .filter(|(id, _)| self.outputs.is_empty() || self.outputs.contains_key(id));
+        let mut current_output = self.display.take();
         for (id, output) in self.outputs.iter() {
             if let Some((_, output_data)) = &current_output {
                 if output.scale > output_data.scale {
@@ -1412,10 +1406,7 @@ impl WaylandWindowStatePtr {
 
                 state.outputs.insert(id, output.clone());
 
-                let previous_display = state.display.as_ref().map(|(id, _)| id.clone());
                 let scale = state.primary_output_scale();
-                let display_changed =
-                    state.display.as_ref().map(|(id, _)| id) != previous_display.as_ref();
                 state.update_subpixel_layout();
 
                 // We use `PreferredBufferScale` instead to set the scale if it's available
@@ -1425,19 +1416,13 @@ impl WaylandWindowStatePtr {
                     self.rescale(scale as f32);
                 } else {
                     drop(state);
-                }
-                if display_changed {
-                    self.report_display_changed();
                 }
                 self.request_redraw();
             }
             wl_surface::Event::Leave { output } => {
                 state.outputs.remove(&output.id());
 
-                let previous_display = state.display.as_ref().map(|(id, _)| id.clone());
                 let scale = state.primary_output_scale();
-                let display_changed =
-                    state.display.as_ref().map(|(id, _)| id) != previous_display.as_ref();
                 state.update_subpixel_layout();
 
                 // We use `PreferredBufferScale` instead to set the scale if it's available
@@ -1447,9 +1432,6 @@ impl WaylandWindowStatePtr {
                     self.rescale(scale as f32);
                 } else {
                     drop(state);
-                }
-                if display_changed {
-                    self.report_display_changed();
                 }
                 self.request_redraw();
             }
@@ -1615,29 +1597,6 @@ impl WaylandWindowStatePtr {
         if let Some(mut fun) = callback {
             fun(focus);
             self.callbacks.borrow_mut().hover_status_change = Some(fun);
-        }
-    }
-
-    fn report_display_changed(&self) {
-        let callback = self.callbacks.borrow_mut().display_changed.take();
-        if let Some(mut callback) = callback {
-            callback();
-            self.callbacks.borrow_mut().display_changed = Some(callback);
-        }
-    }
-
-    /// Updates the window's copy of an output it is on after the compositor
-    /// changes the output's properties, such as its mode.
-    pub fn handle_output_changed(&self, id: &ObjectId, output: &Output) {
-        let mut state = self.state.borrow_mut();
-        let Some(entered) = state.outputs.get_mut(id) else {
-            return;
-        };
-        *entered = output.clone();
-        if let Some((display_id, display)) = &mut state.display
-            && display_id == id
-        {
-            *display = output.clone();
         }
     }
 
@@ -1807,18 +1766,13 @@ impl PlatformWindow for WaylandWindow {
 
     fn display(&self) -> Option<Rc<dyn PlatformDisplay>> {
         let state = self.borrow();
-        // The compositor only names the window's output after mapping it. With
-        // one output the window can only be there, so don't wait for `enter`.
-        let (id, display) = state
-            .display
-            .clone()
-            .or_else(|| state.client.sole_output())?;
-        Some(Rc::new(WaylandDisplay {
-            id,
-            name: display.name.clone(),
-            bounds: display.bounds.to_pixels(state.scale),
-            refresh_interval: display.refresh_interval,
-        }))
+        state.display.as_ref().map(|(id, display)| {
+            Rc::new(WaylandDisplay {
+                id: id.clone(),
+                name: display.name.clone(),
+                bounds: display.bounds.to_pixels(state.scale),
+            }) as Rc<dyn PlatformDisplay>
+        })
     }
 
     fn mouse_position(&self) -> Point<Pixels> {
@@ -1983,10 +1937,6 @@ impl PlatformWindow for WaylandWindow {
 
     fn on_moved(&self, callback: Box<dyn FnMut()>) {
         self.0.callbacks.borrow_mut().moved = Some(callback);
-    }
-
-    fn on_display_changed(&self, callback: Box<dyn FnMut()>) {
-        self.0.callbacks.borrow_mut().display_changed = Some(callback);
     }
 
     fn on_should_close(&self, callback: Box<dyn FnMut() -> bool>) {

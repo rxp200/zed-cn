@@ -187,10 +187,9 @@ impl RenderOnce for TerminalToolHeader {
                                     .icon_color(Color::Error)
                                     .tooltip(move |_window, cx| {
                                         Tooltip::with_meta(
-                                            "Stop This Command",
+                                            i18n::t!("2d00c41d0fbe8c5e"),
                                             None,
-                                            "Also possible by placing your cursor inside the \
-                                             terminal and using regular terminal bindings.",
+                                            i18n::t!("585af3259b11f75c"),
                                             cx,
                                         )
                                     })
@@ -218,7 +217,10 @@ impl RenderOnce for TerminalToolHeader {
                             .icon_size(IconSize::Small)
                             .icon_color(Color::Error)
                             .when_some(exit_code, |this, code| {
-                                this.tooltip(Tooltip::text(format!("Exited with code {code}")))
+                                this.tooltip(Tooltip::text(i18n::t!(
+                                    "60bbae3867c3d9e5",
+                                    code = code
+                                )))
                             }),
                     )
             })
@@ -339,7 +341,7 @@ impl Component for TerminalToolHeader {
             .gap_4()
             .child(example_group(vec![
                 single_example(
-                    "Running",
+                    "运行中",
                     card(
                         "running",
                         TerminalToolHeader::new(
@@ -365,7 +367,7 @@ impl Component for TerminalToolHeader {
                     ),
                 ),
                 single_example(
-                    "Truncated output",
+                    "输出已截断",
                     card(
                         "truncated",
                         TerminalToolHeader::new(
@@ -381,7 +383,7 @@ impl Component for TerminalToolHeader {
                     ),
                 ),
                 single_example(
-                    "Failed with exit code",
+                    "失败，退出代码",
                     card(
                         "failed",
                         TerminalToolHeader::new(
@@ -394,7 +396,7 @@ impl Component for TerminalToolHeader {
                     ),
                 ),
                 single_example(
-                    "Ran without sandbox",
+                    "在沙箱外运行",
                     card(
                         "sandbox",
                         TerminalToolHeader::new(
@@ -422,7 +424,7 @@ impl Component for TerminalToolHeader {
                         .into_any_element(),
                 ),
                 single_example(
-                    "Everything at once",
+                    "一次性全部",
                     card(
                         "kitchen-sink",
                         TerminalToolHeader::new(

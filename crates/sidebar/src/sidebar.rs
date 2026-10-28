@@ -3,7 +3,7 @@ mod thread_switcher;
 use acp_thread::ThreadStatus;
 use action_log::DiffStats;
 use agent::{ThreadStore, ZED_AGENT_ID};
-use agent_client_protocol::schema::v2 as acp;
+use agent_client_protocol::schema::v1 as acp;
 use agent_settings::{AgentSettings, THREADS_LIST_MAX_WIDTH, THREADS_LIST_MIN_WIDTH};
 use agent_ui::terminal_thread_metadata_store::{
     TerminalThreadMetadata, TerminalThreadMetadataStore, terminal_title_prefix,
@@ -863,7 +863,7 @@ impl Sidebar {
 
         let filter_editor = cx.new(|cx| {
             let mut editor = Editor::single_line(window, cx);
-            editor.set_placeholder_text("Search threads…", window, cx);
+            editor.set_placeholder_text(i18n::t!("7877a1fa6670739b"), window, cx);
             editor
         });
         let rename_editor = cx.new(|cx| Editor::single_line(window, cx));
@@ -2310,7 +2310,7 @@ impl Sidebar {
                         .size(IconSize::XSmall)
                         .color(Color::Muted),
                 )
-                .tooltip(Tooltip::text("Remote Project"))
+                .tooltip(Tooltip::text(i18n::t!("83ed097a82962939")))
                 .into_any_element(),
         )
     }
@@ -2350,9 +2350,9 @@ impl Sidebar {
 
         let color = cx.theme().colors();
         let sidebar_base_bg = if is_sticky {
-            color.panel_background_for_overlay()
+            color.surface_overlay_background()
         } else {
-            color.panel_background
+            color.surface_background
         };
 
         // The fade gradient renders as a visible patch on transparent windows,
@@ -2539,7 +2539,7 @@ impl Sidebar {
                             Color::Custom(cx.theme().colors().icon_placeholder.opacity(0.1)),
                         ))
                         .child(
-                            Label::new("No threads yet")
+                            Label::new(i18n::t!("8eccf9eab86e998b"))
                                 .size(LabelSize::Small)
                                 .color(Color::Placeholder),
                         ),
@@ -2591,7 +2591,12 @@ impl Sidebar {
             let key = key.clone();
             return button
                 .tooltip(move |_, cx| {
-                    Tooltip::for_action_in("Start New Agent Thread", &NewThread, &focus_handle, cx)
+                    Tooltip::for_action_in(
+                        i18n::t!("104ac05f7033c7d3"),
+                        &NewThread,
+                        &focus_handle,
+                        cx,
+                    )
                 })
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.set_group_expanded(&key, true, cx);
@@ -2618,7 +2623,7 @@ impl Sidebar {
         )))
         .with_handle(menu_handle)
         .trigger_with_tooltip(button, move |_, cx| {
-            Tooltip::for_action_in("Start New Agent Thread", &NewThread, &focus_handle, cx)
+            Tooltip::for_action_in(i18n::t!("104ac05f7033c7d3"), &NewThread, &focus_handle, cx)
         })
         .anchor(gpui::Anchor::TopLeft)
         .on_open(Rc::new({
@@ -2649,7 +2654,7 @@ impl Sidebar {
                 window,
                 cx,
                 move |mut menu, _window, cx| {
-                    menu = menu.header("New Thread In…");
+                    menu = menu.header(i18n::t!("4e02b916dd3d01bc"));
 
                     for (workspace, labels) in open_workspaces
                         .iter()
@@ -2714,7 +2719,7 @@ impl Sidebar {
                     });
 
                     if let Some(base_workspace) = base_workspace.filter(|_| !creation_blocked) {
-                        menu = menu.separator().submenu("Create New Worktree…", {
+                        menu = menu.separator().submenu(i18n::t!("588d830ff65cd0b1"), {
                             let this = this.clone();
                             move |mut submenu, _window, submenu_cx| {
                                 let project = base_workspace.read(submenu_cx).project().clone();
@@ -3032,7 +3037,7 @@ impl Sidebar {
                         let menu = if open_workspaces.is_empty() {
                             menu
                         } else {
-                            let mut menu = menu.separator().header("Open Worktrees");
+                            let mut menu = menu.separator().header(i18n::t!("52fe5ae7f1bb6cae"));
 
                             for (
                                 workspace_index,
@@ -3100,7 +3105,9 @@ impl Sidebar {
                                                     )
                                                     .icon_size(IconSize::Small)
                                                     .visible_on_hover(&row_group_name)
-                                                    .tooltip(Tooltip::text("Close Worktree"))
+                                                    .tooltip(Tooltip::text(i18n::t!(
+                                                        "234e04132c6e1286"
+                                                    )))
                                                     .on_click(move |_, window, cx| {
                                                         cx.stop_propagation();
                                                         window.prevent_default();
@@ -3157,7 +3164,7 @@ impl Sidebar {
 
                             this.separator()
                                 .item(
-                                    ContextMenuEntry::new("Move Up")
+                                    ContextMenuEntry::new(i18n::t!("1359626e7b696434"))
                                         .action(Box::new(MoveProjectUp))
                                         .disabled(!can_move_up)
                                         .handler(move |_window, cx| {
@@ -3172,7 +3179,7 @@ impl Sidebar {
                                         }),
                                 )
                                 .item(
-                                    ContextMenuEntry::new("Move Down")
+                                    ContextMenuEntry::new(i18n::t!("b58330ac25057a44"))
                                         .action(Box::new(MoveProjectDown))
                                         .disabled(!can_move_down)
                                         .handler(move |_window, cx| {
@@ -3292,7 +3299,7 @@ impl Sidebar {
             .unwrap_or(px(0.));
 
         let color = cx.theme().colors();
-        let background = color.panel_background_for_overlay();
+        let background = color.surface_overlay_background();
 
         let element = v_flex()
             .absolute()
@@ -5374,58 +5381,8 @@ impl Sidebar {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let (metadata, thread_entry) = self.thread_to_archive(session_id, cx);
-
-        if let (
-            Some(metadata),
-            Some(ThreadEntryWorkspace::Closed {
-                folder_paths,
-                project_group_key,
-            }),
-        ) = (
-            metadata.as_ref(),
-            thread_entry.as_ref().map(|thread| &thread.workspace),
-        ) && self.should_load_closed_workspace_for_archive(
-            folder_paths,
-            project_group_key,
-            metadata.remote_connection.as_ref(),
-            Some(metadata.thread_id),
-            None,
-            cx,
-        ) {
-            let session_id = session_id.clone();
-            self.open_workspace_for_archive(
-                folder_paths.clone(),
-                project_group_key.clone(),
-                window,
-                cx,
-                move |this, _workspace, window, cx| {
-                    this.update_entries(cx);
-                    let (metadata, thread_entry) = this.thread_to_archive(&session_id, cx);
-                    this.archive_thread_in_loaded_workspace(
-                        &session_id,
-                        metadata,
-                        thread_entry,
-                        window,
-                        cx,
-                    );
-                },
-            );
-            return;
-        }
-
-        self.archive_thread_in_loaded_workspace(session_id, metadata, thread_entry, window, cx);
-    }
-
-    fn thread_to_archive(
-        &self,
-        session_id: &acp::SessionId,
-        cx: &App,
-    ) -> (Option<ThreadMetadata>, Option<Arc<ThreadEntry>>) {
-        let metadata = ThreadMetadataStore::global(cx)
-            .read(cx)
-            .entry_by_session(session_id)
-            .cloned();
+        let store = ThreadMetadataStore::global(cx);
+        let metadata = store.read(cx).entry_by_session(session_id).cloned();
         let metadata_thread_id = metadata.as_ref().map(|metadata| metadata.thread_id);
         let thread_entry = self.contents.entries.iter().find_map(|entry| match entry {
             ListEntry::Thread(thread) => metadata_thread_id
@@ -5436,18 +5393,6 @@ impl Sidebar {
                 .then(|| thread.clone()),
             _ => None,
         });
-        (metadata, thread_entry)
-    }
-
-    fn archive_thread_in_loaded_workspace(
-        &mut self,
-        session_id: &acp::SessionId,
-        metadata: Option<ThreadMetadata>,
-        thread_entry: Option<Arc<ThreadEntry>>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let metadata_thread_id = metadata.as_ref().map(|metadata| metadata.thread_id);
         let thread_id = metadata_thread_id.or_else(|| {
             thread_entry
                 .as_ref()
@@ -5475,6 +5420,37 @@ impl Sidebar {
                     .as_ref()
                     .map(|workspace| PathList::new(&workspace.read(cx).root_paths(cx)))
             });
+        let thread_entry_workspace = thread_entry.map(|thread| thread.workspace.clone());
+
+        if let (
+            Some(metadata),
+            Some(ThreadEntryWorkspace::Closed {
+                folder_paths,
+                project_group_key,
+            }),
+        ) = (metadata.as_ref(), thread_entry_workspace)
+            && self.should_load_closed_workspace_for_archive(
+                &folder_paths,
+                &project_group_key,
+                metadata.remote_connection.as_ref(),
+                Some(metadata.thread_id),
+                None,
+                cx,
+            )
+        {
+            let session_id = session_id.clone();
+            self.open_workspace_for_archive(
+                folder_paths,
+                project_group_key,
+                window,
+                cx,
+                move |this, _workspace, window, cx| {
+                    this.update_entries(cx);
+                    this.archive_thread(&session_id, window, cx);
+                },
+            );
+            return;
+        }
 
         // Compute which linked worktree roots should be archived from disk if
         // this thread is archived. This must happen before we remove any
@@ -6312,7 +6288,7 @@ impl Sidebar {
         let id = SharedString::from(format!("thread-entry-{}", ix));
 
         let color = cx.theme().colors();
-        let sidebar_bg = color.panel_background;
+        let sidebar_bg = color.surface_background;
         let button_hover_bg = color.element_background;
         let button_active_bg = color.element_active;
 
@@ -6411,7 +6387,7 @@ impl Sidebar {
                             .icon_size(IconSize::Small)
                             .icon_color(Color::Error)
                             .style(ButtonStyle::Tinted(TintColor::Error))
-                            .tooltip(Tooltip::text("Stop Generation"))
+                            .tooltip(Tooltip::text(i18n::t!("9ad0aac32ea304be")))
                             .on_click(cx.listener(move |this, _, _window, cx| {
                                 this.stop_thread(&thread_id_for_actions, cx);
                             }))
@@ -6425,7 +6401,7 @@ impl Sidebar {
                                 .hover_background(button_hover_bg)
                                 .active_background(button_active_bg)
                                 .icon_size(IconSize::Small)
-                                .tooltip(Tooltip::text("Discard Draft"))
+                                .tooltip(Tooltip::text(i18n::t!("70403791a99417bb")))
                                 .on_click({
                                     let thread_workspace = thread_workspace.clone();
                                     cx.listener(move |this, _, window, cx| {
@@ -6641,7 +6617,7 @@ impl Sidebar {
         let timestamp = format_history_entry_timestamp(terminal.metadata.created_at);
         let is_hovered = self.hovered_thread_index == Some(ix);
         let color = cx.theme().colors();
-        let sidebar_bg = color.panel_background;
+        let sidebar_bg = color.surface_background;
         let button_hover_bg = color.element_background;
         let button_active_bg = color.element_active;
         let metadata = terminal.metadata.clone();
@@ -6735,7 +6711,7 @@ impl Sidebar {
                 let sidebar = sidebar.clone();
                 let rename_title = rename_title.clone();
                 ContextMenu::build(window, cx, move |menu, _window, _cx| {
-                    menu.entry("Rename Title", None, move |window, cx| {
+                    menu.entry(i18n::t!("5e3d11c94e712f93"), None, move |window, cx| {
                         sidebar
                             .update(cx, |sidebar, cx| {
                                 sidebar.start_renaming_entry(
@@ -6802,7 +6778,9 @@ impl Sidebar {
                 IconButton::new("open-project", IconName::FolderAdd)
                     .icon_size(IconSize::Small)
                     .selected_style(ButtonStyle::Tinted(TintColor::Accent)),
-                |_window, cx| Tooltip::for_action("Add Project", &OpenRecent::default(), cx),
+                |_window, cx| {
+                    Tooltip::for_action(i18n::t!("44b7ce21b9f2b32c"), &OpenRecent::default(), cx)
+                },
             )
             .offset(gpui::Point {
                 x: px(-2.0),
@@ -7465,7 +7443,7 @@ impl Sidebar {
                                 this.child(
                                     IconButton::new("clear_filter", IconName::Close)
                                         .icon_size(IconSize::Small)
-                                        .tooltip(Tooltip::text("Clear Search"))
+                                        .tooltip(Tooltip::text(i18n::t!("ee32f25f70508f9c")))
                                         .on_click(cx.listener(|this, _, window, cx| {
                                             this.reset_filter_editor_text(window, cx);
                                             this.update_entries(cx);
@@ -7475,11 +7453,7 @@ impl Sidebar {
                     )
             })
             .when(right_window_controls, |this| {
-                this
-                    // Without projects, nothing flex-grows to push right-side window controls
-                    // to the edge.
-                    .when(no_open_projects, |this| this.justify_end())
-                    .children(Self::render_right_window_controls(window, cx))
+                this.children(Self::render_right_window_controls(window, cx))
             })
     }
 
@@ -7528,7 +7502,7 @@ impl Sidebar {
                                 h_flex()
                                     .gap_2()
                                     .justify_between()
-                                    .child(Label::new("Toggle Sidebar"))
+                                    .child(Label::new(i18n::t!("83d7141f672eecfe")))
                                     .child(KeyBinding::for_action(&ToggleWorkspaceSidebar, cx)),
                             )
                             .child(
@@ -7538,7 +7512,7 @@ impl Sidebar {
                                     .border_t_1()
                                     .border_color(cx.theme().colors().border_variant)
                                     .justify_between()
-                                    .child(Label::new("Focus Sidebar"))
+                                    .child(Label::new(i18n::t!("c488f5538b86c838")))
                                     .child(KeyBinding::for_action(&FocusWorkspaceSidebar, cx)),
                             )
                             .into_any_element()
@@ -7987,7 +7961,7 @@ impl Render for Sidebar {
         let sticky_header = self.render_sticky_header(window, cx);
 
         let color = cx.theme().colors();
-        let bg = color.background.blend(color.panel_background);
+        let bg = color.surface_background;
 
         let no_open_projects = !self.contents.has_open_projects;
         let no_search_results = self.contents.entries.is_empty();
@@ -8286,7 +8260,7 @@ pub fn dump_workspace_info(
                         editor::Editor::for_multibuffer(buffer, Some(project.clone()), window, cx);
                     editor.set_read_only(true);
                     editor.set_should_serialize(false, cx);
-                    editor.set_breadcrumb_header("Workspace Info".into());
+                    editor.set_breadcrumb_header(i18n::t!("82be3c0565c5bedd").into());
                     editor
                 })),
                 None,

@@ -10,7 +10,10 @@ use gpui::{
     Action, AnyElement, Entity, EventEmitter, FocusHandle, Focusable, FontWeight, ListState,
     Subscription, Task, TaskExt, WeakEntity, list,
 };
-use util::{debug_panic, paths::PathStyle};
+use util::{
+    debug_panic,
+    paths::{PathStyle, is_absolute},
+};
 
 use crate::ToggleUserFrames;
 use language::PointUtf16;
@@ -525,8 +528,7 @@ impl StackFrameList {
                 .filter(|path| {
                     // Since we do not know if we are debugging on the host or (a remote/WSL) target,
                     // we need to check if either the path is absolute as Posix or Windows.
-                    let path = Path::new(path);
-                    PathStyle::Unix.is_absolute(path) || PathStyle::Windows.is_absolute(path)
+                    is_absolute(path, PathStyle::Unix) || is_absolute(path, PathStyle::Windows)
                 })
                 .map(|path| Arc::<Path>::from(Path::new(path)))
         })
@@ -660,7 +662,7 @@ impl StackFrameList {
                                     }
                                 }))
                                 .tooltip(move |window, cx| {
-                                    Tooltip::text("Restart Stack Frame")(window, cx)
+                                    Tooltip::text(i18n::t!("7af27f51a45994ff"))(window, cx)
                                 }),
                             ),
                     )
@@ -908,8 +910,8 @@ impl StackFrameList {
 
     pub(crate) fn render_control_strip(&self) -> AnyElement {
         let tooltip_title = match self.list_filter {
-            StackFrameFilter::All => "Show stack frames from your project",
-            StackFrameFilter::OnlyUserFrames => "Show all stack frames",
+            StackFrameFilter::All => i18n::t!("ae35a965b95fe0b8"),
+            StackFrameFilter::OnlyUserFrames => i18n::t!("b8a0ba168c29a75c"),
         };
 
         h_flex()

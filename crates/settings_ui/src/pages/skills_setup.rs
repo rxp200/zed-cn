@@ -2,10 +2,11 @@ use agent_skills::{Skill, SkillIndex, SkillSource, encode_skill_share_link};
 use fs::RemoveOptions;
 use gpui::{App, ClipboardItem, PromptLevel, ScrollHandle, SharedString, prelude::*};
 
-use ui::{Divider, Tooltip, prelude::*};
+use ui::{Tooltip, prelude::*};
 use util::ResultExt as _;
 use util::paths::PathExt as _;
 
+use crate::components::settings_card;
 use crate::pages::SkillCreatorOpenMode;
 use crate::{SettingsUiFile, SettingsWindow};
 
@@ -69,7 +70,7 @@ pub(crate) fn render_skills_setup_page(
                         .gap_2()
                         .child(Label::new(message).color(Color::Muted))
                         .child(
-                            Button::new("open-skill-creator-empty", "Create a Skill")
+                            Button::new("open-skill-creator-empty", i18n::t!("04bcc5bd9b5e543d"))
                                 .tab_index(0_isize)
                                 .style(ButtonStyle::Outlined)
                                 .start_icon(
@@ -89,21 +90,11 @@ pub(crate) fn render_skills_setup_page(
             } else {
                 this.track_scroll(scroll_handle)
                     .overflow_y_scroll()
-                    .children(skills.iter().enumerate().flat_map(|(i, skill)| {
-                        let mut elements: Vec<AnyElement> =
-                            vec![render_skill_row(skill, settings_window, cx)];
-
-                        if i + 1 < skills.len() {
-                            elements.push(
-                                div()
-                                    .px_8()
-                                    .child(Divider::horizontal().flex_grow_1())
-                                    .into_any_element(),
-                            );
-                        }
-
-                        elements
-                    }))
+                    .child(div().px_8().child(settings_card(cx).children(
+                        skills.iter().enumerate().map(|(index, skill)| {
+                            render_skill_row(skill, index == 0, settings_window, cx)
+                        }),
+                    )))
             }
         })
         .into_any_element()
@@ -111,6 +102,7 @@ pub(crate) fn render_skills_setup_page(
 
 fn render_skill_row(
     skill: &Skill,
+    first: bool,
     settings_window: &SettingsWindow,
     cx: &mut Context<SettingsWindow>,
 ) -> AnyElement {
@@ -136,7 +128,6 @@ fn render_skill_row(
     let group = format!("group-{}", skill.name);
 
     let title = h_flex()
-        .ml(rems_from_px(-22.0_f32))
         .gap_1()
         .child({
             let share_skill_file_path = skill.skill_file_path.clone();
@@ -149,7 +140,7 @@ fn render_skill_row(
             .shape(ui::IconButtonShape::Square)
             .icon_size(IconSize::Small)
             .icon_color(share_icon_color)
-            .tooltip(Tooltip::text("Copy Share Link"))
+            .tooltip(Tooltip::text(i18n::t!("4300017090d2800c")))
             .visible_on_hover(&group)
             .on_click(cx.listener(move |_settings_window, _event, _window, cx| {
                 let skill_file_path = share_skill_file_path.clone();
@@ -199,8 +190,12 @@ fn render_skill_row(
         .w_full()
         .justify_between()
         .py_3()
-        .px_8()
+        .px_4()
         .gap_4()
+        .when(!first, |this| {
+            this.border_t_1()
+                .border_color(cx.theme().colors().border_variant)
+        })
         .child(
             v_flex().gap_0p5().min_w_0().flex_1().child(title).child(
                 Label::new(skill.description.clone())
@@ -219,7 +214,7 @@ fn render_skill_row(
                     )
                     .tab_index(0_isize)
                     .icon_size(IconSize::Small)
-                    .tooltip(Tooltip::text("Delete Skill"))
+                    .tooltip(Tooltip::text(i18n::t!("615d1b33ea0647f0")))
                     .on_click(cx.listener(
                         move |settings_window, _event, window, cx| {
                             let directory_path = directory_path.clone();
@@ -231,18 +226,13 @@ fn render_skill_row(
                             }
 
                             let prompt_message =
-                                format!("Delete the {skill_scope} skill \"{skill_name}\"?");
-                            let prompt_detail = format!(
-                                "This will move {} to the trash. This skill is shared with other \
-                                 agent tools {shared_scope}, so it will no longer be available to \
-                                 them either.",
-                                directory_path.compact().display(),
-                            );
+                                i18n::t!("0e322e9fbf3e7bc1", skill_scope = skill_scope, skill_name = skill_name);
+                            let prompt_detail = i18n::t_mix!("b84e9c6031a03a3a"; directory_path.compact().display(); shared_scope = shared_scope);
                             let answer = window.prompt(
                                 PromptLevel::Info,
                                 &prompt_message,
                                 Some(&prompt_detail),
-                                &["Delete", "Cancel"],
+                                &[i18n::t!("2f9daa828907b93f"), i18n::t!("2cd0f3be8738a86c")],
                                 cx,
                             );
 
@@ -297,7 +287,7 @@ fn render_skill_row(
                     )),
                 )
                 .child(
-                    Button::new(SharedString::from(format!("open-{}", skill.name)), "Open")
+                    Button::new(SharedString::from(format!("open-{}", skill.name)), i18n::t!("c771248e511fbf93"))
                         .tab_index(0_isize)
                         .style(ButtonStyle::OutlinedGhost)
                         .size(ButtonSize::Medium)

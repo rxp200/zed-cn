@@ -1,3 +1,5 @@
+// Modified by the Zed CN project, 2026. See MODIFICATIONS.md.
+
 use std::{
     cell::{Cell, RefCell},
     ffi::{OsStr, OsString},
@@ -111,7 +113,6 @@ struct PlatformCallbacks {
     keyboard_layout_change: Cell<Option<Box<dyn FnMut()>>>,
     system_sleep: Cell<Option<Box<dyn FnMut()>>>,
     system_wake: Cell<Option<Box<dyn FnMut()>>>,
-    displays_changed: Cell<Option<Box<dyn FnMut()>>>,
 }
 
 impl WindowsPlatformState {
@@ -217,12 +218,9 @@ impl WindowsPlatform {
             directx_devices: None,
             dispatcher: None,
         };
-        // A hidden top-level window rather than a message-only one, since only
-        // top-level windows receive system broadcasts such as `WM_DISPLAYCHANGE`
-        // and `WM_ENDSESSION`, which the app needs even with no windows open.
         let result = unsafe {
             CreateWindowExW(
-                WS_EX_TOOLWINDOW,
+                WINDOW_EX_STYLE(0),
                 PLATFORM_WINDOW_CLASS_NAME,
                 None,
                 WINDOW_STYLE(0),
@@ -230,7 +228,7 @@ impl WindowsPlatform {
                 0,
                 0,
                 0,
-                None,
+                Some(HWND_MESSAGE),
                 None,
                 None,
                 Some(&raw const context as *const _),
@@ -735,14 +733,6 @@ impl Platform for WindowsPlatform {
         WindowsDisplay::primary_monitor().map(|display| Rc::new(display) as Rc<dyn PlatformDisplay>)
     }
 
-    fn on_displays_changed(&self, callback: Box<dyn FnMut()>) {
-        self.inner
-            .state
-            .callbacks
-            .displays_changed
-            .set(Some(callback));
-    }
-
     #[cfg(feature = "screen-capture")]
     fn is_screen_capture_supported(&self) -> bool {
         true
@@ -1181,6 +1171,7 @@ impl WindowsPlatformInner {
 
     fn handle_msg(
         self: &Rc<Self>,
+        wnd_proc_guard: &WndProcGuard,
         handle: HWND,
         msg: u32,
         wparam: WPARAM,
@@ -1191,12 +1182,9 @@ impl WindowsPlatformInner {
             | WM_GPUI_TASK_DISPATCHED_ON_MAIN_THREAD
             | WM_GPUI_DOCK_MENU_ACTION
             | WM_GPUI_KEYBOARD_LAYOUT_CHANGED
-            | WM_GPUI_DISPLAYS_CHANGED
-            | WM_GPUI_GPU_DEVICE_LOST => self.handle_gpui_events(msg, wparam, lparam),
+            | WM_GPUI_GPU_DEVICE_LOST
+            | WM_GPUI_END_SESSION => self.handle_gpui_events(wnd_proc_guard, msg, wparam, lparam),
             WM_POWERBROADCAST => self.handle_power_broadcast(wparam),
-            WM_DISPLAYCHANGE => self.handle_display_change(handle),
-            WM_QUERYENDSESSION => Some(1),
-            WM_ENDSESSION if wparam.0 != 0 => self.handle_end_session(),
             _ => None,
         };
         if let Some(result) = handled {
@@ -1206,7 +1194,13 @@ impl WindowsPlatformInner {
         }
     }
 
-    fn handle_gpui_events(&self, message: u32, wparam: WPARAM, lparam: LPARAM) -> Option<isize> {
+    fn handle_gpui_events(
+        self: &Rc<Self>,
+        wnd_proc_guard: &WndProcGuard,
+        message: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> Option<isize> {
         if wparam.0 != self.validation_number {
             log::error!("Wrong validation number while processing message: {message}");
             return None;
@@ -1216,36 +1210,13 @@ impl WindowsPlatformInner {
                 self.close_one_window(HWND(lparam.0 as _));
                 Some(0)
             }
-            WM_GPUI_TASK_DISPATCHED_ON_MAIN_THREAD => self.run_foreground_task(),
+            WM_GPUI_TASK_DISPATCHED_ON_MAIN_THREAD => self.handle_foreground_task(wnd_proc_guard),
             WM_GPUI_DOCK_MENU_ACTION => self.handle_dock_action_event(lparam.0 as _),
             WM_GPUI_KEYBOARD_LAYOUT_CHANGED => self.handle_keyboard_layout_change(),
-            WM_GPUI_DISPLAYS_CHANGED => self.handle_displays_changed(),
             WM_GPUI_GPU_DEVICE_LOST => self.handle_device_lost(lparam),
+            WM_GPUI_END_SESSION => self.handle_end_session(),
             _ => unreachable!(),
         }
-    }
-
-    fn handle_display_change(&self, handle: HWND) -> Option<isize> {
-        // Broadcasts can be delivered while the app is mid-update, e.g. inside a
-        // COM call, so report the change from the message loop instead.
-        unsafe {
-            PostMessageW(
-                Some(handle),
-                WM_GPUI_DISPLAYS_CHANGED,
-                WPARAM(self.validation_number),
-                LPARAM(0),
-            )
-            .log_err();
-        }
-        Some(0)
-    }
-
-    fn handle_displays_changed(&self) -> Option<isize> {
-        self.with_callback(
-            |callbacks| &callbacks.displays_changed,
-            |callback| callback(),
-        );
-        Some(0)
     }
 
     fn handle_end_session(&self) -> Option<isize> {
@@ -1279,6 +1250,16 @@ impl WindowsPlatformInner {
         lock.remove(index);
 
         lock.is_empty()
+    }
+
+    fn handle_foreground_task(self: &Rc<Self>, wnd_proc_guard: &WndProcGuard) -> Option<isize> {
+        wnd_proc_guard.run_at_outermost({
+            let this = self.clone();
+            move || {
+                this.run_foreground_task();
+            }
+        });
+        Some(0)
     }
 
     #[inline]
@@ -1778,6 +1759,8 @@ unsafe extern "system" fn window_procedure(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
+    let wnd_proc_guard = WndProcGuard::enter();
+
     if msg == WM_NCCREATE {
         let params = unsafe { &*(lparam.0 as *const CREATESTRUCTW) };
         let creation_context = params.lpCreateParams as *mut PlatformWindowCreateContext;
@@ -1815,12 +1798,14 @@ unsafe extern "system" fn window_procedure(
     let result = if let Some(inner) = inner.upgrade() {
         if cfg!(debug_assertions) {
             let inner = std::panic::AssertUnwindSafe(inner);
-            match std::panic::catch_unwind(|| { inner }.handle_msg(hwnd, msg, wparam, lparam)) {
+            match std::panic::catch_unwind(|| {
+                inner.handle_msg(&wnd_proc_guard, hwnd, msg, wparam, lparam)
+            }) {
                 Ok(result) => result,
                 Err(_) => std::process::abort(),
             }
         } else {
-            inner.handle_msg(hwnd, msg, wparam, lparam)
+            inner.handle_msg(&wnd_proc_guard, hwnd, msg, wparam, lparam)
         }
     } else {
         unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
@@ -1832,6 +1817,70 @@ unsafe extern "system" fn window_procedure(
     }
 
     result
+}
+
+thread_local! {
+    static WND_PROC_DEPTH: Cell<usize> = const { Cell::new(0) };
+    static WND_PROC_DEFERRED_CALLBACKS: RefCell<Vec<Box<dyn FnOnce()>>> = const { RefCell::new(Vec::new()) };
+}
+
+pub(crate) struct WndProcGuard {
+    depth: usize,
+}
+
+impl WndProcGuard {
+    pub(crate) fn enter() -> Self {
+        let depth = WND_PROC_DEPTH.get() + 1;
+        WND_PROC_DEPTH.set(depth);
+        Self { depth }
+    }
+
+    pub(crate) fn run_at_outermost(&self, callback: impl FnOnce() + 'static) {
+        if self.depth == 1 {
+            callback();
+        } else {
+            WND_PROC_DEFERRED_CALLBACKS.with_borrow_mut(|callbacks| {
+                callbacks.push(Box::new(callback));
+            });
+        }
+    }
+
+    #[cfg(test)]
+    fn depth() -> usize {
+        WND_PROC_DEPTH.get()
+    }
+
+    #[cfg(test)]
+    fn deferred_callback_count() -> usize {
+        WND_PROC_DEFERRED_CALLBACKS.with_borrow(Vec::len)
+    }
+}
+
+impl Drop for WndProcGuard {
+    fn drop(&mut self) {
+        if self.depth == 1 {
+            loop {
+                let callbacks = WND_PROC_DEFERRED_CALLBACKS
+                    .with_borrow_mut(|callbacks| std::mem::take(callbacks));
+                if callbacks.is_empty() {
+                    break;
+                }
+                for callback in callbacks {
+                    if cfg!(debug_assertions) {
+                        if std::panic::catch_unwind(std::panic::AssertUnwindSafe(callback)).is_err()
+                        {
+                            std::process::abort();
+                        }
+                    } else {
+                        callback();
+                    }
+                }
+            }
+        }
+
+        debug_assert_eq!(WND_PROC_DEPTH.get(), self.depth);
+        WND_PROC_DEPTH.set(self.depth - 1);
+    }
 }
 
 /// Copies the username and secret out of a credential returned by `CredReadW`.
@@ -1868,9 +1917,13 @@ unsafe fn username_and_password(credential: &CREDENTIALW) -> Result<(String, Vec
 
 #[cfg(test)]
 mod tests {
-    use std::ffi::{OsStr, OsString};
+    use std::{
+        cell::RefCell,
+        ffi::{OsStr, OsString},
+        rc::Rc,
+    };
 
-    use crate::{read_from_clipboard, write_to_clipboard};
+    use crate::{WndProcGuard, read_from_clipboard, write_to_clipboard};
     use gpui::ClipboardItem;
     use windows::Win32::Security::Credentials::{
         CRED_PERSIST_SESSION, CRED_TYPE_GENERIC, CREDENTIALW, CredDeleteW, CredFree, CredReadW,
@@ -1947,6 +2000,41 @@ mod tests {
             encode_restart_arguments(&[OsString::from(r"C:\")]),
             OsStr::new(r#""C:\\""#)
         );
+    }
+
+    #[test]
+    fn defers_nested_window_procedure_callbacks() {
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        {
+            let _outer_guard = WndProcGuard::enter();
+            {
+                let nested_guard = WndProcGuard::enter();
+                nested_guard.run_at_outermost({
+                    let calls = calls.clone();
+                    move || {
+                        calls.borrow_mut().push("first");
+                        let nested_guard = WndProcGuard::enter();
+                        nested_guard.run_at_outermost({
+                            let calls = calls.clone();
+                            move || calls.borrow_mut().push("third")
+                        });
+                    }
+                });
+                nested_guard.run_at_outermost({
+                    let calls = calls.clone();
+                    move || calls.borrow_mut().push("second")
+                });
+
+                assert!(calls.borrow().is_empty());
+                assert_eq!(WndProcGuard::depth(), 2);
+                assert_eq!(WndProcGuard::deferred_callback_count(), 2);
+            }
+            assert!(calls.borrow().is_empty());
+        }
+
+        assert_eq!(calls.borrow().as_slice(), &["first", "second", "third"]);
+        assert_eq!(WndProcGuard::depth(), 0);
+        assert_eq!(WndProcGuard::deferred_callback_count(), 0);
     }
 
     #[test]

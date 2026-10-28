@@ -2443,6 +2443,92 @@ async fn test_paste_external_paths(cx: &mut gpui::TestAppContext) {
 }
 
 #[gpui::test]
+async fn test_paste_clipboard_images(cx: &mut gpui::TestAppContext) {
+    init_test(cx);
+
+    let fs = FakeFs::new(cx.executor());
+    fs.insert_tree(
+        path!("/root"),
+        json!({
+            "subdir": {
+                "existing.txt": ""
+            }
+        }),
+    )
+    .await;
+
+    let project = Project::test(fs.clone(), [path!("/root").as_ref()], cx).await;
+    let window = cx.add_window(|window, cx| MultiWorkspace::test_new(project.clone(), window, cx));
+    let workspace = window
+        .read_with(cx, |mw, _| mw.workspace().clone())
+        .unwrap();
+    let cx = &mut VisualTestContext::from_window(window.into(), cx);
+    let panel = workspace.update_in(cx, ProjectPanel::new);
+    cx.run_until_parked();
+
+    toggle_expand_dir(&panel, "root/subdir", cx);
+    let first_image_bytes = vec![1, 2, 3, 4];
+    cx.write_to_clipboard(ClipboardItem::new_image(&gpui::Image::from_bytes(
+        gpui::ImageFormat::Png,
+        first_image_bytes.clone(),
+    )));
+    panel.update_in(cx, |panel, window, cx| {
+        assert!(panel.has_pasteable_content(cx));
+        panel.paste(&Default::default(), window, cx);
+    });
+    cx.run_until_parked();
+
+    assert_eq!(
+        fs.read_file_sync(path!("/root/subdir/image.png")).unwrap(),
+        first_image_bytes
+    );
+    assert_eq!(
+        visible_entries_as_strings(&panel, 0..50, cx),
+        &[
+            "v root",
+            "    v subdir",
+            "          existing.txt",
+            "          image.png  <== selected"
+        ],
+    );
+
+    select_path(&panel, "root/subdir/existing.txt", cx);
+    let second_image_bytes = vec![5, 6, 7, 8];
+    cx.write_to_clipboard(ClipboardItem::new_image(&gpui::Image::from_bytes(
+        gpui::ImageFormat::Png,
+        second_image_bytes.clone(),
+    )));
+    panel.update_in(cx, |panel, window, cx| {
+        panel.paste(&Default::default(), window, cx);
+    });
+    cx.run_until_parked();
+
+    assert_eq!(
+        fs.read_file_sync(path!("/root/subdir/image_1.png"))
+            .unwrap(),
+        second_image_bytes
+    );
+    assert_eq!(
+        visible_entries_as_strings(&panel, 0..50, cx),
+        &[
+            "v root",
+            "    v subdir",
+            "          existing.txt",
+            "          image.png",
+            "          image_1.png  <== selected",
+        ],
+    );
+    let transfers = panel.update(cx, |panel, cx| {
+        project::file_transfer::store(&panel.project, cx)
+    });
+    assert!(
+        transfers.read_with(cx, |transfers, _| transfers.entries().iter().all(
+            |entry| entry.finished.is_some() && !entry.error && entry.percentage() == Some(100)
+        ))
+    );
+}
+
+#[gpui::test]
 async fn test_copy_and_cut_write_to_system_clipboard(cx: &mut gpui::TestAppContext) {
     init_test(cx);
 
@@ -2492,42 +2578,6 @@ async fn test_copy_and_cut_write_to_system_clipboard(cx: &mut gpui::TestAppConte
         text.contains("file_b.txt"),
         "System clipboard should contain the cut file path, got: {text}"
     );
-}
-
-#[gpui::test]
-async fn test_open_svg_preview_for_single_file_worktree(cx: &mut gpui::TestAppContext) {
-    init_test(cx);
-
-    let fs = FakeFs::new(cx.executor());
-    fs.insert_tree(
-        path!("/root"),
-        json!({
-            "icon.svg": "<svg xmlns=\"http://www.w3.org/2000/svg\"/>",
-        }),
-    )
-    .await;
-
-    let project = Project::test(fs.clone(), [path!("/root/icon.svg").as_ref()], cx).await;
-    let window = cx.add_window(|window, cx| MultiWorkspace::test_new(project.clone(), window, cx));
-    let workspace = window
-        .read_with(cx, |mw, _| mw.workspace().clone())
-        .unwrap();
-    let cx = &mut VisualTestContext::from_window(window.into(), cx);
-    let panel = workspace.update_in(cx, ProjectPanel::new);
-    cx.run_until_parked();
-
-    select_path(&panel, "icon.svg", cx);
-    panel.update_in(cx, |panel, window, cx| {
-        panel.open_svg_preview(&OpenSvgPreview, window, cx);
-    });
-    cx.run_until_parked();
-
-    workspace.update(cx, |workspace, cx| {
-        assert!(
-            workspace.active_item_as::<SvgPreviewView>(cx).is_some(),
-            "a file opened as its own worktree should open an SVG preview"
-        );
-    });
 }
 
 #[gpui::test]
@@ -7154,6 +7204,254 @@ async fn test_autoreveal_follows_multibuffer_selection(cx: &mut gpui::TestAppCon
         ],
         "Wrapper-level title updates must not clobber the inner editor's reveal"
     );
+}
+
+#[gpui::test]
+async fn test_reveal_abs_path_loads_unscanned_ancestors(cx: &mut gpui::TestAppContext) {
+    init_test(cx);
+    cx.update(|cx| {
+        cx.update_global::<SettingsStore, _>(|store, cx| {
+            store.update_user_settings(cx, |settings| {
+                settings.project.worktree.file_scan_depth = Some(1);
+            });
+        });
+    });
+
+    let fs = FakeFs::new(cx.executor());
+    fs.insert_tree(
+        "/root",
+        json!({
+            "a": {
+                "b": {
+                    "c": {
+                        "file.txt": "",
+                    },
+                },
+            },
+            "other": {},
+        }),
+    )
+    .await;
+
+    let project = Project::test(fs.clone(), ["/root".as_ref()], cx).await;
+    let window = cx.add_window(|window, cx| MultiWorkspace::test_new(project.clone(), window, cx));
+    let workspace = window
+        .read_with(cx, |mw, _| mw.workspace().clone())
+        .unwrap();
+    let cx = &mut VisualTestContext::from_window(window.into(), cx);
+    let panel = workspace.update_in(cx, |workspace, window, cx| {
+        let panel = ProjectPanel::new(workspace, window, cx);
+        workspace.add_panel(panel.clone(), window, cx);
+        panel
+    });
+    cx.run_until_parked();
+
+    // With file_scan_depth=1, only the top level is scanned.
+    assert_eq!(
+        visible_entries_as_strings(&panel, 0..50, cx),
+        ["v root", "    > a", "    > other"],
+        "deeper directories must not be scanned eagerly"
+    );
+
+    project.update(cx, |_, cx| {
+        cx.emit(project::Event::RevealPathInProjectPanel(PathBuf::from(
+            "/root/a/b/c",
+        )));
+    });
+    cx.run_until_parked();
+    cx.run_until_parked();
+    cx.run_until_parked();
+
+    panel.update(cx, |panel, cx| {
+        let selected = panel
+            .selected_entry(cx)
+            .map(|(_, entry)| entry.path.as_unix_str().to_string());
+        assert_eq!(selected.as_deref(), Some("a/b/c"));
+    });
+    assert_eq!(
+        visible_entries_as_strings(&panel, 0..50, cx),
+        [
+            "v root",
+            "    v a",
+            "        v b",
+            "            v c  <== selected  <== marked",
+            "                  file.txt",
+            "    > other"
+        ],
+        "ancestors of the revealed path must be expanded and scanned"
+    );
+}
+
+#[gpui::test]
+async fn test_reveal_abs_path_outside_worktrees_is_ignored(cx: &mut gpui::TestAppContext) {
+    init_test(cx);
+
+    let fs = FakeFs::new(cx.executor());
+    fs.insert_tree(
+        "/root",
+        json!({
+            "proj": {
+                "a": {},
+            },
+            "shared": {},
+        }),
+    )
+    .await;
+    fs.insert_tree(
+        "/elsewhere",
+        json!({
+            "x": {
+                "y": {
+                    "file.txt": "",
+                },
+            },
+        }),
+    )
+    .await;
+
+    let project = Project::test(fs.clone(), ["/root/proj".as_ref()], cx).await;
+    let window = cx.add_window(|window, cx| MultiWorkspace::test_new(project.clone(), window, cx));
+    let workspace = window
+        .read_with(cx, |mw, _| mw.workspace().clone())
+        .unwrap();
+    let cx = &mut VisualTestContext::from_window(window.into(), cx);
+    let panel = workspace.update_in(cx, |workspace, window, cx| {
+        let panel = ProjectPanel::new(workspace, window, cx);
+        workspace.add_panel(panel.clone(), window, cx);
+        panel
+    });
+    cx.run_until_parked();
+
+    // A terminal that leaves the worktree (e.g. `cd ..` to the parent of the
+    // project root, to the filesystem root, or into a sibling directory) must
+    // stay a plain terminal: no new root, no scan, no selection.
+    for outside in ["/root", "/", "/elsewhere/x"] {
+        project.update(cx, |_, cx| {
+            cx.emit(project::Event::RevealPathInProjectPanel(PathBuf::from(
+                outside,
+            )));
+        });
+        for _ in 0..5 {
+            cx.run_until_parked();
+        }
+    }
+
+    assert_eq!(
+        project.read_with(cx, |project, cx| project.worktrees(cx).count()),
+        1,
+        "paths outside the worktree must not be added as new roots"
+    );
+    assert!(
+        project.read_with(cx, |project, cx| project
+            .find_worktree(Path::new("/root"), cx)
+            .is_none()),
+        "the parent of the project root must not become a worktree"
+    );
+    assert!(
+        panel.read_with(cx, |panel, cx| panel.selected_entry(cx).is_none()),
+        "an outside directory must not be selected in the project panel"
+    );
+    assert_eq!(
+        visible_entries_as_strings(&panel, 0..50, cx),
+        ["v proj", "    > a"],
+        "the project panel must keep showing only the existing roots"
+    );
+
+    // Directories inside the worktree are still revealed.
+    project.update(cx, |_, cx| {
+        cx.emit(project::Event::RevealPathInProjectPanel(PathBuf::from(
+            "/root/proj/a",
+        )));
+    });
+    for _ in 0..5 {
+        cx.run_until_parked();
+    }
+
+    assert_eq!(
+        visible_entries_as_strings(&panel, 0..50, cx),
+        ["v proj", "    v a  <== selected  <== marked"],
+        "a directory inside the worktree must still be revealed"
+    );
+}
+
+#[gpui::test]
+async fn test_reveal_abs_path_ignores_missing_paths_outside_worktrees(
+    cx: &mut gpui::TestAppContext,
+) {
+    init_test(cx);
+
+    let fs = FakeFs::new(cx.executor());
+    fs.insert_tree(
+        "/root",
+        json!({
+            "a": {},
+        }),
+    )
+    .await;
+
+    let project = Project::test(fs.clone(), ["/root".as_ref()], cx).await;
+    let window = cx.add_window(|window, cx| MultiWorkspace::test_new(project.clone(), window, cx));
+    let workspace = window
+        .read_with(cx, |mw, _| mw.workspace().clone())
+        .unwrap();
+    let cx = &mut VisualTestContext::from_window(window.into(), cx);
+    let panel = workspace.update_in(cx, |workspace, window, cx| {
+        let panel = ProjectPanel::new(workspace, window, cx);
+        workspace.add_panel(panel.clone(), window, cx);
+        panel
+    });
+    cx.run_until_parked();
+
+    project.update(cx, |_, cx| {
+        cx.emit(project::Event::RevealPathInProjectPanel(PathBuf::from(
+            "/elsewhere/x/y",
+        )));
+    });
+    cx.run_until_parked();
+
+    panel.update(cx, |panel, cx| {
+        assert!(panel.selected_entry(cx).is_none());
+    });
+}
+
+#[gpui::test]
+async fn test_reveal_abs_path_missing_entry_does_not_panic(cx: &mut gpui::TestAppContext) {
+    init_test(cx);
+
+    let fs = FakeFs::new(cx.executor());
+    fs.insert_tree(
+        "/root",
+        json!({
+            "a": {},
+        }),
+    )
+    .await;
+
+    let project = Project::test(fs.clone(), ["/root".as_ref()], cx).await;
+    let window = cx.add_window(|window, cx| MultiWorkspace::test_new(project.clone(), window, cx));
+    let workspace = window
+        .read_with(cx, |mw, _| mw.workspace().clone())
+        .unwrap();
+    let cx = &mut VisualTestContext::from_window(window.into(), cx);
+    let panel = workspace.update_in(cx, |workspace, window, cx| {
+        let panel = ProjectPanel::new(workspace, window, cx);
+        workspace.add_panel(panel.clone(), window, cx);
+        panel
+    });
+    cx.run_until_parked();
+
+    project.update(cx, |_, cx| {
+        cx.emit(project::Event::RevealPathInProjectPanel(PathBuf::from(
+            "/root/a/missing/deep",
+        )));
+    });
+    for _ in 0..5 {
+        cx.run_until_parked();
+    }
+
+    panel.update(cx, |panel, cx| {
+        assert!(panel.selected_entry(cx).is_none());
+    });
 }
 
 #[gpui::test]
@@ -12475,9 +12773,8 @@ async fn test_focus_follows_mouse_into_blank_area(cx: &mut gpui::TestAppContext)
         );
     });
 
-    // Hover over the blank space below the last entry in the project panel,
-    // which lives in the right dock by default.
-    cx.simulate_mouse_move(point(px(1800.), px(600.)), None, Modifiers::none());
+    // Zed CN places the project panel in the left dock by default.
+    cx.simulate_mouse_move(point(px(100.), px(600.)), None, Modifiers::none());
     cx.executor().advance_clock(Duration::from_millis(200));
     cx.run_until_parked();
 
@@ -12606,7 +12903,7 @@ fn submit_deletion(panel: &Entity<ProjectPanel>, cx: &mut VisualTestContext) {
         cx.has_pending_prompt(),
         "Should have a prompt after the deletion"
     );
-    cx.simulate_prompt_answer("Delete");
+    cx.simulate_prompt_answer("删除");
     assert!(
         !cx.has_pending_prompt(),
         "Should have no prompts after prompt was replied to"
@@ -12748,10 +13045,7 @@ async fn test_delete_prompt_escapes_markdown_in_file_name(cx: &mut gpui::TestApp
         .pending_prompt()
         .expect("delete should show a confirmation prompt");
 
-    assert_eq!(
-        message,
-        "Are you sure you want to permanently delete `__somefile__`?"
-    );
+    assert_eq!(message, "您确定要永久删除 `__somefile__`？");
 }
 
 #[gpui::test]
@@ -12789,7 +13083,7 @@ async fn test_restore_file_prompt_escapes_markdown_in_file_name(cx: &mut gpui::T
         .pending_prompt()
         .expect("restore should show a confirmation prompt");
 
-    assert_eq!(message, "Discard changes to `__init__.py`?");
+    assert_eq!(message, "确定放弃对 `__init__.py` 的更改吗？");
 }
 
 #[gpui::test]

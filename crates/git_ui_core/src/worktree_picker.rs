@@ -413,7 +413,12 @@ impl Render for DeleteWorktreeTooltip {
             Tooltip::with_meta_in(
                 "Delete Worktree",
                 Some(&DeleteWorktree),
-                concat!("Hold ", ui::alt_key_name!(), " to force delete"),
+                format!(
+                    "{}{}{}",
+                    i18n::t!("5e221613dfbdcb3f"),
+                    ui::alt_key_name!(),
+                    i18n::t!("5e9e6853ad7dd15d")
+                ),
                 &self.focus_handle,
                 cx,
             )
@@ -566,7 +571,7 @@ impl WorktreePickerDelegate {
                                 PromptLevel::Warning,
                                 &prompt_message,
                                 None,
-                                &["Force Delete", "Cancel"],
+                                &[i18n::t!("7b01e3d78dca41dc"), i18n::t!("2cd0f3be8738a86c")],
                                 cx,
                             )
                         })?;
@@ -1225,7 +1230,7 @@ impl PickerDelegate for WorktreePickerDelegate {
                                             .with_rotate_animation(2),
                                     )
                                     .child(
-                                        Label::new("Deleting…")
+                                        Label::new(i18n::t!("d3200249259bed6f"))
                                             .size(LabelSize::Small)
                                             .color(Color::Muted),
                                     ),
@@ -1235,7 +1240,7 @@ impl PickerDelegate for WorktreePickerDelegate {
                             let open_in_new_window_button =
                                 IconButton::new(("open-new-window", ix), IconName::ArrowUpRight)
                                     .icon_size(IconSize::Small)
-                                    .tooltip(Tooltip::text("Open in New Window"))
+                                    .tooltip(Tooltip::text(i18n::t!("f742fd2669aacbfd")))
                                     .on_click(cx.listener(move |picker, _, window, cx| {
                                         let Some(entry) = picker.delegate.matches.get(ix) else {
                                             return;
@@ -1303,7 +1308,7 @@ impl PickerDelegate for WorktreePickerDelegate {
                                                 IconName::Close,
                                             )
                                             .icon_size(IconSize::Small)
-                                            .tooltip(Tooltip::text("Remove Worktree from Window"))
+                                            .tooltip(Tooltip::text(i18n::t!("009bed892f5388ed")))
                                             .on_click(
                                                 cx.listener(move |picker, _, window, cx| {
                                                     picker.delegate.remove_worktree_from_window(
@@ -1422,7 +1427,7 @@ impl PickerDelegate for WorktreePickerDelegate {
             .border_t_1()
             .border_color(cx.theme().colors().border_variant)
             .child(
-                Button::new("configure-worktree-tasks", "Automate Setup")
+                Button::new("configure-worktree-tasks", i18n::t!("f8b76f7e3ecec42a"))
                     .key_binding(
                         KeyBinding::for_action_in(&OpenWorktreeSetupTasks, &focus_handle, cx)
                             .map(|kb| kb.size(rems_from_px(12_f32))),
@@ -1436,7 +1441,7 @@ impl PickerDelegate for WorktreePickerDelegate {
             Some(
                 footer
                     .child(
-                        Button::new("create-worktree", "Create")
+                        Button::new("create-worktree", i18n::t!("cde2cd071d25bbab"))
                             .key_binding(
                                 KeyBinding::for_action_in(&menu::Confirm, &focus_handle, cx)
                                     .map(|kb| kb.size(rems_from_px(12_f32))),
@@ -1455,7 +1460,7 @@ impl PickerDelegate for WorktreePickerDelegate {
                             .gap_0p5()
                             .when(is_deleting, |this| {
                                 this.child(
-                                    Button::new("delete-worktree", "Deleting…")
+                                    Button::new("delete-worktree", i18n::t!("5e8e7af57abbcbcf"))
                                         .loading(true)
                                         .disabled(true),
                                 )
@@ -1463,7 +1468,7 @@ impl PickerDelegate for WorktreePickerDelegate {
                             .when(!is_deleting && can_delete, |this| {
                                 let focus_handle = focus_handle.clone();
                                 this.child(
-                                    Button::new("delete-worktree", "Delete")
+                                    Button::new("delete-worktree", i18n::t!("2f9daa828907b93f"))
                                         .key_binding(
                                             KeyBinding::for_action_in(
                                                 &DeleteWorktree,
@@ -1480,7 +1485,7 @@ impl PickerDelegate for WorktreePickerDelegate {
                             .when(!is_deleting && !is_current, |this| {
                                 let focus_handle = focus_handle.clone();
                                 this.child(
-                                    Button::new("open-in-new-window", "Open in New Window")
+                                    Button::new("open-in-new-window", i18n::t!("f742fd2669aacbfd"))
                                         .key_binding(
                                             KeyBinding::for_action_in(
                                                 &menu::SecondaryConfirm,
@@ -1499,7 +1504,7 @@ impl PickerDelegate for WorktreePickerDelegate {
                             })
                             .when(!is_deleting, |this| {
                                 this.child(
-                                    Button::new("open-worktree", "Open")
+                                    Button::new("open-worktree", i18n::t!("c771248e511fbf93"))
                                         .key_binding(
                                             KeyBinding::for_action_in(
                                                 &menu::Confirm,
@@ -1973,7 +1978,7 @@ mod tests {
             "pending delete state should clear while waiting for force-delete confirmation"
         );
 
-        cx.simulate_prompt_answer("Force Delete");
+        cx.simulate_prompt_answer("强制删除");
         cx.run_until_parked();
 
         assert!(!cx.has_pending_prompt());
@@ -2017,7 +2022,7 @@ mod tests {
         assert!(cx.has_pending_prompt());
         assert!(deleting_worktree_paths(&worktree_picker, &mut cx).is_empty());
 
-        cx.simulate_prompt_answer("Cancel");
+        cx.simulate_prompt_answer("取消");
         cx.run_until_parked();
 
         assert!(!cx.has_pending_prompt());

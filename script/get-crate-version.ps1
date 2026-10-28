@@ -5,11 +5,15 @@ if ($args.Length -ne 1) {
 
 $crateName = $args[0]
 
-$metadata = cargo metadata --no-deps --format-version=1 | ConvertFrom-Json
+$metadataJson = cargo metadata --no-deps --format-version=1
+if ($LASTEXITCODE -ne 0) {
+    throw "Failed to resolve Cargo metadata"
+}
 
-$package = $metadata.packages | Where-Object { $_.name -eq $crateName }
+$metadata = $metadataJson | ConvertFrom-Json -AsHashtable
+$package = $metadata["packages"] | Where-Object { $_["name"] -eq $crateName }
 if ($package) {
-    $package.version
+    $package["version"]
 }
 else {
     Write-Error "Crate '$crateName' not found."

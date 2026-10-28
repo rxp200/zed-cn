@@ -290,7 +290,7 @@ impl AcpTools {
         self.selected_connection
             .as_ref()
             .map(|agent_id| agent_id.0.clone())
-            .unwrap_or_else(|| SharedString::from("No connection selected"))
+            .unwrap_or_else(|| SharedString::from(i18n::t!("6ad3c3fd554005f4")))
     }
 
     fn connection_menu(&self, window: &mut Window, cx: &mut Context<Self>) -> Entity<ContextMenu> {
@@ -677,7 +677,10 @@ impl Item for AcpTools {
         format!(
             "ACP: {}",
             self.selected_watched_connection()
-                .map_or("Disconnected", |connection| connection.agent_id.0.as_ref())
+                .map_or(i18n::t!("1f0ac6953e0411c0"), |connection| connection
+                    .agent_id
+                    .0
+                    .as_ref())
         )
         .into()
     }
@@ -733,7 +736,7 @@ impl Render for AcpTools {
                             .child(
                                 IconButton::new("restart_connection", IconName::RotateCw)
                                     .icon_size(IconSize::Small)
-                                    .tooltip(Tooltip::text("Restart Connection"))
+                                    .tooltip(Tooltip::text(i18n::t!("68891ab35cab9663")))
                                     .disabled(!can_restart)
                                     .on_click(cx.listener(|this, _, _window, cx| {
                                         this.restart_selected_connection(cx);
@@ -741,13 +744,13 @@ impl Render for AcpTools {
                             )
                             .child(
                                 CopyButton::new("copy-all-messages", copied_messages)
-                                    .tooltip_label("Copy All Messages")
+                                    .tooltip_label(i18n::t!("f158dbd792d7cfef"))
                                     .disabled(!has_messages),
                             )
                             .child(
                                 IconButton::new("clear_messages", IconName::Trash)
                                     .icon_size(IconSize::Small)
-                                    .tooltip(Tooltip::text("Clear Messages"))
+                                    .tooltip(Tooltip::text(i18n::t!("070df06ba1e3e696")))
                                     .disabled(!has_messages)
                                     .on_click(cx.listener(|this, _, _window, cx| {
                                         this.clear_messages(cx);
@@ -762,7 +765,7 @@ impl Render for AcpTools {
                             .size_full()
                             .justify_center()
                             .items_center()
-                            .child("No messages recorded yet")
+                            .child(i18n::t!("a730119e49b28172"))
                             .into_any()
                     } else {
                         div()
@@ -794,7 +797,7 @@ impl Render for AcpTools {
                         .size_full()
                         .justify_center()
                         .items_center()
-                        .child("No active connection")
+                        .child(i18n::t!("3696c244fdea8690"))
                         .into_any(),
                 },
             })

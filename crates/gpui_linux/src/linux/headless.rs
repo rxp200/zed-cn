@@ -4,13 +4,14 @@ use std::rc::Rc;
 
 use gpui::{AnyWindowHandle, PlatformDisplay, PlatformWindow, WindowParams};
 
-pub(crate) use window::HeadlessWindow;
+pub(crate) use window::{HeadlessDisplay, HeadlessWindow};
 
 /// The state of a `LinuxPlatform` with no display server.
 ///
-/// It reports no displays and opens [`HeadlessWindow`]s, which lay out and handle input but draw
-/// nothing.
+/// It reports one fake display and opens [`HeadlessWindow`]s, which lay out and handle input but
+/// draw nothing.
 pub(crate) struct HeadlessConnection {
+    display: Rc<dyn PlatformDisplay>,
     /// Cloned into every open window, so its count tells whether windows are open.
     window_lease: Rc<()>,
 }
@@ -18,6 +19,7 @@ pub(crate) struct HeadlessConnection {
 impl HeadlessConnection {
     pub(crate) fn new() -> Self {
         Self {
+            display: Rc::new(HeadlessDisplay::new()),
             window_lease: Rc::new(()),
         }
     }
@@ -27,11 +29,11 @@ impl HeadlessConnection {
     }
 
     pub(crate) fn displays(&self) -> Vec<Rc<dyn PlatformDisplay>> {
-        Vec::new()
+        vec![self.display.clone()]
     }
 
     pub(crate) fn primary_display(&self) -> Option<Rc<dyn PlatformDisplay>> {
-        None
+        Some(self.display.clone())
     }
 
     pub(crate) fn open_window(
@@ -41,6 +43,7 @@ impl HeadlessConnection {
     ) -> anyhow::Result<Box<dyn PlatformWindow>> {
         Ok(Box::new(HeadlessWindow::new(
             params,
+            self.display.clone(),
             self.window_lease.clone(),
         )))
     }

@@ -922,35 +922,35 @@ impl Component for ButtonLike {
                     single_example(
                         "Default",
                         ButtonLike::new("default")
-                            .child(Label::new("Default"))
+                            .child(Label::new(i18n::t!("844b8cc8dff7c1d8")))
                             .into_any_element(),
                     ),
                     single_example(
                         "Filled",
                         ButtonLike::new("filled")
                             .style(ButtonStyle::Filled)
-                            .child(Label::new("Filled"))
+                            .child(Label::new(i18n::t!("05fb7cba476bd2e9")))
                             .into_any_element(),
                     ),
                     single_example(
                         "Subtle",
                         ButtonLike::new("outline")
                             .style(ButtonStyle::Subtle)
-                            .child(Label::new("Subtle"))
+                            .child(Label::new(i18n::t!("37e717d5998d0f31")))
                             .into_any_element(),
                     ),
                     single_example(
                         "Tinted",
                         ButtonLike::new("tinted_accent_style")
                             .style(ButtonStyle::Tinted(TintColor::Accent))
-                            .child(Label::new("Accent"))
+                            .child(Label::new(i18n::t!("d5ae79edec852f2d")))
                             .into_any_element(),
                     ),
                     single_example(
                         "Transparent",
                         ButtonLike::new("transparent")
                             .style(ButtonStyle::Transparent)
-                            .child(Label::new("Transparent"))
+                            .child(Label::new(i18n::t!("9dddd9f908b2b956")))
                             .into_any_element(),
                     ),
                 ]),
@@ -960,14 +960,14 @@ impl Component for ButtonLike {
                         single_example(
                             "Left Rounded",
                             ButtonLike::new_rounded_left("left_rounded")
-                                .child(Label::new("Left Rounded"))
+                                .child(Label::new(i18n::t!("ae7930930a4e6aff")))
                                 .style(ButtonStyle::Filled)
                                 .into_any_element(),
                         ),
                         single_example(
                             "Right Rounded",
                             ButtonLike::new_rounded_right("right_rounded")
-                                .child(Label::new("Right Rounded"))
+                                .child(Label::new(i18n::t!("b2ddc334815b0015")))
                                 .style(ButtonStyle::Filled)
                                 .into_any_element(),
                         ),

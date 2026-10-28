@@ -45,15 +45,6 @@ use settings_json::{infer_json_indent_size, update_value_in_json_text};
 
 pub const LSP_SETTINGS_SCHEMA_URL_PREFIX: &str = "zed://schemas/settings/lsp/";
 
-// GPUI resolves these aliases, but they are not part of the platform font inventory.
-const VIRTUAL_FONT_NAMES: [&str; 5] = [
-    ".SystemUIFont",
-    ".ZedMono",
-    ".ZedSans",
-    "Zed Plex Mono",
-    "Zed Plex Sans",
-];
-
 pub trait SettingsKey: 'static + Send + Sync {
     /// The name of a key within the JSON file from which this setting should
     /// be deserialized. If this is `None`, then the setting will be deserialized
@@ -1076,7 +1067,7 @@ impl SettingsStore {
         match (path.clone(), kind, content) {
             (LocalSettingsPath::InWorktree(directory_path), LocalSettingsKind::Tasks, _) => {
                 return Err(InvalidSettingsError::Tasks {
-                    message: "Attempted to submit tasks into the settings store".to_string(),
+                    message: i18n::t!("c76bda9a6c1bf141").to_string(),
                     path: directory_path
                         .join(RelPath::from_unix_str(task_file_name()).unwrap())
                         .as_std_path()
@@ -1085,8 +1076,7 @@ impl SettingsStore {
             }
             (LocalSettingsPath::InWorktree(directory_path), LocalSettingsKind::Debug, _) => {
                 return Err(InvalidSettingsError::Debug {
-                    message: "Attempted to submit debugger config into the settings store"
-                        .to_string(),
+                    message: i18n::t!("9ee89bc70fb90dbb").to_string(),
                     path: directory_path
                         .join(RelPath::from_unix_str(task_file_name()).unwrap())
                         .as_std_path()
@@ -1304,14 +1294,9 @@ impl SettingsStore {
 
         if !params.font_names.is_empty() {
             replace_subschema::<FontFamilyName>(&mut generator, || {
-                let mut font_names = params.font_names.to_vec();
-                font_names.extend(VIRTUAL_FONT_NAMES.map(str::to_string));
-                font_names.sort_unstable();
-                font_names.dedup();
-
                 json_schema!({
                      "type": "string",
-                     "enum": font_names,
+                     "enum": params.font_names,
                 })
             });
         }
@@ -1377,8 +1362,11 @@ impl SettingsStore {
 
         if changed_local_path.is_none() {
             let mut merged = self.default_settings.as_ref().clone();
+            let default_explanations = merged.code_explanations.clone();
             merged.merge_from_option(self.extension_settings.as_deref());
             merged.merge_from_option(self.global_settings.as_deref());
+            // Automatic code disclosure may only be authorized by local user settings.
+            merged.code_explanations = default_explanations;
             if let Some(user_settings) = self.user_settings.as_ref() {
                 let active_profile = user_settings.for_profile(cx);
                 let should_merge_user_settings =
@@ -1394,7 +1382,12 @@ impl SettingsStore {
                     merged.merge_from(&profile.settings);
                 }
             }
+            let user_explanations = merged.code_explanations.clone();
+            let user_language_models = merged.language_models.clone();
             merged.merge_from_option(self.server_settings.as_deref());
+            merged.code_explanations = user_explanations;
+            // A remote host must not redirect client-side model requests to another endpoint.
+            merged.language_models = user_language_models;
 
             // Merge `disable_ai` from all project/local settings into the global value.
             // Since `SaturatingBool` uses OR logic, if any project has `disable_ai: true`,
@@ -1471,6 +1464,8 @@ impl SettingsStore {
                 self.merged_settings.as_ref().clone()
             };
             merged_local_settings.merge_from(local_settings);
+            merged_local_settings.code_explanations =
+                self.merged_settings.code_explanations.clone();
 
             project_settings_stack.push(merged_local_settings);
 
@@ -2771,6 +2766,45 @@ mod tests {
     }
 
     #[gpui::test]
+    fn code_explanations_only_accept_user_authorization(cx: &mut App) {
+        let mut store = SettingsStore::new(cx, &test_settings());
+        let hostile =
+            r#"{"code_explanations":{"enabled":true,"provider":"unexpected","model":"remote"}}"#;
+        store.set_global_settings(hostile, cx).unwrap();
+        store.set_server_settings(hostile, cx).unwrap();
+        assert!(
+            !store
+                .merged_settings()
+                .code_explanations
+                .as_ref()
+                .and_then(|settings| settings.enabled)
+                .unwrap_or(false)
+        );
+        store
+            .set_user_settings(
+                r#"{"code_explanations":{"enabled":true,"provider":"chosen","model":"local"}}"#,
+                cx,
+            )
+            .unwrap();
+        store.set_server_settings(hostile, cx).unwrap();
+        let settings = store.merged_settings().code_explanations.as_ref().unwrap();
+        assert_eq!(settings.provider.as_ref().unwrap().0, "chosen");
+        assert_eq!(settings.model.as_ref().unwrap().0, "local");
+        store
+            .set_user_settings(r#"{"code_explanations":{"enabled":false}}"#, cx)
+            .unwrap();
+        assert_eq!(
+            store
+                .merged_settings()
+                .code_explanations
+                .as_ref()
+                .unwrap()
+                .enabled,
+            Some(false)
+        );
+    }
+
+    #[gpui::test]
     fn test_global_settings(cx: &mut App) {
         let mut store = SettingsStore::new(cx, &test_settings());
         store.register_setting::<ItemSettings>();
@@ -3171,59 +3205,6 @@ mod tests {
                 &SettingsFile::Default,
             ]
         )
-    }
-
-    #[test]
-    fn test_virtual_font_names_are_resolved() {
-        let system = "System Font";
-        let system_shared = SharedString::new_static(system);
-        for name in VIRTUAL_FONT_NAMES {
-            assert_ne!(
-                gpui::font_name_with_fallbacks(name, system),
-                name,
-                "{name} is listed in VIRTUAL_FONT_NAMES but not resolved by font_name_with_fallbacks"
-            );
-            let name_shared = SharedString::new_static(name);
-            assert_ne!(
-                gpui::font_name_with_fallbacks_shared(&name_shared, &system_shared),
-                &name_shared,
-                "{name} is listed in VIRTUAL_FONT_NAMES but not resolved by font_name_with_fallbacks_shared"
-            );
-        }
-    }
-
-    #[test]
-    fn test_font_family_schema_accepts_virtual_aliases() -> Result<()> {
-        let schema = SettingsStore::json_schema(&SettingsJsonSchemaParams {
-            language_names: &[],
-            font_names: &["IBM Plex Sans".to_string(), "Lilex".to_string()],
-            theme_names: &[],
-            icon_theme_names: &[],
-            lsp_adapter_names: &[],
-            action_names: &[],
-            action_documentation: &HashMap::default(),
-            deprecations: &HashMap::default(),
-            deprecation_messages: &HashMap::default(),
-        });
-
-        let font_names = schema
-            .pointer("/$defs/FontFamilyName/enum")
-            .and_then(Value::as_array)
-            .context("FontFamilyName schema should contain allowed font names")?;
-
-        for font_name in ["IBM Plex Sans", "Lilex"]
-            .into_iter()
-            .chain(VIRTUAL_FONT_NAMES)
-        {
-            assert!(
-                font_names
-                    .iter()
-                    .any(|value| value.as_str() == Some(font_name)),
-                "FontFamilyName schema should accept {font_name}"
-            );
-        }
-
-        Ok(())
     }
 
     #[gpui::test]

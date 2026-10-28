@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use acp_thread::AgentSessionListRequest;
 use agent::ThreadStore;
-use agent_client_protocol::schema::v2 as acp;
+use agent_client_protocol::schema::v1 as acp;
 use chrono::Utc;
 use collections::{HashMap, HashSet};
 use db::kvp::Dismissable;
@@ -118,10 +118,10 @@ impl AgentImportStatus {
 
     fn tooltip_text(&self) -> Option<SharedString> {
         match self {
-            Self::Loading => Some("Fetching Sessions…".into()),
+            Self::Loading => Some(i18n::t!("e9f2eb42df89be1d").into()),
             Self::Ready { .. } => None,
-            Self::Unsupported => Some("Importing threads from this agent is not possible as it doesn't support ACP's session/list capability.".into()),
-            Self::Error(error) => Some(format!("Failed to fetch sessions: {error}").into()),
+            Self::Unsupported => Some(i18n::t!("00fa8a22cc03a8ed").into()),
+            Self::Error(error) => Some(i18n::t!("d536bc1b66269dfe", error = error).into()),
         }
     }
 }
@@ -389,7 +389,7 @@ impl ThreadImportModal {
 
     fn show_imported_threads_toast(&self, imported_count: usize, cx: &mut App) {
         let status_toast = if imported_count == 0 {
-            StatusToast::new("No threads found to import.", cx, |this, _cx| {
+            StatusToast::new(i18n::t!("f3ea9ed335cd8bac"), cx, |this, _cx| {
                 this.icon(
                     Icon::new(IconName::Info)
                         .size(IconSize::Small)
@@ -588,7 +588,7 @@ impl Render for ThreadImportModal {
                                 .when(has_agents, |this| this.children(agent_rows))
                                 .when(!has_agents, |this| {
                                     this.child(
-                                        Label::new("No external agents available.")
+                                        Label::new(i18n::t!("397d1862f18860b1"))
                                             .color(Color::Muted)
                                             .size(LabelSize::Small),
                                     )
@@ -607,7 +607,7 @@ impl Render for ThreadImportModal {
                                                 .color(Color::Muted)
                                                 .with_rotate_animation(3),
                                         )
-                                        .child(Label::new("Fetching Agent Threads…")
+                                        .child(Label::new(i18n::t!("4492e9b9539e26d5"))
                                             .size(LabelSize::Small)
                                             .color(Color::Muted))
 
@@ -622,7 +622,7 @@ impl Render for ThreadImportModal {
                                 )
                             })
                             .end_slot(
-                                Button::new("import-threads", "Import Threads")
+                                Button::new("import-threads", i18n::t!("b88cb652d8c5354a"))
                                     .loading(self.is_importing)
                                     .disabled(disabled_import_thread)
                                     .key_binding(
@@ -961,7 +961,7 @@ fn show_cross_channel_import_toast(
     cx: &mut App,
 ) {
     let status_toast = if imported_count == 0 {
-        StatusToast::new("No new threads found to import.", cx, |this, _cx| {
+        StatusToast::new(i18n::t!("f4dc1b779e5eb69f"), cx, |this, _cx| {
             this.icon(Icon::new(IconName::Info).color(Color::Muted))
                 .dismiss_button(true)
         })
@@ -1255,46 +1255,6 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let threads = read_threads_from_channel(dir.path(), ReleaseChannel::Nightly).unwrap();
         assert!(threads.is_empty());
-    }
-
-    #[test]
-    fn test_cross_channel_import_preserves_legacy_session_ids_and_drafts() {
-        let directory = tempfile::tempdir().expect("temporary database directory should exist");
-        let connection = create_channel_db(directory.path(), ReleaseChannel::Nightly);
-        let legacy_session_id =
-            agent_client_protocol::schema::v1::SessionId::new("legacy/session:opaque-☃");
-        let saved_thread_id = ThreadId::new();
-        let draft_thread_id = ThreadId::new();
-        let mut insert = connection
-            .exec_bound::<(ThreadId, Option<std::sync::Arc<str>>)>(
-                "INSERT INTO sidebar_threads \
-                 (thread_id, session_id, title, updated_at, archived) \
-                 VALUES (?1, ?2, 'Legacy thread', '2025-01-15T10:00:00Z', 1)",
-            )
-            .expect("legacy metadata insert should prepare");
-        insert((saved_thread_id, Some(legacy_session_id.0.clone())))
-            .expect("legacy session metadata should insert");
-        insert((draft_thread_id, None)).expect("legacy draft metadata should insert");
-        drop(insert);
-        drop(connection);
-
-        let imported = read_threads_from_channel(directory.path(), ReleaseChannel::Nightly)
-            .expect("legacy channel metadata should load");
-        assert_eq!(imported.len(), 2);
-        let saved = imported
-            .iter()
-            .find(|metadata| metadata.thread_id == saved_thread_id)
-            .expect("legacy session should be imported");
-        assert_eq!(
-            saved.session_id,
-            Some(acp::SessionId::new(legacy_session_id.0))
-        );
-        let draft = imported
-            .iter()
-            .find(|metadata| metadata.thread_id == draft_thread_id)
-            .expect("legacy draft should be imported");
-        assert!(draft.is_draft());
-        assert!(saved.archived && draft.archived);
     }
 
     #[test]

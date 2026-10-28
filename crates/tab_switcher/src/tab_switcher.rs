@@ -15,7 +15,8 @@ use picker::{Picker, PickerDelegate};
 use project::Project;
 use schemars::JsonSchema;
 use serde::Deserialize;
-use settings::{RegisterSetting, Settings, SettingsContent, TabSwitcherSettingsContent};
+use settings::Settings;
+use std::time::Duration;
 use std::{cmp::Reverse, sync::Arc};
 use ui::{
     DecoratedIcon, IconDecoration, IconDecorationKind, ListItem, ListItemSpacing, Tooltip,
@@ -28,21 +29,8 @@ use workspace::{
     pane::{render_item_indicator, tab_details},
 };
 
-#[derive(Clone, Copy, Debug, RegisterSetting)]
-pub struct TabSwitcherSettings {
-    pub show_file_preview: bool,
-}
-
-impl Settings for TabSwitcherSettings {
-    fn from_settings(content: &SettingsContent) -> Self {
-        let tab_switcher: &TabSwitcherSettingsContent = content.tab_switcher.as_ref().unwrap();
-        Self {
-            show_file_preview: tab_switcher.show_file_preview.unwrap(),
-        }
-    }
-}
-
 const PANEL_WIDTH_REMS: f32 = 28.;
+const POPOVER_DELAY: Duration = Duration::from_millis(300);
 
 /// Toggles the tab switcher interface.
 #[derive(PartialEq, Clone, Deserialize, JsonSchema, Default, Action)]
@@ -68,6 +56,8 @@ actions!(
 pub struct TabSwitcher {
     picker: Entity<Picker<TabSwitcherDelegate>>,
     init_modifiers: Option<Modifiers>,
+    visible: bool,
+    _show_task: Option<Task<()>>,
 }
 
 impl ModalView for TabSwitcher {}
@@ -183,6 +173,17 @@ impl TabSwitcher {
         } else {
             window.modifiers().modified().then_some(window.modifiers())
         };
+        let has_modifiers = init_modifiers.is_some();
+        let _show_task = has_modifiers.then(|| {
+            cx.spawn_in(window, async move |this, cx| {
+                cx.background_executor().timer(POPOVER_DELAY).await;
+                this.update_in(cx, |this, _window, cx| {
+                    this.visible = true;
+                    cx.notify();
+                })
+                .ok();
+            })
+        });
         Self {
             picker: cx.new(|cx| {
                 if is_global {
@@ -193,6 +194,8 @@ impl TabSwitcher {
                 .initial_width(rems(PANEL_WIDTH_REMS))
             }),
             init_modifiers,
+            visible: !has_modifiers,
+            _show_task,
         }
     }
 
@@ -209,8 +212,12 @@ impl TabSwitcher {
             self.init_modifiers = None;
             if self.picker.read(cx).delegate.matches.is_empty() {
                 cx.emit(DismissEvent)
-            } else {
+            } else if self.visible {
                 window.dispatch_action(menu::Confirm.boxed_clone(), cx);
+            } else {
+                self.picker.update(cx, |picker, cx| {
+                    picker.delegate.confirm(false, window, cx);
+                });
             }
         }
     }
@@ -239,12 +246,16 @@ impl Focusable for TabSwitcher {
 
 impl Render for TabSwitcher {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let picker = self.picker.clone();
         v_flex()
             .key_context("TabSwitcher")
             .w(rems(PANEL_WIDTH_REMS))
             .on_modifiers_changed(cx.listener(Self::handle_modifiers_changed))
             .on_action(cx.listener(Self::handle_close_selected_item))
-            .child(self.picker.clone())
+            .when(self.visible, |el| el.child(picker.clone()))
+            .when(!self.visible, |el| {
+                el.child(div().size_0().overflow_hidden().child(picker.clone()))
+            })
     }
 }
 
@@ -743,7 +754,7 @@ impl PickerDelegate for TabSwitcherDelegate {
     }
 
     fn no_matches_text(&self, _window: &mut Window, _cx: &mut App) -> Option<SharedString> {
-        Some("No tabs".into())
+        Some(i18n::t!("53353aef06a94232").into())
     }
 
     fn match_count(&self) -> usize {
@@ -754,10 +765,6 @@ impl PickerDelegate for TabSwitcherDelegate {
         self.selected_index
     }
 
-    fn select_on_hover(&self) -> bool {
-        false
-    }
-
     fn set_selected_index(
         &mut self,
         ix: usize,
@@ -766,7 +773,7 @@ impl PickerDelegate for TabSwitcherDelegate {
     ) {
         self.selected_index = ix;
 
-        if !self.open_in_active_pane && TabSwitcherSettings::get_global(cx).show_file_preview {
+        if !self.open_in_active_pane {
             let Some(selected_match) = self.matches.get(self.selected_index()) else {
                 return;
             };
@@ -888,7 +895,10 @@ impl PickerDelegate for TabSwitcherDelegate {
                 IconButton::new("close_tab", IconName::Close)
                     .icon_size(IconSize::Small)
                     .icon_color(indicator_color)
-                    .tooltip(Tooltip::for_action_title("Close", &CloseSelectedItem))
+                    .tooltip(Tooltip::for_action_title(
+                        i18n::t!("7d9eb7acb13e2462"),
+                        &CloseSelectedItem,
+                    ))
                     .on_click(cx.listener(move |picker, _, window, cx| {
                         cx.stop_propagation();
                         picker.delegate.close_item_at(ix, window, cx);
@@ -901,16 +911,7 @@ impl PickerDelegate for TabSwitcherDelegate {
                 .spacing(ListItemSpacing::Sparse)
                 .inset(true)
                 .toggle_state(selected)
-                .child(
-                    h_flex()
-                        .when(ix == 0, |row| {
-                            row.debug_selector(|| "tab-switcher-first-item".into())
-                        })
-                        .w_full()
-                        .min_w_0()
-                        .overflow_hidden()
-                        .child(label),
-                )
+                .child(h_flex().w_full().min_w_0().overflow_hidden().child(label))
                 .start_slot::<DecoratedIcon>(icon)
                 .map(|el| {
                     if self.selected_index == ix {

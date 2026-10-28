@@ -755,6 +755,79 @@ impl Editor {
         ));
     }
 
+    pub fn expand_bracket_selection(
+        &mut self,
+        _: &ExpandBracketSelection,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let snapshot = self.snapshot(window, cx);
+        let buffer = self.buffer.read(cx).snapshot(cx);
+        let old_selections = self.selections.all::<MultiBufferOffset>(&snapshot);
+        if old_selections.is_empty() {
+            return;
+        }
+
+        let mut expanded = false;
+        let new_selections = old_selections
+            .iter()
+            .map(|selection| {
+                let range = selection.start..selection.end;
+                let pair = buffer
+                    .enclosing_bracket_ranges(range.clone())
+                    .and_then(|pairs| {
+                        pairs
+                            .filter(|(open, close)| {
+                                open.end != range.start || close.start != range.end
+                            })
+                            .min_by_key(|(open, close)| close.end.0 - open.start.0)
+                    });
+
+                let Some((open, close)) = pair else {
+                    return *selection;
+                };
+
+                let start = open.end;
+                let end = close.start;
+                if range.start == start && range.end == end {
+                    return *selection;
+                }
+
+                expanded = true;
+                Selection {
+                    id: selection.id,
+                    start,
+                    end,
+                    goal: SelectionGoal::None,
+                    reversed: selection.reversed,
+                }
+            })
+            .collect::<Vec<_>>();
+
+        if !expanded {
+            return;
+        }
+
+        self.bracket_selection_history.push(old_selections);
+        self.change_selections(SelectionEffects::no_scroll(), window, cx, |s| {
+            s.select(new_selections);
+        });
+    }
+
+    pub fn undo_bracket_selection(
+        &mut self,
+        _: &UndoBracketSelection,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(selections) = self.bracket_selection_history.pop() else {
+            return;
+        };
+        self.change_selections(SelectionEffects::no_scroll(), window, cx, |s| {
+            s.select(selections);
+        });
+    }
+
     pub fn select_smaller_syntax_node(
         &mut self,
         _: &SelectSmallerSyntaxNode,
@@ -1778,31 +1851,13 @@ impl Editor {
             return;
         }
 
-        if state.effects.unfold {
-            self.unfold_buffers_with_selections(cx);
-            let ranges = self
-                .selections
-                .disjoint_anchor_ranges()
-                .chain(
-                    self.selections
-                        .pending_anchor()
-                        .map(|selection| selection.range()),
-                )
-                .collect::<Vec<_>>();
-            self.unfold_ranges(&ranges, false, false, cx);
-        }
-
         if state.changed {
             self.selection_history.push(state.history_entry);
-        }
 
-        if state.changed || state.effects.unfold {
             if let Some(autoscroll) = state.effects.scroll {
                 self.request_autoscroll(autoscroll, cx);
             }
-        }
 
-        if state.changed {
             let old_cursor_position = &state.old_cursor_position;
 
             self.selections_did_change(true, old_cursor_position, state.effects, window, cx);
@@ -2103,25 +2158,12 @@ impl Editor {
         change: impl FnOnce(&mut MutableSelectionsCollection<'_, '_>) -> R,
     ) -> R {
         let snapshot = self.display_snapshot(cx);
-        let unfold = effects.unfold
-            || self
-                .deferred_selection_effects_state
-                .as_ref()
-                .is_some_and(|state| state.effects.unfold);
-        let change = |selections: &mut MutableSelectionsCollection<'_, '_>| {
-            if unfold {
-                // Folded display coordinates would otherwise move anchor-based jump destinations.
-                selections.preserve_buffer_positions();
-            }
-            change(selections)
-        };
         if self.deferred_selection_effects_state.is_some() {
             let (changed, result) = self.change_selections_without_effects(&snapshot, change);
             if let Some(state) = &mut self.deferred_selection_effects_state {
                 state.effects.scroll = effects.scroll.or(state.effects.scroll);
                 state.effects.completions = effects.completions;
                 state.effects.nav_history = effects.nav_history.or(state.effects.nav_history);
-                state.effects.unfold |= effects.unfold;
                 state.changed |= changed;
             }
             return result;

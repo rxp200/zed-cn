@@ -9,6 +9,7 @@ path = "src/tabular_data_preview.rs"
 doctest = false
 
 [dependencies]
+i18n.workspace = true
 anyhow.workspace = true
 fuzzy.workspace = true
 gpui.workspace = true
@@ -17,6 +18,7 @@ picker.workspace = true
 ui.workspace = true
 workspace.workspace = true
 log.workspace = true
+menu.workspace = true
 indexmap.workspace = true
 serde.workspace = true
 serde_json.workspace = true

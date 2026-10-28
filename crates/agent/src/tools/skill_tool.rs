@@ -1,4 +1,4 @@
-use agent_client_protocol::schema::v2 as acp;
+use agent_client_protocol::schema::v1 as acp;
 use agent_skills::Skill;
 use anyhow::Result;
 use gpui::{App, AsyncApp, SharedString, Task};
@@ -695,11 +695,7 @@ mod tests {
 
         // The tool must request authorization before producing a result.
         let auth = event_rx.expect_authorization().await;
-        let title = auth
-            .tool_call
-            .title
-            .value()
-            .expect("expected authorization title");
+        let title = auth.tool_call.fields.title.as_deref().unwrap_or("");
         assert!(
             title.contains("my-skill"),
             "auth title should reference the skill name: {title}"
@@ -708,8 +704,8 @@ mod tests {
         // Approve once and confirm the tool then completes successfully.
         auth.response
             .send(acp_thread::SelectedPermissionOutcome::new(
-                acp::PermissionOptionId::new("allow"),
-                acp::PermissionOptionKind::AllowOnce,
+                agent_client_protocol::schema::v1::PermissionOptionId::new("allow"),
+                agent_client_protocol::schema::v1::PermissionOptionKind::AllowOnce,
             ))
             .unwrap();
 

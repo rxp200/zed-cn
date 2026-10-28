@@ -4,6 +4,7 @@ use crate::{
     display_map::{ToDisplayPoint, is_invisible},
     editor_settings::EditorSettingsScrollbarProxy,
     hover_links::{InlayHighlight, RangeInEditor},
+    hover_translation::{HoverTranslationSettings, TranslationService, needs_translation},
     movement::TextLayoutDetails,
     scroll::ScrollAmount,
 };
@@ -14,10 +15,10 @@ use gpui::{
     StatefulInteractiveElement, StyleRefinement, Styled, Subscription, Task, TaskExt,
     TextStyleRefinement, Window, canvas, div, px,
 };
-use language::{CharKind, DiagnosticEntry, Language, LanguageRegistry};
+use language::{DiagnosticEntry, Language, LanguageRegistry};
 use lsp::DiagnosticSeverity;
 use markdown::{CopyButtonVisibility, Markdown, MarkdownElement, MarkdownStyle};
-use multi_buffer::{MultiBufferOffset, MultiBufferSnapshot, ToOffset, ToPoint};
+use multi_buffer::{MultiBufferOffset, ToOffset, ToPoint};
 use project::{HoverBlock, HoverBlockKind, InlayHintLabelPart};
 use settings::Settings;
 use std::{
@@ -29,7 +30,7 @@ use std::{path::PathBuf, rc::Rc};
 use theme_settings::ThemeSettings;
 use ui::{CopyButton, Scrollbars, WithScrollbar, prelude::*, theme_is_transparent};
 use url::Url;
-use util::TryFutureExt;
+use util::{ResultExt, TryFutureExt};
 use workspace::{OpenOptions, OpenVisible, Workspace};
 
 pub const MIN_POPOVER_CHARACTER_WIDTH: f32 = 20.;
@@ -195,17 +196,19 @@ pub fn hover_at_inlay(
                 editor.hover_state.diagnostic_popover = None;
                 editor.hover_state.info_popovers = vec![InfoPopover {
                     symbol_range,
-                    fallback_state: None,
                     parsed_content,
+                    translated_content: None,
                     scroll_handle: ScrollHandle::new(),
                     keyboard_grace: Rc::new(RefCell::new(false)),
                     anchor: None,
                     last_bounds: Rc::new(Cell::new(None)),
                     _subscription: subscription,
+                    _translated_subscription: None,
+                    _translation_task: None,
                 }];
                 cx.notify();
             })
-            .ok();
+            .log_err();
     }))
 }
 
@@ -426,6 +429,9 @@ fn show_hover(
             let mut info_popovers = Vec::with_capacity(
                 hovers_response.len() + if invisible_char.is_some() { 1 } else { 0 },
             );
+            // Documentation text (non-code blocks) for each info popover, used
+            // for AI translation of hover contents.
+            let mut doc_texts: Vec<Option<String>> = Vec::new();
 
             if let Some((invisible, range)) = invisible_char {
                 let blocks = vec![HoverBlock {
@@ -444,14 +450,17 @@ fn show_hover(
                     .flatten();
                 info_popovers.push(InfoPopover {
                     symbol_range: RangeInEditor::Text(range),
-                    fallback_state: None,
                     parsed_content,
+                    translated_content: None,
                     scroll_handle,
                     keyboard_grace: Rc::new(RefCell::new(ignore_timeout)),
                     anchor: Some(anchor),
                     last_bounds: Rc::new(Cell::new(None)),
                     _subscription: subscription,
-                })
+                    _translated_subscription: None,
+                    _translation_task: None,
+                });
+                doc_texts.push(None);
             }
 
             let doc_link_task = this
@@ -475,22 +484,26 @@ fn show_hover(
                 None => Vec::new(),
             };
 
-            let buffer_snapshot = snapshot.buffer_snapshot();
             for hover_result in hovers_response {
                 // Create symbol range of anchors for highlighting and filtering of future requests.
-                let (range, fallback_state) = hover_result
+                let range = hover_result
                     .range
-                    .and_then(|range| buffer_snapshot.buffer_anchor_range_to_anchor_range(range))
-                    .filter(|range| !range.to_offset(buffer_snapshot).is_empty())
-                    .map(|range| (range, None))
-                    .unwrap_or_else(|| {
-                        let range = fallback_hover_range(buffer_snapshot, anchor);
-                        let fallback_state = FallbackHoverState::new(buffer_snapshot, &range);
-                        (range, Some(fallback_state))
-                    });
+                    .and_then(|range| {
+                        let range = snapshot
+                            .buffer_snapshot()
+                            .buffer_anchor_range_to_anchor_range(range)?;
+                        Some(range)
+                    })
+                    .or_else(|| {
+                        let snapshot = &snapshot.buffer_snapshot();
+                        let range = snapshot.syntax_ancestor(anchor..anchor)?.1;
+                        Some(snapshot.anchor_before(range.start)..snapshot.anchor_after(range.end))
+                    })
+                    .unwrap_or_else(|| anchor..anchor);
 
                 let blocks = hover_result.contents;
                 let language = hover_result.language;
+                let doc_text = crate::hover_translation::documentation_text(&blocks);
                 let parsed_content =
                     parse_blocks(&blocks, language_registry.as_ref(), language, cx);
                 let scroll_handle = ScrollHandle::new();
@@ -505,14 +518,17 @@ fn show_hover(
                     .flatten();
                 info_popovers.push(InfoPopover {
                     symbol_range: RangeInEditor::Text(range),
-                    fallback_state,
                     parsed_content,
+                    translated_content: None,
                     scroll_handle,
                     keyboard_grace: Rc::new(RefCell::new(ignore_timeout)),
                     anchor: Some(anchor),
                     last_bounds: Rc::new(Cell::new(None)),
                     _subscription: subscription,
+                    _translated_subscription: None,
+                    _translation_task: None,
                 });
+                doc_texts.push(doc_text);
             }
 
             for (multi_buffer_range, tooltip) in doc_link_tooltips {
@@ -532,14 +548,17 @@ fn show_hover(
                     .flatten();
                 info_popovers.push(InfoPopover {
                     symbol_range: RangeInEditor::Text(multi_buffer_range),
-                    fallback_state: None,
                     parsed_content,
+                    translated_content: None,
                     scroll_handle,
                     keyboard_grace: Rc::new(RefCell::new(ignore_timeout)),
                     anchor: Some(anchor),
                     last_bounds: Rc::new(Cell::new(None)),
                     _subscription: subscription,
+                    _translated_subscription: None,
+                    _translation_task: None,
                 });
+                doc_texts.push(None);
             }
 
             this.update_in(cx, |editor, window, cx| {
@@ -553,6 +572,39 @@ fn show_hover(
                         |_, theme| theme.colors().element_hover, // todo update theme
                         cx,
                     );
+                }
+
+                if HoverTranslationSettings::get_global(cx).enabled {
+                    for (popover, doc_text) in info_popovers.iter_mut().zip(doc_texts) {
+                        let Some(doc_text) = doc_text else {
+                            continue;
+                        };
+                        if !needs_translation(&doc_text) {
+                            continue;
+                        }
+                        // Rendered once the translation arrives; kept empty
+                        // until then so the popover shows the original first.
+                        let markdown =
+                            cx.new(|cx| Markdown::new(Default::default(), None, None, cx));
+                        let subscription = cx.observe(&markdown, |_, _, cx| cx.notify());
+                        let task = cx.spawn_in(window, {
+                            let markdown = markdown.clone();
+                            async move |_, cx| {
+                                let Ok(translation_task) =
+                                    cx.update(|_, cx| TranslationService::translate(doc_text, cx))
+                                else {
+                                    return;
+                                };
+                                if let Ok(translation) = translation_task.await {
+                                    markdown
+                                        .update(cx, |markdown, cx| markdown.reset(translation, cx));
+                                }
+                            }
+                        });
+                        popover.translated_content = Some(markdown);
+                        popover._translated_subscription = Some(subscription);
+                        popover._translation_task = Some(task);
+                    }
                 }
 
                 editor.hover_state.info_popovers = info_popovers;
@@ -570,83 +622,23 @@ fn show_hover(
     None
 }
 
-/// The range to use for a hover result whose language server reported no usable range.
-fn fallback_hover_range(buffer_snapshot: &MultiBufferSnapshot, anchor: Anchor) -> Range<Anchor> {
-    let offset = anchor.to_offset(buffer_snapshot);
-    let syntax_offset = if offset == buffer_snapshot.len()
-        || buffer_snapshot
-            .chars_at(offset)
-            .next()
-            .is_some_and(char::is_whitespace)
-    {
-        match buffer_snapshot.reversed_chars_at(offset).next() {
-            Some(character) if !character.is_whitespace() => offset - character.len_utf8(),
-            _ if offset == buffer_snapshot.len() => return anchor..anchor,
-            _ => offset,
-        }
-    } else {
-        offset
-    };
-    if buffer_snapshot
-        .chars_at(syntax_offset)
-        .next()
-        .is_some_and(|character| !character.is_whitespace())
-        && let Some((_, range)) = buffer_snapshot.syntax_ancestor(syntax_offset..syntax_offset)
-        && !range.is_empty()
-        && (syntax_offset == offset || range.end == offset)
-    {
-        return buffer_snapshot.anchor_after(range.start)..buffer_snapshot.anchor_before(range.end);
-    }
-
-    let classifier = buffer_snapshot.char_classifier_at(offset);
-    if buffer_snapshot
-        .chars_at(offset)
-        .next()
-        .is_some_and(|character| classifier.kind(character) == CharKind::Punctuation)
-    {
-        return anchor..anchor;
-    }
-
-    let (range, kind) = buffer_snapshot.surrounding_word(offset, None);
-    if kind != Some(CharKind::Word) {
-        return anchor..anchor;
-    }
-    buffer_snapshot.anchor_after(range.start)..buffer_snapshot.anchor_before(range.end)
-}
-
-fn same_info_hover(editor: &mut Editor, snapshot: &EditorSnapshot, anchor: Anchor) -> bool {
-    editor.hover_state.info_popovers.iter_mut().any(
-        |InfoPopover {
-             symbol_range,
-             fallback_state,
-             ..
-         }| {
+fn same_info_hover(editor: &Editor, snapshot: &EditorSnapshot, anchor: Anchor) -> bool {
+    editor
+        .hover_state
+        .info_popovers
+        .iter()
+        .any(|InfoPopover { symbol_range, .. }| {
             symbol_range
                 .as_text_range()
                 .map(|range| {
-                    let buffer_snapshot = snapshot.buffer_snapshot();
-                    let hover_range = range.to_offset(buffer_snapshot);
-                    let offset = anchor.to_offset(buffer_snapshot);
-                    if let Some(fallback_state) = fallback_state {
-                        if fallback_state.edit_count != buffer_snapshot.edit_count() {
-                            return false;
-                        }
-                        if offset == hover_range.end {
-                            if fallback_state.non_text_state_update_count
-                                != buffer_snapshot.non_text_state_update_count()
-                            {
-                                *fallback_state = FallbackHoverState::new(buffer_snapshot, &range);
-                            }
-                            return fallback_state.includes_end;
-                        }
-                    }
+                    let hover_range = range.to_offset(&snapshot.buffer_snapshot());
+                    let offset = anchor.to_offset(&snapshot.buffer_snapshot());
                     // LSP returns a hover result for the end index of ranges that should be hovered, so we need to
                     // use an inclusive range here to check if we should dismiss the popover
                     (hover_range.start..=hover_range.end).contains(&offset)
                 })
                 .unwrap_or(false)
-        },
-    )
+        })
 }
 
 fn same_diagnostic_hover(editor: &Editor, snapshot: &EditorSnapshot, anchor: Anchor) -> bool {
@@ -960,6 +952,21 @@ pub fn hover_markdown_style(window: &Window, cx: &App) -> MarkdownStyle {
     }
 }
 
+/// Markdown style for AI translations of hover documentation: same as the
+/// regular hover style, but underlined and slightly muted to distinguish the
+/// translation from the original text.
+pub fn translation_markdown_style(window: &Window, cx: &App) -> MarkdownStyle {
+    let mut style = hover_markdown_style(window, cx);
+    let color = cx.theme().colors().editor_foreground.opacity(0.75);
+    style.base_text_style.color = color;
+    style.base_text_style.underline = Some(gpui::UnderlineStyle {
+        thickness: px(1.),
+        color: Some(color),
+        wavy: false,
+    });
+    style
+}
+
 pub fn diagnostics_markdown_style(window: &Window, cx: &App) -> MarkdownStyle {
     let settings = ThemeSettings::get_global(cx);
     let ui_font_family = settings.ui_font.family.clone();
@@ -1261,32 +1268,16 @@ impl HoverState {
 pub struct InfoPopover {
     pub symbol_range: RangeInEditor,
     pub parsed_content: Option<Entity<Markdown>>,
+    /// AI translation of the non-code parts of `parsed_content`, rendered
+    /// underlined below the original documentation once it arrives.
+    pub translated_content: Option<Entity<Markdown>>,
     pub scroll_handle: ScrollHandle,
     pub keyboard_grace: Rc<RefCell<bool>>,
     pub anchor: Option<Anchor>,
     pub last_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
-    fallback_state: Option<FallbackHoverState>,
-    _subscription: Option<Subscription>,
-}
-
-struct FallbackHoverState {
-    edit_count: usize,
-    non_text_state_update_count: usize,
-    includes_end: bool,
-}
-
-impl FallbackHoverState {
-    fn new(buffer_snapshot: &MultiBufferSnapshot, range: &Range<Anchor>) -> Self {
-        let offsets = range.to_offset(buffer_snapshot);
-        let includes_end = offsets.end == buffer_snapshot.len()
-            || fallback_hover_range(buffer_snapshot, range.end).to_offset(buffer_snapshot)
-                == offsets;
-        Self {
-            edit_count: buffer_snapshot.edit_count(),
-            non_text_state_update_count: buffer_snapshot.non_text_state_update_count(),
-            includes_end,
-        }
-    }
+    pub(crate) _subscription: Option<Subscription>,
+    pub(crate) _translated_subscription: Option<Subscription>,
+    pub(crate) _translation_task: Option<Task<()>>,
 }
 
 impl InfoPopover {
@@ -1362,7 +1353,31 @@ impl InfoPopover {
                                     )
                                 })
                                 .p_2(),
-                        ),
+                        )
+                        .when_some(self.translated_content.clone(), |this, translated| {
+                            // Only take up space once the translation has arrived.
+                            this.when(!translated.read(cx).source().is_empty(), |this| {
+                                this.child(
+                                    div()
+                                        .mx_2()
+                                        .border_t_1()
+                                        .border_color(cx.theme().colors().border),
+                                )
+                                .child(
+                                    MarkdownElement::new(
+                                        translated,
+                                        translation_markdown_style(window, cx),
+                                    )
+                                    .code_block_renderer(markdown::CodeBlockRenderer::Default {
+                                        copy_button_visibility: CopyButtonVisibility::Hidden,
+                                        wrap_button_visibility:
+                                            markdown::WrapButtonVisibility::Hidden,
+                                        border: false,
+                                    })
+                                    .p_2(),
+                                )
+                            })
+                        }),
                 )
                 .custom_scrollbars(
                     Scrollbars::for_settings::<EditorSettingsScrollbarProxy>()
@@ -1496,7 +1511,8 @@ impl DiagnosticPopover {
                             .message
                             .as_shared_string()
                             .clone();
-                        CopyButton::new("copy-diagnostic", message).tooltip_label("Copy Diagnostic")
+                        CopyButton::new("copy-diagnostic", message)
+                            .tooltip_label(i18n::t!("bbce140b7682f375"))
                     }))
                     .custom_scrollbars(
                         Scrollbars::for_settings::<EditorSettingsScrollbarProxy>()
@@ -1542,7 +1558,6 @@ mod tests {
     use indoc::indoc;
     use language::{FakeLspAdapter, rust_lang};
     use markdown::parser::MarkdownEvent;
-    use multi_buffer::MultiBuffer;
     use parking_lot::Mutex;
     use project::InlayId;
     use settings::InlayHintSettingsContent;
@@ -3570,462 +3585,6 @@ mod tests {
                 "No hover info task should be scheduled when hover is disabled"
             );
         });
-    }
-
-    async fn plain_text_lsp_context(cx: &mut gpui::TestAppContext) -> EditorLspTestContext {
-        let plain_text_lang = language::Language::new(
-            language::LanguageConfig {
-                name: "Plain Text".into(),
-                matcher: language::LanguageMatcher {
-                    path_suffixes: vec!["txt".into()],
-                    ..Default::default()
-                }
-                .into(),
-                ..Default::default()
-            },
-            None,
-        );
-
-        EditorLspTestContext::new(
-            plain_text_lang,
-            lsp::ServerCapabilities {
-                hover_provider: Some(lsp::HoverProviderCapability::Simple(true)),
-                ..Default::default()
-            },
-            cx,
-        )
-        .await
-    }
-
-    fn handle_hover_requests(
-        cx: &mut EditorLspTestContext,
-        respond: impl Fn(lsp::Position) -> (&'static str, Option<lsp::Range>) + Send + 'static,
-    ) -> Arc<AtomicUsize> {
-        let request_count = Arc::new(AtomicUsize::new(0));
-        cx.set_request_handler::<lsp::request::HoverRequest, _, _>({
-            let request_count = request_count.clone();
-            move |_, params, _| {
-                request_count.fetch_add(1, atomic::Ordering::AcqRel);
-                let (value, range) = respond(params.text_document_position_params.position);
-                async move {
-                    Ok(Some(lsp::Hover {
-                        contents: lsp::HoverContents::Markup(lsp::MarkupContent {
-                            kind: lsp::MarkupKind::Markdown,
-                            value: value.to_string(),
-                        }),
-                        range,
-                    }))
-                }
-            }
-        });
-        request_count
-    }
-
-    /// Each case is `(marked text, expected symbol range, expected hover text, expected total
-    /// number of hover requests)`.
-    fn assert_hovers(
-        cx: &mut EditorLspTestContext,
-        request_count: &AtomicUsize,
-        cases: &[(&str, Range<usize>, &str, usize)],
-    ) {
-        for (marked_text, range, text, expected_requests) in cases {
-            let display_point = cx.display_point(marked_text);
-            let refresh_expected =
-                *expected_requests > request_count.load(atomic::Ordering::Acquire);
-            cx.update_editor(|editor, window, cx| {
-                let snapshot = editor.snapshot(window, cx);
-                let anchor = snapshot
-                    .buffer_snapshot()
-                    .anchor_before(display_point.to_offset(&snapshot, Bias::Left));
-                hover_at(editor, Some(anchor), None, window, cx);
-                if refresh_expected {
-                    assert!(
-                        !editor.hover_state.visible(),
-                        "previous hover should be hidden immediately at {marked_text}"
-                    );
-                }
-            });
-            let delay = get_hover_popover_delay(cx);
-            cx.background_executor
-                .advance_clock(Duration::from_millis(delay + 100));
-            cx.run_until_parked();
-
-            let symbol = cx.editor(|editor, window, cx| {
-                assert!(editor.hover_state.visible(), "hover at {marked_text}");
-                let popover = editor.hover_state.info_popovers.first().unwrap();
-                let snapshot = editor.snapshot(window, cx);
-                let symbol_range = popover
-                    .symbol_range
-                    .as_text_range()
-                    .unwrap()
-                    .to_offset(&snapshot.buffer_snapshot());
-                (
-                    symbol_range.start.0..symbol_range.end.0,
-                    popover.get_rendered_text(cx),
-                )
-            });
-            assert_eq!(
-                symbol,
-                (range.clone(), text.to_string()),
-                "hover at {marked_text}"
-            );
-            assert_eq!(
-                request_count.load(atomic::Ordering::Acquire),
-                *expected_requests,
-                "hover at {marked_text}"
-            );
-        }
-    }
-
-    #[gpui::test]
-    async fn test_hover_without_usable_range_falls_back_to_word(cx: &mut gpui::TestAppContext) {
-        init_test(cx, |_| {});
-        let mut cx = plain_text_lsp_context(cx).await;
-        cx.set_state("hello foˇobar world");
-        let zero_width_range = cx.lsp_range("hello fo«»obar world");
-
-        for lsp_range in [Some(zero_width_range), None] {
-            let request_count = handle_hover_requests(&mut cx, move |_| ("docs", lsp_range));
-            assert_hovers(
-                &mut cx,
-                &request_count,
-                &[
-                    ("hello fˇoobar world", 6..12, "docs", 1),
-                    ("hello foobˇar world", 6..12, "docs", 1),
-                    ("hello foobarˇ world", 6..12, "docs", 1),
-                    ("hello foobar ˇworld", 13..18, "docs", 2),
-                ],
-            );
-        }
-    }
-
-    #[gpui::test]
-    async fn test_fallback_hover_refreshes_at_token_boundaries(cx: &mut gpui::TestAppContext) {
-        init_test(cx, |_| {});
-        let mut cx = plain_text_lsp_context(cx).await;
-        cx.set_state("fˇoo+=bar");
-        let zero_width_range = cx.lsp_range("foo«»+=bar");
-
-        let request_count =
-            handle_hover_requests(&mut cx, move |position| match position.character {
-                0..=2 => ("foo docs", None),
-                3..=4 => ("operator docs", Some(zero_width_range)),
-                _ => ("bar docs", None),
-            });
-        assert_hovers(
-            &mut cx,
-            &request_count,
-            &[
-                ("fˇoo+=bar", 0..3, "foo docs", 1),
-                ("fooˇ+=bar", 3..3, "operator docs", 2),
-                ("foo+ˇ=bar", 4..4, "operator docs", 3),
-                ("foo+=ˇbar", 5..8, "bar docs", 4),
-                ("fˇoo+=bar", 0..3, "foo docs", 5),
-            ],
-        );
-    }
-
-    #[gpui::test]
-    async fn test_fallback_hover_does_not_merge_punctuation(cx: &mut gpui::TestAppContext) {
-        init_test(cx, |_| {});
-        let mut cx = plain_text_lsp_context(cx).await;
-        cx.set_state("foo()ˇ+bar");
-
-        for zero_width_range in [false, true] {
-            let request_count = handle_hover_requests(&mut cx, move |position| {
-                let text = match position.character {
-                    3 => "open docs",
-                    4 => "close docs",
-                    5 => "plus docs",
-                    _ => "word docs",
-                };
-                let range = zero_width_range.then(|| lsp::Range::new(position, position));
-                (text, range)
-            });
-            assert_hovers(
-                &mut cx,
-                &request_count,
-                &[
-                    ("foo()ˇ+bar", 5..5, "plus docs", 1),
-                    ("foo(ˇ)+bar", 4..4, "close docs", 2),
-                    ("fooˇ()+bar", 3..3, "open docs", 3),
-                    ("fˇoo()+bar", 0..3, "word docs", 4),
-                ],
-            );
-        }
-    }
-
-    #[gpui::test]
-    async fn test_fallback_hover_refreshes_after_external_edits(cx: &mut gpui::TestAppContext) {
-        init_test(cx, |_| {});
-        let mut cx = plain_text_lsp_context(cx).await;
-
-        for (initial, initial_range, edit_range, replacement, edited, edited_range) in [
-            ("fˇoo ", 0..3, 3..3, " bar", "foo ˇbar ", 4..7),
-            (" fˇoo", 1..4, 1..1, "bar ", " ˇbar foo", 1..4),
-            ("foo bˇar ", 4..7, 3..4, "", "foobarˇ ", 0..6),
-            ("fooˇ+ ", 3..3, 3..4, "", "fooˇ ", 0..3),
-        ] {
-            cx.set_state(initial);
-            let request_count = handle_hover_requests(&mut cx, |_| ("docs", None));
-            assert_hovers(
-                &mut cx,
-                &request_count,
-                &[(initial, initial_range, "docs", 1)],
-            );
-
-            cx.update_buffer(|buffer, cx| {
-                buffer.edit([(edit_range, replacement)], None, cx);
-            });
-            assert_hovers(
-                &mut cx,
-                &request_count,
-                &[(edited, edited_range, "docs", 2)],
-            );
-        }
-    }
-
-    #[gpui::test]
-    async fn test_fallback_hover_refreshes_after_language_change(cx: &mut gpui::TestAppContext) {
-        init_test(cx, |_| {});
-        let mut cx = plain_text_lsp_context(cx).await;
-        cx.set_state("fooˇ# ");
-        let request_count = handle_hover_requests(&mut cx, |_| ("docs", None));
-        assert_hovers(&mut cx, &request_count, &[("fooˇ# ", 3..3, "docs", 1)]);
-
-        cx.update_buffer(|buffer, cx| {
-            let mut config = buffer
-                .language()
-                .expect("test buffer has a language")
-                .config()
-                .clone();
-            config.word_characters.insert('#');
-            buffer.set_language(Some(Arc::new(Language::new(config, None))), cx);
-        });
-        assert_hovers(&mut cx, &request_count, &[("fooˇ# ", 0..4, "docs", 2)]);
-    }
-
-    #[gpui::test]
-    async fn test_syntax_hover_refreshes_at_token_boundaries(cx: &mut gpui::TestAppContext) {
-        init_test(cx, |_| {});
-        let mut cx = EditorLspTestContext::new_rust(
-            lsp::ServerCapabilities {
-                hover_provider: Some(lsp::HoverProviderCapability::Simple(true)),
-                ..Default::default()
-            },
-            cx,
-        )
-        .await;
-        cx.set_state("fn main(){fˇoo+=bar;}");
-
-        let request_count = handle_hover_requests(&mut cx, |position| match position.character {
-            10..=12 => ("foo docs", Some(lsp::Range::new(position, position))),
-            13..=14 => ("operator docs", None),
-            15..=17 => ("bar docs", Some(lsp::Range::new(position, position))),
-            18 => ("semicolon docs", None),
-            _ => ("brace docs", None),
-        });
-        assert_hovers(
-            &mut cx,
-            &request_count,
-            &[
-                ("fn main(){fˇoo+=bar;}", 10..13, "foo docs", 1),
-                ("fn main(){foˇo+=bar;}", 10..13, "foo docs", 1),
-                ("fn main(){fooˇ+=bar;}", 13..15, "operator docs", 2),
-                ("fn main(){foo+ˇ=bar;}", 13..15, "operator docs", 2),
-                ("fn main(){foo+=ˇbar;}", 15..18, "bar docs", 3),
-                ("fn main(){foo+=bˇar;}", 15..18, "bar docs", 3),
-                ("fn main(){foo+=barˇ;}", 18..19, "semicolon docs", 4),
-                ("fn main(){foo+=bar;ˇ}", 19..20, "brace docs", 5),
-                ("fn main(){foo+=bar;}ˇ", 19..20, "brace docs", 5),
-                ("fn main(){fˇoo+=bar;}", 10..13, "foo docs", 6),
-            ],
-        );
-
-        cx.set_state("fn main(){fooˇ+= bar; }");
-        let request_count = handle_hover_requests(&mut cx, |position| match position.character {
-            13..=15 => ("operator docs", None),
-            19..=20 => ("semicolon docs", None),
-            _ => ("brace docs", None),
-        });
-        assert_hovers(
-            &mut cx,
-            &request_count,
-            &[
-                ("fn main(){fooˇ+= bar; }", 13..15, "operator docs", 1),
-                ("fn main(){foo+=ˇ bar; }", 13..15, "operator docs", 1),
-                ("fn main(){foo+= barˇ; }", 19..20, "semicolon docs", 2),
-                ("fn main(){foo+= bar;ˇ }", 19..20, "semicolon docs", 2),
-                ("fn main(){foo+= bar; ˇ}", 21..22, "brace docs", 3),
-            ],
-        );
-    }
-
-    #[gpui::test]
-    async fn test_syntax_hover_on_whitespace(cx: &mut gpui::TestAppContext) {
-        init_test(cx, |_| {});
-        let mut cx = EditorLspTestContext::new_rust(
-            lsp::ServerCapabilities {
-                hover_provider: Some(lsp::HoverProviderCapability::Simple(true)),
-                ..Default::default()
-            },
-            cx,
-        )
-        .await;
-        cx.set_state("fn foo() {}\nˇ\nfn bar() {}\n\n");
-
-        for zero_width_range in [false, true] {
-            let request_count = handle_hover_requests(&mut cx, move |position| {
-                let text = match position.line {
-                    0 => "foo docs",
-                    2 => "bar docs",
-                    _ => "whitespace docs",
-                };
-                let range = zero_width_range.then(|| lsp::Range::new(position, position));
-                (text, range)
-            });
-            assert_hovers(
-                &mut cx,
-                &request_count,
-                &[
-                    (
-                        "fn foo() {}\nˇ\nfn bar() {}\n\n",
-                        12..12,
-                        "whitespace docs",
-                        1,
-                    ),
-                    ("fn fˇoo() {}\n\nfn bar() {}\n\n", 3..6, "foo docs", 2),
-                    (
-                        "fn foo() {}\n\nfn bar() {}\nˇ\n",
-                        25..25,
-                        "whitespace docs",
-                        3,
-                    ),
-                    ("fn foo() {}\n\nfn bˇar() {}\n\n", 16..19, "bar docs", 4),
-                ],
-            );
-        }
-    }
-
-    #[gpui::test]
-    async fn test_syntax_hover_first_requested_at_end_of_buffer(cx: &mut gpui::TestAppContext) {
-        init_test(cx, |_| {});
-        let mut cx = EditorLspTestContext::new_rust(
-            lsp::ServerCapabilities {
-                hover_provider: Some(lsp::HoverProviderCapability::Simple(true)),
-                ..Default::default()
-            },
-            cx,
-        )
-        .await;
-
-        for trailing_whitespace in ["", " ", "\n"] {
-            let text = format!("fn main(){{foo+=bar;}}{trailing_whitespace}");
-            let end_marked_text = format!("{text}ˇ");
-            let word_marked_text = format!("fn main(){{fˇoo+=bar;}}{trailing_whitespace}");
-            let end_range = if trailing_whitespace.is_empty() {
-                19..20
-            } else {
-                text.len()..text.len()
-            };
-            cx.set_state(&end_marked_text);
-
-            for zero_width_range in [true, false] {
-                let request_count = handle_hover_requests(&mut cx, move |position| {
-                    let text = if position.line == 0 && position.character == 11 {
-                        "foo docs"
-                    } else {
-                        "EOF docs"
-                    };
-                    let range = zero_width_range.then(|| lsp::Range::new(position, position));
-                    (text, range)
-                });
-                assert_hovers(
-                    &mut cx,
-                    &request_count,
-                    &[
-                        (&end_marked_text, end_range.clone(), "EOF docs", 1),
-                        (&word_marked_text, 10..13, "foo docs", 2),
-                    ],
-                );
-            }
-        }
-    }
-
-    #[gpui::test]
-    async fn test_hover_preserves_lsp_and_end_of_buffer_boundaries(cx: &mut gpui::TestAppContext) {
-        init_test(cx, |_| {});
-        let mut cx = plain_text_lsp_context(cx).await;
-        cx.set_state("fˇoo+=bar");
-        let explicit_range = cx.lsp_range("«foo»+=bar");
-
-        let request_count = handle_hover_requests(&mut cx, move |position| {
-            if position.character <= 3 {
-                ("foo docs", Some(explicit_range))
-            } else {
-                ("bar docs", None)
-            }
-        });
-        assert_hovers(
-            &mut cx,
-            &request_count,
-            &[
-                ("fˇoo+=bar", 0..3, "foo docs", 1),
-                ("fooˇ+=bar", 0..3, "foo docs", 1),
-                ("foo+=ˇbar", 5..8, "bar docs", 2),
-                ("foo+=barˇ", 5..8, "bar docs", 2),
-            ],
-        );
-    }
-
-    #[gpui::test]
-    fn test_fallback_hover_range(cx: &mut gpui::TestAppContext) {
-        // (text, offset of the hovered anchor, expected range)
-        let cases: &[(&str, usize, Range<usize>)] = &[
-            ("foo+=bar", 0, 0..3),
-            ("foo+=bar", 1, 0..3),
-            // Word end and operator start share an offset: the operator wins.
-            ("foo+=bar", 3, 3..3),
-            ("foo+=bar", 4, 4..4),
-            ("foo+-bar", 3, 3..3),
-            ("foo+-bar", 4, 4..4),
-            // Operator end and word start share an offset: the word wins.
-            ("foo+=bar", 5, 5..8),
-            ("foo+=bar", 8, 5..8),
-            // Whitespace next to a word never extends the range.
-            ("foo bar", 3, 0..3),
-            ("foo bar", 4, 4..7),
-            ("foo  bar", 4, 4..4),
-            ("foo\n+bar", 3, 0..3),
-            ("foo ", 4, 4..4),
-            ("foo\n", 4, 4..4),
-            ("", 0, 0..0),
-            // Ranges are byte offsets, so multi-byte characters must be measured in bytes.
-            ("héllo+é", 6, 6..6),
-            ("héllo+é", 7, 7..9),
-            ("héllo+é", 9, 7..9),
-        ];
-
-        for (text, offset, expected) in cases {
-            let snapshot = cx.update(|cx| {
-                let buffer = MultiBuffer::build_simple(text, cx);
-                buffer.read(cx).snapshot(cx)
-            });
-            let anchor = snapshot.anchor_before(MultiBufferOffset(*offset));
-            let range = fallback_hover_range(&snapshot, anchor);
-            assert_eq!(
-                range.start.to_offset(&snapshot).0..range.end.to_offset(&snapshot).0,
-                *expected,
-                "text {text:?} at offset {offset}",
-            );
-            if !expected.is_empty() {
-                assert_eq!(
-                    (range.start.bias(), range.end.bias()),
-                    (Bias::Right, Bias::Left),
-                    "text {text:?} at offset {offset}",
-                );
-            }
-        }
     }
 
     #[test]

@@ -140,6 +140,9 @@ pub(crate) struct SerializedWorkspace {
     pub(crate) center_group: SerializedPaneGroup,
     pub(crate) window_bounds: Option<SerializedWindowBounds>,
     pub(crate) centered_layout: bool,
+    /// Whether this workspace was opened as a remote terminal workspace
+    /// (a terminal-centric remote session) rather than a regular remote project.
+    pub(crate) remote_terminal_mode: bool,
     pub(crate) display: Option<Uuid>,
     pub(crate) docks: DockStructure,
     pub(crate) session_id: Option<String>,
@@ -365,7 +368,12 @@ impl SerializedPane {
         let mut preview_item_index = None;
         for (index, item) in self.children.iter().enumerate() {
             let project = project.clone();
-            item_tasks.push(pane.update_in(cx, |_, window, cx| {
+            let diagnostic = zlog::diagnostics::DiagnosticSpan::new("restore_item");
+            diagnostic.record(format_args!(
+                "workspace={workspace_id:?} index={index} kind={:?} item={}",
+                item.kind, item.item_id
+            ));
+            let task = pane.update_in(cx, |_, window, cx| {
                 SerializableItemRegistry::deserialize(
                     &item.kind,
                     project,
@@ -375,7 +383,16 @@ impl SerializedPane {
                     window,
                     cx,
                 )
-            })?);
+            })?;
+            item_tasks.push(async move {
+                let result = task.await;
+                diagnostic.record(format_args!(
+                    "result={}",
+                    if result.is_ok() { "ok" } else { "error" }
+                ));
+                diagnostic.finish();
+                result
+            });
             if item.active {
                 active_item_index = Some(index);
             }

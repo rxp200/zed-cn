@@ -40,7 +40,7 @@ use language::LanguageRegistry;
 use onboarding::{FIRST_OPEN, show_onboarding_view};
 use project_panel::ProjectPanel;
 use prompt_store::PromptBuilder;
-use remote::RemoteConnectionOptions;
+use remote::{RemoteConnectionOptions, remote_client::MachineIdentity};
 use reqwest_client::ReqwestClient;
 
 use assets::Assets;
@@ -133,7 +133,7 @@ fn files_not_created_on_launch(errors: HashMap<io::ErrorKind, Vec<&Path>>) {
                             gpui::PromptLevel::Critical,
                             message,
                             Some(&error_details),
-                            &["Exit"],
+                            &[i18n::t!("498e1d59b4d787ee")],
                             cx,
                         );
 
@@ -176,7 +176,7 @@ fn fail_to_open_window(e: anyhow::Error, _cx: &mut App) {
             proxy
                 .add_notification(
                     notification_id,
-                    Notification::new("Zed failed to launch")
+                    Notification::new(i18n::t!("ed35c4875b3a8bea"))
                         .body(Some(
                             format!(
                                 "{e:?}. See https://zed.dev/docs/linux for troubleshooting steps."
@@ -216,6 +216,19 @@ fn main() {
     #[cfg(not(target_os = "windows"))]
     if let Some(socket) = &args.askpass {
         askpass::main(socket);
+        return;
+    }
+
+    // `zed --ssh-proxy` tunnels an SSH connection through an HTTP or SOCKS5 proxy.
+    if let Some(values) = &args.ssh_proxy {
+        let [proxy_url, host, port] = values.as_slice() else {
+            eprintln!("--ssh-proxy requires PROXY_URL, HOST and PORT");
+            process::exit(2);
+        };
+        if let Err(error) = util::ssh_proxy::run(proxy_url, host, port) {
+            eprintln!("Zed SSH 代理失败：{error:#}");
+            process::exit(1);
+        }
         return;
     }
 
@@ -290,13 +303,18 @@ fn main() {
 
     if stdout_is_a_pty() {
         zlog::init_output_stdout();
-    } else {
-        let result = zlog::init_output_file(paths::log_file(), Some(paths::old_log_file()));
-        if let Err(err) = result {
-            eprintln!("Could not open log file: {}... Defaulting to stdout", err);
-            zlog::init_output_stdout();
-        };
     }
+    if let Err(err) = zlog::init_output_file(paths::log_file(), Some(paths::old_log_file())) {
+        eprintln!("Could not open log file: {}... Defaulting to stdout", err);
+        zlog::init_output_stdout();
+    }
+    let diagnostic = zlog::diagnostics::DiagnosticSpan::new("desktop_start");
+    diagnostic.record(format_args!(
+        "version={} revision={}",
+        env!("CARGO_PKG_VERSION"),
+        option_env!("ZED_COMMIT_SHA").unwrap_or("unknown")
+    ));
+    diagnostic.finish();
     ztracing::init();
 
     #[cfg(unix)]
@@ -490,6 +508,9 @@ fn main() {
         zed_actions::init();
 
         release_channel::init(app_version, cx);
+        if let Some(tag) = option_env!("ZED_CUSTOM_RELEASE_TAG") {
+            cx.set_global(release_channel::CustomReleaseTag(tag.to_owned()));
+        }
         gpui_tokio::init(cx);
         if let Some(app_commit_sha) = app_commit_sha {
             AppCommitSha::set_global(app_commit_sha, cx);
@@ -595,6 +616,12 @@ fn main() {
 
         let system_id = cx.foreground_executor().block_on(system_id).ok();
         let installation_id = cx.foreground_executor().block_on(installation_id).ok();
+        if let Some(installation_id) = installation_id.as_ref() {
+            // Namespaces remote server session names to this installation so
+            // that two machines connecting to the same remote account never
+            // share, and therefore never replace, each other's sessions.
+            cx.set_global(MachineIdentity::new(installation_id.to_string()));
+        }
         let session = cx.foreground_executor().block_on(session);
 
         let telemetry = client.telemetry();
@@ -730,6 +757,7 @@ fn main() {
 
         editor::init(cx);
         image_viewer::init(cx);
+        document_viewer::init(cx);
         repl::notebook::init(cx);
         diagnostics::init(cx);
 
@@ -778,6 +806,7 @@ fn main() {
         markdown_preview::init(cx);
         tabular_data_preview::init(cx);
         svg_preview::init(cx);
+        web_preview::init(cx);
         onboarding::init(cx);
         settings_ui::init(cx);
         keymap_editor::init(cx);
@@ -1767,6 +1796,11 @@ struct Args {
     #[cfg(not(target_os = "windows"))]
     #[arg(hide = true)]
     askpass: Option<String>,
+
+    /// Connects to an SSH target through an HTTP CONNECT or SOCKS5 proxy, acting as ssh's
+    /// `ProxyCommand` helper.
+    #[arg(long, hide = true, num_args = 3, value_names = ["PROXY_URL", "HOST", "PORT"])]
+    ssh_proxy: Option<Vec<String>>,
 
     #[arg(long, hide = true)]
     dump_all_actions: bool,

@@ -17,6 +17,7 @@ doctest = false
 default = []
 
 [dependencies]
+i18n.workspace = true
 client.workspace = true
 cloud_api_types.workspace = true
 component.workspace = true

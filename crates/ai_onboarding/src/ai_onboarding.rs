@@ -148,7 +148,7 @@ impl ZedAiOnboarding {
                 .child(
                     IconButton::new("dismiss_onboarding", IconName::Close)
                         .icon_size(IconSize::Small)
-                        .tooltip(Tooltip::text("Dismiss"))
+                        .tooltip(Tooltip::text(i18n::t!("3fd47edce45b3603")))
                         .on_click(move |_, window, cx| {
                             telemetry::event!("Banner Dismissed", source = "AI Onboarding",);
                             callback(window, cx)
@@ -165,15 +165,15 @@ impl ZedAiOnboarding {
             .w_full()
             .relative()
             .gap_1()
-            .child(Headline::new("Welcome to Zed AI"))
+            .child(Headline::new(i18n::t!("636d4614d254c109")))
             .child(
-                Label::new("Sign in to try GPT Luna. Your 14 days begin when you start the trial.")
+                Label::new(i18n::t!("7d439f2fb28d7dea"))
                     .color(Color::Muted)
                     .mb_2(),
             )
             .child(PlanDefinitions.sign_in_upsell())
             .child(
-                Button::new("sign_in", "Sign In to Try GPT Luna")
+                Button::new("sign_in", i18n::t!("03afb4b6fa1c30b3"))
                     .disabled(signing_in)
                     .full_width()
                     .style(ButtonStyle::Tinted(ui::TintColor::Accent))
@@ -195,7 +195,7 @@ impl ZedAiOnboarding {
                 .relative()
                 .min_w_0()
                 .gap_1()
-                .child(Headline::new("Welcome to Zed AI"))
+                .child(Headline::new(i18n::t!("636d4614d254c109")))
                 .child(YoungAccountBanner)
                 .child(
                     v_flex()
@@ -214,7 +214,7 @@ impl ZedAiOnboarding {
                         )
                         .child(PlanDefinitions.pro_plan())
                         .child(
-                            Button::new("pro", "Get Started")
+                            Button::new("pro", i18n::t!("715ee9dc842f34e4"))
                                 .full_width()
                                 .style(ButtonStyle::Tinted(ui::TintColor::Accent))
                                 .on_click(move |_, _window, cx| {
@@ -232,7 +232,7 @@ impl ZedAiOnboarding {
                 .w_full()
                 .relative()
                 .gap_1()
-                .child(Headline::new("Welcome to Zed AI"))
+                .child(Headline::new(i18n::t!("636d4614d254c109")))
                 .child(
                     v_flex()
                         .mt_2()
@@ -241,7 +241,7 @@ impl ZedAiOnboarding {
                             h_flex()
                                 .gap_2()
                                 .child(
-                                    Label::new("Free")
+                                    Label::new(i18n::t!("649a0fc7237ed893"))
                                         .size(LabelSize::Small)
                                         .color(Color::Muted)
                                         .buffer_font(cx),
@@ -267,7 +267,7 @@ impl ZedAiOnboarding {
                             h_flex()
                                 .gap_2()
                                 .child(
-                                    Label::new("Pro Trial")
+                                    Label::new(i18n::t!("8528cf62d6ae524d"))
                                         .size(LabelSize::Small)
                                         .color(Color::Accent)
                                         .buffer_font(cx),
@@ -276,7 +276,7 @@ impl ZedAiOnboarding {
                         )
                         .child(PlanDefinitions.pro_trial(true))
                         .child(
-                            Button::new("pro", "Start Free Trial")
+                            Button::new("pro", i18n::t!("7a948008f0e06c53"))
                                 .full_width()
                                 .style(ButtonStyle::Tinted(ui::TintColor::Accent))
                                 .on_click(move |_, _window, cx| {
@@ -298,9 +298,9 @@ impl ZedAiOnboarding {
             .relative()
             .gap_1()
             .child(Self::pro_trial_stamp(cx))
-            .child(Headline::new("Welcome to the Zed Pro Trial"))
+            .child(Headline::new(i18n::t!("ca1e6fc3e1f401a4")))
             .child(
-                Label::new("Included for 14 days from when your trial started:")
+                Label::new(i18n::t!("1102ec40107fc93b"))
                     .color(Color::Muted)
                     .mb_2(),
             )
@@ -315,9 +315,9 @@ impl ZedAiOnboarding {
             .relative()
             .gap_1()
             .child(Self::certified_user_stamp(cx))
-            .child(Headline::new("Welcome to Zed Pro"))
+            .child(Headline::new(i18n::t!("10be48f1b70afa01")))
             .child(
-                Label::new("Here's what you get:")
+                Label::new(i18n::t!("2ed3b7287317d224"))
                     .color(Color::Muted)
                     .mb_2(),
             )
@@ -332,9 +332,9 @@ impl ZedAiOnboarding {
             .relative()
             .gap_1()
             .child(Self::business_stamp(cx))
-            .child(Headline::new("Welcome to Zed Business"))
+            .child(Headline::new(i18n::t!("42729e91d528d9a7")))
             .child(
-                Label::new("Here's what you get:")
+                Label::new(i18n::t!("2ed3b7287317d224"))
                     .color(Color::Muted)
                     .mb_2(),
             )
@@ -349,9 +349,9 @@ impl ZedAiOnboarding {
             .relative()
             .gap_1()
             .child(Self::vip_stamp(cx))
-            .child(Headline::new("Welcome to Zed VIP"))
+            .child(Headline::new(i18n::t!("ee3a312f6adc81dc")))
             .child(
-                Label::new("Here's what you get:")
+                Label::new(i18n::t!("2ed3b7287317d224"))
                     .color(Color::Muted)
                     .mb_2(),
             )
@@ -366,9 +366,9 @@ impl ZedAiOnboarding {
             .relative()
             .gap_1()
             .child(Self::student_stamp(cx))
-            .child(Headline::new("Welcome to Zed Student"))
+            .child(Headline::new(i18n::t!("57825f8a1bb5f7c6")))
             .child(
-                Label::new("Here's what you get:")
+                Label::new(i18n::t!("2ed3b7287317d224"))
                     .color(Color::Muted)
                     .mb_2(),
             )
@@ -454,7 +454,7 @@ impl Component for ZedAiOnboarding {
                     onboarding(SignInStatus::SignedIn, Some(Plan::ZedFree), false),
                 ),
                 single_example(
-                    "Pro Trial",
+                    i18n::t!("8528cf62d6ae524d"),
                     onboarding(SignInStatus::SignedIn, Some(Plan::ZedProTrial), false),
                 ),
                 single_example(

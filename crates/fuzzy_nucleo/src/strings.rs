@@ -21,6 +21,7 @@ pub struct StringMatchCandidate {
     pub id: usize,
     pub string: SharedString,
     char_bag: CharBag,
+    pinyin_initials: Option<fuzzy::PinyinInitials>,
 }
 
 impl StringMatchCandidate {
@@ -34,7 +35,14 @@ impl StringMatchCandidate {
             id,
             string,
             char_bag,
+            pinyin_initials: None,
         }
+    }
+
+    pub fn new_with_pinyin(id: usize, string: impl Into<SharedString>) -> Self {
+        let mut candidate = Self::from_shared(id, string.into());
+        candidate.pinyin_initials = fuzzy::PinyinInitials::from_text(candidate.string.as_ref());
+        candidate
     }
 }
 
@@ -113,7 +121,8 @@ where
         return Vec::new();
     }
 
-    let Some(query) = Query::build(query, case) else {
+    let raw_query = query;
+    let Some(query) = Query::build(raw_query, case) else {
         return empty_query_results(candidates, max_results);
     };
 
@@ -161,6 +170,7 @@ where
     }
 
     let mut results = segment_results.concat();
+    append_pinyin_matches(candidates, raw_query, case, length_penalty, &mut results);
     gpui_util::truncate_to_bottom_n_sorted_by(&mut results, max_results, &|a, b| b.cmp(a));
     results
 }
@@ -179,7 +189,8 @@ where
         return Vec::new();
     }
 
-    let Some(query) = Query::build(query, case) else {
+    let raw_query = query;
+    let Some(query) = Query::build(raw_query, case) else {
         return empty_query_results(candidates, max_results);
     };
 
@@ -198,8 +209,71 @@ where
     .ok();
 
     matcher::return_matcher(matcher);
+    append_pinyin_matches(candidates, raw_query, case, length_penalty, &mut results);
     gpui_util::truncate_to_bottom_n_sorted_by(&mut results, max_results, &|a, b| b.cmp(a));
     results
+}
+
+fn append_pinyin_matches<T: Borrow<StringMatchCandidate>>(
+    candidates: &[T],
+    query: &str,
+    case: Case,
+    length_penalty: LengthPenalty,
+    results: &mut Vec<StringMatch>,
+) {
+    if !query.is_ascii() {
+        return;
+    }
+
+    let matched_ids = results
+        .iter()
+        .map(|string_match| string_match.candidate_id)
+        .collect::<std::collections::HashSet<_>>();
+    let mut variant_candidates = Vec::new();
+    let mut variant_metadata = Vec::new();
+    for candidate in candidates {
+        let candidate = candidate.borrow();
+        if matched_ids.contains(&candidate.id) {
+            continue;
+        }
+        let Some(initials) = candidate.pinyin_initials.as_ref() else {
+            continue;
+        };
+        for (variant, byte_offsets) in initials.variants() {
+            let variant_id = variant_candidates.len();
+            variant_candidates.push(StringMatchCandidate::new(variant_id, variant));
+            variant_metadata.push((candidate, byte_offsets));
+        }
+    }
+
+    if variant_candidates.is_empty() {
+        return;
+    }
+    let variant_matches = match_strings(
+        &variant_candidates,
+        query,
+        case,
+        length_penalty,
+        variant_candidates.len(),
+    );
+    let mut added_ids = std::collections::HashSet::new();
+    for variant_match in variant_matches {
+        let Some((candidate, byte_offsets)) = variant_metadata.get(variant_match.candidate_id)
+        else {
+            continue;
+        };
+        if added_ids.insert(candidate.id) {
+            results.push(StringMatch {
+                candidate_id: candidate.id,
+                score: variant_match.score,
+                positions: fuzzy::PinyinInitials::original_positions(
+                    byte_offsets,
+                    &variant_match.positions,
+                ),
+                string: candidate.string.clone(),
+            });
+        }
+    }
 }
 
 fn empty_query_results<T: Borrow<StringMatchCandidate>>(
@@ -300,6 +374,31 @@ mod tests {
             .enumerate()
             .map(|(id, s)| StringMatchCandidate::new(id, *s))
             .collect()
+    }
+
+    #[test]
+    fn test_pinyin_initial_match_maps_to_original_positions() {
+        let candidates = [StringMatchCandidate::new_with_pinyin(0, "编辑器: 退格")];
+        let matches = match_strings(&candidates, "bjqtg", Case::Ignore, LengthPenalty::On, 10);
+
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].string, "编辑器: 退格");
+        assert_eq!(matches[0].positions, vec![0, 3, 6, 11, 14]);
+    }
+
+    #[test]
+    fn test_plain_candidate_does_not_enable_pinyin() {
+        let candidates = [StringMatchCandidate::new(0, "编辑器: 退格")];
+        assert!(
+            match_strings(&candidates, "bjqtg", Case::Ignore, LengthPenalty::On, 10,).is_empty()
+        );
+    }
+
+    #[test]
+    fn test_original_chinese_match_is_not_duplicated() {
+        let candidates = [StringMatchCandidate::new_with_pinyin(0, "编辑器: 退格")];
+        let matches = match_strings(&candidates, "退格", Case::Ignore, LengthPenalty::On, 10);
+        assert_eq!(matches.len(), 1);
     }
 
     #[gpui::test]

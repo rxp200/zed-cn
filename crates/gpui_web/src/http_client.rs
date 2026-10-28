@@ -1,6 +1,9 @@
 use crate::WebDispatcher;
 use anyhow::{Context as _, anyhow};
-use futures::{AsyncRead, AsyncReadExt as _, FutureExt as _, TryStreamExt as _, channel::oneshot};
+use futures::{
+    AsyncRead, AsyncReadExt as _, FutureExt as _, SinkExt as _, TryStreamExt as _,
+    channel::{mpsc, oneshot},
+};
 use http_client::{AsyncBody, HttpClient, RedirectPolicy};
 use std::{
     io,
@@ -208,7 +211,7 @@ async fn read_body_to_bytes(mut body: AsyncBody) -> anyhow::Result<Option<Vec<u8
 const RESPONSE_BODY_CHANNEL_CAPACITY: usize = 8;
 
 struct ReadableStreamBody {
-    chunks: futures::stream::IntoAsyncRead<Pin<Box<async_channel::Receiver<io::Result<Vec<u8>>>>>>,
+    chunks: futures::stream::IntoAsyncRead<mpsc::Receiver<io::Result<Vec<u8>>>>,
     // Dropping this sender resolves the pump's cancellation future, which
     // cancels the browser-side `ReadableStream`.
     _cancellation: oneshot::Sender<()>,
@@ -216,10 +219,7 @@ struct ReadableStreamBody {
 
 impl ReadableStreamBody {
     fn new(reader: web_sys::ReadableStreamDefaultReader) -> Self {
-        // The pump runs on the browser main thread while a worker may read the
-        // body. futures::mpsc's internal mutex can park the main thread.
-        let (chunks_sender, chunks_receiver) =
-            async_channel::bounded(RESPONSE_BODY_CHANNEL_CAPACITY);
+        let (chunks_sender, chunks_receiver) = mpsc::channel(RESPONSE_BODY_CHANNEL_CAPACITY);
         let (cancellation, cancellation_receiver) = oneshot::channel();
         wasm_bindgen_futures::spawn_local(pump_response_body(
             reader,
@@ -227,7 +227,7 @@ impl ReadableStreamBody {
             cancellation_receiver,
         ));
         Self {
-            chunks: Box::pin(chunks_receiver).into_async_read(),
+            chunks: chunks_receiver.into_async_read(),
             _cancellation: cancellation,
         }
     }
@@ -245,7 +245,7 @@ impl AsyncRead for ReadableStreamBody {
 
 async fn pump_response_body(
     reader: web_sys::ReadableStreamDefaultReader,
-    chunks: async_channel::Sender<io::Result<Vec<u8>>>,
+    mut chunks: mpsc::Sender<io::Result<Vec<u8>>>,
     cancellation: oneshot::Receiver<()>,
 ) {
     let cancellation = cancellation.fuse();

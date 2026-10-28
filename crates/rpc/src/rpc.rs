@@ -1,6 +1,7 @@
 pub mod auth;
 mod conn;
 mod message_stream;
+pub mod network_pacing;
 mod notification;
 mod peer;
 

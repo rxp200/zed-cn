@@ -4,6 +4,7 @@ use gpui::{ScrollHandle, prelude::*};
 use ui::{Checkbox, ToggleState, prelude::*};
 
 use crate::SettingsWindow;
+use crate::components::{settings_card, settings_card_row};
 
 pub(crate) fn render_feature_flags_page(
     _settings_window: &SettingsWindow,
@@ -24,13 +25,16 @@ pub(crate) fn render_feature_flags_page(
         .pt_2p5()
         .px_8()
         .pb_16()
-        .gap_4()
         .overflow_y_scroll()
         .track_scroll(scroll_handle)
-        .children(
-            descriptors
-                .into_iter()
-                .map(|descriptor| render_flag_row(descriptor, cx)),
+        .child(
+            settings_card(cx).children(descriptors.into_iter().enumerate().map(
+                |(index, descriptor)| {
+                    settings_card_row(index == 0, cx)
+                        .py_3()
+                        .child(render_flag_row(descriptor, cx))
+                },
+            )),
         )
         .into_any_element()
 }
@@ -59,7 +63,7 @@ fn render_flag_row(
                     ))
                     .when(forced_on, |this| {
                         this.child(
-                            Label::new("enabled for all")
+                            Label::new(i18n::t!("ec1b6f41466c73b7"))
                                 .size(LabelSize::Small)
                                 .color(Color::Muted),
                         )
@@ -68,11 +72,14 @@ fn render_flag_row(
             .when(has_override && !forced_on, |this| {
                 let name = descriptor.name;
                 this.child(
-                    Button::new(SharedString::from(format!("reset-{}", name)), "Reset")
-                        .label_size(LabelSize::Small)
-                        .on_click(cx.listener(move |_, _, _, cx| {
-                            FeatureFlagStore::clear_override(name, <dyn Fs>::global(cx), cx);
-                        })),
+                    Button::new(
+                        SharedString::from(format!("reset-{}", name)),
+                        i18n::t!("cb5d682bac3d1a2d"),
+                    )
+                    .label_size(LabelSize::Small)
+                    .on_click(cx.listener(move |_, _, _, cx| {
+                        FeatureFlagStore::clear_override(name, <dyn Fs>::global(cx), cx);
+                    })),
                 )
             });
 

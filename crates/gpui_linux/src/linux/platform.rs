@@ -1,3 +1,5 @@
+// Modified by the Zed CN project, 2026. See MODIFICATIONS.md.
+
 use std::{
     cell::RefCell,
     env,
@@ -71,7 +73,6 @@ pub(crate) struct PlatformHandlers {
     pub(crate) keyboard_layout_change: Option<Box<dyn FnMut()>>,
     pub(crate) system_sleep: Option<Box<dyn FnMut()>>,
     pub(crate) system_wake: Option<Box<dyn FnMut()>>,
-    pub(crate) displays_changed: Option<Box<dyn FnMut()>>,
 }
 
 /// A logind `PrepareForSleep` signal, forwarded from the D-Bus listener to
@@ -428,8 +429,7 @@ impl LinuxPlatform {
     fn replace_connection(&self, connection: DisplayConnection) {
         let previous = std::mem::replace(&mut *self.connection.borrow_mut(), connection);
         drop(previous);
-        // The app caches the keyboard layout and the displays, which belong to
-        // the connection.
+        // The app caches the keyboard layout, which belongs to the connection.
         let callback = self
             .common
             .borrow_mut()
@@ -443,15 +443,6 @@ impl LinuxPlatform {
             if common.callbacks.keyboard_layout_change.is_none() {
                 common.callbacks.keyboard_layout_change = Some(callback);
             }
-        }
-        let callback = self.common.borrow_mut().callbacks.displays_changed.take();
-        if let Some(mut callback) = callback {
-            callback();
-            self.common
-                .borrow_mut()
-                .callbacks
-                .displays_changed
-                .get_or_insert(callback);
         }
     }
 
@@ -722,10 +713,6 @@ impl Platform for LinuxPlatform {
         self.connection.borrow().displays()
     }
 
-    fn on_displays_changed(&self, callback: Box<dyn FnMut()>) {
-        self.with_common(|common| common.callbacks.displays_changed = Some(callback));
-    }
-
     #[cfg(feature = "screen-capture")]
     fn is_screen_capture_supported(&self) -> bool {
         self.connection.borrow().is_screen_capture_supported()
@@ -846,7 +833,7 @@ impl Platform for LinuxPlatform {
                         ashpd::desktop::file_chooser::SaveFileRequest::default()
                             .identifier(identifier.await)
                             .modal(true)
-                            .title("Save File")
+                            .title(i18n::t!("4d8dc23ed6e1e690"))
                             .current_folder(directory)
                             .expect("pathbuf should not be nul terminated");
 

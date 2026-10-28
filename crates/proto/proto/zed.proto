@@ -523,8 +523,52 @@ message Envelope {
     ExecuteLspCommand execute_lsp_command = 491;
     ExecuteLspCommandResponse execute_lsp_command_response = 492;
     RefreshDocumentHighlights refresh_document_highlights = 493;
-    GetTerminalShell get_terminal_shell = 494;
-    GetTerminalShellResponse get_terminal_shell_response = 495; // current max
+    CreateTemporaryFile create_temporary_file = 494;
+    CreateTemporaryFileResponse create_temporary_file_response = 495;
+    GetSystemStats get_system_stats = 496;
+    GetSystemStatsResponse get_system_stats_response = 497;
+    CreatePersistentTerminal create_persistent_terminal = 498;
+    CreatePersistentTerminalResponse create_persistent_terminal_response = 499;
+    PersistentTerminalInput persistent_terminal_input = 500;
+    ResizePersistentTerminal resize_persistent_terminal = 501;
+    ReadPersistentTerminal read_persistent_terminal = 502;
+    ReadPersistentTerminalResponse read_persistent_terminal_response = 503;
+    ClosePersistentTerminal close_persistent_terminal = 504;
+    GetTerminalShell get_terminal_shell = 505;
+    GetTerminalShellResponse get_terminal_shell_response = 506;
+    SubscribePersistentTerminal subscribe_persistent_terminal = 507;
+    PersistentTerminalOutput persistent_terminal_output = 508;
+    PersistentTerminalOutputCredit persistent_terminal_output_credit = 509;
+    ReadDocumentChunk read_document_chunk = 510;
+    ReadDocumentChunkResponse read_document_chunk_response = 511;
+    ReadEpubEntry read_epub_entry = 512;
+    ReadEpubEntryResponse read_epub_entry_response = 513;
+    BeginProjectEntryUpload begin_project_entry_upload = 514;
+    BeginProjectEntryUploadResponse begin_project_entry_upload_response = 515;
+    WriteProjectEntryChunk write_project_entry_chunk = 516;
+    WriteProjectEntryChunkResponse write_project_entry_chunk_response = 517;
+    FinishProjectEntryUpload finish_project_entry_upload = 518;
+    FinishProjectEntryUploadResponse finish_project_entry_upload_response = 519;
+    AbortProjectEntryUpload abort_project_entry_upload = 520;
+    AbortProjectEntryUploadResponse abort_project_entry_upload_response = 521;
+    DownloadFileChunk download_file_chunk = 522;
+    DownloadFileChunkResponse download_file_chunk_response = 523;
+    CancelGitOperation cancel_git_operation = 524;
+    HostTerminal host_terminal = 525;
+    HostTerminalResponse host_terminal_response = 526;
+    ListHostedTerminals list_hosted_terminals = 527;
+    ListHostedTerminalsResponse list_hosted_terminals_response = 528;
+    AttachHostedTerminal attach_hosted_terminal = 529;
+    AttachHostedTerminalResponse attach_hosted_terminal_response = 530;
+    DetachHostedTerminal detach_hosted_terminal = 531;
+    TakeHostedTerminalControl take_hosted_terminal_control = 532;
+    TakeHostedTerminalControlResponse take_hosted_terminal_control_response = 533;
+    RenameHostedTerminal rename_hosted_terminal = 534;
+    TerminateHostedTerminal terminate_hosted_terminal = 535;
+    DeleteHostedTerminal delete_hosted_terminal = 536;
+    CreateRemoteDirectory create_remote_directory = 537;
+    CreateRemoteDirectoryResponse create_remote_directory_response = 538;
+    UnhostTerminal unhost_terminal = 539; // current max
   }
 
   reserved 87 to 88;
@@ -601,7 +645,9 @@ message FlushBufferedMessages {}
 
 message FlushBufferedMessagesResponse {}
 
-message RemoteStarted {}
+message RemoteStarted {
+  repeated string capabilities = 1;
+}
 
 message SpawnKernel {
   string kernel_name = 1;

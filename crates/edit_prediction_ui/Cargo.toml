@@ -13,6 +13,7 @@ path = "src/edit_prediction_ui.rs"
 doctest = false
 
 [dependencies]
+i18n.workspace = true
 anyhow.workspace = true
 buffer_diff.workspace = true
 client.workspace = true

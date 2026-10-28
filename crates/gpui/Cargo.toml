@@ -42,6 +42,8 @@ x11 = [
 ]
 screen-capture = [
     "scap",
+    "dep:objc2-core-foundation",
+    "dep:objc2-core-video",
 ]
 windows-manifest = ["dep:embed-resource"]
 profiler = ["dep:hdrhistogram"]
@@ -51,6 +53,7 @@ stacker = ["dep:stacksafe"]
 path = "src/gpui.rs"
 
 [dependencies]
+i18n.workspace = true
 accesskit.workspace = true
 anyhow.workspace = true
 async-task.workspace = true
@@ -132,10 +135,11 @@ uuid = { workspace = true, features = ["js"] }
 
 
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
-objc2-core-foundation.workspace = true
-objc2-core-video = { workspace = true, features = ["CVPixelBuffer"] }
+core-video.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
+objc2-core-foundation = { workspace = true, optional = true }
+objc2-core-video = { workspace = true, optional = true }
 log.workspace = true
 objc2 = { workspace = true, optional = true }
 objc2-metal = { version = "0.3", optional = true }

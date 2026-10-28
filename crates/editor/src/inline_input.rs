@@ -51,10 +51,13 @@ impl InlineInputPreview {
             return (text.to_string(), line_count as u32);
         }
         let hidden_lines = line_count - max_lines;
-        let noun = if hidden_lines == 1 { "line" } else { "lines" };
         let shown = text.lines().take(max_lines).collect::<Vec<_>>().join("\n");
         (
-            format!("{shown}\n… +{hidden_lines} more {noun}"),
+            i18n::t!(
+                "f403a54c9fd47896",
+                shown = shown,
+                hidden_lines = hidden_lines
+            ),
             max_lines as u32 + 1,
         )
     }
@@ -357,14 +360,22 @@ mod tests {
         assert_eq!(height, 9);
         assert_eq!(
             shown,
-            format!(
-                "{}\n… +4 more lines",
-                text.lines().take(8).collect::<Vec<_>>().join("\n")
+            i18n::t!(
+                "f403a54c9fd47896",
+                shown = text.lines().take(8).collect::<Vec<_>>().join("\n"),
+                hidden_lines = 4
             )
         );
         let (shown, height) = preview.display_text(11);
         assert_eq!(height, 12);
-        assert_eq!(shown.lines().last(), Some("… +1 more line"));
+        assert_eq!(
+            shown,
+            i18n::t!(
+                "f403a54c9fd47896",
+                shown = text.lines().take(11).collect::<Vec<_>>().join("\n"),
+                hidden_lines = 1
+            )
+        );
         assert_eq!(preview.display_text(12), (text, 12));
     }
 }

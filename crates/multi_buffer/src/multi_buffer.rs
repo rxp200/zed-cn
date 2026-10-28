@@ -5860,6 +5860,55 @@ impl MultiBufferSnapshot {
         Some(results.into_iter().map(|(range, _)| range).tuples())
     }
 
+    /// Like [`Self::enclosing_bracket_ranges`], but also reports the bracket
+    /// pair's nesting depth indices so callers can resolve its colorization accent.
+    pub fn enclosing_bracket_matches<T: ToOffset>(
+        &self,
+        range: Range<T>,
+    ) -> Option<
+        impl Iterator<
+            Item = (
+                Range<MultiBufferOffset>,
+                Range<MultiBufferOffset>,
+                Option<usize>,
+                Option<usize>,
+            ),
+        >,
+    > {
+        let range = range.start.to_offset(self)..range.end.to_offset(self);
+        let results =
+            self.map_excerpt_ranges(range, |buffer, excerpt_range, input_buffer_range| {
+                buffer
+                    .enclosing_bracket_ranges(input_buffer_range)
+                    .filter(|pair| {
+                        excerpt_range.context.start.0 <= pair.open_range.start
+                            && pair.close_range.end <= excerpt_range.context.end.0
+                    })
+                    .flat_map(|pair| {
+                        let indices = (pair.color_index, pair.type_color_index);
+                        [
+                            (
+                                BufferOffset(pair.open_range.start)
+                                    ..BufferOffset(pair.open_range.end),
+                                indices,
+                            ),
+                            (
+                                BufferOffset(pair.close_range.start)
+                                    ..BufferOffset(pair.close_range.end),
+                                indices,
+                            ),
+                        ]
+                    })
+                    .collect()
+            })?;
+        Some(
+            results
+                .into_iter()
+                .tuples()
+                .map(|((open, indices), (close, _))| (open, close, indices.0, indices.1)),
+        )
+    }
+
     /// Returns enclosing bracket ranges containing the given range or returns None if the range is
     /// not contained in a single excerpt
     pub fn text_object_ranges<T: ToOffset>(

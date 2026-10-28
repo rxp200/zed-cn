@@ -2,7 +2,7 @@ use crate::{
     Thread, ToolCallEventStream, ToolPermissionContext, ToolPermissionDecision,
     decide_permission_for_path,
 };
-use agent_client_protocol::schema::v2 as acp;
+use agent_client_protocol::schema::v1 as acp;
 use agent_skills::is_agents_skills_path;
 use anyhow::{Result, anyhow};
 use fs::Fs;
@@ -836,12 +836,12 @@ pub fn authorize_dirty_buffer(
             vec![
                 acp::PermissionOption::new(
                     acp::PermissionOptionId::new("save"),
-                    "Save",
+                    i18n::t!("a3030bf8f16dc63c"),
                     acp::PermissionOptionKind::AllowOnce,
                 ),
                 acp::PermissionOption::new(
                     acp::PermissionOptionId::new("discard"),
-                    "Discard",
+                    i18n::t!("b16f71b55691cdc3"),
                     acp::PermissionOptionKind::RejectOnce,
                 ),
             ],
@@ -851,12 +851,12 @@ pub fn authorize_dirty_buffer(
             vec![
                 acp::PermissionOption::new(
                     acp::PermissionOptionId::new("discard"),
-                    "Overwrite",
+                    i18n::t!("4ce4c98eb27e4b65"),
                     acp::PermissionOptionKind::AllowOnce,
                 ),
                 acp::PermissionOption::new(
                     acp::PermissionOptionId::new("keep"),
-                    "Cancel",
+                    i18n::t!("2cd0f3be8738a86c"),
                     acp::PermissionOptionKind::RejectOnce,
                 ),
             ],

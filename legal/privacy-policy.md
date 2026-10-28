@@ -3,6 +3,8 @@ title: Privacy Policy
 slug: privacy-policy
 ---
 
+> **Upstream notice:** This is Zed Industries, Inc.'s official privacy policy, preserved from the upstream Zed source because Zed CN can still connect to official Zed services. It is not a privacy policy issued by Zed CN. Zed CN is an unofficial community fork, is not operated, sponsored, or endorsed by Zed Industries, and does not independently operate the accounts, cloud services, billing, telemetry endpoints, or support contacts described below.
+
 **Last Updated**: June 9, 2026
 
 ## Summary

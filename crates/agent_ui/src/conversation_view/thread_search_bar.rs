@@ -169,7 +169,7 @@ impl ThreadSearchBar {
     ) -> Self {
         let query_editor = cx.new(|cx| {
             let mut editor = Editor::single_line(window, cx);
-            editor.set_placeholder_text("Search this thread…", window, cx);
+            editor.set_placeholder_text(i18n::t!("b47b067241d25794"), window, cx);
             editor
         });
         let editor_subscription = cx.subscribe_in(
@@ -841,7 +841,7 @@ impl Render for ThreadSearchBar {
                         "thread-search-prev",
                         IconName::ChevronLeft,
                         !has_matches,
-                        "Previous Match",
+                        i18n::t!("dbb65ea867d3828d"),
                         &SelectPreviousThreadMatch,
                         focus_handle.clone(),
                     ))
@@ -849,7 +849,7 @@ impl Render for ThreadSearchBar {
                         "thread-search-next",
                         IconName::ChevronRight,
                         !has_matches,
-                        "Next Match",
+                        i18n::t!("ca824c5947e097c4"),
                         &SelectNextThreadMatch,
                         focus_handle.clone(),
                     ))
@@ -864,7 +864,7 @@ impl Render for ThreadSearchBar {
                         "thread-search-dismiss",
                         IconName::Close,
                         false,
-                        "Close Search",
+                        i18n::t!("ab008ef18dac8f83"),
                         &DismissThreadSearch,
                         focus_handle,
                     )),
@@ -994,8 +994,8 @@ fn compaction_markdowns(
 ) -> impl Iterator<Item = Entity<Markdown>> + '_ {
     compaction
         .summary
-        .markdowns()
-        .cloned()
+        .iter()
+        .filter_map(|content| content.markdown().cloned())
         .chain(compaction.error.iter().cloned())
         .filter(move |_| is_expanded)
 }
@@ -1004,42 +1004,42 @@ fn compaction_markdowns(
 mod tests {
     use super::*;
     use acp_thread::{
-        ContextCompaction, ContextCompactionId, ContextCompactionStatus, MessageContent,
+        ContentBlock, ContextCompaction, ContextCompactionId, ContextCompactionStatus,
     };
-    use agent_client_protocol::schema::v2 as acp_v2;
+    use agent_client_protocol::schema::v1 as acp_v1;
     use language::LanguageRegistry;
-    use util::paths::PathStyle;
 
     #[gpui::test]
     fn test_compaction_markdowns_include_summary_and_error(cx: &mut App) {
+        let summary = cx.new(|cx| Markdown::new("summary match".into(), None, None, cx));
         let error = cx.new(|cx| Markdown::new("error match".into(), None, None, cx));
         let language_registry = Arc::new(LanguageRegistry::test(cx.background_executor().clone()));
-        let mut summary = MessageContent::new(
-            acp_v2::ContentBlock::Text(acp_v2::TextContent::new("summary match")),
+        let unsupported_block = ContentBlock::new_output(
+            acp_thread::content::from_v1(acp_v1::ContentBlock::Audio(acp_v1::AudioContent::new(
+                "YXVkaW8=",
+                "audio/wav",
+            )))
+            .expect("known v1 audio content"),
             &language_registry,
-            PathStyle::local(),
             cx,
         );
-        summary.append(
-            acp_v2::ContentBlock::Audio(acp_v2::AudioContent::new("YXVkaW8=", "audio/wav")),
-            &language_registry,
-            PathStyle::local(),
-            cx,
-        );
-        let mut expected_markdowns = summary.markdowns().cloned().collect::<Vec<_>>();
-        assert_eq!(expected_markdowns.len(), 2);
-        expected_markdowns.push(error.clone());
+        let unsupported = unsupported_block
+            .markdown()
+            .expect("audio fallback")
+            .clone();
         let compaction = ContextCompaction {
             id: ContextCompactionId("compaction".into()),
             status: ContextCompactionStatus::Failed,
-            summary,
-            error: Some(error),
-            meta: None,
+            summary: vec![
+                ContentBlock::from_markdown(summary.clone()),
+                unsupported_block,
+            ],
+            error: Some(error.clone()),
         };
 
         assert!(compaction_markdowns(&compaction, false).next().is_none());
 
         let markdowns = compaction_markdowns(&compaction, true).collect::<Vec<_>>();
-        assert_eq!(markdowns, expected_markdowns);
+        assert_eq!(markdowns, vec![summary, unsupported, error]);
     }
 }

@@ -336,6 +336,17 @@ impl LanguageModel {
         self.max_token_count
     }
 
+    /// Estimates tokens for plain text used for client-side admission. Implementations may
+    /// override this when they have a tokenizer matching the provider; the default is a
+    /// conservative Unicode-aware estimate and must never be described as exact.
+    ///
+    /// Zed CN: kept public for the code-explanation and hover-translation budget checks.
+    pub fn estimate_tokens(&self, text: &str) -> u64 {
+        let bytes = text.len() as u64;
+        let characters = text.chars().count() as u64;
+        bytes.max(characters.saturating_mul(2))
+    }
+
     /// Returns the input ceiling before reserving output from any shared window.
     pub fn max_input_tokens(&self) -> u64 {
         self.max_input_tokens
@@ -542,6 +553,11 @@ pub trait LanguageModelProvider: LanguageModelClient {
     fn is_authenticated(&self, cx: &App) -> bool;
     fn authenticate(&self, cx: &mut App) -> Task<Result<(), AuthenticateError>>;
     fn settings_view(&self, cx: &mut App) -> Option<ProviderSettingsView>;
+
+    /// Returns saved credentials only for the exact endpoint being configured.
+    fn configuration_api_key(&self, _api_url: &str, _cx: &App) -> Option<String> {
+        None
+    }
 
     fn set_api_key(&self, _key: Option<String>, _cx: &mut App) -> Task<Result<()>> {
         Task::ready(Ok(()))

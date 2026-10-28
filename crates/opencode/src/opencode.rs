@@ -143,7 +143,10 @@ pub async fn stream_generate_content(
         .method(Method::POST)
         .uri(uri)
         .header("Content-Type", "application/json")
-        .header("Authorization", format!("Bearer {api_key}"))
+        .header(
+            "Authorization",
+            i18n::t!("4c1921d519adeb3b", api_key = api_key),
+        )
         .extra_headers(extra_headers)
         .body(AsyncBody::from(serde_json::to_string(&request)?))?;
     let mut response = client.send(request).await?;

@@ -29,6 +29,7 @@ test-support = [
 ]
 
 [dependencies]
+i18n.workspace = true
 agent_settings.workspace = true
 anyhow.workspace = true
 auto_update.workspace = true
@@ -46,6 +47,7 @@ git_ui_core.workspace = true
 gpui = { workspace = true, features = ["screen-capture"] }
 icons.workspace = true
 livekit_client.workspace = true
+log.workspace = true
 project.workspace = true
 recent_projects.workspace = true
 remote.workspace = true
