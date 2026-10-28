@@ -2101,10 +2101,10 @@ impl RemoteServerPickerDelegate {
                                             container.name.clone()
                                         }
                                     };
-                                    format!("{address} · {} 个项目", projects.len())
+                                    i18n::t_mix!("4150540c538d4d5a"; projects.len(); address = address)
                                 }
                                 RemoteEntry::SshConfig { host } => {
-                                    format!("{host} · SSH 配置")
+                                    i18n::t!("a805a03897346590", host = host)
                                 }
                             })
                             .size(LabelSize::XSmall)
@@ -5736,7 +5736,6 @@ impl RemoteServerProjects {
         _cx: &mut Context<Self>,
     ) -> impl IntoElement {
         v_flex()
-            .min_h(rems(20.))
             .size_full()
             .child(self.default_picker.clone())
             .into_any_element()

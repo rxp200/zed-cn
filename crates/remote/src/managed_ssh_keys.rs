@@ -273,7 +273,7 @@ async fn generate_managed_ssh_key_blocking(
         .trim()
         .to_string();
     let key_id = public_key_identity(&public_key)?;
-    fs::rename(&temporary_path, &private_key_path).context("保存 Zed SSH 私钥失败")?;
+    fs::rename(&temporary_path, &private_key_path).context(i18n::t!("ab88a7d30eb540e7"))?;
     if let Err(error) = fs::rename(&temporary_public_path, public_key_path(&private_key_path))
         .context(i18n::t!("0f9eaee4a2a233a5"))
     {
@@ -1085,11 +1085,21 @@ mod tests {
         key.connection_args = vec!["-o".to_string(), "StrictHostKeyChecking=yes".to_string()];
         let arguments = verification_arguments(&key, Path::new("/keys/zed-key"));
 
-        assert!(arguments.windows(2).any(|pair| pair == ["-o", "BatchMode=yes"]));
-        assert!(arguments
-            .windows(2)
-            .any(|pair| pair == ["-o", "StrictHostKeyChecking=yes"]));
-        assert!(arguments.windows(2).any(|pair| pair == ["-i", "/keys/zed-key"]));
+        assert!(
+            arguments
+                .windows(2)
+                .any(|pair| pair == ["-o", "BatchMode=yes"])
+        );
+        assert!(
+            arguments
+                .windows(2)
+                .any(|pair| pair == ["-o", "StrictHostKeyChecking=yes"])
+        );
+        assert!(
+            arguments
+                .windows(2)
+                .any(|pair| pair == ["-i", "/keys/zed-key"])
+        );
         assert!(arguments.windows(2).any(|pair| pair == ["-p", "2222"]));
         assert_eq!(arguments.last().map(String::as_str), Some("true"));
         assert!(arguments.contains(&"dev@example.com".to_string()));
@@ -1100,9 +1110,10 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let directory = directory.path();
         let mut manifest = load_or_create_manifest_in(directory).unwrap();
-        manifest
-            .keys
-            .push(test_key("ssh-ed25519:rename", ManagedSshKeyDeploymentState::Verified));
+        manifest.keys.push(test_key(
+            "ssh-ed25519:rename",
+            ManagedSshKeyDeploymentState::Verified,
+        ));
         save_manifest_in(directory, &manifest).unwrap();
 
         rename_managed_ssh_key_in(
@@ -1311,7 +1322,10 @@ mod tests {
         ));
         assert!(result.is_err());
         assert!(
-            load_or_create_manifest_in(data.path()).unwrap().keys.is_empty(),
+            load_or_create_manifest_in(data.path())
+                .unwrap()
+                .keys
+                .is_empty(),
             "a rejected import must not add a manifest record"
         );
     }

@@ -1257,8 +1257,8 @@ impl Dock {
         }
     }
 
-    fn dispatch_context() -> KeyContext {
-        let mut dispatch_context = KeyContext::new_with_defaults();
+    fn dispatch_context(cx: &App) -> KeyContext {
+        let mut dispatch_context = KeyContext::new_with_defaults(cx.platform_info().os);
         dispatch_context.add("Dock");
 
         dispatch_context
@@ -1309,7 +1309,7 @@ impl Dock {
 
 impl Render for Dock {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let dispatch_context = Self::dispatch_context();
+        let dispatch_context = Self::dispatch_context(cx);
         if let Some(entry) = self.visible_entry() {
             let position = self.position;
             let accent = cx.theme().colors().border_focused;
