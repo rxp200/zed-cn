@@ -148,6 +148,31 @@ pub fn project_image_source(project: WeakEntity<Project>, path: ProjectPath) -> 
     })
 }
 
+/// Starts loading a project image without going through GPUI's global asset
+/// cache.
+///
+/// The global asset cache is never evicted, so callers that need decoded images
+/// to be reclaimable (for example a preview that owns a bounded image cache)
+/// must load the image through this function instead of
+/// [`project_image_source`].
+pub fn load_project_image(
+    project: WeakEntity<Project>,
+    path: ProjectPath,
+    cx: &mut App,
+) -> impl Future<Output = Result<Arc<RenderImage>, ImageCacheError>> + Send + 'static {
+    ProjectImageAsset::load(ProjectImageSource { project, path }, cx)
+}
+
+/// Returns whether a project image is being held by GPUI's global asset cache.
+#[cfg(any(test, feature = "test-support"))]
+pub fn is_project_image_cached(
+    project: WeakEntity<Project>,
+    path: ProjectPath,
+    cx: &App,
+) -> bool {
+    cx.has_asset::<AssetLogger<ProjectImageAsset>>(&ProjectImageSource { project, path })
+}
+
 impl ImageItem {
     pub fn compute_metadata_from_bytes(image_bytes: &[u8]) -> Result<ImageMetadata> {
         let image_format = image::guess_format(image_bytes)?;

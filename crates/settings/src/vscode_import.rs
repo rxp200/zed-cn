@@ -909,6 +909,7 @@ impl VsCodeSettings {
             auto_open: None,
             diagnostic_badges: None,
             git_status_indicator: None,
+            git_branch_name: None,
         };
 
         if let (Some(false), Some(false)) = (

@@ -13172,6 +13172,155 @@ async fn test_focus_follows_mouse_into_blank_area(cx: &mut gpui::TestAppContext)
     });
 }
 
+fn visible_entry_branches(
+    panel: &Entity<ProjectPanel>,
+    range: Range<usize>,
+    cx: &mut VisualTestContext,
+) -> Vec<(String, Option<(String, bool)>)> {
+    let mut result = Vec::new();
+
+    panel.update_in(cx, |panel, window, cx| {
+        panel.for_each_visible_entry(range, window, cx, &mut |_, details, _, _| {
+            result.push((
+                details.filename.clone(),
+                details
+                    .branch
+                    .as_ref()
+                    .map(|branch| (branch.name.to_string(), branch.is_detached)),
+            ));
+        });
+    });
+
+    result
+}
+
+#[gpui::test]
+async fn test_worktree_root_branch_labels(cx: &mut gpui::TestAppContext) {
+    init_test(cx);
+
+    let fs = FakeFs::new(cx.executor());
+    fs.insert_tree("/root1", json!({ ".git": {}, "a": "" }))
+        .await;
+    fs.insert_tree("/root2", json!({ ".git": {}, "b": "" }))
+        .await;
+    fs.insert_tree("/root3", json!({ "c": "" })).await;
+    fs.set_branch_name(Path::new("/root1/.git"), Some("main"));
+    fs.set_branch_name(
+        Path::new("/root2/.git"),
+        Some("feature/project-panel-branch"),
+    );
+
+    let project = Project::test(
+        fs.clone(),
+        ["/root1".as_ref(), "/root2".as_ref(), "/root3".as_ref()],
+        cx,
+    )
+    .await;
+    let window = cx.add_window(|window, cx| MultiWorkspace::test_new(project.clone(), window, cx));
+    let workspace = window
+        .read_with(cx, |mw, _| mw.workspace().clone())
+        .unwrap();
+    let cx = &mut VisualTestContext::from_window(window.into(), cx);
+    let panel = workspace.update_in(cx, ProjectPanel::new);
+    cx.run_until_parked();
+
+    let labeled_roots = visible_entry_branches(&panel, 0..50, cx)
+        .into_iter()
+        .filter(|(_, branch)| branch.is_some())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        labeled_roots,
+        vec![
+            ("root1".to_string(), Some(("main".to_string(), false))),
+            (
+                "root2".to_string(),
+                Some(("feature/project-panel-branch".to_string(), false))
+            ),
+        ],
+        "Only worktree roots backed by a git repository show a branch label"
+    );
+
+    fs.set_branch_name(Path::new("/root1/.git"), Some("other"));
+    cx.run_until_parked();
+
+    assert_eq!(
+        visible_entry_branches(&panel, 0..1, cx),
+        vec![("root1".to_string(), Some(("other".to_string(), false)))],
+        "Changing the branch refreshes the panel"
+    );
+}
+
+#[gpui::test]
+async fn test_worktree_root_branch_labels_can_be_disabled(cx: &mut gpui::TestAppContext) {
+    init_test(cx);
+    cx.update(|cx| {
+        let settings = *ProjectPanelSettings::get_global(cx);
+        ProjectPanelSettings::override_global(
+            ProjectPanelSettings {
+                git_branch_name: false,
+                ..settings
+            },
+            cx,
+        );
+    });
+
+    let fs = FakeFs::new(cx.executor());
+    fs.insert_tree("/root", json!({ ".git": {}, "a": "" }))
+        .await;
+    fs.set_branch_name(Path::new("/root/.git"), Some("main"));
+
+    let project = Project::test(fs.clone(), ["/root".as_ref()], cx).await;
+    let window = cx.add_window(|window, cx| MultiWorkspace::test_new(project.clone(), window, cx));
+    let workspace = window
+        .read_with(cx, |mw, _| mw.workspace().clone())
+        .unwrap();
+    let cx = &mut VisualTestContext::from_window(window.into(), cx);
+    let panel = workspace.update_in(cx, ProjectPanel::new);
+    cx.run_until_parked();
+
+    assert_eq!(
+        visible_entry_branches(&panel, 0..10, cx),
+        vec![
+            ("root".to_string(), None),
+            (".git".to_string(), None),
+            ("a".to_string(), None),
+        ],
+        "The project panel setting hides branch labels"
+    );
+}
+
+#[test]
+fn test_worktree_branch_label_formatting() {
+    assert_eq!(
+        worktree_branch_label(Some("main"), Some("0123456789abcdef")),
+        Some(WorktreeBranchLabel {
+            name: "main".into(),
+            is_detached: false,
+            full_name: "main".into(),
+        })
+    );
+
+    assert_eq!(
+        worktree_branch_label(None, Some("0123456789abcdef")),
+        Some(WorktreeBranchLabel {
+            name: "01234567".into(),
+            is_detached: true,
+            full_name: "0123456789abcdef".into(),
+        })
+    );
+    assert_eq!(worktree_branch_label(None, None), None);
+
+    let long_branch_name = format!("feature/{}", "a".repeat(MAX_BRANCH_LABEL_LENGTH));
+    let label = worktree_branch_label(Some(&long_branch_name), None)
+        .expect("a branch name produces a label");
+    assert_eq!(
+        label.name.chars().count(),
+        MAX_BRANCH_LABEL_LENGTH + 1,
+        "Long branch names are truncated with a trailing ellipsis"
+    );
+    assert_eq!(label.full_name, long_branch_name);
+}
+
 pub(crate) fn init_test(cx: &mut TestAppContext) {
     cx.update(|cx| {
         let settings_store = SettingsStore::test(cx);

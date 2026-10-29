@@ -11,7 +11,7 @@ use sysinfo::{Disks, Networks, ProcessRefreshKind, ProcessesToUpdate, System};
 use system_specs::hardware::{GpuReading, HardwareSampler, TemperatureReading, TemperatureSource};
 use terminal_view::port_forwarding::{
     ForwardDirection, ForwardSnapshot, ForwardSource, ForwardStatus, PortForwardManager,
-    stop_forward_button,
+    forwarded_local_url, stop_forward_button,
 };
 use ui::{ProgressBar, prelude::*};
 use workspace::{
@@ -1307,6 +1307,7 @@ fn port_forwarding_card(
                 ForwardStatus::Retrying(_) => (i18n::t!("ab7e3afbecbdafbe"), Color::Modified),
                 ForwardStatus::Failed(_) => (i18n::t!("28384d7afd2e4fa6"), Color::Error),
             };
+            let open_url = forwarded_local_url(entry);
             h_flex()
                 .w_full()
                 .min_w_0()
@@ -1336,7 +1337,24 @@ fn port_forwarding_card(
                                         .flex_none(),
                                 ),
                         )
-                        .child(Label::new(ports).size(LabelSize::Small).truncate()),
+                        .child(match open_url {
+                            Some(url) => div()
+                                .id(format!("open-forwarded-port:{}", entry.target))
+                                .debug_selector({
+                                    let target = entry.target.to_string();
+                                    move || format!("open-forwarded-port:{target}")
+                                })
+                                .min_w_0()
+                                .cursor_pointer()
+                                .tooltip(ui::Tooltip::text(i18n::t!("863910b4ff1717af")))
+                                .child(Label::new(ports).size(LabelSize::Small).truncate())
+                                .on_click(move |_, _, cx| cx.open_url(&url))
+                                .into_any_element(),
+                            None => Label::new(ports)
+                                .size(LabelSize::Small)
+                                .truncate()
+                                .into_any_element(),
+                        }),
                 )
                 .child(stop_forward_button(
                     entry,
@@ -1793,5 +1811,88 @@ mod tests {
         visual.simulate_click(stop.center(), Modifiers::default());
         visual.run_until_parked();
         assert!(notified.get(), "点击卡片上的停止按钮应当停止对应的端口转发");
+    }
+
+    #[gpui::test]
+    async fn port_forwarding_card_opens_a_running_remote_forward_in_the_browser(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use gpui::{AppContext as _, IntoElement, Modifiers, VisualTestContext, px, size};
+        use settings::SettingsStore;
+        use terminal_view::port_forwarding::ForwardTarget;
+
+        struct PortForwardingCardHarness {
+            entries: Vec<ForwardSnapshot>,
+            manager: Entity<PortForwardManager>,
+        }
+
+        impl Render for PortForwardingCardHarness {
+            fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+                port_forwarding_card(&self.entries, &self.manager, cx)
+            }
+        }
+
+        cx.update(|cx| {
+            let store = SettingsStore::test(cx);
+            cx.set_global(store);
+            theme_settings::init(theme::LoadThemes::JustBase, cx);
+        });
+
+        let manager = cx.new(|_| PortForwardManager::new());
+        let entries = vec![
+            ForwardSnapshot {
+                direction: ForwardDirection::RemoteToLocal,
+                target: ForwardTarget {
+                    host: None,
+                    port: 3000,
+                },
+                local_port: Some(3000),
+                source: ForwardSource::Automatic,
+                status: ForwardStatus::RunningUnconfirmed,
+            },
+            ForwardSnapshot {
+                direction: ForwardDirection::RemoteToLocal,
+                target: ForwardTarget {
+                    host: None,
+                    port: 4000,
+                },
+                local_port: None,
+                source: ForwardSource::Manual,
+                status: ForwardStatus::Starting,
+            },
+            ForwardSnapshot {
+                direction: ForwardDirection::LocalToRemote,
+                target: ForwardTarget {
+                    host: None,
+                    port: 5000,
+                },
+                local_port: Some(5000),
+                source: ForwardSource::Manual,
+                status: ForwardStatus::RunningUnconfirmed,
+            },
+        ];
+        let window = cx.open_window(size(px(320.), px(220.)), move |_, _| {
+            PortForwardingCardHarness { entries, manager }
+        });
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+
+        assert!(
+            visual.debug_bounds("open-forwarded-port:4000").is_none(),
+            "转发尚未运行时不应该提供浏览器入口"
+        );
+        assert!(
+            visual.debug_bounds("open-forwarded-port:5000").is_none(),
+            "反向转发暴露的是远端端口，不应该提供本机浏览器入口"
+        );
+
+        let ports = visual
+            .debug_bounds("open-forwarded-port:3000")
+            .expect("运行中的远程→本地转发应当可以直接在浏览器打开");
+        visual.simulate_click(ports.center(), Modifiers::default());
+        visual.run_until_parked();
+        assert_eq!(
+            visual.opened_url().as_deref(),
+            Some("http://127.0.0.1:3000")
+        );
     }
 }

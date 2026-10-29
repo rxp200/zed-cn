@@ -31,12 +31,36 @@ const SECTION_CAP_TRIANGLES: usize = 300_000;
 const CAP_DEPTH_BIAS: f64 = 1e-4;
 const CUT_DEPTH_BIAS: f64 = 2e-4;
 
-/// Isometric view cube in the viewport's top-right corner. Its bounding square
-/// is a top-face rhombus on top of two side faces; the three clickable regions
-/// tile that square so every face is hit exactly once.
-const VIEW_CUBE_WIDTH: f32 = 84.0;
-const VIEW_CUBE_TOP_HEIGHT: f32 = 42.0;
-const VIEW_CUBE_HEIGHT: f32 = 84.0;
+/// Isometric view cube in the viewport's top-right corner. The cube is drawn by
+/// orthographically projecting its eight corners through the camera rotation, so
+/// it turns with the model and every visible face can be clicked.
+const VIEW_CUBE_SIZE: f32 = 92.0;
+/// Faces turned further away than this are back-facing and never drawn or hit.
+const VIEW_CUBE_CULL: f32 = 0.001;
+/// Faces this edge-on cannot carry a readable caption.
+const VIEW_CUBE_LABEL_FACING: f32 = 0.22;
+/// A caption needs this much projected width, otherwise short and long labels
+/// would spill over neighbouring faces.
+const VIEW_CUBE_LABEL_MIN_WIDTH: f32 = 34.0;
+
+/// Grid floor: one cell targets this many screen pixels, matching the fixed
+/// 0.78-unit grid it replaces, and the grid is laid out this many cells to each
+/// side of the model before fading away.
+const GRID_TARGET_PIXELS: f64 = 56.0;
+const GRID_CELLS: i64 = 46;
+const GRID_MAJOR_EVERY: i64 = 5;
+/// Major lines are this much brighter than the theme's grid alpha, so the
+/// five-cell grouping reads without needing a second theme color.
+const GRID_MAJOR_ALPHA_SCALE: f32 = 1.7;
+/// Fractions of the laid-out radius over which minor and major lines fade out.
+/// Minor lines go first so the distance does not turn into a dense hatch.
+const GRID_MINOR_FADE: (f64, f64) = (0.55, 0.90);
+const GRID_MAJOR_FADE: (f64, f64) = (0.68, 1.00);
+/// Distance from the projection plane to the eye in the view-space perspective
+/// projection, and the view-space z at which grid lines are clipped.
+const VIEW_EYE: f64 = 2.5;
+const GRID_NEAR_PLANE: f64 = 2.45;
+const SCREEN_MARGIN: f64 = 2.0;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Shading {
@@ -45,7 +69,7 @@ enum Shading {
     Wireframe,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ViewPreset {
     Isometric,
     Front,
@@ -69,7 +93,7 @@ impl ViewPreset {
 
     fn orientation(self) -> (f64, f64) {
         match self {
-            ViewPreset::Isometric => (0.65, -0.4),
+            ViewPreset::Isometric => (0.65, 0.4),
             ViewPreset::Front => (0.0, 0.0),
             ViewPreset::Back => (std::f64::consts::PI, 0.0),
             ViewPreset::Right => (std::f64::consts::FRAC_PI_2, 0.0),
@@ -90,6 +114,19 @@ impl ViewPreset {
             ViewPreset::Bottom => i18n::t!("479ad21ac9096236"),
         }
     }
+
+    /// Caption of the matching face on the orientation cube.
+    fn face_label(self) -> &'static str {
+        match self {
+            ViewPreset::Front => i18n::t!("6044e9f095e0b5e4"),
+            ViewPreset::Back => i18n::t!("60be66d61586b95c"),
+            ViewPreset::Left => i18n::t!("e2e0c454e5d53186"),
+            ViewPreset::Right => i18n::t!("14ab1f2bce0a8777"),
+            ViewPreset::Top => i18n::t!("db5ba671d244ee82"),
+            ViewPreset::Bottom => i18n::t!("13c12b064b635e06"),
+            ViewPreset::Isometric => i18n::t!("d7cde03d36a8013c"),
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -105,9 +142,10 @@ struct Camera {
 }
 impl Default for Camera {
     fn default() -> Self {
+        let (yaw, pitch) = ViewPreset::Isometric.orientation();
         Self {
-            yaw: 0.65,
-            pitch: -0.4,
+            yaw,
+            pitch,
             zoom: 1.0,
             pan: [0.0; 2],
             perspective: true,
@@ -178,6 +216,7 @@ pub struct ModelReader {
     camera: Camera,
     preset: ViewPreset,
     view_cube_hover: Option<ViewPreset>,
+    view_cube_bounds: Option<Bounds<Pixels>>,
     section: SectionState,
     section_geometry: Option<(SectionPlane, Arc<Section>)>,
     section_open: bool,
@@ -245,6 +284,7 @@ impl ModelReader {
             camera: Camera::default(),
             preset: ViewPreset::Isometric,
             view_cube_hover: None,
+            view_cube_bounds: None,
             section: SectionState::default(),
             section_geometry: None,
             section_open: true,
@@ -468,6 +508,24 @@ impl ModelReader {
         self.preset = preset;
         self.dirty = true;
         cx.notify();
+    }
+
+    /// Which orientation-cube face sits under a window-space pointer position.
+    fn view_cube_face_at(&self, position: Point<Pixels>) -> Option<ViewPreset> {
+        let bounds = self.view_cube_bounds?;
+        let local = position - bounds.origin;
+        view_cube_preset_at(local, &projected_view_cube(&self.camera))
+    }
+
+    /// Test hook: visible orientation-cube faces in gizmo-local coordinates,
+    /// nearest first, paired with the preset caption each one selects.
+    #[cfg(test)]
+    pub(crate) fn view_cube_face_centers_for_test(&self) -> Vec<(&'static str, Point<Pixels>)> {
+        projected_view_cube(&self.camera)
+            .into_iter()
+            .rev()
+            .map(|face| (face.preset.label(), face.center))
+            .collect()
     }
 
     fn set_section_plane(&mut self, plane: SectionPlane, cx: &mut Context<Self>) {
@@ -1225,14 +1283,14 @@ impl ModelReader {
     fn render_view_navigation(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let colors = cx.theme().colors();
         let hovered = self.view_cube_hover;
-        // One surface tone lightened in three steps, so the faces read as a
-        // single isometric solid in both dark and light themes.
+        // Every face is one surface tone lightened by how squarely it faces the
+        // camera, so the cube reads as a solid in both dark and light themes.
         let base = colors.element_background;
-        let top_face = base.blend(colors.text.opacity(0.12));
-        let front_face = base.blend(colors.text.opacity(0.06));
-        let right_face = base.blend(colors.text.opacity(0.03));
         let edge = base.blend(colors.text.opacity(0.45));
         let label = colors.text;
+        let faces = projected_view_cube(&self.camera);
+        let painted = faces.clone();
+        let entity = cx.entity().downgrade();
         v_flex()
             .absolute()
             .top_4()
@@ -1242,62 +1300,73 @@ impl ModelReader {
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(
                 div()
+                    .id("model-view-cube")
                     .debug_selector(|| "model-view-cube".to_string())
                     .relative()
-                    .w(px(VIEW_CUBE_WIDTH))
-                    .h(px(VIEW_CUBE_HEIGHT))
+                    .w(px(VIEW_CUBE_SIZE))
+                    .h(px(VIEW_CUBE_SIZE))
+                    .cursor_pointer()
+                    .child(
+                        canvas(
+                            move |bounds, _, cx| {
+                                entity
+                                    .update(cx, |reader, _| reader.view_cube_bounds = Some(bounds))
+                                    .log_err();
+                            },
+                            |_, _, _, _| {},
+                        )
+                        .absolute()
+                        .size_full(),
+                    )
                     .child(
                         canvas(
                             move |bounds, _, _| bounds.origin,
                             move |_, origin, window, _| {
-                                for (preset, vertices) in view_cube_faces() {
-                                    let face = match preset {
-                                        ViewPreset::Top => top_face,
-                                        ViewPreset::Front => front_face,
-                                        _ => right_face,
-                                    };
-                                    let face = if hovered == Some(preset) {
-                                        face.blend(label.opacity(0.08))
-                                    } else {
-                                        face
-                                    };
-                                    paint_view_cube_face(window, origin, &vertices, face, edge);
+                                for face in &painted {
+                                    let lighten = 0.06
+                                        + 0.30 * face.facing
+                                        + if hovered == Some(face.preset) {
+                                            0.12
+                                        } else {
+                                            0.0
+                                        };
+                                    let fill = base.blend(label.opacity(lighten));
+                                    paint_view_cube_face(window, origin, &face.corners, fill, edge);
                                 }
                             },
                         )
                         .absolute()
                         .size_full(),
                     )
-                    .child(view_cube_label(ViewPreset::Top, label))
-                    .child(view_cube_label(ViewPreset::Front, label))
-                    .child(view_cube_label(ViewPreset::Right, label))
                     .children(
-                        view_cube_hit_regions()
-                            .into_iter()
-                            .map(|(preset, [x, y, width, height])| {
-                                let id = view_cube_region_id(preset);
-                                div()
-                                    .id(id)
-                                    .debug_selector(move || id.to_string())
-                                    .absolute()
-                                    .left(px(x))
-                                    .top(px(y))
-                                    .w(px(width))
-                                    .h(px(height))
-                                    .cursor_pointer()
-                                    .on_click(cx.listener(move |reader, _, _, cx| {
-                                        reader.set_preset(preset, cx);
-                                    }))
-                                    .on_hover(cx.listener(move |reader, hovered, _, cx| {
-                                        if *hovered {
-                                            reader.view_cube_hover = Some(preset);
-                                        } else if reader.view_cube_hover == Some(preset) {
-                                            reader.view_cube_hover = None;
-                                        }
-                                        cx.notify();
-                                    }))
-                            }),
-                    ),
+                        faces
+                            .iter()
+                            .filter(|face| face.shows_label())
+                            .map(|face| view_cube_label(face, label)),
+                    )
+                    .on_mouse_move(cx.listener(|reader, event: &gpui::MouseMoveEvent, _, cx| {
+                        let hovered = reader.view_cube_hover;
+                        let next = reader.view_cube_face_at(event.position);
+                        if next != hovered {
+                            reader.view_cube_hover = next;
+                            cx.notify();
+                        }
+                    }))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|reader, event: &gpui::MouseDownEvent, _, cx| {
+                            if let Some(preset) = reader.view_cube_face_at(event.position) {
+                                reader.set_preset(preset, cx);
+                            }
+                            cx.stop_propagation();
+                        }),
+                    )
+                    .on_hover(cx.listener(|reader, hovered: &bool, _, cx| {
+                        if !*hovered && reader.view_cube_hover.is_some() {
+                            reader.view_cube_hover = None;
+                            cx.notify();
+                        }
+                    })),
             )
             .child(
                 Button::new("model-navigation-isometric", ViewPreset::Isometric.label())
@@ -1340,98 +1409,223 @@ impl ModelReader {
     }
 }
 
-/// Visible view-cube faces in cube-local coordinates: top, front and right.
-/// The three faces share the inner vertex at the cube's center.
-fn view_cube_faces() -> [(ViewPreset, [Point<Pixels>; 4]); 3] {
-    let zero = px(0.0);
-    let half = px(VIEW_CUBE_WIDTH / 2.0);
-    let width = px(VIEW_CUBE_WIDTH);
-    let middle = px(VIEW_CUBE_TOP_HEIGHT / 2.0);
-    let top = px(VIEW_CUBE_TOP_HEIGHT);
-    let bottom = px(VIEW_CUBE_HEIGHT);
-    let shoulder = px((VIEW_CUBE_TOP_HEIGHT + VIEW_CUBE_HEIGHT) / 2.0);
-    [
-        (
-            ViewPreset::Top,
-            [
-                point(half, zero),
-                point(width, middle),
-                point(half, top),
-                point(zero, middle),
-            ],
-        ),
-        (
-            ViewPreset::Front,
-            [
-                point(zero, middle),
-                point(half, top),
-                point(half, bottom),
-                point(zero, shoulder),
-            ],
-        ),
-        (
-            ViewPreset::Right,
-            [
-                point(half, top),
-                point(width, middle),
-                point(width, shoulder),
-                point(half, bottom),
-            ],
-        ),
-    ]
+/// One face of the orientation cube, in cube-local `[-1, 1]` coordinates.
+struct CubeFace {
+    preset: ViewPreset,
+    /// Outward normal; the face is visible when its view-space z is positive.
+    normal: [f64; 3],
+    corners: [[f64; 3]; 4],
 }
 
-/// Clickable view-cube regions in cube-local coordinates as
-/// `(x, y, width, height)`. The rectangles tile the cube's bounding square, so
-/// each face wins the hit test for exactly its own area.
-fn view_cube_hit_regions() -> [(ViewPreset, [f32; 4]); 3] {
-    let half = VIEW_CUBE_WIDTH / 2.0;
-    let face_height = VIEW_CUBE_HEIGHT - VIEW_CUBE_TOP_HEIGHT;
-    [
-        (
-            ViewPreset::Top,
-            [0.0, 0.0, VIEW_CUBE_WIDTH, VIEW_CUBE_TOP_HEIGHT],
-        ),
-        (
-            ViewPreset::Front,
-            [0.0, VIEW_CUBE_TOP_HEIGHT, half, face_height],
-        ),
-        (
-            ViewPreset::Right,
-            [half, VIEW_CUBE_TOP_HEIGHT, half, face_height],
-        ),
-    ]
+const CUBE_FACES: [CubeFace; 6] = [
+    CubeFace {
+        preset: ViewPreset::Front,
+        normal: [0.0, 0.0, 1.0],
+        corners: [
+            [-1.0, -1.0, 1.0],
+            [1.0, -1.0, 1.0],
+            [1.0, 1.0, 1.0],
+            [-1.0, 1.0, 1.0],
+        ],
+    },
+    CubeFace {
+        preset: ViewPreset::Back,
+        normal: [0.0, 0.0, -1.0],
+        corners: [
+            [1.0, -1.0, -1.0],
+            [-1.0, -1.0, -1.0],
+            [-1.0, 1.0, -1.0],
+            [1.0, 1.0, -1.0],
+        ],
+    },
+    CubeFace {
+        preset: ViewPreset::Right,
+        normal: [1.0, 0.0, 0.0],
+        corners: [
+            [1.0, -1.0, 1.0],
+            [1.0, -1.0, -1.0],
+            [1.0, 1.0, -1.0],
+            [1.0, 1.0, 1.0],
+        ],
+    },
+    CubeFace {
+        preset: ViewPreset::Left,
+        normal: [-1.0, 0.0, 0.0],
+        corners: [
+            [-1.0, -1.0, -1.0],
+            [-1.0, -1.0, 1.0],
+            [-1.0, 1.0, 1.0],
+            [-1.0, 1.0, -1.0],
+        ],
+    },
+    CubeFace {
+        preset: ViewPreset::Top,
+        normal: [0.0, 1.0, 0.0],
+        corners: [
+            [-1.0, 1.0, 1.0],
+            [1.0, 1.0, 1.0],
+            [1.0, 1.0, -1.0],
+            [-1.0, 1.0, -1.0],
+        ],
+    },
+    CubeFace {
+        preset: ViewPreset::Bottom,
+        normal: [0.0, -1.0, 0.0],
+        corners: [
+            [-1.0, -1.0, -1.0],
+            [1.0, -1.0, -1.0],
+            [1.0, -1.0, 1.0],
+            [-1.0, -1.0, 1.0],
+        ],
+    },
+];
+
+/// One face of the orientation cube after the camera rotation and orthographic
+/// projection, in gizmo-local pixels.
+#[derive(Clone, Copy)]
+struct ProjectedCubeFace {
+    preset: ViewPreset,
+    corners: [Point<Pixels>; 4],
+    center: Point<Pixels>,
+    /// How squarely the face looks at the camera, `0` edge-on and `1` head-on.
+    facing: f32,
+    /// View-space depth; larger is nearer.
+    depth: f32,
 }
 
-fn view_cube_region_id(preset: ViewPreset) -> &'static str {
-    match preset {
-        ViewPreset::Top => "model-view-cube-top",
-        ViewPreset::Front => "model-view-cube-front",
-        ViewPreset::Right => "model-view-cube-right",
-        _ => "model-view-cube-face",
+impl ProjectedCubeFace {
+    fn shows_label(self) -> bool {
+        if self.facing < VIEW_CUBE_LABEL_FACING {
+            return false;
+        }
+        let widest = (0..4)
+            .map(|index| {
+                let first = self.corners[index];
+                let second = self.corners[(index + 1) % 4];
+                (f32::from(second.x) - f32::from(first.x))
+                    .hypot(f32::from(second.y) - f32::from(first.y))
+            })
+            .fold(0.0f32, f32::max);
+        widest >= VIEW_CUBE_LABEL_MIN_WIDTH
     }
 }
 
-/// A face caption centered on its region instead of its parallelogram, which
-/// keeps two-character labels inside the visible face.
-fn view_cube_label(preset: ViewPreset, color: Hsla) -> impl IntoElement {
-    let half = VIEW_CUBE_WIDTH / 2.0;
-    let side_center = (VIEW_CUBE_TOP_HEIGHT + VIEW_CUBE_HEIGHT) / 2.0;
-    let (left, width, center) = match preset {
-        ViewPreset::Top => (0.0, VIEW_CUBE_WIDTH, VIEW_CUBE_TOP_HEIGHT / 2.0),
-        ViewPreset::Front => (0.0, half, side_center),
-        ViewPreset::Right => (half, half, side_center),
-        _ => (0.0, VIEW_CUBE_WIDTH, VIEW_CUBE_TOP_HEIGHT / 2.0),
-    };
+/// Applies the model camera's yaw/pitch rotation to a cube-local point, which is
+/// what makes the orientation cube follow the view.
+fn cube_view_point(point: [f64; 3], camera: &Camera) -> [f64; 3] {
+    let (yaw_sin, yaw_cos) = camera.yaw.sin_cos();
+    let (pitch_sin, pitch_cos) = camera.pitch.sin_cos();
+    let x = point[0] * yaw_cos + point[2] * yaw_sin;
+    let z = -point[0] * yaw_sin + point[2] * yaw_cos;
+    [
+        x,
+        point[1] * pitch_cos - z * pitch_sin,
+        point[1] * pitch_sin + z * pitch_cos,
+    ]
+}
+
+/// Projects a cube-local point into gizmo-local pixels. `k` keeps the rotated
+/// cube's longest silhouette (a body diagonal) inside the gizmo square.
+fn project_cube_point(corner: [f64; 3], camera: &Camera) -> (Point<Pixels>, f32) {
+    let view = cube_view_point(corner, camera);
+    let half = f64::from(VIEW_CUBE_SIZE) / 2.0;
+    let k = (half - 7.0) / 3f64.sqrt();
+    (
+        point(
+            px((half + view[0] * k) as f32),
+            px((half - view[1] * k) as f32),
+        ),
+        view[2] as f32,
+    )
+}
+
+/// Camera-facing faces of the orientation cube, sorted far to near so the paint
+/// order is a plain painter's algorithm.
+fn projected_view_cube(camera: &Camera) -> Vec<ProjectedCubeFace> {
+    let mut faces: Vec<ProjectedCubeFace> = CUBE_FACES
+        .iter()
+        .filter_map(|face| {
+            let facing = cube_view_point(face.normal, camera)[2] as f32;
+            if facing <= VIEW_CUBE_CULL {
+                return None;
+            }
+            let mut corners = [point(px(0.0), px(0.0)); 4];
+            let mut depth = 0.0f32;
+            for (index, corner) in face.corners.iter().enumerate() {
+                let (projected, corner_depth) = project_cube_point(*corner, camera);
+                corners[index] = projected;
+                depth += corner_depth / 4.0;
+            }
+            let center = point(
+                px(corners
+                    .iter()
+                    .map(|corner| f32::from(corner.x))
+                    .sum::<f32>()
+                    / 4.0),
+                px(corners
+                    .iter()
+                    .map(|corner| f32::from(corner.y))
+                    .sum::<f32>()
+                    / 4.0),
+            );
+            Some(ProjectedCubeFace {
+                preset: face.preset,
+                corners,
+                center,
+                facing,
+                depth,
+            })
+        })
+        .collect();
+    faces.sort_by(|first, second| {
+        first
+            .depth
+            .partial_cmp(&second.depth)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    faces
+}
+
+/// Point-in-convex-quad test in gizmo-local pixels.
+fn point_in_quad(point: Point<Pixels>, corners: &[Point<Pixels>; 4]) -> bool {
+    let point_x = f32::from(point.x);
+    let point_y = f32::from(point.y);
+    let mut positive = false;
+    let mut negative = false;
+    for index in 0..4 {
+        let first = corners[index];
+        let second = corners[(index + 1) % 4];
+        let cross = (f32::from(second.x) - f32::from(first.x)) * (point_y - f32::from(first.y))
+            - (f32::from(second.y) - f32::from(first.y)) * (point_x - f32::from(first.x));
+        if cross > 0.01 {
+            positive = true;
+        } else if cross < -0.01 {
+            negative = true;
+        }
+    }
+    positive != negative
+}
+
+/// Nearest visible face under a gizmo-local point.
+fn view_cube_preset_at(point: Point<Pixels>, faces: &[ProjectedCubeFace]) -> Option<ViewPreset> {
+    faces
+        .iter()
+        .rev()
+        .find(|face| point_in_quad(point, &face.corners))
+        .map(|face| face.preset)
+}
+
+/// A face caption centered on the projected face.
+fn view_cube_label(face: &ProjectedCubeFace, color: Hsla) -> impl IntoElement {
     h_flex()
         .absolute()
-        .left(px(left))
-        .top(px(center - 8.0))
-        .w(px(width))
+        .left(face.center.x - px(18.0))
+        .top(face.center.y - px(8.0))
+        .w(px(36.0))
         .h(px(16.0))
         .justify_center()
         .child(
-            Label::new(preset.label())
+            Label::new(face.preset.face_label())
                 .size(LabelSize::XSmall)
                 .color(Color::Custom(color)),
         )
@@ -1744,12 +1938,13 @@ fn rasterize(
         [
             f64::from(width) * 0.5 + (vertex[0] * perspective + camera.pan[0]) * scale,
             f64::from(height) * 0.5 - (vertex[1] * perspective - camera.pan[1]) * scale,
-            -vertex[2],
+            depth_key(camera.perspective, vertex[2]),
         ]
     };
     if camera.grid {
         draw_grid(
             mesh,
+            camera,
             &rotate,
             &project,
             &mut pixels,
@@ -2057,13 +2252,13 @@ fn plane_depth(
             return None;
         }
         let z = 2.5 - 2.5 / perspective;
-        z.is_finite().then_some(-z)
+        z.is_finite().then(|| depth_key(camera.perspective, z))
     } else {
         if normal[2].abs() <= 1e-12 {
             return None;
         }
         let z = (offset - normal[0] * u - normal[1] * v) / normal[2];
-        z.is_finite().then_some(-z)
+        z.is_finite().then_some(depth_key(camera.perspective, z))
     }
 }
 
@@ -2108,8 +2303,14 @@ fn shade(base: [u8; 3], intensity: f64) -> [u8; 4] {
 
 /// Rasterizes a grid floor at the model's lowest point so the viewer reads as
 /// a grounded scene instead of a floating object.
+///
+/// The cell size is derived from the on-screen scale, so the grid keeps roughly
+/// the same density at every zoom level, and it is laid out far enough past the
+/// viewport that the fade hides its outer boundary instead of ending on a hard
+/// edge.
 fn draw_grid(
     mesh: &ModelMesh,
+    camera: Camera,
     view: &impl Fn(Vertex) -> Vertex,
     project: &impl Fn(Vertex) -> Vertex,
     pixels: &mut [u8],
@@ -2125,27 +2326,232 @@ fn draw_grid(
         .fold(0.0f64, f64::max)
         .max(1e-20);
     let floor = (mesh.minimum[1] - center[1]) / radius;
-    const EXTENT: f64 = 0.78;
-    const DIVISIONS: usize = 12;
-    for division in 0..=DIVISIONS {
+    let scale = f64::from(dimensions[0].min(dimensions[1])) * 0.8 * camera.zoom;
+    let cell = nice_step(GRID_TARGET_PIXELS / scale);
+    let extent = cell * GRID_CELLS as f64;
+    for index in -GRID_CELLS..=GRID_CELLS {
         if cancel.load(Ordering::Relaxed) {
             return;
         }
-        let offset = -EXTENT + 2.0 * EXTENT * division as f64 / DIVISIONS as f64;
+        let offset = index as f64 * cell;
+        let major = index.rem_euclid(GRID_MAJOR_EVERY) == 0;
+        let minor_alpha = f32::from(color[3]) / 255.0;
+        let (alpha, fade) = if major {
+            ((minor_alpha * GRID_MAJOR_ALPHA_SCALE).min(1.0), GRID_MAJOR_FADE)
+        } else {
+            (minor_alpha, GRID_MINOR_FADE)
+        };
         for (start, end) in [
-            ([-EXTENT, floor, offset], [EXTENT, floor, offset]),
-            ([offset, floor, -EXTENT], [offset, floor, EXTENT]),
+            ([-extent, floor, offset], [extent, floor, offset]),
+            ([offset, floor, -extent], [offset, floor, extent]),
         ] {
-            draw_line(
+            draw_grid_line(
+                start,
+                end,
+                camera,
+                view,
+                project,
                 pixels,
                 depth,
                 dimensions,
-                project(view(start)),
-                project(view(end)),
                 color,
-                0.0,
+                alpha,
+                Some((fade.0 * extent, fade.1 * extent)),
             );
         }
+    }
+}
+
+/// Rounds `value` down to the nearest 1, 2 or 5 times a power of ten, so grid
+/// cells change size in readable steps while zooming instead of continuously.
+fn nice_step(value: f64) -> f64 {
+    if !value.is_finite() || value <= 0.0 {
+        return 1.0;
+    }
+    let base = 10f64.powf(value.log10().floor());
+    let fraction = value / base;
+    let mantissa = if fraction < 1.5 {
+        1.0
+    } else if fraction < 3.5 {
+        2.0
+    } else if fraction < 7.5 {
+        5.0
+    } else {
+        10.0
+    };
+    mantissa * base
+}
+
+fn smooth_step(edge0: f64, edge1: f64, value: f64) -> f64 {
+    if edge1 <= edge0 {
+        return if value <= edge0 { 1.0 } else { 0.0 };
+    }
+    let t = ((value - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+/// Depth key the z-buffer compares: smaller is nearer.
+///
+/// Under perspective, interpolating `-1 / (2.5 - z)` is the only choice that is
+/// affine in screen space, so a long grid line or a large triangle keeps the
+/// occlusion it would have on a real rasterizer instead of bleeding through the
+/// model it is behind.
+fn depth_key(perspective: bool, view_z: f64) -> f64 {
+    if perspective {
+        -1.0 / (VIEW_EYE - view_z)
+    } else {
+        -view_z
+    }
+}
+
+fn lerp_vertex(first: Vertex, second: Vertex, t: f64) -> Vertex {
+    std::array::from_fn(|axis| first[axis] + (second[axis] - first[axis]) * t)
+}
+
+/// Clips a projected segment to the screen rectangle and returns the parameter
+/// range that survives, as fractions of the input segment.
+fn clip_screen(first: Vertex, second: Vertex, dimensions: [u32; 2]) -> Option<(f64, f64)> {
+    let [width, height] = dimensions;
+    let delta = sub(second, first);
+    let mut low: f64 = 0.0;
+    let mut high: f64 = 1.0;
+    for (p, q) in [
+        (-delta[0], first[0] + SCREEN_MARGIN),
+        (delta[0], f64::from(width) + SCREEN_MARGIN - first[0]),
+        (-delta[1], first[1] + SCREEN_MARGIN),
+        (delta[1], f64::from(height) + SCREEN_MARGIN - first[1]),
+    ] {
+        if p == 0.0 {
+            if q < 0.0 {
+                return None;
+            }
+            continue;
+        }
+        let t = q / p;
+        if p < 0.0 {
+            if t > high {
+                return None;
+            }
+            low = low.max(t);
+        } else {
+            if t < low {
+                return None;
+            }
+            high = high.min(t);
+        }
+    }
+    (high > low).then_some((low, high))
+}
+
+/// Draws one grid line with near-plane, screen and distance handling.
+///
+/// The grid now reaches past the camera plane, where a plain projection would
+/// divide by zero, and past the viewport, where a plain DDA would spend steps on
+/// invisible pixels; the near and screen clips keep both bounded. Alpha fades
+/// out towards `fade.1` so the laid-out edge is never visible.
+#[allow(clippy::too_many_arguments)]
+fn draw_grid_line(
+    start: Vertex,
+    end: Vertex,
+    camera: Camera,
+    view: &impl Fn(Vertex) -> Vertex,
+    project: &impl Fn(Vertex) -> Vertex,
+    pixels: &mut [u8],
+    depth: &mut [f64],
+    dimensions: [u32; 2],
+    color: [u8; 4],
+    alpha: f32,
+    fade: Option<(f64, f64)>,
+) {
+    let [width, height] = dimensions;
+    let view_start = view(start);
+    let view_end = view(end);
+    let mut start_parameter = 0.0;
+    let mut end_parameter = 1.0;
+    if camera.perspective {
+        if view_start[2] >= GRID_NEAR_PLANE && view_end[2] >= GRID_NEAR_PLANE {
+            return;
+        }
+        if view_start[2] != view_end[2] {
+            let crossing = (GRID_NEAR_PLANE - view_start[2]) / (view_end[2] - view_start[2]);
+            if view_start[2] > GRID_NEAR_PLANE {
+                start_parameter = crossing;
+            }
+            if view_end[2] > GRID_NEAR_PLANE {
+                end_parameter = crossing;
+            }
+        }
+    }
+    if end_parameter <= start_parameter {
+        return;
+    }
+
+    let first = project(lerp_vertex(view_start, view_end, start_parameter));
+    let last = project(lerp_vertex(view_start, view_end, end_parameter));
+    if !first[0].is_finite()
+        || !first[1].is_finite()
+        || !last[0].is_finite()
+        || !last[1].is_finite()
+    {
+        return;
+    }
+    let Some((low, high)) = clip_screen(first, last, dimensions) else {
+        return;
+    };
+
+    // `1 / w` is affine in screen space, so the clipped segment's screen
+    // parameter can be converted back into the three-dimensional one exactly.
+    let weight = |parameter: f64| {
+        if camera.perspective {
+            VIEW_EYE - (view_start[2] + (view_end[2] - view_start[2]) * parameter)
+        } else {
+            1.0
+        }
+    };
+    let weight_start = weight(start_parameter);
+    let weight_end = weight(end_parameter);
+    if weight_start <= 0.0 || weight_end <= 0.0 {
+        return;
+    }
+
+    let steps = ((last[0] - first[0]).hypot(last[1] - first[1]) * (high - low))
+        .ceil()
+        .max(1.0) as u32;
+    for step in 0..=steps {
+        let t = f64::from(step) / f64::from(steps);
+        let parameter = low + (high - low) * t;
+        let x = (first[0] + (last[0] - first[0]) * parameter).round() as i64;
+        let y = (first[1] + (last[1] - first[1]) * parameter).round() as i64;
+        if x < 0 || y < 0 || x >= i64::from(width) || y >= i64::from(height) {
+            continue;
+        }
+        let offset = y as usize * width as usize + x as usize;
+        let distance = first[2] + (last[2] - first[2]) * parameter;
+        if distance >= depth[offset] {
+            continue;
+        }
+
+        let mut attenuation = 1.0;
+        if let Some((fade_start, fade_end)) = fade {
+            let depth_weight = 1.0 / ((1.0 - parameter) / weight_start + parameter / weight_end);
+            let model = lerp_vertex(
+                start,
+                end,
+                start_parameter
+                    + (end_parameter - start_parameter) * parameter * depth_weight / weight_end,
+            );
+            attenuation = 1.0 - smooth_step(fade_start, fade_end, model[0].hypot(model[2]));
+            if attenuation <= 0.002 {
+                continue;
+            }
+        }
+
+        let value = (f64::from(alpha) * attenuation * 255.0).round() as u8;
+        if value <= pixels[offset * 4 + 3] {
+            continue;
+        }
+        depth[offset] = distance;
+        pixels[offset * 4..offset * 4 + 4].copy_from_slice(&[color[0], color[1], color[2], value]);
     }
 }
 
@@ -2193,7 +2599,7 @@ mod tests {
             model: [120, 160, 210],
             edge: [48, 64, 84],
             wire: [200, 200, 200],
-            grid: [90, 90, 90, 255],
+            grid: [90, 90, 90, 130],
             section: [200, 120, 60],
             cut: [250, 240, 130],
         }
@@ -2459,47 +2865,250 @@ mod tests {
         assert_eq!(format_bytes(5 * 1024 * 1024), "5.0 MiB");
     }
 
-    #[test]
-    fn view_cube_regions_tile_the_cube() {
-        let regions = view_cube_hit_regions();
-        let area: f32 = regions
-            .iter()
-            .map(|(_, [_, _, width, height])| width * height)
-            .sum();
-        assert_eq!(area, VIEW_CUBE_WIDTH * VIEW_CUBE_HEIGHT);
-        for (index, (_, first)) in regions.iter().enumerate() {
-            assert!(first[0] >= 0.0 && first[1] >= 0.0);
-            assert!(first[2] > 0.0 && first[3] > 0.0);
-            for (_, second) in regions.iter().skip(index + 1) {
-                let overlap_x =
-                    (first[0] + first[2]).min(second[0] + second[2]) - first[0].max(second[0]);
-                let overlap_y =
-                    (first[1] + first[3]).min(second[1] + second[3]) - first[1].max(second[1]);
-                assert!(
-                    overlap_x <= 0.0 || overlap_y <= 0.0,
-                    "view cube regions must not overlap"
-                );
-            }
-        }
-        // The top face spans the full width; the side faces split the lower half.
-        assert_eq!(regions[0].1[2], VIEW_CUBE_WIDTH);
-        assert_eq!(regions[1].1[0], regions[2].1[0] - regions[1].1[2]);
+    /// Grid pixels of a frame, as `(x, y, alpha)` in sRGB channel order.
+    fn grid_pixels(image: &Arc<RenderImage>, width: u32) -> Vec<(u32, u32, u8)> {
+        let grid = test_style().grid;
+        let color = bgra([grid[0], grid[1], grid[2]]);
+        image
+            .as_bytes(0)
+            .expect("pixels")
+            .chunks_exact(4)
+            .enumerate()
+            .filter(|(_, pixel)| pixel[..3] == color)
+            .map(|(index, pixel)| {
+                let index = index as u32;
+                (index % width, index / width, pixel[3])
+            })
+            .collect()
+    }
+
+    fn grid_image(mesh: &ModelMesh, camera: Camera, dimensions: [u32; 2]) -> Arc<RenderImage> {
+        rasterize(
+            mesh,
+            camera,
+            test_style(),
+            dimensions,
+            None,
+            &AtomicBool::new(false),
+        )
+        .expect("image")
     }
 
     #[test]
-    fn view_cube_faces_meet_at_the_center() {
-        let center = point(px(VIEW_CUBE_WIDTH / 2.0), px(VIEW_CUBE_TOP_HEIGHT));
-        for (_, vertices) in view_cube_faces() {
+    fn grid_cell_size_stays_readable_across_zoom() {
+        for zoom in [0.05, 0.2, 0.5, 1.0, 2.0, 5.0, 20.0] {
+            let scale = 256.0 * 0.8 * zoom;
+            let cell = nice_step(GRID_TARGET_PIXELS / scale);
+            let pixels = cell * scale;
             assert!(
-                vertices.contains(&center),
-                "every view cube face must share the inner vertex"
+                (28.0..=GRID_TARGET_PIXELS).contains(&pixels),
+                "zoom {zoom} puts a cell at {pixels} px"
             );
-            assert!(vertices.iter().all(|vertex| {
-                vertex.x >= px(0.0)
-                    && vertex.x <= px(VIEW_CUBE_WIDTH)
-                    && vertex.y >= px(0.0)
-                    && vertex.y <= px(VIEW_CUBE_HEIGHT)
-            }));
+        }
+    }
+
+    #[test]
+    fn grid_covers_the_viewport_at_the_default_zoom() {
+        let mut camera = Camera::default();
+        camera.grid = true;
+        let image = grid_image(&test_mesh(), camera, [256, 192]);
+        let pixels = grid_pixels(&image, 256);
+        // The replaced fixed grid ended well inside the frame; the new one keeps
+        // drawing all the way to both side edges and the bottom edge.
+        assert!(pixels.iter().any(|(x, _, _)| *x < 2));
+        assert!(pixels.iter().any(|(x, _, _)| *x > 253));
+        assert!(pixels.iter().any(|(_, y, _)| *y > 189));
+        let covered = pixels.len() as f64 / (256.0 * 192.0);
+        assert!(
+            (0.04..0.35).contains(&covered),
+            "grid should cover the floor without flooding it: {covered}"
+        );
+    }
+
+    #[test]
+    fn grid_fades_before_its_laid_out_edge() {
+        let mut camera = Camera::default();
+        // A grazing view compresses the far floor towards the horizon, so the
+        // distance fade happens inside the frame.
+        camera.pitch = 0.12;
+        let image = grid_image(&test_mesh(), camera, [320, 240]);
+        let mut pixels = grid_pixels(&image, 320);
+        pixels.sort_by_key(|(_, y, _)| *y);
+        let third = pixels.len() / 3;
+        let mean_alpha = |slice: &[(u32, u32, u8)]| {
+            slice
+                .iter()
+                .map(|(_, _, alpha)| f64::from(*alpha))
+                .sum::<f64>()
+                / slice.len() as f64
+        };
+        let near = mean_alpha(&pixels[pixels.len() - third..]);
+        let far = mean_alpha(&pixels[..third]);
+        let brightest = f64::from(test_style().grid[3]);
+        assert!(
+            far < near * 0.9,
+            "the far third must be fainter: far {far:.1} near {near:.1}"
+        );
+        assert!(
+            far < brightest * 0.75,
+            "the far third must be visibly faded: far {far:.1}"
+        );
+        assert!(
+            near > brightest,
+            "near lines keep their full alpha: near {near:.1}"
+        );
+    }
+
+    #[test]
+    fn grid_line_clipping_keeps_only_the_visible_part() {
+        let dimensions = [100, 100];
+        // A segment crossing the frame keeps an interior parameter range.
+        let (low, high) = clip_screen([-50.0, 50.0, 0.0], [150.0, 50.0, 0.0], dimensions)
+            .expect("crossing segment");
+        assert!(low > 0.0 && high < 1.0);
+        assert!(low < high);
+        // A segment entirely outside is dropped instead of walking its length.
+        assert!(clip_screen([-200.0, 10.0, 0.0], [-100.0, 90.0, 0.0], dimensions).is_none());
+        assert!(clip_screen([10.0, -300.0, 0.0], [90.0, -200.0, 0.0], dimensions).is_none());
+    }
+
+    #[test]
+    fn grid_cells_snap_to_readable_steps() {
+        assert_eq!(nice_step(0.0536), 0.05);
+        assert_eq!(nice_step(0.12), 0.1);
+        assert_eq!(nice_step(2.4), 2.0);
+        assert_eq!(nice_step(7.4), 5.0);
+        assert_eq!(nice_step(9.6), 10.0);
+        assert_eq!(nice_step(0.0), 1.0);
+    }
+
+    #[test]
+    fn depth_key_ranks_nearer_geometry_first() {
+        let near = depth_key(true, 1.0);
+        let far = depth_key(true, 0.0);
+        assert!(near < far, "nearer geometry must sort first");
+        assert!(
+            depth_key(true, 0.0) < depth_key(true, -1.0),
+            "depth key must stay monotonic behind the model"
+        );
+        assert_eq!(depth_key(false, 1.0), -1.0);
+        assert!(depth_key(false, 1.0) < depth_key(false, 0.0));
+    }
+
+    /// The default viewpoint must look down at the floor: with the eye below the
+    /// model, the grid plane would sit in front of the model.
+    #[test]
+    fn default_camera_looks_down_at_the_model() {
+        let camera = Camera::default();
+        assert_eq!(
+            (camera.yaw, camera.pitch),
+            ViewPreset::Isometric.orientation()
+        );
+        let up = cube_view_point([0.0, 1.0, 0.0], &camera);
+        assert!(up[2] > 0.0, "the top face must face the default camera");
+        let floor = (0.0, -0.5, 0.0);
+        assert!(
+            cube_view_point([floor.0, floor.1, floor.2], &camera)[1] < 0.0,
+            "the floor must project below the model center"
+        );
+    }
+
+    #[test]
+    fn orientation_cube_shows_the_faces_turned_towards_the_camera() {
+        let mut camera = Camera::default();
+        let visible: Vec<ViewPreset> = projected_view_cube(&camera)
+            .iter()
+            .map(|face| face.preset)
+            .collect();
+        for expected in [ViewPreset::Front, ViewPreset::Left, ViewPreset::Top] {
+            assert!(visible.contains(&expected), "{expected:?} in {visible:?}");
+        }
+        for hidden in [ViewPreset::Back, ViewPreset::Right, ViewPreset::Bottom] {
+            assert!(!visible.contains(&hidden), "{hidden:?} in {visible:?}");
+        }
+
+        camera.yaw = ViewPreset::Back.orientation().0;
+        camera.pitch = ViewPreset::Back.orientation().1;
+        let visible: Vec<ViewPreset> = projected_view_cube(&camera)
+            .iter()
+            .map(|face| face.preset)
+            .collect();
+        assert_eq!(visible, vec![ViewPreset::Back]);
+
+        camera.pitch = ViewPreset::Bottom.orientation().1;
+        camera.yaw = ViewPreset::Bottom.orientation().0;
+        let visible: Vec<ViewPreset> = projected_view_cube(&camera)
+            .iter()
+            .map(|face| face.preset)
+            .collect();
+        assert_eq!(visible, vec![ViewPreset::Bottom]);
+    }
+
+    #[test]
+    fn orientation_cube_labels_only_fit_readable_faces() {
+        let camera = Camera::default();
+        let faces = projected_view_cube(&camera);
+        let labelled: Vec<ViewPreset> = faces
+            .iter()
+            .filter(|face| face.shows_label())
+            .map(|face| face.preset)
+            .collect();
+        assert_eq!(
+            labelled.len(),
+            3,
+            "the isometric view must caption its three faces: {labelled:?}"
+        );
+        for face in &faces {
+            if !face.shows_label() {
+                continue;
+            }
+            assert!(face.center.x >= px(0.0) && face.center.x <= px(VIEW_CUBE_SIZE));
+            assert!(face.center.y >= px(0.0) && face.center.y <= px(VIEW_CUBE_SIZE));
+        }
+    }
+
+    #[test]
+    fn orientation_cube_hit_test_picks_the_nearest_face() {
+        let camera = Camera::default();
+        let faces = projected_view_cube(&camera);
+        for face in &faces {
+            assert_eq!(
+                view_cube_preset_at(face.center, &faces),
+                Some(face.preset),
+                "each visible face must own its center"
+            );
+        }
+        let outside = point(px(-20.0), px(-20.0));
+        assert_eq!(view_cube_preset_at(outside, &faces), None);
+    }
+
+    #[test]
+    fn orientation_cube_stays_inside_its_square() {
+        let mut camera = Camera::default();
+        for yaw in [-3.0, -1.6, 0.0, 0.7, 2.4, 3.1] {
+            for pitch in [-1.5, -0.4, 0.0, 0.4, 1.2] {
+                camera.yaw = yaw;
+                camera.pitch = pitch;
+                let faces = projected_view_cube(&camera);
+                assert!(!faces.is_empty(), "yaw {yaw} pitch {pitch} shows no face");
+                for face in faces {
+                    for corner in face.corners {
+                        assert!(
+                            corner.x >= px(0.0)
+                                && corner.x <= px(VIEW_CUBE_SIZE)
+                                && corner.y >= px(0.0)
+                                && corner.y <= px(VIEW_CUBE_SIZE),
+                            "yaw {yaw} pitch {pitch} put a corner at {corner:?}"
+                        );
+                    }
+                }
+                // Painter's order: depths must be non-decreasing.
+                let mut last = f32::NEG_INFINITY;
+                for face in projected_view_cube(&camera) {
+                    assert!(face.depth >= last - 1e-4);
+                    last = face.depth;
+                }
+            }
         }
     }
 }

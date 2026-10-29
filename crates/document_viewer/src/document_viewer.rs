@@ -1734,22 +1734,36 @@ mod tests {
         assert_eq!(cube.size.width, cube.size.height);
         assert!(cube.origin.x > viewport.origin.x + viewport.size.width * 0.75);
         assert!(cube.origin.y < viewport.origin.y + viewport.size.height * 0.25);
-        for (selector, expected) in [
-            ("model-view-cube-top", i18n::t!("d5cdfcf7ff75338f")),
-            ("model-view-cube-front", i18n::t!("a617590202898821")),
-            ("model-view-cube-right", i18n::t!("883361d5d682a157")),
-        ] {
-            let region = window.debug_bounds(selector).expect("view cube region");
-            assert!(
-                cube.contains(&region.center()),
-                "{selector} must be inside the cube"
-            );
-            window.simulate_click(region.center(), gpui::Modifiers::none());
+        // The cube turns with the camera, so the clickable faces are read from
+        // the current projection instead of fixed regions. Every visible face
+        // must select the preset it names.
+        let ((yaw, pitch, zoom, _, _), faces) = window.update(|_, cx| {
+            let reader = reader.read(cx);
+            (
+                reader.camera_state_for_test(),
+                reader.view_cube_face_centers_for_test(),
+            )
+        });
+        assert_eq!(
+            faces.len(),
+            3,
+            "the isometric view shows three cube faces: {faces:?}"
+        );
+        for (expected, center) in faces {
+            window.update(|_, cx| {
+                reader.update(cx, |reader, _| {
+                    reader.set_camera_for_test(yaw, pitch, zoom);
+                })
+            });
+            window.run_until_parked();
+            let target = gpui::point(cube.origin.x + center.x, cube.origin.y + center.y);
+            assert!(cube.contains(&target), "{expected} must be inside the cube");
+            window.simulate_click(target, gpui::Modifiers::none());
             window.run_until_parked();
             assert_eq!(
                 window.update(|_, cx| reader.read(cx).preset_label()),
                 expected,
-                "{selector} must select its preset"
+                "clicking the {expected} face must select that view"
             );
         }
     }

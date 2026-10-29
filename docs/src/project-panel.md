@@ -135,6 +135,12 @@ Setting `project_panel.git_status_indicator` to `true` (disabled by default) add
 to each name: **M** (modified), **A** (added), **D** (deleted), **U**
 (untracked) or **!** (conflict).
 
+Setting `project_panel.git_branch_name` (enabled by default) shows the current Git branch next to
+each worktree root. In multi-folder projects every root reports the branch of its own repository;
+the label follows branch switches and new commits, and a detached HEAD is shown as a short commit
+SHA. Worktrees without a Git repository show no label, and the setting has no effect while Git is
+disabled.
+
 ![Project Panel: Git Integration](https://images.zed.dev/docs/project-panel/git-status.png)
 
 Use {#action project_panel::SelectNextGitEntry} and {#action

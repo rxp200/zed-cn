@@ -1,7 +1,7 @@
 mod image_info;
 mod image_viewer_settings;
 
-use std::{path::Path, sync::Arc};
+use std::{collections::HashMap, path::Path, sync::Arc};
 
 use anyhow::Context as _;
 use editor::{
@@ -10,12 +10,12 @@ use editor::{
 };
 use file_icons::FileIcons;
 use gpui::{
-    AnyElement, App, Bounds, Context, DispatchPhase, Element, ElementId, Entity, EventEmitter,
-    FocusHandle, Focusable, Font, GlobalElementId, InspectorElementId, InteractiveElement,
-    IntoElement, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    ParentElement, PinchEvent, Pixels, Point, Render, RenderImage, ScrollDelta, ScrollEvent, Style,
-    Styled, Subscription, Task, WeakEntity, Window, actions, checkerboard, div, img, point, px,
-    size,
+    AnyElement, App, Bounds, Context, DispatchPhase, Element, ElementId, Entity, EntityId,
+    EventEmitter, FocusHandle, Focusable, Font, Global, GlobalElementId, InspectorElementId,
+    InteractiveElement, IntoElement, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent,
+    MouseUpEvent, ParentElement, PinchEvent, Pixels, Point, Render, RenderImage, ScrollDelta,
+    ScrollEvent, Style, Styled, Subscription, Task, WeakEntity, Window, actions, checkerboard, div,
+    img, point, px, size,
 };
 use language::File as _;
 use persistence::ImageViewerDb;
@@ -74,6 +74,14 @@ pub struct ImageView {
     pending_image: Option<Arc<gpui::Image>>,
     displayed_image: Option<DisplayedImage>,
 }
+
+/// Number of live image views per image item. Splits and duplicated tabs share
+/// one decoded image and one atlas entry, so the entry is released with the
+/// last view.
+#[derive(Default)]
+struct ImageViewCounts(HashMap<EntityId, usize>);
+
+impl Global for ImageViewCounts {}
 
 struct DisplayedImage {
     source_image: Arc<gpui::Image>,
@@ -161,14 +169,7 @@ impl ImageView {
             }
         })
         .detach();
-        cx.on_release_in(window, |this, window, cx| {
-            let image_data = this.image_item.read(cx).image.clone();
-            if let Some(image) = image_data.clone().get_render_image(window, cx) {
-                cx.drop_image(image, None);
-            }
-            image_data.remove_asset(cx);
-        })
-        .detach();
+        Self::track_view(image_item.clone(), window, cx);
 
         let image_size = image_item
             .read(cx)
@@ -187,6 +188,41 @@ impl ImageView {
             pending_image: Some(pending_image),
             displayed_image: None,
         }
+    }
+
+    /// Registers a view of `image_item`. Views created from the same image share
+    /// one atlas entry, so the entry is only released once the last view goes
+    /// away.
+    fn track_view(image_item: Entity<ImageItem>, window: &Window, cx: &mut Context<Self>) {
+        let image_item_id = image_item.entity_id();
+        *cx.default_global::<ImageViewCounts>()
+            .0
+            .entry(image_item_id)
+            .or_default() += 1;
+
+        cx.on_release_in(window, move |this, window, cx| {
+            let remaining = {
+                let counts = cx.default_global::<ImageViewCounts>();
+                let count = counts.0.entry(image_item_id).or_default();
+                *count = count.saturating_sub(1);
+                *count
+            };
+            if remaining > 0 {
+                return;
+            }
+            cx.default_global::<ImageViewCounts>().0.remove(&image_item_id);
+
+            let image_data = this.image_item.read(cx).image.clone();
+            let render_image = image_data.clone().get_render_image(window, cx);
+            image_data.remove_asset(cx);
+            if let Some(render_image) = render_image {
+                // The release observer runs inside a window update, where that
+                // window is absent from `App::windows`; deferring the atlas
+                // removal covers every window, including detached ones.
+                cx.defer(move |cx| cx.drop_image(render_image, None));
+            }
+        })
+        .detach();
     }
 
     fn on_image_event(
@@ -645,13 +681,13 @@ impl Item for ImageView {
     fn clone_on_split(
         &self,
         _workspace_id: Option<WorkspaceId>,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Task<Option<Entity<Self>>>
     where
         Self: Sized,
     {
-        Task::ready(Some(cx.new(|cx| Self {
+        let image_view = cx.new(|cx| Self {
             image_item: self.image_item.clone(),
             project: self.project.clone(),
             focus_handle: cx.focus_handle(),
@@ -662,7 +698,11 @@ impl Item for ImageView {
             image_size: self.image_size,
             pending_image: None,
             displayed_image: None,
-        })))
+        });
+        image_view.update(cx, |image_view, cx| {
+            Self::track_view(image_view.image_item.clone(), window, cx);
+        });
+        Task::ready(Some(image_view))
     }
 
     fn has_deleted_file(&self, cx: &App) -> bool {
@@ -1302,6 +1342,42 @@ mod tests {
         assert!(
             !image_is_cached(&prefetched_image, cx),
             "the superseded constructor prefetch remained in GPUI's asset cache"
+        );
+    }
+
+    #[gpui::test]
+    async fn test_releasing_the_last_view_drops_the_atlas_entry(cx: &mut TestAppContext) {
+        init_test(cx);
+        let (project, image_item) = open_test_image(cx).await;
+
+        let cx = cx.add_empty_window();
+        let image_view = cx.update(|window, cx| {
+            cx.new(|cx| ImageView::new(image_item.clone(), project, window, cx))
+        });
+        let draw_view = |cx: &mut VisualTestContext| {
+            cx.draw(point(px(0.), px(0.)), size(px(1.), px(1.)), |_, _| {
+                div().size_full().child(image_view.clone())
+            });
+        };
+        draw_view(cx);
+        cx.run_until_parked();
+        draw_view(cx);
+
+        let render_image = displayed_render_image(&image_view, cx)
+            .expect("the image view should finish decoding");
+        assert!(
+            cx.update(|window, _| window.has_image_atlas_entry(&render_image)),
+            "the displayed image should be present in the window atlas"
+        );
+
+        drop(image_view);
+        drop(image_item);
+        cx.update(|_, _| {});
+        cx.run_until_parked();
+
+        assert!(
+            !cx.update(|window, _| window.has_image_atlas_entry(&render_image)),
+            "releasing the last image view left its atlas entry behind"
         );
     }
 

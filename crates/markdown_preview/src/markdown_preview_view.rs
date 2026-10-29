@@ -17,8 +17,8 @@ use editor::{
 use gpui::{
     Action, AnyElement, App, ClipboardItem, Context, Entity, EntityId, EventEmitter, FocusHandle,
     Focusable, Global, ImageSource, InteractiveElement, IntoElement, IsZero, Pixels, Render,
-    Resource, RetainAllImageCache, ScrollHandle, SharedString, SharedUri, Subscription, Task,
-    WeakEntity, Window, point, px,
+    Resource, ScrollHandle, SharedString, SharedUri, Subscription, Task, WeakEntity, Window, point,
+    px,
 };
 use language::{Buffer, LanguageRegistry};
 use markdown::{
@@ -26,7 +26,7 @@ use markdown::{
     MarkdownOptions, MarkdownStyle,
 };
 use project::search::SearchQuery;
-use project::{Project, ProjectPath, image_store};
+use project::{Project, ProjectPath};
 use settings::{SeedQuerySetting, Settings, update_settings_file};
 use theme::{SystemAppearance, Theme, ThemeRegistry};
 use theme_settings::ThemeSettings;
@@ -53,6 +53,7 @@ use workspace::{
 };
 use zed_actions::{DecreaseBufferFontSize, IncreaseBufferFontSize, ResetBufferFontSize};
 
+use crate::image_cache::MarkdownImageCache;
 use crate::markdown_preview_settings::MarkdownPreviewSettings;
 use crate::{
     CloseAndReturnToEditor, OpenFollowingPreview, OpenPreview, OpenPreviewToTheSide, ScrollDown,
@@ -77,7 +78,7 @@ pub struct MarkdownPreviewView {
     _markdown_subscription: Subscription,
     active_source_index: Option<usize>,
     scroll_handle: ScrollHandle,
-    image_cache: Entity<RetainAllImageCache>,
+    image_cache: Entity<MarkdownImageCache>,
     base_directory: Option<PathBuf>,
     pending_update_task: Option<Task<Result<()>>>,
     hovered_url: Option<SharedString>,
@@ -422,7 +423,7 @@ impl MarkdownPreviewView {
                 markdown,
                 active_source_index: None,
                 scroll_handle: ScrollHandle::new(),
-                image_cache: RetainAllImageCache::new(cx),
+                image_cache: MarkdownImageCache::new(cx),
                 base_directory: None,
                 pending_update_task: None,
                 hovered_url: None,
@@ -1127,6 +1128,7 @@ impl MarkdownPreviewView {
             .show_root_block_markers()
             .image_resolver({
                 let base_directory = self.base_directory.clone();
+                let image_cache = self.image_cache.clone();
                 move |dest_url, cx| {
                     resolve_preview_image(
                         dest_url,
@@ -1135,6 +1137,7 @@ impl MarkdownPreviewView {
                         project.as_ref(),
                         source_project_path.as_ref(),
                         PathStyle::local(),
+                        &image_cache,
                         cx,
                     )
                 }
@@ -1530,6 +1533,7 @@ fn resolve_preview_image(
     project: Option<&Entity<Project>>,
     source_project_path: Option<&ProjectPath>,
     client_path_style: PathStyle,
+    image_cache: &Entity<MarkdownImageCache>,
     cx: &App,
 ) -> Option<ImageSource> {
     if dest_url.starts_with("data:") {
@@ -1563,7 +1567,8 @@ fn resolve_preview_image(
                 .worktree_for_id(project_path.worktree_id, cx)
                 .is_some_and(|worktree| !worktree.read(cx).is_local());
             if is_remote {
-                return Some(image_store::project_image_source(
+                return Some(cached_project_image_source(
+                    image_cache,
                     project.downgrade(),
                     project_path,
                 ));
@@ -1589,6 +1594,22 @@ fn resolve_preview_image(
 
     path.exists()
         .then(|| ImageSource::Resource(Resource::Path(Arc::from(path.as_path()))))
+}
+
+/// Builds an image source that loads through the preview's own image cache, so
+/// the decoded image can be evicted once the preview stops drawing it.
+fn cached_project_image_source(
+    image_cache: &Entity<MarkdownImageCache>,
+    project: WeakEntity<Project>,
+    path: ProjectPath,
+) -> ImageSource {
+    let image_cache = image_cache.downgrade();
+    ImageSource::from(move |window: &mut Window, cx: &mut App| {
+        let image_cache = image_cache.upgrade()?;
+        image_cache.update(cx, |cache, cx| {
+            cache.load_project_image(project.clone(), path.clone(), window, cx)
+        })
+    })
 }
 
 fn resolve_project_path_for_preview_image(
@@ -1898,6 +1919,8 @@ impl Item for MarkdownPreviewView {
     }
 
     fn deactivated(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        self.image_cache
+            .update(cx, |image_cache, cx| image_cache.retire_all(cx));
         if let Some(nav_history) = self.nav_history.as_mut() {
             nav_history.push::<()>(None, None, cx);
         }
@@ -1906,6 +1929,8 @@ impl Item for MarkdownPreviewView {
 
 impl Render for MarkdownPreviewView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.image_cache
+            .update(cx, |image_cache, cx| image_cache.begin_frame(cx));
         let preview_theme = self.resolve_preview_theme(cx);
         let bg_color = preview_theme
             .as_ref()
@@ -2389,6 +2414,7 @@ mod tests {
         MarkdownPreviewView, filter_non_rendered_matches, open_preview_url,
         reset_persisted_font_size,
     };
+    use crate::image_cache::MarkdownImageCache;
 
     #[test]
     fn filters_matches_in_non_rendered_link_source() {
@@ -2566,6 +2592,7 @@ mod tests {
         let workspace_directory = tree.path();
         let base_directory = markdown_fixture_directory(&tree);
         let image_file = workspace_directory.join("test_image.png");
+        let image_cache = MarkdownImageCache::new(cx);
 
         for workspace_root_relative_path in ["/test_image.png", "\\test_image.png"] {
             let resolved = resolve_preview_image(
@@ -2575,6 +2602,7 @@ mod tests {
                 None,
                 None,
                 PathStyle::local(),
+                &image_cache,
                 cx,
             );
             assert_resolved_preview_image_path(resolved, image_file.as_path());
@@ -2587,6 +2615,7 @@ mod tests {
             None,
             None,
             PathStyle::local(),
+            &image_cache,
             cx,
         );
         assert!(missing.is_none());
@@ -2605,6 +2634,7 @@ mod tests {
         };
 
         let resolved = cx.update(|cx| {
+            let image_cache = MarkdownImageCache::new(cx);
             resolve_preview_image(
                 "images/example.png",
                 Some(Path::new("/remote/project/docs")),
@@ -2612,12 +2642,14 @@ mod tests {
                 Some(&project),
                 Some(&source_project_path),
                 PathStyle::local(),
+            &image_cache,
                 cx,
             )
         });
         assert!(matches!(resolved, Some(ImageSource::Custom(_))));
 
         let outside_worktree = cx.update(|cx| {
+            let image_cache = MarkdownImageCache::new(cx);
             resolve_preview_image(
                 "../../outside/example.png",
                 Some(Path::new("/remote/project/docs")),
@@ -2625,6 +2657,7 @@ mod tests {
                 Some(&project),
                 Some(&source_project_path),
                 PathStyle::local(),
+            &image_cache,
                 cx,
             )
         });
@@ -2646,6 +2679,7 @@ mod tests {
         };
 
         let resolved = cx.update(|cx| {
+            let image_cache = MarkdownImageCache::new(cx);
             resolve_preview_image(
                 "images/example.png",
                 Some(Path::new("/remote/project/docs")),
@@ -2653,6 +2687,7 @@ mod tests {
                 Some(&project),
                 Some(&source_project_path),
                 PathStyle::Windows,
+                &image_cache,
                 cx,
             )
         });
@@ -2689,6 +2724,7 @@ mod tests {
         };
 
         let resolved = cx.update(|cx| {
+            let image_cache = MarkdownImageCache::new(cx);
             resolve_preview_image(
                 "/images/root.png",
                 Some(Path::new("/remote/project/docs")),
@@ -2696,6 +2732,7 @@ mod tests {
                 Some(&project),
                 Some(&source_project_path),
                 PathStyle::Windows,
+                &image_cache,
                 cx,
             )
         });
