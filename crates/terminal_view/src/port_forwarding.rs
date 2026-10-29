@@ -206,6 +206,24 @@ pub struct ForwardSnapshot {
     pub status: ForwardStatus,
 }
 
+/// The URL that opens a forwarded remote port in this machine's browser.
+///
+/// Only a remote→local tunnel binds a loopback port on this machine, and only
+/// once the tunnel reports as running: a reverse forward exposes its port on
+/// the remote host, and a starting, retrying or failed tunnel has nothing to
+/// reach yet. Every surface that offers to open a forward in the browser must
+/// take the URL from here so they agree on which entries are reachable.
+pub fn forwarded_local_url(entry: &ForwardSnapshot) -> Option<String> {
+    if entry.direction != ForwardDirection::RemoteToLocal
+        || !matches!(entry.status, ForwardStatus::RunningUnconfirmed)
+    {
+        return None;
+    }
+    entry
+        .local_port
+        .map(|local_port| format!("http://127.0.0.1:{local_port}"))
+}
+
 #[derive(Clone)]
 struct AutomaticForwardContext {
     project: Entity<Project>,
@@ -1537,26 +1555,21 @@ impl Render for PortForwardModal {
                                                 },
                                             )
                                             .child(
-                                                if direction == ForwardDirection::RemoteToLocal
-                                                    && entry.local_port.is_some()
-                                                    && matches!(
-                                                        entry.status,
-                                                        ForwardStatus::RunningUnconfirmed
-                                                    )
+                                                if let Some(address_for_click) =
+                                                    forwarded_local_url(&entry)
                                                 {
-                                                    let address_for_click = address.clone();
                                                     div()
                                                         .id(format!(
-                                                            "{}:{target}",
-                                                            match direction {
-                                                                ForwardDirection::RemoteToLocal => {
-                                                                    "remote-forward-address"
-                                                                }
-                                                                ForwardDirection::LocalToRemote => {
-                                                                    "reverse-forward-address"
-                                                                }
-                                                            }
+                                                            "remote-forward-address:{target}"
                                                         ))
+                                                        .debug_selector({
+                                                            let target = target.to_string();
+                                                            move || {
+                                                                format!(
+                                                                    "remote-forward-address:{target}"
+                                                                )
+                                                            }
+                                                        })
                                                         .cursor_pointer()
                                                         .tooltip(ui::Tooltip::text(i18n::t!(
                                                             "f5b68300857567ee"
@@ -1656,6 +1669,66 @@ mod tests {
             host: Some(host.to_string()),
             port,
         }
+    }
+
+    fn snapshot(
+        direction: super::ForwardDirection,
+        local_port: Option<u16>,
+        status: super::ForwardStatus,
+    ) -> super::ForwardSnapshot {
+        super::ForwardSnapshot {
+            direction,
+            target: loopback(3000),
+            local_port,
+            source: super::ForwardSource::Automatic,
+            status,
+        }
+    }
+
+    #[test]
+    fn only_a_running_remote_forward_exposes_an_openable_local_url() {
+        use super::{ForwardDirection, ForwardStatus};
+
+        assert_eq!(
+            super::forwarded_local_url(&snapshot(
+                ForwardDirection::RemoteToLocal,
+                Some(3000),
+                ForwardStatus::RunningUnconfirmed,
+            )),
+            Some("http://127.0.0.1:3000".to_string())
+        );
+        for status in [
+            ForwardStatus::Starting,
+            ForwardStatus::Retrying("reconnecting".into()),
+            ForwardStatus::Failed("denied".into()),
+        ] {
+            assert_eq!(
+                super::forwarded_local_url(&snapshot(
+                    ForwardDirection::RemoteToLocal,
+                    Some(3000),
+                    status,
+                )),
+                None
+            );
+        }
+        assert_eq!(
+            super::forwarded_local_url(&snapshot(
+                ForwardDirection::RemoteToLocal,
+                None,
+                ForwardStatus::RunningUnconfirmed,
+            )),
+            None,
+            "没有绑定的本地端口就不能在浏览器打开"
+        );
+        assert_eq!(
+            super::forwarded_local_url(&snapshot(
+                ForwardDirection::LocalToRemote,
+                Some(3000),
+                ForwardStatus::RunningUnconfirmed,
+            )),
+            None,
+            "反向转发暴露的是远端端口，本机浏览器无法访问"
+        );
     }
 
     struct DiagnosticReader {
@@ -2851,6 +2924,60 @@ mod tests {
         assert_eq!(
             to_remote, remote_to_local,
             "the two direction labels must render at the same width, otherwise the segments become asymmetric"
+        );
+    }
+
+    #[gpui::test]
+    async fn modal_address_opens_a_remote_forward_only_with_ctrl_click(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use super::{ForwardDirection, ForwardEntry, ForwardSource, ForwardStatus};
+        use gpui::{AppContext as _, Modifiers, VisualTestContext, px, size};
+        use project::Project;
+        use std::path::Path;
+        use workspace::AppState;
+
+        let fs = cx.update(AppState::test).fs.as_fake().clone();
+        cx.update(|cx| {
+            theme_settings::init(theme::LoadThemes::JustBase, cx);
+            editor::init(cx);
+        });
+        fs.insert_tree("/project", serde_json::json!({"file": ""}))
+            .await;
+        let project = Project::test(fs, [Path::new("/project")], cx).await;
+        let manager = cx.new(|_| super::PortForwardManager::new());
+        let target = loopback(3000);
+        manager.update(cx, |manager, _| {
+            manager.entries.insert(
+                (ForwardDirection::RemoteToLocal, target.clone()),
+                ForwardEntry {
+                    direction: ForwardDirection::RemoteToLocal,
+                    target,
+                    local_port: Some(3000),
+                    source: ForwardSource::Manual,
+                    status: ForwardStatus::RunningUnconfirmed,
+                    generation: 1,
+                    cancellation: None,
+                },
+            );
+        });
+        let window = cx.open_window(size(px(700.), px(400.)), move |window, cx| {
+            super::PortForwardModal::new(manager, project, window, cx)
+        });
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        let address = visual
+            .debug_bounds("remote-forward-address:3000")
+            .expect("运行中的远程→本地转发会显示可以打开的本地地址");
+
+        visual.simulate_click(address.center(), Modifiers::default());
+        visual.run_until_parked();
+        assert_eq!(visual.opened_url(), None, "单击只复制地址，不应打开浏览器");
+
+        visual.simulate_click(address.center(), Modifiers::control());
+        visual.run_until_parked();
+        assert_eq!(
+            visual.opened_url().as_deref(),
+            Some("http://127.0.0.1:3000")
         );
     }
 

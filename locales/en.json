@@ -2160,6 +2160,7 @@
   "64b986fb129bb5b0": "Reject All",
   "64f1f87721d5d160": "Tree View",
   "64f4432a7228aa33": "Whether to zoom the editor font size with the mouse wheel while holding the primary modifier key.",
+  "64f522a1b0d2720e": "Show the current Git branch next to each worktree root in the project panel.",
   "6500c47399bfd391": "Set Condition",
   "6508435f4a6349bc": "Whether to sort file and folder names case-sensitively in the project panel.",
   "6514a7130bf4071c": "Maximum completion tokens for OpenAI-compatible requests.",
@@ -5749,5 +5750,11 @@
   "df848a4c14e44334": "Failed to flush stdout",
   "e48f9b7c70065b43": "Proxy address must not contain a path: {}",
   "e9993e04f476ce46": "HTTP proxy rejected the connection: {status_line}",
-  "84c956292a993074": "Proxy address is not a valid URL"
+  "84c956292a993074": "Proxy address is not a valid URL",
+  "6044e9f095e0b5e4": "Front",
+  "60be66d61586b95c": "Back",
+  "e2e0c454e5d53186": "Left",
+  "14ab1f2bce0a8777": "Right",
+  "db5ba671d244ee82": "Top",
+  "13c12b064b635e06": "Bottom"
 }

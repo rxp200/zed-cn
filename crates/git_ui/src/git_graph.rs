@@ -61,11 +61,11 @@ use time::{OffsetDateTime, UtcOffset, format_description::BorrowedFormatItem};
 use ui::{
     Chip, ColumnWidthConfig, CommonAnimationExt as _, ContextMenu, ContextMenuEntry, DiffStat,
     Disclosure, Divider, HeaderResizeInfo, HighlightedLabel, IndentGuideColors, ListItem,
-    ListItemSpacing, ListSubHeader, RedistributableColumnsState, ScrollableHandle, Switch,
-    SwitchLabelPosition, Table, TableInteractionState, TableRenderContext, TableResizeBehavior,
-    Tooltip, WithScrollbar, bind_redistributable_columns, prelude::*,
-    redistribute_hidden_fractions, redistribute_hidden_widths,
-    render_redistributable_columns_resize_handles, render_table_header, table_row::TableRow,
+    ListItemSpacing, RedistributableColumnsState, ScrollableHandle, Switch, SwitchLabelPosition,
+    Table, TableInteractionState, TableRenderContext, TableResizeBehavior, Tooltip, WithScrollbar,
+    bind_redistributable_columns, prelude::*, redistribute_hidden_fractions,
+    redistribute_hidden_widths, render_redistributable_columns_resize_handles, render_table_header,
+    table_row::TableRow,
 };
 use util::{ResultExt, debug_panic};
 use workspace::{
@@ -90,6 +90,20 @@ const GIT_SIDEBAR_MAX_WIDTH: Pixels = px(460.);
 
 fn clamped_sidebar_width(width: Pixels) -> Pixels {
     width.clamp(GIT_SIDEBAR_MIN_WIDTH, GIT_SIDEBAR_MAX_WIDTH)
+}
+
+/// Section label for the branch tree. `ListSubHeader` grows along the main axis
+/// of a flex column, which spread the tree sections over the whole tree height
+/// and left large gaps between them when there were few branches.
+fn sidebar_section_header(id: &'static str, label: impl Into<SharedString>) -> impl IntoElement {
+    div()
+        .debug_selector(move || id.to_string())
+        .flex_none()
+        .h_5()
+        .px_1()
+        .flex()
+        .items_center()
+        .child(Label::new(label).color(Color::Muted).size(LabelSize::Small))
 }
 
 /// Opening a historical file requires a double click; a single click only selects.
@@ -3054,9 +3068,11 @@ impl GitGraph {
                     .into_any_element(),
                 |this, cx| this.set_sidebar_log_source(LogSource::All, cx),
             )
-            .when(all_commits_selected, |this| this.bg(selected_background));
+            .when(all_commits_selected, |this| this.bg(selected_background))
+            .debug_selector(|| "git-graph-sidebar-all-commits".into());
 
         v_flex()
+            .debug_selector(|| "git-graph-sidebar".into())
             .w(self.sidebar_width)
             .h_full()
             .flex_shrink_0()
@@ -3070,9 +3086,15 @@ impl GitGraph {
                     .p_1()
                     .gap_0p5()
                     .child(all_commits_row)
-                    .child(ListSubHeader::new(i18n::t!("bf4ad761840fcd0a")))
+                    .child(sidebar_section_header(
+                        "git-graph-sidebar-local-header",
+                        i18n::t!("bf4ad761840fcd0a"),
+                    ))
                     .children(self.render_sidebar_tree("local", &local_tree, &local_branches, cx))
-                    .child(ListSubHeader::new(i18n::t!("7ba00927dde9122f")))
+                    .child(sidebar_section_header(
+                        "git-graph-sidebar-remote-header",
+                        i18n::t!("7ba00927dde9122f"),
+                    ))
                     .children(self.render_sidebar_tree(
                         "remote",
                         &remote_tree,
@@ -7399,6 +7421,105 @@ mod tests {
         assert_eq!(clamped_sidebar_width(px(300.)), px(300.));
         assert!(GIT_SIDEBAR_DEFAULT_WIDTH >= GIT_SIDEBAR_MIN_WIDTH);
         assert!(GIT_SIDEBAR_DEFAULT_WIDTH <= GIT_SIDEBAR_MAX_WIDTH);
+    }
+
+    #[gpui::test]
+    async fn sidebar_sections_stack_from_the_top_and_leave_the_rest_blank(cx: &mut TestAppContext) {
+        init_test(cx);
+
+        let fs = FakeFs::new(cx.executor());
+        fs.insert_tree(
+            Path::new("/project"),
+            json!({
+                ".git": {},
+                "file.txt": "content",
+            }),
+        )
+        .await;
+        let dot_git = Path::new("/project/.git");
+        fs.set_branch_name(dot_git, Some("main"));
+        fs.with_git_state(dot_git, true, |state| {
+            state.branches.insert("origin/main".into());
+        })
+        .expect("should seed a remote branch");
+
+        let mut rng = StdRng::seed_from_u64(7);
+        let commits = generate_random_commit_dag(&mut rng, 5, false);
+        fs.set_graph_commits(dot_git, commits);
+
+        let project = Project::test(fs.clone(), [Path::new("/project")], cx).await;
+        cx.run_until_parked();
+
+        let repository = project.read_with(cx, |project, cx| {
+            project
+                .active_repository(cx)
+                .expect("should have a repository")
+        });
+        let (multi_workspace, cx) = cx.add_window_view(|window, cx| {
+            workspace::MultiWorkspace::test_new(project.clone(), window, cx)
+        });
+        let workspace = multi_workspace.read_with(&*cx, |multi, _| multi.workspace().downgrade());
+        let git_graph = cx.new_window_entity(|window, cx| {
+            GitGraph::new(
+                repository.read(cx).id,
+                project.read(cx).git_store().clone(),
+                workspace,
+                None,
+                GraphPresentation::FullTab,
+                window,
+                cx,
+            )
+        });
+        cx.run_until_parked();
+
+        cx.draw(
+            gpui::point(gpui::px(0.), gpui::px(0.)),
+            gpui::size(gpui::px(1200.), gpui::px(800.)),
+            move |_, _| git_graph.into_any_element(),
+        );
+        cx.run_until_parked();
+
+        let sidebar = cx
+            .debug_bounds("git-graph-sidebar")
+            .expect("the branch tree should render");
+        let all_commits = cx
+            .debug_bounds("git-graph-sidebar-all-commits")
+            .expect("the all-commits row should render");
+        let local_header = cx
+            .debug_bounds("git-graph-sidebar-local-header")
+            .expect("the local section header should render");
+        let remote_header = cx
+            .debug_bounds("git-graph-sidebar-remote-header")
+            .expect("the remote section header should render");
+
+        for (name, header) in [("local", local_header), ("remote", remote_header)] {
+            assert!(
+                header.size.height <= px(24.),
+                "the {name} section header must keep its content height instead of growing to fill the tree: {:?}",
+                header.size.height
+            );
+        }
+
+        let gap_below_all_commits = local_header.top() - all_commits.bottom();
+        assert!(
+            gap_below_all_commits <= px(12.),
+            "section headers must follow the row above them instead of being spread over the tree height: {:?}",
+            gap_below_all_commits
+        );
+
+        let gap_around_local_rows = remote_header.top() - local_header.bottom();
+        assert!(
+            gap_around_local_rows <= px(48.),
+            "a single local branch must not push the remote section far down: {:?}",
+            gap_around_local_rows
+        );
+
+        let blank_below_content = sidebar.bottom() - remote_header.bottom();
+        assert!(
+            blank_below_content >= px(400.),
+            "the branch tree should stay stacked at the top and leave the remaining height empty: {:?}",
+            blank_below_content
+        );
     }
 
     #[test]

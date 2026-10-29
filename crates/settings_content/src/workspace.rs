@@ -920,6 +920,10 @@ pub struct ProjectPanelSettingsContent {
     ///
     /// Default: false
     pub git_status_indicator: Option<bool>,
+    /// Whether to show the current Git branch next to each worktree root in the project panel.
+    ///
+    /// Default: true
+    pub git_branch_name: Option<bool>,
 }
 
 /// Controls the width of the git diff hunk indicators in the gutter.

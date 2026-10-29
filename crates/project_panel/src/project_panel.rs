@@ -37,7 +37,7 @@ use project::{
     Entry, EntryKind, Fs, GitEntry, GitEntryRef, GitTraversal, Project, ProjectEntryId,
     ProjectPath, Worktree, WorktreeId,
     git_store::{GitStoreEvent, RepositoryEvent, git_traversal::ChildEntriesGitIter},
-    project_settings::GoToDiagnosticSeverityFilter,
+    project_settings::{GoToDiagnosticSeverityFilter, ProjectSettings},
 };
 use project_panel_settings::ProjectPanelSettings;
 use rayon::slice::ParallelSliceMut;
@@ -93,6 +93,8 @@ use crate::{
 
 const PROJECT_PANEL_KEY: &str = "ProjectPanel";
 const NEW_ENTRY_ID: ProjectEntryId = ProjectEntryId::MAX;
+const MAX_BRANCH_LABEL_LENGTH: usize = 40;
+const SHORT_COMMIT_SHA_LENGTH: usize = 8;
 
 fn unused_pasted_image_path(
     target_directory: &RelPath,
@@ -332,9 +334,17 @@ struct EntryDetails {
     reserves_chevron_slot: bool,
     diagnostic_count: Option<DiagnosticCount>,
     git_status: GitSummary,
+    branch: Option<WorktreeBranchLabel>,
     is_private: bool,
     worktree_id: WorktreeId,
     canonical_path: Option<Arc<Path>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct WorktreeBranchLabel {
+    name: SharedString,
+    is_detached: bool,
+    full_name: SharedString,
 }
 
 /// The glyph a row's diagnostic mark decorates, and the shape of that mark.
@@ -749,6 +759,9 @@ impl ProjectPanel {
                     | GitStoreEvent::DiffBaseChanged(_)
                     | GitStoreEvent::RepositoryRemoved(_) => {
                         this.update_visible_entries(None, false, false, window, cx);
+                        cx.notify();
+                    }
+                    GitStoreEvent::RepositoryUpdated(_, RepositoryEvent::HeadChanged, _) => {
                         cx.notify();
                     }
                     _ => {}
@@ -6377,6 +6390,7 @@ impl ProjectPanel {
             .is_some_and(|selection| selection.entry_id == entry_id);
 
         let file_name = details.filename.clone();
+        let branch = details.branch.clone();
 
         let chevron = details.chevron.clone();
         let mut icon = details.icon.clone();
@@ -7077,16 +7091,54 @@ impl ProjectPanel {
                                     ))
                                 }
 
-                                None => this.child(
-                                    Label::new(file_name)
-                                        .single_line()
-                                        .color(filename_text_color)
-                                        .when(
-                                            settings.bold_folder_labels && kind.is_dir(),
-                                            |this| this.weight(FontWeight::SEMIBOLD),
+                                None => this
+                                    .child(
+                                        Label::new(file_name)
+                                            .single_line()
+                                            .color(filename_text_color)
+                                            .when(
+                                                settings.bold_folder_labels && kind.is_dir(),
+                                                |this| this.weight(FontWeight::SEMIBOLD),
+                                            )
+                                            .into_any_element(),
+                                    )
+                                    .when_some(branch, |this, branch| {
+                                        let tooltip = if branch.is_detached {
+                                            format!("Detached HEAD: {}", branch.full_name)
+                                        } else {
+                                            branch.full_name.to_string()
+                                        };
+
+                                        this.child(
+                                            h_flex()
+                                                .id(if is_sticky {
+                                                    (
+                                                        "project_panel_sticky_worktree_branch",
+                                                        entry_id.to_proto() as usize,
+                                                    )
+                                                } else {
+                                                    (
+                                                        "project_panel_worktree_branch",
+                                                        entry_id.to_proto() as usize,
+                                                    )
+                                                })
+                                                .flex_none()
+                                                .gap_0p5()
+                                                .pl_1p5()
+                                                .child(
+                                                    Icon::new(IconName::GitBranch)
+                                                        .size(IconSize::XSmall)
+                                                        .color(Color::Muted),
+                                                )
+                                                .child(
+                                                    Label::new(branch.name)
+                                                        .single_line()
+                                                        .size(LabelSize::Small)
+                                                        .color(Color::Muted),
+                                                )
+                                                .tooltip(Tooltip::text(tooltip)),
                                         )
-                                        .into_any_element(),
-                                ),
+                                    }),
                             })
                     })
                     .on_secondary_mouse_down(cx.listener(
@@ -7474,6 +7526,10 @@ impl ProjectPanel {
         let filename_text_color =
             entry_git_aware_label_color(git_status, entry.is_ignored, is_marked);
 
+        let branch = (entry.path.is_empty() && entry.kind.is_dir())
+            .then(|| self.branch_for_worktree(worktree_id, cx))
+            .flatten();
+
         let is_cut = self
             .clipboard
             .as_ref()
@@ -7500,10 +7556,43 @@ impl ProjectPanel {
             reserves_chevron_slot,
             diagnostic_count,
             git_status,
+            branch,
             is_private: entry.is_private,
             worktree_id,
             canonical_path: entry.canonical_path.clone(),
         }
+    }
+
+    fn branch_for_worktree(
+        &self,
+        worktree_id: WorktreeId,
+        cx: &App,
+    ) -> Option<WorktreeBranchLabel> {
+        if !ProjectSettings::get_global(cx).git.enabled.status
+            || !ProjectPanelSettings::get_global(cx).git_branch_name
+        {
+            return None;
+        }
+
+        let project_path = ProjectPath {
+            worktree_id,
+            path: RelPath::empty_arc(),
+        };
+        let (repository, _) = self
+            .project
+            .read(cx)
+            .git_store()
+            .read(cx)
+            .repository_and_path_for_project_path(&project_path, cx)?;
+        let repository = repository.read(cx);
+
+        worktree_branch_label(
+            repository.branch.as_ref().map(|branch| branch.name()),
+            repository
+                .head_commit
+                .as_ref()
+                .map(|commit| commit.sha.as_ref()),
+        )
     }
 
     fn dispatch_context(&self, window: &Window, cx: &Context<Self>) -> KeyContext {
@@ -7864,6 +7953,29 @@ fn entry_file_name<'a>(entry: &'a Entry, root_name: &'a RelPath) -> &'a str {
         .path
         .file_name()
         .unwrap_or_else(|| root_name.as_unix_str())
+}
+
+fn worktree_branch_label(
+    branch_name: Option<&str>,
+    head_commit_sha: Option<&str>,
+) -> Option<WorktreeBranchLabel> {
+    if let Some(branch_name) = branch_name {
+        return Some(WorktreeBranchLabel {
+            name: util::truncate_and_trailoff(branch_name, MAX_BRANCH_LABEL_LENGTH).into(),
+            is_detached: false,
+            full_name: branch_name.into(),
+        });
+    }
+
+    head_commit_sha.map(|sha| WorktreeBranchLabel {
+        name: sha
+            .chars()
+            .take(SHORT_COMMIT_SHA_LENGTH)
+            .collect::<String>()
+            .into(),
+        is_detached: true,
+        full_name: sha.into(),
+    })
 }
 
 fn item_width_estimate(depth: usize, item_text_chars: usize, is_symlink: bool) -> usize {

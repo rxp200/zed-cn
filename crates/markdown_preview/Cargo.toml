@@ -40,5 +40,8 @@ db = { workspace = true, features = ["test-support"] }
 editor = { workspace = true, features = ["test-support"] }
 fs.workspace = true
 gpui = { workspace = true, features = ["test-support"] }
+image.workspace = true
+project = { workspace = true, features = ["test-support"] }
 serde_json.workspace = true
+smallvec.workspace = true
 workspace = { workspace = true, features = ["test-support"] }
