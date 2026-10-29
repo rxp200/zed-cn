@@ -3,7 +3,7 @@ use gpui::{
     Anchor, DismissEvent, Entity, EventEmitter, FocusHandle, Focusable, Subscription, Task,
 };
 use project::file_transfer::{FileTransfers, Transfer, TransferDirection};
-use std::time::Duration;
+use std::{path::Path, time::Duration};
 use ui::{PopoverMenu, Tooltip, prelude::*};
 use workspace::{StatusItemView, Workspace, item::ItemHandle};
 
@@ -111,9 +111,26 @@ fn server_summary(entry: &RemoteServerDownload) -> String {
 
 fn is_file_transfer_visible(entry: &Transfer) -> bool {
     entry.error
+        || entry.cancelled
         || entry
             .finished
             .is_none_or(|finished| finished.elapsed() < FINISHED_VISIBLE_DURATION)
+}
+
+/// Only an unfinished transfer can be stopped.
+fn can_cancel(entry: &Transfer) -> bool {
+    entry.finished.is_none()
+}
+
+/// The destination of a finished download exists on this machine, so it can be
+/// revealed in the local file manager. Uploads write to the remote host and
+/// copies stay inside the project, so neither gets the reveal button.
+fn can_reveal_in_file_manager(entry: &Transfer) -> bool {
+    entry.finished.is_some()
+        && !entry.error
+        && !entry.cancelled
+        && entry.direction == TransferDirection::Download
+        && !entry.destination.is_empty()
 }
 impl Render for FileTransferIndicator {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -296,14 +313,56 @@ impl Render for TransferDetails {
                     .color(Color::Muted),
             )
             .children(entries.iter().map(|entry| {
+                let id = entry.id;
+                let destination = entry.destination.clone();
+                let show_cancel = can_cancel(entry);
+                let show_reveal = can_reveal_in_file_manager(entry);
                 v_flex()
                     .min_w_0()
                     .gap_1()
-                    .child(Label::new(summary(entry)).color(if entry.error {
-                        Color::Error
-                    } else {
-                        Color::Default
-                    }))
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .child(div().flex_1().min_w_0().child(
+                                Label::new(summary(entry)).truncate().color(if entry.error {
+                                    Color::Error
+                                } else if entry.cancelled {
+                                    Color::Muted
+                                } else {
+                                    Color::Default
+                                }),
+                            ))
+                            .when(show_cancel, |element| {
+                                element.child(
+                                    Button::new(
+                                        ("cancel-transfer", id),
+                                        i18n::t!("8637ac9558ff1093"),
+                                    )
+                                    .label_size(LabelSize::Small)
+                                    .on_click(cx.listener(
+                                        move |this, _, _, cx| {
+                                            this.transfers.update(cx, |transfers, cx| {
+                                                transfers.cancel(id, cx)
+                                            });
+                                        },
+                                    )),
+                                )
+                            })
+                            .when(show_reveal, |element| {
+                                let destination = Path::new(&destination).to_path_buf();
+                                element.child(
+                                    IconButton::new(("reveal-transfer", id), IconName::FolderOpen)
+                                        .icon_size(IconSize::Small)
+                                        .aria_label(ui::utils::reveal_in_file_manager_label(false))
+                                        .tooltip(Tooltip::text(
+                                            ui::utils::reveal_in_file_manager_label(false),
+                                        ))
+                                        .on_click(move |_, _, cx| {
+                                            cx.reveal_path(&destination);
+                                        }),
+                                )
+                            }),
+                    )
                     .child(
                         Label::new(format!("{} → {}", entry.path, entry.destination))
                             .size(LabelSize::Small)
@@ -403,5 +462,90 @@ impl Render for TransferDetails {
                         )
                     })
             }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Instant;
+
+    fn transfer(direction: TransferDirection) -> Transfer {
+        Transfer {
+            id: 1,
+            direction,
+            path: "dist/file.bin".into(),
+            destination: "/tmp/file.bin".into(),
+            bytes: 1024,
+            total: Some(4096),
+            completed_files: 0,
+            total_entries: Some(1),
+            status: i18n::t!("e0f3db545a0fe3d5").into(),
+            finished: None,
+            error: false,
+            cancelled: false,
+        }
+    }
+
+    #[test]
+    fn only_unfinished_transfers_can_be_cancelled() {
+        let mut entry = transfer(TransferDirection::Download);
+        assert!(can_cancel(&entry));
+
+        entry.finished = Some(Instant::now());
+        assert!(!can_cancel(&entry));
+    }
+
+    #[test]
+    fn finished_download_offers_reveal_in_file_manager() {
+        let mut entry = transfer(TransferDirection::Download);
+        assert!(
+            !can_reveal_in_file_manager(&entry),
+            "an in-flight download has no completed file to reveal"
+        );
+
+        entry.finished = Some(Instant::now());
+        assert!(can_reveal_in_file_manager(&entry));
+    }
+
+    #[test]
+    fn finished_upload_or_copy_has_no_reveal_button() {
+        for direction in [TransferDirection::Upload, TransferDirection::Copy] {
+            let mut entry = transfer(direction);
+            entry.finished = Some(Instant::now());
+            assert!(
+                !can_reveal_in_file_manager(&entry),
+                "uploads write to the remote host and copies stay inside the project"
+            );
+        }
+    }
+
+    #[test]
+    fn failed_cancelled_or_destinationless_download_has_no_reveal_button() {
+        let mut failed = transfer(TransferDirection::Download);
+        failed.finished = Some(Instant::now());
+        failed.error = true;
+        assert!(!can_reveal_in_file_manager(&failed));
+
+        let mut cancelled = transfer(TransferDirection::Download);
+        cancelled.finished = Some(Instant::now());
+        cancelled.cancelled = true;
+        assert!(!can_reveal_in_file_manager(&cancelled));
+
+        let mut without_destination = transfer(TransferDirection::Download);
+        without_destination.finished = Some(Instant::now());
+        without_destination.destination.clear();
+        assert!(!can_reveal_in_file_manager(&without_destination));
+    }
+
+    #[test]
+    fn cancelled_transfer_stays_visible_until_cleared() {
+        let mut entry = transfer(TransferDirection::Download);
+        assert!(is_file_transfer_visible(&entry));
+
+        entry.finished = Some(Instant::now());
+        entry.cancelled = true;
+        assert!(is_file_transfer_visible(&entry));
+        assert_eq!(entry.percentage(), None);
     }
 }
