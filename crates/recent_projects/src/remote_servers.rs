@@ -16,10 +16,10 @@ use extension_host::ExtensionStore;
 use filter::{FilterData, FilteredServer};
 use futures::{FutureExt, StreamExt as _, channel::oneshot, future::Shared};
 use gpui::{
-    Action, AnyElement, App, ClickEvent, ClipboardItem, Context, DismissEvent, Entity,
-    EventEmitter, ExternalPaths, FocusHandle, Focusable, FontWeight, KeyDownEvent,
-    PathPromptOptions, PromptLevel, Rems, ScrollHandle, Subscription, Task, TaskExt, WeakEntity,
-    Window,
+    Action, Anchor, AnyElement, App, ClickEvent, ClipboardItem, Context, DismissEvent, Entity,
+    EventEmitter, ExternalPaths, FocusHandle, Focusable, FontWeight, KeyDownEvent, MouseButton,
+    PathPromptOptions, Point, PromptLevel, Rems, ScrollHandle, Subscription, Task, TaskExt,
+    WeakEntity, Window, anchored, deferred, point,
 };
 use log::{debug, info};
 use open_path_prompt::OpenPathDelegate;
@@ -46,8 +46,8 @@ use std::{
 
 use ui::{
     Checkbox, Chip, CommonAnimationExt, ElevationIndex, HighlightedLabel, IconButtonShape,
-    KeyBinding, ListItem, ListSeparator, ModalHeader, Navigable, NavigableEntry, TintColor,
-    Tooltip, prelude::*,
+    KeyBinding, ListItem, ListSeparator, ModalHeader, Navigable, NavigableEntry, ScrollAxes,
+    Scrollbars, TintColor, Tooltip, WithScrollbar, prelude::*,
 };
 use util::{
     ResultExt,
@@ -165,6 +165,50 @@ fn preserve_existing_connection_state(connection: &mut SshConnection, existing: 
     connection.args = existing.args.clone();
     connection.port_forwards = existing.port_forwards.clone();
     connection.upload_binary_over_ssh = existing.upload_binary_over_ssh;
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FormConnectIntent {
+    /// Enter the remote project after the handshake succeeds.
+    Connect,
+    /// Run the same handshake, then close the connection without opening a
+    /// project or saving the host.
+    Test,
+}
+
+/// Builds the connection options for a form submission.
+///
+/// Both the regular connect and the connection test go through this function
+/// so the password/key handling, jump-host chain, proxy and timeout are
+/// exercised identically.
+fn form_connection_options(
+    draft: &RemoteServerFormDraft,
+    key_id: Option<String>,
+) -> remote::SshConnectionOptions {
+    remote::SshConnectionOptions {
+        host: draft.host.clone().into(),
+        username: draft.username.clone(),
+        port: draft.port,
+        password: None,
+        args: Some(Vec::new()),
+        port_forwards: None,
+        connection_timeout: draft.connection_timeout,
+        nickname: draft.nickname.clone(),
+        upload_binary_over_ssh: true,
+        auth_method: Some(draft.auth_method),
+        ssh_key_id: key_id,
+        jump_hosts: draft.jump_hosts.clone(),
+        proxy: draft.proxy.clone(),
+        proxy_disabled: draft.proxy_disabled,
+    }
+}
+
+fn form_test_success_message(platform: remote::RemotePlatform) -> SharedString {
+    SharedString::from(i18n::t_args!(
+        "71845845eeac6c37",
+        platform.os.display_name(),
+        platform.arch.to_string()
+    ))
 }
 
 fn auth_method_label(method: SshAuthMethod) -> &'static str {
@@ -317,6 +361,9 @@ struct RemoteServerFormDraft {
 /// [`SshConnection`], so the list view, connection flow and remote-server
 /// deployment behave identically afterwards.
 struct CreateRemoteServerForm {
+    /// Drives the left column's scrollbar and lets a newly opened jump-host
+    /// picker scroll into view, so the picker is never clipped by the modal.
+    scroll_handle: ScrollHandle,
     nickname_editor: Entity<Editor>,
     host_editor: Entity<Editor>,
     port_editor: Entity<Editor>,
@@ -330,6 +377,15 @@ struct CreateRemoteServerForm {
     key_id: Option<String>,
     jump_hosts: Vec<JumpHost>,
     jump_host_picker: Option<Entity<Picker<JumpHostPickerDelegate>>>,
+    /// Window position the jump-host popover is anchored to.
+    jump_host_picker_anchor: Option<Point<gpui::Pixels>>,
+    /// Set while a connection test is running so both footer actions lock.
+    testing: bool,
+    /// Result of the last successful connection test.
+    test_success: Option<SharedString>,
+    /// Options that produced `test_success`, so editing a field hides a result
+    /// that no longer describes the form.
+    tested_connection: Option<remote::SshConnectionOptions>,
     proxy_disabled: bool,
     /// Whether the advanced section is expanded. Only affects the current
     /// form; nothing here is persisted.
@@ -360,6 +416,7 @@ impl CreateRemoteServerForm {
         });
 
         Self {
+            scroll_handle: ScrollHandle::new(),
             nickname_editor,
             host_editor,
             port_editor,
@@ -371,6 +428,10 @@ impl CreateRemoteServerForm {
             key_id: None,
             jump_hosts: Vec::new(),
             jump_host_picker: None,
+            jump_host_picker_anchor: None,
+            testing: false,
+            test_success: None,
+            tested_connection: None,
             proxy_disabled: false,
             advanced_open: false,
             host_error: None,
@@ -666,7 +727,7 @@ impl PickerDelegate for JumpHostPickerDelegate {
         Task::ready(())
     }
 
-    fn confirm(&mut self, _: bool, _: &mut Window, cx: &mut Context<Picker<Self>>) {
+    fn confirm(&mut self, _: bool, window: &mut Window, cx: &mut Context<Picker<Self>>) {
         let Some(candidate) = self
             .matching
             .get(self.selected_index)
@@ -680,17 +741,21 @@ impl PickerDelegate for JumpHostPickerDelegate {
                 if let Mode::CreateRemoteServerForm(form) = &mut modal.mode {
                     form.jump_hosts.push(jump_host);
                     form.jump_host_picker = None;
+                    form.jump_host_picker_anchor = None;
+                    form.host_editor.focus_handle(cx).focus(window, cx);
                 }
                 cx.notify();
             })
             .log_err();
     }
 
-    fn dismissed(&mut self, _: &mut Window, cx: &mut Context<Picker<Self>>) {
+    fn dismissed(&mut self, window: &mut Window, cx: &mut Context<Picker<Self>>) {
         self.parent_form
             .update(cx, |modal, cx| {
                 if let Mode::CreateRemoteServerForm(form) = &mut modal.mode {
                     form.jump_host_picker = None;
+                    form.jump_host_picker_anchor = None;
+                    form.host_editor.focus_handle(cx).focus(window, cx);
                 }
                 cx.notify();
             })
@@ -3986,7 +4051,12 @@ impl RemoteServerProjects {
         cx.notify();
     }
 
-    fn open_jump_host_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn open_jump_host_picker(
+        &mut self,
+        anchor: Point<gpui::Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let saved = RemoteSettings::get_global(cx)
             .ssh_connections()
             .map(|connection| {
@@ -4007,7 +4077,7 @@ impl RemoteServerProjects {
             .workspace
             .read_with(cx, |workspace, _| workspace.app_state().fs.clone())
         else {
-            self.show_jump_host_picker(saved, window, cx);
+            self.show_jump_host_picker(saved, anchor, window, cx);
             return;
         };
 
@@ -4021,7 +4091,7 @@ impl RemoteServerProjects {
             };
             this.update_in(cx, |this, window, cx| {
                 let candidates = merge_jump_host_candidates(saved, config_hosts);
-                this.show_jump_host_picker(candidates, window, cx);
+                this.show_jump_host_picker(candidates, anchor, window, cx);
             })
             .log_err();
         })
@@ -4031,13 +4101,25 @@ impl RemoteServerProjects {
     fn show_jump_host_picker(
         &mut self,
         candidates: Vec<JumpHostCandidate>,
+        anchor: Point<gpui::Pixels>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let delegate = JumpHostPickerDelegate::new(candidates, cx.entity().downgrade());
         let picker = cx.new(|cx| Picker::uniform_list(delegate, window, cx).embedded());
+        picker.focus_handle(cx).focus(window, cx);
         if let Mode::CreateRemoteServerForm(state) = &mut self.mode {
             state.jump_host_picker = Some(picker);
+            state.jump_host_picker_anchor = Some(anchor);
+        }
+        cx.notify();
+    }
+
+    fn close_jump_host_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Mode::CreateRemoteServerForm(state) = &mut self.mode {
+            state.jump_host_picker = None;
+            state.jump_host_picker_anchor = None;
+            state.host_editor.focus_handle(cx).focus(window, cx);
         }
         cx.notify();
     }
@@ -4178,22 +4260,7 @@ impl RemoteServerProjects {
                     return;
                 }
 
-                let connection_options = remote::SshConnectionOptions {
-                    host: draft.host.clone().into(),
-                    username: draft.username.clone(),
-                    port: draft.port,
-                    password: None,
-                    args: Some(Vec::new()),
-                    port_forwards: None,
-                    connection_timeout: draft.connection_timeout,
-                    nickname: draft.nickname.clone(),
-                    upload_binary_over_ssh: true,
-                    auth_method: Some(draft.auth_method),
-                    ssh_key_id: key_id.clone(),
-                    jump_hosts: draft.jump_hosts.clone(),
-                    proxy: draft.proxy.clone(),
-                    proxy_disabled: draft.proxy_disabled,
-                };
+                let connection_options = form_connection_options(&draft, key_id.clone());
 
                 let index = this.persist_form_connection(&connection_options, saved_index, cx);
                 if let Mode::CreateRemoteServerForm(state) = &mut this.mode {
@@ -4212,10 +4279,96 @@ impl RemoteServerProjects {
                     );
                     return;
                 }
-                this.begin_form_connect(connection_options, window, cx);
+                this.begin_form_connect(connection_options, FormConnectIntent::Connect, window, cx);
             })
             .log_err();
             None::<()>
+        })
+        .detach();
+    }
+
+    /// Runs the same connection setup as a normal connect, but stops before
+    /// opening a project.
+    ///
+    /// The form entry is not written to the settings file, the established
+    /// connection is closed after the handshake, and failures stay inline in
+    /// the form instead of opening a second dialog.
+    fn test_form_connection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Mode::CreateRemoteServerForm(state) = &self.mode
+            && (state.testing || state._creating.is_some())
+        {
+            return;
+        }
+
+        let draft = match self.read_form_draft(cx) {
+            Ok(draft) => draft,
+            Err(error) => {
+                if let Mode::CreateRemoteServerForm(state) = &mut self.mode {
+                    state.host_error = Some(error.clone());
+                    state.advanced_open = true;
+                    state.testing = false;
+                    state.test_success = None;
+                    state.tested_connection = None;
+                }
+                self.set_form_error(error, cx);
+                return;
+            }
+        };
+
+        if let Mode::CreateRemoteServerForm(state) = &mut self.mode {
+            state.error = None;
+            state.host_error = None;
+            state.testing = true;
+            state.test_success = None;
+            state.tested_connection = None;
+        }
+        cx.notify();
+
+        cx.spawn_in(window, async move |this, cx| {
+            let key_id = match (draft.existing_key_id.clone(), draft.key_file.clone()) {
+                (Some(key_id), _) => Some(key_id),
+                (None, Some(path)) => match remote::import_managed_ssh_key(
+                    path,
+                    draft.host.clone(),
+                    draft.port.unwrap_or(22),
+                    draft.username.clone(),
+                    cx,
+                )
+                .await
+                {
+                    Ok(imported) => Some(imported.record.key_id),
+                    Err(error) => {
+                        let message = SharedString::from(i18n::t_args!(
+                            "41b86c2b700f0a24",
+                            format!("{error:#}")
+                        ));
+                        this.update(cx, |this, cx| {
+                            this.set_form_error(message, cx);
+                            if let Mode::CreateRemoteServerForm(state) = &mut this.mode {
+                                state.testing = false;
+                                state.scroll_handle.scroll_to_bottom();
+                            }
+                        })
+                        .log_err();
+                        return;
+                    }
+                },
+                (None, None) => None,
+            };
+
+            this.update_in(cx, |this, window, cx| {
+                // The user may have left the form while the key was importing.
+                if !matches!(this.mode, Mode::CreateRemoteServerForm(_)) {
+                    return;
+                }
+
+                let connection_options = form_connection_options(&draft, key_id.clone());
+                if let Mode::CreateRemoteServerForm(state) = &mut this.mode {
+                    state.key_id = key_id;
+                }
+                this.begin_form_connect(connection_options, FormConnectIntent::Test, window, cx);
+            })
+            .log_err();
         })
         .detach();
     }
@@ -4256,6 +4409,7 @@ impl RemoteServerProjects {
     fn begin_form_connect(
         &mut self,
         connection_options: remote::SshConnectionOptions,
+        intent: FormConnectIntent,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -4270,43 +4424,103 @@ impl RemoteServerProjects {
             )
         });
 
+        let tested_connection =
+            (intent == FormConnectIntent::Test).then(|| connection_options.clone());
+
         let connection = connect(
             ConnectionIdentifier::setup(),
             RemoteConnectionOptions::Ssh(connection_options),
             ssh_prompt.clone(),
             window,
             cx,
-        )
-        .prompt_err(i18n::t!("46c9f3b7520fde53"), window, cx, |_, _, _| None);
+        );
 
-        let task = cx.spawn_in(window, async move |this, cx| {
-            match connection.await {
-                Some(Some(client)) => this
-                    .update_in(cx, |this, window, cx| {
-                        info!("ssh server created from form");
-                        telemetry::event!("SSH Server Created");
-                        this.retained_connections.push(client);
-                        this.mode = Mode::default_mode(&this.ssh_config_servers, cx);
-                        this.focus_handle(cx).focus(window, cx);
-                        cx.notify()
-                    })
-                    .log_err(),
-                _ => this
-                    .update_in(cx, |this, _, cx| {
-                        if let Mode::CreateRemoteServerForm(state) = &mut this.mode {
-                            state.ssh_prompt = None;
-                            state._creating = None;
-                        }
-                        cx.notify()
-                    })
-                    .log_err(),
-            };
-            None
-        });
+        let task = match intent {
+            FormConnectIntent::Connect => {
+                let connection =
+                    connection.prompt_err(i18n::t!("46c9f3b7520fde53"), window, cx, |_, _, _| None);
+                cx.spawn_in(window, async move |this, cx| {
+                    match connection.await {
+                        Some(Some(client)) => this
+                            .update_in(cx, |this, window, cx| {
+                                info!("ssh server created from form");
+                                telemetry::event!("SSH Server Created");
+                                this.retained_connections.push(client);
+                                this.mode = Mode::default_mode(&this.ssh_config_servers, cx);
+                                this.focus_handle(cx).focus(window, cx);
+                                cx.notify()
+                            })
+                            .log_err(),
+                        _ => this
+                            .update_in(cx, |this, _, cx| {
+                                if let Mode::CreateRemoteServerForm(state) = &mut this.mode {
+                                    state.ssh_prompt = None;
+                                    state._creating = None;
+                                }
+                                cx.notify()
+                            })
+                            .log_err(),
+                    };
+                    None
+                })
+            }
+            FormConnectIntent::Test => cx.spawn_in(window, async move |this, cx| {
+                match connection.await {
+                    Ok(Some(client)) => {
+                        this.update_in(cx, |this, window, cx| {
+                            let platform = client.read(cx).remote_platform();
+                            if let Mode::CreateRemoteServerForm(state) = &mut this.mode {
+                                state.ssh_prompt = None;
+                                state._creating = None;
+                                state.testing = false;
+                                state.error = None;
+                                state.test_success = Some(form_test_success_message(platform));
+                                state.tested_connection = tested_connection;
+                            }
+                            this.focus_handle(cx).focus(window, cx);
+                            cx.notify();
+                        })
+                        .log_err();
+                        // Dropping the test client closes the SSH master process
+                        // and the remote server instead of leaving them running.
+                        drop(client);
+                    }
+                    Ok(None) => {
+                        this.update_in(cx, |this, _, cx| {
+                            if let Mode::CreateRemoteServerForm(state) = &mut this.mode {
+                                state.ssh_prompt = None;
+                                state._creating = None;
+                                state.testing = false;
+                            }
+                            cx.notify()
+                        })
+                        .log_err();
+                    }
+                    Err(error) => {
+                        let message = SharedString::from(i18n::t_args!(
+                            "4e2bd57b42aef425",
+                            format!("{error:#}")
+                        ));
+                        this.update(cx, |this, cx| {
+                            this.set_form_error(message, cx);
+                            if let Mode::CreateRemoteServerForm(state) = &mut this.mode {
+                                state.testing = false;
+                                state.scroll_handle.scroll_to_bottom();
+                            }
+                        })
+                        .log_err();
+                    }
+                };
+                None
+            }),
+        };
 
         if let Mode::CreateRemoteServerForm(state) = &mut self.mode {
             state.ssh_prompt = Some(ssh_prompt);
             state.error = None;
+            if intent == FormConnectIntent::Test {
+                state.test_success = None;
+            }
             state._creating = Some(task);
         }
         cx.notify();
@@ -4722,7 +4936,7 @@ impl RemoteServerProjects {
     fn render_create_remote_server_form(
         &self,
         state: &CreateRemoteServerForm,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         if let Some(prompt) = state.ssh_prompt.clone() {
@@ -5134,21 +5348,16 @@ impl RemoteServerProjects {
                                         .start_icon(
                                             Icon::new(IconName::Plus).size(IconSize::XSmall),
                                         )
-                                        .on_click(cx.listener(|this, _, window, cx| {
-                                            this.open_jump_host_picker(window, cx)
-                                        })),
-                                )
-                                .when_some(state.jump_host_picker.clone(), |this, picker| {
-                                    this.child(
-                                        div()
-                                            .h(rems(12.))
-                                            .border_1()
-                                            .border_color(border_color)
-                                            .rounded_md()
-                                            .overflow_hidden()
-                                            .child(picker),
-                                    )
-                                }),
+                                        .on_click(cx.listener(
+                                            |this, event: &ClickEvent, window, cx| {
+                                                this.open_jump_host_picker(
+                                                    event.position(),
+                                                    window,
+                                                    cx,
+                                                )
+                                            },
+                                        )),
+                                ),
                         )
                         .child(
                             v_flex()
@@ -5221,6 +5430,22 @@ impl RemoteServerProjects {
         } else {
             i18n::t!("a5574109f0208e89")
         };
+        let busy = state.testing || state._creating.is_some();
+        // Only show a passing result for the configuration that was actually
+        // tested; editing any field hides a result that no longer applies.
+        let test_success = state.test_success.clone().filter(|_| {
+            state.tested_connection.as_ref().is_some_and(|tested| {
+                self.read_form_draft(cx).is_ok_and(|draft| {
+                    form_connection_options(
+                        &draft,
+                        draft
+                            .existing_key_id
+                            .clone()
+                            .or_else(|| state.key_id.clone()),
+                    ) == *tested
+                })
+            })
+        });
 
         let footer = h_flex()
             .w_full()
@@ -5229,11 +5454,32 @@ impl RemoteServerProjects {
             .items_center()
             .border_t_1()
             .border_color(border_color)
+            .when_some(test_success, |this, message| {
+                this.child(
+                    h_flex()
+                        .debug_selector(|| "form-test-success".into())
+                        .min_w_0()
+                        .max_w(rems(20.))
+                        .gap_1()
+                        .child(
+                            Icon::new(IconName::Check)
+                                .size(IconSize::XSmall)
+                                .color(Color::Success),
+                        )
+                        .child(
+                            Label::new(message)
+                                .size(LabelSize::XSmall)
+                                .color(Color::Success)
+                                .truncate(),
+                        ),
+                )
+            })
             .child(div().flex_1())
             .child(
                 Button::new("back-from-form", i18n::t!("572cf45ba43634b3"))
                     .style(ButtonStyle::Transparent)
                     .color(Color::Muted)
+                    .disabled(busy)
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.mode = Mode::default_mode(&this.ssh_config_servers, cx);
                         this.focus_handle(cx).focus(window, cx);
@@ -5241,9 +5487,23 @@ impl RemoteServerProjects {
                     })),
             )
             .child(
+                div()
+                    .debug_selector(|| "form-test-connection".into())
+                    .child(
+                        Button::new("test-connection-form", i18n::t!("0a98a48eaaac4175"))
+                            .style(ButtonStyle::Outlined)
+                            .loading(state.testing)
+                            .disabled(busy)
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.test_form_connection(window, cx)
+                            })),
+                    ),
+            )
+            .child(
                 Button::new("connect-form", submit_label)
                     .style(ButtonStyle::Tinted(TintColor::Accent))
                     .start_icon(Icon::new(IconName::ArrowRight).size(IconSize::XSmall))
+                    .disabled(busy)
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.confirm_create_remote_server_form(window, cx)
                     })),
@@ -5265,9 +5525,17 @@ impl RemoteServerProjects {
                     .child(
                         div()
                             .id("create-remote-server-form-fields")
+                            .debug_selector(|| "form-fields".into())
                             .flex_1()
                             .min_h_0()
                             .overflow_y_scroll()
+                            .track_scroll(&state.scroll_handle)
+                            .custom_scrollbars(
+                                Scrollbars::always_visible(ScrollAxes::Vertical)
+                                    .tracked_scroll_handle(&state.scroll_handle),
+                                window,
+                                cx,
+                            )
                             .child(
                                 v_flex()
                                     .w_full()
@@ -5306,6 +5574,52 @@ impl RemoteServerProjects {
                     ),
             )
             .child(footer)
+            .when_some(
+                state
+                    .jump_host_picker
+                    .clone()
+                    .zip(state.jump_host_picker_anchor),
+                |this, (picker, anchor)| {
+                    this.child(
+                        deferred(
+                            div()
+                                .absolute()
+                                .inset_0()
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|this, _, window, cx| {
+                                        this.close_jump_host_picker(window, cx)
+                                    }),
+                                )
+                                .child(
+                                    anchored()
+                                        .position(anchor)
+                                        .anchor(Anchor::TopLeft)
+                                        .offset(point(px(0.), px(6.)))
+                                        .snap_to_window_with_margin(px(8.))
+                                        .child(
+                                            v_flex()
+                                                .debug_selector(|| "form-jump-host-popover".into())
+                                                .occlude()
+                                                .w(rems(24.))
+                                                .h(rems(14.))
+                                                .overflow_hidden()
+                                                .rounded_md()
+                                                .border_1()
+                                                .border_color(border_color)
+                                                .bg(colors.elevated_surface_background)
+                                                .shadow_lg()
+                                                .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                                    cx.stop_propagation()
+                                                })
+                                                .child(picker),
+                                        ),
+                                ),
+                        )
+                        .with_priority(2),
+                    )
+                },
+            )
             .into_any_element()
     }
 
@@ -8680,6 +8994,10 @@ impl Render for RemoteServerProjects {
             .on_action(cx.listener(Self::select_first))
             .on_action(cx.listener(Self::select_last))
             .capture_any_mouse_down(cx.listener(|this, _, window, cx| {
+                if matches!(&this.mode, Mode::CreateRemoteServerForm(state) if state.jump_host_picker.is_some())
+                {
+                    this.close_jump_host_picker(window, cx);
+                }
                 this.focus_handle(cx).focus(window, cx);
             }))
             .on_mouse_down_out(cx.listener(|this, _, _, cx| {
@@ -9736,6 +10054,297 @@ mod tests {
                 "every non-default advanced value stays visible while collapsed"
             );
         });
+    }
+
+    #[test]
+    fn form_connection_options_keep_every_field_the_connect_path_uses() {
+        let draft = RemoteServerFormDraft {
+            nickname: Some("测试主机".into()),
+            host: "target.example".into(),
+            port: Some(2222),
+            username: Some("dev".into()),
+            auth_method: SshAuthMethod::Key,
+            key_file: Some(PathBuf::from("/home/user/.ssh/id_ed25519")),
+            existing_key_id: None,
+            jump_hosts: vec![JumpHost {
+                host: "jump.example".into(),
+                username: Some("ops".into()),
+                port: Some(2200),
+            }],
+            proxy: Some("socks5://127.0.0.1:1080".into()),
+            proxy_disabled: false,
+            connection_timeout: Some(30),
+        };
+
+        let options = form_connection_options(&draft, Some("key-id".into()));
+        assert_eq!(options.host.to_string(), "target.example");
+        assert_eq!(options.username.as_deref(), Some("dev"));
+        assert_eq!(options.port, Some(2222));
+        assert_eq!(options.nickname.as_deref(), Some("测试主机"));
+        assert_eq!(options.auth_method, Some(SshAuthMethod::Key));
+        assert_eq!(options.ssh_key_id.as_deref(), Some("key-id"));
+        assert_eq!(options.jump_hosts, draft.jump_hosts);
+        assert_eq!(options.proxy.as_deref(), Some("socks5://127.0.0.1:1080"));
+        assert!(!options.proxy_disabled);
+        assert_eq!(options.connection_timeout, Some(30));
+        assert_eq!(options.password, None, "the form never stores a password");
+    }
+
+    #[gpui::test]
+    async fn test_connection_action_renders_and_rejects_an_invalid_host(cx: &mut TestAppContext) {
+        let app_state = init_test(cx);
+        let fs = app_state.fs.as_fake();
+        let project = Project::test(fs.clone(), [], cx).await;
+        let (multi_workspace, cx) = cx.add_window_view(|window, cx| {
+            let workspace = cx.new(|cx| Workspace::test_new(project, window, cx));
+            MultiWorkspace::new(workspace, window, cx)
+        });
+        let workspace =
+            multi_workspace.read_with(cx, |multi_workspace, _| multi_workspace.workspace().clone());
+        workspace.update_in(cx, |workspace, window, cx| {
+            let weak = cx.weak_entity();
+            workspace.toggle_modal(window, cx, |window, cx| {
+                RemoteServerProjects::new(false, fs.clone(), window, weak, cx)
+            });
+        });
+        cx.run_until_parked();
+
+        workspace.update_in(cx, |workspace, window, cx| {
+            let modal = workspace
+                .active_modal::<RemoteServerProjects>(cx)
+                .expect("the remote server modal is open");
+            modal.update(cx, |modal, cx| {
+                modal.mode = Mode::CreateRemoteServerForm(CreateRemoteServerForm::new(window, cx));
+                cx.notify();
+            });
+        });
+        cx.run_until_parked();
+
+        assert!(
+            cx.debug_bounds("form-test-connection").is_some(),
+            "the footer offers a connection test next to connect"
+        );
+
+        // An invalid form reports the field error and never starts a
+        // connection, so a stale result is also cleared.
+        workspace.update_in(cx, |workspace, window, cx| {
+            let modal = workspace
+                .active_modal::<RemoteServerProjects>(cx)
+                .expect("the remote server modal is open");
+            modal.update(cx, |modal, cx| modal.test_form_connection(window, cx));
+        });
+        cx.run_until_parked();
+
+        workspace.update_in(cx, |workspace, _window, cx| {
+            let modal = workspace
+                .active_modal::<RemoteServerProjects>(cx)
+                .expect("the remote server modal is open");
+            modal.update(cx, |modal, _cx| {
+                let Mode::CreateRemoteServerForm(state) = &modal.mode else {
+                    panic!("expected the form mode");
+                };
+                assert!(
+                    state.host_error.is_some(),
+                    "an empty host is reported before any connection attempt"
+                );
+                assert!(!state.testing, "no test starts without a valid host");
+                assert!(
+                    state.ssh_prompt.is_none(),
+                    "no connection prompt is shown for an invalid host"
+                );
+                assert!(
+                    state.test_success.is_none(),
+                    "an invalid host clears the previous successful result"
+                );
+            });
+        });
+        assert!(
+            cx.debug_bounds("form-test-success").is_none(),
+            "the old success banner is no longer rendered"
+        );
+
+        // A passing result is shown for the configuration that was tested.
+        workspace.update_in(cx, |workspace, window, cx| {
+            let modal = workspace
+                .active_modal::<RemoteServerProjects>(cx)
+                .expect("the remote server modal is open");
+            modal.update(cx, |modal, cx| {
+                let Mode::CreateRemoteServerForm(state) = &mut modal.mode else {
+                    panic!("expected the form mode");
+                };
+                state.host_editor.update(cx, |editor, cx| {
+                    editor.set_text("target.example", window, cx)
+                });
+                cx.notify();
+            });
+        });
+        cx.run_until_parked();
+
+        let tested = workspace
+            .update_in(cx, |workspace, _window, cx| {
+                let modal = workspace
+                    .active_modal::<RemoteServerProjects>(cx)
+                    .expect("the remote server modal is open");
+                modal.read_with(cx, |modal, cx| {
+                    modal
+                        .read_form_draft(cx)
+                        .ok()
+                        .map(|draft| form_connection_options(&draft, None))
+                })
+            })
+            .expect("the filled form produces options");
+
+        workspace.update_in(cx, |workspace, _window, cx| {
+            let modal = workspace
+                .active_modal::<RemoteServerProjects>(cx)
+                .expect("the remote server modal is open");
+            modal.update(cx, |modal, cx| {
+                let Mode::CreateRemoteServerForm(state) = &mut modal.mode else {
+                    panic!("expected the form mode");
+                };
+                state.test_success = Some("连接测试通过：Linux · x86_64".into());
+                state.tested_connection = Some(tested);
+                cx.notify();
+            });
+        });
+        cx.run_until_parked();
+        assert!(
+            cx.debug_bounds("form-test-success").is_some(),
+            "a successful test is shown next to the footer actions"
+        );
+
+        // Editing the host invalidates the result instead of leaving a
+        // success label that describes a different server.
+        workspace.update_in(cx, |workspace, window, cx| {
+            let modal = workspace
+                .active_modal::<RemoteServerProjects>(cx)
+                .expect("the remote server modal is open");
+            modal.update(cx, |modal, cx| {
+                let Mode::CreateRemoteServerForm(state) = &mut modal.mode else {
+                    panic!("expected the form mode");
+                };
+                state.host_editor.update(cx, |editor, cx| {
+                    editor.set_text("other.example", window, cx)
+                });
+                cx.notify();
+            });
+        });
+        cx.run_until_parked();
+        assert!(
+            cx.debug_bounds("form-test-success").is_none(),
+            "editing the host hides the stale passing result"
+        );
+    }
+
+    #[gpui::test]
+    async fn opening_the_jump_host_picker_keeps_it_visible_and_the_form_scrollable(
+        cx: &mut TestAppContext,
+    ) {
+        let app_state = init_test(cx);
+        let fs = app_state.fs.as_fake();
+        let project = Project::test(fs.clone(), [], cx).await;
+        let (multi_workspace, cx) = cx.add_window_view(|window, cx| {
+            let workspace = cx.new(|cx| Workspace::test_new(project, window, cx));
+            MultiWorkspace::new(workspace, window, cx)
+        });
+        let workspace =
+            multi_workspace.read_with(cx, |multi_workspace, _| multi_workspace.workspace().clone());
+        workspace.update_in(cx, |workspace, window, cx| {
+            let weak = cx.weak_entity();
+            workspace.toggle_modal(window, cx, |window, cx| {
+                RemoteServerProjects::new(false, fs.clone(), window, weak, cx)
+            });
+        });
+        cx.run_until_parked();
+
+        workspace.update_in(cx, |workspace, window, cx| {
+            let modal = workspace
+                .active_modal::<RemoteServerProjects>(cx)
+                .expect("the remote server modal is open");
+            modal.update(cx, |modal, cx| {
+                modal.mode = Mode::CreateRemoteServerForm(CreateRemoteServerForm::new(window, cx));
+                let Mode::CreateRemoteServerForm(state) = &mut modal.mode else {
+                    panic!("expected the form mode");
+                };
+                state.host_editor.update(cx, |editor, cx| {
+                    editor.set_text("target.example", window, cx)
+                });
+                state.advanced_open = true;
+                cx.notify();
+            });
+        });
+        cx.run_until_parked();
+
+        // The fields column is the scrollable element that owns the form's
+        // scroll handle. Losing this wiring removes both the visible
+        // scrollbar and wheel scrolling, which made an expanded jump-host
+        // picker impossible to reach.
+        let fields = cx
+            .debug_bounds("form-fields")
+            .expect("the form fields column is laid out");
+        workspace.update_in(cx, |workspace, _window, cx| {
+            let modal = workspace
+                .active_modal::<RemoteServerProjects>(cx)
+                .expect("the remote server modal is open");
+            modal.update(cx, |modal, _cx| {
+                let Mode::CreateRemoteServerForm(state) = &modal.mode else {
+                    panic!("expected the form mode");
+                };
+                assert_eq!(
+                    state.scroll_handle.bounds(),
+                    fields,
+                    "the form's scroll handle must track the fields column"
+                );
+            });
+        });
+
+        // Opening the picker anchors a deferred popover at the click point.
+        // It no longer grows the form, so it can't be clipped by the modal or
+        // covered by the scroll container.
+        let anchor = point(px(800.), px(520.));
+        workspace.update_in(cx, |workspace, window, cx| {
+            let modal = workspace
+                .active_modal::<RemoteServerProjects>(cx)
+                .expect("the remote server modal is open");
+            modal.update(cx, |modal, cx| {
+                modal.show_jump_host_picker(Vec::new(), anchor, window, cx);
+            });
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+
+        workspace.update_in(cx, |workspace, _window, cx| {
+            let modal = workspace
+                .active_modal::<RemoteServerProjects>(cx)
+                .expect("the remote server modal is open");
+            modal.update(cx, |modal, _cx| {
+                let Mode::CreateRemoteServerForm(state) = &modal.mode else {
+                    panic!("expected the form mode");
+                };
+                assert!(
+                    state.jump_host_picker.is_some(),
+                    "the picker is opened as an overlay"
+                );
+                assert_eq!(
+                    state.jump_host_picker_anchor,
+                    Some(anchor),
+                    "the overlay is anchored at the click point"
+                );
+                assert!(
+                    state.advanced_open,
+                    "opening the picker never collapses its section"
+                );
+            });
+        });
+
+        let popover = cx
+            .debug_bounds("form-jump-host-popover")
+            .expect("the jump-host overlay is laid out");
+        let viewport = cx.update(|window, _| window.viewport_size());
+        assert!(
+            popover.top() >= px(0.) && popover.bottom() <= viewport.height,
+            "the overlay stays inside the window instead of being clipped: {popover:?}"
+        );
     }
 
     /// The server and key managers are two-column windows: both columns take the
