@@ -4102,7 +4102,17 @@ impl ProjectPanel {
                             })
                         });
                         if let Ok(task) = download_task {
-                            task.await.log_err();
+                            let result = task.await;
+                            // Cancelling one file ends the whole batch instead of
+                            // silently starting the next one.
+                            if result.as_ref().is_err_and(|error| {
+                                error
+                                    .downcast_ref::<project::file_transfer::TransferCancelled>()
+                                    .is_some()
+                            }) {
+                                break;
+                            }
+                            result.log_err();
                         }
                     }
                 }

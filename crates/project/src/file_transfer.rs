@@ -1,9 +1,39 @@
 use gpui::{App, AppContext as _, Context, Entity, Task};
 use parking_lot::Mutex;
 use std::{
+    collections::HashMap,
+    fmt,
     sync::Arc,
     time::{Duration, Instant},
 };
+
+/// How long a finished transfer stays in the list before it is pruned.
+const FINISHED_RETENTION: Duration = Duration::from_secs(5);
+
+/// An entry that is already cancelled is not a failure, so callers that await
+/// the tracked task can tell a user cancellation from a real error.
+#[derive(Debug)]
+pub struct TransferCancelled;
+impl fmt::Display for TransferCancelled {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(i18n::t!("166b9cd3f5c5a86b"))
+    }
+}
+impl std::error::Error for TransferCancelled {}
+
+fn cancelled_error() -> anyhow::Error {
+    anyhow::Error::new(TransferCancelled)
+}
+
+/// Keeps failures and user-cancelled transfers until the user clears them, and
+/// successful ones for a short window.
+fn is_retained(entry: &Transfer) -> bool {
+    entry.error
+        || entry.cancelled
+        || entry
+            .finished
+            .is_none_or(|finished| finished.elapsed() < FINISHED_RETENTION)
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum TransferDirection {
@@ -34,9 +64,13 @@ pub struct Transfer {
     pub status: String,
     pub finished: Option<Instant>,
     pub error: bool,
+    pub cancelled: bool,
 }
 impl Transfer {
     pub fn percentage(&self) -> Option<u64> {
+        if self.cancelled {
+            return None;
+        }
         if self.finished.is_some() && !self.error {
             return Some(100);
         }
@@ -48,6 +82,8 @@ impl Transfer {
 
 pub struct FileTransfers {
     entries: Arc<Mutex<Vec<Transfer>>>,
+    /// Cancellation signals for in-flight transfers, keyed by transfer id.
+    cancellations: Arc<Mutex<HashMap<usize, async_channel::Sender<()>>>>,
     wake: async_channel::Sender<()>,
     _task: Task<()>,
     next_id: usize,
@@ -67,6 +103,7 @@ impl FileTransfers {
         });
         Self {
             entries: Default::default(),
+            cancellations: Default::default(),
             wake,
             _task: task,
             next_id: 0,
@@ -76,8 +113,29 @@ impl FileTransfers {
         self.entries.lock().clone()
     }
     pub fn clear_finished(&mut self, cx: &mut Context<Self>) {
-        self.entries.lock().retain(|entry| entry.finished.is_none());
+        let mut entries = self.entries.lock();
+        entries.retain(|entry| entry.finished.is_none());
+        self.cancellations
+            .lock()
+            .retain(|id, _| entries.iter().any(|entry| entry.id == *id));
+        drop(entries);
         cx.notify();
+    }
+    /// Stops an in-flight transfer. The tracked task notices the signal, drops
+    /// its work (so partial downloads clean up through their own guards) and
+    /// resolves with [`TransferCancelled`]. Returns `false` when the transfer
+    /// already finished, was already cancelled, or is unknown.
+    pub fn cancel(&mut self, id: usize, cx: &mut Context<Self>) -> bool {
+        let sender = self.cancellations.lock().get(&id).cloned();
+        let Some(sender) = sender else {
+            return false;
+        };
+        match sender.try_send(()) {
+            Ok(()) | Err(async_channel::TrySendError::Full(())) => {}
+            Err(async_channel::TrySendError::Closed(())) => return false,
+        }
+        cx.notify();
+        true
     }
     pub fn start(
         &mut self,
@@ -88,13 +146,12 @@ impl FileTransfers {
     ) -> TransferHandle {
         self.next_id += 1;
         let id = self.next_id;
-        self.entries.lock().retain(|entry| {
-            entry.error
-                || entry
-                    .finished
-                    .is_none_or(|finished| finished.elapsed() < Duration::from_secs(5))
-        });
-        self.entries.lock().push(Transfer {
+        let mut entries = self.entries.lock();
+        entries.retain(is_retained);
+        self.cancellations
+            .lock()
+            .retain(|id, _| entries.iter().any(|entry| entry.id == *id));
+        entries.push(Transfer {
             id,
             direction,
             path,
@@ -106,11 +163,18 @@ impl FileTransfers {
             status: i18n::t!("5f2ed701d82cd70e").into(),
             finished: None,
             error: false,
+            cancelled: false,
         });
+        drop(entries);
+
+        let (cancel_sender, cancel_receiver) = async_channel::bounded(1);
+        self.cancellations.lock().insert(id, cancel_sender);
         cx.notify();
         TransferHandle {
             id,
             entries: self.entries.clone(),
+            cancellations: self.cancellations.clone(),
+            cancel_receiver: Arc::new(Mutex::new(Some(cancel_receiver))),
             wake: self.wake.clone(),
         }
     }
@@ -120,6 +184,8 @@ impl FileTransfers {
 pub struct TransferHandle {
     id: usize,
     entries: Arc<Mutex<Vec<Transfer>>>,
+    cancellations: Arc<Mutex<HashMap<usize, async_channel::Sender<()>>>>,
+    cancel_receiver: Arc<Mutex<Option<async_channel::Receiver<()>>>>,
     wake: async_channel::Sender<()>,
 }
 impl TransferHandle {
@@ -137,6 +203,12 @@ impl TransferHandle {
             | Err(async_channel::TrySendError::Full(()))
             | Err(async_channel::TrySendError::Closed(())) => {}
         }
+    }
+    /// Ends the entry and stops tracking its cancellation channel, so a later
+    /// `cancel` cannot resolve an already-finished transfer.
+    fn complete(&self, update: impl FnOnce(&mut Transfer)) {
+        self.update(update);
+        self.cancellations.lock().remove(&self.id);
     }
     pub fn progress(&self, progress: worktree::FileTransferProgress) {
         self.update(|entry| match progress {
@@ -169,7 +241,15 @@ impl TransferHandle {
         });
     }
     pub fn finish(&self, result: &anyhow::Result<()>) {
-        self.update(|entry| {
+        if self
+            .entries
+            .lock()
+            .iter()
+            .any(|entry| entry.id == self.id && entry.cancelled)
+        {
+            return;
+        }
+        self.complete(|entry| {
             entry.finished = Some(Instant::now());
             entry.error = result.is_err();
             entry.status = match result {
@@ -182,6 +262,16 @@ impl TransferHandle {
             }
         });
     }
+    /// Ends the entry as user-cancelled (not a failure). Kept visible until the
+    /// user clears finished transfers.
+    fn finish_cancelled(&self) {
+        self.complete(|entry| {
+            entry.finished = Some(Instant::now());
+            entry.cancelled = true;
+            entry.error = false;
+            entry.status = i18n::t!("71e03cd890f413e3").into();
+        });
+    }
     pub fn track<T: Send + 'static>(
         &self,
         task: Task<anyhow::Result<T>>,
@@ -192,8 +282,27 @@ impl TransferHandle {
         let guard = util::defer(move || {
             cancelled.finish(&Err(anyhow::anyhow!(i18n::t!("265b461c5c3d102a"))))
         });
+        let cancel_receiver = self.cancel_receiver.lock().take();
         cx.background_spawn(async move {
-            let result = task.await;
+            let result = match cancel_receiver {
+                Some(cancel_receiver) => {
+                    let cancel = wait_for_cancel(cancel_receiver);
+                    let task = Box::pin(task);
+                    futures::pin_mut!(cancel);
+                    match futures::future::select(cancel, task).await {
+                        futures::future::Either::Left(((), task)) => {
+                            // Dropping the task aborts the transfer, and its own
+                            // guards remove partially written files.
+                            drop(task);
+                            handle.finish_cancelled();
+                            guard.abort();
+                            return Err(cancelled_error());
+                        }
+                        futures::future::Either::Right((result, _cancel)) => result,
+                    }
+                }
+                None => task.await,
+            };
             handle.finish(
                 &result
                     .as_ref()
@@ -203,6 +312,15 @@ impl TransferHandle {
             guard.abort();
             result
         })
+    }
+}
+
+/// Resolves only when the transfer is cancelled on purpose. A closed channel
+/// means the store stopped tracking this transfer (it finished or was cleared),
+/// which must never look like a cancellation.
+async fn wait_for_cancel(receiver: async_channel::Receiver<()>) {
+    if receiver.recv().await.is_err() {
+        std::future::pending::<()>().await;
     }
 }
 
@@ -268,6 +386,85 @@ mod tests {
             .expect("completion must be delivered")
             .expect_err("size mismatch");
         assert!(error.to_string().contains("大小不匹配"));
+    }
+
+    #[gpui::test]
+    async fn test_cancel_stops_task_and_marks_entry_cancelled(cx: &mut TestAppContext) {
+        let store = cx.new(FileTransfers::new);
+        let handle = store.update(cx, |store, cx| {
+            store.start(
+                TransferDirection::Download,
+                "huge.bin".into(),
+                "/tmp/huge.bin".into(),
+                cx,
+            )
+        });
+        handle.progress(worktree::FileTransferProgress::Bytes(10, 100));
+        let task = cx.update(|cx| {
+            handle.track(
+                cx.background_spawn(async {
+                    futures::future::pending::<anyhow::Result<()>>().await
+                }),
+                cx,
+            )
+        });
+
+        assert!(store.update(cx, |store, cx| store.cancel(handle.id, cx)));
+        let error = task.await.expect_err("cancel must end the task");
+        assert!(
+            error.downcast_ref::<TransferCancelled>().is_some(),
+            "cancel must be distinguishable from a real failure: {error:#}"
+        );
+
+        let entries = store.read_with(cx, |store, _| store.entries());
+        let entry = &entries[0];
+        assert!(entry.cancelled);
+        assert!(!entry.error);
+        assert!(entry.finished.is_some());
+        assert_eq!(entry.status, i18n::t!("71e03cd890f413e3"));
+        assert_eq!(entry.percentage(), None);
+
+        // A cancelled transfer is no longer tracked, so it cannot be cancelled twice.
+        assert!(!store.update(cx, |store, cx| store.cancel(handle.id, cx)));
+
+        // Cancelled entries stay visible like failures do, and clearing removes them.
+        store.update(cx, |store, cx| {
+            store.start(
+                TransferDirection::Upload,
+                "next.bin".into(),
+                "/project".into(),
+                cx,
+            )
+        });
+        assert!(store.read_with(cx, |store, _| {
+            store.entries().iter().any(|entry| entry.cancelled)
+        }));
+        store.update(cx, |store, cx| store.clear_finished(cx));
+        assert!(!store.read_with(cx, |store, _| {
+            store.entries().iter().any(|entry| entry.cancelled)
+        }));
+    }
+
+    #[gpui::test]
+    async fn test_completed_transfer_ignores_cancel(cx: &mut TestAppContext) {
+        let store = cx.new(FileTransfers::new);
+        let handle = store.update(cx, |store, cx| {
+            store.start(
+                TransferDirection::Download,
+                "done.bin".into(),
+                "/tmp/done.bin".into(),
+                cx,
+            )
+        });
+        let task = cx.update(|cx| handle.track(Task::ready(Ok(())), cx));
+        task.await.expect("transfer");
+
+        let entry = store.read_with(cx, |store, _| store.entries()[0].clone());
+        assert!(entry.finished.is_some());
+        assert!(!entry.cancelled);
+        assert_eq!(entry.percentage(), Some(100));
+        assert!(!store.update(cx, |store, cx| store.cancel(handle.id, cx)));
+        assert!(!store.read_with(cx, |store, _| store.entries()[0].cancelled));
     }
 
     #[gpui::test]

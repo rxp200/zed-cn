@@ -5756,5 +5756,8 @@
   "e2e0c454e5d53186": "Left",
   "14ab1f2bce0a8777": "Right",
   "db5ba671d244ee82": "Top",
-  "13c12b064b635e06": "Bottom"
+  "13c12b064b635e06": "Bottom",
+  "8637ac9558ff1093": "Stop",
+  "166b9cd3f5c5a86b": "Transfer stopped",
+  "71e03cd890f413e3": "Stopped"
 }
