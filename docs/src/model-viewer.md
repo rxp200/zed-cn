@@ -15,6 +15,7 @@
 STEP（ISO 10303-21，AP203/AP214/AP242）保存的是带曲面的 B-rep，不是三角网格，因此打开时由内置的纯 Rust 几何内核（`truck`）完成曲面细分，再把三角形交给同一个视口渲染。解析全部在客户端进行，服务端只按扩展名与大小返回文件字节。
 
 - 读取 `MANIFOLD_SOLID_BREP`、`BREP_WITH_VOIDS`、`SHELL_BASED_SURFACE_MODEL` 引用的封闭/开放壳体；平面、圆柱、圆锥、球、圆环、B 样条/Bezier/有理曲面以及旋转、拉伸曲面都在支持范围内。
+- 曲面边界的环绕方向按参数空间里真实投影出的边界折线判定，并对周期曲面按接缝折回；有理样条只在其有限参数区间内取样。判错环绕方向会让 `truck` 为单个面拼出整块参数矩形（看起来像横穿零件的碎三角面），把参数域外的点当成有效值则会让整个面消失。
 - **装配**：按 `NEXT_ASSEMBLY_USAGE_OCCURRENCE` 与 `REPRESENTATION_RELATIONSHIP_WITH_TRANSFORMATION` / `ITEM_DEFINED_TRANSFORMATION` 递归展开，同一子零件被多次引用时按实例分别放置；`MAPPED_ITEM` + `CARTESIAN_TRANSFORMATION_OPERATOR_3D` 也会应用。
 - **单位**：识别 `SI_UNIT`（mm/cm/µm/m）与 `CONVERSION_BASED_UNIT`（英寸/英尺及带换算因子的单位），所有坐标统一换算为毫米，属性面板的「单位」显示实际单位并新增「实体」数量。无法识别的单位按文件原始坐标显示。
 - 装配中的颜色、图层、PMI 标注、2D 工程图、材质与纹理不显示；文件里的面颜色不会被猜测。

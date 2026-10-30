@@ -10,10 +10,14 @@ use anyhow::{Result, anyhow, bail, ensure};
 use ruststep::ast::{DataSection, EntityInstance, Name, Parameter};
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
-use truck_geometry::prelude::SearchNearestParameter as _;
+use truck_geometry::prelude::{
+    ParameterDivision1D as _, SearchNearestParameter as _, SearchParameter as _,
+};
 use truck_meshalgo::tessellation::{MeshedShape as _, RobustMeshableShape as _};
 use truck_stepio::r#in::{Table, alias::*};
-use truck_topology::compress::{CompressedEdge, CompressedFace, CompressedShell};
+use truck_topology::compress::{
+    CompressedEdge, CompressedEdgeIndex, CompressedFace, CompressedShell,
+};
 
 use crate::model_mesh::MAX_TRIANGLES;
 
@@ -248,26 +252,13 @@ fn tessellate_shells(
             continue;
         };
         let output = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let mut compressed = table
+            let compressed = table
                 .to_compressed_shell(shell)
                 .map_err(|error| anyhow!("{error}"))?;
             let tolerance = tessellation_tolerance(&compressed, scale) * coarseness;
-            let valid = tessellatable_faces(&compressed, tolerance);
-            let kept = prune_faces(&mut compressed, &valid);
-            if kept == 0 {
-                return Ok(None);
-            }
-            if kept < valid.len() {
-                log::warn!(
-                    "[step] shell #{shell_id}: dropped {} of {} faces that `truck` cannot tessellate",
-                    valid.len() - kept,
-                    valid.len()
-                );
-            }
-            orient_boundaries(&mut compressed);
-            let tessellated = compressed.robust_triangulation(tolerance);
-            let polygon = tessellated.to_polygon();
-            Ok::<_, anyhow::Error>(Some((polygon, compressed.faces.len())))
+            Ok::<_, anyhow::Error>(tessellate_compressed_shell(
+                compressed, *shell_id, tolerance,
+            ))
         }));
         let (polygon, face_count) = match output {
             Ok(Ok(Some(value))) => value,
@@ -292,6 +283,31 @@ fn tessellate_shells(
         solids += 1;
     }
     Ok((triangles, solids))
+}
+
+/// Turns one shell into a polygon mesh plus its face count, dropping the faces
+/// `truck` cannot tessellate. Returns `None` when no face is left.
+fn tessellate_compressed_shell(
+    mut compressed: CompressedShell<Point3, Curve3D, Surface>,
+    shell_id: u64,
+    tolerance: f64,
+) -> Option<(PolygonMesh, usize)> {
+    let original_faces = compressed.faces.len();
+    clamp_curve_domains(&mut compressed, tolerance);
+    let valid = tessellatable_faces(&compressed, tolerance);
+    let kept = prune_faces(&mut compressed, &valid);
+    if kept == 0 {
+        return None;
+    }
+    if kept < original_faces {
+        log::warn!(
+            "[step] shell #{shell_id}: dropped {} of {original_faces} faces that `truck` cannot tessellate",
+            original_faces - kept
+        );
+    }
+    orient_boundaries(&mut compressed, tolerance);
+    let polygon = compressed.robust_triangulation(tolerance).to_polygon();
+    Some((polygon, kept))
 }
 
 fn build_table(sections: &[DataSection]) -> (Table, usize) {
@@ -547,6 +563,91 @@ fn unit_parameter(raw: &RawEntities, parameter: &Parameter, depth: usize) -> Opt
             .find_map(|parameter| unit_parameter(raw, parameter, depth)),
         _ => None,
     }
+}
+
+/// Replaces an edge curve that is not evaluable over its whole reported
+/// parameter range with a polyline over the finite part of it.
+///
+/// `truck` reports a B-spline's parameter range as its entire knot span, but only
+/// evaluates it on the clamped domain: curves written with one extra knot
+/// interval at either end (common in OpenCASCADE exports) then produce
+/// non-finite points at the range ends. `truck` subdivides such an edge forever
+/// and eventually fails to triangulate the face, so the geometry disappears.
+/// Sampling the finite subrange once keeps those faces renderable.
+fn clamp_curve_domains(shell: &mut CompressedShell<Point3, Curve3D, Surface>, tolerance: f64) {
+    for edge in &mut shell.edges {
+        let Some((start, end)) = edge.curve.try_range_tuple() else {
+            continue;
+        };
+        if !start.is_finite() || !end.is_finite() {
+            continue;
+        }
+        if [0.0, 0.25, 0.5, 0.75, 1.0]
+            .into_iter()
+            .all(|fraction| point_is_finite(edge.curve.subs(start + (end - start) * fraction)))
+        {
+            continue;
+        }
+        let Some((start, end)) = finite_curve_range(&edge.curve, start, end) else {
+            log::warn!("[step] edge curve has no finite parameter range");
+            continue;
+        };
+        let points = edge.curve.parameter_division((start, end), tolerance).1;
+        if points.len() < 2 || !points.iter().all(|point| point_is_finite(*point)) {
+            log::warn!("[step] edge curve cannot be sampled inside its finite range");
+            continue;
+        }
+        edge.curve = Curve3D::Polyline(PolylineCurve(points));
+    }
+}
+
+/// Narrows a curve's parameter range to the interval where it evaluates to finite
+/// points. B-splines are evaluable on a single closed interval, so bisecting
+/// each non-finite end toward a finite interior parameter finds the boundary
+/// without knowing the knot layout.
+fn finite_curve_range(curve: &Curve3D, start: f64, end: f64) -> Option<(f64, f64)> {
+    let span = end - start;
+    let inside = [0.5, 0.25, 0.75, 0.125, 0.375, 0.625, 0.875]
+        .into_iter()
+        .map(|fraction| start + span * fraction)
+        .find(|parameter| point_is_finite(curve.subs(*parameter)))?;
+    let low = match point_is_finite(curve.subs(start)) {
+        true => start,
+        false => finite_curve_end(curve, start, inside)?,
+    };
+    let high = match point_is_finite(curve.subs(end)) {
+        true => end,
+        false => finite_curve_end(curve, end, inside)?,
+    };
+    if !low.is_finite() || !high.is_finite() || high <= low {
+        return None;
+    }
+    let span = high - low;
+    let finite = [0.0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1.0]
+        .into_iter()
+        .all(|fraction| point_is_finite(curve.subs(low + span * fraction)));
+    finite.then_some((low, high))
+}
+
+/// Bisects between a non-finite parameter and the range midpoint, which the
+/// caller has already established is finite, and returns the innermost finite
+/// parameter found.
+fn finite_curve_end(curve: &Curve3D, bad: f64, inside: f64) -> Option<f64> {
+    if !point_is_finite(curve.subs(inside)) {
+        return None;
+    }
+    let (mut bad, mut good) = (bad, inside);
+    for _ in 0..64 {
+        let probe = (bad + good) * 0.5;
+        if probe == bad || probe == good {
+            break;
+        }
+        match point_is_finite(curve.subs(probe)) {
+            true => good = probe,
+            false => bad = probe,
+        }
+    }
+    Some(good)
 }
 
 /// Reports which faces of a shell can be tessellated safely.
@@ -867,38 +968,38 @@ fn tessellation_tolerance(shell: &CompressedShell<Point3, Curve3D, Surface>, sca
 /// `truck` adds a spurious copy of a surface's parameter rectangle whenever all
 /// boundary loops are clockwise in parameter space. STEP faces may be written
 /// either way round, so reverse the dominant loop of such a face first.
-fn orient_boundaries(shell: &mut CompressedShell<Point3, Curve3D, Surface>) {
-    for face in &mut shell.faces {
+///
+/// The winding has to be measured on the projected boundary polylines, exactly
+/// as `truck` does: a loop that crosses a periodic surface's seam has vertices
+/// on both sides of the period, and an area computed from the end vertices alone
+/// then reports the opposite sign. Reversing such a loop makes it clockwise for
+/// `truck` and adds the full parameter rectangle instead of removing it.
+fn orient_boundaries(shell: &mut CompressedShell<Point3, Curve3D, Surface>, tolerance: f64) {
+    let CompressedShell { edges, faces, .. } = shell;
+    for face in faces {
         let mut areas = Vec::with_capacity(face.boundaries.len());
+        let mut closed = Vec::with_capacity(face.boundaries.len());
         for boundary in &face.boundaries {
-            let mut points = Vec::with_capacity(boundary.len());
-            let mut hint = None;
-            for edge_index in boundary {
-                let edge = &shell.edges[edge_index.index];
-                let vertex = if edge_index.orientation {
-                    edge.vertices.0
-                } else {
-                    edge.vertices.1
-                };
-                let Some(point) = shell.vertices.get(vertex) else {
-                    continue;
-                };
-                let Some(uv) = face.surface.search_nearest_parameter(point, hint, 10) else {
-                    continue;
-                };
-                hint = Some(uv);
-                points.push([uv.0, uv.1]);
-            }
-            areas.push(signed_area(&points));
+            let winding = boundary_winding(&face.surface, edges, boundary, tolerance);
+            areas.push(winding.0);
+            closed.push(winding.1);
         }
-        if areas.iter().any(|area| *area > 0.0) {
+        if !closed.iter().any(|is_closed| *is_closed) {
             continue;
         }
-        let Some((index, _)) = areas
+        if areas
+            .iter()
+            .zip(&closed)
+            .any(|(area, is_closed)| *is_closed && *area > 0.0)
+        {
+            continue;
+        }
+        let dominant = closed
             .iter()
             .enumerate()
-            .max_by(|left, right| left.1.abs().total_cmp(&right.1.abs()))
-        else {
+            .filter(|(_, is_closed)| **is_closed)
+            .max_by(|left, right| areas[left.0].abs().total_cmp(&areas[right.0].abs()));
+        let Some((index, _)) = dominant else {
             continue;
         };
         if areas[index].abs() < 1e-9 {
@@ -910,6 +1011,89 @@ fn orient_boundaries(shell: &mut CompressedShell<Point3, Curve3D, Surface>) {
             edge_index.orientation = !edge_index.orientation;
         }
     }
+}
+
+/// Signed area of a boundary loop in the surface's parameter plane, plus whether
+/// the projected loop closes. Positive area means counter-clockwise, which is
+/// what keeps `truck` from adding the parameter rectangle.
+///
+/// Points are projected and unwrapped across periods the same way `truck`'s
+/// `PolyBoundaryPiece` does, so the sign matches the one it will use.
+fn boundary_winding(
+    surface: &Surface,
+    edges: &[CompressedEdge<Curve3D>],
+    boundary: &[CompressedEdgeIndex],
+    tolerance: f64,
+) -> (f64, bool) {
+    let (u_period, v_period) = (surface.u_period(), surface.v_period());
+    let mut points = Vec::new();
+    let mut hint = None;
+    for edge_index in boundary {
+        let Some(edge) = edges.get(edge_index.index) else {
+            return (0.0, false);
+        };
+        let Some((start, end)) = edge.curve.try_range_tuple() else {
+            return (0.0, false);
+        };
+        if !start.is_finite() || !end.is_finite() {
+            return (0.0, false);
+        }
+        let mut samples = edge.curve.parameter_division((start, end), tolerance).1;
+        if !edge_index.orientation {
+            samples.reverse();
+        }
+        for point in samples {
+            if !point_is_finite(point) {
+                return (0.0, false);
+            }
+            let Some((mut u, mut v)) = nearest_parameter(surface, point, hint) else {
+                return (0.0, false);
+            };
+            if let (Some(period), Some((u0, _))) = (u_period, hint) {
+                u = nearest_period(u, u0, period);
+            }
+            if let (Some(period), Some((_, v0))) = (v_period, hint) {
+                v = nearest_period(v, v0, period);
+            }
+            if !u.is_finite() || !v.is_finite() {
+                return (0.0, false);
+            }
+            hint = Some((u, v));
+            points.push([u, v]);
+        }
+    }
+    if points.len() < 3 {
+        return (0.0, false);
+    }
+    let first = points[0];
+    let last = points[points.len() - 1];
+    let closed = (first[0] - last[0]).hypot(first[1] - last[1]) < 1e-3;
+    (signed_area(&points), closed)
+}
+
+fn nearest_parameter(
+    surface: &Surface,
+    point: Point3,
+    hint: Option<(f64, f64)>,
+) -> Option<(f64, f64)> {
+    surface
+        .search_parameter(point, hint, 100)
+        .or_else(|| surface.search_parameter(point, None, 100))
+        .or_else(|| surface.search_nearest_parameter(point, hint, 100))
+        .or_else(|| surface.search_nearest_parameter(point, None, 100))
+}
+
+/// Shifts a parameter by whole periods to the value closest to the previous one.
+fn nearest_period(value: f64, previous: f64, period: f64) -> f64 {
+    (-2..=2)
+        .map(|index| value + index as f64 * period)
+        .min_by(|left, right| {
+            (left - previous)
+                .abs()
+                .partial_cmp(&(right - previous).abs())
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .unwrap_or(value)
 }
 
 fn signed_area(points: &[[f64; 2]]) -> f64 {
@@ -2223,5 +2407,185 @@ pub(crate) mod tests {
             .expect_err("the shell budget must reject an over-large expansion");
         assert!(!error.to_string().is_empty());
         assert!(shells.len() <= MAX_SHELLS);
+    }
+
+    fn cylinder_patch_shell() -> CompressedShell<Point3, Curve3D, Surface> {
+        const RADIUS: f64 = 10.0;
+        const HEIGHT: f64 = 5.0;
+        const LOW: f64 = -0.2;
+        const HIGH: f64 = 0.2;
+        let point = |angle: f64, height: f64| {
+            Point3::new(RADIUS * angle.cos(), RADIUS * angle.sin(), height)
+        };
+        let vertices = vec![
+            point(LOW, 0.0),
+            point(LOW, HEIGHT),
+            point(HIGH, HEIGHT),
+            point(HIGH, 0.0),
+        ];
+        let edge = |start: (f64, f64), end: (f64, f64), vertices: (usize, usize)| {
+            let points = (0..=8)
+                .map(|index| {
+                    let fraction = index as f64 / 8.0;
+                    point(
+                        start.0 + (end.0 - start.0) * fraction,
+                        start.1 + (end.1 - start.1) * fraction,
+                    )
+                })
+                .collect();
+            CompressedEdge {
+                vertices,
+                curve: Curve3D::Polyline(PolylineCurve(points)),
+            }
+        };
+        let edges = vec![
+            edge((LOW, 0.0), (LOW, HEIGHT), (0, 1)),
+            edge((LOW, HEIGHT), (HIGH, HEIGHT), (1, 2)),
+            edge((HIGH, HEIGHT), (HIGH, 0.0), (2, 3)),
+            edge((HIGH, 0.0), (LOW, 0.0), (3, 0)),
+        ];
+        let surface = Surface::ElementarySurface(Box::new(ElementarySurface::CylindricalSurface(
+            Processor::new(RevolutedCurve::by_revolution(
+                Line(
+                    Point3::new(RADIUS, 0.0, 0.0),
+                    Point3::new(RADIUS, 0.0, HEIGHT),
+                ),
+                Point3::new(0.0, 0.0, 0.0),
+                Vector3::new(0.0, 0.0, 1.0),
+            )),
+        )));
+        CompressedShell {
+            vertices,
+            edges,
+            faces: vec![CompressedFace {
+                boundaries: vec![
+                    (0..4)
+                        .map(|index| CompressedEdgeIndex {
+                            index,
+                            orientation: true,
+                        })
+                        .collect(),
+                ],
+                orientation: true,
+                surface,
+            }],
+        }
+    }
+
+    #[test]
+    fn keeps_a_seam_crossing_cylinder_patch_inside_its_trimmed_bounds() {
+        let shell = cylinder_patch_shell();
+        let tolerance = 0.01;
+        // The loop runs counter-clockwise once its parameters are unwrapped across
+        // the seam, so it must not be reversed: reversing it would make `truck`
+        // substitute the whole surface parameter rectangle for the patch.
+        let polygon = tessellate_compressed_shell(shell, 1, tolerance)
+            .expect("the patch is tessellatable")
+            .0;
+        let triangles = polygon.faces().tri_faces().len();
+        assert!(
+            triangles <= 64,
+            "a trimmed patch must stay a few triangles, got {triangles}"
+        );
+        for point in polygon.positions() {
+            assert!(
+                point.y.abs() < 2.5 && point.x > 8.0,
+                "the patch must not fill the whole cylinder: {point:?}"
+            );
+        }
+    }
+
+    fn extended_knot_side() -> Curve3D {
+        // Degree 2 NURBS with one extra knot interval at either end: `truck`
+        // reports the whole knot span as the parameter range, but the rational
+        // evaluation collapses to `NaN` exactly at `-1.0` and `4.0`.
+        let knots = KnotVec::from(vec![-1.0, 0.0, 0.0, 1.0, 1.0, 2.0, 2.0, 3.0, 3.0, 4.0]);
+        let control_points = (0..7)
+            .map(|index| Vector4::new(5.0 * index as f64 / 6.0, 0.0, 0.0, 1.0))
+            .collect();
+        Curve3D::NurbsCurve(NurbsCurve::new(BSplineCurve::new(knots, control_points)))
+    }
+
+    /// A 5x4 quad on the z=0 plane whose `(0,0)-(5,0)` side is a NURBS with an
+    /// extended knot span.
+    fn extended_knot_quad() -> CompressedShell<Point3, Curve3D, Surface> {
+        let polyline = |from: Point3, to: Point3| Curve3D::Polyline(PolylineCurve(vec![from, to]));
+        let plane = Plane::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 0.0, 0.0),
+            Point3::new(0.0, 1.0, 0.0),
+        );
+        CompressedShell {
+            vertices: vec![
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(5.0, 0.0, 0.0),
+                Point3::new(5.0, 4.0, 0.0),
+                Point3::new(0.0, 4.0, 0.0),
+            ],
+            edges: vec![
+                CompressedEdge {
+                    vertices: (0, 1),
+                    curve: extended_knot_side(),
+                },
+                CompressedEdge {
+                    vertices: (1, 2),
+                    curve: polyline(Point3::new(5.0, 0.0, 0.0), Point3::new(5.0, 4.0, 0.0)),
+                },
+                CompressedEdge {
+                    vertices: (2, 3),
+                    curve: polyline(Point3::new(5.0, 4.0, 0.0), Point3::new(0.0, 4.0, 0.0)),
+                },
+                CompressedEdge {
+                    vertices: (3, 0),
+                    curve: polyline(Point3::new(0.0, 4.0, 0.0), Point3::new(0.0, 0.0, 0.0)),
+                },
+            ],
+            faces: vec![CompressedFace {
+                boundaries: vec![
+                    (0..4)
+                        .map(|index| CompressedEdgeIndex {
+                            index,
+                            orientation: true,
+                        })
+                        .collect(),
+                ],
+                orientation: true,
+                surface: Surface::ElementarySurface(Box::new(ElementarySurface::Plane(plane))),
+            }],
+        }
+    }
+
+    #[test]
+    fn samples_an_edge_curve_only_inside_its_finite_parameter_range() {
+        let tolerance = 0.01;
+        let shell = extended_knot_quad();
+        assert!(
+            !edge_is_tessellatable(&shell.edges[0], &shell.vertices, tolerance),
+            "the raw curve is not evaluable over its reported range"
+        );
+        let mut clamped = shell.clone();
+        clamp_curve_domains(&mut clamped, tolerance);
+        assert!(
+            matches!(clamped.edges[0].curve, Curve3D::Polyline(_)),
+            "the curve must be baked into a polyline inside its finite range"
+        );
+        let (start, end) = clamped.edges[0].curve.range_tuple();
+        let first = clamped.edges[0].curve.subs(start);
+        let last = clamped.edges[0].curve.subs(end);
+        assert!((first - shell.vertices[0]).magnitude() < 1e-9, "{first:?}");
+        assert!((last - shell.vertices[1]).magnitude() < 1e-9, "{last:?}");
+
+        // The face is only renderable once the edge is sampled inside its domain.
+        let (polygon, faces) =
+            tessellate_compressed_shell(shell, 1, tolerance).expect("the quad renders");
+        assert_eq!(faces, 1);
+        let mut triangles = Vec::new();
+        append_polygon(&polygon, &Frame::IDENTITY, 1.0, 64, &mut triangles)
+            .unwrap_or_else(|_| panic!("the quad fits the triangle budget"));
+        assert!(
+            (surface_area(&triangles) - 20.0).abs() < 1e-6,
+            "the quad must keep its 5x4 area, got {}",
+            surface_area(&triangles)
+        );
     }
 }
