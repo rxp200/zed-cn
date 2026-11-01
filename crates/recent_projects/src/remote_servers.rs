@@ -1590,6 +1590,7 @@ impl ManageServerTab {
 struct ServerProjectsState {
     entry: RemoteEntry,
     selected: usize,
+    scroll: ScrollHandle,
 }
 
 struct ManageServersState {
@@ -5519,7 +5520,10 @@ impl RemoteServerProjects {
                 }
             }))
             .child(
-                h_flex()
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_stretch()
                     .flex_1()
                     .min_h_0()
                     .child(
@@ -5527,6 +5531,7 @@ impl RemoteServerProjects {
                             .id("create-remote-server-form-fields")
                             .debug_selector(|| "form-fields".into())
                             .flex_1()
+                            .h_full()
                             .min_h_0()
                             .overflow_y_scroll()
                             .track_scroll(&state.scroll_handle)
@@ -5548,8 +5553,10 @@ impl RemoteServerProjects {
                     )
                     .child(
                         v_flex()
+                            .debug_selector(|| "form-preview".into())
                             .w(rems_from_px(240_f32))
                             .flex_none()
+                            .h_full()
                             .min_h_0()
                             .gap_2()
                             .p_3()
@@ -6079,7 +6086,11 @@ impl RemoteServerProjects {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.mode = Mode::ServerProjects(ServerProjectsState { entry, selected: 0 });
+        self.mode = Mode::ServerProjects(ServerProjectsState {
+            entry,
+            selected: 0,
+            scroll: ScrollHandle::new(),
+        });
         self.focus_handle(cx).focus(window, cx);
         cx.notify();
     }
@@ -6211,7 +6222,7 @@ impl RemoteServerProjects {
     fn render_server_projects(
         &self,
         state: &ServerProjectsState,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let colors = cx.theme().colors().clone();
@@ -6433,8 +6444,18 @@ impl RemoteServerProjects {
             )
             .child(
                 v_flex()
+                    .id("server-projects-body")
+                    .debug_selector(|| "server-projects-body".into())
                     .flex_1()
                     .min_h_0()
+                    .overflow_y_scroll()
+                    .track_scroll(&state.scroll)
+                    .custom_scrollbars(
+                        Scrollbars::always_visible(ScrollAxes::Vertical)
+                            .tracked_scroll_handle(&state.scroll),
+                        window,
+                        cx,
+                    )
                     .p_3()
                     .gap_2()
                     .child(
@@ -10432,6 +10453,161 @@ mod tests {
         assert!(
             list.size.width < detail.size.width,
             "the key list keeps its fixed column width"
+        );
+    }
+
+    /// The add-server form shares the managers' two-column body, so its field
+    /// column has to start at the body's top edge and own the form's scroll
+    /// area. `h_flex` centres the row by default, which shrank the field column
+    /// to its content: the form was drawn in the middle of the window and the
+    /// scrollable child had no overflow left, so its scrollbar never appeared.
+    #[gpui::test]
+    async fn add_server_form_columns_fill_the_body_and_scroll(cx: &mut TestAppContext) {
+        let app_state = init_test(cx);
+        let fs = app_state.fs.clone();
+        let project = Project::test(fs.clone(), [], cx).await;
+        let (multi_workspace, cx) = cx.add_window_view(|window, cx| {
+            let workspace = cx.new(|cx| Workspace::test_new(project, window, cx));
+            MultiWorkspace::new(workspace, window, cx)
+        });
+        let workspace =
+            multi_workspace.read_with(cx, |multi_workspace, _| multi_workspace.workspace().clone());
+        workspace.update_in(cx, |workspace, window, cx| {
+            let weak = cx.weak_entity();
+            workspace.toggle_modal(window, cx, |window, cx| {
+                RemoteServerProjects::new(false, fs.clone(), window, weak, cx)
+            });
+        });
+        cx.run_until_parked();
+
+        // Key auth plus the expanded advanced section and enough jump hosts make
+        // the field column taller than the body, which is where the missing
+        // scrollbar showed up.
+        workspace.update_in(cx, |workspace, window, cx| {
+            let modal = workspace
+                .active_modal::<RemoteServerProjects>(cx)
+                .expect("the remote server modal is open");
+            modal.update(cx, |modal, cx| {
+                modal.mode = Mode::CreateRemoteServerForm(CreateRemoteServerForm::new(window, cx));
+                let Mode::CreateRemoteServerForm(state) = &mut modal.mode else {
+                    panic!("expected the form mode");
+                };
+                state.auth_method = SshAuthMethod::Key;
+                state.advanced_open = true;
+                state.jump_hosts = (0..16)
+                    .map(|index| JumpHost {
+                        host: format!("jump-{index}.example"),
+                        username: None,
+                        port: None,
+                    })
+                    .collect();
+                cx.notify();
+            });
+        });
+        cx.run_until_parked();
+
+        let fields = cx
+            .debug_bounds("form-fields")
+            .expect("the form field column is laid out");
+        let preview = cx
+            .debug_bounds("form-preview")
+            .expect("the form preview column is laid out");
+        assert_eq!(
+            fields.top(),
+            preview.top(),
+            "both form columns share one top edge: {fields:?} {preview:?}"
+        );
+        assert_eq!(
+            fields.bottom(),
+            preview.bottom(),
+            "both form columns stretch to the body's bottom edge: {fields:?} {preview:?}"
+        );
+
+        let max_offset = workspace.read_with(cx, |workspace, cx| {
+            let modal = workspace
+                .active_modal::<RemoteServerProjects>(cx)
+                .expect("the remote server modal is open");
+            modal.read_with(cx, |modal, _| {
+                let Mode::CreateRemoteServerForm(state) = &modal.mode else {
+                    panic!("expected the form mode");
+                };
+                state.scroll_handle.max_offset()
+            })
+        });
+        assert!(
+            max_offset.y > px(0.),
+            "a field column taller than the body has to scroll instead of clipping: {max_offset:?}"
+        );
+    }
+
+    /// The projects view lists one row per recent project under a card header.
+    /// When the list outgrows the modal, the body has to scroll; clipping the
+    /// remaining rows silently hides projects the user cannot reach.
+    #[gpui::test]
+    async fn server_projects_body_scrolls_instead_of_clipping(cx: &mut TestAppContext) {
+        let app_state = init_test(cx);
+        let fs = app_state.fs.clone();
+        let project = Project::test(fs.clone(), [], cx).await;
+        let (multi_workspace, cx) = cx.add_window_view(|window, cx| {
+            let workspace = cx.new(|cx| Workspace::test_new(project, window, cx));
+            MultiWorkspace::new(workspace, window, cx)
+        });
+        let workspace =
+            multi_workspace.read_with(cx, |multi_workspace, _| multi_workspace.workspace().clone());
+        workspace.update_in(cx, |workspace, window, cx| {
+            let weak = cx.weak_entity();
+            workspace.toggle_modal(window, cx, |window, cx| {
+                RemoteServerProjects::new(false, fs.clone(), window, weak, cx)
+            });
+        });
+        cx.run_until_parked();
+
+        workspace.update_in(cx, |workspace, _window, cx| {
+            let modal = workspace
+                .active_modal::<RemoteServerProjects>(cx)
+                .expect("the remote server modal is open");
+            modal.update(cx, |modal, cx| {
+                modal.mode = Mode::ServerProjects(ServerProjectsState {
+                    entry: RemoteEntry::Project {
+                        projects: (0..16)
+                            .map(|index| ProjectEntry {
+                                project: RemoteProject {
+                                    paths: vec![format!("/home/user/project-{index}")],
+                                },
+                            })
+                            .collect(),
+                        connection: Connection::Ssh(SshConnection {
+                            host: "target.example".into(),
+                            ..Default::default()
+                        }),
+                        index: ServerIndex::Ssh(SshServerIndex(0)),
+                    },
+                    selected: 0,
+                    scroll: ScrollHandle::new(),
+                });
+                cx.notify();
+            });
+        });
+        cx.run_until_parked();
+
+        assert!(
+            cx.debug_bounds("server-projects-body").is_some(),
+            "the projects body is laid out as its own scroll area"
+        );
+        let max_offset = workspace.read_with(cx, |workspace, cx| {
+            let modal = workspace
+                .active_modal::<RemoteServerProjects>(cx)
+                .expect("the remote server modal is open");
+            modal.read_with(cx, |modal, _| {
+                let Mode::ServerProjects(state) = &modal.mode else {
+                    panic!("expected the projects mode");
+                };
+                state.scroll.max_offset()
+            })
+        });
+        assert!(
+            max_offset.y > px(0.),
+            "a project list taller than the body has to scroll instead of clipping: {max_offset:?}"
         );
     }
 
