@@ -706,17 +706,19 @@
     "cache_max_bytes": 52428800
   },
   "hover_translation": {
-    // Whether to automatically translate non-Chinese hover documentation
-    // into the target language (shown underlined below the original text).
-    "enabled": false,
-    // The language model provider used for translation, matching one of the
-    // providers configured under `language_models`. `null` means the default
-    // fast model is used.
+    // Whether to automatically translate non-target-language hover
+    // documentation (shown underlined below the original text).
+    "enabled": true,
+    // The translation channel. `null` or "default" uses the built-in free
+    // Bing endpoint and needs no configuration; "bing" selects it explicitly.
+    // Any other value names a provider configured under `language_models`.
     "provider": null,
     // The model used for translation. `null` means the provider's default.
+    // The built-in default/Bing channels do not use a model.
     "model": null,
-    // The target language to translate into.
-    "target_language": "中文",
+    // The target language to translate into, as a language name or BCP-47 tag.
+    // `null` follows the interface language.
+    "target_language": null,
     // Maximum number of documentation characters sent for translation.
     "max_chars": 4000,
     // Whether translations are persisted to an on-disk cache reused across

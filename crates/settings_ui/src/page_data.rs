@@ -2626,7 +2626,7 @@ fn editor_page() -> SettingsPage {
             SettingsPageItem::SectionHeader(i18n::t!("84f41f0b0c41982b")),
             SettingsPageItem::SettingItem(SettingItem {
                 title: i18n::t!("9ba27619e4a34c53"),
-                description: i18n::t!("1f17ceb9ed561cad"),
+                description: i18n::t!("1744f541e72bd8f5"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("hover_translation.enabled"),
@@ -2649,7 +2649,7 @@ fn editor_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: i18n::t!("148475fdd9ea8520"),
-                description: i18n::t!("32f62f10d655753a"),
+                description: i18n::t!("83c009f9f87bf741"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("hover_translation.provider"),
@@ -2672,7 +2672,7 @@ fn editor_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: i18n::t!("1b3ae8feb8b283ea"),
-                description: i18n::t!("33ec843199d56ac3"),
+                description: i18n::t!("57d2231db1dfa87c"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("hover_translation.model"),
@@ -2691,7 +2691,7 @@ fn editor_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: i18n::t!("966a23e84aedeea5"),
-                description: i18n::t!("77e285dcda49b9ae"),
+                description: i18n::t!("0d258569095cbb37"),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("hover_translation.target_language"),
