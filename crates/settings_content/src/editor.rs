@@ -1182,31 +1182,34 @@ impl From<String> for TranslationModelSetting {
     }
 }
 
-/// Settings for AI-powered translation in the editor's hover popovers.
+/// Settings for translation in the editor's hover popovers.
 #[with_fallible_options]
 #[derive(Clone, Default, Debug, Serialize, Deserialize, JsonSchema, MergeFrom, PartialEq, Eq)]
 pub struct HoverTranslationSettingsContent {
-    /// Whether to automatically translate non-Chinese parts of hover
-    /// documentation (e.g. LSP hover information) into the target language.
-    /// The translation is shown underlined below the original text.
+    /// Whether to automatically translate hover documentation (e.g. LSP hover
+    /// information) that is not already in the target language. The
+    /// translation is shown underlined below the original text.
     ///
-    /// Default: false
+    /// Default: true
     pub enabled: Option<bool>,
-    /// The language model provider (channel) used for translation, matching
-    /// one of the providers configured under `language_models`, e.g.
+    /// The translation channel. When unset, empty or `default`, the built-in
+    /// free Bing endpoint is used and no language model configuration is
+    /// required. `bing` selects that endpoint explicitly. Any other value names
+    /// a provider configured under `language_models`, e.g.
     /// "openai_compatible", "anthropic", "google", "ollama".
-    /// When unset, the default fast model is used.
     ///
     /// Default: null
     pub provider: Option<TranslationProviderSetting>,
     /// The model to use for translation, as provided by the configured
-    /// `provider`.
+    /// `provider`. The built-in default/Bing channels do not use a model.
     ///
     /// Default: null
     pub model: Option<TranslationModelSetting>,
-    /// The target language to translate into.
+    /// The target language to translate into, as a language name (for example
+    /// "中文" or "English") or a BCP-47 tag. When unset or empty, the
+    /// interface language is used.
     ///
-    /// Default: 中文
+    /// Default: null
     pub target_language: Option<String>,
     /// Maximum number of characters of documentation sent for translation.
     /// Longer documents are truncated to limit token usage.

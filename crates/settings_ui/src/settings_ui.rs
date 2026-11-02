@@ -5716,6 +5716,15 @@ fn translation_model_options(cx: &App, provider_id: &str) -> Vec<(SharedString, 
         .collect()
 }
 
+/// The localized label for a built-in translation provider value, if any.
+fn translation_provider_label(provider: &str) -> Option<&'static str> {
+    match provider {
+        "default" => Some(i18n::t!("ba6e600818f3c62e")),
+        "bing" => Some(i18n::t!("8ba35facf51e9a73")),
+        _ => None,
+    }
+}
+
 fn render_translation_provider_picker(
     field: SettingField<settings::TranslationProviderSetting>,
     file: SettingsUiFile,
@@ -5725,13 +5734,22 @@ fn render_translation_provider_picker(
     _window: &mut Window,
     cx: &mut App,
 ) -> AnyElement {
+    let is_hover_translation = field.json_path == Some("hover_translation.provider");
     let (_, value) = SettingsStore::global(cx).get_value_from_file(file.to_settings(), field.pick);
     let current_value: SharedString = value
         .map(|provider| provider.0.as_str().into())
         .unwrap_or_default();
 
     let trigger_value: SharedString = if current_value.is_empty() {
-        i18n::t!("b97606e7830ef8b2").into()
+        if is_hover_translation {
+            i18n::t!("ba6e600818f3c62e").into()
+        } else {
+            i18n::t!("b97606e7830ef8b2").into()
+        }
+    } else if is_hover_translation {
+        translation_provider_label(&current_value)
+            .map(SharedString::from)
+            .unwrap_or_else(|| current_value.clone())
     } else {
         current_value.clone()
     };
@@ -5750,7 +5768,18 @@ fn render_translation_provider_picker(
         .menu(move |window, cx| {
             let file = file.clone();
             let current_value = current_value.clone();
-            let options = translation_provider_options(cx);
+            let mut options = Vec::new();
+            if is_hover_translation {
+                options.push((
+                    SharedString::from("default"),
+                    SharedString::from(i18n::t!("ba6e600818f3c62e")),
+                ));
+                options.push((
+                    SharedString::from("bing"),
+                    SharedString::from(i18n::t!("8ba35facf51e9a73")),
+                ));
+            }
+            options.extend(translation_provider_options(cx));
             Some(cx.new(move |cx| {
                 translation_picker(
                     options,
@@ -5809,6 +5838,17 @@ fn render_translation_model_picker(
     let provider_id: SharedString = provider_value
         .map(|provider| provider.0.as_str().into())
         .unwrap_or_default();
+
+    let is_hover_translation = field.json_path == Some("hover_translation.model");
+    if is_hover_translation
+        && (provider_id.as_str().is_empty()
+            || provider_id.as_str() == "default"
+            || provider_id.as_str() == "bing")
+    {
+        return Label::new(i18n::t!("29c5f86f840d9f28"))
+            .color(Color::Muted)
+            .into_any_element();
+    }
 
     let (_, value) = store.get_value_from_file(file.to_settings(), field.pick);
     let current_value: SharedString = value

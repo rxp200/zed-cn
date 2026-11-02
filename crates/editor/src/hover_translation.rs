@@ -1,4 +1,5 @@
-//! AI-powered translation for hover popovers.
+//! Translation for hover popovers, served by the built-in Bing channel or a
+//! configured language model.
 //!
 //! Two entry points:
 //! - [`translate_selection`]: keyboard action (`editor::TranslateSelection`).
@@ -19,11 +20,12 @@ use crate::{
 };
 use anyhow::{Context as _, Result};
 use collections::HashMap;
-use futures::{StreamExt as _, channel::oneshot};
+use futures::{AsyncReadExt as _, StreamExt as _, channel::oneshot};
 use gpui::{
     App, AppContext as _, AsyncApp, Context, Entity, Global, ScrollHandle, SharedString, Task,
     Window,
 };
+use http_client::{AsyncBody, HttpClient, HttpRequestExt as _, RedirectPolicy};
 use itertools::Itertools as _;
 use language::CharKind;
 use language_model::{
@@ -38,21 +40,36 @@ use std::{
     cell::{Cell, RefCell},
     hash::{Hash, Hasher},
     rc::Rc,
+    sync::Arc,
+    time::Duration,
 };
 
-/// Settings for AI-powered translation in hover popovers, configured under
-/// the `hover_translation` key in settings.json.
+/// Anonymous Microsoft Edge translation endpoint used by the built-in default
+/// and explicit `bing` channels. No credentials are sent and redirects are
+/// disabled; the endpoint's availability is not guaranteed.
+const BING_TRANSLATE_ENDPOINT: &str = "https://edge.microsoft.com/translate/translatetext";
+const ANONYMOUS_TRANSLATION_TIMEOUT: Duration = Duration::from_secs(10);
+const MAX_ANONYMOUS_RESPONSE_BYTES: usize = 1024 * 1024;
+/// Provider value selecting the built-in anonymous translation channel.
+const DEFAULT_TRANSLATION_PROVIDER: &str = "default";
+/// Provider value selecting the built-in anonymous Bing channel explicitly.
+const BING_TRANSLATION_PROVIDER: &str = "bing";
+
+/// Settings for translation in hover popovers, configured under the
+/// `hover_translation` key in settings.json.
 #[derive(Clone, Debug, RegisterSetting)]
 pub struct HoverTranslationSettings {
     /// Whether hover documentation is automatically translated.
     pub enabled: bool,
-    /// The provider (channel) used for translation. When `None`, the default
-    /// fast model is used.
+    /// The provider (channel) used for translation. `None`, an empty value or
+    /// `default` selects the built-in anonymous channel; `bing` selects it
+    /// explicitly. Any other value names a configured language model provider.
     pub provider: Option<SharedString>,
     /// The model used for translation.
     pub model: Option<SharedString>,
-    /// The target language to translate into.
-    pub target_language: SharedString,
+    /// The target language to translate into. `None` or an empty value follows
+    /// the interface language.
+    pub target_language: Option<SharedString>,
     /// Maximum number of characters sent for translation.
     pub max_chars: usize,
     /// Whether translations are persisted to an on-disk cache reused across
@@ -69,7 +86,7 @@ impl Settings for HoverTranslationSettings {
             enabled: content.enabled.unwrap(),
             provider: content.provider.map(|provider| provider.as_str().into()),
             model: content.model.map(|model| model.as_str().into()),
-            target_language: content.target_language.unwrap().into(),
+            target_language: content.target_language.map(|language| language.into()),
             max_chars: content.max_chars.unwrap() as usize,
             cache_persist: content.cache_persist.unwrap(),
             cache_max_bytes: content.cache_max_bytes.unwrap() as usize,
@@ -132,6 +149,165 @@ fn hash_text(text: &str) -> u64 {
     hasher.finish()
 }
 
+/// The backend that serves a translation request.
+enum TranslationRoute {
+    /// The built-in anonymous Bing endpoint, used both by the default channel
+    /// and by an explicit `bing` channel.
+    Bing,
+    /// A language model provider configured under `language_models`.
+    LanguageModel(ConfiguredModel),
+}
+
+impl TranslationRoute {
+    /// The provider part of the cache key. Built-in requests are pinned to the
+    /// `bing` channel so they cannot collide with a configured provider named
+    /// `default`.
+    fn cache_key_prefix(&self) -> String {
+        match self {
+            Self::Bing => BING_TRANSLATION_PROVIDER.to_string(),
+            Self::LanguageModel(model) => {
+                format!("{}:{}", model.provider.id().0, model.model.id().0)
+            }
+        }
+    }
+
+    /// The target-language part of the cache key. Built-in requests use the
+    /// normalized BCP-47 tag so `中文` and `zh-Hans` share results.
+    fn cache_key_target<'a>(&self, target: &'a TranslationTarget) -> &'a str {
+        match self {
+            Self::Bing => &target.tag,
+            Self::LanguageModel(_) => &target.name,
+        }
+    }
+}
+
+/// The resolved translation target: a human-readable name for the model prompt
+/// and a BCP-47 tag for the anonymous endpoint.
+struct TranslationTarget {
+    name: String,
+    tag: String,
+}
+
+/// Maps a configured language name or tag to the tag accepted by the Bing
+/// endpoint. Known names are mapped to their language; anything else is passed
+/// through unchanged, matching the reference translator.
+fn bing_language_tag(language: &str) -> String {
+    let language = language.trim();
+    match language.to_lowercase().as_str() {
+        "中文" | "简体中文" | "中文（简体）" | "chinese" | "simplified chinese" | "zh"
+        | "zh-cn" | "zh-sg" | "zh-hans" => "zh-Hans".to_string(),
+        "繁體中文"
+        | "繁体中文"
+        | "中文（繁體）"
+        | "traditional chinese"
+        | "zh-tw"
+        | "zh-hk"
+        | "zh-mo"
+        | "zh-hant" => "zh-Hant".to_string(),
+        "英文" | "英语" | "english" | "en" => "en".to_string(),
+        "日文" | "日语" | "japanese" | "ja" => "ja".to_string(),
+        "韩文" | "韩语" | "korean" | "ko" => "ko".to_string(),
+        "法文" | "法语" | "french" | "fr" => "fr".to_string(),
+        "德文" | "德语" | "german" | "de" => "de".to_string(),
+        "西班牙文" | "西班牙语" | "spanish" | "es" => "es".to_string(),
+        "俄文" | "俄语" | "russian" | "ru" => "ru".to_string(),
+        "葡萄牙文" | "葡萄牙语" | "portuguese" | "pt" => "pt".to_string(),
+        "意大利文" | "意大利语" | "italian" | "it" => "it".to_string(),
+        _ => language.to_string(),
+    }
+}
+
+/// The language name used in the model prompt when the target follows the
+/// interface language.
+fn interface_language_name(locale: i18n::Locale) -> &'static str {
+    match locale.id() {
+        "zh-Hans" => "Simplified Chinese",
+        "en" => "English",
+        other => other,
+    }
+}
+
+fn resolve_target_language(configured: Option<&str>) -> TranslationTarget {
+    translation_target(configured, i18n::current_locale())
+}
+
+fn translation_target(
+    configured: Option<&str>,
+    interface_locale: i18n::Locale,
+) -> TranslationTarget {
+    match configured
+        .map(str::trim)
+        .filter(|language| !language.is_empty() && !language.eq_ignore_ascii_case("auto"))
+    {
+        Some(language) => TranslationTarget {
+            name: language.to_string(),
+            tag: bing_language_tag(language),
+        },
+        None => TranslationTarget {
+            name: interface_language_name(interface_locale).to_string(),
+            tag: bing_language_tag(interface_locale.id()),
+        },
+    }
+}
+
+/// The translation channel chosen by the provider/model settings.
+enum ProviderSelection {
+    Builtin,
+    LanguageModel { provider: String, model: String },
+    Incomplete,
+}
+
+fn select_provider(provider: Option<&str>, model: Option<&str>) -> ProviderSelection {
+    let provider = provider
+        .map(str::trim)
+        .filter(|provider| !provider.is_empty());
+    let model = model.map(str::trim).filter(|model| !model.is_empty());
+
+    if matches!(
+        provider,
+        Some(DEFAULT_TRANSLATION_PROVIDER) | Some(BING_TRANSLATION_PROVIDER)
+    ) {
+        return ProviderSelection::Builtin;
+    }
+
+    // An unconfigured provider uses the built-in anonymous channel, which needs
+    // no language model at all. A model without a provider stays an error so a
+    // partially configured LLM channel never silently switches services.
+    match (provider, model) {
+        (None, None) => ProviderSelection::Builtin,
+        (Some(provider), Some(model)) => ProviderSelection::LanguageModel {
+            provider: provider.to_string(),
+            model: model.to_string(),
+        },
+        _ => ProviderSelection::Incomplete,
+    }
+}
+
+fn bing_translation_url(target_tag: &str) -> Result<String> {
+    let mut url = http_client::Url::parse(BING_TRANSLATE_ENDPOINT)?;
+    url.query_pairs_mut()
+        .append_pair("to", target_tag)
+        .append_pair("isEnterpriseClient", "false");
+    Ok(url.into())
+}
+
+fn parse_bing_translation(body: &[u8]) -> Result<SharedString> {
+    let payload: serde_json::Value =
+        serde_json::from_slice(body).map_err(|_| anyhow::anyhow!(i18n::t!("d410a8f58de1ef69")))?;
+    let translation = payload
+        .as_array()
+        .and_then(|segments| segments.first())
+        .and_then(|segment| segment.get("translations"))
+        .and_then(|translations| translations.as_array())
+        .and_then(|translations| translations.first())
+        .and_then(|translation| translation.get("text"))
+        .and_then(|text| text.as_str())
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .ok_or_else(|| anyhow::anyhow!(i18n::t!("d410a8f58de1ef69")))?;
+    Ok(SharedString::from(translation.to_string()))
+}
+
 /// A translation request that is currently in flight, along with the waiters
 /// that receive the result once it completes.
 struct InFlightTranslation {
@@ -148,7 +324,7 @@ struct InFlightTranslation {
 /// returned task then only cancels the *waiting*, not the request.
 pub struct TranslationService {
     /// Completed translations for the current session, keyed by the cache key
-    /// (provider:model:target_language:text-hash).
+    /// (route:target_language:text-hash).
     cache: HashMap<String, SharedString>,
     /// Requests that are still running, keyed by the cache key.
     in_flight: HashMap<String, InFlightTranslation>,
@@ -156,16 +332,14 @@ pub struct TranslationService {
     pub(crate) disk_cache: TranslationDiskCache,
 }
 
-/// Returns the cache key for a translation: the provider, model and target
-/// language, plus a hash of the text. Changing any of them naturally misses
-/// the cache, so a stale translation can never be served for a new
-/// configuration.
-fn cache_key(model: &ConfiguredModel, target_language: &str, text: &str) -> String {
+/// Returns the cache key for a translation: the route and target language,
+/// plus a hash of the text. Changing any of them naturally misses the cache, so
+/// a stale translation can never be served for a new configuration.
+fn cache_key(route: &TranslationRoute, target: &TranslationTarget, text: &str) -> String {
     format!(
-        "{}:{}:{}:{:x}",
-        model.provider.id().0,
-        model.model.id().0,
-        target_language,
+        "{}:{}:{:x}",
+        route.cache_key_prefix(),
+        route.cache_key_target(target),
         hash_text(text)
     )
 }
@@ -226,17 +400,18 @@ impl TranslationService {
     /// enabled—on disk for future sessions.
     pub fn translate(text: String, cx: &mut App) -> Task<Result<SharedString>> {
         let settings = HoverTranslationSettings::get_global(cx);
-        let target_language = settings.target_language.clone();
+        let target = resolve_target_language(settings.target_language.as_deref());
         let persist = settings.cache_persist;
         let max_bytes = settings.cache_max_bytes;
         let text = truncate_text(&text, settings.max_chars);
 
-        let service = Self::global(cx);
-        let model = match resolve_model(cx) {
-            Ok(model) => model,
+        let route = match resolve_route(&settings, cx) {
+            Ok(route) => route,
             Err(error) => return Task::ready(Err(error)),
         };
-        let key = cache_key(&model, &target_language, &text);
+        let service = Self::global(cx);
+        let key = cache_key(&route, &target, &text);
+        let http_client = cx.http_client();
 
         // Keep the persistent cache in sync with the current settings.
         service.update(cx, |service, _| {
@@ -323,9 +498,15 @@ impl TranslationService {
                     return;
                 }
 
-                let result = request_translation(&model, text, &target_language, cx)
-                    .await
-                    .map_err(|err| err.to_string());
+                let result = match route {
+                    TranslationRoute::Bing => {
+                        request_bing_translation(&http_client, text, &target).await
+                    }
+                    TranslationRoute::LanguageModel(model) => {
+                        request_translation(&model, text, &target.name, cx).await
+                    }
+                }
+                .map_err(|err| err.to_string());
                 this.update(cx, |service, cx| {
                     if let Some(in_flight) = service.in_flight.remove(&key) {
                         if let Ok(translation) = &result {
@@ -352,18 +533,22 @@ impl TranslationService {
     }
 }
 
-fn resolve_model(cx: &App) -> Result<ConfiguredModel> {
-    let settings = HoverTranslationSettings::get_global(cx);
-    let registry = LanguageModelRegistry::read_global(cx);
-    match (&settings.provider, &settings.model) {
-        (Some(provider_id), Some(model_name)) => {
+fn resolve_route(settings: &HoverTranslationSettings, cx: &App) -> Result<TranslationRoute> {
+    match select_provider(settings.provider.as_deref(), settings.model.as_deref()) {
+        ProviderSelection::Builtin => Ok(TranslationRoute::Bing),
+        ProviderSelection::Incomplete => Err(anyhow::anyhow!(i18n::t!("c70371b6a0586b63"))),
+        ProviderSelection::LanguageModel {
+            provider: provider_id,
+            model: model_name,
+        } => {
+            let registry = LanguageModelRegistry::read_global(cx);
             let provider = registry
-                .provider(&LanguageModelProviderId(provider_id.clone()))
+                .provider(&LanguageModelProviderId(provider_id.as_str().into()))
                 .with_context(|| i18n::t!("f5aca7fe71bf5d1f", provider_id = provider_id))?;
             let model = provider
                 .provided_models(cx)
                 .into_iter()
-                .find(|model| model.id().0.as_ref() == model_name.as_str())
+                .find(|candidate| candidate.id().0.as_ref() == model_name.as_str())
                 .with_context(|| {
                     i18n::t!(
                         "6ae3539f811d5bad",
@@ -371,20 +556,46 @@ fn resolve_model(cx: &App) -> Result<ConfiguredModel> {
                         model_name = model_name
                     )
                 })?;
-            Ok(ConfiguredModel { provider, model })
+            Ok(TranslationRoute::LanguageModel(ConfiguredModel {
+                provider,
+                model,
+            }))
         }
-        (None, None) => {
-            let model = registry
-                .default_fast_model(cx)
-                .or_else(|| registry.default_model())
-                .context(i18n::t!("f7e7b7f73d5c70b0"))?;
-            let provider = registry
-                .provider(&model.provider_id)
-                .context(i18n::t!("e1d101dd283ff727"))?;
-            Ok(ConfiguredModel { provider, model })
-        }
-        _ => Err(anyhow::anyhow!(i18n::t!("c70371b6a0586b63"))),
     }
+}
+
+async fn request_bing_translation(
+    client: &Arc<dyn HttpClient>,
+    text: String,
+    target: &TranslationTarget,
+) -> Result<SharedString> {
+    let url = bing_translation_url(&target.tag)?;
+    let body = serde_json::to_string(&[text.as_str()])?;
+    let request = http_client::Request::builder()
+        .method(http_client::Method::POST)
+        .uri(url)
+        .header("Content-Type", "application/json")
+        .follow_redirects(RedirectPolicy::NoFollow)
+        .timeout(ANONYMOUS_TRANSLATION_TIMEOUT)
+        .body(AsyncBody::from(body))?;
+    let response = client.send(request).await?;
+    let status = response.status();
+    anyhow::ensure!(
+        status.is_success(),
+        i18n::t!("05d7d00737291230", status = status.as_u16())
+    );
+
+    let mut body = Vec::new();
+    response
+        .into_body()
+        .take(MAX_ANONYMOUS_RESPONSE_BYTES as u64 + 1)
+        .read_to_end(&mut body)
+        .await?;
+    anyhow::ensure!(
+        body.len() <= MAX_ANONYMOUS_RESPONSE_BYTES,
+        i18n::t!("808c91a847b2948f", max_bytes = MAX_ANONYMOUS_RESPONSE_BYTES)
+    );
+    parse_bing_translation(&body)
 }
 
 async fn request_translation(
@@ -436,7 +647,7 @@ async fn request_translation(
 /// The `editor::TranslateSelection` action: translates the current selection
 /// or, when empty, the word under the cursor, and shows the translation in a
 /// small hover popover. Works regardless of the `hover_translation.enabled`
-/// setting, as long as a translation model is configured.
+/// setting; an unconfigured channel uses the built-in Bing translation.
 pub fn translate_selection(
     editor: &mut Editor,
     _: &TranslateSelection,
@@ -517,7 +728,7 @@ mod tests {
     use gpui::BorrowAppContext;
     use language_model::fake_provider::FakeLanguageModelProvider;
     use settings::SettingsStore;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
     /// Initializes the editor with the persistent translation cache disabled,
     /// so tests never read or write the real cache file under the user's data
@@ -572,6 +783,13 @@ mod tests {
                 registry.register_provider(provider.clone(), cx);
                 registry.set_default_model(Some(model.clone()), cx);
             });
+            cx.update_global(|store: &mut SettingsStore, cx| {
+                store.update_user_settings(cx, |settings: &mut SettingsContent| {
+                    let hover = settings.hover_translation.get_or_insert_default();
+                    hover.provider = Some(settings::TranslationProviderSetting("fake".to_string()));
+                    hover.model = Some(settings::TranslationModelSetting("fake".to_string()));
+                });
+            });
             (provider, model)
         })
     }
@@ -604,7 +822,11 @@ mod tests {
         let requests = provider.pending_completions();
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0].messages[1].string_contents(), "bar");
-        assert!(requests[0].messages[0].string_contents().contains("中文"));
+        assert!(
+            requests[0].messages[0]
+                .string_contents()
+                .contains("Simplified Chinese")
+        );
 
         provider.send_last_text(&model, "柱");
         provider.end_last(&model);
@@ -811,28 +1033,156 @@ mod tests {
         assert!(!service.read_with(cx, |service, _| service.disk_cache.is_dirty()));
     }
 
-    #[gpui::test]
-    async fn test_translate_selection_without_configured_model(cx: &mut gpui::TestAppContext) {
-        init_test_without_persistent_cache(cx);
-        cx.update(|cx| {
-            LanguageModelRegistry::test(cx);
-            // Simulate an unconfigured translation setup: no default model
-            // and no explicit provider/model in hover_translation settings.
-            LanguageModelRegistry::global(cx).update(cx, |registry, cx| {
-                registry.set_default_model(None, cx);
-            });
-        });
-        let mut cx = EditorTestContext::new(cx).await;
+    #[test]
+    fn test_bing_language_tags() {
+        assert_eq!(bing_language_tag("中文"), "zh-Hans");
+        assert_eq!(bing_language_tag("简体中文"), "zh-Hans");
+        assert_eq!(bing_language_tag("zh-CN"), "zh-Hans");
+        assert_eq!(bing_language_tag("zh-Hans"), "zh-Hans");
+        assert_eq!(bing_language_tag("繁體中文"), "zh-Hant");
+        assert_eq!(bing_language_tag("English"), "en");
+        assert_eq!(bing_language_tag("英语"), "en");
+        assert_eq!(bing_language_tag("日语"), "ja");
+        assert_eq!(bing_language_tag("fr-FR"), "fr-FR");
+        assert_eq!(bing_language_tag("  "), "");
+    }
 
-        cx.set_state("let \u{02C7}value = 1;");
+    #[test]
+    fn test_translation_target_follows_interface_language() {
+        let followed = translation_target(None, i18n::Locale::En);
+        assert_eq!(followed.name, "English");
+        assert_eq!(followed.tag, "en");
+
+        let followed = translation_target(Some("  "), i18n::Locale::ZhHans);
+        assert_eq!(followed.name, "Simplified Chinese");
+        assert_eq!(followed.tag, "zh-Hans");
+
+        let automatic = translation_target(Some("auto"), i18n::Locale::ZhHans);
+        assert_eq!(automatic.tag, "zh-Hans");
+
+        let configured = translation_target(Some("日语"), i18n::Locale::En);
+        assert_eq!(configured.name, "日语");
+        assert_eq!(configured.tag, "ja");
+    }
+
+    #[test]
+    fn test_provider_selection_uses_builtin_by_default() {
+        assert!(matches!(
+            select_provider(None, None),
+            ProviderSelection::Builtin
+        ));
+        assert!(matches!(
+            select_provider(Some("default"), None),
+            ProviderSelection::Builtin
+        ));
+        assert!(matches!(
+            select_provider(Some("bing"), Some("ignored")),
+            ProviderSelection::Builtin
+        ));
+        assert!(matches!(
+            select_provider(Some(""), Some("")),
+            ProviderSelection::Builtin
+        ));
+        assert!(matches!(
+            select_provider(Some("openai"), Some("gpt")),
+            ProviderSelection::LanguageModel { .. }
+        ));
+        assert!(matches!(
+            select_provider(Some("openai"), None),
+            ProviderSelection::Incomplete
+        ));
+        assert!(matches!(
+            select_provider(None, Some("gpt")),
+            ProviderSelection::Incomplete
+        ));
+    }
+
+    #[test]
+    fn test_bing_translation_url_encodes_target() {
+        let url = bing_translation_url("zh-Hans").expect("built-in endpoint url");
+        assert!(url.starts_with(BING_TRANSLATE_ENDPOINT));
+        assert!(url.contains("to=zh-Hans"), "url: {url}");
+        assert!(url.contains("isEnterpriseClient=false"), "url: {url}");
+    }
+
+    #[test]
+    fn test_parse_bing_translation_response() {
+        assert_eq!(
+            parse_bing_translation(r#"[{"translations":[{"text":"你好"}]}]"#.as_bytes())
+                .expect("valid response")
+                .as_ref(),
+            "你好"
+        );
+        assert!(parse_bing_translation(br#"[]"#).is_err());
+        assert!(parse_bing_translation(br#"[{"translations":[]}]"#).is_err());
+        assert!(parse_bing_translation(br#"[{"translations":[{"text":"  "}]}]"#).is_err());
+        assert!(parse_bing_translation(br#"[{"translations":[{"text":null}]}]"#).is_err());
+        assert!(parse_bing_translation(b"not json").is_err());
+    }
+
+    #[test]
+    fn test_builtin_cache_key_uses_normalized_tag() {
+        let target = translation_target(Some("中文"), i18n::Locale::ZhHans);
+        let key = cache_key(&TranslationRoute::Bing, &target, "hello");
+        assert!(key.starts_with("bing:zh-Hans:"), "key: {key}");
+    }
+
+    #[gpui::test]
+    async fn test_default_translation_uses_builtin_bing(cx: &mut gpui::TestAppContext) {
+        init_test_without_persistent_cache(cx);
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let requests_for_handler = requests.clone();
+        let http_client = http_client::FakeHttpClient::create(move |request| {
+            let requests = requests_for_handler.clone();
+            async move {
+                let uri = request.uri().to_string();
+                let mut body = request.into_body();
+                let mut text = String::new();
+                body.read_to_string(&mut text).await?;
+                requests.lock().unwrap().push((uri, text));
+                Ok(http_client::Response::builder()
+                    .status(200)
+                    .body(AsyncBody::from(
+                        r#"[{"translations":[{"text":"你好，世界","to":"zh-Hans"}]}]"#,
+                    ))?)
+            }
+        });
+        cx.update(|cx| cx.set_http_client(http_client));
+
+        let mut cx = EditorTestContext::new(cx).await;
+        cx.set_state("let value = foo.ˇbar();");
         cx.dispatch_action(TranslateSelection);
         cx.run_until_parked();
 
-        // The popover should tell the user the model is not configured,
-        // instead of doing nothing.
+        {
+            let captured = requests.lock().unwrap();
+            assert_eq!(captured.len(), 1);
+            assert!(
+                captured[0].0.contains("to=zh-Hans"),
+                "uri: {}",
+                captured[0].0
+            );
+            assert!(
+                captured[0].0.contains("isEnterpriseClient=false"),
+                "uri: {}",
+                captured[0].0
+            );
+            assert_eq!(captured[0].1, r#"["bar"]"#);
+        }
+
         cx.editor(|editor, _, cx| {
-            let text = popover_text(editor, cx);
-            assert!(text.contains("未配置翻译模型"), "got: {text}");
+            assert_eq!(popover_text(editor, cx), "你好，世界");
+        });
+
+        // The built-in translation is cached like a model translation.
+        cx.update_editor(|editor, _, cx| {
+            hide_hover(editor, cx);
+        });
+        cx.dispatch_action(TranslateSelection);
+        cx.run_until_parked();
+        assert_eq!(requests.lock().unwrap().len(), 1);
+        cx.editor(|editor, _, cx| {
+            assert_eq!(popover_text(editor, cx), "你好，世界");
         });
     }
 
