@@ -12,7 +12,7 @@ use encoding_rs::{Encoding, GBK, UTF_8, WINDOWS_1251, WINDOWS_1252};
 use gpui::SharedString;
 
 use crate::cad_scene::{
-    ACI_FOREGROUND, COLOR_INHERIT, CadBounds, CadColor, CadLayer, CadScene, MAX_BLOCK_POINTS,
+    ACI_FOREGROUND, COLOR_INHERIT, CadColor, CadLayer, CadScene, MAX_BLOCK_POINTS,
     MAX_INSERT_DEPTH, encode_aci, encode_truecolor, push_arc_points, push_bulge_points,
     push_ellipse_points,
 };
@@ -20,8 +20,6 @@ use crate::cad_scene::{
 /// Why a DXF file cannot be previewed at all.
 #[derive(Debug)]
 pub enum CadError {
-    /// The file is an AutoCAD DWG container, not a DXF drawing.
-    Dwg,
     /// Binary DXF encodes group values differently from the ASCII text form.
     BinaryDxf,
     /// The file is not a DXF document.
@@ -33,7 +31,6 @@ pub enum CadError {
 impl fmt::Display for CadError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let message = match self {
-            CadError::Dwg => i18n::t!("4a57c500c76df00e"),
             CadError::BinaryDxf => i18n::t!("9d31bf6b9ebcc683"),
             CadError::NotDxf => i18n::t!("ee27e1fb58fdfa8a"),
             CadError::Empty => i18n::t!("96ab902f5adf7da4"),
@@ -57,10 +54,6 @@ fn reject_unsupported_containers(bytes: &[u8]) -> Result<(), CadError> {
     let head = &bytes[..bytes.len().min(64)];
     if head.starts_with(b"AutoCAD Binary DXF") {
         return Err(CadError::BinaryDxf);
-    }
-    // DWG containers begin with a version sentinel such as AC1015 or AC1032.
-    if head.len() >= 6 && &head[0..2] == b"AC" && head[2..6].iter().all(u8::is_ascii_digit) {
-        return Err(CadError::Dwg);
     }
     Ok(())
 }
@@ -141,7 +134,7 @@ impl Kind {
 /// A 2D affine transform plus the rotation and scale that produced it, so text
 /// inside a block reference keeps its orientation.
 #[derive(Clone, Copy, Debug)]
-struct Transform {
+pub(crate) struct Transform {
     xx: f64,
     xy: f64,
     yx: f64,
@@ -153,7 +146,20 @@ struct Transform {
 }
 
 impl Transform {
-    fn apply(&self, point: [f64; 2]) -> [f64; 2] {
+    pub(crate) fn identity() -> Self {
+        Self {
+            xx: 1.0,
+            xy: 0.0,
+            yx: 0.0,
+            yy: 1.0,
+            tx: 0.0,
+            ty: 0.0,
+            rotation: 0.0,
+            scale: [1.0; 2],
+        }
+    }
+
+    pub(crate) fn apply(&self, point: [f64; 2]) -> [f64; 2] {
         [
             self.xx * point[0] + self.xy * point[1] + self.tx,
             self.yx * point[0] + self.yy * point[1] + self.ty,
@@ -161,7 +167,7 @@ impl Transform {
     }
 
     /// Transforms a direction, ignoring the translation.
-    fn apply_direction(&self, direction: [f64; 2]) -> [f64; 2] {
+    pub(crate) fn apply_direction(&self, direction: [f64; 2]) -> [f64; 2] {
         [
             self.xx * direction[0] + self.xy * direction[1],
             self.yx * direction[0] + self.yy * direction[1],
@@ -170,7 +176,7 @@ impl Transform {
 
     /// Applies `self` first and then `outer`, which is how a nested block
     /// reference composes with the one that contains it.
-    fn then(&self, outer: &Transform) -> Transform {
+    pub(crate) fn then(&self, outer: &Transform) -> Transform {
         Transform {
             xx: outer.xx * self.xx + outer.xy * self.yx,
             xy: outer.xx * self.xy + outer.xy * self.yy,
@@ -186,8 +192,13 @@ impl Transform {
         }
     }
 
+    /// Accumulated rotation, used to orient text inside a block.
+    pub(crate) fn rotation(&self) -> f64 {
+        self.rotation
+    }
+
     /// Average axis scale, used to size text inside a block.
-    fn text_scale(&self) -> f64 {
+    pub(crate) fn text_scale(&self) -> f64 {
         let first = (self.xx * self.xx + self.yx * self.yx).sqrt();
         let second = (self.xy * self.xy + self.yy * self.yy).sqrt();
         ((first + second) / 2.0).abs()
@@ -1154,15 +1165,8 @@ impl<'a> Parser<'a> {
     /// Infinite construction lines are clipped to the drawing bounds, which are
     /// only known once every entity has been read.
     fn clip_infinite_lines(&mut self) {
-        let infinite = std::mem::take(&mut self.infinite);
-        let Some(bounds) = self.scene.bounds.map(|bounds| bounds.expanded(0.05)) else {
-            return;
-        };
-        for (origin, direction, layer, color) in infinite {
-            if let Some(segment) = clip_line(origin, direction, bounds) {
-                self.scene.push_clipped_path(&segment, false, layer, color);
-            }
-        }
+        self.scene
+            .push_infinite_lines(std::mem::take(&mut self.infinite));
     }
 }
 
@@ -1374,7 +1378,7 @@ fn encoding_for_code_page(code_page: &str) -> &'static Encoding {
     }
 }
 
-fn insertion_transform(
+pub(crate) fn insertion_transform(
     base: [f64; 2],
     insertion: [f64; 2],
     scale: [f64; 2],
@@ -1398,7 +1402,7 @@ fn insertion_transform(
 }
 
 /// Builds a polyline's points, tessellating the bulge arcs between vertices.
-fn vertices_to_points(vertices: &[(f64, f64, f64)], closed: bool) -> Vec<[f64; 2]> {
+pub(crate) fn vertices_to_points(vertices: &[(f64, f64, f64)], closed: bool) -> Vec<[f64; 2]> {
     let mut points = Vec::with_capacity(vertices.len() + 1);
     for (index, (x, y, _)) in vertices.iter().enumerate() {
         if index == 0 {
@@ -1434,52 +1438,12 @@ fn vertices_to_points(vertices: &[(f64, f64, f64)], closed: bool) -> Vec<[f64; 2
     points
 }
 
-/// Clips an infinite line to a box, returning the visible segment.
-fn clip_line(origin: [f64; 2], direction: [f64; 2], bounds: CadBounds) -> Option<[[f64; 2]; 2]> {
-    let mut start = f64::NEG_INFINITY;
-    let mut end = f64::INFINITY;
-    for axis in 0..2 {
-        let low = bounds.min[axis];
-        let high = bounds.max[axis];
-        let delta = direction[axis];
-        let position = origin[axis];
-        if delta.abs() < 1e-12 {
-            if position < low || position > high {
-                return None;
-            }
-            continue;
-        }
-        let first = (low - position) / delta;
-        let second = (high - position) / delta;
-        let (first, second) = if first <= second {
-            (first, second)
-        } else {
-            (second, first)
-        };
-        start = start.max(first);
-        end = end.min(second);
-    }
-    if !start.is_finite() || !end.is_finite() || start >= end {
-        return None;
-    }
-    Some([
-        [
-            origin[0] + direction[0] * start,
-            origin[1] + direction[1] * start,
-        ],
-        [
-            origin[0] + direction[0] * end,
-            origin[1] + direction[1] * end,
-        ],
-    ])
-}
-
 /// Removes DXF text formatting codes so labels render as plain text.
 ///
 /// `TEXT` uses `%%d` / `%%p` / `%%c` for degree, plus-minus and diameter;
 /// `MTEXT` adds `\P` paragraphs, `\~` spaces and `\f...;`-style control
 /// sequences with brace grouping.
-fn strip_text_codes(text: &str) -> String {
+pub(crate) fn strip_text_codes(text: &str) -> String {
     let mut output = String::with_capacity(text.len());
     let mut characters = text.chars().peekable();
     while let Some(character) = characters.next() {
@@ -1745,11 +1709,7 @@ mod tests {
     }
 
     #[test]
-    fn dwg_and_binary_dxf_are_rejected_with_a_reason() {
-        assert!(matches!(
-            parse(b"AC1032\x00\x00\x00\x00"),
-            Err(CadError::Dwg)
-        ));
+    fn binary_dxf_is_rejected_with_a_reason() {
         assert!(matches!(
             parse(b"AutoCAD Binary DXF\r\n\x1a\x00"),
             Err(CadError::BinaryDxf)

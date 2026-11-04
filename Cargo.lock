@@ -5374,6 +5374,7 @@ dependencies = [
  "language",
  "log",
  "markdown",
+ "opendwg",
  "postage",
  "project",
  "quick-xml 0.41.0",
@@ -12819,6 +12820,16 @@ dependencies = [
  "schemars 1.0.4",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "opendwg"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f157dd4f408eb6faf3622cec648de8f830b7174a610726eb70ff31daa8c34ec7"
+dependencies = [
+ "encoding_rs",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

@@ -33,6 +33,7 @@ image.workspace = true
 language.workspace = true
 log.workspace = true
 markdown.workspace = true
+opendwg.workspace = true
 project.workspace = true
 settings.workspace = true
 smallvec.workspace = true
