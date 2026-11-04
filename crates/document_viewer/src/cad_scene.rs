@@ -330,6 +330,20 @@ impl CadScene {
         true
     }
 
+    /// Clips construction lines (rays and xlines) to the drawing bounds and
+    /// appends the visible segments. The bounds are only known once everything
+    /// else has been read, so readers collect these until they finish.
+    pub fn push_infinite_lines(&mut self, lines: Vec<([f64; 2], [f64; 2], u16, CadColor)>) {
+        let Some(bounds) = self.bounds.map(|bounds| bounds.expanded(0.05)) else {
+            return;
+        };
+        for (origin, direction, layer, color) in lines {
+            if let Some(segment) = clip_line(origin, direction, bounds) {
+                self.push_clipped_path(&segment, false, layer, color);
+            }
+        }
+    }
+
     pub fn push_fill(&mut self, points: &[[f64; 2]], layer: u16, color: CadColor) -> bool {
         if points.len() < 3 {
             return true;
@@ -459,6 +473,46 @@ impl CadScene {
 }
 
 /// Splits `sweep_degrees` into steps of at most [`ARC_STEP_DEGREES`].
+/// Clips an infinite line to a box, returning the visible segment.
+fn clip_line(origin: [f64; 2], direction: [f64; 2], bounds: CadBounds) -> Option<[[f64; 2]; 2]> {
+    let mut start = f64::NEG_INFINITY;
+    let mut end = f64::INFINITY;
+    for axis in 0..2 {
+        let low = bounds.min[axis];
+        let high = bounds.max[axis];
+        let delta = direction[axis];
+        let position = origin[axis];
+        if delta.abs() < 1e-12 {
+            if position < low || position > high {
+                return None;
+            }
+            continue;
+        }
+        let first = (low - position) / delta;
+        let second = (high - position) / delta;
+        let (first, second) = if first <= second {
+            (first, second)
+        } else {
+            (second, first)
+        };
+        start = start.max(first);
+        end = end.min(second);
+    }
+    if !start.is_finite() || !end.is_finite() || start >= end {
+        return None;
+    }
+    Some([
+        [
+            origin[0] + direction[0] * start,
+            origin[1] + direction[1] * start,
+        ],
+        [
+            origin[0] + direction[0] * end,
+            origin[1] + direction[1] * end,
+        ],
+    ])
+}
+
 fn arc_steps(sweep: f64) -> usize {
     let steps = (sweep.abs() / ARC_STEP_DEGREES).ceil();
     if !steps.is_finite() || steps <= 0.0 {

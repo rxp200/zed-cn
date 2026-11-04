@@ -230,8 +230,10 @@ pub fn document_file_size_limit(extension: &str) -> Option<u64> {
         "xlsx" | "xlsm" | "xlsb" => Some(256 * 1024 * 1024),
         "xls" | "ods" => Some(64 * 1024 * 1024),
         // ASCII DXF is a verbose text format, so even a large drawing stays
-        // well under this cap.
-        "dxf" => Some(64 * 1024 * 1024),
+        // well under this cap. DWG is compressed, but decoding it materializes
+        // the whole object table (roughly 16 times the file size on the
+        // drawings measured so far), so it shares the same cap.
+        "dxf" | "dwg" => Some(64 * 1024 * 1024),
         // STEP assemblies routinely exceed the plain mesh cap while remaining
         // far below the parser's own budgets.
         "step" | "stp" => Some(256 * 1024 * 1024),
@@ -259,7 +261,7 @@ mod document_loading_tests {
     #[test]
     fn document_formats_and_size_limits() {
         for extension in [
-            "pdf", "EPUB", "xlsx", "xlsm", "xlsb", "xls", "ods", "DXF", "step", "STP",
+            "pdf", "EPUB", "xlsx", "xlsm", "xlsb", "xls", "ods", "DXF", "DWG", "step", "STP",
         ] {
             assert!(document_file_size_limit(extension).is_some());
         }
@@ -3645,10 +3647,9 @@ impl Project {
                 "stl" | "obj" | "ply" | "step" | "stp"
             )
         });
-        let is_cad = path
-            .path
-            .extension()
-            .is_some_and(|extension| extension.eq_ignore_ascii_case("dxf"));
+        let is_cad = path.path.extension().is_some_and(|extension| {
+            matches!(extension.to_ascii_lowercase().as_str(), "dxf" | "dwg")
+        });
         let Some(client) = self.remote_client.as_ref().filter(|client| {
             let client = client.read(cx);
             if is_model {

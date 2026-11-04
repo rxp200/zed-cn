@@ -1,3 +1,4 @@
+mod cad_dwg;
 mod cad_dxf;
 mod cad_reader;
 mod cad_scene;
@@ -66,7 +67,7 @@ impl DocumentFormat {
             "pdf" => Some(Self::Pdf),
             "epub" => Some(Self::Epub),
             "xlsx" | "xlsm" | "xls" | "xlsb" | "ods" => Some(Self::Spreadsheet),
-            "dxf" => Some(Self::Cad),
+            "dxf" | "dwg" => Some(Self::Cad),
             "docx" | "docm" | "dotx" | "dotm" => Some(Self::Word),
             _ => None,
         }
@@ -522,10 +523,15 @@ async fn parse_document_payload(
         }
         // The drawing only needs its bytes until it has been flattened into the
         // render scene, which is smaller than the file and drops everything the
-        // reader cannot draw.
+        // reader cannot draw. The content decides the format so a DWG renamed
+        // to `.dxf` (or the reverse) still opens.
         DocumentFormat::Cad => {
             log::info!("[open-debug] parsing drawing ({} bytes)", content.len());
-            let scene = cad_dxf::parse(&content)?;
+            let scene = if cad_dwg::is_dwg(&content) {
+                cad_dwg::parse(&content)?
+            } else {
+                cad_dxf::parse(&content)?
+            };
             log::info!(
                 "[open-debug] drawing parsed: {} paths, {} fills, {} texts",
                 scene.paths.len(),
@@ -1615,21 +1621,55 @@ mod tests {
     }
 
     #[gpui::test]
-    async fn test_dxf_is_claimed_but_dwg_is_not(cx: &mut TestAppContext) {
+    async fn test_dwg_documents_open_the_drawing_viewer(cx: &mut TestAppContext) {
         init_test(cx);
-        let (project, path) = test_document_project(cx, "plan.dwg", b"AC1032".to_vec()).await;
-        assert!(
-            cx.update(|cx| {
-                <DocumentItem as project::ProjectItem>::try_open(&project, &path, cx)
-            })
-            .is_none(),
-            "DWG must not be claimed by the drawing viewer"
+        assert_eq!(
+            DocumentFormat::from_extension("dwg"),
+            Some(DocumentFormat::Cad)
+        );
+        assert_eq!(
+            DocumentFormat::from_extension("DWG"),
+            Some(DocumentFormat::Cad)
         );
 
-        // A DWG that was renamed to .dxf explains itself instead of failing
-        // silently inside the parsing stage.
-        let (project, project_path) =
-            test_document_project(cx, "renamed.dxf", b"AC1032\x00\x00\x00\x00".to_vec()).await;
+        let bytes = crate::cad_dwg::minimal_dwg();
+        let (project, item) = open_test_document(cx, "plan.dwg", bytes.clone()).await;
+        item.read_with(cx, |item, _| {
+            assert_eq!(item.format, DocumentFormat::Cad);
+            assert!(
+                item.contents.is_empty(),
+                "the parsed drawing must not keep the file bytes resident"
+            );
+            let scene = item.cad.as_ref().expect("drawing scene");
+            assert_eq!(scene.paths.len(), 1);
+            assert_eq!(
+                scene.layers.last().expect("walls layer").name.as_ref(),
+                "WALLS"
+            );
+        });
+
+        // The container decides the reader, so a DWG renamed to .dxf opens
+        // instead of being rejected by the DXF parser.
+        let (_, renamed) = open_test_document(cx, "renamed.dxf", bytes).await;
+        renamed.read_with(cx, |item, _| {
+            assert_eq!(item.format, DocumentFormat::Cad);
+            assert!(item.cad.is_some(), "a DWG named .dxf is still a drawing");
+        });
+
+        let (view, window) =
+            cx.add_window_view(|window, cx| DocumentView::new(item, project, window, cx));
+        window.run_until_parked();
+        view.read_with(&mut *window, |view, _| {
+            assert!(matches!(view.child, DocumentChild::Cad(_)));
+        });
+    }
+
+    #[gpui::test]
+    async fn test_unsupported_dwg_version_explains_itself(cx: &mut TestAppContext) {
+        init_test(cx);
+        let mut bytes = b"AC1014".to_vec();
+        bytes.resize(256, 0);
+        let (project, project_path) = test_document_project(cx, "legacy.dwg", bytes).await;
         let item = cx
             .update(|cx| DocumentItem::open(project, project_path, cx))
             .await
@@ -1638,8 +1678,8 @@ mod tests {
         item.read_with(cx, |item, _| {
             assert!(
                 matches!(&item.state, DocumentLoadState::Failed(message)
-                    if message.contains(&i18n::t!("4a57c500c76df00e"))),
-                "expected the DWG explanation, got {:?}",
+                    if message.contains("R14 (AC1014)")),
+                "expected the version explanation, got {:?}",
                 item.state
             );
         });
@@ -1875,11 +1915,6 @@ mod tests {
             DocumentFormat::from_extension("doc"),
             None,
             "the legacy binary Word format is not previewable and must not be claimed"
-        );
-        assert_eq!(
-            DocumentFormat::from_extension("dwg"),
-            None,
-            "DWG is not previewable and must not be claimed"
         );
         assert_eq!(DocumentFormat::from_extension("txt"), None);
     }

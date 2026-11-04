@@ -484,13 +484,22 @@ async fn test_remote_document_loading(cx: &mut TestAppContext, server_cx: &mut T
     let fs = FakeFs::new(server_cx.executor());
     fs.insert_tree(path!("/code"), json!({"project": {}})).await;
     let bytes = vec![37; project::DOCUMENT_CHUNK_SIZE + 17];
-    for name in ["book.epub", "document.pdf", "sheet.xlsx", "empty.ods"] {
+    // A DWG container: the server only validates the extension and transfers
+    // the bytes, the client decodes them.
+    let dwg = b"AC1032".to_vec();
+    for name in [
+        "book.epub",
+        "document.pdf",
+        "sheet.xlsx",
+        "empty.ods",
+        "plan.dwg",
+    ] {
         fs.insert_file(
             &format!("/code/project/{name}"),
-            if name == "empty.ods" {
-                Vec::new()
-            } else {
-                bytes.clone()
+            match name {
+                "empty.ods" => Vec::new(),
+                "plan.dwg" => dwg.clone(),
+                _ => bytes.clone(),
             },
         )
         .await;
@@ -545,13 +554,7 @@ async fn test_remote_document_loading(cx: &mut TestAppContext, server_cx: &mut T
     );
     fs.insert_file("/code/project/book.epub", bytes.clone())
         .await;
-    // `plan.dwg` is a real DWG container, which this fork does not preview.
-    for invalid_path in [
-        "../book.epub",
-        "/code/project/book.epub",
-        "unsupported.txt",
-        "plan.dwg",
-    ] {
+    for invalid_path in ["../book.epub", "/code/project/book.epub", "unsupported.txt"] {
         assert!(
             client
                 .request(proto::ReadDocumentChunk {
@@ -565,7 +568,13 @@ async fn test_remote_document_loading(cx: &mut TestAppContext, server_cx: &mut T
                 .is_err()
         );
     }
-    for name in ["book.epub", "document.pdf", "sheet.xlsx", "empty.ods"] {
+    for name in [
+        "book.epub",
+        "document.pdf",
+        "sheet.xlsx",
+        "empty.ods",
+        "plan.dwg",
+    ] {
         let progress = Rc::new(RefCell::new(Vec::new()));
         let loaded = project
             .update(cx, |project, cx| {
@@ -587,10 +596,10 @@ async fn test_remote_document_loading(cx: &mut TestAppContext, server_cx: &mut T
         assert!(!loaded.file.is_local);
         assert_eq!(
             loaded.content,
-            if name == "empty.ods" {
-                Vec::new()
-            } else {
-                bytes.clone()
+            match name {
+                "empty.ods" => Vec::new(),
+                "plan.dwg" => dwg.clone(),
+                _ => bytes.clone(),
             }
         );
         assert_eq!(loaded.file.path.as_unix_str(), name);

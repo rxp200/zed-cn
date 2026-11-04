@@ -39,7 +39,6 @@
   "8b2cfcc58121cfbd": "Too much geometry to draw at this zoom level",
   "5fae915de35e2dc2": "{size} · {zoom}%",
   "4f86881b2f3cc387": "Every layer is hidden; show a layer to see the drawing",
-  "4a57c500c76df00e": "This is a DWG drawing; export it to DXF to preview it",
   "9d31bf6b9ebcc683": "Binary DXF is not supported; save the drawing as ASCII DXF",
   "ee27e1fb58fdfa8a": "This file is not a DXF drawing",
   "96ab902f5adf7da4": "This drawing has no geometry to preview",
@@ -5767,5 +5766,8 @@
   "0d258569095cbb37": "The target language for translation, as a language name or BCP-47 tag. Leave empty to follow the Zed interface language.",
   "d410a8f58de1ef69": "The default (Bing) translation returned an invalid response",
   "05d7d00737291230": "The default (Bing) translation request failed: HTTP {status}",
-  "808c91a847b2948f": "The default (Bing) translation response exceeded the {max_bytes}-byte limit"
+  "808c91a847b2948f": "The default (Bing) translation response exceeded the {max_bytes}-byte limit",
+  "90add587c97ee314": "DWG version {} is not supported; save the drawing as AutoCAD 2000 or newer, or export it as DXF",
+  "a21f8cb7c2076d33": "This DWG is password-protected and cannot be previewed",
+  "3bb9251f6e5caa6a": "This DWG is damaged or incomplete and cannot be previewed"
 }
