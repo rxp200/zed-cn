@@ -5769,5 +5769,21 @@
   "808c91a847b2948f": "The default (Bing) translation response exceeded the {max_bytes}-byte limit",
   "90add587c97ee314": "DWG version {} is not supported; save the drawing as AutoCAD 2000 or newer, or export it as DXF",
   "a21f8cb7c2076d33": "This DWG is password-protected and cannot be previewed",
-  "3bb9251f6e5caa6a": "This DWG is damaged or incomplete and cannot be previewed"
+  "3bb9251f6e5caa6a": "This DWG is damaged or incomplete and cannot be previewed",
+  "08a4c34560df2e32": "Part {}",
+  "dacb6d45653e6f98": "Other parts",
+  "efbcd674b4f43dcc": "Parts",
+  "21c81ea001d9fcbb": "Explode parts",
+  "484d208c49def35b": "Move parts",
+  "58fbbd8fae0e9cba": "Reset positions",
+  "91113056591e6c40": "Reset this part",
+  "3dc5d9ee77d7ca7e": "Show part",
+  "a4cde08f5a968c39": "Hide part",
+  "c21e410e4be2f1e3": "Section caps are unavailable while parts are moved",
+  "0a4644af439370c2": "Showing the {} largest parts",
+  "2150d8df37e48957": "Show all",
+  "359a8477958d7f31": "Explode",
+  "357975a377051487": "Click to select a part; drag in move mode to reposition it",
+  "44e7d4b248469d73": "Assembly",
+  "dc1ddfc95171bd44": "{} parts"
 }

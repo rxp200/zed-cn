@@ -139,7 +139,7 @@ impl DocumentItem {
         project_path: ProjectPath,
         cx: &mut App,
     ) -> Task<Result<Entity<Self>>> {
-        let Some(extension) = project_path.path.extension().map(str::to_string) else {
+        let Some(extension) = project.read(cx).document_extension(&project_path, cx) else {
             return Task::ready(Err(anyhow!("unsupported document format")));
         };
         let Some(format) = DocumentFormat::from_extension(&extension) else {
@@ -390,7 +390,7 @@ impl DocumentItem {
 
     fn reload_bytes(&mut self, cx: &mut Context<Self>) {
         let path = self.project_path(cx);
-        let Some(extension) = path.path.extension().map(str::to_string) else {
+        let Some(extension) = self.project.read(cx).document_extension(&path, cx) else {
             return;
         };
         if let Some(entry) = self.project.read(cx).entry_for_path(&path, cx)
@@ -475,7 +475,7 @@ impl project::ProjectItem for DocumentItem {
         path: &ProjectPath,
         cx: &mut App,
     ) -> Option<Task<Result<Entity<Self>>>> {
-        DocumentFormat::from_extension(path.path.extension()?)?;
+        DocumentFormat::from_extension(&project.read(cx).document_extension(path, cx)?)?;
         log::info!(
             "[open-debug] DocumentItem::try_open {:?}",
             path.path.as_unix_str()
@@ -1469,7 +1469,7 @@ mod tests {
     use fs::{FakeFs, Fs as _};
     use gpui::TestAppContext;
     use postage::stream::Stream as _;
-    use util::rel_path::rel_path;
+    use util::rel_path::{RelPath, rel_path};
     use workspace::AppState;
 
     fn init_test(cx: &mut TestAppContext) {
@@ -1665,6 +1665,119 @@ mod tests {
     }
 
     #[gpui::test]
+    async fn test_document_opens_from_a_directly_opened_file(cx: &mut TestAppContext) {
+        init_test(cx);
+        let fs = FakeFs::new(cx.executor());
+        fs.create_dir(Path::new("/root"))
+            .await
+            .expect("test root should be created");
+        fs.insert_file("/root/plan.dwg", crate::cad_dwg::minimal_dwg())
+            .await;
+
+        // Opening a file from the file manager or the CLI creates a single-file
+        // worktree rooted at that file, so its project path is empty.
+        let project = Project::test(fs.clone(), [Path::new("/root/plan.dwg")], cx).await;
+        let project_path = cx.update(|cx| {
+            let worktree = project
+                .read(cx)
+                .worktrees(cx)
+                .next()
+                .expect("test project should contain a worktree");
+            assert!(
+                worktree.read(cx).is_single_file(),
+                "a directly opened file must be its own worktree root"
+            );
+            ProjectPath {
+                worktree_id: worktree.read(cx).id(),
+                path: RelPath::empty_arc(),
+            }
+        });
+        assert!(
+            cx.update(|cx| <DocumentItem as project::ProjectItem>::try_open(
+                &project,
+                &project_path,
+                cx
+            ))
+            .is_some(),
+            "a directly opened DWG must be claimed by the drawing viewer"
+        );
+
+        let item = cx
+            .update(|cx| DocumentItem::open(project.clone(), project_path, cx))
+            .await
+            .expect("a directly opened document should open");
+        cx.run_until_parked();
+        item.read_with(cx, |item, _| {
+            assert_eq!(item.format, DocumentFormat::Cad);
+            assert!(
+                item.cad
+                    .as_ref()
+                    .is_some_and(|scene| !scene.paths.is_empty()),
+                "the directly opened drawing should be parsed"
+            );
+        });
+
+        // Rewriting the file must still reload it: the extension lookup used by
+        // the reload path must resolve the single-file worktree the same way.
+        fs.insert_file("/root/plan.dwg", crate::cad_dwg::minimal_dwg_with_lines(2))
+            .await;
+        let worktree = project.read_with(cx, |project, cx| {
+            project.worktrees(cx).next().expect("test worktree")
+        });
+        worktree
+            .read_with(cx, |worktree, _| {
+                worktree
+                    .as_local()
+                    .expect("test worktree is local")
+                    .manually_refresh_entries_for_paths(vec![RelPath::empty_arc()])
+            })
+            .recv()
+            .await;
+        cx.run_until_parked();
+        item.read_with(cx, |item, _| {
+            assert_eq!(
+                item.cad.as_ref().expect("reloaded scene").paths.len(),
+                2,
+                "the rewritten file must reload in place"
+            );
+        });
+    }
+
+    #[gpui::test]
+    async fn test_a_directory_named_like_a_drawing_is_not_claimed(cx: &mut TestAppContext) {
+        init_test(cx);
+        let fs = FakeFs::new(cx.executor());
+        fs.create_dir(Path::new("/root/plan.dwg"))
+            .await
+            .expect("test directory should be created");
+        let project = Project::test(fs, [Path::new("/root/plan.dwg")], cx).await;
+        let project_path = cx.update(|cx| {
+            let worktree = project
+                .read(cx)
+                .worktrees(cx)
+                .next()
+                .expect("test project should contain a worktree");
+            assert!(
+                !worktree.read(cx).is_single_file(),
+                "a directory worktree is not a single-file worktree"
+            );
+            ProjectPath {
+                worktree_id: worktree.read(cx).id(),
+                path: RelPath::empty_arc(),
+            }
+        });
+        assert!(
+            cx.update(|cx| <DocumentItem as project::ProjectItem>::try_open(
+                &project,
+                &project_path,
+                cx
+            ))
+            .is_none(),
+            "a directory whose name ends in .dwg is not a drawing"
+        );
+    }
+
+    #[gpui::test]
     async fn test_unsupported_dwg_version_explains_itself(cx: &mut TestAppContext) {
         init_test(cx);
         let mut bytes = b"AC1014".to_vec();
@@ -1751,6 +1864,50 @@ mod tests {
             .expect("topology");
         assert!(geometry.origin.x > panel.origin.x);
         assert!(topology.origin.y > geometry.origin.y + geometry.size.height);
+    }
+
+    #[gpui::test]
+    async fn test_model_parts_panel_and_explode(cx: &mut TestAppContext) {
+        init_test(cx);
+        let stl = b"solid test\n\
+            facet normal 0 0 1\nouter loop\nvertex 0 0 0\nvertex 1 0 0\nvertex 0 1 0\nendloop\nendfacet\n\
+            facet normal 0 0 1\nouter loop\nvertex 10 0 0\nvertex 11 0 0\nvertex 10 1 0\nendloop\nendfacet\n\
+            endsolid test";
+        let (project, item) = open_test_document(cx, "two-parts.stl", stl.to_vec()).await;
+        let (view, window) =
+            cx.add_window_view(|window, cx| DocumentView::new(item, project, window, cx));
+        let reader = window.update(|_, cx| match &view.read(cx).child {
+            DocumentChild::Model(reader) => reader.clone(),
+            _ => panic!("model documents should open the model reader"),
+        });
+        window.run_until_parked();
+        assert_eq!(
+            window.update(|_, cx| reader.read(cx).parts_state_for_test().0),
+            2
+        );
+        assert!(window.debug_bounds("model-parts-header").is_some());
+        assert!(window.debug_bounds("model-explode-track").is_some());
+        window.update(|_, cx| reader.update(cx, |reader, cx| reader.set_explode_for_test(0.6, cx)));
+        window.run_until_parked();
+        assert!(
+            (window.update(|_, cx| reader.read(cx).parts_state_for_test().1) - 0.6).abs() < 1e-9
+        );
+    }
+
+    #[gpui::test]
+    async fn test_single_body_model_hides_parts_panel(cx: &mut TestAppContext) {
+        init_test(cx);
+        let (project, item) = open_test_document(
+            cx,
+            "triangle.obj",
+            b"v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3".to_vec(),
+        )
+        .await;
+        let (_view, window) =
+            cx.add_window_view(|window, cx| DocumentView::new(item, project, window, cx));
+        window.run_until_parked();
+        assert!(window.debug_bounds("model-parts-header").is_none());
+        assert!(window.debug_bounds("model-explode-track").is_none());
     }
 
     #[gpui::test]
@@ -1947,6 +2104,45 @@ mod tests {
             assert!(
                 !item.contents.is_empty(),
                 "the restored tab must load the document bytes"
+            );
+        });
+    }
+
+    #[gpui::test]
+    async fn test_restore_saved_document_outside_the_project(cx: &mut TestAppContext) {
+        init_test(cx);
+        let fs = FakeFs::new(cx.executor());
+        fs.create_dir(Path::new("/root"))
+            .await
+            .expect("test root should be created");
+        fs.create_dir(Path::new("/saved"))
+            .await
+            .expect("saved directory should be created");
+        fs.insert_file("/saved/plan.dwg", crate::cad_dwg::minimal_dwg())
+            .await;
+        let project = Project::test(fs, [Path::new("/root")], cx).await;
+
+        // Restoring a tab stores the absolute path, so a document that is not
+        // covered by any open worktree opens through a single-file worktree.
+        let open = cx.update(|cx| {
+            let project = project.clone();
+            cx.spawn(async move |cx| {
+                DocumentView::open_saved_document(project, PathBuf::from("/saved/plan.dwg"), cx)
+                    .await
+            })
+        });
+        let item = open
+            .await
+            .expect("a document outside the project must reopen");
+        cx.run_until_parked();
+        item.read_with(cx, |item, cx| {
+            assert_eq!(item.format, DocumentFormat::Cad);
+            assert_eq!(item.host_path(cx), Path::new("/saved/plan.dwg"));
+            assert!(
+                item.cad
+                    .as_ref()
+                    .is_some_and(|scene| !scene.paths.is_empty()),
+                "the restored drawing should be parsed"
             );
         });
     }

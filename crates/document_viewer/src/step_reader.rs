@@ -79,12 +79,39 @@ impl StepUnit {
     }
 }
 
+/// One independently selectable body of a STEP assembly.
+pub struct StepPart {
+    pub name: String,
+    pub color: Option<[u8; 3]>,
+    pub triangle_count: usize,
+    pub depth: u16,
+}
+
 /// Flattened STEP geometry, ready for the existing model viewer.
 pub struct StepMesh {
     pub triangles: Vec<[[f64; 3]; 3]>,
+    pub parts: Vec<StepPart>,
     /// Number of shells (solid bodies) that contributed triangles.
     pub solids: usize,
     pub unit: StepUnit,
+}
+
+/// Identity of one body inside one placed product instance.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct ComponentKey {
+    product: u64,
+    owner: u64,
+    frame: [u64; 12],
+}
+
+/// One shell already placed in assembly coordinates.
+struct PlacedShell {
+    component: ComponentKey,
+    name: String,
+    color: Option<[u8; 3]>,
+    depth: u16,
+    shell: u64,
+    frame: Frame,
 }
 
 /// A frame with an orthonormal basis and a uniform scale folded into it. STEP's
@@ -174,12 +201,14 @@ pub fn parse(bytes: &[u8]) -> Result<StepMesh> {
     // Start with a tolerance relative to the model size and coarsen it when a
     // finely tessellated assembly would blow the triangle budget.
     let mut triangles = Vec::new();
+    let mut parts = Vec::new();
     let mut solids = 0;
     let mut coarseness = 1.0_f64;
     for attempt in 0..3 {
         match tessellate_shells(&table, &placements, scale, coarseness, deadline) {
-            Ok((tessellated, shell_count)) => {
+            Ok((tessellated, tessellated_parts, shell_count)) => {
                 triangles = tessellated;
+                parts = tessellated_parts;
                 solids = shell_count;
                 break;
             }
@@ -205,13 +234,15 @@ pub fn parse(bytes: &[u8]) -> Result<StepMesh> {
 
     ensure!(!triangles.is_empty(), i18n::t!("b3c2a02674c98236"));
     log::info!(
-        "[step] parsed {} solids, {} triangles, unit {}",
+        "[step] parsed {} solids, {} parts, {} triangles, unit {}",
         solids,
+        parts.len(),
         triangles.len(),
         unit.label()
     );
     Ok(StepMesh {
         triangles,
+        parts,
         solids,
         unit,
     })
@@ -233,56 +264,112 @@ impl From<anyhow::Error> for TessellateFailure {
 
 fn tessellate_shells(
     table: &Table,
-    placements: &[(u64, Frame)],
+    placements: &[PlacedShell],
     scale: f64,
     coarseness: f64,
     deadline: Instant,
-) -> Result<(Vec<[[f64; 3]; 3]>, usize), TessellateFailure> {
+) -> Result<(Vec<[[f64; 3]; 3]>, Vec<StepPart>, usize), TessellateFailure> {
     let mut triangles = Vec::new();
     let mut solids = 0;
     let mut inspected_faces = 0;
     if placements.len() > MAX_SHELLS {
         return Err(TessellateFailure::TooManyBodies);
     }
-    for (shell_id, placement) in placements {
-        if Instant::now() >= deadline {
-            return Err(TessellateFailure::TimedOut);
-        }
-        let Some(shell) = table.shell.get(shell_id) else {
-            continue;
-        };
-        let output = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let compressed = table
-                .to_compressed_shell(shell)
-                .map_err(|error| anyhow!("{error}"))?;
-            let tolerance = tessellation_tolerance(&compressed, scale) * coarseness;
-            Ok::<_, anyhow::Error>(tessellate_compressed_shell(
-                compressed, *shell_id, tolerance,
-            ))
-        }));
-        let (polygon, face_count) = match output {
-            Ok(Ok(Some(value))) => value,
-            Ok(Ok(None)) => {
-                log::warn!("[step] shell #{shell_id} has no tessellatable faces");
-                continue;
-            }
-            Ok(Err(error)) => {
-                log::warn!("[step] shell #{shell_id} is not convertible: {error}");
-                continue;
-            }
-            Err(_) => {
-                log::warn!("[step] shell #{shell_id} panicked while tessellating");
-                continue;
-            }
-        };
-        inspected_faces += face_count;
-        if inspected_faces > MAX_FACES {
-            return Err(TessellateFailure::Fatal(anyhow!(i18n::t!("2c715501987c136e"))));
-        }
-        append_polygon(&polygon, placement, scale, MAX_TRIANGLES, &mut triangles)?;
-        solids += 1;
+
+    let mut groups: Vec<(ComponentKey, String, Option<[u8; 3]>, u16, Vec<usize>)> = Vec::new();
+    let mut group_index: HashMap<ComponentKey, usize> = HashMap::new();
+    for (index, placed) in placements.iter().enumerate() {
+        let group = *group_index.entry(placed.component).or_insert_with(|| {
+            let group = groups.len();
+            groups.push((
+                placed.component,
+                placed.name.clone(),
+                placed.color,
+                placed.depth,
+                Vec::new(),
+            ));
+            group
+        });
+        groups[group].4.push(index);
     }
-    Ok((triangles, solids))
+
+    let mut parts = Vec::new();
+    let mut generated_names = 0usize;
+    for (_, name, color, depth, shells) in groups {
+        let first_triangle = triangles.len();
+        for shell_index in shells {
+            let placed = &placements[shell_index];
+            let shell_id = placed.shell;
+            if Instant::now() >= deadline {
+                return Err(TessellateFailure::TimedOut);
+            }
+            let Some(shell) = table.shell.get(&shell_id) else {
+                continue;
+            };
+            let output = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let compressed = table
+                    .to_compressed_shell(shell)
+                    .map_err(|error| anyhow!("{error}"))?;
+                let tolerance = tessellation_tolerance(&compressed, scale) * coarseness;
+                Ok::<_, anyhow::Error>(tessellate_compressed_shell(compressed, shell_id, tolerance))
+            }));
+            let (polygon, face_count) = match output {
+                Ok(Ok(Some(value))) => value,
+                Ok(Ok(None)) => {
+                    log::warn!("[step] shell #{shell_id} has no tessellatable faces");
+                    continue;
+                }
+                Ok(Err(error)) => {
+                    log::warn!("[step] shell #{shell_id} is not convertible: {error}");
+                    continue;
+                }
+                Err(_) => {
+                    log::warn!("[step] shell #{shell_id} panicked while tessellating");
+                    continue;
+                }
+            };
+            inspected_faces += face_count;
+            if inspected_faces > MAX_FACES {
+                return Err(TessellateFailure::Fatal(anyhow!(i18n::t!(
+                    "2c715501987c136e"
+                ))));
+            }
+            append_polygon(
+                &polygon,
+                &placed.frame,
+                scale,
+                MAX_TRIANGLES,
+                &mut triangles,
+            )?;
+            solids += 1;
+        }
+        let triangle_count = triangles.len() - first_triangle;
+        if triangle_count == 0 {
+            continue;
+        }
+        let name = if name.trim().is_empty() {
+            generated_names += 1;
+            i18n::t_args!("08a4c34560df2e32", generated_names)
+        } else {
+            name
+        };
+        parts.push(StepPart {
+            name,
+            color,
+            triangle_count,
+            depth,
+        });
+    }
+
+    let mut seen: HashMap<String, usize> = HashMap::new();
+    for part in &mut parts {
+        let count = seen.entry(part.name.clone()).or_insert(0);
+        *count += 1;
+        if *count > 1 {
+            part.name = format!("{} #{}", part.name, *count);
+        }
+    }
+    Ok((triangles, parts, solids))
 }
 
 /// Turns one shell into a polygon mesh plus its face count, dropping the faces
@@ -328,6 +415,10 @@ fn build_table(sections: &[DataSection]) -> (Table, usize) {
 /// Geometry and topology entities are left to `truck-stepio` so a large STEP
 /// file is not duplicated in the raw table.
 const STRUCTURAL_ENTITIES: &[&str] = &[
+    "PRODUCT",
+    "PRODUCT_DEFINITION",
+    "PRODUCT_DEFINITION_FORMATION",
+    "PRODUCT_DEFINITION_FORMATION_WITH_SPECIFIED_SOURCE",
     "PRODUCT_DEFINITION_SHAPE",
     "SHAPE_DEFINITION_REPRESENTATION",
     "NEXT_ASSEMBLY_USAGE_OCCURRENCE",
@@ -354,6 +445,17 @@ const STRUCTURAL_ENTITIES: &[&str] = &[
     "LENGTH_UNIT",
     "LENGTH_MEASURE_WITH_UNIT",
     "MEASURE_WITH_UNIT",
+    "STYLED_ITEM",
+    "PRESENTATION_STYLE_ASSIGNMENT",
+    "SURFACE_STYLE_USAGE",
+    "SURFACE_SIDE_STYLE",
+    "SURFACE_STYLE_FILL_AREA",
+    "SURFACE_STYLE_TRANSPARENT",
+    "SURFACE_STYLE_BOUNDARY",
+    "FILL_AREA_STYLE",
+    "FILL_AREA_STYLE_COLOUR",
+    "COLOUR_RGB",
+    "DRAUGHTING_PRE_DEFINED_COLOUR",
 ];
 
 fn collect_raw_entities(sections: &[DataSection]) -> RawEntities {
@@ -686,7 +788,11 @@ fn point_is_finite(point: Point3) -> bool {
     point.x.is_finite() && point.y.is_finite() && point.z.is_finite()
 }
 
-fn edge_is_tessellatable(edge: &CompressedEdge<Curve3D>, vertices: &[Point3], tolerance: f64) -> bool {
+fn edge_is_tessellatable(
+    edge: &CompressedEdge<Curve3D>,
+    vertices: &[Point3],
+    tolerance: f64,
+) -> bool {
     let Some(first) = vertices.get(edge.vertices.0) else {
         return false;
     };
@@ -1149,7 +1255,7 @@ fn append_polygon(
 
 /// Decides where every shell in the file sits in model space. Files without an
 /// assembly graph return each shell with the identity placement.
-fn shell_placements(raw: &RawEntities, table: &Table) -> Result<Vec<(u64, Frame)>> {
+fn shell_placements(raw: &RawEntities, table: &Table) -> Result<Vec<PlacedShell>> {
     let mut all: Vec<u64> = table.shell.keys().copied().collect();
     all.sort_unstable();
 
@@ -1157,7 +1263,18 @@ fn shell_placements(raw: &RawEntities, table: &Table) -> Result<Vec<(u64, Frame)
     if graph.occurrences.is_empty() && graph.representation_shells.is_empty() {
         return Ok(all
             .into_iter()
-            .map(|shell_id| (shell_id, Frame::IDENTITY))
+            .map(|shell_id| PlacedShell {
+                component: ComponentKey {
+                    product: 0,
+                    owner: shell_id,
+                    frame: frame_key(&Frame::IDENTITY),
+                },
+                name: String::new(),
+                color: graph.solid_colors.get(&shell_id).copied(),
+                depth: 0,
+                shell: shell_id,
+                frame: Frame::IDENTITY,
+            })
             .collect());
     }
 
@@ -1165,8 +1282,14 @@ fn shell_placements(raw: &RawEntities, table: &Table) -> Result<Vec<(u64, Frame)
     let mut visited = HashSet::new();
     let mut budget = ShellBudget::default();
     for root in &graph.roots {
+        let name = graph
+            .product_names
+            .get(root)
+            .cloned()
+            .unwrap_or_else(|| i18n::t!("44e7d4b248469d73").to_string());
         graph.collect(
             *root,
+            &name,
             &Frame::IDENTITY,
             0,
             &mut placements,
@@ -1177,18 +1300,29 @@ fn shell_placements(raw: &RawEntities, table: &Table) -> Result<Vec<(u64, Frame)
 
     let mut emitted = HashSet::new();
     let mut result = Vec::new();
-    for (shell_id, frame) in placements {
-        if emitted.insert((shell_id, frame_key(&frame))) {
-            result.push((shell_id, frame));
+    for placed in placements {
+        if emitted.insert((placed.component, placed.shell)) {
+            result.push(placed);
         }
     }
 
     // Keep shells the assembly graph never reached (e.g. a file that mixes a
     // product structure with loose shells) so nothing silently disappears.
-    let placed: HashSet<u64> = result.iter().map(|(shell_id, _)| *shell_id).collect();
+    let placed: HashSet<u64> = result.iter().map(|placed| placed.shell).collect();
     for shell_id in all {
         if !placed.contains(&shell_id) {
-            result.push((shell_id, Frame::IDENTITY));
+            result.push(PlacedShell {
+                component: ComponentKey {
+                    product: 0,
+                    owner: shell_id,
+                    frame: frame_key(&Frame::IDENTITY),
+                },
+                name: String::new(),
+                color: graph.solid_colors.get(&shell_id).copied(),
+                depth: 0,
+                shell: shell_id,
+                frame: Frame::IDENTITY,
+            });
         }
     }
     Ok(result)
@@ -1224,15 +1358,25 @@ fn frame_key(frame: &Frame) -> [u64; 12] {
     key
 }
 
+struct Occurrence {
+    parent: u64,
+    child: u64,
+    name: String,
+}
+
 /// Product/assembly graph extracted from the raw entity table.
 #[derive(Default)]
 struct AssemblyGraph {
-    occurrences: Vec<(u64, u64)>,
+    occurrences: Vec<Occurrence>,
     roots: Vec<u64>,
     /// Product definition → representations that carry its geometry.
     product_representations: HashMap<u64, Vec<u64>>,
-    /// Representation → shells, with mapped-item placements already applied.
-    representation_shells: HashMap<u64, Vec<(u64, Frame)>>,
+    /// Product definition → PRODUCT name used in the parts list.
+    product_names: HashMap<u64, String>,
+    /// Solid/model entity → fill color from its presentation style.
+    solid_colors: HashMap<u64, [u8; 3]>,
+    /// Representation → shells with their owning solid and placement.
+    representation_shells: HashMap<u64, Vec<(u64, u64, Frame)>>,
     /// (child representation, parent representation) → child-to-parent frame.
     representation_transforms: HashMap<(u64, u64), Frame>,
 }
@@ -1277,7 +1421,7 @@ impl AssemblyGraph {
         items: &Parameter,
         placement: &Frame,
         depth: usize,
-        shells: &mut Vec<(u64, Frame)>,
+        shells: &mut Vec<(u64, u64, Frame)>,
         budget: &mut ShellBudget,
     ) -> Result<()> {
         if depth > MAX_ASSEMBLY_DEPTH {
@@ -1297,19 +1441,19 @@ impl AssemblyGraph {
                     "MANIFOLD_SOLID_BREP" => {
                         if let Some(shell) = entity.parameters.get(1).and_then(entity_ref) {
                             budget.take(1)?;
-                            shells.push((shell, *placement));
+                            shells.push((*item_id, shell, *placement));
                         }
                     }
                     "BREP_WITH_VOIDS" => {
                         if let Some(shell) = entity.parameters.get(1).and_then(entity_ref) {
                             budget.take(1)?;
-                            shells.push((shell, *placement));
+                            shells.push((*item_id, shell, *placement));
                         }
                         if let Some(Parameter::List(voids)) = entity.parameters.get(2) {
                             for void in voids {
                                 if let Some(shell) = entity_ref(void) {
                                     budget.take(1)?;
-                                    shells.push((shell, *placement));
+                                    shells.push((*item_id, shell, *placement));
                                 }
                             }
                         }
@@ -1319,14 +1463,14 @@ impl AssemblyGraph {
                             for shell in shells_list {
                                 if let Some(shell) = entity_ref(shell) {
                                     budget.take(1)?;
-                                    shells.push((shell, *placement));
+                                    shells.push((*item_id, shell, *placement));
                                 }
                             }
                         }
                     }
                     "CLOSED_SHELL" | "OPEN_SHELL" => {
                         budget.take(1)?;
-                        shells.push((*item_id, *placement));
+                        shells.push((*item_id, *item_id, *placement));
                     }
                     "MAPPED_ITEM" => {
                         let mapped = mapped_item_frame(raw, entity);
@@ -1346,9 +1490,9 @@ impl AssemblyGraph {
                             return Ok(());
                         };
                         let combined = placement.then(&mapped);
-                        for (shell, local) in children {
+                        for (owner, shell, local) in children {
                             budget.take(1)?;
-                            shells.push((*shell, combined.then(local)));
+                            shells.push((*owner, *shell, combined.then(local)));
                         }
                     }
                     _ => {}
@@ -1360,6 +1504,56 @@ impl AssemblyGraph {
     }
 
     fn collect_products(&mut self, raw: &RawEntities) {
+        let mut formation_product: HashMap<u64, u64> = HashMap::new();
+        for (id, entity) in raw {
+            if !matches!(
+                entity.name.as_str(),
+                "PRODUCT_DEFINITION_FORMATION"
+                    | "PRODUCT_DEFINITION_FORMATION_WITH_SPECIFIED_SOURCE"
+            ) {
+                continue;
+            }
+            if let Some(product) =
+                entity
+                    .parameters
+                    .iter()
+                    .filter_map(entity_ref)
+                    .find(|reference| {
+                        raw.get(reference)
+                            .is_some_and(|entity| entity.name == "PRODUCT")
+                    })
+            {
+                formation_product.insert(*id, product);
+            }
+        }
+        for (id, entity) in raw {
+            if entity.name != "PRODUCT_DEFINITION" {
+                continue;
+            }
+            let Some(formation) = entity
+                .parameters
+                .iter()
+                .filter_map(entity_ref)
+                .find(|reference| formation_product.contains_key(reference))
+            else {
+                continue;
+            };
+            let Some(product) = formation_product.get(&formation) else {
+                continue;
+            };
+            let Some(product) = raw.get(product) else {
+                continue;
+            };
+            let name = product
+                .parameters
+                .get(1)
+                .and_then(parameter_text)
+                .or_else(|| product.parameters.first().and_then(parameter_text));
+            if let Some(name) = name.filter(|name| !name.trim().is_empty()) {
+                self.product_names.insert(*id, name);
+            }
+        }
+
         // PRODUCT_DEFINITION_SHAPE → SHAPE_DEFINITION_REPRESENTATION → representation.
         let mut shape_to_definition: HashMap<u64, u64> = HashMap::new();
         for (id, entity) in raw {
@@ -1390,6 +1584,36 @@ impl AssemblyGraph {
                 .entry(product)
                 .or_default()
                 .push(representation);
+        }
+
+        self.collect_colors(raw);
+    }
+
+    /// Solid colors come from `STYLED_ITEM` presentation styles. Curve styles
+    /// in the same file resolve to nothing and are ignored.
+    fn collect_colors(&mut self, raw: &RawEntities) {
+        for entity in raw.values() {
+            if entity.name != "STYLED_ITEM" {
+                continue;
+            }
+            let Some(target) = entity.parameters.get(2).and_then(entity_ref) else {
+                continue;
+            };
+            let Some(target_entity) = raw.get(&target) else {
+                continue;
+            };
+            if !matches!(
+                target_entity.name.as_str(),
+                "MANIFOLD_SOLID_BREP" | "BREP_WITH_VOIDS" | "SHELL_BASED_SURFACE_MODEL"
+            ) {
+                continue;
+            }
+            let Some(styles) = entity.parameters.get(1) else {
+                continue;
+            };
+            if let Some(color) = style_color(raw, styles, 0) {
+                self.solid_colors.entry(target).or_insert(color);
+            }
         }
     }
 
@@ -1446,7 +1670,16 @@ impl AssemblyGraph {
             ) else {
                 continue;
             };
-            self.occurrences.push((parent, child));
+            let name = entity
+                .parameters
+                .get(2)
+                .and_then(parameter_text)
+                .unwrap_or_default();
+            self.occurrences.push(Occurrence {
+                parent,
+                child,
+                name,
+            });
             parents.insert(parent);
             children.insert(child);
         }
@@ -1472,9 +1705,10 @@ impl AssemblyGraph {
     fn collect(
         &self,
         product: u64,
+        name: &str,
         placement: &Frame,
         depth: usize,
-        shells: &mut Vec<(u64, Frame)>,
+        shells: &mut Vec<PlacedShell>,
         visited: &mut HashSet<(u64, [u64; 12])>,
         budget: &mut ShellBudget,
     ) -> Result<()> {
@@ -1487,26 +1721,52 @@ impl AssemblyGraph {
             .into_iter()
             .flatten()
         {
-            for (shell, local) in self
+            for (owner, shell, local) in self
                 .representation_shells
                 .get(representation)
                 .into_iter()
                 .flatten()
             {
                 budget.take(1)?;
-                shells.push((*shell, placement.then(local)));
+                let frame = placement.then(local);
+                shells.push(PlacedShell {
+                    component: ComponentKey {
+                        product,
+                        owner: *owner,
+                        frame: frame_key(&frame),
+                    },
+                    name: name.to_owned(),
+                    color: self.solid_colors.get(owner).copied(),
+                    depth: depth.min(usize::from(u16::MAX)) as u16,
+                    shell: *shell,
+                    frame,
+                });
             }
         }
-        for (parent, child) in &self.occurrences {
-            if *parent != product {
+        for occurrence in &self.occurrences {
+            if occurrence.parent != product {
                 continue;
             }
+            let child = occurrence.child;
             let local = self
-                .occurrence_transform(*child, *parent)
+                .occurrence_transform(child, product)
                 .unwrap_or(Frame::IDENTITY);
             let combined = placement.then(&local);
-            if visited.insert((*child, frame_key(&combined))) {
-                self.collect(*child, &combined, depth + 1, shells, visited, budget)?;
+            if visited.insert((child, frame_key(&combined))) {
+                let child_name = if occurrence.name.trim().is_empty() {
+                    self.product_names.get(&child).cloned().unwrap_or_default()
+                } else {
+                    occurrence.name.clone()
+                };
+                self.collect(
+                    child,
+                    &child_name,
+                    &combined,
+                    depth + 1,
+                    shells,
+                    visited,
+                    budget,
+                )?;
             }
         }
         Ok(())
@@ -1526,6 +1786,71 @@ impl AssemblyGraph {
             }
         }
         None
+    }
+}
+
+fn parameter_text(parameter: &Parameter) -> Option<String> {
+    match parameter {
+        Parameter::String(value) => Some(value.clone()),
+        Parameter::Typed { parameter, .. } => parameter_text(parameter),
+        _ => None,
+    }
+}
+
+fn style_color(raw: &RawEntities, parameter: &Parameter, depth: usize) -> Option<[u8; 3]> {
+    if depth > 16 {
+        return None;
+    }
+    match parameter {
+        Parameter::Ref(Name::Entity(id)) => {
+            let entity = raw.get(id)?;
+            match entity.name.as_str() {
+                "COLOUR_RGB" => {
+                    let channels = [
+                        entity.parameters.get(1).and_then(real)?,
+                        entity.parameters.get(2).and_then(real)?,
+                        entity.parameters.get(3).and_then(real)?,
+                    ];
+                    Some(channels.map(|channel| (channel.clamp(0.0, 1.0) * 255.0).round() as u8))
+                }
+                "DRAUGHTING_PRE_DEFINED_COLOUR" => entity
+                    .parameters
+                    .first()
+                    .and_then(parameter_text)
+                    .and_then(|name| predefined_color(&name)),
+                "PRESENTATION_STYLE_ASSIGNMENT"
+                | "SURFACE_STYLE_USAGE"
+                | "SURFACE_SIDE_STYLE"
+                | "SURFACE_STYLE_FILL_AREA"
+                | "FILL_AREA_STYLE"
+                | "FILL_AREA_STYLE_COLOUR"
+                | "SURFACE_STYLE_TRANSPARENT"
+                | "SURFACE_STYLE_BOUNDARY" => entity
+                    .parameters
+                    .iter()
+                    .find_map(|parameter| style_color(raw, parameter, depth + 1)),
+                _ => None,
+            }
+        }
+        Parameter::List(parameters) => parameters
+            .iter()
+            .find_map(|parameter| style_color(raw, parameter, depth + 1)),
+        Parameter::Typed { parameter, .. } => style_color(raw, parameter, depth + 1),
+        _ => None,
+    }
+}
+
+fn predefined_color(name: &str) -> Option<[u8; 3]> {
+    match name.to_ascii_lowercase().as_str() {
+        "black" => Some([24, 24, 24]),
+        "red" => Some([210, 70, 70]),
+        "green" => Some([70, 160, 90]),
+        "blue" => Some([70, 110, 210]),
+        "yellow" => Some([220, 190, 70]),
+        "magenta" => Some([190, 80, 180]),
+        "cyan" => Some([70, 180, 190]),
+        "white" => Some([240, 240, 240]),
+        _ => None,
     }
 }
 
@@ -2007,6 +2332,37 @@ pub(crate) mod tests {
         (definition, representation)
     }
 
+    fn push_solid_color(entities: &mut String, next: &mut u32, brep: u32, color: [f64; 3]) {
+        let mut id = || {
+            let value = *next;
+            *next += 1;
+            value
+        };
+        let rgb = id();
+        let fill = id();
+        let area = id();
+        let surface = id();
+        let side = id();
+        let usage = id();
+        let assignment = id();
+        let styled = id();
+        entities.push_str(&format!(
+            "#{rgb}=COLOUR_RGB('',{},{},{});\n",
+            color[0], color[1], color[2]
+        ));
+        entities.push_str(&format!("#{fill}=FILL_AREA_STYLE_COLOUR('',#{rgb});\n"));
+        entities.push_str(&format!("#{area}=FILL_AREA_STYLE('',(#{fill}));\n"));
+        entities.push_str(&format!("#{surface}=SURFACE_STYLE_FILL_AREA(#{area});\n"));
+        entities.push_str(&format!("#{side}=SURFACE_SIDE_STYLE('',(#{surface}));\n"));
+        entities.push_str(&format!("#{usage}=SURFACE_STYLE_USAGE(.BOTH.,#{side});\n"));
+        entities.push_str(&format!(
+            "#{assignment}=PRESENTATION_STYLE_ASSIGNMENT((#{usage}));\n"
+        ));
+        entities.push_str(&format!(
+            "#{styled}=STYLED_ITEM('',(#{assignment}),#{brep});\n"
+        ));
+    }
+
     fn assembly_step(unit: &str) -> String {
         let parent = cube_entities(1, [0.0, 0.0, 0.0]);
         let child = cube_entities(parent.next_id, [0.0, 0.0, 0.0]);
@@ -2068,6 +2424,9 @@ pub(crate) mod tests {
             next_id(&mut next)
         ));
 
+        push_solid_color(&mut entities, &mut next, parent_brep, [0.8, 0.2, 0.2]);
+        push_solid_color(&mut entities, &mut next, child_brep, [0.2, 0.8, 0.2]);
+
         wrap_data(&format!("{unit}{entities}{}{}", parent.text, child.text))
     }
 
@@ -2128,6 +2487,49 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn assembly_parts_keep_names_colors_and_ranges() {
+        let text = assembly_step(millimetre_unit());
+        let mesh = parse(text.as_bytes()).expect("assembly parts");
+        assert_eq!(mesh.parts.len(), 2);
+        let mut names: Vec<&str> = mesh.parts.iter().map(|part| part.name.as_str()).collect();
+        names.sort_unstable();
+        assert_eq!(names, ["child", "parent"]);
+        assert_eq!(
+            mesh.parts
+                .iter()
+                .map(|part| part.triangle_count)
+                .sum::<usize>(),
+            mesh.triangles.len()
+        );
+        let parent = mesh
+            .parts
+            .iter()
+            .find(|part| part.name == "parent")
+            .expect("parent part");
+        let child = mesh
+            .parts
+            .iter()
+            .find(|part| part.name == "child")
+            .expect("child part");
+        assert_eq!(parent.color, Some([204, 51, 51]));
+        assert_eq!(child.color, Some([51, 204, 51]));
+        assert_eq!(parent.depth, 0);
+        assert_eq!(child.depth, 1);
+    }
+
+    #[test]
+    fn single_solid_step_keeps_the_flat_part_path() {
+        let mesh = parse(cube_step(millimetre_unit()).as_bytes()).expect("cube");
+        assert_eq!(mesh.parts.len(), 1);
+        assert_eq!(mesh.parts[0].triangle_count, mesh.triangles.len());
+        assert_eq!(mesh.parts[0].color, None);
+        let model =
+            crate::model_mesh::ModelMesh::parse("step", cube_step(millimetre_unit()).as_bytes())
+                .expect("model");
+        assert!(model.parts.is_empty());
+    }
+
+    #[test]
     fn reports_invalid_step_input() {
         assert!(parse(b"not a step file").is_err());
         assert!(parse(b"\xFF\xFE").is_err());
@@ -2160,9 +2562,7 @@ pub(crate) mod tests {
             value
         };
         let origin = next();
-        text.push_str(&format!(
-            "#{origin}=CARTESIAN_POINT('',(0.0,0.0,0.0));\n"
-        ));
+        text.push_str(&format!("#{origin}=CARTESIAN_POINT('',(0.0,0.0,0.0));\n"));
         let normal = next();
         text.push_str(&format!("#{normal}=DIRECTION('',(0.0,0.0,1.0));\n"));
         let reference = next();
@@ -2253,9 +2653,7 @@ pub(crate) mod tests {
                 vertex_ids[(index + 1) % 4]
             ));
             let oriented = next();
-            text.push_str(&format!(
-                "#{oriented}=ORIENTED_EDGE('',$,$,#{edge},.T.);\n"
-            ));
+            text.push_str(&format!("#{oriented}=ORIENTED_EDGE('',$,$,#{edge},.T.);\n"));
             edge_ids.push(oriented);
         }
 
@@ -2356,8 +2754,10 @@ pub(crate) mod tests {
                 })
                 .collect::<Vec<_>>()
         };
-        let ordinary =
-            Surface::BSplineSurface(Box::new(BSplineSurface::new((knots(), knots()), net(false))));
+        let ordinary = Surface::BSplineSurface(Box::new(BSplineSurface::new(
+            (knots(), knots()),
+            net(false),
+        )));
         assert!(spline_division_fits(&ordinary, 0.01));
 
         let extreme =
@@ -2374,7 +2774,7 @@ pub(crate) mod tests {
         graph.representation_shells.insert(
             mapped_representation,
             (0..MAX_SHELLS as u64 + 1)
-                .map(|shell| (shell, Frame::IDENTITY))
+                .map(|shell| (shell, shell, Frame::IDENTITY))
                 .collect(),
         );
         let mut raw = RawEntities::new();

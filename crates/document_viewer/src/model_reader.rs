@@ -1,11 +1,11 @@
 use crate::{
     DocumentItem,
-    model_mesh::{ModelMesh, Topology, Vertex, cross, dot, sub},
+    model_mesh::{ModelMesh, ModelPart, Topology, Vertex, cross, dot, sub},
     model_section::{self, Section, SectionAxis, SectionPlane},
 };
 use gpui::{
-    App, Bounds, Context, Entity, FocusHandle, Focusable, Hsla, IntoElement, MouseButton, PathBuilder,
-    Pixels, Point, RenderImage, Rgba, Task, Window, canvas, img, point, px, rgb,
+    App, Bounds, Context, Entity, FocusHandle, Focusable, Hsla, IntoElement, MouseButton,
+    PathBuilder, Pixels, Point, RenderImage, Rgba, Task, Window, canvas, img, point, px, rgb,
 };
 use std::sync::{
     Arc,
@@ -42,6 +42,30 @@ const VIEW_CUBE_LABEL_FACING: f32 = 0.22;
 /// A caption needs this much projected width, otherwise short and long labels
 /// would spill over neighbouring faces.
 const VIEW_CUBE_LABEL_MIN_WIDTH: f32 = 34.0;
+
+/// Largest bodies listed in the properties panel. The model still keeps every
+/// body; only the list is truncated for layout cost and scrolling.
+const PARTS_PANEL_LIMIT: usize = 120;
+/// Base fraction of the model radius every exploded part travels, in addition
+/// to its own distance from the assembly center.
+const EXPLODE_DISTANCE: f64 = 0.35;
+/// Depth bias that keeps the selected silhouette above its own surface.
+const SELECTION_DEPTH_BIAS: f64 = 3e-4;
+/// Muted fill palette for bodies without a file-provided color.
+const PART_PALETTE: [[u8; 3]; 12] = [
+    [86, 148, 210],
+    [214, 137, 82],
+    [110, 180, 130],
+    [176, 120, 200],
+    [90, 180, 200],
+    [210, 170, 90],
+    [150, 150, 210],
+    [200, 110, 130],
+    [120, 190, 170],
+    [170, 160, 140],
+    [130, 170, 90],
+    [200, 140, 190],
+];
 
 /// Grid floor: one cell targets this many screen pixels, matching the fixed
 /// 0.78-unit grid it replaces, and the grid is laid out this many cells to each
@@ -129,7 +153,7 @@ impl ViewPreset {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 struct Camera {
     yaw: f64,
     pitch: f64,
@@ -156,6 +180,200 @@ impl Default for Camera {
     }
 }
 
+fn compute_explode_offsets(
+    parts: &[ModelPart],
+    center: Vertex,
+    radius: f64,
+    factor: f64,
+) -> Vec<Vertex> {
+    if parts.len() < 2 || factor <= 0.0 {
+        return vec![[0.0; 3]; parts.len()];
+    }
+    let factor = factor.clamp(0.0, 1.0);
+    let mut seen_centers: Vec<(Vertex, usize)> = Vec::with_capacity(parts.len());
+    parts
+        .iter()
+        .enumerate()
+        .map(|(index, part)| {
+            let radial = sub(part.center, center);
+            let length = dot(radial, radial).sqrt();
+            let mut direction = if length > radius * 1e-6 {
+                radial.map(|value| value / length)
+            } else {
+                alternative_explode_direction(index)
+            };
+            // Parts that share a center (mirrored instances, for example) would
+            // otherwise move along the same ray and stay overlapped. Give later
+            // duplicates a deterministic tangential component.
+            let duplicate = seen_centers.iter().position(|(other, _)| {
+                let distance = sub(*other, part.center);
+                dot(distance, distance).sqrt() <= radius * 1e-3
+            });
+            let ordinal = if let Some(position) = duplicate {
+                seen_centers[position].1 += 1;
+                seen_centers[position].1
+            } else {
+                seen_centers.push((part.center, 0));
+                0
+            };
+            if ordinal > 0 {
+                let seed = alternative_explode_direction(index);
+                let tangent = cross(direction, seed);
+                let tangent_length = dot(tangent, tangent).sqrt();
+                let tangent = if tangent_length > 1e-9 {
+                    tangent.map(|value| value / tangent_length)
+                } else {
+                    seed
+                };
+                let blended = [
+                    direction[0] + tangent[0] * 0.8,
+                    direction[1] + tangent[1] * 0.8,
+                    direction[2] + tangent[2] * 0.8,
+                ];
+                let blended_length = dot(blended, blended).sqrt().max(1e-9);
+                direction = blended.map(|value| value / blended_length);
+            }
+            let distance = factor * (length + radius * EXPLODE_DISTANCE);
+            direction.map(|value| value * distance)
+        })
+        .collect()
+}
+
+/// Converts a screen-space drag into a model-space translation on the camera
+/// plane. Perspective is approximated with the part center's depth, which is
+/// stable for dragging and avoids inverting the full projection.
+fn drag_translation(
+    camera: Camera,
+    dimensions: [u32; 2],
+    radius: f64,
+    part_center: Vertex,
+    delta: Point<Pixels>,
+) -> Vertex {
+    let [width, height] = dimensions;
+    let scale = f64::from(width.min(height)) * 0.8 * camera.zoom;
+    if !scale.is_finite() || scale <= 0.0 {
+        return [0.0; 3];
+    }
+    let (yaw_sin, yaw_cos) = camera.yaw.sin_cos();
+    let (pitch_sin, pitch_cos) = camera.pitch.sin_cos();
+    let view_z = -part_center[0] * yaw_sin + part_center[2] * yaw_cos;
+    let depth = part_center[1] * pitch_sin + view_z * pitch_cos;
+    let perspective = if camera.perspective {
+        let denominator = (2.5 - depth).abs().max(1e-6);
+        2.5 / denominator
+    } else {
+        1.0
+    };
+    let view_delta = [
+        f64::from(delta.x) / (scale * perspective),
+        -f64::from(delta.y) / (scale * perspective),
+        0.0,
+    ];
+    // The camera is a pure rotation, so its inverse is its transpose.
+    let undo_pitch_y = view_delta[1] * pitch_cos + view_delta[2] * pitch_sin;
+    let undo_pitch_z = -view_delta[1] * pitch_sin + view_delta[2] * pitch_cos;
+    let world_x = view_delta[0] * yaw_cos - undo_pitch_z * yaw_sin;
+    let world_z = view_delta[0] * yaw_sin + undo_pitch_z * yaw_cos;
+    [world_x * radius, undo_pitch_y * radius, world_z * radius]
+}
+
+fn alternative_explode_direction(index: usize) -> Vertex {
+    let angle = index as f64 * 2.399_963_229_728_653;
+    let z = if index.is_multiple_of(2) { 0.35 } else { -0.35 } + ((index % 5) as f64 - 2.0) * 0.05;
+    let xy = (1.0 - z * z).max(0.0).sqrt();
+    [angle.cos() * xy, angle.sin() * xy, z]
+}
+
+fn scale_color(color: [u8; 3], factor: f32) -> [u8; 3] {
+    color.map(|channel| (f32::from(channel) * factor).round().clamp(0.0, 255.0) as u8)
+}
+
+fn blend_color(first: [u8; 3], second: [u8; 3], amount: f32) -> [u8; 3] {
+    std::array::from_fn(|axis| {
+        (f32::from(first[axis]) * (1.0 - amount) + f32::from(second[axis]) * amount)
+            .round()
+            .clamp(0.0, 255.0) as u8
+    })
+}
+
+fn part_surface(
+    mesh: &ModelMesh,
+    index: usize,
+    style: RasterStyle,
+    selected: bool,
+) -> SurfaceStyle {
+    let base = mesh
+        .parts
+        .get(index)
+        .and_then(|part| part.color)
+        .unwrap_or(PART_PALETTE[index % PART_PALETTE.len()]);
+    let base = if style.is_dark {
+        std::array::from_fn(|axis| {
+            (f32::from(base[axis]) + (255.0 - f32::from(base[axis])) * 0.22) as u8
+        })
+    } else {
+        std::array::from_fn(|axis| (f32::from(base[axis]) * 0.86) as u8)
+    };
+    let fill = if selected {
+        blend_color(base, style.selection, 0.5)
+    } else {
+        base
+    };
+    let edge = if selected {
+        style.selection
+    } else {
+        scale_color(fill, 0.55)
+    };
+    let wire = if selected {
+        style.selection
+    } else {
+        scale_color(fill, 0.72)
+    };
+    SurfaceStyle { fill, edge, wire }
+}
+
+/// Draws the visible silhouette of the selected body. Writing over the part's
+/// own boundary pixels with a smaller depth keeps the outline stable while the
+/// model is orbited.
+fn draw_selection_outline(
+    pixels: &mut [u8],
+    depth: &mut [f64],
+    picks: &[u16],
+    selected: u16,
+    dimensions: [u32; 2],
+    color: [u8; 3],
+    cancel: &AtomicBool,
+) -> bool {
+    let [width, height] = dimensions;
+    let width = width as usize;
+    let height = height as usize;
+    for y in 0..height {
+        for x in 0..width {
+            let index = y * width + x;
+            if index.is_multiple_of(4096) && cancel.load(Ordering::Relaxed) {
+                return false;
+            }
+            if picks[index] != selected {
+                continue;
+            }
+            let edge = x == 0
+                || x + 1 >= width
+                || y == 0
+                || y + 1 >= height
+                || picks[index - 1] != selected
+                || picks[index + 1] != selected
+                || picks[index - width] != selected
+                || picks[index + width] != selected;
+            if edge && depth[index].is_finite() {
+                depth[index] -= SELECTION_DEPTH_BIAS;
+                pixels[index * 4..index * 4 + 4]
+                    .copy_from_slice(&[color[0], color[1], color[2], 255]);
+            }
+        }
+    }
+    true
+}
+
 /// Theme-derived colors for the software rasterizer, captured on the main
 /// thread so the background render task never touches theme state.
 #[derive(Clone, Copy, PartialEq)]
@@ -166,6 +384,54 @@ struct RasterStyle {
     grid: [u8; 4],
     section: [u8; 3],
     cut: [u8; 3],
+    selection: [u8; 3],
+    is_dark: bool,
+}
+
+/// Per-part display state captured for one rasterization.
+struct PartRender {
+    offsets: Vec<Vertex>,
+    hidden: Vec<bool>,
+    selected: Option<usize>,
+}
+
+/// Camera, offsets and visibility that produced the current pick buffer.
+#[derive(Clone)]
+struct PickFrame {
+    camera: Camera,
+    dimensions: [u32; 2],
+    offsets: Vec<Vertex>,
+    hidden: Vec<bool>,
+}
+
+#[derive(Clone, Copy)]
+enum DragMode {
+    Orbit,
+    Pan,
+    MovePart(usize),
+}
+
+struct DragState {
+    start: Point<Pixels>,
+    last: Point<Pixels>,
+    mode: DragMode,
+    moved: bool,
+}
+
+#[derive(Clone, Copy)]
+struct SurfaceStyle {
+    fill: [u8; 3],
+    edge: [u8; 3],
+    wire: [u8; 3],
+}
+
+struct RenderedModel {
+    image: Arc<RenderImage>,
+    picks: Option<Arc<Vec<u16>>>,
+    camera: Camera,
+    dimensions: [u32; 2],
+    offsets: Vec<Vertex>,
+    hidden: Vec<bool>,
 }
 
 /// Cutting plane plus the cross-section loops built for it.
@@ -222,6 +488,19 @@ pub struct ModelReader {
     section_open: bool,
     section_track: Option<Bounds<Pixels>>,
     dragging_section: bool,
+    parts_open: bool,
+    part_rows: Vec<usize>,
+    explode: f64,
+    explode_offsets: Vec<Vertex>,
+    manual_offsets: Vec<Vertex>,
+    hidden_parts: Vec<bool>,
+    selected_part: Option<usize>,
+    move_parts: bool,
+    explode_track: Option<Bounds<Pixels>>,
+    dragging_explode: bool,
+    viewport: Option<Bounds<Pixels>>,
+    pick: Option<Arc<Vec<u16>>>,
+    pick_frame: Option<PickFrame>,
     panel_open: bool,
     geometry_open: bool,
     topology_open: bool,
@@ -232,7 +511,7 @@ pub struct ModelReader {
     rendered_style: Option<RasterStyle>,
     dirty: bool,
     dimensions: [u32; 2],
-    drag: Option<(Point<Pixels>, bool)>,
+    drag: Option<DragState>,
     cancel: Arc<AtomicBool>,
     render_task: Option<Task<()>>,
     inspect_task: Option<Task<()>>,
@@ -290,6 +569,19 @@ impl ModelReader {
             section_open: true,
             section_track: None,
             dragging_section: false,
+            parts_open: true,
+            part_rows: Vec::new(),
+            explode: 0.0,
+            explode_offsets: Vec::new(),
+            manual_offsets: Vec::new(),
+            hidden_parts: Vec::new(),
+            selected_part: None,
+            move_parts: false,
+            explode_track: None,
+            dragging_explode: false,
+            viewport: None,
+            pick: None,
+            pick_frame: None,
             panel_open: true,
             geometry_open: true,
             topology_open: true,
@@ -305,6 +597,7 @@ impl ModelReader {
             render_task: None,
             inspect_task: None,
         };
+        reader.reset_part_layout();
         // Topology is cheap enough for supported meshes and the panel presents
         // it immediately; oversized meshes stay lazy until explicitly requested.
         // STEP geometry is a tessellation, so exact-coordinate edge matching would
@@ -357,6 +650,9 @@ impl ModelReader {
         self.topology = None;
         self.section_geometry = None;
         self.error = None;
+        self.pick = None;
+        self.pick_frame = None;
+        self.reset_part_layout();
         self.dirty = true;
         if self.mesh.topology_reliable && self.mesh.triangles.len() <= 300_000 {
             self.inspect(cx);
@@ -376,6 +672,16 @@ impl ModelReader {
         )
     }
 
+    #[cfg(test)]
+    pub(crate) fn parts_state_for_test(&self) -> (usize, f64, Option<usize>) {
+        (self.mesh.parts.len(), self.explode, self.selected_part)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_explode_for_test(&mut self, factor: f64, cx: &mut Context<Self>) {
+        self.set_explode(factor, cx);
+    }
+
     /// Test hook: moves the camera away from its default so a reload that
     /// resets the viewpoint is observable.
     #[cfg(test)]
@@ -384,6 +690,184 @@ impl ModelReader {
         self.camera.pitch = pitch;
         self.camera.zoom = zoom;
         self.dirty = true;
+    }
+
+    fn reset_part_layout(&mut self) {
+        let count = self.mesh.parts.len();
+        self.manual_offsets = vec![[0.0; 3]; count];
+        self.explode_offsets = vec![[0.0; 3]; count];
+        self.hidden_parts = vec![false; count];
+        self.selected_part = None;
+        self.explode = 0.0;
+        self.move_parts = false;
+        self.refresh_part_rows();
+    }
+
+    fn refresh_part_rows(&mut self) {
+        let mut rows: Vec<usize> = (0..self.mesh.parts.len()).collect();
+        rows.sort_by(|&first, &second| {
+            self.mesh.parts[second]
+                .triangle_count
+                .cmp(&self.mesh.parts[first].triangle_count)
+                .then(first.cmp(&second))
+        });
+        rows.truncate(PARTS_PANEL_LIMIT);
+        self.part_rows = rows;
+    }
+
+    fn effective_offsets(&self) -> Vec<Vertex> {
+        (0..self.mesh.parts.len())
+            .map(|index| {
+                let explode = self.explode_offsets.get(index).copied().unwrap_or([0.0; 3]);
+                let manual = self.manual_offsets.get(index).copied().unwrap_or([0.0; 3]);
+                [
+                    explode[0] + manual[0],
+                    explode[1] + manual[1],
+                    explode[2] + manual[2],
+                ]
+            })
+            .collect()
+    }
+
+    fn rebuild_explode_offsets(&mut self) {
+        let (center, radius) = self.mesh.frame();
+        self.explode_offsets =
+            compute_explode_offsets(&self.mesh.parts, center, radius, self.explode);
+    }
+
+    fn set_explode(&mut self, factor: f64, cx: &mut Context<Self>) {
+        let factor = (factor.clamp(0.0, 1.0) * 100.0).round() / 100.0;
+        if (self.explode - factor).abs() <= 1e-9 {
+            return;
+        }
+        self.explode = factor;
+        self.rebuild_explode_offsets();
+        self.dirty = true;
+        cx.notify();
+    }
+
+    fn drag_explode(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        let Some(bounds) = self.explode_track else {
+            return;
+        };
+        let width = f64::from(bounds.size.width).max(1.0);
+        let factor = f64::from(position.x - bounds.origin.x) / width;
+        self.set_explode(factor, cx);
+    }
+
+    fn reset_part_positions(&mut self, cx: &mut Context<Self>) {
+        let count = self.mesh.parts.len();
+        self.manual_offsets = vec![[0.0; 3]; count];
+        self.explode_offsets = vec![[0.0; 3]; count];
+        self.explode = 0.0;
+        self.dirty = true;
+        cx.notify();
+    }
+
+    fn toggle_part_hidden(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(hidden) = self.hidden_parts.get_mut(index) else {
+            return;
+        };
+        *hidden = !*hidden;
+        self.dirty = true;
+        cx.notify();
+    }
+
+    fn show_all_parts(&mut self, cx: &mut Context<Self>) {
+        for hidden in &mut self.hidden_parts {
+            *hidden = false;
+        }
+        self.dirty = true;
+        cx.notify();
+    }
+
+    fn select_part(&mut self, part: Option<usize>, cx: &mut Context<Self>) {
+        if self.selected_part == part {
+            return;
+        }
+        self.selected_part = part;
+        self.dirty = true;
+        cx.notify();
+    }
+
+    /// Returns the part under a window-space pointer position, using the pick
+    /// buffer that matches the currently displayed camera, offsets and
+    /// visibility. A stale buffer is ignored instead of selecting the wrong
+    /// body while a new frame is still rendering.
+    fn pick_at(&self, position: Point<Pixels>) -> Option<usize> {
+        if self.mesh.parts.len() < 2 {
+            return None;
+        }
+        let picks = self.pick.as_ref()?;
+        let frame = self.pick_frame.as_ref()?;
+        let offsets = self.effective_offsets();
+        if frame.camera != self.camera
+            || frame.dimensions != self.dimensions
+            || frame.offsets != offsets
+            || frame.hidden != self.hidden_parts
+        {
+            return None;
+        }
+        let bounds = self.viewport?;
+        let [width, height] = frame.dimensions;
+        if width == 0 || height == 0 || picks.len() < width as usize * height as usize {
+            return None;
+        }
+        let scale = (f64::from(bounds.size.width) / f64::from(width))
+            .min(f64::from(bounds.size.height) / f64::from(height));
+        if !scale.is_finite() || scale <= 0.0 {
+            return None;
+        }
+        let origin_x = f64::from(bounds.origin.x)
+            + (f64::from(bounds.size.width) - f64::from(width) * scale) * 0.5;
+        let origin_y = f64::from(bounds.origin.y)
+            + (f64::from(bounds.size.height) - f64::from(height) * scale) * 0.5;
+        let x = ((f64::from(position.x) - origin_x) / scale).floor();
+        let y = ((f64::from(position.y) - origin_y) / scale).floor();
+        if x < 0.0 || y < 0.0 || x >= f64::from(width) || y >= f64::from(height) {
+            return None;
+        }
+        let pick = *picks.get(y as usize * width as usize + x as usize)?;
+        (pick != u16::MAX).then_some(pick as usize)
+    }
+
+    /// Converts a screen-space drag into a model-space translation on the
+    /// camera plane. Perspective is approximated with the part center's depth,
+    /// which is stable for dragging and avoids inverting the full projection.
+    fn screen_delta_to_model(&self, delta: Point<Pixels>, part: usize) -> Vertex {
+        let (center, radius) = self.mesh.frame();
+        let part_center = self
+            .mesh
+            .parts
+            .get(part)
+            .map(|part| part.center)
+            .unwrap_or(center);
+        // The image is displayed with `ObjectFit::Contain`, so a window pixel
+        // can cover more than one raster pixel when the viewport is larger than
+        // the 1280x960 render limit.
+        let scale = self.viewport.map_or(1.0, |bounds| {
+            let width = f64::from(self.dimensions[0]).max(1.0);
+            let height = f64::from(self.dimensions[1]).max(1.0);
+            (f64::from(bounds.size.width) / width)
+                .min(f64::from(bounds.size.height) / height)
+                .max(1e-6)
+        });
+        let delta = point(
+            px((f64::from(delta.x) / scale) as f32),
+            px((f64::from(delta.y) / scale) as f32),
+        );
+        drag_translation(self.camera, self.dimensions, radius, part_center, delta)
+    }
+
+    fn move_part(&mut self, index: usize, delta: Point<Pixels>) {
+        let translation = self.screen_delta_to_model(delta, index);
+        if let Some(offset) = self.manual_offsets.get_mut(index) {
+            for axis in 0..3 {
+                offset[axis] += translation[axis];
+            }
+            self.selected_part = Some(index);
+            self.dirty = true;
+        }
     }
 
     fn raster_style(&self, cx: &App) -> RasterStyle {
@@ -406,6 +890,8 @@ impl ModelReader {
             // surfaces and from the reference grid on light and dark themes alike.
             section: [186, 106, 74],
             cut: [246, 196, 150],
+            selection: color_rgb(colors.text_accent),
+            is_dark: colors.editor_background.l < 0.5,
         }
     }
 
@@ -423,6 +909,8 @@ impl ModelReader {
             grid: [90, 90, 90, 110],
             section: [186, 106, 74],
             cut: [246, 196, 150],
+            selection: [86, 148, 210],
+            is_dark: true,
         });
         let dimensions = self.dimensions;
         if self.image.is_none() {
@@ -433,16 +921,27 @@ impl ModelReader {
             );
         }
         let cancel = self.cancel.clone();
+        let offsets = self.effective_offsets();
+        let hidden = self.hidden_parts.clone();
+        let selected = self.selected_part;
+        let parts_moved = offsets
+            .iter()
+            .any(|offset| offset.iter().any(|value| *value != 0.0));
         let plane = self.section.enabled.then_some(self.section.plane);
-        let cached = self
-            .section_geometry
-            .as_ref()
-            .filter(|(cached_plane, _)| Some(*cached_plane) == plane)
-            .map(|(_, geometry)| geometry.clone());
+        let cached = if parts_moved {
+            None
+        } else {
+            self.section_geometry
+                .as_ref()
+                .filter(|(cached_plane, _)| Some(*cached_plane) == plane)
+                .map(|(_, geometry)| geometry.clone())
+        };
         // Cap loops are independent of the camera, so they are built once per plane;
-        // orbiting only re-runs the rasterizer.
+        // orbiting only re-runs the rasterizer. Moving parts invalidates the loops
+        // because the cap no longer matches the displaced geometry.
         let build_cap = plane.is_some()
             && self.section.capped
+            && !parts_moved
             && self.mesh.triangles.len() <= SECTION_CAP_TRIANGLES
             && cached.is_none();
         let background = cx.background_spawn(async move {
@@ -456,20 +955,40 @@ impl ModelReader {
                 cached
             };
             let section = plane.map(|plane| SectionRender { plane, cap });
-            let rendered = rasterize(&mesh, camera, style, dimensions, section.as_ref(), &cancel)?;
+            let parts = PartRender {
+                offsets,
+                hidden,
+                selected,
+            };
+            let rendered = rasterize(
+                &mesh,
+                camera,
+                style,
+                dimensions,
+                section.as_ref(),
+                &parts,
+                &cancel,
+            )?;
             Some((rendered, plane, section.and_then(|section| section.cap)))
         });
         self.render_task = Some(cx.spawn_in(window, async move |this, cx| {
             let rendered = background.await;
             this.update_in(cx, |reader, window, cx| {
                 reader.render_task = None;
-                if let Some((image, plane, cap)) = rendered {
+                if let Some((rendered, plane, cap)) = rendered {
                     if let (Some(plane), Some(cap)) = (plane, cap) {
                         reader.section_geometry = Some((plane, cap));
                     }
-                    if let Some(previous) = reader.image.replace(image) {
+                    if let Some(previous) = reader.image.replace(rendered.image) {
                         window.drop_image(previous).log_err();
                     }
+                    reader.pick = rendered.picks;
+                    reader.pick_frame = Some(PickFrame {
+                        camera: rendered.camera,
+                        dimensions: rendered.dimensions,
+                        offsets: rendered.offsets,
+                        hidden: rendered.hidden,
+                    });
                 }
                 cx.notify();
             })
@@ -739,6 +1258,34 @@ impl ModelReader {
                         cx.notify();
                     })),
             )
+            .when(self.mesh.parts.len() > 1, |toolbar| {
+                toolbar
+                    .child(Divider::vertical())
+                    .child(
+                        IconButton::new("model-explode", IconName::GenericMaximize)
+                            .icon_size(IconSize::Small)
+                            .toggle_state(self.explode > 0.0)
+                            .tooltip(Tooltip::text(i18n::t!("21c81ea001d9fcbb")))
+                            .on_click(cx.listener(|reader, _, _, cx| {
+                                reader.panel_open = true;
+                                if reader.explode > 0.0 {
+                                    reader.set_explode(0.0, cx);
+                                } else {
+                                    reader.set_explode(0.6, cx);
+                                }
+                            })),
+                    )
+                    .child(
+                        IconButton::new("model-move-parts", IconName::ArrowRightLeft)
+                            .icon_size(IconSize::Small)
+                            .toggle_state(self.move_parts)
+                            .tooltip(Tooltip::text(i18n::t!("484d208c49def35b")))
+                            .on_click(cx.listener(|reader, _, _, cx| {
+                                reader.move_parts = !reader.move_parts;
+                                cx.notify();
+                            })),
+                    )
+            })
             .child(Divider::vertical())
             .child(
                 IconButton::new("model-grid", IconName::Table)
@@ -777,6 +1324,11 @@ impl ModelReader {
 
     fn render_panel(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let section_card = self.render_section_card(cx);
+        let parts_card = if self.mesh.parts.len() > 1 {
+            Some(self.render_parts_card(cx).into_any_element())
+        } else {
+            None
+        };
         let colors = cx.theme().colors();
         let dimensions = sub(self.mesh.maximum, self.mesh.minimum);
         let inspecting = self.inspect_task.is_some();
@@ -831,159 +1383,495 @@ impl ModelReader {
                     .overflow_y_scroll()
                     .flex_1()
                     .min_h_0()
-                    .child(model_card(cx).child(section_header(
-                        "model-geometry-header",
-                        i18n::t!("fa9da5754ccfd409"),
-                        geometry_open,
-                        cx,
-                        cx.listener(|reader, _, _, cx| {
-                            reader.geometry_open = !reader.geometry_open;
-                            cx.notify();
-                        }),
-                    ))
-                    .when(geometry_open, |section| {
-                        section
-                            .child(property_row(
-                                i18n::t!("29b88538d1c54511"),
-                                grouped(self.mesh.triangles.len()),
+                    .child(
+                        model_card(cx)
+                            .child(section_header(
+                                "model-geometry-header",
+                                i18n::t!("fa9da5754ccfd409"),
+                                geometry_open,
+                                cx,
+                                cx.listener(|reader, _, _, cx| {
+                                    reader.geometry_open = !reader.geometry_open;
+                                    cx.notify();
+                                }),
                             ))
-                            .child(property_row(
-                                i18n::t!("930586b2834930e5"),
-                                topology
-                                    .map(|topology| grouped(topology.vertices))
-                                    .unwrap_or_else(|| i18n::t!("5b8aa0bf3c59daec").to_string()),
-                            ))
-                            .child(property_row(
-                                i18n::t!("7452a2c6a7a497d8"),
-                                format_quantity(dimensions[0]),
-                            ))
-                            .child(property_row(
-                                i18n::t!("3677766bde03a33d"),
-                                format_quantity(dimensions[1]),
-                            ))
-                            .child(property_row(
-                                i18n::t!("291c0228365f2d7d"),
-                                format_quantity(dimensions[2]),
-                            ))
-                            .child(property_row(
-                                i18n::t!("9fb6669a77ea48bb"),
-                                self.mesh
-                                    .step_unit
-                                    .map(|unit| unit.label().to_string())
-                                    .filter(|label| !label.is_empty())
-                                    .unwrap_or_else(|| {
-                                        i18n::t!("5b8aa0bf3c59daec").to_string()
-                                    }),
-                            ))
-                            .when(self.mesh.step_solids > 0, |section| {
-                                section.child(property_row(
-                                    i18n::t!("f80ef1756ed9b411"),
-                                    grouped(self.mesh.step_solids),
-                                ))
-                            })
-                            .when(closed, |section| {
-                                section.child(property_row(
-                                    i18n::t!("b10fb966d72063f5"),
-                                    i18n::t!(
-                                        "fb301391e0c9e9c9",
-                                        value = format_quantity(self.mesh.signed_volume.abs())
-                                    ),
-                                ))
-                            })
-                    }))
+                            .when(geometry_open, |section| {
+                                section
+                                    .child(property_row(
+                                        i18n::t!("29b88538d1c54511"),
+                                        grouped(self.mesh.triangles.len()),
+                                    ))
+                                    .child(property_row(
+                                        i18n::t!("930586b2834930e5"),
+                                        topology
+                                            .map(|topology| grouped(topology.vertices))
+                                            .unwrap_or_else(|| {
+                                                i18n::t!("5b8aa0bf3c59daec").to_string()
+                                            }),
+                                    ))
+                                    .child(property_row(
+                                        i18n::t!("7452a2c6a7a497d8"),
+                                        format_quantity(dimensions[0]),
+                                    ))
+                                    .child(property_row(
+                                        i18n::t!("3677766bde03a33d"),
+                                        format_quantity(dimensions[1]),
+                                    ))
+                                    .child(property_row(
+                                        i18n::t!("291c0228365f2d7d"),
+                                        format_quantity(dimensions[2]),
+                                    ))
+                                    .child(property_row(
+                                        i18n::t!("9fb6669a77ea48bb"),
+                                        self.mesh
+                                            .step_unit
+                                            .map(|unit| unit.label().to_string())
+                                            .filter(|label| !label.is_empty())
+                                            .unwrap_or_else(|| {
+                                                i18n::t!("5b8aa0bf3c59daec").to_string()
+                                            }),
+                                    ))
+                                    .when(self.mesh.step_solids > 0, |section| {
+                                        section.child(property_row(
+                                            i18n::t!("f80ef1756ed9b411"),
+                                            grouped(self.mesh.step_solids),
+                                        ))
+                                    })
+                                    .when(closed, |section| {
+                                        section.child(property_row(
+                                            i18n::t!("b10fb966d72063f5"),
+                                            i18n::t!(
+                                                "fb301391e0c9e9c9",
+                                                value =
+                                                    format_quantity(self.mesh.signed_volume.abs())
+                                            ),
+                                        ))
+                                    })
+                            }),
+                    )
+                    .when_some(parts_card, |panel, card| panel.child(card))
                     .child(section_card)
-                    .child(model_card(cx).child(section_header(
-                        "model-topology-header",
-                        i18n::t!("3a6c23b78b17490b"),
-                        topology_open,
-                        cx,
-                        cx.listener(|reader, _, _, cx| {
-                            reader.topology_open = !reader.topology_open;
-                            cx.notify();
-                        }),
-                    ))
-                    .when(topology_open, |section| {
-                        if !self.mesh.topology_reliable {
-                            return section.child(
-                                div().px_3().py_1().child(
-                                    Label::new(i18n::t!("1d513de9e33840f7"))
-                                        .size(LabelSize::XSmall)
-                                        .color(Color::Muted),
-                                ),
-                            );
-                        }
-                        let section = section
-                            .child(check_row(
-                                i18n::t!("0abb54d180cded75"),
-                                topology.map(|topology| topology.boundary_edges),
-                                inspecting,
+                    .child(
+                        model_card(cx)
+                            .child(section_header(
+                                "model-topology-header",
+                                i18n::t!("3a6c23b78b17490b"),
+                                topology_open,
+                                cx,
+                                cx.listener(|reader, _, _, cx| {
+                                    reader.topology_open = !reader.topology_open;
+                                    cx.notify();
+                                }),
                             ))
-                            .child(check_row(
-                                i18n::t!("830b893eee319bc7"),
-                                topology.map(|topology| topology.non_manifold_edges),
-                                inspecting,
-                            ))
-                            .child(check_row(
-                                i18n::t!("c074951d4625d1c1"),
-                                topology.map(|topology| topology.inconsistent_edges),
-                                inspecting,
-                            ))
-                            .child(check_row(
-                                i18n::t!("d44d74055685e9c8"),
-                                topology.map(|_| self.mesh.degenerate_faces),
-                                inspecting,
-                            ))
-                            .child(check_row(i18n::t!("16f8919589ea1cab"), None, inspecting))
-                            .when_some(self.error.clone(), |section, error| {
-                                section.child(
-                                    div().px_3().py_0p5().child(
-                                        Label::new(error)
-                                            .size(LabelSize::XSmall)
-                                            .color(Color::Error),
-                                    ),
-                                )
-                            });
-                        section.when(topology.is_none() && self.error.is_none(), |section| {
-                            section.child(
-                                div().px_3().py_1().child(
-                                    Button::new("model-inspect", i18n::t!("91d5290121a42adf"))
-                                        .label_size(LabelSize::Small)
-                                        .disabled(inspecting)
-                                        .on_click(
-                                            cx.listener(|reader, _, _, cx| reader.inspect(cx)),
+                            .when(topology_open, |section| {
+                                if !self.mesh.topology_reliable {
+                                    return section.child(
+                                        div().px_3().py_1().child(
+                                            Label::new(i18n::t!("1d513de9e33840f7"))
+                                                .size(LabelSize::XSmall)
+                                                .color(Color::Muted),
                                         ),
+                                    );
+                                }
+                                let section = section
+                                    .child(check_row(
+                                        i18n::t!("0abb54d180cded75"),
+                                        topology.map(|topology| topology.boundary_edges),
+                                        inspecting,
+                                    ))
+                                    .child(check_row(
+                                        i18n::t!("830b893eee319bc7"),
+                                        topology.map(|topology| topology.non_manifold_edges),
+                                        inspecting,
+                                    ))
+                                    .child(check_row(
+                                        i18n::t!("c074951d4625d1c1"),
+                                        topology.map(|topology| topology.inconsistent_edges),
+                                        inspecting,
+                                    ))
+                                    .child(check_row(
+                                        i18n::t!("d44d74055685e9c8"),
+                                        topology.map(|_| self.mesh.degenerate_faces),
+                                        inspecting,
+                                    ))
+                                    .child(check_row(
+                                        i18n::t!("16f8919589ea1cab"),
+                                        None,
+                                        inspecting,
+                                    ))
+                                    .when_some(self.error.clone(), |section, error| {
+                                        section.child(
+                                            div().px_3().py_0p5().child(
+                                                Label::new(error)
+                                                    .size(LabelSize::XSmall)
+                                                    .color(Color::Error),
+                                            ),
+                                        )
+                                    });
+                                section.when(
+                                    topology.is_none() && self.error.is_none(),
+                                    |section| {
+                                        section.child(
+                                            div().px_3().py_1().child(
+                                                Button::new(
+                                                    "model-inspect",
+                                                    i18n::t!("91d5290121a42adf"),
+                                                )
+                                                .label_size(LabelSize::Small)
+                                                .disabled(inspecting)
+                                                .on_click(cx.listener(|reader, _, _, cx| {
+                                                    reader.inspect(cx)
+                                                })),
+                                            ),
+                                        )
+                                    },
+                                )
+                            }),
+                    )
+                    .child(
+                        model_card(cx)
+                            .child(section_header(
+                                "model-file-header",
+                                i18n::t!("50009ce1da4d15e1"),
+                                file_open,
+                                cx,
+                                cx.listener(|reader, _, _, cx| {
+                                    reader.file_open = !reader.file_open;
+                                    cx.notify();
+                                }),
+                            ))
+                            .when(file_open, |section| {
+                                section
+                                    .child(property_row(
+                                        i18n::t!("2f343666aaa88c44"),
+                                        self.format.clone(),
+                                    ))
+                                    .child(property_row(
+                                        i18n::t!("1af851907331c0ed"),
+                                        format_bytes(self.file_size),
+                                    ))
+                                    .child(property_row(
+                                        i18n::t!("05ba10a2667aa584"),
+                                        i18n::t!(
+                                            "beb6a740ef5a98e7",
+                                            value = format_quantity(self.mesh.area)
+                                        ),
+                                    ))
+                            }),
+                    ),
+            )
+    }
+
+    fn render_parts_card(&mut self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let open = self.parts_open;
+        let count = self.mesh.parts.len();
+        let rows = self.part_rows.clone();
+        let offsets = self.effective_offsets();
+        let selected = self.selected_part;
+        let hidden_any = self.hidden_parts.iter().any(|hidden| *hidden);
+        let moved = offsets
+            .iter()
+            .any(|offset| offset.iter().any(|value| *value != 0.0));
+        let cap_warning = moved && self.section.enabled && self.section.capped;
+        let truncated = count > rows.len();
+        let weak = cx.entity().downgrade();
+        let colors = cx.theme().colors();
+        let hover = colors.element_hover;
+        let selected_background = colors.element_selected;
+        let border = colors.border;
+
+        model_card(cx)
+            .child(section_header(
+                "model-parts-header",
+                i18n::t!("efbcd674b4f43dcc"),
+                open,
+                cx,
+                cx.listener(|reader, _, _, cx| {
+                    reader.parts_open = !reader.parts_open;
+                    cx.notify();
+                }),
+            ))
+            .when(open, |card| {
+                card.child(
+                    h_flex()
+                        .px_3()
+                        .py_1()
+                        .gap_2()
+                        .items_center()
+                        .child(
+                            Label::new(i18n::t_args!("dc1ddfc95171bd44", count))
+                                .size(LabelSize::XSmall)
+                                .color(Color::Muted),
+                        )
+                        .child(
+                            Button::new("model-parts-reset", i18n::t!("58fbbd8fae0e9cba"))
+                                .label_size(LabelSize::XSmall)
+                                .on_click(
+                                    cx.listener(|reader, _, _, cx| reader.reset_part_positions(cx)),
                                 ),
+                        )
+                        .when(hidden_any, |row| {
+                            row.child(
+                                Button::new("model-parts-show-all", i18n::t!("2150d8df37e48957"))
+                                    .label_size(LabelSize::XSmall)
+                                    .on_click(
+                                        cx.listener(|reader, _, _, cx| reader.show_all_parts(cx)),
+                                    ),
                             )
-                        })
-                    }))
-                    .child(model_card(cx).child(section_header(
-                        "model-file-header",
-                        i18n::t!("50009ce1da4d15e1"),
-                        file_open,
-                        cx,
-                        cx.listener(|reader, _, _, cx| {
-                            reader.file_open = !reader.file_open;
-                            cx.notify();
                         }),
-                    ))
-                    .when(file_open, |section| {
-                        section
-                            .child(property_row(
-                                i18n::t!("2f343666aaa88c44"),
-                                self.format.clone(),
-                            ))
-                            .child(property_row(
-                                i18n::t!("1af851907331c0ed"),
-                                format_bytes(self.file_size),
-                            ))
-                            .child(property_row(
-                                i18n::t!("05ba10a2667aa584"),
-                                i18n::t!(
-                                    "beb6a740ef5a98e7",
-                                    value = format_quantity(self.mesh.area)
-                                ),
-                            ))
-                    })),
+                )
+                .when(count > 1, |card| {
+                    card.child(self.render_explode_position(cx))
+                })
+                .when(cap_warning, |card| {
+                    card.child(
+                        div().px_3().pb_1().child(
+                            Label::new(i18n::t!("c21e410e4be2f1e3"))
+                                .size(LabelSize::XSmall)
+                                .color(Color::Warning),
+                        ),
+                    )
+                })
+                .when(truncated, |card| {
+                    card.child(
+                        div().px_3().pb_1().child(
+                            Label::new(i18n::t_args!("0a4644af439370c2", rows.len()))
+                                .size(LabelSize::XSmall)
+                                .color(Color::Muted),
+                        ),
+                    )
+                })
+                .child(
+                    v_flex()
+                        .id("model-parts-list")
+                        .debug_selector(|| "model-parts-list".to_string())
+                        .px_1()
+                        .pb_1()
+                        .max_h(px(260.0))
+                        .overflow_y_scroll()
+                        .children(rows.iter().map(|&index| {
+                            let part = &self.mesh.parts[index];
+                            let color = part
+                                .color
+                                .unwrap_or(PART_PALETTE[index % PART_PALETTE.len()]);
+                            let swatch = Rgba {
+                                r: f32::from(color[0]) / 255.0,
+                                g: f32::from(color[1]) / 255.0,
+                                b: f32::from(color[2]) / 255.0,
+                                a: 1.0,
+                            };
+                            let hidden = self.hidden_parts.get(index).copied().unwrap_or(false);
+                            let is_selected = selected == Some(index);
+                            let offset = offsets.get(index).copied().unwrap_or([0.0; 3]);
+                            let name = Label::new(part.name.clone()).size(LabelSize::Small);
+                            let name = if hidden {
+                                name.color(Color::Muted)
+                            } else {
+                                name
+                            };
+                            let row_weak = weak.clone();
+                            let eye_weak = weak.clone();
+                            let reset_weak = weak.clone();
+                            v_flex()
+                                .id(format!("model-part-row-{index}"))
+                                .w_full()
+                                .rounded_md()
+                                .when(is_selected, |row| row.bg(selected_background))
+                                .hover(move |style| style.bg(hover))
+                                .on_click(move |_, _, cx| {
+                                    row_weak
+                                        .update(cx, |reader, cx| {
+                                            reader.select_part(Some(index), cx)
+                                        })
+                                        .log_err();
+                                })
+                                .child(
+                                    h_flex()
+                                        .px_2()
+                                        .py_1()
+                                        .gap_2()
+                                        .items_center()
+                                        .child(
+                                            div()
+                                                .size(px(10.0))
+                                                .rounded_sm()
+                                                .border_1()
+                                                .border_color(border)
+                                                .bg(swatch),
+                                        )
+                                        .child(name)
+                                        .child(
+                                            Label::new(grouped(part.triangle_count))
+                                                .size(LabelSize::XSmall)
+                                                .color(Color::Muted),
+                                        )
+                                        .child(div().flex_1())
+                                        .child(
+                                            IconButton::new(
+                                                format!("model-part-eye-{index}"),
+                                                if hidden {
+                                                    IconName::EyeOff
+                                                } else {
+                                                    IconName::Eye
+                                                },
+                                            )
+                                            .icon_size(IconSize::Small)
+                                            .tooltip(Tooltip::text(if hidden {
+                                                i18n::t!("3dc5d9ee77d7ca7e")
+                                            } else {
+                                                i18n::t!("a4cde08f5a968c39")
+                                            }))
+                                            .on_click(
+                                                move |_, _, cx| {
+                                                    cx.stop_propagation();
+                                                    eye_weak
+                                                        .update(cx, |reader, cx| {
+                                                            reader.toggle_part_hidden(index, cx)
+                                                        })
+                                                        .log_err();
+                                                },
+                                            ),
+                                        ),
+                                )
+                                .when(is_selected, |row| {
+                                    row.child(
+                                        h_flex()
+                                            .px_2()
+                                            .pb_1()
+                                            .gap_2()
+                                            .items_center()
+                                            .child(
+                                                Label::new(format!(
+                                                    "X {:+.2}  Y {:+.2}  Z {:+.2}",
+                                                    offset[0], offset[1], offset[2]
+                                                ))
+                                                .size(LabelSize::XSmall)
+                                                .color(Color::Muted),
+                                            )
+                                            .child(div().flex_1())
+                                            .child(
+                                                Button::new(
+                                                    format!("model-part-reset-{index}"),
+                                                    i18n::t!("91113056591e6c40"),
+                                                )
+                                                .label_size(LabelSize::XSmall)
+                                                .on_click(move |_, _, cx| {
+                                                    cx.stop_propagation();
+                                                    reset_weak
+                                                        .update(cx, |reader, cx| {
+                                                            if let Some(offset) =
+                                                                reader.manual_offsets.get_mut(index)
+                                                            {
+                                                                *offset = [0.0; 3];
+                                                                reader.dirty = true;
+                                                                cx.notify();
+                                                            }
+                                                        })
+                                                        .log_err();
+                                                }),
+                                            ),
+                                    )
+                                })
+                        })),
+                )
+            })
+    }
+
+    fn render_explode_position(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let entity = cx.entity().downgrade();
+        let factor = self.explode;
+        let accent = cx.theme().colors().text_accent;
+        let track = cx.theme().colors().border;
+        let handle_border = cx.theme().colors().background;
+        v_flex()
+            .px_3()
+            .py_1p5()
+            .gap_1()
+            .child(
+                h_flex()
+                    .justify_between()
+                    .child(
+                        Label::new(i18n::t!("359a8477958d7f31"))
+                            .size(LabelSize::Default)
+                            .color(Color::Muted),
+                    )
+                    .child(Label::new(format!("{:.0}%", factor * 100.0)).size(LabelSize::Default)),
+            )
+            .child(
+                div()
+                    .id("model-explode-track")
+                    .debug_selector(|| "model-explode-track".to_string())
+                    .relative()
+                    .h(px(20.0))
+                    .w_full()
+                    .cursor_pointer()
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|reader, event: &gpui::MouseDownEvent, _, cx| {
+                            reader.dragging_explode = true;
+                            reader.drag_explode(event.position, cx);
+                        }),
+                    )
+                    .on_mouse_up(
+                        MouseButton::Left,
+                        cx.listener(|reader, _, _, _| reader.dragging_explode = false),
+                    )
+                    .on_mouse_move(cx.listener(|reader, event: &gpui::MouseMoveEvent, _, cx| {
+                        if !event
+                            .pressed_button
+                            .is_some_and(|button| button == MouseButton::Left)
+                        {
+                            reader.dragging_explode = false;
+                            return;
+                        }
+                        if reader.dragging_explode {
+                            reader.drag_explode(event.position, cx);
+                        }
+                    }))
+                    .child(
+                        div()
+                            .absolute()
+                            .top(px(8.0))
+                            .left_0()
+                            .right_0()
+                            .h(px(4.0))
+                            .rounded_full()
+                            .bg(track),
+                    )
+                    .child(
+                        div()
+                            .absolute()
+                            .top(px(8.0))
+                            .left_0()
+                            .h(px(4.0))
+                            .rounded_full()
+                            .w(relative(factor as f32))
+                            .bg(accent),
+                    )
+                    .child(
+                        div()
+                            .absolute()
+                            .top(px(4.0))
+                            .left(relative(factor as f32))
+                            .ml(px(-6.0))
+                            .size(px(12.0))
+                            .rounded_full()
+                            .border_2()
+                            .border_color(handle_border)
+                            .bg(accent),
+                    )
+                    .child(
+                        canvas(
+                            move |bounds, _, cx| {
+                                entity
+                                    .update(cx, |reader, _| reader.explode_track = Some(bounds))
+                                    .log_err();
+                            },
+                            |_, _, _, _| {},
+                        )
+                        .absolute()
+                        .size_full(),
+                    ),
             )
     }
 
@@ -1209,13 +2097,35 @@ impl ModelReader {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|reader, event: &gpui::MouseDownEvent, _, cx| {
-                    reader.drag = Some((event.position, event.modifiers.shift));
+                    let part = reader.pick_at(event.position);
+                    let mode = if event.modifiers.shift {
+                        DragMode::Pan
+                    } else if reader.move_parts {
+                        part.map(DragMode::MovePart).unwrap_or(DragMode::Orbit)
+                    } else {
+                        DragMode::Orbit
+                    };
+                    if let DragMode::MovePart(index) = mode {
+                        reader.selected_part = Some(index);
+                        reader.dirty = true;
+                    }
+                    reader.drag = Some(DragState {
+                        start: event.position,
+                        last: event.position,
+                        mode,
+                        moved: false,
+                    });
                     cx.notify();
                 }),
             )
             .on_mouse_up(
                 MouseButton::Left,
-                cx.listener(|reader, _, _, _| reader.drag = None),
+                cx.listener(|reader, event: &gpui::MouseUpEvent, _, cx| {
+                    let moved = reader.drag.take().is_some_and(|drag| drag.moved);
+                    if !moved {
+                        reader.select_part(reader.pick_at(event.position), cx);
+                    }
+                }),
             )
             .on_mouse_move(cx.listener(|reader, event: &gpui::MouseMoveEvent, _, cx| {
                 if !event
@@ -1225,19 +2135,30 @@ impl ModelReader {
                     reader.drag = None;
                     return;
                 }
-                if let Some((previous, pan)) = reader.drag {
-                    let delta = event.position - previous;
-                    if pan {
-                        reader.camera.pan[0] += f64::from(delta.x) / 400.0;
-                        reader.camera.pan[1] += f64::from(delta.y) / 400.0;
-                    } else {
-                        reader.camera.yaw += f64::from(delta.x) * 0.01;
-                        reader.camera.pitch += f64::from(delta.y) * 0.01;
+                let Some(mut drag) = reader.drag.take() else {
+                    return;
+                };
+                let delta = event.position - drag.last;
+                if (event.position - drag.start).magnitude() > 2.0 {
+                    drag.moved = true;
+                }
+                if drag.moved {
+                    match drag.mode {
+                        DragMode::Pan => {
+                            reader.camera.pan[0] += f64::from(delta.x) / 400.0;
+                            reader.camera.pan[1] += f64::from(delta.y) / 400.0;
+                        }
+                        DragMode::Orbit => {
+                            reader.camera.yaw += f64::from(delta.x) * 0.01;
+                            reader.camera.pitch += f64::from(delta.y) * 0.01;
+                        }
+                        DragMode::MovePart(index) => reader.move_part(index, delta),
                     }
-                    reader.drag = Some((event.position, pan));
                     reader.dirty = true;
                     cx.notify();
                 }
+                drag.last = event.position;
+                reader.drag = Some(drag);
             }))
             .on_scroll_wheel(
                 cx.listener(|reader, event: &gpui::ScrollWheelEvent, _, cx| {
@@ -1261,6 +2182,7 @@ impl ModelReader {
                     move |bounds, _, cx| {
                         entity
                             .update(cx, |reader, cx| {
+                                reader.viewport = Some(bounds);
                                 let width = f32::from(bounds.size.width).clamp(1.0, 1280.0) as u32;
                                 let height = f32::from(bounds.size.height).clamp(1.0, 960.0) as u32;
                                 if reader.dimensions != [width, height] {
@@ -1391,9 +2313,13 @@ impl ModelReader {
             .border_t_1()
             .border_color(cx.theme().colors().border)
             .child(
-                Label::new(i18n::t!("30bd16f9d01e8dc6"))
-                    .size(LabelSize::Small)
-                    .color(Color::Muted),
+                Label::new(if self.mesh.parts.len() > 1 {
+                    i18n::t!("357975a377051487")
+                } else {
+                    i18n::t!("30bd16f9d01e8dc6")
+                })
+                .size(LabelSize::Small)
+                .color(Color::Muted),
             )
             .child(
                 Label::new(format!(
@@ -1791,7 +2717,11 @@ fn property_row(label: &'static str, value: impl Into<SharedString>) -> impl Int
         .py_1p5()
         .justify_between()
         .gap_2()
-        .child(Label::new(label).size(LabelSize::Default).color(Color::Muted))
+        .child(
+            Label::new(label)
+                .size(LabelSize::Default)
+                .color(Color::Muted),
+        )
         .child(Label::new(value).size(LabelSize::Default))
 }
 
@@ -1806,7 +2736,11 @@ fn check_row(label: &'static str, count: Option<usize>, inspecting: bool) -> imp
         .px_3()
         .py_1p5()
         .justify_between()
-        .child(Label::new(label).size(LabelSize::Default).color(Color::Muted))
+        .child(
+            Label::new(label)
+                .size(LabelSize::Default)
+                .color(Color::Muted),
+        )
         .child(
             h_flex()
                 .gap_1p5()
@@ -1909,8 +2843,9 @@ fn rasterize(
     style: RasterStyle,
     dimensions: [u32; 2],
     section: Option<&SectionRender>,
+    parts: &PartRender,
     cancel: &AtomicBool,
-) -> Option<Arc<RenderImage>> {
+) -> Option<RenderedModel> {
     let [width, height] = dimensions;
     let length = width as usize * height as usize;
     let mut pixels = vec![0u8; length * 4];
@@ -1954,6 +2889,23 @@ fn rasterize(
             cancel,
         );
     }
+    let use_parts = mesh.parts.len() > 1
+        && parts.offsets.len() == mesh.parts.len()
+        && mesh.part_of_triangle.len() == mesh.triangles.len();
+    let normalized_offsets: Vec<Vertex> = if use_parts {
+        parts
+            .offsets
+            .iter()
+            .map(|offset| offset.map(|value| value / radius))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let mut picks = if use_parts {
+        Some(vec![u16::MAX; length])
+    } else {
+        None
+    };
     let section_args = section.map(|section| {
         (
             section.plane.axis.index(),
@@ -1976,9 +2928,39 @@ fn rasterize(
         if index % 256 == 0 && cancel.load(Ordering::Relaxed) {
             return None;
         }
+        let part_index = if use_parts {
+            mesh.part_of_triangle[index] as usize
+        } else {
+            0
+        };
+        if use_parts && parts.hidden.get(part_index).copied().unwrap_or(false) {
+            continue;
+        }
+        let offset = normalized_offsets
+            .get(part_index)
+            .copied()
+            .unwrap_or([0.0; 3]);
         // Clipping happens on normalized model coordinates, before rotation, so the
         // cutting plane stays a plain half-space test regardless of the camera.
-        let normalized = triangle.map(|vertex| model_section::normalize(vertex, center, radius));
+        // A part offset is applied in the same frame, which keeps moved bodies
+        // clipped by the fixed model-space plane.
+        let normalized = triangle.map(|vertex| {
+            let normalized = model_section::normalize(vertex, center, radius);
+            [
+                normalized[0] + offset[0],
+                normalized[1] + offset[1],
+                normalized[2] + offset[2],
+            ]
+        });
+        let surface = if use_parts {
+            part_surface(mesh, part_index, style, parts.selected == Some(part_index))
+        } else {
+            SurfaceStyle {
+                fill: style.model,
+                edge: style.edge,
+                wire: style.wire,
+            }
+        };
         let mut polygon = [[0.0; 3]; 4];
         let (length, cut) = match section_args {
             Some((axis, threshold, sign)) => {
@@ -2012,11 +2994,13 @@ fn rasterize(
             ];
             if !rasterize_triangle(
                 rotated,
-                style,
+                surface,
                 camera.shading,
                 &project,
                 &mut pixels,
                 &mut depth,
+                picks.as_deref_mut(),
+                part_index as u16,
                 dimensions,
                 cancel,
             ) {
@@ -2040,6 +3024,22 @@ fn rasterize(
     {
         return None;
     }
+    if let (Some(picks), Some(selected)) = (picks.as_ref(), parts.selected) {
+        if selected < u16::MAX as usize
+            && selected < mesh.parts.len()
+            && !draw_selection_outline(
+                &mut pixels,
+                &mut depth,
+                picks,
+                selected as u16,
+                dimensions,
+                style.selection,
+                cancel,
+            )
+        {
+            return None;
+        }
+    }
     // The rasterizer works in RGBA, while GPUI's `RenderImage` stores BGRA, so
     // the red and blue channels are swapped once on the way out. Rendering in
     // one order and converting here keeps the shading math readable.
@@ -2048,9 +3048,16 @@ fn rasterize(
     }
     let image = image::RgbaImage::from_raw(width, height, pixels)?;
     log::info!("[open-debug] ModelReader rasterized {width}x{height}");
-    Some(Arc::new(RenderImage::new(smallvec::smallvec![
-        image::Frame::new(image)
-    ])))
+    Some(RenderedModel {
+        image: Arc::new(RenderImage::new(smallvec::smallvec![image::Frame::new(
+            image
+        )])),
+        picks: picks.map(Arc::new),
+        camera,
+        dimensions,
+        offsets: parts.offsets.clone(),
+        hidden: parts.hidden.clone(),
+    })
 }
 
 /// Rasterizes one view-space triangle into the shared color and depth buffers.
@@ -2059,11 +3066,13 @@ fn rasterize(
 #[allow(clippy::too_many_arguments)]
 fn rasterize_triangle(
     rotated: [Vertex; 3],
-    style: RasterStyle,
+    surface: SurfaceStyle,
     shading: Shading,
     project: &impl Fn(Vertex) -> Vertex,
     pixels: &mut [u8],
     depth: &mut [f64],
+    mut picks: Option<&mut [u16]>,
+    part: u16,
     dimensions: [u32; 2],
     cancel: &AtomicBool,
 ) -> bool {
@@ -2124,12 +3133,19 @@ fn rasterize_triangle(
                 continue;
             }
             depth[offset] = distance;
+            if let Some(picks) = picks.as_deref_mut() {
+                picks[offset] = part;
+            }
             let line = weights.iter().any(|weight| *weight < 0.025);
             let color = match shading {
-                Shading::Solid => shade(style.model, intensity),
-                Shading::SolidEdges if line => [style.edge[0], style.edge[1], style.edge[2], 255],
-                Shading::SolidEdges => shade(style.model, intensity),
-                Shading::Wireframe if line => [style.wire[0], style.wire[1], style.wire[2], 255],
+                Shading::Solid => shade(surface.fill, intensity),
+                Shading::SolidEdges if line => {
+                    [surface.edge[0], surface.edge[1], surface.edge[2], 255]
+                }
+                Shading::SolidEdges => shade(surface.fill, intensity),
+                Shading::Wireframe if line => {
+                    [surface.wire[0], surface.wire[1], surface.wire[2], 255]
+                }
                 Shading::Wireframe => continue,
             };
             pixels[offset * 4..offset * 4 + 4].copy_from_slice(&color);
@@ -2337,7 +3353,10 @@ fn draw_grid(
         let major = index.rem_euclid(GRID_MAJOR_EVERY) == 0;
         let minor_alpha = f32::from(color[3]) / 255.0;
         let (alpha, fade) = if major {
-            ((minor_alpha * GRID_MAJOR_ALPHA_SCALE).min(1.0), GRID_MAJOR_FADE)
+            (
+                (minor_alpha * GRID_MAJOR_ALPHA_SCALE).min(1.0),
+                GRID_MAJOR_FADE,
+            )
         } else {
             (minor_alpha, GRID_MINOR_FADE)
         };
@@ -2602,7 +3621,36 @@ mod tests {
             grid: [90, 90, 90, 130],
             section: [200, 120, 60],
             cut: [250, 240, 130],
+            selection: [40, 120, 220],
+            is_dark: true,
         }
+    }
+
+    /// Existing rasterizer tests only exercise the single-body path. This
+    /// wrapper keeps their call shape while the production function now also
+    /// returns pick data.
+    fn rasterize(
+        mesh: &ModelMesh,
+        camera: Camera,
+        style: RasterStyle,
+        dimensions: [u32; 2],
+        section: Option<&SectionRender>,
+        cancel: &AtomicBool,
+    ) -> Option<Arc<RenderImage>> {
+        super::rasterize(
+            mesh,
+            camera,
+            style,
+            dimensions,
+            section,
+            &PartRender {
+                offsets: Vec::new(),
+                hidden: Vec::new(),
+                selected: None,
+            },
+            cancel,
+        )
+        .map(|rendered| rendered.image)
     }
 
     fn section_render(mesh: &ModelMesh, offset: f64, capped: bool) -> SectionRender {
@@ -2645,6 +3693,153 @@ mod tests {
             .chunks_exact(4)
             .filter(|pixel| pixel[..3] == color)
             .count()
+    }
+
+    fn part(name: &str, center: Vertex) -> ModelPart {
+        ModelPart {
+            name: name.to_string(),
+            color: None,
+            triangle_count: 1,
+            minimum: center,
+            maximum: center,
+            center,
+            depth: 0,
+        }
+    }
+
+    fn split_mesh() -> ModelMesh {
+        let stl = "solid test\n\
+            facet normal 0 0 1\nouter loop\nvertex 0 0 0\nvertex 1 0 0\nvertex 0 1 0\nendloop\nendfacet\n\
+            facet normal 0 0 1\nouter loop\nvertex 10 0 0\nvertex 11 0 0\nvertex 10 1 0\nendloop\nendfacet\n\
+            endsolid test";
+        ModelMesh::parse("stl", stl.as_bytes()).expect("split mesh")
+    }
+
+    #[test]
+    fn explode_offsets_are_zero_at_rest_and_radial_under_load() {
+        let parts = [
+            part("left", [-1.0, 0.0, 0.0]),
+            part("right", [1.0, 0.0, 0.0]),
+        ];
+        let rest = compute_explode_offsets(&parts, [0.0; 3], 2.0, 0.0);
+        assert_eq!(rest, vec![[0.0; 3]; 2]);
+        let moved = compute_explode_offsets(&parts, [0.0; 3], 2.0, 0.5);
+        assert!((moved[0][0] + 0.85).abs() < 1e-12, "{moved:?}");
+        assert!((moved[1][0] - 0.85).abs() < 1e-12, "{moved:?}");
+        assert_eq!(moved[0][1], 0.0);
+        assert_eq!(moved[1][1], 0.0);
+    }
+
+    #[test]
+    fn coincident_part_centers_get_distinct_directions() {
+        let parts = [part("first", [0.0; 3]), part("second", [0.0; 3])];
+        let moved = compute_explode_offsets(&parts, [0.0; 3], 1.0, 1.0);
+        let first = moved[0];
+        let second = moved[1];
+        assert!(dot(first, first).sqrt() > 0.3);
+        assert!(dot(second, second).sqrt() > 0.3);
+        assert!(
+            (first[0] - second[0]).abs() + (first[1] - second[1]).abs() > 0.1,
+            "{moved:?}"
+        );
+    }
+
+    #[test]
+    fn drag_translation_follows_the_camera_axes() {
+        let camera = Camera {
+            yaw: 0.0,
+            pitch: 0.0,
+            zoom: 1.0,
+            pan: [0.0; 2],
+            perspective: false,
+            shading: Shading::SolidEdges,
+            grid: false,
+            axes: false,
+        };
+        let moved = drag_translation(camera, [100, 100], 1.0, [0.0; 3], point(px(8.0), px(0.0)));
+        assert!((moved[0] - 0.1).abs() < 1e-12, "{moved:?}");
+        assert_eq!(moved[1], 0.0);
+        let moved = drag_translation(camera, [100, 100], 1.0, [0.0; 3], point(px(0.0), px(8.0)));
+        assert!((moved[1] + 0.1).abs() < 1e-12, "{moved:?}");
+
+        let yawed = Camera {
+            yaw: std::f64::consts::FRAC_PI_2,
+            ..camera
+        };
+        let moved = drag_translation(yawed, [100, 100], 1.0, [0.0; 3], point(px(8.0), px(0.0)));
+        assert!((moved[2] - 0.1).abs() < 1e-12, "{moved:?}");
+        assert!(moved[0].abs() < 1e-12, "{moved:?}");
+    }
+
+    #[test]
+    fn pick_buffer_identifies_each_part_and_honors_visibility() {
+        let mesh = split_mesh();
+        assert_eq!(mesh.parts.len(), 2);
+        let camera = Camera {
+            grid: false,
+            ..Camera::default()
+        };
+        let render = |hidden: [bool; 2], selected: Option<usize>| {
+            super::rasterize(
+                &mesh,
+                camera,
+                test_style(),
+                [128, 128],
+                None,
+                &PartRender {
+                    offsets: vec![[0.0; 3]; 2],
+                    hidden: hidden.to_vec(),
+                    selected,
+                },
+                &AtomicBool::new(false),
+            )
+            .expect("render")
+        };
+        let rendered = render([false, false], None);
+        let picks = rendered.picks.as_ref().expect("pick buffer");
+        assert!(picks.contains(&0), "first body must be pickable");
+        assert!(picks.contains(&1), "second body must be pickable");
+
+        let rendered = render([true, false], None);
+        let picks = rendered.picks.as_ref().expect("pick buffer");
+        assert!(!picks.contains(&0), "hidden body must not be pickable");
+        assert!(picks.contains(&1));
+
+        let rendered = render([false, false], Some(0));
+        let selection = bgra(test_style().selection);
+        assert!(
+            rendered
+                .image
+                .as_bytes(0)
+                .expect("pixels")
+                .chunks_exact(4)
+                .any(|pixel| pixel[..3] == selection),
+            "selected body must draw its silhouette"
+        );
+    }
+
+    #[test]
+    fn single_body_render_has_no_pick_buffer() {
+        let mesh =
+            ModelMesh::parse("obj", b"v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3").expect("triangle");
+        let rendered = super::rasterize(
+            &mesh,
+            Camera {
+                grid: false,
+                ..Camera::default()
+            },
+            test_style(),
+            [64, 64],
+            None,
+            &PartRender {
+                offsets: Vec::new(),
+                hidden: Vec::new(),
+                selected: None,
+            },
+            &AtomicBool::new(false),
+        )
+        .expect("render");
+        assert!(rendered.picks.is_none());
     }
 
     #[test]

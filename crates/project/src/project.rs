@@ -3623,16 +3623,41 @@ impl Project {
         cx.spawn(async move |_, _| client.request(request).await)
     }
 
+    /// The extension a document preview is dispatched on.
+    ///
+    /// A project path usually carries the file name, but a file opened directly
+    /// from the file manager or the CLI lives in a single-file worktree whose
+    /// root is the file itself: its project path is empty, so the worktree root
+    /// supplies the extension. Directories never qualify, even when their name
+    /// ends in a known extension.
+    pub fn document_extension(&self, path: &ProjectPath, cx: &App) -> Option<String> {
+        if let Some(extension) = path.path.extension() {
+            return Some(extension.to_owned());
+        }
+        if !path.path.is_empty() {
+            return None;
+        }
+        let worktree = self.worktree_for_id(path.worktree_id, cx)?;
+        let worktree = worktree.read(cx);
+        if !worktree.is_single_file() {
+            return None;
+        }
+        worktree
+            .abs_path()
+            .extension()
+            .map(|extension| extension.to_string_lossy().into_owned())
+    }
+
     /// Resolves how a previewable document is read without touching its bytes.
     ///
     /// Callers use this before they open a tab so unsupported formats and
     /// remote servers that cannot transfer documents fail immediately.
     fn document_load_route(&self, path: &ProjectPath, cx: &App) -> Result<DocumentLoadRoute> {
+        let extension = self
+            .document_extension(path, cx)
+            .context("unsupported document format")?;
         anyhow::ensure!(
-            path.path
-                .extension()
-                .and_then(document_file_size_limit)
-                .is_some(),
+            document_file_size_limit(&extension).is_some(),
             "unsupported document format"
         );
         let worktree = self
@@ -3641,15 +3666,9 @@ impl Project {
         if worktree.read(cx).is_local() {
             return Ok(DocumentLoadRoute::Local(worktree));
         }
-        let is_model = path.path.extension().is_some_and(|extension| {
-            matches!(
-                extension.to_ascii_lowercase().as_str(),
-                "stl" | "obj" | "ply" | "step" | "stp"
-            )
-        });
-        let is_cad = path.path.extension().is_some_and(|extension| {
-            matches!(extension.to_ascii_lowercase().as_str(), "dxf" | "dwg")
-        });
+        let extension = extension.to_ascii_lowercase();
+        let is_model = matches!(extension.as_str(), "stl" | "obj" | "ply" | "step" | "stp");
+        let is_cad = matches!(extension.as_str(), "dxf" | "dwg");
         let Some(client) = self.remote_client.as_ref().filter(|client| {
             let client = client.read(cx);
             if is_model {
@@ -3690,7 +3709,10 @@ impl Project {
         progress: Option<DocumentLoadProgress>,
         cx: &mut Context<Self>,
     ) -> Result<Task<Result<worktree::LoadedBinaryFile>>> {
-        let Some(limit) = path.path.extension().and_then(document_file_size_limit) else {
+        let Some(limit) = self
+            .document_extension(&path, cx)
+            .and_then(|extension| document_file_size_limit(&extension))
+        else {
             return Err(anyhow!("unsupported document format"));
         };
         log::info!(
