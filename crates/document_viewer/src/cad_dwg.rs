@@ -826,6 +826,11 @@ fn entity_type_name(entity: &Entity) -> &'static str {
 
 #[cfg(test)]
 pub(crate) fn minimal_dwg() -> Vec<u8> {
+    minimal_dwg_with_lines(1)
+}
+
+#[cfg(test)]
+pub(crate) fn minimal_dwg_with_lines(lines: usize) -> Vec<u8> {
     use opendwg::object::{Entity, EntityCommon, Line};
 
     let mut drawing = Drawing::new();
@@ -833,15 +838,18 @@ pub(crate) fn minimal_dwg() -> Vec<u8> {
     layer.color = Color::Index(1);
     let walls = drawing.add_layer(layer).expect("walls layer");
     let model = drawing.model_space();
-    let mut common = EntityCommon::new(walls);
-    common.color = Color::Index(1);
-    drawing
-        .add_entity(
-            model,
-            common,
-            Entity::Line(Line::new([0.0, 0.0, 0.0], [10.0, 5.0, 0.0])),
-        )
-        .expect("line");
+    for line in 0..lines {
+        let mut common = EntityCommon::new(walls);
+        common.color = Color::Index(1);
+        let start = [0.0, line as f64 * 2.0, 0.0];
+        drawing
+            .add_entity(
+                model,
+                common,
+                Entity::Line(Line::new(start, [10.0, start[1] + 5.0, 0.0])),
+            )
+            .expect("line");
+    }
     drawing.to_bytes().expect("dwg bytes")
 }
 

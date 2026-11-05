@@ -2,7 +2,46 @@ use anyhow::{Context as _, Result, bail, ensure};
 use std::collections::HashMap;
 
 pub const MAX_TRIANGLES: usize = 2_000_000;
+/// Hard cap on independently selectable bodies. A larger assembly keeps its
+/// largest bodies and folds the rest into one summary part.
+pub const MAX_PARTS: usize = 1024;
 pub type Vertex = [f64; 3];
+
+/// One independently selectable body of a model.
+///
+/// `STEP` assemblies provide names, colors and nesting from the product graph;
+/// triangle soup formats such as `STL` get one part per connected component.
+#[derive(Clone, Debug)]
+pub struct ModelPart {
+    pub name: String,
+    pub color: Option<[u8; 3]>,
+    pub triangle_count: usize,
+    pub minimum: Vertex,
+    pub maximum: Vertex,
+    pub center: Vertex,
+    /// Product-structure nesting level; 0 for flat triangle meshes.
+    pub depth: u16,
+}
+
+impl ModelPart {
+    fn new(name: String, color: Option<[u8; 3]>, triangle_count: usize, depth: u16) -> Self {
+        Self {
+            name,
+            color,
+            triangle_count,
+            minimum: [f64::INFINITY; 3],
+            maximum: [f64::NEG_INFINITY; 3],
+            center: [0.0; 3],
+            depth,
+        }
+    }
+}
+
+#[derive(Default)]
+struct PartLayout {
+    parts: Vec<ModelPart>,
+    part_of_triangle: Vec<u32>,
+}
 
 pub struct ModelMesh {
     pub triangles: Vec<[Vertex; 3]>,
@@ -18,6 +57,11 @@ pub struct ModelMesh {
     /// STEP geometry is a tessellation of curved surfaces, so the exact-coordinate
     /// topology inspection would report tessellation seams as model defects.
     pub topology_reliable: bool,
+    /// Independently selectable bodies, empty when the format has no part
+    /// information or the mesh is a single connected body.
+    pub parts: Vec<ModelPart>,
+    /// Part index per triangle, parallel to `triangles` when `parts` is non-empty.
+    pub part_of_triangle: Vec<u32>,
 }
 
 impl ModelMesh {
@@ -29,16 +73,27 @@ impl ModelMesh {
         let mut step_unit = None;
         let mut step_solids = 0;
         let mut topology_reliable = true;
-        let triangles = match extension.to_ascii_lowercase().as_str() {
-            "stl" => parse_stl(bytes)?,
-            "obj" => parse_obj(std::str::from_utf8(bytes)?)?,
-            "ply" => parse_ply(std::str::from_utf8(bytes)?)?,
+        let (triangles, layout) = match extension.to_ascii_lowercase().as_str() {
+            "stl" => {
+                let triangles = parse_stl(bytes)?;
+                let layout = split_stl_parts(&triangles);
+                (triangles, layout)
+            }
+            "obj" => (
+                parse_obj(std::str::from_utf8(bytes)?)?,
+                PartLayout::default(),
+            ),
+            "ply" => (
+                parse_ply(std::str::from_utf8(bytes)?)?,
+                PartLayout::default(),
+            ),
             "step" | "stp" => {
                 let step = super::step_reader::parse(bytes)?;
                 step_unit = Some(step.unit);
                 step_solids = step.solids;
                 topology_reliable = false;
-                step.triangles
+                let layout = PartLayout::from_step_parts(step.parts, step.triangles.len());
+                (step.triangles, layout)
             }
             _ => bail!("unsupported model format"),
         };
@@ -53,6 +108,8 @@ impl ModelMesh {
             step_unit,
             step_solids,
             topology_reliable,
+            parts: layout.parts,
+            part_of_triangle: layout.part_of_triangle,
         };
         for triangle in &mesh.triangles {
             for vertex in triangle {
@@ -87,12 +144,56 @@ impl ModelMesh {
             mesh.area.is_finite() && mesh.signed_volume.is_finite(),
             "model measurements exceed supported range"
         );
+        mesh.finish_parts();
         log::info!(
             "[open-debug] ModelMesh::parse done: {} triangles, {} degenerate",
             mesh.triangles.len(),
             mesh.degenerate_faces
         );
         Ok(mesh)
+    }
+
+    /// Resolves each part's bounding box from the triangles assigned to it.
+    /// A mismatched layout is discarded rather than risking out-of-bounds ids.
+    fn finish_parts(&mut self) {
+        if self.parts.is_empty() {
+            self.part_of_triangle.clear();
+            return;
+        }
+        if self.part_of_triangle.len() != self.triangles.len() {
+            self.parts.clear();
+            self.part_of_triangle.clear();
+            return;
+        }
+        let Self {
+            triangles,
+            parts,
+            part_of_triangle,
+            ..
+        } = self;
+        for part in parts.iter_mut() {
+            part.minimum = [f64::INFINITY; 3];
+            part.maximum = [f64::NEG_INFINITY; 3];
+        }
+        for (index, triangle) in triangles.iter().enumerate() {
+            let Some(part) = parts.get_mut(part_of_triangle[index] as usize) else {
+                continue;
+            };
+            for vertex in triangle {
+                for axis in 0..3 {
+                    part.minimum[axis] = part.minimum[axis].min(vertex[axis]);
+                    part.maximum[axis] = part.maximum[axis].max(vertex[axis]);
+                }
+            }
+        }
+        for part in parts.iter_mut() {
+            if !part.minimum.iter().all(|value| value.is_finite()) {
+                part.minimum = [0.0; 3];
+                part.maximum = [0.0; 3];
+            }
+            part.center =
+                std::array::from_fn(|axis| part.minimum[axis] * 0.5 + part.maximum[axis] * 0.5);
+        }
     }
 
     /// Bounding box center and longest box extent, the frame model coordinates are
@@ -227,6 +328,266 @@ fn parse_stl(bytes: &[u8]) -> Result<Vec<[Vertex; 3]>> {
     }
     ensure!(!in_facet, "truncated STL facet");
     Ok(triangles)
+}
+
+impl PartLayout {
+    /// Converts the part descriptors emitted by the STEP reader into the
+    /// triangle-index layout the viewer uses.
+    fn from_step_parts(parts: Vec<super::step_reader::StepPart>, triangle_count: usize) -> Self {
+        let parts: Vec<_> = parts
+            .into_iter()
+            .filter(|part| part.triangle_count > 0)
+            .collect();
+        if parts.is_empty() {
+            return Self::default();
+        }
+        let total: usize = parts.iter().map(|part| part.triangle_count).sum();
+        if total != triangle_count {
+            log::warn!("[model] STEP part layout covers {total} of {triangle_count} triangles");
+            return Self::default();
+        }
+        if parts.len() < 2 {
+            return Self::default();
+        }
+        let mut part_of_triangle = Vec::with_capacity(triangle_count);
+        let mut model_parts = Vec::with_capacity(parts.len());
+        for (index, part) in parts.into_iter().enumerate() {
+            part_of_triangle.extend(std::iter::repeat(index as u32).take(part.triangle_count));
+            model_parts.push(ModelPart::new(
+                part.name,
+                part.color,
+                part.triangle_count,
+                part.depth,
+            ));
+        }
+        Self {
+            parts: model_parts,
+            part_of_triangle,
+        }
+    }
+}
+
+fn quantized_vertex(vertex: Vertex, inverse: f64) -> [i64; 3] {
+    vertex.map(|value| {
+        let scaled = value * inverse;
+        if scaled.is_nan() {
+            0
+        } else {
+            let limit = 9.0e15;
+            scaled.round().clamp(-limit, limit) as i64
+        }
+    })
+}
+
+fn vertex_hash(key: [i64; 3]) -> u32 {
+    let mut hash = 0x811c_9dc5u32;
+    for value in key {
+        for byte in value.to_le_bytes() {
+            hash ^= u32::from(byte);
+            hash = hash.wrapping_mul(0x0100_0193);
+        }
+    }
+    hash
+}
+
+fn record_corner(record: u64) -> usize {
+    (record & 0xffff_ffff) as usize
+}
+
+fn record_triangle(record: u64) -> u32 {
+    record_corner(record) as u32 / 3
+}
+
+fn corner_key(record: u64, triangles: &[[Vertex; 3]], inverse: f64) -> [i64; 3] {
+    let corner = record_corner(record);
+    quantized_vertex(triangles[corner / 3][corner % 3], inverse)
+}
+
+fn component_root(parent: &mut [u32], mut index: u32) -> u32 {
+    let mut root = index;
+    while parent[root as usize] != root {
+        root = parent[root as usize];
+    }
+    while parent[index as usize] != index {
+        let next = parent[index as usize];
+        parent[index as usize] = root;
+        index = next;
+    }
+    root
+}
+
+fn join_components(parent: &mut [u32], first: u32, second: u32) {
+    let first = component_root(parent, first);
+    let second = component_root(parent, second);
+    if first != second {
+        parent[first.max(second) as usize] = first.min(second);
+    }
+}
+
+/// Splits triangle soup (STL) into connected bodies.
+///
+/// The naive `HashMap<vertex, id>` needs hundreds of megabytes at the supported
+/// two-million-triangle limit. Instead each triangle corner is packed as a
+/// 32-bit coordinate hash plus its corner index, the records are sorted, and
+/// equal hashes are confirmed against the quantized coordinates. Peak extra
+/// memory is eight bytes per corner plus the union-find table.
+fn split_stl_parts(triangles: &[[Vertex; 3]]) -> PartLayout {
+    if triangles.len() < 2 {
+        return PartLayout::default();
+    }
+    let mut minimum = [f64::INFINITY; 3];
+    let mut maximum = [f64::NEG_INFINITY; 3];
+    for triangle in triangles {
+        for vertex in triangle {
+            if !vertex.iter().all(|value| value.is_finite()) {
+                return PartLayout::default();
+            }
+            for axis in 0..3 {
+                minimum[axis] = minimum[axis].min(vertex[axis]);
+                maximum[axis] = maximum[axis].max(vertex[axis]);
+            }
+        }
+    }
+    let diagonal = sub(maximum, minimum).into_iter().fold(0.0f64, f64::max);
+    if !diagonal.is_finite() || diagonal <= 0.0 {
+        return PartLayout::default();
+    }
+    let inverse = 1.0 / (diagonal * 1e-7).max(1e-9);
+
+    let mut records = Vec::with_capacity(triangles.len() * 3);
+    for (triangle_index, triangle) in triangles.iter().enumerate() {
+        for (corner, vertex) in triangle.iter().enumerate() {
+            let hash = vertex_hash(quantized_vertex(*vertex, inverse));
+            let corner = (triangle_index * 3 + corner) as u32;
+            records.push((u64::from(hash) << 32) | u64::from(corner));
+        }
+    }
+    records.sort_unstable();
+
+    let mut parent: Vec<u32> = (0..triangles.len() as u32).collect();
+    let mut start = 0;
+    while start < records.len() {
+        let hash = records[start] >> 32;
+        let mut end = start + 1;
+        while end < records.len() && records[end] >> 32 == hash {
+            end += 1;
+        }
+        let group = &records[start..end];
+        if group.len() > 1 {
+            if group.len() <= 32 {
+                for first in 0..group.len() {
+                    let first_key = corner_key(group[first], triangles, inverse);
+                    for second in first + 1..group.len() {
+                        if first_key == corner_key(group[second], triangles, inverse) {
+                            join_components(
+                                &mut parent,
+                                record_triangle(group[first]),
+                                record_triangle(group[second]),
+                            );
+                        }
+                    }
+                }
+            } else {
+                let mut entries: Vec<([i64; 3], u32)> = group
+                    .iter()
+                    .map(|record| {
+                        (
+                            corner_key(*record, triangles, inverse),
+                            record_triangle(*record),
+                        )
+                    })
+                    .collect();
+                entries.sort_unstable();
+                let mut first = 0;
+                while first < entries.len() {
+                    let mut last = first + 1;
+                    while last < entries.len() && entries[last].0 == entries[first].0 {
+                        join_components(&mut parent, entries[first].1, entries[last].1);
+                        last += 1;
+                    }
+                    first = last;
+                }
+            }
+        }
+        start = end;
+    }
+
+    let mut component_of_triangle = vec![u32::MAX; triangles.len()];
+    let mut component_counts: Vec<u32> = Vec::new();
+    let mut component_first: Vec<u32> = Vec::new();
+    let mut roots: HashMap<u32, u32> = HashMap::new();
+    for triangle in 0..triangles.len() {
+        let root = component_root(&mut parent, triangle as u32);
+        let component = match roots.entry(root) {
+            std::collections::hash_map::Entry::Occupied(entry) => *entry.get(),
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                let component = component_counts.len() as u32;
+                component_counts.push(0);
+                component_first.push(triangle as u32);
+                entry.insert(component);
+                component
+            }
+        };
+        component_of_triangle[triangle] = component;
+        component_counts[component as usize] += 1;
+    }
+    if component_counts.len() <= 1 {
+        return PartLayout::default();
+    }
+
+    let mut part_indices = vec![0u32; component_counts.len()];
+    let mut parts = Vec::new();
+    if component_counts.len() <= MAX_PARTS {
+        for (index, count) in component_counts.iter().enumerate() {
+            part_indices[index] = index as u32;
+            parts.push(ModelPart::new(
+                i18n::t_args!("08a4c34560df2e32", index + 1),
+                None,
+                *count as usize,
+                0,
+            ));
+        }
+    } else {
+        let mut order: Vec<usize> = (0..component_counts.len()).collect();
+        order.sort_by(|&first, &second| {
+            component_counts[second]
+                .cmp(&component_counts[first])
+                .then(component_first[first].cmp(&component_first[second]))
+        });
+        let keep = MAX_PARTS.saturating_sub(1);
+        for (part_index, component) in order[..keep].iter().enumerate() {
+            part_indices[*component] = part_index as u32;
+            parts.push(ModelPart::new(
+                i18n::t_args!("08a4c34560df2e32", part_index + 1),
+                None,
+                component_counts[*component] as usize,
+                0,
+            ));
+        }
+        let other_index = parts.len() as u32;
+        for component in &order[keep..] {
+            part_indices[*component] = other_index;
+        }
+        let other_count: u32 = order[keep..]
+            .iter()
+            .map(|component| component_counts[*component])
+            .sum();
+        parts.push(ModelPart::new(
+            i18n::t!("dacb6d45653e6f98").to_string(),
+            None,
+            other_count as usize,
+            0,
+        ));
+    }
+
+    let part_of_triangle = component_of_triangle
+        .into_iter()
+        .map(|component| part_indices[component as usize])
+        .collect();
+    PartLayout {
+        parts,
+        part_of_triangle,
+    }
 }
 
 fn read_vertex<'a>(fields: &mut impl Iterator<Item = &'a str>) -> Result<Vertex> {
@@ -437,6 +798,76 @@ mod tests {
             mesh.inspect(&std::sync::atomic::AtomicBool::new(true))
                 .is_none()
         );
+    }
+
+    fn two_triangle_stl(second_origin: f64) -> Vec<u8> {
+        format!(
+            "solid test\n\
+             facet normal 0 0 1\nouter loop\nvertex 0 0 0\nvertex 1 0 0\nvertex 0 1 0\nendloop\nendfacet\n\
+             facet normal 0 0 1\nouter loop\nvertex {second_origin} 0 0\nvertex {} 0 0\nvertex {second_origin} 1 0\nendloop\nendfacet\n\
+             endsolid test",
+            second_origin + 1.0
+        )
+        .into_bytes()
+    }
+
+    #[test]
+    fn disconnected_stl_triangles_become_separate_parts() {
+        let mesh = ModelMesh::parse("stl", &two_triangle_stl(10.0)).expect("split");
+        assert_eq!(mesh.parts.len(), 2);
+        assert_eq!(mesh.part_of_triangle, vec![0, 1]);
+        assert_eq!(mesh.parts[0].triangle_count, 1);
+        assert_eq!(mesh.parts[1].triangle_count, 1);
+        assert_eq!(mesh.parts[0].center, [0.5, 0.5, 0.0]);
+        assert_eq!(mesh.parts[1].center, [10.5, 0.5, 0.0]);
+        assert!(mesh.parts.iter().all(|part| part.color.is_none()));
+    }
+
+    #[test]
+    fn single_stl_triangle_keeps_the_flat_path() {
+        let mesh = ModelMesh::parse("stl", &two_triangle_stl(0.0)).expect("single");
+        assert!(mesh.parts.is_empty());
+        assert!(mesh.part_of_triangle.is_empty());
+    }
+
+    #[test]
+    fn split_welds_coordinates_within_its_tolerance() {
+        let stl = b"solid test\n\
+            facet normal 0 0 1\nouter loop\nvertex 0 0 0\nvertex 1 0 0\nvertex 0 1 0\nendloop\nendfacet\n\
+            facet normal 0 0 1\nouter loop\nvertex 1.000000001 0 0\nvertex 2 0 0\nvertex 2 1 0\nendloop\nendfacet\n\
+            endsolid test";
+        let mesh = ModelMesh::parse("stl", stl).expect("welded");
+        assert!(mesh.parts.is_empty(), "a welded pair must stay one body");
+        let stl = b"solid test\n\
+            facet normal 0 0 1\nouter loop\nvertex 0 0 0\nvertex 1 0 0\nvertex 0 1 0\nendloop\nendfacet\n\
+            facet normal 0 0 1\nouter loop\nvertex 1.1 0 0\nvertex 2 0 0\nvertex 2 1 0\nendloop\nendfacet\n\
+            endsolid test";
+        let mesh = ModelMesh::parse("stl", stl).expect("separate");
+        assert_eq!(mesh.parts.len(), 2);
+    }
+
+    #[test]
+    fn too_many_stl_bodies_fold_into_one_other_part() {
+        let mut stl = String::from("solid test\n");
+        for index in 0..=MAX_PARTS {
+            let base = (index * 4) as f64;
+            stl.push_str(&format!(
+                "facet normal 0 0 1\nouter loop\nvertex {base} 0 0\nvertex {} 0 0\nvertex {base} 1 0\nendloop\nendfacet\n",
+                base + 1.0
+            ));
+        }
+        stl.push_str("endsolid test\n");
+        let mesh = ModelMesh::parse("stl", stl.as_bytes()).expect("many bodies");
+        assert_eq!(mesh.parts.len(), MAX_PARTS);
+        assert_eq!(
+            mesh.parts
+                .iter()
+                .map(|part| part.triangle_count)
+                .sum::<usize>(),
+            MAX_PARTS + 1
+        );
+        assert_eq!(mesh.parts.last().map(|part| part.triangle_count), Some(2));
+        assert_eq!(mesh.part_of_triangle.len(), MAX_PARTS + 1);
     }
 
     #[test]
