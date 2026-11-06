@@ -5575,7 +5575,7 @@
   "ec07ed7f41b88860": "Leave empty for the default; raise it on slow networks.",
   "f5e4d34b558e9646": "Remote terminals require the Zed CN Remote Server",
   "f9da540818e754a9": "The Remote Server does not support hosted terminals; update the Zed CN Remote Server",
-  "1b27f6899e658e81": "This file is not UTF-8 STEP text",
+  "7d02bde73da912a1": "This file is not STEP text (missing the ISO-10303-21 header)",
   "80bd84afa3b5b7b2": "Could not parse the STEP file: {error}",
   "c0a8e86e433996bb": "The STEP file has no DATA section",
   "67c7488a47fd7b4c": "The STEP file contains no shells",

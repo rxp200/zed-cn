@@ -7,7 +7,9 @@
 //! length units, the entity allow-list, resource budgets and user-facing errors.
 
 use anyhow::{Result, anyhow, bail, ensure};
+use encoding_rs::GB18030;
 use ruststep::ast::{DataSection, EntityInstance, Name, Parameter};
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 use truck_geometry::prelude::{
@@ -178,10 +180,165 @@ struct RawEntity {
 
 type RawEntities = HashMap<u64, RawEntity>;
 
+/// Skips the byte-order mark and leading whitespace some exporters put in front of
+/// the signature, which the grammar itself does not allow.
+fn exchange_start(bytes: &[u8]) -> &[u8] {
+    let bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
+    let start = bytes
+        .iter()
+        .position(|byte| !byte.is_ascii_whitespace())
+        .unwrap_or(bytes.len());
+    &bytes[start..]
+}
+
+/// Decodes the payload into text.
+///
+/// ISO 10303-21 syntax is ASCII and non-ASCII text belongs inside string literals,
+/// where the standard requires `\X2\` escapes. Several exporters (SolidWorks in
+/// particular) also write the author's code page there, which is GBK on a Chinese
+/// Windows installation; the whole file then fails strict UTF-8 even though its
+/// topology is perfectly readable. Keep the UTF-8 runs as they are and decode only
+/// the invalid bytes with GB18030, so one stray byte cannot turn the topology that
+/// follows it into mojibake.
+fn decode_exchange_text(bytes: &[u8]) -> Cow<'_, str> {
+    if let Ok(text) = std::str::from_utf8(bytes) {
+        return Cow::Borrowed(text);
+    }
+    let mut text = String::with_capacity(bytes.len().saturating_add(bytes.len() / 8));
+    let mut rest = bytes;
+    while !rest.is_empty() {
+        match std::str::from_utf8(rest) {
+            Ok(valid) => {
+                text.push_str(valid);
+                break;
+            }
+            Err(error) => {
+                let valid = error.valid_up_to();
+                // `valid_up_to` is a validated character boundary.
+                text.push_str(std::str::from_utf8(&rest[..valid]).expect("validated prefix"));
+                let legacy = &rest[valid..];
+                let length = code_page_character_len(legacy);
+                text.push_str(&GB18030.decode(&legacy[..length]).0);
+                rest = &legacy[length..];
+            }
+        }
+    }
+    Cow::Owned(text)
+}
+
+/// Length in bytes of the GB18030 character at the start of `bytes`, which is one,
+/// two or four bytes. Only the four-byte form has ASCII digits as its second and
+/// fourth byte, so a lead byte followed by a digit is either that form or an
+/// invalid sequence that is consumed two bytes at a time.
+fn code_page_character_len(bytes: &[u8]) -> usize {
+    let lead = |index: usize| matches!(bytes.get(index), Some(0x81..=0xFE));
+    let digit = |index: usize| bytes.get(index).is_some_and(|byte| byte.is_ascii_digit());
+    if lead(0) && digit(1) && lead(2) && digit(3) {
+        4
+    } else if lead(0) {
+        2
+    } else {
+        1
+    }
+}
+
+/// Decodes the ISO 10303-21 escapes of one string value: `''`, `\\`, `\X\hh`,
+/// `\S\c`, `\P?\`, and the `\X2\`/`\X4\` sequences exporters use for CJK names.
+/// Sequences this reader does not understand stay literal instead of being dropped.
+fn decode_step_string(value: &str) -> String {
+    if !value.contains('\\') && !value.contains("''") {
+        return value.to_owned();
+    }
+    let mut decoded = String::with_capacity(value.len());
+    let mut rest = value;
+    while !rest.is_empty() {
+        if let Some(tail) = rest.strip_prefix("''") {
+            decoded.push('\'');
+            rest = tail;
+        } else if let Some(tail) = rest.strip_prefix('\\') {
+            match decode_step_escape(tail) {
+                Some((escape, tail)) => {
+                    decoded.push_str(&escape);
+                    rest = tail;
+                }
+                None => {
+                    decoded.push('\\');
+                    rest = tail;
+                }
+            }
+        } else {
+            let character = rest.chars().next().expect("non-empty");
+            decoded.push(character);
+            rest = &rest[character.len_utf8()..];
+        }
+    }
+    decoded
+}
+
+/// Decodes the escape sequence following a reverse solidus, returning its text and
+/// the remaining input, or `None` for a sequence this reader does not understand.
+fn decode_step_escape(input: &str) -> Option<(String, &str)> {
+    match input.as_bytes() {
+        [b'\\', ..] => Some(("\\".to_owned(), &input[1..])),
+        [b'P', _, b'\\', ..] => Some((String::new(), &input[3..])),
+        [b'S', b'\\', ..] => {
+            // `\S\` shifts one ASCII character into the upper half of ISO 8859-1.
+            let character = input[2..].chars().next()?;
+            let shifted = u32::from(character) + 0x80;
+            if shifted > 0xFF {
+                return None;
+            }
+            Some((
+                char::from(shifted as u8).to_string(),
+                &input[2 + character.len_utf8()..],
+            ))
+        }
+        [b'X', b'\\', ..] => {
+            let code = u32::from_str_radix(input.get(2..4)?, 16).ok()?;
+            Some((char::from_u32(code)?.to_string(), &input[4..]))
+        }
+        [b'X', b'2', b'\\', ..] | [b'X', b'4', b'\\', ..] => {
+            let width = if input.as_bytes()[1] == b'2' { 4 } else { 8 };
+            let (hex, tail) = input[3..].split_once("\\X0\\")?;
+            if hex.len() % width != 0 {
+                return None;
+            }
+            let text = if width == 4 {
+                let units = hex
+                    .as_bytes()
+                    .chunks(4)
+                    .map(|chunk| u16::from_str_radix(std::str::from_utf8(chunk).ok()?, 16).ok())
+                    .collect::<Option<Vec<u16>>>()?;
+                String::from_utf16(&units).ok()?
+            } else {
+                hex.as_bytes()
+                    .chunks(8)
+                    .map(|chunk| {
+                        let code =
+                            u32::from_str_radix(std::str::from_utf8(chunk).ok()?, 16).ok()?;
+                        char::from_u32(code)
+                    })
+                    .collect::<Option<String>>()?
+            };
+            Some((text, tail))
+        }
+        _ => None,
+    }
+}
+
 /// Parses a STEP file into triangles in millimetres.
 pub fn parse(bytes: &[u8]) -> Result<StepMesh> {
-    let text = std::str::from_utf8(bytes).map_err(|_| anyhow!(i18n::t!("1b27f6899e658e81")))?;
-    let exchange = ruststep::parser::parse(text)
+    // ISO 10303-21 requires the `ISO-10303-21;` signature as the first token.
+    // Checking it on the raw bytes keeps a renamed binary (a native CAD file, a
+    // mesh archive) from reaching the code-page fallback below, which would expand
+    // it up to threefold before failing.
+    let bytes = exchange_start(bytes);
+    ensure!(
+        bytes.starts_with(b"ISO-10303-21;"),
+        i18n::t!("7d02bde73da912a1")
+    );
+    let text = decode_exchange_text(bytes);
+    let exchange = ruststep::parser::parse(&text)
         .map_err(|error| anyhow!(i18n::t!("80bd84afa3b5b7b2", error = error.to_string())))?;
     ensure!(!exchange.data.is_empty(), i18n::t!("c0a8e86e433996bb"));
 
@@ -1791,7 +1948,7 @@ impl AssemblyGraph {
 
 fn parameter_text(parameter: &Parameter) -> Option<String> {
     match parameter {
-        Parameter::String(value) => Some(value.clone()),
+        Parameter::String(value) => Some(decode_step_string(value)),
         Parameter::Typed { parameter, .. } => parameter_text(parameter),
         _ => None,
     }
@@ -2535,6 +2692,64 @@ pub(crate) mod tests {
         assert!(parse(b"\xFF\xFE").is_err());
         let empty = wrap_data("");
         assert!(parse(empty.as_bytes()).is_err());
+    }
+
+    #[test]
+    fn decodes_code_page_bytes_inside_step_strings() {
+        // SolidWorks writes the author's code page (GBK here) into string values
+        // instead of the `\X2\` escapes the standard requires, so the payload is
+        // not valid UTF-8 even though every entity in it is readable.
+        let text = assembly_step(millimetre_unit());
+        let mut bytes = Vec::new();
+        for (index, chunk) in text.split("'parent'").enumerate() {
+            if index > 0 {
+                bytes.extend(b"'\xC1\xE3\xBC\xFE'");
+            }
+            bytes.extend(chunk.as_bytes());
+        }
+        let mesh = parse(&bytes).expect("GBK assembly");
+        assert_eq!(mesh.solids, 2);
+        assert_eq!(mesh.triangles.len(), 24);
+        let names: Vec<&str> = mesh.parts.iter().map(|part| part.name.as_str()).collect();
+        assert!(names.contains(&"零件"), "names {names:?}");
+    }
+
+    #[test]
+    fn decodes_escaped_names_in_utf8_payloads() {
+        let text = assembly_step(millimetre_unit()).replace("'parent'", r"'\X2\96F64EF6\X0\'");
+        let mesh = parse(text.as_bytes()).expect("escaped assembly");
+        let names: Vec<&str> = mesh.parts.iter().map(|part| part.name.as_str()).collect();
+        assert!(names.contains(&"零件"), "names {names:?}");
+    }
+
+    #[test]
+    fn decodes_iso_10303_string_escapes() {
+        assert_eq!(decode_step_string("it''s"), "it's");
+        assert_eq!(decode_step_string(r"a\\b"), r"a\b");
+        assert_eq!(decode_step_string(r"\X\41"), "A");
+        assert_eq!(decode_step_string(r"\S\a"), "\u{E1}");
+        assert_eq!(decode_step_string(r"\X2\96F64EF6\X0\"), "零件");
+        assert_eq!(decode_step_string(r"\X2\D83DDE00\X0\"), "\u{1F600}");
+        assert_eq!(decode_step_string(r"\X4\0001F600\X0\"), "\u{1F600}");
+        assert_eq!(decode_step_string(r"\P?\\S\a"), "\u{E1}");
+        // Unknown or truncated escapes stay literal instead of disappearing.
+        assert_eq!(decode_step_string(r"\Q\X2\96F6"), r"\Q\X2\96F6");
+        assert_eq!(decode_step_string(r"\X2\96F6"), r"\X2\96F6");
+    }
+
+    #[test]
+    fn keeps_utf8_runs_while_decoding_code_page_bytes() {
+        let mut bytes = "零件 ".as_bytes().to_vec();
+        bytes.extend(b"\xC1\xE3\xBC\xFE");
+        assert_eq!(decode_exchange_text(&bytes), "零件 零件");
+    }
+
+    #[test]
+    fn accepts_a_byte_order_mark_before_the_exchange_signature() {
+        let mut bytes = b"\xEF\xBB\xBF\r\n  ".to_vec();
+        bytes.extend(cube_step(millimetre_unit()).as_bytes());
+        let mesh = parse(&bytes).expect("bom cube");
+        assert_eq!(mesh.triangles.len(), 12);
     }
 
     #[test]
