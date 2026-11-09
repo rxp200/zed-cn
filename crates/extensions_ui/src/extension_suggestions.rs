@@ -141,7 +141,7 @@ fn suggest_for_buffer(
                 .more_info_message("Learn more")
                 .more_info_url(suggestion.docs_url)
                 .primary_message(suggestion.install_message)
-                .secondary_message("Don't show again")
+                .secondary_message(i18n::t!("d16d035f63448e2e"))
             });
         }
         None => {
@@ -168,8 +168,8 @@ fn suggest_for_buffer(
                     ),
                     cx,
                 )
-                .primary_message("Yes, install extension")
-                .secondary_message("No, don't install it")
+                .primary_message(i18n::t!("a33293b58626b430"))
+                .secondary_message(i18n::t!("893cd95e31b51999"))
             });
         }
     }

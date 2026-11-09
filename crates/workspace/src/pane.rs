@@ -317,6 +317,8 @@ actions!(
         TogglePinTab,
         /// Unpins all tabs in the pane.
         UnpinAllTabs,
+        /// Clones the active item into a new window.
+        CloneItemToNewWindow,
     ]
 );
 
@@ -409,6 +411,10 @@ pub struct Pane {
     was_focused: bool,
     active_item_index: usize,
     preview_item_id: Option<EntityId>,
+    /// Items the user kept open explicitly (permanent open, double-clicked tab, or
+    /// edited). Their tabs are never replaced by a newly opened file. In-memory only:
+    /// after a restart, restored tabs count as unmodified and can be reused again.
+    retained_item_ids: HashSet<EntityId>,
     last_focus_handle_by_item: HashMap<EntityId, WeakFocusHandle>,
     nav_history: NavHistory,
     toolbar: Entity<Toolbar>,
@@ -529,6 +535,42 @@ pub struct DraggedTab {
     pub is_active: bool,
 }
 
+impl DraggedTab {
+    fn release_outside_source(&self, window: &mut Window, cx: &mut App) {
+        // A tab released over another window moves there when that window
+        // shares the project; a tab is only detached into a new window when
+        // it is released outside every window.
+        let point = window.mouse_position();
+        if let Some((target_window, target_workspace)) =
+            Workspace::workspace_window_containing_point(point, window, cx)
+        {
+            // Moving an item into a different project would strand it from
+            // its buffers (and, for remote projects, from its host), so such
+            // releases simply cancel the drag.
+            let same_project = self
+                .pane
+                .read(cx)
+                .project
+                .upgrade()
+                .is_some_and(|project| target_workspace.read(cx).project() == &project);
+            if same_project
+                && self
+                    .item
+                    .detach_to_window(target_window, self.pane.clone(), window, cx)
+            {
+                cx.stop_active_drag(window);
+            }
+            return;
+        }
+        if self
+            .item
+            .detach_to_new_window(self.pane.clone(), window, cx)
+        {
+            cx.stop_active_drag(window);
+        }
+    }
+}
+
 impl EventEmitter<Event> for Pane {}
 
 pub enum Side {
@@ -580,6 +622,7 @@ impl Pane {
             zoomed: false,
             active_item_index: 0,
             preview_item_id: None,
+            retained_item_ids: HashSet::default(),
             max_tabs,
             use_max_tabs,
             last_focus_handle_by_item: Default::default(),
@@ -824,6 +867,11 @@ impl Pane {
         self.is_tab_pinned(self.active_item_index)
     }
 
+    pub fn is_item_pinned(&self, item_id: EntityId) -> bool {
+        self.index_for_item_id(item_id)
+            .is_some_and(|index| self.is_tab_pinned(index))
+    }
+
     pub fn activation_history(&self) -> &[ActivationHistoryEntry] {
         &self.activation_history
     }
@@ -1060,11 +1108,71 @@ impl Pane {
     }
 
     pub fn handle_item_edit(&mut self, item_id: EntityId, cx: &App) {
+        // `ItemEvent::Edit` is not reserved for user edits: attaching a file's git diff
+        // right after it opens, toggling diff hunks, and syncing multibuffer excerpts all
+        // emit it while the buffer stays unmodified. Keeping the tab on those synthetic
+        // events would leave every tracked file permanently un-reusable, so only an item
+        // that actually carries unsaved changes is retained here.
+        let item_was_modified = self
+            .items
+            .iter()
+            .find(|item| item.item_id() == item_id)
+            .is_some_and(|item| item.is_dirty(cx));
+        if item_was_modified {
+            self.retain_item(item_id);
+        }
         if let Some(preview_item) = self.preview_item()
             && preview_item.item_id() == item_id
             && !preview_item.preserve_preview(cx)
         {
             self.unpreview_item_if_preview(item_id);
+        }
+    }
+
+    /// Marks an item as explicitly kept by the user so that opening another file
+    /// no longer reuses its tab.
+    fn retain_item(&mut self, item_id: EntityId) {
+        self.retained_item_ids.insert(item_id);
+    }
+
+    /// Whether the tab holding this item can be replaced in place by a newly opened file.
+    /// Only unmodified, file-backed items qualify; terminals and other tab kinds, as well
+    /// as items the user kept open explicitly, are left alone.
+    fn is_item_replaceable(&self, item: &dyn ItemHandle, cx: &App) -> bool {
+        item.buffer_kind(cx) == ItemBufferKind::Singleton
+            && item.project_path(cx).is_some()
+            && !item.is_dirty(cx)
+            && !self.retained_item_ids.contains(&item.item_id())
+    }
+
+    /// Closes the active item when it can be replaced, returning the index the new item
+    /// should take so that the tab keeps its position.
+    fn close_replaceable_active_item(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<usize> {
+        let item_index = self.active_item_index;
+        if self.is_tab_pinned(item_index) {
+            return None;
+        }
+
+        let item = self.items.get(item_index)?.boxed_clone();
+        if !self.is_item_replaceable(item.as_ref(), cx) {
+            return None;
+        }
+
+        let previous_active_item_index = self.active_item_index;
+        self.remove_item(item.item_id(), false, false, window, cx);
+        self.active_item_index = previous_active_item_index;
+        if item_index < previous_active_item_index {
+            self.active_item_index -= 1;
+        }
+
+        if item_index < self.items.len() {
+            Some(item_index)
+        } else {
+            None
         }
     }
 
@@ -1107,8 +1215,11 @@ impl Pane {
 
         let set_up_existing_item =
             |index: usize, pane: &mut Self, window: &mut Window, cx: &mut Context<Self>| {
-                if !allow_preview && let Some(item) = pane.items.get(index) {
-                    pane.unpreview_item_if_preview(item.item_id());
+                if !allow_preview
+                    && let Some(item_id) = pane.items.get(index).map(|item| item.item_id())
+                {
+                    pane.unpreview_item_if_preview(item_id);
+                    pane.retain_item(item_id);
                 }
                 if activate {
                     pane.activate_item(index, focus_item, focus_item, window, cx);
@@ -1141,21 +1252,33 @@ impl Pane {
 
             if allow_preview && !preview_was_active {
                 pane.set_preview_item_id(Some(new_item_id), cx);
+            } else if !allow_preview {
+                pane.retain_item(new_item_id);
             }
         };
+
+        // Opening a file reuses the active tab when it has not been modified, and otherwise
+        // falls back to the existing preview tab (if any). Permanent and batch opens keep
+        // every tab, so reuse only applies where the caller allows a preview tab. The tab is
+        // only closed once we know the new item is actually inserted.
+        let compute_destination =
+            |pane: &mut Self, window: &mut Window, cx: &mut Context<Self>| -> Option<usize> {
+                if allow_preview {
+                    let reusable_active_item = if activate {
+                        pane.close_replaceable_active_item(window, cx)
+                    } else {
+                        None
+                    };
+                    reusable_active_item.or_else(|| pane.close_current_preview_item(window, cx))
+                } else {
+                    suggested_position
+                }
+            };
 
         if let Some((index, existing_item)) = existing_item {
             set_up_existing_item(index, self, window, cx);
             existing_item
         } else {
-            // If the item is being opened as preview and we have an existing preview tab,
-            // open the new item in the position of the existing preview tab.
-            let destination_index = if allow_preview {
-                self.close_current_preview_item(window, cx)
-            } else {
-                suggested_position
-            };
-
             let new_item = build_item(self, window, cx);
             // A special case that won't ever get a `project_entry_id` but has to be deduplicated nonetheless.
             if let Some(invalid_buffer_view) = new_item.downcast::<InvalidItemView>() {
@@ -1182,6 +1305,7 @@ impl Pane {
                         Box::new(already_open_view) as Box<_>
                     }
                     None => {
+                        let destination_index = compute_destination(self, window, cx);
                         set_up_new_item(new_item.clone(), destination_index, self, window, cx);
                         new_item
                     }
@@ -1194,6 +1318,7 @@ impl Pane {
 
                 resulting_item
             } else {
+                let destination_index = compute_destination(self, window, cx);
                 set_up_new_item(new_item.clone(), destination_index, self, window, cx);
                 new_item
             }
@@ -1448,6 +1573,20 @@ impl Pane {
 
     pub fn item_for_index(&self, ix: usize) -> Option<&dyn ItemHandle> {
         self.items.get(ix).map(|i| i.as_ref())
+    }
+
+    fn clone_item_to_new_window(
+        &mut self,
+        _: &CloneItemToNewWindow,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(item) = self.active_item() else {
+            return;
+        };
+        if !item.clone_to_new_window(window, cx) {
+            cx.propagate();
+        }
     }
 
     pub fn toggle_zoom(&mut self, _: &ToggleZoom, window: &mut Window, cx: &mut Context<Self>) {
@@ -2008,9 +2147,13 @@ impl Pane {
                     let detail = Self::file_names_for_prompt(&mut dirty_items.iter(), cx);
                     window.prompt(
                         PromptLevel::Warning,
-                        "Do you want to save changes to the following files?",
+                        i18n::t!("8c6b07f825b62039"),
                         Some(&detail),
-                        &["Save all", "Discard all", "Cancel"],
+                        &[
+                            i18n::t!("592b52ba3cd3cd5a"),
+                            i18n::t!("2725e3b0b5b06397"),
+                            i18n::t!("2cd0f3be8738a86c"),
+                        ],
                         cx,
                     )
                 })?;
@@ -2059,9 +2202,9 @@ impl Pane {
                                 );
                                 window.prompt(
                                     PromptLevel::Warning,
-                                    &format!("Unable to save file: {err}"),
+                                    &i18n::t!("277fac85db1b0a63", err = err),
                                     Some(&detail),
-                                    &["Close Without Saving", "Cancel"],
+                                    &[i18n::t!("b841391919f681b3"), i18n::t!("2cd0f3be8738a86c")],
                                     cx,
                                 )
                             })?;
@@ -2201,6 +2344,7 @@ impl Pane {
         }
 
         let item = self.items.remove(item_index);
+        self.retained_item_ids.remove(&item.item_id());
 
         cx.emit(Event::RemovedItem { item: item.clone() });
         if self.items.is_empty() {
@@ -2335,7 +2479,11 @@ impl Pane {
                         PromptLevel::Warning,
                         DELETED_MESSAGE,
                         None,
-                        &["Save", "Close", "Cancel"],
+                        &[
+                            i18n::t!("a3030bf8f16dc63c"),
+                            i18n::t!("3fd47edce45b3603"),
+                            i18n::t!("2cd0f3be8738a86c"),
+                        ],
                         cx,
                     )
                 })?;
@@ -2370,7 +2518,11 @@ impl Pane {
                         PromptLevel::Warning,
                         CONFLICT_MESSAGE,
                         None,
-                        &["Overwrite", "Discard Edits", "Cancel"],
+                        &[
+                            i18n::t!("4ce4c98eb27e4b65"),
+                            i18n::t!("cc3fc6bfbd0cc1af"),
+                            i18n::t!("2cd0f3be8738a86c"),
+                        ],
                         cx,
                     )
                 })?;
@@ -2413,7 +2565,11 @@ impl Pane {
                                 PromptLevel::Warning,
                                 &prompt,
                                 None,
-                                &["Save", "Don't Save", "Cancel"],
+                                &[
+                                    i18n::t!("a3030bf8f16dc63c"),
+                                    i18n::t!("8bcc3e177f5f3b10"),
+                                    i18n::t!("2cd0f3be8738a86c"),
+                                ],
                                 cx,
                             ))
                         } else {
@@ -2608,30 +2764,6 @@ impl Pane {
 
     pub fn toolbar(&self) -> &Entity<Toolbar> {
         &self.toolbar
-    }
-
-    pub fn remove_navigation_history_paths(
-        &mut self,
-        project_paths: &HashSet<ProjectPath>,
-        cx: &mut Context<Self>,
-    ) {
-        let open_item_ids = self
-            .items
-            .iter()
-            .map(|item| item.item_id())
-            .collect::<HashSet<_>>();
-        let mut item_ids = HashSet::default();
-        self.nav_history
-            .for_each_entry(cx, &mut |entry, (path, _)| {
-                if project_paths.contains(&path) && !open_item_ids.contains(&entry.item.id()) {
-                    item_ids.insert(entry.item.id());
-                }
-            });
-        if item_ids.is_empty() {
-            return;
-        }
-        self.nav_history.remove_items(&item_ids);
-        self.history_updated(cx);
     }
 
     pub fn handle_deleted_project_item(
@@ -2920,13 +3052,18 @@ impl Pane {
                 .tooltip(move |_, cx| {
                     if toggleable {
                         Tooltip::with_meta(
-                            "Unlock Tab",
+                            i18n::t!("0bb3b6540b6ca5f7"),
                             None,
-                            "This will make this tab editable",
+                            i18n::t!("922f25b36cf6fe8b"),
                             cx,
                         )
                     } else {
-                        Tooltip::with_meta("Locked Tab", None, "This tab is read-only", cx)
+                        Tooltip::with_meta(
+                            i18n::t!("e9c35c96cbed8286"),
+                            None,
+                            i18n::t!("a108103aa00af9cf"),
+                            cx,
+                        )
                     }
                 })
                 .on_click(cx.listener(move |pane, _, window, cx| {
@@ -2957,6 +3094,7 @@ impl Pane {
                 move |pane: &mut Self, event: &ClickEvent, window, cx| {
                     if event.click_count() > 1 {
                         pane.unpreview_item_if_preview(item_id);
+                        pane.retain_item(item_id);
                         let extra_actions = item_handle.tab_extra_context_menu_actions(window, cx);
                         if let Some((_, action)) = extra_actions
                             .into_iter()
@@ -2994,6 +3132,9 @@ impl Pane {
                 },
                 |tab, _, _, cx| cx.new(|_| tab.clone()),
             )
+            .on_drag_release_outside(|tab: &DraggedTab, window, cx| {
+                tab.release_outside_source(window, cx);
+            })
             .drag_over::<DraggedTab>(move |tab, dragged_tab: &DraggedTab, _, cx| {
                 let mut styled_tab = tab
                     .bg(cx.theme().colors().drop_target_background)
@@ -3036,7 +3177,7 @@ impl Pane {
                 let end_slot_tooltip_text: &'static str;
                 let end_slot = if is_pinned {
                     end_slot_action = &TogglePinTab;
-                    end_slot_tooltip_text = "Unpin Tab";
+                    end_slot_tooltip_text = i18n::t!("04a5269f4f524167");
                     IconButton::new("unpin tab", IconName::Pin)
                         .shape(IconButtonShape::Square)
                         .icon_color(Color::Muted)
@@ -3103,7 +3244,7 @@ impl Pane {
                             } else {
                                 this.tooltip(move |_, cx| {
                                     let text = text.clone();
-                                    Tooltip::with_meta(text, None, "Read-Only Tab", cx)
+                                    Tooltip::with_meta(text, None, i18n::t!("65b3590e70453684"), cx)
                                 })
                             }
                         }
@@ -3129,6 +3270,7 @@ impl Pane {
         let has_items_to_left = ix > 0;
         let has_items_to_right = ix < total_items - 1;
         let has_clean_items = self.items.iter().any(|item| !item.is_dirty(cx));
+        let can_detach_to_new_window = self.items[ix].can_detach_to_new_window(cx);
         let is_pinned = self.is_tab_pinned(ix);
 
         let pane = cx.entity().downgrade();
@@ -3170,7 +3312,7 @@ impl Pane {
                     if let Some(pane) = pane.upgrade() {
                         menu = menu
                             .entry(
-                                "Close",
+                                i18n::t!("3fd47edce45b3603"),
                                 Some(Box::new(close_active_item_action)),
                                 window.handler_for(&pane, move |pane, window, cx| {
                                     pane.close_item_by_id(item_id, SaveIntent::Close, window, cx)
@@ -3178,7 +3320,7 @@ impl Pane {
                                 }),
                             )
                             .item(ContextMenuItem::Entry(
-                                ContextMenuEntry::new("Close Others")
+                                ContextMenuEntry::new(i18n::t!("b92d86f4f5570817"))
                                     .action(Box::new(close_inactive_items_action.clone()))
                                     .disabled(total_items == 1)
                                     .handler(window.handler_for(&pane, move |pane, window, cx| {
@@ -3194,7 +3336,7 @@ impl Pane {
                             // We make this optional, instead of using disabled as to not overwhelm the context menu unnecessarily
                             .extend(has_multibuffer_items.then(|| {
                                 ContextMenuItem::Entry(
-                                    ContextMenuEntry::new("Close Multibuffers")
+                                    ContextMenuEntry::new(i18n::t!("b8fe3e766330e95d"))
                                         .action(Box::new(close_multibuffers_action.clone()))
                                         .handler(window.handler_for(
                                             &pane,
@@ -3211,7 +3353,7 @@ impl Pane {
                             }))
                             .separator()
                             .item(ContextMenuItem::Entry(
-                                ContextMenuEntry::new("Close Left")
+                                ContextMenuEntry::new(i18n::t!("bc066eb3c8b6d497"))
                                     .action(Box::new(close_items_to_the_left_action.clone()))
                                     .disabled(!has_items_to_left)
                                     .handler(window.handler_for(&pane, move |pane, window, cx| {
@@ -3225,7 +3367,7 @@ impl Pane {
                                     })),
                             ))
                             .item(ContextMenuItem::Entry(
-                                ContextMenuEntry::new("Close Right")
+                                ContextMenuEntry::new(i18n::t!("9594d7707c4bfc74"))
                                     .action(Box::new(close_items_to_the_right_action.clone()))
                                     .disabled(!has_items_to_right)
                                     .handler(window.handler_for(&pane, move |pane, window, cx| {
@@ -3240,7 +3382,7 @@ impl Pane {
                             ))
                             .separator()
                             .item(ContextMenuItem::Entry(
-                                ContextMenuEntry::new("Close Clean")
+                                ContextMenuEntry::new(i18n::t!("74cb3cfcc05333d5"))
                                     .action(Box::new(close_clean_items_action.clone()))
                                     .disabled(!has_clean_items)
                                     .handler(window.handler_for(&pane, move |pane, window, cx| {
@@ -3253,7 +3395,7 @@ impl Pane {
                                     })),
                             ))
                             .entry(
-                                "Close All",
+                                i18n::t!("2e8456bb7d65651a"),
                                 Some(Box::new(close_all_items_action.clone())),
                                 window.handler_for(&pane, move |pane, window, cx| {
                                     pane.close_all_items(&close_all_items_action, window, cx)
@@ -3265,7 +3407,7 @@ impl Pane {
                             menu.separator().map(|this| {
                                 if is_pinned {
                                     this.entry(
-                                        "Unpin Tab",
+                                        i18n::t!("04a5269f4f524167"),
                                         Some(TogglePinTab.boxed_clone()),
                                         window.handler_for(&pane, move |pane, window, cx| {
                                             pane.unpin_tab_at(ix, window, cx);
@@ -3273,7 +3415,7 @@ impl Pane {
                                     )
                                 } else {
                                     this.entry(
-                                        "Pin Tab",
+                                        i18n::t!("f51c832fa5619a8a"),
                                         Some(TogglePinTab.boxed_clone()),
                                         window.handler_for(&pane, move |pane, window, cx| {
                                             pane.pin_tab_at(ix, window, cx);
@@ -3285,9 +3427,9 @@ impl Pane {
 
                         if capability != Capability::ReadOnly {
                             let read_only_label = if capability.editable() {
-                                "Make Tab Read-Only"
+                                i18n::t!("70be9cfb51358967")
                             } else {
-                                "Make Tab Editable"
+                                i18n::t!("a4c7252efa72b971")
                             };
                             menu = menu.separator().entry(
                                 read_only_label,
@@ -3357,7 +3499,7 @@ impl Pane {
                                 .separator()
                                 .when_some(entry_abs_path, |menu, abs_path| {
                                     menu.entry(
-                                        "Copy Path",
+                                        i18n::t!("b97c49acb93028ec"),
                                         Some(Box::new(zed_actions::workspace::CopyPath)),
                                         window.handler_for(&pane, move |_, _, cx| {
                                             cx.write_to_clipboard(ClipboardItem::new_string(
@@ -3368,7 +3510,7 @@ impl Pane {
                                 })
                                 .when_some(relative_path, |menu, relative_path| {
                                     menu.entry(
-                                        "Copy Relative Path",
+                                        i18n::t!("02bcdbc5a1453cb0"),
                                         Some(Box::new(zed_actions::workspace::CopyRelativePath)),
                                         window.handler_for(&pane, move |this, _, cx| {
                                             let Some(project) = this.project.upgrade() else {
@@ -3387,7 +3529,7 @@ impl Pane {
                                         project_path.clone(),
                                         |menu, project_path| {
                                             menu.entry(
-                                                "Open File Permalink",
+                                                i18n::t!("aa32d423e7138efa"),
                                                 Some(OpenFilePermalink.boxed_clone()),
                                                 window.handler_for(&pane, {
                                                     let project_path = project_path.clone();
@@ -3407,7 +3549,7 @@ impl Pane {
                                                 }),
                                             )
                                             .entry(
-                                                "Copy File Permalink",
+                                                i18n::t!("d72898311fb0c0e3"),
                                                 Some(CopyFilePermalink.boxed_clone()),
                                                 window.handler_for(
                                                     &pane,
@@ -3451,7 +3593,7 @@ impl Pane {
                                 .map(pin_tab_entries)
                                 .when(visible_in_project_panel, |menu| {
                                     menu.entry(
-                                        "Reveal In Project Panel",
+                                        i18n::t!("8ab39adcd02f4d5b"),
                                         Some(Box::new(RevealInProjectPanel::default())),
                                         window.handler_for(&pane, move |pane, _, cx| {
                                             pane.project
@@ -3466,7 +3608,7 @@ impl Pane {
                                 })
                                 .when_some(parent_abs_path, |menu, parent_abs_path| {
                                     menu.entry(
-                                        "Open in Terminal",
+                                        i18n::t!("a04c3bc562c5f568"),
                                         Some(Box::new(OpenInTerminal)),
                                         window.handler_for(&pane, move |_, window, cx| {
                                             window.dispatch_action(
@@ -3484,6 +3626,19 @@ impl Pane {
                             menu = menu.map(pin_tab_entries);
                         }
                     };
+
+                    if let Some(pane) = pane.upgrade() {
+                        menu = menu.separator().item(ContextMenuItem::Entry(
+                            ContextMenuEntry::new(i18n::t!("2adf5c1e367d4b6f"))
+                                .disabled(!can_detach_to_new_window)
+                                .handler(window.handler_for(&pane, move |pane, window, cx| {
+                                    if let Some(item) = pane.item_for_index(ix) {
+                                        let source_pane = cx.entity();
+                                        item.detach_to_new_window(source_pane, window, cx);
+                                    }
+                                })),
+                        ));
+                    }
 
                     // Add custom item-specific actions
                     if !extra_actions.is_empty() {
@@ -3520,7 +3675,7 @@ impl Pane {
                 let focus_handle = focus_handle.clone();
                 move |window, cx| {
                     Tooltip::for_action_in(
-                        "Go Back",
+                        i18n::t!("2d1d8c1e38956bea"),
                         &GoBack,
                         &window.focused(cx).unwrap_or_else(|| focus_handle.clone()),
                         cx,
@@ -3543,7 +3698,7 @@ impl Pane {
                 let focus_handle = focus_handle.clone();
                 move |window, cx| {
                     Tooltip::for_action_in(
-                        "Go Forward",
+                        i18n::t!("d681c6e2947ae79b"),
                         &GoForward,
                         &window.focused(cx).unwrap_or_else(|| focus_handle.clone()),
                         cx,
@@ -4165,7 +4320,7 @@ impl Pane {
                 let project = workspace.project().read(cx);
 
                 if project.is_via_collab() {
-                    workspace.show_error("Cannot drop files on a remote project", cx);
+                    workspace.show_error(i18n::t!("3fd0f398c1ec1d8a"), cx);
                     return (true, false);
                 }
                 if project.is_via_remote_server() {
@@ -4364,21 +4519,33 @@ fn default_render_tab_bar_buttons(
             PopoverMenu::new("pane-tab-bar-popover-menu")
                 .trigger_with_tooltip(
                     IconButton::new("plus", IconName::Plus).icon_size(IconSize::Small),
-                    Tooltip::text("New…"),
+                    Tooltip::text(i18n::t!("0b0f7ee4a6703701")),
                 )
                 .anchor(Anchor::TopRight)
                 .with_handle(pane.new_item_context_menu_handle.clone())
                 .menu(move |window, cx| {
                     Some(ContextMenu::build(window, cx, |menu, _, _| {
-                        menu.action("New File", NewFile.boxed_clone())
-                            .action("Open File", ToggleFileFinder::default().boxed_clone())
-                            .separator()
-                            .action("Search Project", DeploySearch::default().boxed_clone())
-                            .action("Search Symbols", ToggleProjectSymbols.boxed_clone())
-                            .separator()
-                            .action("New Terminal", NewTerminal::default().boxed_clone())
+                        menu.action(i18n::t!("6ddd1eaccab127de"), NewFile.boxed_clone())
                             .action(
-                                "New Center Terminal",
+                                i18n::t!("4c8a4e3da39e5c2a"),
+                                ToggleFileFinder::default().boxed_clone(),
+                            )
+                            .separator()
+                            .action(
+                                i18n::t!("dfb59ea2b7a20c66"),
+                                DeploySearch::default().boxed_clone(),
+                            )
+                            .action(
+                                i18n::t!("ca2ed75c1ab15589"),
+                                ToggleProjectSymbols.boxed_clone(),
+                            )
+                            .separator()
+                            .action(
+                                i18n::t!("14ee5380fc86ff57"),
+                                NewTerminal::default().boxed_clone(),
+                            )
+                            .action(
+                                i18n::t!("6a83039fdbb9891d"),
                                 NewCenterTerminal::default().boxed_clone(),
                             )
                     }))
@@ -4390,7 +4557,7 @@ fn default_render_tab_bar_buttons(
                     IconButton::new("split", IconName::Split)
                         .icon_size(IconSize::Small)
                         .disabled(!can_clone && !can_split_move),
-                    Tooltip::text("Split Pane"),
+                    Tooltip::text(i18n::t!("5115c5b366985ba0")),
                 )
                 .anchor(Anchor::TopRight)
                 .with_handle(pane.split_item_context_menu_handle.clone())
@@ -4398,15 +4565,36 @@ fn default_render_tab_bar_buttons(
                     ContextMenu::build(window, cx, |menu, _, _| {
                         let mode = SplitMode::MovePane;
                         if can_split_move {
-                            menu.action("Split Right", SplitRight { mode }.boxed_clone())
-                                .action("Split Left", SplitLeft { mode }.boxed_clone())
-                                .action("Split Up", SplitUp { mode }.boxed_clone())
-                                .action("Split Down", SplitDown { mode }.boxed_clone())
+                            menu.action(
+                                i18n::t!("7c9ed6c199718d94"),
+                                SplitRight { mode }.boxed_clone(),
+                            )
+                            .action(
+                                i18n::t!("4fcfde0c0fafef93"),
+                                SplitLeft { mode }.boxed_clone(),
+                            )
+                            .action(i18n::t!("8719c337f07261f3"), SplitUp { mode }.boxed_clone())
+                            .action(
+                                i18n::t!("d7e72a7908f9ae8e"),
+                                SplitDown { mode }.boxed_clone(),
+                            )
                         } else {
-                            menu.action("Split Right", SplitRight::default().boxed_clone())
-                                .action("Split Left", SplitLeft::default().boxed_clone())
-                                .action("Split Up", SplitUp::default().boxed_clone())
-                                .action("Split Down", SplitDown::default().boxed_clone())
+                            menu.action(
+                                i18n::t!("7c9ed6c199718d94"),
+                                SplitRight::default().boxed_clone(),
+                            )
+                            .action(
+                                i18n::t!("4fcfde0c0fafef93"),
+                                SplitLeft::default().boxed_clone(),
+                            )
+                            .action(
+                                i18n::t!("8719c337f07261f3"),
+                                SplitUp::default().boxed_clone(),
+                            )
+                            .action(
+                                i18n::t!("d7e72a7908f9ae8e"),
+                                SplitDown::default().boxed_clone(),
+                            )
                         }
                     })
                     .into()
@@ -4423,7 +4611,11 @@ fn default_render_tab_bar_buttons(
                 }))
                 .tooltip(move |_window, cx| {
                     Tooltip::for_action(
-                        if zoomed { "Zoom Out" } else { "Zoom In" },
+                        if zoomed {
+                            i18n::t!("290f68030501cd9c")
+                        } else {
+                            i18n::t!("80f8fbcfa0117633")
+                        },
                         &ToggleZoom,
                         cx,
                     )
@@ -4531,6 +4723,7 @@ impl Render for Pane {
             .on_action(cx.listener(Self::swap_item_right))
             .on_action(cx.listener(Self::toggle_pin_tab))
             .on_action(cx.listener(Self::unpin_all_tabs))
+            .on_action(cx.listener(Self::clone_item_to_new_window))
             .when(PreviewTabsSettings::get_global(cx).enabled, |this| {
                 this.on_action(
                     cx.listener(|pane: &mut Pane, _: &TogglePreviewTab, window, cx| {
@@ -4973,15 +5166,18 @@ impl NavHistory {
     pub fn remove_item(&mut self, item_id: EntityId) {
         let mut state = self.0.lock();
         state.paths_by_item.remove(&item_id);
-        state.retain_entries(|id| id != item_id);
-    }
-
-    pub fn remove_items(&mut self, item_ids: &HashSet<EntityId>) {
-        let mut state = self.0.lock();
-        for item_id in item_ids {
-            state.paths_by_item.remove(item_id);
-        }
-        state.retain_entries(|id| !item_ids.contains(&id));
+        state
+            .backward_stack
+            .retain(|entry| entry.item.id() != item_id);
+        state
+            .forward_stack
+            .retain(|entry| entry.item.id() != item_id);
+        state
+            .closed_stack
+            .retain(|entry| entry.item.id() != item_id);
+        state
+            .tag_stack
+            .retain(|entry| entry.origin.item.id() != item_id && entry.target.item.id() != item_id);
     }
 
     pub fn rename_item(
@@ -5045,22 +5241,6 @@ impl NavHistoryState {
                 pane.update(cx, |pane, cx| pane.history_updated(cx));
             });
         }
-    }
-
-    fn retain_entries(&mut self, retain: impl Fn(EntityId) -> bool) {
-        self.backward_stack.retain(|entry| retain(entry.item.id()));
-        self.forward_stack.retain(|entry| retain(entry.item.id()));
-        self.closed_stack.retain(|entry| retain(entry.item.id()));
-        let old_position = self.tag_stack_pos;
-        let mut index = 0;
-        self.tag_stack.retain(|entry| {
-            let keep = retain(entry.origin.item.id()) && retain(entry.target.item.id());
-            if index < old_position && !keep {
-                self.tag_stack_pos -= 1;
-            }
-            index += 1;
-            keep
-        });
     }
 }
 
@@ -5202,86 +5382,6 @@ mod tests {
             }
             is_dragged_tab
         }
-    }
-
-    #[gpui::test]
-    async fn test_remove_navigation_history_paths(cx: &mut TestAppContext) {
-        init_test(cx);
-        let fs = FakeFs::new(cx.executor());
-        let project = Project::test(fs, [], cx).await;
-        let (workspace, cx) =
-            cx.add_window_view(|window, cx| Workspace::test_new(project, window, cx));
-        let pane = workspace.read_with(cx, |workspace, _| workspace.active_pane().clone());
-        let [live, first_removed, second_removed, retained] = std::array::from_fn(|index| {
-            cx.new(|cx| {
-                TestItem::new(cx).with_project_items(&[TestProjectItem::new(
-                    index as u64,
-                    &format!("{index}.rs"),
-                    cx,
-                )])
-            })
-        });
-        pane.update_in(cx, |pane, window, cx| {
-            pane.add_item(Box::new(live.clone()), false, false, None, window, cx);
-        });
-        let entry = |item: &Entity<TestItem>| NavigationEntry {
-            item: Arc::new(item.downgrade()),
-            data: None,
-            timestamp: 0,
-            is_preview: false,
-            row: None,
-        };
-        pane.update(cx, |pane, cx| {
-            {
-                let mut state = pane.nav_history.0.lock();
-                let items = [&live, &first_removed, &second_removed, &retained];
-                state.backward_stack = items.map(entry).into();
-                state.forward_stack = state.backward_stack.clone();
-                state.closed_stack = state.backward_stack.clone();
-                for item in items {
-                    state
-                        .paths_by_item
-                        .insert(item.entity_id(), (item.project_path(cx).unwrap(), None));
-                }
-            }
-            let history = pane.nav_history_mut();
-            history.push_tag(entry(&first_removed), entry(&second_removed));
-            history.push_tag(entry(&live), entry(&retained));
-            assert_eq!(
-                history.pop_tag(TagNavigationMode::Older).unwrap().item.id(),
-                live.entity_id()
-            );
-            let paths = [&live, &first_removed, &second_removed]
-                .map(|item| item.project_path(cx).unwrap())
-                .into_iter()
-                .collect::<HashSet<_>>();
-            pane.remove_navigation_history_paths(&paths, cx);
-            {
-                let state = pane.nav_history.0.lock();
-                for stack in [
-                    &state.backward_stack,
-                    &state.forward_stack,
-                    &state.closed_stack,
-                ] {
-                    assert_eq!(
-                        stack
-                            .iter()
-                            .map(|entry| entry.item.id())
-                            .collect::<Vec<_>>(),
-                        vec![live.entity_id(), retained.entity_id()]
-                    );
-                }
-                assert_eq!(state.paths_by_item.len(), 2);
-            }
-            assert_eq!(
-                pane.nav_history_mut()
-                    .pop_tag(TagNavigationMode::Newer)
-                    .unwrap()
-                    .item
-                    .id(),
-                retained.entity_id()
-            );
-        });
     }
 
     #[gpui::test]
@@ -7483,6 +7583,259 @@ mod tests {
         assert_item_labels(&pane, ["A*", "B", "C"], cx);
     }
 
+    fn open_test_file(
+        pane: &Entity<Pane>,
+        entry_id: u64,
+        path: &'static str,
+        allow_preview: bool,
+        cx: &mut VisualTestContext,
+    ) {
+        let entry = ProjectEntryId::from_proto(entry_id);
+        let project_path = ProjectPath {
+            worktree_id: WorktreeId::from_usize(0),
+            path: util::rel_path::rel_path(path).into(),
+        };
+        pane.update_in(cx, |pane, window, cx| {
+            pane.open_item(
+                Some(entry),
+                project_path,
+                true,
+                allow_preview,
+                true,
+                None,
+                window,
+                cx,
+                Box::new(move |_, _, cx| {
+                    Box::new(cx.new(|cx| {
+                        TestItem::new(cx)
+                            .with_label(path)
+                            .with_project_items(&[TestProjectItem::new(entry_id, path, cx)])
+                    }))
+                }),
+            );
+        });
+    }
+
+    fn add_restored_test_file(
+        pane: &Entity<Pane>,
+        entry_id: u64,
+        path: &'static str,
+        cx: &mut VisualTestContext,
+    ) {
+        pane.update_in(cx, |pane, window, cx| {
+            pane.add_item(
+                Box::new(cx.new(|cx| {
+                    TestItem::new(cx)
+                        .with_label(path)
+                        .with_project_items(&[TestProjectItem::new(entry_id, path, cx)])
+                })),
+                true,
+                true,
+                None,
+                window,
+                cx,
+            );
+        });
+    }
+
+    #[gpui::test]
+    async fn test_opening_file_replaces_preview_tab(cx: &mut TestAppContext) {
+        init_test(cx);
+        let project = Project::test(FakeFs::new(cx.executor()), None, cx).await;
+        let (workspace, cx) =
+            cx.add_window_view(|window, cx| Workspace::test_new(project.clone(), window, cx));
+        let pane = workspace.read_with(cx, |workspace, _| workspace.active_pane().clone());
+
+        open_test_file(&pane, 1, "first.rs", true, cx);
+        assert_item_labels(&pane, ["first.rs*"], cx);
+
+        open_test_file(&pane, 2, "second.rs", true, cx);
+        assert_item_labels(&pane, ["second.rs*"], cx);
+    }
+
+    #[gpui::test]
+    async fn test_opening_file_replaces_restored_unmodified_tab(cx: &mut TestAppContext) {
+        init_test(cx);
+        let project = Project::test(FakeFs::new(cx.executor()), None, cx).await;
+        let (workspace, cx) =
+            cx.add_window_view(|window, cx| Workspace::test_new(project.clone(), window, cx));
+        let pane = workspace.read_with(cx, |workspace, _| workspace.active_pane().clone());
+
+        add_restored_test_file(&pane, 1, "first.rs", cx);
+        assert_item_labels(&pane, ["first.rs*"], cx);
+
+        open_test_file(&pane, 2, "second.rs", true, cx);
+        assert_item_labels(&pane, ["second.rs*"], cx);
+    }
+
+    #[gpui::test]
+    async fn test_opening_file_keeps_permanently_opened_tab(cx: &mut TestAppContext) {
+        init_test(cx);
+        let project = Project::test(FakeFs::new(cx.executor()), None, cx).await;
+        let (workspace, cx) =
+            cx.add_window_view(|window, cx| Workspace::test_new(project.clone(), window, cx));
+        let pane = workspace.read_with(cx, |workspace, _| workspace.active_pane().clone());
+
+        open_test_file(&pane, 1, "first.rs", false, cx);
+        assert_item_labels(&pane, ["first.rs*"], cx);
+
+        open_test_file(&pane, 2, "second.rs", true, cx);
+        assert_item_labels(&pane, ["first.rs", "second.rs*"], cx);
+    }
+
+    #[gpui::test]
+    async fn test_opening_file_keeps_edited_tab(cx: &mut TestAppContext) {
+        init_test(cx);
+        let project = Project::test(FakeFs::new(cx.executor()), None, cx).await;
+        let (workspace, cx) =
+            cx.add_window_view(|window, cx| Workspace::test_new(project.clone(), window, cx));
+        let pane = workspace.read_with(cx, |workspace, _| workspace.active_pane().clone());
+
+        open_test_file(&pane, 1, "first.rs", true, cx);
+        let item_id = pane.read_with(cx, |pane, _| {
+            pane.active_item().expect("an active item").item_id()
+        });
+        let item = pane.read_with(cx, |pane, _cx| {
+            let index = pane.index_for_item_id(item_id).expect("item index");
+            pane.items[index]
+                .to_any_view()
+                .downcast::<TestItem>()
+                .expect("test item")
+        });
+        item.update(cx, |item, _| item.is_dirty = true);
+        pane.update_in(cx, |pane, window, cx| {
+            pane.handle_item_edit(item_id, cx);
+            pane.activate_item(0, true, true, window, cx);
+        });
+        // Saving clears the dirty flag, but the tab stays kept because the user edited it.
+        item.update(cx, |item, _| item.is_dirty = false);
+
+        open_test_file(&pane, 2, "second.rs", true, cx);
+        assert_item_labels(&pane, ["first.rs", "second.rs*"], cx);
+    }
+
+    #[gpui::test]
+    async fn test_opening_file_replaces_tab_on_unmodified_edit_event(cx: &mut TestAppContext) {
+        init_test(cx);
+        // Preview tabs are turned off so that replacing the tab can only come from the
+        // reuse path, not from the preview slot fallback.
+        cx.update_global::<SettingsStore, ()>(|store, cx| {
+            store.update_user_settings(cx, |settings| {
+                settings.preview_tabs.get_or_insert_default().enabled = Some(false);
+            });
+        });
+        let project = Project::test(FakeFs::new(cx.executor()), None, cx).await;
+        let (workspace, cx) =
+            cx.add_window_view(|window, cx| Workspace::test_new(project.clone(), window, cx));
+        let pane = workspace.read_with(cx, |workspace, _| workspace.active_pane().clone());
+
+        open_test_file(&pane, 1, "first.rs", true, cx);
+        let item_id = pane.read_with(cx, |pane, _| {
+            pane.active_item().expect("an active item").item_id()
+        });
+        // Editors emit `ItemEvent::Edit` for non-user work such as attaching the file's git
+        // diff; that must not turn the tab into one the next file cannot replace.
+        pane.update_in(cx, |pane, window, cx| {
+            pane.handle_item_edit(item_id, cx);
+            pane.activate_item(0, true, true, window, cx);
+        });
+        assert_item_labels(&pane, ["first.rs*"], cx);
+
+        open_test_file(&pane, 2, "second.rs", true, cx);
+        assert_item_labels(&pane, ["second.rs*"], cx);
+    }
+
+    #[gpui::test]
+    async fn test_opening_file_keeps_tab_without_project_path(cx: &mut TestAppContext) {
+        init_test(cx);
+        let project = Project::test(FakeFs::new(cx.executor()), None, cx).await;
+        let (workspace, cx) =
+            cx.add_window_view(|window, cx| Workspace::test_new(project.clone(), window, cx));
+        let pane = workspace.read_with(cx, |workspace, _| workspace.active_pane().clone());
+
+        pane.update_in(cx, |pane, window, cx| {
+            pane.add_item(
+                Box::new(cx.new(|cx| TestItem::new(cx).with_label("terminal"))),
+                true,
+                true,
+                None,
+                window,
+                cx,
+            );
+        });
+        assert_item_labels(&pane, ["terminal*"], cx);
+
+        open_test_file(&pane, 1, "first.rs", true, cx);
+        assert_item_labels(&pane, ["terminal", "first.rs*"], cx);
+    }
+
+    #[gpui::test]
+    async fn test_opening_file_keeps_pinned_tab(cx: &mut TestAppContext) {
+        init_test(cx);
+        let project = Project::test(FakeFs::new(cx.executor()), None, cx).await;
+        let (workspace, cx) =
+            cx.add_window_view(|window, cx| Workspace::test_new(project.clone(), window, cx));
+        let pane = workspace.read_with(cx, |workspace, _| workspace.active_pane().clone());
+
+        open_test_file(&pane, 1, "first.rs", true, cx);
+        pane.update_in(cx, |pane, window, cx| {
+            pane.pin_tab_at(0, window, cx);
+            pane.activate_item(0, true, true, window, cx);
+        });
+        assert_item_labels(&pane, ["first.rs*!"], cx);
+
+        open_test_file(&pane, 2, "second.rs", true, cx);
+        assert_item_labels(&pane, ["first.rs!", "second.rs*"], cx);
+    }
+
+    #[gpui::test]
+    async fn test_opening_file_keeps_multibuffer_tab(cx: &mut TestAppContext) {
+        init_test(cx);
+        let project = Project::test(FakeFs::new(cx.executor()), None, cx).await;
+        let (workspace, cx) =
+            cx.add_window_view(|window, cx| Workspace::test_new(project.clone(), window, cx));
+        let pane = workspace.read_with(cx, |workspace, _| workspace.active_pane().clone());
+
+        pane.update_in(cx, |pane, window, cx| {
+            pane.add_item(
+                Box::new(cx.new(|cx| {
+                    TestItem::new(cx)
+                        .with_label("multibuffer")
+                        .with_buffer_kind(ItemBufferKind::Multibuffer)
+                        .with_project_items(&[TestProjectItem::new(1, "first.rs", cx)])
+                })),
+                true,
+                true,
+                None,
+                window,
+                cx,
+            );
+        });
+
+        open_test_file(&pane, 2, "second.rs", true, cx);
+        assert_item_labels(&pane, ["multibuffer", "second.rs*"], cx);
+    }
+
+    #[gpui::test]
+    async fn test_opening_file_replaces_active_tab_in_place(cx: &mut TestAppContext) {
+        init_test(cx);
+        let project = Project::test(FakeFs::new(cx.executor()), None, cx).await;
+        let (workspace, cx) =
+            cx.add_window_view(|window, cx| Workspace::test_new(project.clone(), window, cx));
+        let pane = workspace.read_with(cx, |workspace, _| workspace.active_pane().clone());
+
+        open_test_file(&pane, 1, "first.rs", false, cx);
+        open_test_file(&pane, 2, "second.rs", true, cx);
+        open_test_file(&pane, 3, "third.rs", false, cx);
+        assert_item_labels(&pane, ["first.rs", "second.rs", "third.rs*"], cx);
+
+        pane.update_in(cx, |pane, window, cx| {
+            pane.activate_item(1, true, true, window, cx);
+        });
+        open_test_file(&pane, 4, "fourth.rs", true, cx);
+        assert_item_labels(&pane, ["first.rs", "fourth.rs*", "third.rs"], cx);
+    }
+
     #[gpui::test]
     async fn test_move_item(cx: &mut TestAppContext) {
         init_test(cx);
@@ -8248,7 +8601,7 @@ mod tests {
         });
 
         cx.executor().run_until_parked();
-        cx.simulate_prompt_answer("Save all");
+        cx.simulate_prompt_answer("全部保存");
         save.await.unwrap();
         assert_item_labels(&pane, [], cx);
 
@@ -8268,7 +8621,7 @@ mod tests {
         });
 
         cx.executor().run_until_parked();
-        cx.simulate_prompt_answer("Discard all");
+        cx.simulate_prompt_answer("全部丢弃");
         save.await.unwrap();
         assert_item_labels(&pane, [], cx);
 
@@ -8298,7 +8651,7 @@ mod tests {
         });
 
         cx.executor().run_until_parked();
-        cx.simulate_prompt_answer("Discard all");
+        cx.simulate_prompt_answer("全部丢弃");
         close_task.await.unwrap();
         assert_item_labels(&pane, [], cx);
 
@@ -8322,7 +8675,7 @@ mod tests {
         });
 
         cx.executor().run_until_parked();
-        cx.simulate_prompt_answer("Cancel");
+        cx.simulate_prompt_answer("取消");
         close_task.await.unwrap();
         assert_item_labels(&pane, ["Dirty*^"], cx);
     }
@@ -8361,7 +8714,7 @@ mod tests {
         });
 
         cx.executor().run_until_parked();
-        cx.simulate_prompt_answer("Discard all");
+        cx.simulate_prompt_answer("全部丢弃");
         close_task.await.unwrap();
         assert_item_labels(&pane, [], cx);
 
@@ -8403,7 +8756,7 @@ mod tests {
         });
 
         cx.executor().run_until_parked();
-        cx.simulate_prompt_answer("Don't Save");
+        cx.simulate_prompt_answer("不保存");
         close_task.await.unwrap();
         assert_item_labels(&pane, [], cx);
 
@@ -8536,7 +8889,7 @@ mod tests {
         });
 
         cx.executor().run_until_parked();
-        cx.simulate_prompt_answer("Discard all");
+        cx.simulate_prompt_answer("全部丢弃");
         close_task.await.unwrap();
         assert_item_labels(&pane, [], cx);
 
@@ -8652,7 +9005,7 @@ mod tests {
         });
 
         cx.executor().run_until_parked();
-        cx.simulate_prompt_answer("Save all");
+        cx.simulate_prompt_answer("全部保存");
         save.await.unwrap();
         assert_item_labels(&pane, ["C", "A*^"], cx);
 
@@ -8683,7 +9036,7 @@ mod tests {
         });
 
         cx.executor().run_until_parked();
-        cx.simulate_prompt_answer("Discard all");
+        cx.simulate_prompt_answer("全部丢弃");
         save.await.unwrap();
         assert_item_labels(&pane, ["C", "A*^"], cx);
     }

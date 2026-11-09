@@ -51,6 +51,7 @@ pub struct TerminalSettings {
     pub path_hyperlink_regexes: Vec<String>,
     pub path_hyperlink_timeout_ms: u64,
     pub show_count_badge: bool,
+    pub notify_on_long_task_finish: bool,
     pub bell: TerminalBell,
 }
 
@@ -136,6 +137,7 @@ impl settings::Settings for TerminalSettings {
                 .collect(),
             path_hyperlink_timeout_ms: project_content.path_hyperlink_timeout_ms.unwrap(),
             show_count_badge: user_content.show_count_badge.unwrap(),
+            notify_on_long_task_finish: user_content.notify_on_long_task_finish.unwrap(),
             bell: user_content.bell.unwrap(),
         }
     }

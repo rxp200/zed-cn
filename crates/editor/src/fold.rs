@@ -80,15 +80,23 @@ impl EditorSnapshot {
         cx: &mut App,
     ) -> Option<AnyElement> {
         let folded = self.is_line_folded(buffer_row);
-        if let Crease::Inline { render_trailer, .. } = self
-            .crease_snapshot
-            .query_row(buffer_row, self.buffer_snapshot())?
-        {
-            let render_trailer = render_trailer.as_ref()?;
-            Some(render_trailer(buffer_row, folded, window, cx))
-        } else {
-            None
+        let mut trailers = Vec::new();
+        for (_, crease) in self.crease_snapshot.creases() {
+            let Crease::Inline {
+                range,
+                render_trailer: Some(render_trailer),
+                ..
+            } = crease
+            else {
+                continue;
+            };
+            if range.start.to_point(self.buffer_snapshot()).row == buffer_row.0
+                && range.start.is_valid(self.buffer_snapshot())
+            {
+                trailers.push(render_trailer(buffer_row, folded, window, cx));
+            }
         }
+        (!trailers.is_empty()).then(|| h_flex().gap_1().children(trailers).into_any_element())
     }
 }
 

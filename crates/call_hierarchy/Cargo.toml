@@ -13,6 +13,7 @@ path = "src/call_hierarchy.rs"
 doctest = false
 
 [dependencies]
+i18n.workspace = true
 editor.workspace = true
 fuzzy.workspace = true
 gpui.workspace = true

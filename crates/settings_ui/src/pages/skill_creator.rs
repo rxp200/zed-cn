@@ -183,7 +183,7 @@ impl SkillCreatorPage {
 
         let name_editor = cx.new(|cx| {
             InputField::new(window, cx, "my-new-skill")
-                .label("Name")
+                .label(i18n::t!("d44e9b3d3b31d37b"))
                 .tab_index(NAME_FIELD_TAB_INDEX)
                 .tab_stop(true)
         });
@@ -191,14 +191,10 @@ impl SkillCreatorPage {
         window.focus(&name_editor.focus_handle(cx), cx);
 
         let description_editor = cx.new(|cx| {
-            InputField::new(
-                window,
-                cx,
-                "e.g., Fill the PR description following this template.",
-            )
-            .label("Description")
-            .tab_index(DESCRIPTION_FIELD_TAB_INDEX)
-            .tab_stop(true)
+            InputField::new(window, cx, i18n::t!("a1d15b8662173333"))
+                .label(i18n::t!("dc2ba467fc7ac962"))
+                .tab_index(DESCRIPTION_FIELD_TAB_INDEX)
+                .tab_stop(true)
         });
 
         let body_editor = cx.new(|cx| {
@@ -208,7 +204,7 @@ impl SkillCreatorPage {
                 buffer
             });
             let mut editor = Editor::for_buffer(buffer, None, window, cx);
-            editor.set_placeholder_text("Add skill content…", window, cx);
+            editor.set_placeholder_text(i18n::t!("0885a615236610aa"), window, cx);
             editor.set_soft_wrap_mode(SoftWrap::EditorWidth, cx);
             editor.set_show_gutter(false, cx);
             editor.set_show_wrap_guides(false, cx);
@@ -412,7 +408,7 @@ impl SkillCreatorPage {
     fn recompute_body_error(&mut self, cx: &App) {
         let body = self.current_body(cx);
         self.body_error = if body.trim().is_empty() {
-            Some("Body is required.")
+            Some(i18n::t!("c526c8835571e4b4"))
         } else {
             None
         };
@@ -457,9 +453,7 @@ impl SkillCreatorPage {
         match parse_imported_skill(&content, "") {
             Ok(imported) => self.apply_imported_skill(imported, window, cx),
             Err(err) => {
-                self.save_error = Some(SharedString::from(format!(
-                    "Couldn't read shared skill: {err}"
-                )));
+                self.save_error = Some(SharedString::from(i18n::t!("a58c9798f07abde0", err = err)));
                 cx.notify();
             }
         }
@@ -703,20 +697,17 @@ impl SkillCreatorPage {
             .child(
                 h_flex()
                     .gap_1()
-                    .child(Label::new("Import from URL"))
-                    .child(Label::new("(optional)").color(Color::Muted)),
+                    .child(Label::new(i18n::t!("d02426cea6110581")))
+                    .child(Label::new(i18n::t!("3d5c3c3dbaca6b32")).color(Color::Muted)),
             )
             .child(self.url_editor.clone())
             .child(match &self.url_import_status {
-                UrlImportStatus::Idle => Label::new(
-                    "Paste a GitHub .md URL to fetch it and fill out the form. \
-                     For private files, Zed retries using GITHUB_TOKEN, if set.",
-                )
-                .size(LabelSize::Small)
-                .color(Color::Muted)
-                .into_any_element(),
+                UrlImportStatus::Idle => Label::new(i18n::t!("b741854e38bd5e3d"))
+                    .size(LabelSize::Small)
+                    .color(Color::Muted)
+                    .into_any_element(),
                 UrlImportStatus::Fetching => {
-                    LoadingLabel::new("Fetching and parsing…").into_any_element()
+                    LoadingLabel::new(i18n::t!("0097c72840220124")).into_any_element()
                 }
                 UrlImportStatus::Error(error) => h_flex()
                     .gap_1()
@@ -743,7 +734,7 @@ impl SkillCreatorPage {
             .child(
                 v_flex()
                     .gap_2()
-                    .child(Label::new("Front-matter"))
+                    .child(Label::new(i18n::t!("06c2291944cd6abc")))
                     .child(self.name_editor.clone())
                     .child(self.description_editor.clone()),
             )
@@ -754,7 +745,7 @@ impl SkillCreatorPage {
                     .flex_grow_1()
                     .flex_shrink_0()
                     .gap_2()
-                    .child(Label::new("Skill Content"))
+                    .child(Label::new(i18n::t!("b3e7383cb255c4df")))
                     .child(self.render_body_field(window, cx))
                     .when_some(self.body_error, |this, error| {
                         this.child(Label::new(error).size(LabelSize::Small).color(Color::Error))
@@ -767,11 +758,8 @@ impl SkillCreatorPage {
 
         SwitchField::new(
             "disable-model-invocation",
-            Some("Disable model invocation"),
-            Some(
-                "Hide this skill from the model's catalog. It can still be invoked via slash command."
-                    .into(),
-            ),
+            Some(i18n::t!("3a927755adc978a3")),
+            Some(i18n::t!("756f596afa583e11").into()),
             toggle_state,
             cx.listener(|this, _state: &ToggleState, _window, cx| {
                 this.toggle_disable_model_invocation(cx);
@@ -835,7 +823,11 @@ impl SkillCreatorPage {
 
     fn render_footer(&self, _window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let saving = self.saving;
-        let main_action = if saving { "Saving…" } else { "Save Skill" };
+        let main_action = if saving {
+            i18n::t!("91a18d716662cfe1")
+        } else {
+            i18n::t!("c6b2eecaf242c24c")
+        };
 
         v_flex()
             .w_full()
@@ -986,13 +978,13 @@ async fn fetch_imported_skill_from_url_with_github_token(
     }
 
     if body.len() > MAX_SKILL_FILE_SIZE {
-        anyhow::bail!(
-            "SKILL.md file exceeds maximum size of {}KB",
+        anyhow::bail!(i18n::t_args!(
+            "3522db0c3ccb7289",
             MAX_SKILL_FILE_SIZE / 1024
-        );
+        ));
     }
 
-    let content = String::from_utf8(body).context("GitHub response was not valid UTF-8")?;
+    let content = String::from_utf8(body).context(i18n::t!("a36b8fe1145afd89"))?;
     parse_imported_skill(&content, raw_url.as_str())
 }
 
@@ -1015,21 +1007,18 @@ async fn fetch_skill_url(
     let request = Request::get(raw_url)
         .follow_redirects(redirect_policy)
         .when_some(github_token, |builder, token| {
-            builder.header("Authorization", format!("Bearer {token}"))
+            builder.header("Authorization", i18n::t!("bf733da73429e88a", token = token))
         })
         .body(AsyncBody::default())?;
 
     let mut response = http_client
         .send(request)
         .await
-        .with_context(|| format!("failed to fetch {raw_url}"))?;
+        .with_context(|| i18n::t!("9f94a4ca2a65d9f6", raw_url = raw_url))?;
 
     let status = response.status();
     if github_token.is_some() && status.is_redirection() {
-        anyhow::bail!(
-            "GitHub returned an unexpected redirect ({}) for the authenticated request to {raw_url}",
-            status.as_u16()
-        );
+        anyhow::bail!(i18n::t_mix!("db6c98afe0b366e2"; status.as_u16(); raw_url = raw_url));
     }
     let mut body = Vec::new();
     response
@@ -1037,20 +1026,16 @@ async fn fetch_skill_url(
         .take(MAX_SKILL_FILE_SIZE as u64 + 1)
         .read_to_end(&mut body)
         .await
-        .context("failed to read response body")?;
+        .context(i18n::t!("e35bc8f0794810f0"))?;
 
     Ok((status, body))
 }
 
 fn github_fetch_error(status: StatusCode, body: &[u8]) -> anyhow::Error {
     let mut message = if status == StatusCode::NOT_FOUND {
-        "GitHub returned 404 while fetching the skill; no repository exists at this URL, or it is private"
-            .to_string()
+        i18n::t!("5110930d8556a083").to_string()
     } else {
-        format!(
-            "GitHub returned {} while fetching the skill",
-            status.as_u16()
-        )
+        i18n::t_args!("5fa0f5be6a2dc325", status.as_u16())
     };
 
     let response_text = truncated_response_body_for_error(body);
@@ -1067,17 +1052,17 @@ pub(crate) fn is_supported_skill_url(input: &str) -> bool {
 }
 
 fn github_raw_url(input: &str) -> Result<String> {
-    let url = Url::parse(input.trim()).context("Enter a valid GitHub URL")?;
+    let url = Url::parse(input.trim()).context("输入有效的 GitHub URL")?;
     if url.scheme() != "https" {
-        anyhow::bail!("GitHub skill URLs must use https://");
+        anyhow::bail!(i18n::t!("a3ecf24c8e4736d2"));
     }
 
     let host = url
         .host_str()
-        .ok_or_else(|| anyhow!("Enter a valid GitHub URL"))?;
+        .ok_or_else(|| anyhow!(i18n::t!("8f11618b0ab22e2f")))?;
     let path_segments = url
         .path_segments()
-        .ok_or_else(|| anyhow!("Enter a valid GitHub URL"))?
+        .ok_or_else(|| anyhow!(i18n::t!("8f11618b0ab22e2f")))?
         .collect::<Vec<_>>();
 
     match host {
@@ -1086,17 +1071,17 @@ fn github_raw_url(input: &str) -> Result<String> {
             ensure_markdown_path(&path_segments)?;
             Ok(url.into())
         }
-        _ => anyhow::bail!("Paste a GitHub .md URL"),
+        _ => anyhow::bail!(i18n::t!("6430e2f6dcd161a5")),
     }
 }
 
 fn github_blob_raw_url(path_segments: &[&str]) -> Result<String> {
     let [owner, repo, kind, reference, file_path @ ..] = path_segments else {
-        anyhow::bail!("Paste a GitHub blob URL that points to a .md file");
+        anyhow::bail!(i18n::t!("caea843fbebb154c"));
     };
 
     if *kind != "blob" {
-        anyhow::bail!("Paste a GitHub blob URL that points to a .md file");
+        anyhow::bail!(i18n::t!("caea843fbebb154c"));
     }
 
     ensure_markdown_path(file_path)?;
@@ -1108,11 +1093,11 @@ fn github_blob_raw_url(path_segments: &[&str]) -> Result<String> {
 
 fn ensure_markdown_path(path_segments: &[&str]) -> Result<()> {
     let Some(file_name) = path_segments.last() else {
-        anyhow::bail!("Paste a GitHub .md URL");
+        anyhow::bail!(i18n::t!("6430e2f6dcd161a5"));
     };
 
     if !file_name.to_ascii_lowercase().ends_with(".md") {
-        anyhow::bail!("Paste a GitHub URL that points to a .md file");
+        anyhow::bail!(i18n::t!("e1f77a81f4ef4526"));
     }
 
     Ok(())
@@ -1130,6 +1115,7 @@ fn parse_imported_skill(content: &str, source_url: &str) -> Result<ImportedSkill
     }
 
     Ok(ImportedSkill {
+        // This value becomes both the validated name and the on-disk directory, not a UI label.
         name: derived_skill_name_from_url(source_url).unwrap_or_else(|| "imported-skill".into()),
         description: derived_description_from_markdown(content).unwrap_or_default(),
         body: content.trim().to_string(),
@@ -1199,10 +1185,7 @@ async fn write_skill_to_disk(
     let skill_dir = skills_dir.join(name);
     match fs.metadata(&skill_dir).await {
         Ok(Some(metadata)) if metadata.is_dir => {
-            anyhow::bail!(
-                "A skill named \"{name}\" already exists at {}. Pick a different name.",
-                skill_dir.display()
-            );
+            anyhow::bail!(i18n::t_mix!("995d78d0e8d46514"; skill_dir.display(); name = name));
         }
         Ok(Some(_)) => {
             // Something exists at this path, but it isn't a directory — e.g.
@@ -1210,20 +1193,15 @@ async fn write_skill_to_disk(
             // this branch we'd fall through to `create_dir`, which on the
             // real fs returns a generic "File exists" IO error that gives
             // the user no idea what's wrong or how to recover.
-            anyhow::bail!(
-                "A file (not a skill directory) already exists at {}. \
-                 Delete it or pick a different skill name.",
-                skill_dir.display()
-            );
+            anyhow::bail!(i18n::t!(
+                "67f32358bf28ebd2",
+                skill_dir = skill_dir.display()
+            ));
         }
         Ok(None) => {}
         Err(err) => {
-            return Err(err).with_context(|| {
-                format!(
-                    "failed to check whether {} already exists",
-                    skill_dir.display()
-                )
-            });
+            return Err(err)
+                .with_context(|| i18n::t_args!("8caab78851afc409", skill_dir.display()));
         }
     }
 
@@ -1231,11 +1209,11 @@ async fn write_skill_to_disk(
 
     fs.create_dir(&skill_dir)
         .await
-        .with_context(|| format!("failed to create skill directory {}", skill_dir.display()))?;
+        .with_context(|| i18n::t_args!("e25765e7d17ebec0", skill_dir.display()))?;
     let skill_file_path = skill_dir.join(SKILL_FILE_NAME);
     fs.write(&skill_file_path, content.as_bytes())
         .await
-        .with_context(|| format!("failed to write {}", skill_file_path.display()))?;
+        .with_context(|| i18n::t_args!("b5b0f7e1fd5f45e9", skill_file_path.display()))?;
 
     Ok(skill_file_path)
 }
@@ -1251,8 +1229,7 @@ fn format_skill_file(
         description: description.to_string(),
         disable_model_invocation,
     };
-    let frontmatter = serde_yaml_ng::to_string(&metadata)
-        .context("failed to serialize skill frontmatter as YAML")?;
+    let frontmatter = serde_yaml_ng::to_string(&metadata).context(i18n::t!("da5e24d0bc432354"))?;
 
     let mut content = String::with_capacity(frontmatter.len() + body.len() + 16);
     content.push_str("---\n");
@@ -1520,6 +1497,59 @@ mod tests {
         assert!(!imported.disable_model_invocation);
     }
 
+    #[gpui::test]
+    async fn parse_imported_skill_fallback_name_can_be_saved(cx: &mut gpui::TestAppContext) {
+        let content = "# 导入的技能\n\n执行代码审查。";
+        for source_url in [
+            "",
+            "not a URL",
+            "https://github.com/owner/repo/blob/main/---.md",
+        ] {
+            let imported = parse_imported_skill(content, source_url)
+                .expect("Markdown without frontmatter should import without a usable URL name");
+            assert_eq!(imported.name, "imported-skill");
+            assert_eq!(imported.description, "导入的技能");
+            assert_eq!(imported.body, content);
+            assert!(!imported.disable_model_invocation);
+            assert_eq!(validate_name(&imported.name), Ok(()));
+            assert_eq!(validate_description(&imported.description), Ok(()));
+
+            let fs = FakeFs::new(cx.executor());
+            fs.insert_tree("/skills", serde_json::json!({})).await;
+            let path = write_skill_to_disk(
+                fs.as_ref(),
+                Path::new("/skills"),
+                &imported.name,
+                &imported.description,
+                &imported.body,
+                imported.disable_model_invocation,
+            )
+            .await
+            .expect("fallback name should save successfully");
+            assert_eq!(path, Path::new("/skills/imported-skill/SKILL.md"));
+            let written = fs.load(&path).await.expect("skill should exist");
+            let (metadata, body) = parse_skill_file_content(&written)
+                .expect("saved fallback skill should pass strict metadata validation");
+            assert_eq!(metadata.name, imported.name);
+            assert_eq!(metadata.description, imported.description);
+            assert_eq!(body.trim(), imported.body);
+        }
+    }
+
+    #[test]
+    fn parse_imported_skill_rejects_invalid_frontmatter_without_url() {
+        for content in [
+            "---\nname: 导入的技能\ndescription: 描述\n---\n内容",
+            "---\nname: [\n---\n内容",
+            "---\ndescription: 描述\n---\n内容",
+        ] {
+            assert!(
+                parse_imported_skill(content, "").is_err(),
+                "invalid frontmatter must not be hidden by a fallback: {content}"
+            );
+        }
+    }
+
     #[test]
     fn parse_imported_skill_reuses_skill_metadata_validation() {
         let error = parse_imported_skill(
@@ -1595,7 +1625,7 @@ mod tests {
         let message = error.to_string();
 
         assert!(
-            message.contains("unexpected redirect (302)"),
+            message.contains("意外的重定向 (302)"),
             "error should report the redirect, got: {message}"
         );
     }
@@ -1616,7 +1646,7 @@ mod tests {
         let message = error.to_string();
 
         assert!(
-            message.contains("no repository exists at this URL, or it is private"),
+            message.contains("不存在仓库，或是私有仓库"),
             "404 error should mention private repositories, got: {message}"
         );
         assert_eq!(client.authorization_headers(), vec![None]);
@@ -1641,11 +1671,11 @@ mod tests {
         let message = error.to_string();
 
         assert!(
-            message.contains("exceeds maximum size"),
+            message.contains("超过最大大小"),
             "error should report the skill size limit, got: {message}"
         );
         assert!(
-            !message.contains("failed to read response body"),
+            !message.contains("读取响应正文失败"),
             "reader should not be polled past the limit, got: {message}"
         );
     }
@@ -1666,7 +1696,7 @@ mod tests {
         .expect_err("non-success responses should be rejected");
         let message = error.to_string();
 
-        assert!(message.contains("GitHub returned 500"));
+        assert!(message.contains("GitHub 在获取技能时返回 500"));
         assert!(
             message.ends_with('…'),
             "error body should be visibly truncated, got: {message}"
@@ -1725,7 +1755,7 @@ mod tests {
         .await
         .expect_err("writing over an existing skill must fail");
         assert!(
-            err.to_string().contains("already exists"),
+            err.to_string().contains("已存在"),
             "error message should mention the conflict, got: {err}"
         );
     }
@@ -1756,7 +1786,7 @@ mod tests {
         .expect_err("writing where a file already lives must fail");
         let message = err.to_string();
         assert!(
-            message.contains("not a skill directory"),
+            message.contains("非技能目录"),
             "error should explain the conflict is a non-directory, got: {message}"
         );
         // Path separator differs between platforms

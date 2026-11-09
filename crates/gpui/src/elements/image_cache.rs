@@ -7,7 +7,7 @@ use crate::{
 use crate::asset_cache::CachedLoad;
 use refineable::Refineable;
 use smallvec::SmallVec;
-use std::{collections::HashMap, fmt, sync::Arc};
+use std::{collections::HashMap, fmt, future::Future, sync::Arc};
 
 /// An image cache element, all its child img elements will use the cache specified by this element.
 /// Note that this could as simple as passing an `Entity<T: ImageCache>`
@@ -181,6 +181,16 @@ impl ImageCacheItem {
         Self(CachedLoad::new(future, cx))
     }
 
+    /// Starts loading an image through a caller-supplied loader into a new cache
+    /// entry. Use this for image sources that are not addressable as a
+    /// [`Resource`], such as project files fetched over the network.
+    pub fn from_load(
+        future: impl Future<Output = Result<Arc<RenderImage>, ImageCacheError>> + Send + 'static,
+        cx: &mut App,
+    ) -> Self {
+        Self(CachedLoad::new(future, cx))
+    }
+
     /// Returns the cached result without subscribing to completion notifications.
     pub fn get(&self) -> Option<Result<Arc<RenderImage>, ImageCacheError>> {
         self.0.get()
@@ -320,7 +330,7 @@ impl ImageCacheProvider for RetainAllImageCacheProvider {
                 window.with_element_state::<Entity<RetainAllImageCache>, _>(
                     global_id,
                     |cache, _window| {
-                        let cache = cache.unwrap_or_else(|| RetainAllImageCache::new(cx));
+                        let mut cache = cache.unwrap_or_else(|| RetainAllImageCache::new(cx));
                         (cache.clone(), cache)
                     },
                 )

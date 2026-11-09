@@ -1,3 +1,5 @@
+// Modified by the Zed CN project, 2026. See MODIFICATIONS.md.
+
 use std::{
     collections::BinaryHeap,
     sync::Arc,
@@ -133,7 +135,7 @@ impl ThreadedDispatcher {
             let mut receiver: PriorityQueueReceiver<RunnableVariant> = background_receiver.clone();
             let idle = idle.clone();
             thread::Builder::new()
-                .name(format!("ThreadedDispatcherWorker-{i}"))
+                .name(i18n::t!("31707e19ad9d9047", i = i))
                 .spawn(move || {
                     while let Ok(runnable) = receiver.pop() {
                         let _decrement = idle.decrement_on_drop();

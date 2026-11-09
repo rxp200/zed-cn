@@ -1,11 +1,18 @@
 pub mod command;
 pub mod json_log;
+mod managed_ssh_keys;
 pub mod protocol;
 pub mod proxy;
 pub mod remote_client;
 pub mod remote_identity;
 mod transport;
 
+pub use managed_ssh_keys::{
+    ImportedManagedSshKey, ManagedSshKey, ManagedSshKeyDeploymentState, ManagedSshKeyKind,
+    delete_local_managed_ssh_key, import_managed_ssh_key, list_managed_ssh_keys,
+    managed_ssh_key_directory, public_key_fingerprint, rename_managed_ssh_key,
+    revoke_and_delete_managed_ssh_key, verify_managed_ssh_key,
+};
 #[cfg(target_os = "windows")]
 pub use remote_client::OpenWslPath;
 pub use remote_client::{

@@ -993,12 +993,12 @@ impl ToolPermissionContext {
             return acp_thread::PermissionOptions::Flat(vec![
                 acp_v2::PermissionOption::new(
                     acp_v2::PermissionOptionId::new("allow"),
-                    "Yes",
+                    i18n::t!("b5141d3d19e9a048"),
                     acp_v2::PermissionOptionKind::AllowOnce,
                 ),
                 acp_v2::PermissionOption::new(
                     acp_v2::PermissionOptionId::new("deny"),
-                    "No",
+                    i18n::t!("0c70665b6eb65f1a"),
                     acp_v2::PermissionOptionKind::RejectOnce,
                 ),
             ]);
@@ -1009,12 +1009,12 @@ impl ToolPermissionContext {
             return acp_thread::PermissionOptions::Flat(vec![
                 acp_v2::PermissionOption::new(
                     acp_v2::PermissionOptionId::new("allow"),
-                    "Allow",
+                    i18n::t!("e213c161d5cefa52"),
                     acp_v2::PermissionOptionKind::AllowOnce,
                 ),
                 acp_v2::PermissionOption::new(
                     acp_v2::PermissionOptionId::new("deny"),
-                    "Deny",
+                    i18n::t!("05a2d7332eb9d8bf"),
                     acp_v2::PermissionOptionKind::RejectOnce,
                 ),
             ]);
@@ -1051,12 +1051,12 @@ impl ToolPermissionContext {
                     choices.push(acp_thread::PermissionOptionChoice {
                         allow: acp_v2::PermissionOption::new(
                             acp_v2::PermissionOptionId::new("allow"),
-                            "Only this time",
+                            i18n::t!("a7caf448a5d59fa8"),
                             acp_v2::PermissionOptionKind::AllowOnce,
                         ),
                         deny: acp_v2::PermissionOption::new(
                             acp_v2::PermissionOptionId::new("deny"),
-                            "Only this time",
+                            i18n::t!("a7caf448a5d59fa8"),
                             acp_v2::PermissionOptionKind::RejectOnce,
                         ),
                         sub_patterns: vec![],
@@ -2793,7 +2793,7 @@ impl Thread {
 
     pub(crate) fn prepare_local_turn(&mut self, cx: &mut Context<Self>) {
         // Freeze the old partial before inserting a successor's user message,
-        // and fence detached cleanup while its command is prepared.
+        // and fence detached cleanup while its checkpoint or command is prepared.
         self.flush_pending_message(cx);
         self.advance_prompt_id();
     }
@@ -6168,14 +6168,14 @@ impl ToolCallEventStream {
             reason,
         };
         let allow_thread_label = if self.is_subagent(cx) {
-            "Allow for this subagent"
+            i18n::t!("32f7a6cf99dc9d50")
         } else {
-            "Allow for this thread"
+            i18n::t!("7b7e921e1e9c3752")
         };
         let options = acp_thread::PermissionOptions::Flat(vec![
             acp_v2::PermissionOption::new(
                 acp_v2::PermissionOptionId::new(acp_thread::SandboxPermission::AllowOnce.as_id()),
-                "Allow once",
+                i18n::t!("168511d24d9ee031"),
                 acp_v2::PermissionOptionKind::AllowOnce,
             ),
             acp_v2::PermissionOption::new(
@@ -6185,12 +6185,12 @@ impl ToolCallEventStream {
             ),
             acp_v2::PermissionOption::new(
                 acp_v2::PermissionOptionId::new(acp_thread::SandboxPermission::AllowAlways.as_id()),
-                "Allow always",
+                i18n::t!("11f1800a41afbccd"),
                 acp_v2::PermissionOptionKind::AllowAlways,
             ),
             acp_v2::PermissionOption::new(
                 acp_v2::PermissionOptionId::new(acp_thread::SandboxPermission::Deny.as_id()),
-                "Deny",
+                i18n::t!("05a2d7332eb9d8bf"),
                 acp_v2::PermissionOptionKind::RejectOnce,
             ),
         ]);
@@ -6555,7 +6555,7 @@ impl ToolCallEventStream {
             ),
             acp_v2::PermissionOption::new(
                 acp_v2::PermissionOptionId::new(acp_thread::SandboxPermission::AllowOnce.as_id()),
-                "Run without sandbox once",
+                i18n::t!("f6828749b35ab559"),
                 acp_v2::PermissionOptionKind::AllowOnce,
             ),
             acp_v2::PermissionOption::new(
@@ -6565,12 +6565,12 @@ impl ToolCallEventStream {
             ),
             acp_v2::PermissionOption::new(
                 acp_v2::PermissionOptionId::new(acp_thread::SandboxPermission::AllowAlways.as_id()),
-                "Always run without sandbox",
+                i18n::t!("f64a85a35f866f27"),
                 acp_v2::PermissionOptionKind::AllowAlways,
             ),
             acp_v2::PermissionOption::new(
                 acp_v2::PermissionOptionId::new(acp_thread::SandboxPermission::Deny.as_id()),
-                "Deny",
+                i18n::t!("05a2d7332eb9d8bf"),
                 acp_v2::PermissionOptionKind::RejectOnce,
             ),
         ]);
@@ -8950,20 +8950,24 @@ mod tests {
             vec![
                 (
                     "allow",
-                    "Allow once",
+                    i18n::t!("168511d24d9ee031"),
                     acp_v2::PermissionOptionKind::AllowOnce
                 ),
                 (
                     "allow_thread",
-                    "Allow for this thread",
+                    i18n::t!("7b7e921e1e9c3752"),
                     acp_v2::PermissionOptionKind::AllowAlways,
                 ),
                 (
                     "allow_always",
-                    "Allow always",
+                    i18n::t!("11f1800a41afbccd"),
                     acp_v2::PermissionOptionKind::AllowAlways,
                 ),
-                ("deny", "Deny", acp_v2::PermissionOptionKind::RejectOnce),
+                (
+                    "deny",
+                    i18n::t!("05a2d7332eb9d8bf"),
+                    acp_v2::PermissionOptionKind::RejectOnce,
+                ),
             ]
         );
 
@@ -9032,10 +9036,10 @@ mod tests {
             options,
             vec![
                 ("retry", "Retry"),
-                ("allow", "Run without sandbox once"),
+                ("allow", i18n::t!("f6828749b35ab559")),
                 ("allow_thread", "Run without sandbox for this thread"),
-                ("allow_always", "Always run without sandbox"),
-                ("deny", "Deny"),
+                ("allow_always", i18n::t!("f64a85a35f866f27")),
+                ("deny", i18n::t!("05a2d7332eb9d8bf")),
             ]
         );
 

@@ -13,6 +13,7 @@ path = "src/keymap_editor.rs"
 doctest = false
 
 [dependencies]
+i18n.workspace = true
 anyhow.workspace = true
 collections.workspace = true
 command_palette.workspace = true

@@ -88,6 +88,19 @@ impl TestContext {
             "should have pending prompt"
         );
 
+        let answer = match answer {
+            "Trash" => i18n::t!("fa5e1982038ca189"),
+            "Don't Save" => i18n::t!("8bcc3e177f5f3b10"),
+            "Cancel" => {
+                let (prompt, _) = self.cx.cx.pending_prompt().expect("pending prompt");
+                if prompt.contains("contains unsaved edits. Do you want to save it?") {
+                    i18n::t!("2cd0f3be8738a86c")
+                } else {
+                    "Cancel"
+                }
+            }
+            answer => answer,
+        };
         self.cx.cx.simulate_prompt_answer(answer);
         self.cx.run_until_parked();
     }
@@ -725,7 +738,7 @@ async fn batch_trash_warns_about_unsaved_changes(cx: &mut gpui::TestAppContext) 
     });
 
     cx.redo().await;
-    cx.assert_prompt("1 of these has unsaved changes, which will be lost.");
+    cx.assert_prompt(&i18n::t!("ac63ba71b9e1ec17"));
 
     cx.answer("Cancel");
     cx.assert_fs_state_is(&["a.txt", "b.txt"]);

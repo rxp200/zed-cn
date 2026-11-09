@@ -296,7 +296,7 @@ impl CommitModal {
                             })
                             .when(has_previous_commit, |this| {
                                 this.toggleable_entry(
-                                    "Amend",
+                                    i18n::t!("5dd9a77083d911cb"),
                                     amend_enabled,
                                     IconPosition::Start,
                                     Some(Box::new(Amend)),
@@ -313,7 +313,7 @@ impl CommitModal {
                                 )
                             })
                             .toggleable_entry(
-                                "Signoff",
+                                i18n::t!("412189be35e53bfa"),
                                 signoff_enabled,
                                 IconPosition::Start,
                                 Some(Box::new(Signoff)),
@@ -327,7 +327,7 @@ impl CommitModal {
                                 },
                             )
                             .item(
-                                ContextMenuEntry::new("Skip Hooks")
+                                ContextMenuEntry::new(i18n::t!("9a5dc1d2a0b059cc"))
                                     .toggleable(IconPosition::Start, skip_hooks_enabled)
                                     .action(Box::new(SkipHooks))
                                     .handler(move |window, cx| {
@@ -409,7 +409,7 @@ impl CommitModal {
             .with_handle(self.branch_list_handle.clone())
             .trigger_with_tooltip(
                 branch_picker_button,
-                Tooltip::for_action_title("Switch Branch", &zed_actions::git::Branch),
+                Tooltip::for_action_title(i18n::t!("27eae3e46e729194"), &zed_actions::git::Branch),
             )
             .anchor(Anchor::BottomLeft)
             .offset(gpui::Point {

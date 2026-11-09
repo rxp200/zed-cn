@@ -16,6 +16,7 @@ doctest = false
 test-support = []
 
 [dependencies]
+i18n.workspace = true
 ai_onboarding.workspace = true
 anthropic = { workspace = true, features = ["schemars"] }
 anyhow.workspace = true
@@ -74,7 +75,6 @@ x_ai_subscribed.workspace = true
 client = { workspace = true, features = ["test-support"] }
 clock = { workspace = true, features = ["test-support"] }
 cloud_llm_client.workspace = true
-credentials_provider = { workspace = true, features = ["test-support"] }
 db = { workspace = true, features = ["test-support"] }
 feature_flags.workspace = true
 gpui = { workspace = true, features = ["test-support"] }

@@ -16,6 +16,7 @@ doctest = false
 test-support = ["gpui/test-support", "fs/test-support"]
 
 [dependencies]
+i18n.workspace = true
 anyhow.workspace = true
 collections.workspace = true
 ec4rs.workspace = true

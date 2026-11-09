@@ -36,6 +36,9 @@ message AddWorktree {
   string path = 1;
   uint64 project_id = 2;
   bool visible = 3;
+  // When set, limits eager scanning to this directory depth; deeper entries
+  // load on demand. Absent on older clients; ignored by older servers.
+  optional uint32 file_scan_depth = 4;
 }
 
 message AddWorktreeResponse {
@@ -94,12 +97,441 @@ message ListRemoteDirectoryResponse {
   repeated EntryInfo entry_info = 2;
 }
 
+// Creates a directory outside of any worktree, used by the remote project
+// picker before the chosen path becomes a worktree root. Only sent to servers
+// that advertised the `create_remote_directory_v1` capability.
+message CreateRemoteDirectory {
+  string path = 1;
+}
+
+message CreateRemoteDirectoryResponse {
+  string path = 1;
+}
+
 message CreateProjectEntry {
   uint64 project_id = 1;
   uint64 worktree_id = 2;
   string path = 3;
   bool is_directory = 4;
   optional bytes content = 5;
+}
+
+// Chunked project entry upload, used only with the `upload_chunks_v1`
+// capability. The client sends one bounded chunk at a time and waits for its
+// response, so interactive requests can be interleaved on the same connection
+// instead of queueing behind a whole file.
+message BeginProjectEntryUpload {
+  uint64 project_id = 1;
+  uint64 worktree_id = 2;
+  string path = 3;
+  uint64 total_size = 4;
+  uint64 upload_id = 5;
+}
+
+message BeginProjectEntryUploadResponse {}
+
+message WriteProjectEntryChunk {
+  uint64 project_id = 1;
+  uint64 worktree_id = 2;
+  uint64 upload_id = 3;
+  uint64 offset = 4;
+  bytes content = 5;
+}
+
+message WriteProjectEntryChunkResponse {}
+
+message FinishProjectEntryUpload {
+  uint64 project_id = 1;
+  uint64 worktree_id = 2;
+  uint64 upload_id = 3;
+}
+
+message FinishProjectEntryUploadResponse {
+  optional Entry entry = 1;
+  uint64 worktree_scan_id = 2;
+}
+
+message AbortProjectEntryUpload {
+  uint64 project_id = 1;
+  uint64 worktree_id = 2;
+  uint64 upload_id = 3;
+}
+
+message AbortProjectEntryUploadResponse {}
+
+message CreateTemporaryFile {
+  string suggested_name = 1;
+  bytes content = 2;
+}
+
+message CreateTemporaryFileResponse {
+  string path = 1;
+}
+
+message ReadDocumentChunk {
+  uint64 worktree_id = 1;
+  string path = 2;
+  uint64 offset = 3;
+  uint64 expected_size = 4;
+  optional Timestamp expected_mtime = 5;
+}
+
+message ReadDocumentChunkResponse {
+  File file = 1;
+  bytes content = 2;
+  uint64 total_size = 3;
+}
+
+message ReadEpubEntry {
+  uint64 worktree_id = 1;
+  string path = 2;
+  string entry_path = 3;
+  uint64 offset = 4;
+  uint64 expected_size = 5;
+  optional Timestamp expected_mtime = 6;
+}
+
+message ReadEpubEntryResponse {
+  File file = 1;
+  bytes content = 2;
+  uint64 total_size = 3;
+  uint64 entry_size = 4;
+}
+
+message GetSystemStats {}
+
+// A single temperature sensor reading. `source` is a stable cross-process component
+// identifier (cpu/gpu/storage/board/network/other); unknown values fall back to other
+// on the receiving side.
+message SystemTemperature {
+  string label = 1;
+  string source = 2;
+  float celsius = 3;
+}
+
+// A single GPU reading. A missing optional field means the current platform or driver
+// does not expose that piece of data.
+message SystemGpuReading {
+  string name = 1;
+  string vendor = 2;
+  optional string driver_version = 3;
+  optional uint64 memory_total_bytes = 4;
+  optional uint64 memory_used_bytes = 5;
+  optional float utilization_percent = 6;
+  optional float temperature_celsius = 7;
+}
+
+message GetSystemStatsResponse {
+  string hostname = 1;
+  string os_name = 2;
+  string kernel_version = 3;
+  uint64 uptime_seconds = 4;
+  float cpu_usage_percent = 5;
+  repeated float cpu_core_usage_percent = 6;
+  uint64 memory_used_bytes = 7;
+  uint64 memory_total_bytes = 8;
+  uint64 swap_used_bytes = 9;
+  uint64 swap_total_bytes = 10;
+  uint64 disk_used_bytes = 11;
+  uint64 disk_total_bytes = 12;
+  uint64 network_received_bytes_per_second = 13;
+  uint64 network_transmitted_bytes_per_second = 14;
+  uint32 process_count = 15;
+  double load_average_one = 16;
+  double load_average_five = 17;
+  double load_average_fifteen = 18;
+  int64 sampled_at_unix_seconds = 19;
+  repeated string local_ip_addresses = 20;
+  repeated SystemTemperature temperatures = 21;
+  repeated SystemGpuReading gpus = 22;
+}
+
+message CreatePersistentTerminal {
+  string creation_id = 1;
+  string program = 2;
+  repeated string args = 3;
+  map<string, string> env = 4;
+  optional string working_directory = 5;
+  uint32 rows = 6;
+  uint32 columns = 7;
+  uint32 pixel_width = 8;
+  uint32 pixel_height = 9;
+  // Set by clients that understand selective hosting. The terminal is created
+  // in the independent service, so it can later be promoted without restarting.
+  bool hosted = 10;
+}
+
+message CreatePersistentTerminalResponse {
+  string server_instance_id = 1;
+  string terminal_id = 2;
+}
+
+message PersistentTerminalInput {
+  string server_instance_id = 1;
+  string terminal_id = 2;
+  uint64 sequence = 3;
+  bytes data = 4;
+}
+
+message ResizePersistentTerminal {
+  string server_instance_id = 1;
+  string terminal_id = 2;
+  uint32 rows = 3;
+  uint32 columns = 4;
+  uint32 pixel_width = 5;
+  uint32 pixel_height = 6;
+}
+
+message ReadPersistentTerminal {
+  string server_instance_id = 1;
+  string terminal_id = 2;
+  uint64 offset = 3;
+  uint32 max_bytes = 4;
+}
+
+message ReadPersistentTerminalResponse {
+  bytes data = 1;
+  uint64 next_offset = 2;
+  bool history_truncated = 3;
+  bool exited = 4;
+  optional int32 exit_code = 5;
+}
+
+message ClosePersistentTerminal {
+  string server_instance_id = 1;
+  string terminal_id = 2;
+}
+
+message SubscribePersistentTerminal {
+  string server_instance_id = 1;
+  string terminal_id = 2;
+  uint64 offset = 3;
+}
+
+message PersistentTerminalOutput {
+  string server_instance_id = 1;
+  string terminal_id = 2;
+  uint64 offset = 3;
+  bytes data = 4;
+  bool history_truncated = 5;
+  bool exited = 6;
+  optional int32 exit_code = 7;
+  bool replay = 8;
+}
+
+message PersistentTerminalOutputCredit {
+  string server_instance_id = 1;
+  string terminal_id = 2;
+  uint64 offset = 3;
+}
+
+// Selective hosting: an explicitly promoted terminal outlives the client that
+// created it and can be attached by other clients of the same remote account.
+// Input, resize, output and credit keep using the PersistentTerminal messages;
+// the project server translates them to the independent terminal service.
+message HostTerminal {
+  string server_instance_id = 1;
+  string terminal_id = 2;
+  string name = 3;
+  // Server-internal attachment identity; ignored when sent by a client.
+  string attachment_id = 4;
+}
+
+message HostTerminalResponse {
+  // Server-side session id used by list/attach/take/terminate/detach. It is not
+  // the client's pseudo terminal id.
+  string session_id = 1;
+  string name = 2;
+}
+
+message ListHostedTerminals {
+  string canonical_root = 1;
+}
+
+message HostedTerminalSummary {
+  string session_id = 1;
+  string name = 2;
+  bool running = 3;
+  optional int32 exit_code = 4;
+  string controller_label = 5;
+  uint32 viewer_count = 6;
+  uint64 started_at_unix_seconds = 7;
+}
+
+message ListHostedTerminalsResponse {
+  repeated HostedTerminalSummary sessions = 1;
+}
+
+message AttachHostedTerminal {
+  string canonical_root = 1;
+  string session_id = 2;
+}
+
+message AttachHostedTerminalResponse {
+  // Pseudo persistent-terminal identity the client uses for the attached
+  // session. It is local to the serving connection, never a daemon id.
+  string server_instance_id = 1;
+  string terminal_id = 2;
+  bool controls_input = 3;
+  bool running = 4;
+  optional int32 exit_code = 5;
+  // Server-side session id, required by the management operations.
+  string session_id = 6;
+}
+
+message UnhostTerminal {
+  string terminal_id = 1;
+  // Resolved by the project server, never trusted from the desktop client.
+  string attachment_id = 2;
+}
+
+message DetachHostedTerminal {
+  string session_id = 1;
+  // Server-internal attachment identity; ignored when sent by a client.
+  string attachment_id = 2;
+}
+
+message TakeHostedTerminalControl {
+  string session_id = 1;
+  string terminal_id = 3;
+  // Server-internal attachment identity; ignored when sent by a client.
+  string attachment_id = 2;
+}
+
+message TakeHostedTerminalControlResponse {
+  bool controls_input = 1;
+}
+
+message RenameHostedTerminal {
+  string session_id = 1;
+  string name = 2;
+  // Server-internal attachment identity; ignored when sent by a client.
+  string attachment_id = 3;
+}
+
+message TerminateHostedTerminal {
+  string session_id = 1;
+  // Server-internal attachment identity; ignored when sent by a client.
+  string attachment_id = 2;
+}
+
+message DeleteHostedTerminal {
+  string session_id = 1;
+  // Server-internal attachment identity; ignored when sent by a client.
+  string attachment_id = 2;
+}
+
+// Frames exchanged with the independent terminal service over its
+// account-private local socket. They are not registered in the request table
+// because only the colocated project server speaks this protocol.
+message HostedTerminalFrame {
+  uint64 request_id = 1;
+  oneof kind {
+    HostedTerminalDaemonRequest request = 2;
+    HostedTerminalDaemonResponse response = 3;
+    PersistentTerminalOutput output = 4;
+  }
+}
+
+message HostedTerminalDaemonRequest {
+  oneof kind {
+    CreateHostedTerminal create = 1;
+    HostTerminal host = 2;
+    ListHostedTerminals list = 3;
+    AttachHostedTerminal attach = 4;
+    DetachHostedTerminal detach = 5;
+    TakeHostedTerminalControl take_control = 6;
+    RenameHostedTerminal rename = 7;
+    TerminateHostedTerminal terminate = 8;
+    DeleteHostedTerminal delete = 9;
+    SubscribeHostedTerminal subscribe = 10;
+    HostedTerminalDaemonInput input = 11;
+    HostedTerminalDaemonResize resize = 12;
+    HostedTerminalDaemonCredit credit = 13;
+    CloseHostedTerminal close = 14;
+    UnhostTerminal unhost = 15;
+  }
+}
+
+message CreateHostedTerminal {
+  string creation_id = 1;
+  string program = 2;
+  repeated string args = 3;
+  map<string, string> env = 4;
+  optional string working_directory = 5;
+  uint32 rows = 6;
+  uint32 columns = 7;
+  uint32 pixel_width = 8;
+  uint32 pixel_height = 9;
+  string canonical_root = 10;
+  string attachment_id = 11;
+}
+
+message SubscribeHostedTerminal {
+  string session_id = 1;
+  string attachment_id = 2;
+  uint64 offset = 3;
+}
+
+message HostedTerminalDaemonInput {
+  string session_id = 1;
+  string attachment_id = 2;
+  uint64 control_generation = 3;
+  uint64 sequence = 4;
+  bytes data = 5;
+}
+
+message HostedTerminalDaemonResize {
+  string session_id = 1;
+  string attachment_id = 2;
+  uint64 control_generation = 3;
+  uint32 rows = 4;
+  uint32 columns = 5;
+  uint32 pixel_width = 6;
+  uint32 pixel_height = 7;
+}
+
+message HostedTerminalDaemonCredit {
+  string session_id = 1;
+  string attachment_id = 2;
+  uint64 offset = 3;
+}
+
+message CloseHostedTerminal {
+  string session_id = 1;
+  string attachment_id = 2;
+}
+
+message HostedTerminalDaemonResponse {
+  oneof kind {
+    HostedTerminalAck ack = 1;
+    HostedTerminalDaemonError error = 2;
+    CreatedHostedTerminal created = 3;
+    ListHostedTerminalsResponse sessions = 4;
+    AttachedHostedTerminal attached = 5;
+    HostedTerminalControl control = 6;
+  }
+}
+
+message HostedTerminalAck {}
+
+message HostedTerminalDaemonError {
+  string message = 1;
+}
+
+message CreatedHostedTerminal {
+  string session_id = 1;
+}
+
+message AttachedHostedTerminal {
+  string attachment_id = 1;
+  uint64 control_generation = 2;
+  bool controls_input = 3;
+}
+
+message HostedTerminalControl {
+  uint64 control_generation = 1;
+  bool controls_input = 2;
 }
 
 message RenameProjectEntry {

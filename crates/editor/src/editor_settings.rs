@@ -1,14 +1,15 @@
 use core::num;
 
-use gpui::App;
+use gpui::{App, Hsla};
 use language::CursorShape;
 use project::project_settings::DiagnosticSeverity;
 pub use settings::{
-    CodeLens, CompletionDetailAlignment, CompletionMenuItemKind, CurrentLineHighlight, DelayMs,
-    DiffViewStyle, DisplayIn, DocumentColorsRenderMode, DoubleClickInMultibuffer, GitGutterWidth,
-    GoToDefinitionFallback, GoToDefinitionScrollStrategy, MinimapThumb, MinimapThumbBorder,
-    MultiCursorModifier, OpenResultsIn, ScrollBeyondLastLine, ScrollbarDiagnostics,
-    SeedQuerySetting, ShowMinimap, SnippetSortOrder,
+    BracketColorMode, BracketPairGuides, CodeLens, CompletionDetailAlignment,
+    CompletionMenuItemKind, CurrentLineHighlight, DelayMs, DiffViewStyle, DisplayIn,
+    DocumentColorsRenderMode, DoubleClickInMultibuffer, GitGutterWidth, GoToDefinitionFallback,
+    GoToDefinitionScrollStrategy, MinimapThumb, MinimapThumbBorder, MultiCursorModifier,
+    OpenResultsIn, ScrollBeyondLastLine, ScrollbarDiagnostics, SeedQuerySetting, ShowMinimap,
+    SnippetSortOrder,
 };
 use settings::{RegisterSetting, RelativeLineNumbers, Settings};
 use ui::scrollbars::ShowScrollbar;
@@ -72,6 +73,20 @@ pub struct EditorSettings {
     pub diff_view_style: DiffViewStyle,
     pub minimum_split_diff_width: f32,
     pub file_diff: FileDiffSettings,
+    pub rainbow_brackets: RainbowBracketsSettings,
+}
+
+/// Rainbow bracket colorization and decoration options.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RainbowBracketsSettings {
+    /// Palette in cycle order; empty means the theme's `accents`.
+    pub colors: Vec<Hsla>,
+    pub color_mode: BracketColorMode,
+    pub force_iteration_color_cycle: bool,
+    pub force_unique_opening_color: bool,
+    pub unmatched_bracket_color: Option<Hsla>,
+    pub highlight_active_scope: bool,
+    pub bracket_pair_guides: BracketPairGuides,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -342,6 +357,22 @@ impl Settings for EditorSettings {
             minimum_split_diff_width: editor.minimum_split_diff_width.unwrap(),
             file_diff: FileDiffSettings {
                 show_full_file: file_diff.show_full_file.unwrap(),
+            },
+            rainbow_brackets: {
+                let rainbow_brackets = editor.rainbow_brackets.unwrap();
+                RainbowBracketsSettings {
+                    colors: rainbow_brackets.colors.unwrap(),
+                    color_mode: rainbow_brackets.color_mode.unwrap(),
+                    force_iteration_color_cycle: rainbow_brackets
+                        .force_iteration_color_cycle
+                        .unwrap(),
+                    force_unique_opening_color: rainbow_brackets
+                        .force_unique_opening_color
+                        .unwrap(),
+                    unmatched_bracket_color: rainbow_brackets.unmatched_bracket_color,
+                    highlight_active_scope: rainbow_brackets.highlight_active_scope.unwrap(),
+                    bracket_pair_guides: rainbow_brackets.bracket_pair_guides.unwrap(),
+                }
             },
         }
     }

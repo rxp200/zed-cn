@@ -148,6 +148,31 @@ pub fn project_image_source(project: WeakEntity<Project>, path: ProjectPath) -> 
     })
 }
 
+/// Starts loading a project image without going through GPUI's global asset
+/// cache.
+///
+/// The global asset cache is never evicted, so callers that need decoded images
+/// to be reclaimable (for example a preview that owns a bounded image cache)
+/// must load the image through this function instead of
+/// [`project_image_source`].
+pub fn load_project_image(
+    project: WeakEntity<Project>,
+    path: ProjectPath,
+    cx: &mut App,
+) -> impl Future<Output = Result<Arc<RenderImage>, ImageCacheError>> + Send + 'static {
+    ProjectImageAsset::load(ProjectImageSource { project, path }, cx)
+}
+
+/// Returns whether a project image is being held by GPUI's global asset cache.
+#[cfg(any(test, feature = "test-support"))]
+pub fn is_project_image_cached(
+    project: WeakEntity<Project>,
+    path: ProjectPath,
+    cx: &App,
+) -> bool {
+    cx.has_asset::<AssetLogger<ProjectImageAsset>>(&ProjectImageSource { project, path })
+}
+
 impl ImageItem {
     pub fn compute_metadata_from_bytes(image_bytes: &[u8]) -> Result<ImageMetadata> {
         let image_format = image::guess_format(image_bytes)?;
@@ -270,6 +295,7 @@ impl ProjectItem for ImageItem {
         cx: &mut App,
     ) -> Option<Task<anyhow::Result<Entity<Self>>>> {
         if is_image_file(project, path, cx) {
+            log::info!("[open-debug] ImageItem::try_open {:?}", path.path.as_unix_str());
             Some(cx.spawn({
                 let path = path.clone();
                 let project = project.clone();
@@ -419,8 +445,13 @@ impl ImageStore {
     ) -> Task<Result<Entity<ImageItem>>> {
         let existing_image = self.get_by_path(&project_path, cx);
         if let Some(existing_image) = existing_image {
+            log::info!(
+                "[open-debug] reusing already-open image {:?}",
+                project_path.path.as_unix_str()
+            );
             return Task::ready(Ok(existing_image));
         }
+        log::info!("[open-debug] ImageStore::open_image {:?}", project_path.path.as_unix_str());
 
         let Some(worktree) = self
             .worktree_store
@@ -596,6 +627,11 @@ impl RemoteImageStore {
                 loading.chunks.push(chunk.data);
 
                 if loading.received_size == loading.state.content_size {
+                    log::info!(
+                        "[open-debug] remote image {} fully received ({} bytes)",
+                        image_id,
+                        loading.received_size
+                    );
                     let loading = self.loading_remote_images_by_id.remove(&image_id).unwrap();
 
                     let mut content = Vec::with_capacity(loading.received_size as usize);
@@ -661,6 +697,11 @@ impl ImageStoreImpl for Entity<LocalImageStore> {
         });
         cx.spawn(async move |image_store, cx| {
             let LoadedBinaryFile { file, content } = load_file.await?;
+            log::info!(
+                "[open-debug] local image loaded {:?} ({} bytes)",
+                file.path.as_unix_str(),
+                content.len()
+            );
             let image = create_gpui_image(content)?;
 
             let entity = cx.new(|cx| ImageItem {
@@ -735,6 +776,7 @@ impl ImageStoreImpl for Entity<RemoteImageStore> {
         let remote_store = self.clone();
 
         cx.spawn(async move |_image_store, cx| {
+            log::info!("[open-debug] requesting remote image {:?}", path.as_unix_str());
             let response = client
                 .request(rpc::proto::OpenImageByPath {
                     project_id,
@@ -933,6 +975,10 @@ impl LocalImageStore {
 
 fn create_gpui_image(content: Vec<u8>) -> anyhow::Result<Arc<gpui::Image>> {
     let format = image::guess_format(&content)?;
+    log::info!(
+        "[open-debug] create_gpui_image format={format:?} bytes={}",
+        content.len()
+    );
 
     Ok(Arc::new(gpui::Image::from_bytes(
         match format {

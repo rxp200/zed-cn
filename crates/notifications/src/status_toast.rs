@@ -12,6 +12,7 @@ pub struct StatusToast {
     action: Option<ToastAction>,
     show_dismiss: bool,
     auto_dismiss: bool,
+    dismiss_duration: std::time::Duration,
     this_handle: Entity<Self>,
     focus_handle: FocusHandle,
 }
@@ -32,6 +33,7 @@ impl StatusToast {
                     action: None,
                     show_dismiss: false,
                     auto_dismiss: true,
+                    dismiss_duration: std::time::Duration::from_secs(10),
                     this_handle: cx.entity(),
                     focus_handle,
                 },
@@ -42,6 +44,11 @@ impl StatusToast {
 
     pub fn icon(mut self, icon: Icon) -> Self {
         self.icon = Some(icon);
+        self
+    }
+
+    pub fn dismiss_after(mut self, duration: std::time::Duration) -> Self {
+        self.dismiss_duration = duration;
         self
     }
 
@@ -116,7 +123,7 @@ impl Render for StatusToast {
                         .shape(ui::IconButtonShape::Square)
                         .icon_size(IconSize::Small)
                         .icon_color(Color::Muted)
-                        .tooltip(Tooltip::text("Dismiss"))
+                        .tooltip(Tooltip::text(i18n::t!("3fd47edce45b3603")))
                         .on_click(move |_click_event, _window, cx| {
                             handle.update(cx, |_, cx| {
                                 cx.emit(DismissEvent);
@@ -128,6 +135,10 @@ impl Render for StatusToast {
 }
 
 impl ToastView for StatusToast {
+    fn dismiss_duration(&self) -> std::time::Duration {
+        self.dismiss_duration
+    }
+
     fn action(&self) -> Option<ToastAction> {
         self.action.clone()
     }
@@ -160,7 +171,7 @@ impl Component for StatusToast {
         let text_example = StatusToast::new("Operation completed", cx, |this, _| this);
 
         let action_example = StatusToast::new("Update ready to install", cx, |this, _cx| {
-            this.action("Restart", |_, _| {})
+            this.action("重新启动", |_, _| {})
         });
 
         let dismiss_button_example =
@@ -195,7 +206,7 @@ impl Component for StatusToast {
                         .size(IconSize::Small)
                         .color(Color::Error),
                 )
-                .action("More Info", |_, _| {})
+                .action("更多信息", |_, _| {})
             },
         );
 
@@ -205,7 +216,7 @@ impl Component for StatusToast {
                     .size(IconSize::Small)
                     .color(Color::Warning),
             )
-            .action("More Info", |_, _| {})
+            .action("更多信息", |_, _| {})
         });
 
         let pr_example =
@@ -215,7 +226,7 @@ impl Component for StatusToast {
                         .size(IconSize::Small)
                         .color(Color::Muted),
                 )
-                .action("Open Pull Request", |_, cx| {
+                .action("打开拉取请求", |_, cx| {
                     cx.open_url("https://github.com/")
                 })
             });

@@ -192,11 +192,11 @@ impl Component for TabBar {
                     vec![single_example(
                         "Full TabBar",
                         TabBar::new("full_tab_bar")
-                            .start_child(Button::new("start_button", "Start"))
+                            .start_child(Button::new("start_button", i18n::t!("d2bb025a2e51c410")))
                             .child(Tab::new("tab1"))
                             .child(Tab::new("tab2"))
                             .child(Tab::new("tab3"))
-                            .end_child(Button::new("end_button", "End"))
+                            .end_child(Button::new("end_button", i18n::t!("c7b24e7997e96eaa")))
                             .into_any_element(),
                     )],
                 ),

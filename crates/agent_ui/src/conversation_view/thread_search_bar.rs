@@ -23,7 +23,6 @@ use theme_settings::ThemeSettings;
 use ui::{IconButtonShape, Tooltip, prelude::*};
 use util::paths::PathMatcher;
 
-use super::subagent_card::acp_subagent_card;
 use crate::entry_view_state::EntryViewState;
 
 actions!(
@@ -170,7 +169,7 @@ impl ThreadSearchBar {
     ) -> Self {
         let query_editor = cx.new(|cx| {
             let mut editor = Editor::single_line(window, cx);
-            editor.set_placeholder_text("Search this thread…", window, cx);
+            editor.set_placeholder_text(i18n::t!("b47b067241d25794"), window, cx);
             editor
         });
         let editor_subscription = cx.subscribe_in(
@@ -362,9 +361,6 @@ impl ThreadSearchBar {
                         snapshot,
                     });
                 }
-                // Drawn as the subagent's card, which does not show the message.
-                AgentThreadEntry::SessionMessage(message)
-                    if acp_subagent_card(thread, entry_ix, message).is_some() => {}
                 _ => {
                     for markdown in collect_markdowns(entry_ix, entry, &entry_view_state, cx) {
                         let source = markdown.read(cx).source().clone();
@@ -845,7 +841,7 @@ impl Render for ThreadSearchBar {
                         "thread-search-prev",
                         IconName::ChevronLeft,
                         !has_matches,
-                        "Previous Match",
+                        i18n::t!("dbb65ea867d3828d"),
                         &SelectPreviousThreadMatch,
                         focus_handle.clone(),
                     ))
@@ -853,7 +849,7 @@ impl Render for ThreadSearchBar {
                         "thread-search-next",
                         IconName::ChevronRight,
                         !has_matches,
-                        "Next Match",
+                        i18n::t!("ca824c5947e097c4"),
                         &SelectNextThreadMatch,
                         focus_handle.clone(),
                     ))
@@ -868,7 +864,7 @@ impl Render for ThreadSearchBar {
                         "thread-search-dismiss",
                         IconName::Close,
                         false,
-                        "Close Search",
+                        i18n::t!("ab008ef18dac8f83"),
                         &DismissThreadSearch,
                         focus_handle,
                     )),
@@ -955,9 +951,6 @@ fn collect_markdowns(
     let mut out = Vec::new();
     match entry {
         AgentThreadEntry::UserMessage(_) => {}
-        AgentThreadEntry::SessionMessage(message) => {
-            out.extend(message.content.markdowns().cloned())
-        }
         AgentThreadEntry::AssistantMessage(message) => {
             for (chunk_ix, chunk) in message.chunks.iter().enumerate() {
                 match chunk {

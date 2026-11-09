@@ -1,3 +1,5 @@
+// Modified by the Zed CN project, 2026. See MODIFICATIONS.md.
+
 use calloop::{
     EventLoop, PostAction,
     channel::{self, Sender},
@@ -37,7 +39,7 @@ impl LinuxDispatcher {
             .map(|i| {
                 let receiver: PriorityQueueReceiver<RunnableVariant> = background_receiver.clone();
                 std::thread::Builder::new()
-                    .name(format!("Worker-{i}"))
+                    .name(i18n::t!("e475eecae05a04de", i = i))
                     .spawn(move || {
                         for runnable in receiver.iter() {
                             let location = runnable.metadata().location;

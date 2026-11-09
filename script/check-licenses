@@ -2,6 +2,12 @@
 
 set -euo pipefail
 
+# This component is vendored third-party code. Its original license files must
+# remain regular files rather than links to Zed's first-party license texts.
+declare -A VENDORED_LICENSES=(
+    ["crates/alacritty_terminal"]="LICENSE-APACHE LICENSE-MIT"
+)
+
 check_manifest_for_agpl () {
     local cargo_toml="$1"
 
@@ -34,10 +40,13 @@ check_symlink_target () {
     local symlink_path="$1"
     local license_name="$2"
 
-    local target=$(readlink "$symlink_path")
+    local target
+    target=$(readlink "$symlink_path")
 
-    local dir=$(dirname "$symlink_path")
-    local depth=$(echo "$dir" | tr '/' '\n' | wc -l)
+    local dir
+    dir=$(dirname "$symlink_path")
+    local depth
+    depth=$(echo "$dir" | tr '/' '\n' | wc -l)
     local expected_prefix=""
     for ((i = 0; i < depth; i++)); do
         expected_prefix="../$expected_prefix"
@@ -55,32 +64,80 @@ check_symlink_target () {
     fi
 }
 
-check_license () {
+check_first_party_license () {
     local dir="$1"
-    local allowed_licenses=("LICENSE-GPL" "LICENSE-APACHE")
+    local manifest="$dir/Cargo.toml"
+    local declared_license=""
+    local expected_file=""
 
-    for license in "${allowed_licenses[@]}"; do
-        if [[ -L "$dir/$license" ]]; then
-            check_symlink_target "$dir/$license" "$license"
-            return 0
-        elif [[ -e "$dir/$license" ]]; then
-            echo "Error: $dir/$license exists but is not a symlink."
+    declared_license=$(awk -F '"' '/^[[:space:]]*license[[:space:]]*=/ { print $2; exit }' "$manifest")
+    case "$declared_license" in
+        GPL-3.0-or-later) expected_file="LICENSE-GPL" ;;
+        Apache-2.0|"MIT OR Apache-2.0") expected_file="LICENSE-APACHE" ;;
+        "")
+            if [[ -L "$dir/LICENSE-GPL" && ! -e "$dir/LICENSE-APACHE" ]]; then
+                expected_file="LICENSE-GPL"
+            elif [[ -L "$dir/LICENSE-APACHE" && ! -e "$dir/LICENSE-GPL" ]]; then
+                expected_file="LICENSE-APACHE"
+            else
+                echo "Error: $manifest has no license field and its component license is ambiguous."
+                exit 1
+            fi
+            ;;
+        *)
+            echo "Error: $manifest must declare an approved first-party GPL-3.0-or-later or Apache-2.0 license."
             exit 1
+            ;;
+    esac
+
+    for license_file in LICENSE-GPL LICENSE-APACHE; do
+        if [[ -e "$dir/$license_file" || -L "$dir/$license_file" ]]; then
+            if [[ "$license_file" != "$expected_file" ]]; then
+                echo "Error: $dir/$license_file does not match '$declared_license' in $manifest."
+                exit 1
+            fi
+            if [[ ! -L "$dir/$license_file" ]]; then
+                echo "Error: $dir/$license_file exists but is not a symlink."
+                exit 1
+            fi
+            check_symlink_target "$dir/$license_file" "$license_file"
+            return 0
         fi
     done
 
-    echo "Error: $dir does not contain a LICENSE-GPL or LICENSE-APACHE symlink"
+    echo "Error: $dir does not contain the expected $expected_file symlink"
     exit 1
+}
+
+check_vendored_license () {
+    local dir="$1"
+    local expected_files=${VENDORED_LICENSES[$dir]}
+
+    for license_file in $expected_files; do
+        if [[ ! -f "$dir/$license_file" || -L "$dir/$license_file" ]]; then
+            echo "Error: vendored component $dir must preserve $license_file as a regular file."
+            exit 1
+        fi
+        if [[ -n "$(git status --porcelain=v1 -- "$dir/$license_file")" ]]; then
+            echo "Error: vendored license $dir/$license_file has uncommitted modifications."
+            exit 1
+        fi
+    done
 }
 
 check_no_agpl_license_file
 
-git ls-files -z -- "Cargo.toml" "**/Cargo.toml" | while IFS= read -r -d '' cargo_toml; do
+while IFS= read -r -d '' cargo_toml; do
     check_manifest_for_agpl "$cargo_toml"
 
     if [[ "$cargo_toml" == */Cargo.toml ]]; then
-        check_license "$(dirname "$cargo_toml")"
+        dir=$(dirname "$cargo_toml")
+        if [[ -n "${VENDORED_LICENSES[$dir]:-}" ]]; then
+            check_vendored_license "$dir"
+        else
+            check_first_party_license "$dir"
+        fi
     fi
-done
+done < <(git ls-files -z -- "Cargo.toml" "**/Cargo.toml")
 
 echo "check-licenses succeeded"

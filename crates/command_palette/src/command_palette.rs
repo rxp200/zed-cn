@@ -1,3 +1,4 @@
+mod action_translations;
 mod command_palette_settings;
 mod persistence;
 
@@ -458,9 +459,9 @@ impl CommandPaletteDelegate {
             })
             .child(
                 ButtonLike::new(("remove-command-history", ix))
-                    .aria_label("Remove from Command History")
+                    .aria_label(i18n::t!("e8cc741b9ca7746c"))
                     .tooltip(Tooltip::for_action_title(
-                        "Remove from Command History",
+                        i18n::t!("e8cc741b9ca7746c"),
                         &RemoveSelected,
                     ))
                     .child(
@@ -521,7 +522,7 @@ impl PickerDelegate for CommandPaletteDelegate {
     }
 
     fn placeholder_text(&self, _window: &mut Window, _cx: &mut App) -> Arc<str> {
-        "Execute a command...".into()
+        i18n::t!("5bab4598e5b0e1c7").into()
     }
 
     fn select_history(
@@ -612,7 +613,7 @@ impl PickerDelegate for CommandPaletteDelegate {
                 let candidates = commands
                     .iter()
                     .enumerate()
-                    .map(|(ix, command)| StringMatchCandidate::new(ix, &command.name))
+                    .map(|(ix, command)| StringMatchCandidate::new_with_pinyin(ix, &command.name))
                     .collect::<Vec<_>>();
 
                 let mut matches = fuzzy_nucleo::match_strings_async(
@@ -821,7 +822,7 @@ impl PickerDelegate for CommandPaletteDelegate {
 
         let focus_handle = &self.previous_focus_handle;
         let keybinding_buttons = if keybind.has_binding(window) {
-            Button::new("change", "Change Keybinding…")
+            Button::new("change", i18n::t!("e92fffaa34031de5"))
                 .key_binding(
                     KeyBinding::for_action_in(&menu::SecondaryConfirm, focus_handle, cx)
                         .map(|kb| kb.size(rems_from_px(12_f32))),
@@ -830,7 +831,7 @@ impl PickerDelegate for CommandPaletteDelegate {
                     window.dispatch_action(menu::SecondaryConfirm.boxed_clone(), cx);
                 })
         } else {
-            Button::new("add", "Add Keybinding…")
+            Button::new("add", i18n::t!("44e9043518360916"))
                 .key_binding(
                     KeyBinding::for_action_in(&menu::SecondaryConfirm, focus_handle, cx)
                         .map(|kb| kb.size(rems_from_px(12_f32))),
@@ -850,7 +851,7 @@ impl PickerDelegate for CommandPaletteDelegate {
                 .border_color(cx.theme().colors().border_variant)
                 .child(keybinding_buttons)
                 .child(
-                    Button::new("run-action", "Run")
+                    Button::new("run-action", i18n::t!("75b269496f698fae"))
                         .key_binding(
                             KeyBinding::for_action_in(&menu::Confirm, &focus_handle, cx)
                                 .map(|kb| kb.size(rems_from_px(12_f32))),
@@ -865,6 +866,10 @@ impl PickerDelegate for CommandPaletteDelegate {
 }
 
 pub fn humanize_action_name(name: &str) -> String {
+    if let Some(translated) = action_translations::translate_action_name(name) {
+        return translated.to_string();
+    }
+
     let chars = name.chars().collect::<Vec<_>>();
     let capacity = name.len() + chars.iter().filter(|c| c.is_uppercase()).count();
     let mut result = String::with_capacity(capacity);
@@ -928,6 +933,15 @@ pub fn humanize_action_name(name: &str) -> String {
         }
     }
 
+    // 翻译未收录 action 的命名空间前缀（冒号左边部分）
+    if let Some((namespace, _)) = name.split_once("::")
+        && let Some(translated_namespace) =
+            action_translations::translate_action_namespace(namespace)
+        && let Some(colon_ix) = result.find(':')
+    {
+        return format!("{}{}", translated_namespace, &result[colon_ix..]);
+    }
+
     result
 }
 
@@ -956,28 +970,46 @@ mod tests {
     fn test_humanize_action_name() {
         assert_eq!(
             humanize_action_name("editor::GoToDefinition"),
-            "editor: go to definition"
+            "编辑器: 转到定义"
         );
-        assert_eq!(
-            humanize_action_name("editor::Backspace"),
-            "editor: backspace"
-        );
-        assert_eq!(
-            humanize_action_name("go_to_line::Deploy"),
-            "go to line: deploy"
-        );
+        assert_eq!(humanize_action_name("editor::Backspace"), "编辑器: 退格");
+        assert_eq!(humanize_action_name("go_to_line::Deploy"), "转到行: deploy");
         assert_eq!(
             humanize_action_name("agent::OpenGlobalAGENTS.mdRules"),
-            "agent: open global AGENTS.md rules"
+            "Agent: open global AGENTS.md rules"
         );
         assert_eq!(
             humanize_action_name("agent::OpenProjectAGENTS.mdRules"),
-            "agent: open project AGENTS.md rules"
+            "Agent: open project AGENTS.md rules"
         );
-        assert_eq!(humanize_action_name("editor::OpenURL"), "editor: open URL");
+        assert_eq!(humanize_action_name("editor::OpenUrl"), "编辑器: 打开 URL");
         assert_eq!(
-            humanize_action_name("editor::OpenURLParser"),
-            "editor: open URL parser"
+            humanize_action_name("markdown::OpenPreview"),
+            "Markdown: 打开预览"
+        );
+        assert_eq!(
+            humanize_action_name("tabular_data::OpenPreview"),
+            "表格数据: 打开预览"
+        );
+        assert_eq!(
+            humanize_action_name("copilot_edit_predictions::Reinstall"),
+            "Copilot 编辑预测: 重新安装"
+        );
+        assert_eq!(
+            humanize_action_name("dev::OpenEditPredictionContextView"),
+            "开发工具: 打开编辑预测上下文视图"
+        );
+        assert_eq!(
+            humanize_action_name("zed_predict_onboarding::OpenZedPredictOnboarding"),
+            "Zed Predict: 打开入门引导"
+        );
+        assert_eq!(
+            humanize_action_name("dev::UnlistedDiagnosticAction"),
+            "开发工具: unlisted diagnostic action"
+        );
+        assert_eq!(
+            humanize_action_name("editor::ToggleGoToLine"),
+            "编辑器: 转到行"
         );
     }
 
@@ -1022,6 +1054,7 @@ mod tests {
         let app_state = init_test(cx);
         let db = cx.update(|cx| persistence::CommandPaletteDB::global(cx));
         db.clear_all().await.unwrap();
+        let backspace = humanize_action_name("editor::Backspace");
         let project = Project::test(app_state.fs.clone(), [], cx).await;
         let (multi_workspace, cx) =
             cx.add_window_view(|window, cx| MultiWorkspace::test_new(project.clone(), window, cx));
@@ -1056,10 +1089,10 @@ mod tests {
             assert!(is_sorted(&palette.delegate.commands));
         });
 
-        cx.simulate_input("bcksp");
+        cx.simulate_input("退格");
 
         palette.read_with(cx, |palette, _| {
-            assert_eq!(palette.delegate.matches[0].string, "editor: backspace");
+            assert_eq!(palette.delegate.matches[0].string, "编辑器: 退格");
         });
 
         cx.dispatch_action(menu::Confirm);
@@ -1103,7 +1136,7 @@ mod tests {
             assert_eq!(editor.read(cx).text(cx), "ab");
         });
         assert_eq!(
-            db.get_command_usage("editor: backspace")
+            db.get_command_usage(&backspace)
                 .unwrap()
                 .unwrap()
                 .invocations,
@@ -1114,7 +1147,7 @@ mod tests {
         cx.simulate_click(history_button.center(), gpui::Modifiers::default());
         cx.run_until_parked();
 
-        assert_eq!(db.get_command_usage("editor: backspace").unwrap(), None);
+        assert_eq!(db.get_command_usage(&backspace).unwrap(), None);
         workspace.update_in(cx, |workspace, window, cx| {
             assert_eq!(editor.read(cx).text(cx), "ab");
             let palette = workspace.active_modal::<CommandPalette>(cx).unwrap();
@@ -1124,7 +1157,7 @@ mod tests {
                     .delegate
                     .matches
                     .iter()
-                    .filter(|matching_command| matching_command.string == "editor: backspace")
+                    .filter(|matching_command| matching_command.string == backspace)
                     .count(),
                 1,
             );
@@ -1159,20 +1192,20 @@ mod tests {
         let app_state = init_test(cx);
         cx.update(|cx| cx.set_global(db::AppDatabase::test_new()));
         let db = cx.update(|cx| persistence::CommandPaletteDB::global(cx));
+        let backspace = humanize_action_name("editor::Backspace");
+        let go_to_line_toggle = humanize_action_name("go_to_line::Toggle");
 
-        db.write_command_invocation("editor: backspace", "")
+        db.write_command_invocation(backspace.clone(), "")
             .await
             .unwrap();
-        db.write_command_invocation("editor: backspace", "")
+        db.write_command_invocation(backspace.clone(), "")
             .await
             .unwrap();
-        db.write_command_invocation("go to line: toggle", "")
+        db.write_command_invocation(go_to_line_toggle.clone(), "")
             .await
             .unwrap();
-        db.set_last_invoked(100, "editor: backspace".to_string())
-            .await
-            .unwrap();
-        db.set_last_invoked(200, "go to line: toggle".to_string())
+        db.set_last_invoked(100, backspace.clone()).await.unwrap();
+        db.set_last_invoked(200, go_to_line_toggle.clone())
             .await
             .unwrap();
 
@@ -1200,8 +1233,8 @@ mod tests {
                 .iter()
                 .map(|command| command.name.as_str())
                 .collect::<Vec<_>>();
-            assert_eq!(names[0], "go to line: toggle");
-            assert_eq!(names[1], "editor: backspace");
+            assert_eq!(names[0], go_to_line_toggle.as_str());
+            assert_eq!(names[1], backspace.as_str());
             assert!(
                 names[2..].windows(2).all(|pair| pair[0] <= pair[1]),
                 "unused commands should stay alphabetical"
@@ -1228,8 +1261,33 @@ mod tests {
         });
         let picker = palette.read_with(cx, |palette, _| palette.picker.clone());
 
+        // 命令名会随界面语言本地化，因此从当前命令列表里挑一个至少能匹配
+        // 三条命令的查询串，而不是假定某个英文子串。
+        let query = picker.read_with(cx, |picker, _| {
+            let names = picker
+                .delegate
+                .commands
+                .iter()
+                .map(|command| command.name.to_string())
+                .collect::<Vec<_>>();
+            for name in &names {
+                let characters = name.chars().collect::<Vec<_>>();
+                for start in 0..characters.len().saturating_sub(2) {
+                    let candidate: String = characters[start..start + 3].iter().collect();
+                    let matches = names
+                        .iter()
+                        .filter(|other| other.contains(&candidate))
+                        .count();
+                    if matches >= 3 {
+                        return candidate;
+                    }
+                }
+            }
+            panic!("expected a query matching at least three commands");
+        });
+
         palette.update_in(cx, |palette, window, cx| {
-            palette.set_query("toggle", window, cx)
+            palette.set_query(&query, window, cx)
         });
         cx.run_until_parked();
 
@@ -1265,7 +1323,7 @@ mod tests {
         palette.update_in(cx, |palette, window, cx| palette.set_query("", window, cx));
         cx.run_until_parked();
         palette.update_in(cx, |palette, window, cx| {
-            palette.set_query("toggle", window, cx)
+            palette.set_query(&query, window, cx)
         });
         cx.run_until_parked();
 
@@ -1484,9 +1542,9 @@ mod tests {
                 .clone()
         });
 
-        cx.simulate_input("Editor::    Backspace");
+        cx.simulate_input("编辑器::    退格");
         palette.read_with(cx, |palette, _| {
-            assert_eq!(palette.delegate.matches[0].string, "editor: backspace");
+            assert_eq!(palette.delegate.matches[0].string, "编辑器: 退格");
         });
     }
 
@@ -1508,7 +1566,7 @@ mod tests {
         });
 
         cx.simulate_keystrokes("cmd-shift-p");
-        cx.simulate_input("go to line: Toggle");
+        cx.simulate_input("转到行");
         cx.simulate_keystrokes("enter");
 
         workspace.update(cx, |workspace, cx| {
@@ -1543,7 +1601,7 @@ mod tests {
 
         for _ in 0..2 {
             cx.simulate_keystrokes("cmd-shift-p");
-            cx.simulate_input("go to line: Toggle");
+            cx.simulate_input("转到行");
             cx.simulate_keystrokes("enter");
 
             workspace.update(cx, |workspace, cx| {
@@ -1680,10 +1738,10 @@ mod tests {
             cx.add_window_view(|window, cx| MultiWorkspace::test_new(project.clone(), window, cx));
         let workspace = multi_workspace.read_with(cx, |mw, _| mw.workspace().clone());
 
-        let palette = open_palette_with_history(&workspace, &["editor: close", "editor: open"], cx);
+        let palette = open_palette_with_history(&workspace, &["编辑器: 关闭", "编辑器: 打开"], cx);
 
         // Open palette with a query that has multiple matches
-        cx.simulate_input("editor");
+        cx.simulate_input("编辑器");
         cx.background_executor.run_until_parked();
 
         // Should have multiple matches, selected_ix should be 0
@@ -1707,11 +1765,11 @@ mod tests {
         });
 
         // Press up again at top - should enter history mode and show previous query
-        // that matches the "editor" prefix
+        // that matches the "编辑器" prefix
         cx.simulate_keystrokes("up");
         cx.background_executor.run_until_parked();
         palette.read_with(cx, |palette, cx| {
-            assert_eq!(palette.query(cx), "editor: open");
+            assert_eq!(palette.query(cx), "编辑器: 打开");
         });
     }
 

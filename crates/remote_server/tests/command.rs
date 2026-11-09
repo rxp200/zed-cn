@@ -146,6 +146,7 @@ fn test_remote_command_working_directory_and_exit_status() -> Result<()> {
 fn test_remote_command_inherits_shell_environment() -> Result<()> {
     smol::block_on(async {
         let home = tempfile::tempdir()?;
+        std::fs::write(home.path().join(".hushlogin"), "")?;
         let shell_only_binary = home.path().join("shell-only-printenv");
         std::os::unix::fs::symlink("/usr/bin/printenv", &shell_only_binary)?;
         let home_path = home.path().display().to_string();
@@ -197,6 +198,7 @@ fn test_remote_command_inherits_shell_environment() -> Result<()> {
 fn test_remote_command_inherits_default_shell_startup_environment() -> Result<()> {
     smol::block_on(async {
         let home = tempfile::tempdir()?;
+        std::fs::write(home.path().join(".hushlogin"), "")?;
         let helper = install_helper(home.path())?;
         let startup_script = home.path().join("startup env");
         std::fs::write(
@@ -251,6 +253,7 @@ fn test_remote_command_inherits_default_shell_startup_environment() -> Result<()
 fn test_remote_command_survives_shell_startup_changing_directory() -> Result<()> {
     smol::block_on(async {
         let home = tempfile::tempdir()?;
+        std::fs::write(home.path().join(".hushlogin"), "")?;
         let project = home.path().join("project");
         std::fs::create_dir(&project)?;
         let helper = install_helper(home.path())?;
@@ -288,6 +291,7 @@ fn test_remote_command_survives_shell_startup_changing_directory() -> Result<()>
 fn test_remote_command_runs_shell_directory_hooks() -> Result<()> {
     smol::block_on(async {
         let home = tempfile::tempdir()?;
+        std::fs::write(home.path().join(".hushlogin"), "")?;
         let project = home.path().join("project 'with spaces'");
         let application = project.join("application");
         std::fs::create_dir_all(&application)?;
@@ -505,6 +509,7 @@ fn test_remote_command_matches_native_path_lookup() -> Result<()> {
 fn test_remote_command_launcher_expands_home_in_shell() -> Result<()> {
     smol::block_on(async {
         let home = tempfile::tempdir()?;
+        std::fs::write(home.path().join(".hushlogin"), "")?;
         install_helper(home.path())?;
         std::fs::write(home.path().join(".bashrc"), "cd /tmp\n")?;
         let descriptor = RemoteCommand {

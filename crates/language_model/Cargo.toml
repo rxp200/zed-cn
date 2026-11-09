@@ -34,5 +34,4 @@ serde_json.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
-credentials_provider = { workspace = true, features = ["test-support"] }
 gpui = { workspace = true, features = ["test-support"] }

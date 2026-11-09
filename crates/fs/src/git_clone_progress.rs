@@ -33,6 +33,32 @@ pub(crate) fn failure_message(stderr: &[u8]) -> String {
         .to_owned()
 }
 
+pub(crate) fn localized_progress(message: &str) -> String {
+    let (prefix, message) = match message.strip_prefix("remote: ") {
+        Some(message) => (i18n::t!("dfa0810c2a5893a4"), message),
+        None => ("", message),
+    };
+    for (english, chinese) in [
+        ("Enumerating objects:", i18n::t!("e1673e87160921fb")),
+        ("Counting objects:", i18n::t!("adf6f979cbcd637f")),
+        ("Compressing objects:", i18n::t!("ab8bb0329547df27")),
+        ("Receiving objects:", i18n::t!("97c69aaff79bbb42")),
+        ("Resolving deltas:", i18n::t!("12f852c6e14a9a9d")),
+        ("Updating files:", i18n::t!("adbf5f4c7339ff21")),
+        ("Checking out files:", i18n::t!("2d181b217f1ea0ec")),
+        ("Filtering content:", i18n::t!("75363f413d013d1c")),
+        ("Cloning into ", i18n::t!("20b1124e3a3e0033")),
+    ] {
+        if let Some(detail) = message.strip_prefix(english) {
+            return format!(
+                "{prefix}{chinese}{}",
+                detail.replace(", done.", i18n::t!("2be279916ea7d1a0"))
+            );
+        }
+    }
+    i18n::t!("68b4d43f2c9e4de3", prefix = prefix, message = message)
+}
+
 struct GitCloneProgress {
     pending: Vec<u8>,
     last_message: Option<String>,
@@ -125,6 +151,22 @@ mod tests {
                 "Cloning into 'repository'...",
                 "A future Git progress phase: 12%"
             ]
+        );
+    }
+
+    #[test]
+    fn localizes_progress_without_changing_counts() {
+        assert_eq!(
+            localized_progress("Receiving objects: 42% (42/100)"),
+            "正在接收对象： 42% (42/100)"
+        );
+        assert_eq!(
+            localized_progress("remote: Counting objects: 100% (5/5), done."),
+            "远程：正在统计对象： 100% (5/5)，完成。"
+        );
+        assert_eq!(
+            localized_progress("custom output"),
+            "Git 克隆输出：custom output"
         );
     }
 

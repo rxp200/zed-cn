@@ -4,7 +4,7 @@ pub use editor::HighlightKey;
 use editor::SearchSettings;
 use gpui::{Action, App, ClickEvent, Entity, FocusHandle, IntoElement, actions};
 use project::search::SearchQuery;
-pub use project_search::ProjectSearchView;
+pub use project_search::{ProjectSearchPanel, ProjectSearchView};
 use ui::{IconButtonShape, Tooltip, prelude::*};
 use util::paths::PathMatcher;
 use workspace::notifications::NotificationId;
@@ -81,9 +81,17 @@ pub enum SearchOption {
     Backwards,
 }
 
-const REPLACE_PLACEHOLDER: &str = "Replace in project…";
-const INCLUDE_PLACEHOLDER: &str = "Include: e.g. src/**/*.rs";
-const EXCLUDE_PLACEHOLDER: &str = "Exclude: e.g. vendor/*, *.lock";
+fn replace_placeholder() -> &'static str {
+    i18n::t!("441e892d9e8609a2")
+}
+
+fn include_placeholder() -> &'static str {
+    i18n::t!("9f4d1b31b0e3b7f6")
+}
+
+fn exclude_placeholder() -> &'static str {
+    i18n::t!("7c9a1d5e2f8b4a03")
+}
 
 pub enum SearchSource<'a, 'b> {
     Buffer,
@@ -97,12 +105,12 @@ impl SearchOption {
 
     pub fn label(&self) -> &'static str {
         match self {
-            SearchOption::WholeWord => "Match Whole Words",
-            SearchOption::CaseSensitive => "Match Case Sensitivity",
-            SearchOption::IncludeIgnored => "Also search files ignored by configuration",
-            SearchOption::Regex => "Use Regular Expressions",
-            SearchOption::OneMatchPerLine => "One Match Per Line",
-            SearchOption::Backwards => "Search Backwards",
+            SearchOption::WholeWord => i18n::t!("4a270a8e9212256e"),
+            SearchOption::CaseSensitive => i18n::t!("8c7e3447ec67023e"),
+            SearchOption::IncludeIgnored => i18n::t!("c90105a9bebf98d1"),
+            SearchOption::Regex => i18n::t!("25ffa8f5ee973e70"),
+            SearchOption::OneMatchPerLine => i18n::t!("fc512964ee702815"),
+            SearchOption::Backwards => i18n::t!("0243fcf0cdd8af94"),
         }
     }
 
@@ -233,7 +241,7 @@ pub(crate) fn show_no_more_matches(window: &mut Window, cx: &mut App) {
         };
         workspace.update(cx, |workspace, cx| {
             workspace.show_toast(
-                Toast::new(notification_id.clone(), "No more matches").autohide(),
+                Toast::new(notification_id.clone(), i18n::t!("d12d5ae572ea78ab")).autohide(),
                 cx,
             );
         })

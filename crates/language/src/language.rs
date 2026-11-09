@@ -1157,7 +1157,7 @@ impl Language {
         };
         let text_len = text.source_len();
         let highlights = if text_len > MAX_TEXT_HIGHLIGHT_ENTRY_BYTES {
-            self.compute_resolved_highlights(grammar, &highlights_config.query, text)
+            Self::compute_resolved_highlights(grammar, &highlights_config.query, text)
         } else {
             let key = TextHighlightKey::new(text.source_chunks(), text_len);
             match highlights_config
@@ -1171,7 +1171,7 @@ impl Language {
                     highlights_config.text_highlight_cache.insert(
                         key,
                         cached_text,
-                        self.compute_resolved_highlights(grammar, &highlights_config.query, text),
+                        Self::compute_resolved_highlights(grammar, &highlights_config.query, text),
                     )
                 }
             }
@@ -1186,29 +1186,19 @@ impl Language {
     }
 
     fn compute_resolved_highlights(
-        &self,
         grammar: &Arc<Grammar>,
         query: &tree_sitter::Query,
         text: &(impl HighlightSource + ?Sized),
     ) -> ResolvedHighlights {
         let highlight_map = grammar.highlight_map();
         let text_len = text.source_len();
-        let tree = match text.parse(grammar) {
-            Ok(tree) => tree,
-            Err(error) => {
-                log::warn!(
-                    "highlighting {} text of {text_len} bytes: {error:#}",
-                    self.name()
-                );
-                return ResolvedHighlights::default();
-            }
-        };
+        let tree = text.parse(grammar);
         let regions = with_query_cursor(|cursor| {
             cursor.set_byte_range(0..text_len);
             let mut captures = cursor.captures(query, tree.root_node(), text.text_provider());
             let capture_refs = iter::from_fn(move || {
                 let (query_match, capture_index) = captures.next()?;
-                let capture = query_match.captures()[*capture_index];
+                let capture = query_match.captures[*capture_index];
                 Some((
                     capture.node.byte_range(),
                     HighlightCaptureRef {
@@ -1483,7 +1473,7 @@ impl Debug for Language {
 pub trait HighlightSource {
     fn source_len(&self) -> usize;
     fn source_chunks(&self) -> impl Iterator<Item = &str>;
-    fn parse(&self, grammar: &Grammar) -> Result<Tree>;
+    fn parse(&self, grammar: &Grammar) -> Tree;
     fn text_provider<'a>(&'a self) -> impl tree_sitter::TextProvider<&'a [u8]> + 'a;
 }
 
@@ -1496,12 +1486,12 @@ impl HighlightSource for str {
         iter::once(self)
     }
 
-    fn parse(&self, grammar: &Grammar) -> Result<Tree> {
+    fn parse(&self, grammar: &Grammar) -> Tree {
         with_parser(|parser| {
-            parser.set_language(&grammar.ts_language)?;
             parser
-                .parse(self, None)
-                .context("tree-sitter returned no tree")
+                .set_language(&grammar.ts_language)
+                .expect("incompatible grammar");
+            parser.parse(self, None).unwrap()
         })
     }
 
@@ -1519,7 +1509,7 @@ impl HighlightSource for Rope {
         self.chunks()
     }
 
-    fn parse(&self, grammar: &Grammar) -> Result<Tree> {
+    fn parse(&self, grammar: &Grammar) -> Tree {
         parse_text(grammar, self, None)
     }
 
@@ -1528,9 +1518,11 @@ impl HighlightSource for Rope {
     }
 }
 
-pub(crate) fn parse_text(grammar: &Grammar, text: &Rope, old_tree: Option<Tree>) -> Result<Tree> {
+pub(crate) fn parse_text(grammar: &Grammar, text: &Rope, old_tree: Option<Tree>) -> Tree {
     with_parser(|parser| {
-        parser.set_language(&grammar.ts_language)?;
+        parser
+            .set_language(&grammar.ts_language)
+            .expect("incompatible grammar");
         let mut chunks = text.chunks_in_range(0..text.len());
         parser
             .parse_with_options(
@@ -1541,7 +1533,7 @@ pub(crate) fn parse_text(grammar: &Grammar, text: &Rope, old_tree: Option<Tree>)
                 old_tree.as_ref(),
                 None,
             )
-            .context("tree-sitter returned no tree")
+            .unwrap()
     })
 }
 

@@ -12,6 +12,7 @@ use task::{RevealTarget, TaskContext, TaskId, TaskTemplate, TaskVariables, Varia
 use tree_sitter::{Query, StreamingIterator as _};
 use workspace::Workspace;
 
+mod code_runner;
 mod modal;
 
 pub use modal::{Rerun, ShowAttachModal, Spawn, TaskOverrides, TasksModal};
@@ -55,7 +56,7 @@ pub fn insert_task_json_into_editor(
 
     let mut last_offset = None;
     while let Some(mat) = matches.next() {
-        if let Some(pos) = mat.captures().first().map(|m| m.node.byte_range().end) {
+        if let Some(pos) = mat.captures.first().map(|m| m.node.byte_range().end) {
             last_offset = Some(MultiBufferOffset(pos))
         }
     }
@@ -73,7 +74,7 @@ pub fn insert_task_json_into_editor(
         );
 
         if let Some(mat) = matches.next() {
-            if let Some(pos) = mat.captures().first().map(|m| m.node.byte_range().end - 1) {
+            if let Some(pos) = mat.captures.first().map(|m| m.node.byte_range().end - 1) {
                 edits.push((
                     MultiBufferOffset(pos)..MultiBufferOffset(pos),
                     format!("\n{new_task}\n"),
@@ -103,6 +104,9 @@ pub fn init(cx: &mut App) {
         |workspace: &mut Workspace, _: Option<&mut Window>, _: &mut Context<Workspace>| {
             workspace
                 .register_action(spawn_task_or_modal)
+                .register_action(code_runner::run_file)
+                .register_action(code_runner::run_code)
+                .register_action(code_runner::run_selection)
                 .register_action(move |workspace, action: &modal::Rerun, window, cx| {
                     if let Some((task_source_kind, mut last_scheduled_task)) = workspace
                         .project()

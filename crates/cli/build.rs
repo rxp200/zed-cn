@@ -7,11 +7,11 @@ fn main() {
     }
 
     if cfg!(target_os = "macos") {
-        println!("cargo:rustc-env=MACOSX_DEPLOYMENT_TARGET=12.0");
+        println!("cargo:rustc-env=MACOSX_DEPLOYMENT_TARGET=10.15.7");
     }
 
     // Populate git sha environment variable if git is available
-    println!("cargo:rerun-if-changed=../../.git/logs/HEAD");
+    println!("cargo:rerun-if-env-changed=ZED_COMMIT_SHA");
     if let Some(output) = Command::new("git")
         .args(["rev-parse", "HEAD"])
         .output()

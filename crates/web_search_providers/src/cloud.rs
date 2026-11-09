@@ -79,7 +79,7 @@ async fn perform_web_search(
                 .method(Method::POST)
                 .uri(url.as_ref())
                 .header("Content-Type", "application/json")
-                .header("Authorization", format!("Bearer {token}"))
+                .header("Authorization", i18n::t!("bf733da73429e88a", token = token))
                 .body(body.clone().into())?)
         })
         .await?;

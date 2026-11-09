@@ -105,7 +105,7 @@ impl FakeTerminalHandle {
         }
     }
 
-    pub(crate) fn new_with_immediate_exit(cx: &mut App, exit_code: i64) -> Self {
+    pub(crate) fn new_with_immediate_exit(cx: &mut App, exit_code: u32) -> Self {
         let killed = Arc::new(AtomicBool::new(false));
         let stopped_by_user = Arc::new(AtomicBool::new(false));
         let (exit_sender, _exit_receiver) = futures::channel::oneshot::channel();
@@ -1646,7 +1646,7 @@ fn test_permission_options_terminal_pipeline_produces_dropdown_with_patterns() {
         .map(|choice| choice.allow.name.as_ref())
         .collect();
     assert!(labels.contains(&"Always for terminal"));
-    assert!(labels.contains(&"Only this time"));
+    assert!(labels.contains(&i18n::t!("a7caf448a5d59fa8")));
 
     // Should have per-command patterns for "cargo test" and "tail"
     assert_eq!(patterns.len(), 2);

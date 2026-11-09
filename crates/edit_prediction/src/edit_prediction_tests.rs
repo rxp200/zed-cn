@@ -2328,6 +2328,7 @@ async fn test_zed_cloud_predictions_skip_organizations_without_subscriptions(
                         prompt_format: Some(settings::EditPredictionPromptFormatContent::Zeta2),
                         max_output_tokens: Some(64),
                         prediction_debounce: None,
+                        api_type: None,
                     });
             });
         });
@@ -3751,6 +3752,9 @@ async fn make_sweep_prompt_test_ep_store(
                             settings::CustomEditPredictionProviderSettingsContent {
                                 api_url: Some("http://localhost:8080/v1/completions".to_string()),
                                 model: Some("sweep-next-edit-1.5b".to_string()),
+                                api_type: Some(
+                                    settings::OpenAiCompatibleApiTypeContent::Completions,
+                                ),
                                 prompt_format: Some(
                                     settings::EditPredictionPromptFormatContent::Sweep,
                                 ),

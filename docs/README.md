@@ -1,8 +1,11 @@
 # Zed Docs
 
+> [!IMPORTANT]
+> These docs are inherited from the official [Zed](https://github.com/zed-industries/zed) project. Zed CN is an unofficial community fork and does not publish or operate `zed.dev`; references to Zed Industries, official accounts, cloud services, billing, privacy policies, support channels, and deployment infrastructure describe upstream services unless a page explicitly says otherwise.
+
 Welcome to Zed's documentation.
 
-This is built on push to `main` and published automatically to [https://zed.dev/docs](https://zed.dev/docs).
+In the upstream repository, these docs are built on push to `main` and published to [https://zed.dev/docs](https://zed.dev/docs). This Zed CN repository does not deploy that site.
 
 To preview the docs locally you will need to install [mdBook](https://rust-lang.github.io/mdBook/) (`cargo install mdbook@0.4.40`), generate the action metadata, and then serve:
 
@@ -88,7 +91,19 @@ You can see how the actions and keybindings are templated in `crates/docs_prepro
 
 ## Consent Banner
 
-The consent banner is the markup in `theme/index.hbs`, driven by `theme/analytics.js`. That script loads `c15t.js` from our Inth backend (`DOCS_CONSENT_IO_INSTANCE`) with c15t's stock UI turned off. Inth serves the c15t version our hosted backend runs, so there is no bundle to update in this repo. The banner only appears when `DOCS_CONSENT_IO_INSTANCE` is set.
+We pre-bundle the `c15t` package because the docs pipeline does not include a JS bundler. If you need to update `c15t` and rebuild the bundle, use:
+
+```
+mkdir c15t-bundle && cd c15t-bundle
+npm init -y
+npm install c15t@<version> esbuild
+echo "import { getOrCreateConsentRuntime } from 'c15t'; window.c15t = { getOrCreateConsentRuntime };" > entry.js
+npx esbuild entry.js --bundle --format=iife --minify --outfile=c15t@<version>.js
+cp c15t@<version>.js ../theme/c15t@<version>.js
+cd .. && rm -rf c15t-bundle
+```
+
+Replace `<version>` with the new version of `c15t` you are installing. Then update `book.toml` to reference the new bundle filename.
 
 ### References
 

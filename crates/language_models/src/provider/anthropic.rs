@@ -350,14 +350,6 @@ impl LanguageModelProvider for AnthropicLanguageModelProvider {
         self.state.update(cx, |state, cx| state.authenticate(cx))
     }
 
-    fn refresh_models(&self, cx: &mut App) {
-        self.state.update(cx, |state, cx| {
-            if state.is_authenticated() {
-                state.restart_fetch_models_task(cx);
-            }
-        });
-    }
-
     fn settings_view(&self, cx: &mut App) -> Option<ProviderSettingsView> {
         let state = self.state.read(cx);
         Some(ProviderSettingsView::ApiKey(ApiKeyConfiguration::new(
@@ -375,12 +367,8 @@ impl LanguageModelProvider for AnthropicLanguageModelProvider {
 
     fn fast_mode_confirmation(&self, _cx: &App) -> Option<FastModeConfirmation> {
         Some(FastModeConfirmation {
-            title: "Enable Fast Mode for Anthropic?".into(),
-            message: "Fast mode lets requests use your Anthropic Priority Tier capacity, which \
-                Anthropic prioritizes over standard requests during peak load. Requires a \
-                Priority Tier commitment with Anthropic; without one, requests behave the same \
-                as the standard tier."
-                .into(),
+            title: i18n::t!("52848a33fd996763").into(),
+            message: i18n::t!("54c39b8c08c0f9d4").into(),
         })
     }
 }

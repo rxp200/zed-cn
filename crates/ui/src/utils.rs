@@ -9,7 +9,6 @@ mod constants;
 mod control_characters;
 mod corner_solver;
 mod format_distance;
-mod retained_focus;
 mod search_input;
 mod with_rem_size;
 
@@ -19,7 +18,6 @@ pub use constants::*;
 pub use control_characters::*;
 pub use corner_solver::{CornerSolver, inner_corner_radius};
 pub use format_distance::*;
-pub use retained_focus::*;
 pub use search_input::*;
 pub use with_rem_size::*;
 
@@ -46,11 +44,11 @@ pub fn buffer_text_style(cx: &App) -> gpui::TextStyle {
 /// Returns the platform-appropriate label for the "reveal in file manager" action.
 pub fn reveal_in_file_manager_label(is_remote: bool) -> &'static str {
     if cfg!(target_os = "macos") && !is_remote {
-        "Reveal in Finder"
+        i18n::t!("ded07da9efc6846c")
     } else if cfg!(target_os = "windows") && !is_remote {
-        "Reveal in File Explorer"
+        i18n::t!("59eb1eedf3341ea2")
     } else {
-        "Reveal in File Manager"
+        i18n::t!("978ef51c888c950f")
     }
 }
 

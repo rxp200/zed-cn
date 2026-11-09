@@ -1,11 +1,11 @@
+// Modified by the Zed CN project, 2026. See MODIFICATIONS.md.
+
 #[cfg(feature = "profiler")]
 use crate::DebugFrameOverlayMode;
 #[cfg(any(feature = "inspector", debug_assertions))]
 use crate::Inspector;
 #[cfg(feature = "profiler")]
 use crate::profiler;
-use crate::subscription::SingleSubscriberSet;
-use crate::taffy::TaffyLayoutEngine;
 use crate::{
     Action, AnyDrag, AnyElement, AnyImageCache, AnyTooltip, AnyView, App, AppContext, Arena, Asset,
     AsyncWindowContext, AtlasTile, AvailableSpace, Background, BorderStyle, Bounds, BoxShadow,
@@ -19,12 +19,12 @@ use crate::{
     PolychromeSprite, Priority, PromptButton, PromptLevel, Quad, Render, RenderGlyphParams,
     RenderImage, RenderImageParams, RenderSvgParams, Replay, ResizeEdge, SMOOTH_SVG_SCALE_FACTOR,
     SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, ScaledPixels, Scene, Shadow, SharedString, Size,
-    StrikethroughStyle, Style, SubpixelSprite, Subscription, SystemWindowTab,
-    SystemWindowTabController, TabStopMap, Task, TextInputConfiguration, TextInputStateChange,
-    TextRenderingMode, TextStyle, TextStyleRefinement, ThermalState, TransformationMatrix,
-    Underline, UnderlineStyle, WindowAppearance, WindowBackgroundAppearance, WindowBounds,
-    WindowControls, WindowDecorations, WindowInsets, WindowOptions, WindowParams, WindowTextSystem,
-    WindowVisibility, point, prelude::*, px, rems, size, transparent_black,
+    StrikethroughStyle, Style, SubpixelSprite, SubscriberSet, Subscription, SystemWindowTab,
+    SystemWindowTabController, TabStopMap, TaffyLayoutEngine, Task, TextInputConfiguration,
+    TextInputStateChange, TextRenderingMode, TextStyle, TextStyleRefinement, ThermalState,
+    TransformationMatrix, Underline, UnderlineStyle, WindowAppearance, WindowBackgroundAppearance,
+    WindowBounds, WindowControls, WindowDecorations, WindowInsets, WindowOptions, WindowParams,
+    WindowTextSystem, WindowVisibility, point, prelude::*, px, rems, size, transparent_black,
 };
 
 use crate::gestures::{GestureTuning, RecognizedTouchGesture, TouchGestureRecognizer};
@@ -144,6 +144,15 @@ struct WindowInvalidatorInner {
 struct FrameDirtyAccumulator {
     dirty_at: Option<Instant>,
     invalidations: u64,
+}
+
+/// Why GPUI capped a window's frame rate.
+#[derive(Clone, Copy)]
+enum FrameRateLimit {
+    /// The window isn't focused.
+    Inactive,
+    /// The system is under thermal pressure.
+    Thermal,
 }
 
 #[derive(Clone)]
@@ -271,6 +280,10 @@ impl WindowInvalidator {
 
     pub fn not_drawing(&self) -> bool {
         self.inner.borrow().draw_phase == DrawPhase::None
+    }
+
+    pub fn has_dirty_views(&self) -> bool {
+        !self.inner.borrow().dirty_views.is_empty()
     }
 
     #[track_caller]
@@ -823,7 +836,7 @@ impl HitboxId {
         window.mouse_hit_test.ids.contains(&self)
     }
 
-    fn next(self) -> HitboxId {
+    fn next(mut self) -> HitboxId {
         HitboxId(self.0.wrapping_add(1))
     }
 }
@@ -1220,11 +1233,11 @@ pub struct Window {
     pub(crate) removed: bool,
     pub(crate) platform_window: Box<dyn PlatformWindow>,
     pub(crate) display_id: Option<DisplayId>,
-    pub(crate) display_observers: SingleSubscriberSet<AnyObserver>,
+    pub(crate) display_observers: SubscriberSet<(), AnyObserver>,
     is_resizable: bool,
     is_minimizable: bool,
     sprite_atlas: Arc<dyn PlatformAtlas>,
-    text_system: Rc<WindowTextSystem>,
+    text_system: Arc<WindowTextSystem>,
     text_rendering_mode: Rc<Cell<TextRenderingMode>>,
     rem_size: Pixels,
     /// The stack of override values for the window's rem size.
@@ -1255,8 +1268,8 @@ pub struct Window {
     pub(crate) tooltip_bounds: Option<TooltipBounds>,
     pub(crate) next_frame_callbacks: Rc<RefCell<Vec<FrameCallback>>>,
     pub(crate) dirty_views: FxHashSet<EntityId>,
-    focus_listeners: SingleSubscriberSet<AnyWindowFocusListener>,
-    pub(crate) focus_lost_listeners: SingleSubscriberSet<AnyObserver>,
+    focus_listeners: SubscriberSet<(), AnyWindowFocusListener>,
+    pub(crate) focus_lost_listeners: SubscriberSet<(), AnyObserver>,
     focus_lost_path: SmallVec<[FocusId; 8]>,
     default_prevented: bool,
     mouse_position: Point<Pixels>,
@@ -1264,14 +1277,14 @@ pub struct Window {
     modifiers: Modifiers,
     capslock: Capslock,
     scale_factor: f32,
-    pub(crate) bounds_observers: SingleSubscriberSet<AnyObserver>,
+    pub(crate) bounds_observers: SubscriberSet<(), AnyObserver>,
     appearance: WindowAppearance,
-    pub(crate) appearance_observers: SingleSubscriberSet<AnyObserver>,
-    pub(crate) button_layout_observers: SingleSubscriberSet<AnyObserver>,
+    pub(crate) appearance_observers: SubscriberSet<(), AnyObserver>,
+    pub(crate) button_layout_observers: SubscriberSet<(), AnyObserver>,
     active: Rc<Cell<bool>>,
     visibility: WindowVisibility,
     pub(crate) visibility_observers:
-        SingleSubscriberSet<Box<dyn FnMut(WindowVisibility, &mut Window, &mut App) -> bool>>,
+        SubscriberSet<(), Box<dyn FnMut(WindowVisibility, &mut Window, &mut App) -> bool>>,
     hovered: Rc<Cell<bool>>,
     pub(crate) needs_present: Rc<Cell<bool>>,
     /// Tracks recent input event timestamps to determine if input is arriving at a high rate.
@@ -1285,7 +1298,7 @@ pub struct Window {
     long_press_timer: Option<Task<()>>,
     long_press_capture: Option<EntityId>,
     pub(crate) refreshing: bool,
-    pub(crate) activation_observers: SingleSubscriberSet<AnyObserver>,
+    pub(crate) activation_observers: SubscriberSet<(), AnyObserver>,
     pub(crate) focus: Option<FocusId>,
     focus_enabled: bool,
     /// Incremented every time focus moves. Used to invalidate a
@@ -1293,7 +1306,7 @@ pub struct Window {
     pub(crate) focus_generation: u64,
     pending_input: Option<PendingInput>,
     pending_modifier: ModifierState,
-    pub(crate) pending_input_observers: SingleSubscriberSet<AnyObserver>,
+    pub(crate) pending_input_observers: SubscriberSet<(), AnyObserver>,
     prompt: Option<RenderablePromptHandle>,
     pub(crate) client_inset: Option<Pixels>,
     /// The hitbox that has captured the pointer, if any.
@@ -1321,47 +1334,6 @@ pub(crate) struct InputRateTracker {
     inputs_per_second: u32,
     sustain_until: Instant,
     sustain_duration: Duration,
-}
-
-const THIRTY_FPS_INTERVAL: Duration = Duration::from_micros(33333);
-const SIXTY_FPS_INTERVAL: Duration = Duration::from_micros(16667);
-const FRAME_INTERVAL_TOLERANCE: Duration = Duration::from_millis(1);
-
-/// Display-link timestamps can straddle a target interval by fractions of a
-/// millisecond. Accepting that callback preserves an even display-frame divisor
-/// instead of occasionally waiting for an additional refresh.
-fn frame_request_arrived_too_early(elapsed: Duration, minimum_interval: Duration) -> bool {
-    elapsed < minimum_interval.saturating_sub(FRAME_INTERVAL_TOLERANCE)
-}
-
-fn minimum_frame_interval(
-    should_throttle: bool,
-    inactive_without_high_rate_input: bool,
-    inactive_frame_interval: Option<Duration>,
-    thermal_state: ThermalState,
-    power_mode: crate::PowerMode,
-) -> Option<Duration> {
-    let low_power_mode_enabled = power_mode == crate::PowerMode::LowPower;
-    if !should_throttle {
-        None
-    } else if inactive_without_high_rate_input {
-        match (inactive_frame_interval, low_power_mode_enabled) {
-            (Some(inactive_frame_interval), true) => {
-                Some(inactive_frame_interval.max(THIRTY_FPS_INTERVAL))
-            }
-            (inactive_frame_interval, false) => inactive_frame_interval,
-            (None, true) => Some(THIRTY_FPS_INTERVAL),
-        }
-    } else if low_power_mode_enabled {
-        Some(THIRTY_FPS_INTERVAL)
-    } else if matches!(
-        thermal_state,
-        ThermalState::Critical | ThermalState::Serious
-    ) {
-        Some(SIXTY_FPS_INTERVAL)
-    } else {
-        None
-    }
 }
 
 impl Default for InputRateTracker {
@@ -1687,7 +1659,7 @@ impl Window {
         let content_size = platform_window.content_size();
         let scale_factor = platform_window.scale_factor();
         let appearance = platform_window.appearance();
-        let text_system = Rc::new(WindowTextSystem::new(cx.text_system().clone()));
+        let text_system = Arc::new(WindowTextSystem::new(cx.text_system().clone()));
         let invalidator = WindowInvalidator::new(handle.window_id());
         let active = Rc::new(Cell::new(platform_window.is_active()));
         let visibility = platform_window.visibility();
@@ -1795,22 +1767,12 @@ impl Window {
 
         platform_window.on_close(Box::new({
             let window_id = handle.window_id();
-            let cx = cx.to_async();
+            let mut cx = cx.to_async();
             move || {
-                // Native destruction can re-enter while the app is borrowed.
-                // Schedule both operations without borrowing the app here.
-                cx.spawn(async move |cx| {
-                    cx.update(|cx| {
-                        // App-driven closure may already have removed the window.
-                        if cx.windows.contains_key(window_id) {
-                            handle
-                                .update(cx, |_, window, _| window.remove_window())
-                                .log_err();
-                        }
-                        SystemWindowTabController::remove_tab(cx, window_id);
-                    });
-                })
-                .detach();
+                let _ = handle.update(&mut cx, |_, window, _| window.remove_window());
+                let _ = cx.update(|cx| {
+                    SystemWindowTabController::remove_tab(cx, window_id);
+                });
             }
         }));
         platform_window.on_request_frame(Box::new({
@@ -1862,37 +1824,31 @@ impl Window {
                 let force_render =
                     mem::take(&mut deferred_force_render) || request_frame_options.force_render;
 
-                let power_state = handle
-                    .update(&mut cx, |_, _, cx| (cx.thermal_state(), cx.power_mode()))
+                let thermal_state = handle
+                    .update(&mut cx, |_, _, cx| cx.thermal_state())
                     .log_err();
 
                 // Throttle frame rate based on conditions:
                 // - Thermal pressure (Serious/Critical): cap to ~60fps
-                // - Low power mode: cap to ~30fps
-                // - Inactive window (not focused): use its configured frame interval
-                let should_throttle = !request_frame_options.require_presentation
-                    && (request_frame_options.force_render
-                        || !next_frame_callbacks.borrow().is_empty());
-                let inactive_without_high_rate_input = should_throttle
-                    && !active.get()
-                    && !input_rate_tracker.borrow_mut().is_high_rate();
-                let (thermal_state, power_mode) =
-                    power_state.unwrap_or((ThermalState::Nominal, crate::PowerMode::Unknown));
-                let min_frame_interval = minimum_frame_interval(
-                    should_throttle,
-                    inactive_without_high_rate_input,
-                    inactive_frame_interval,
-                    thermal_state,
-                    power_mode,
-                );
+                // - Inactive window (not focused): cap to ~30fps to save energy
+                let min_frame_interval = if request_frame_options.require_presentation
+                    || (!request_frame_options.force_render
+                        && next_frame_callbacks.borrow().is_empty())
+                {
+                    None
+                } else if !active.get() && !input_rate_tracker.borrow_mut().is_high_rate() {
+                    inactive_frame_interval.map(|interval| (interval, FrameRateLimit::Inactive))
+                } else if let Some(ThermalState::Critical | ThermalState::Serious) = thermal_state {
+                    Some((Duration::from_micros(16667), FrameRateLimit::Thermal))
+                } else {
+                    None
+                };
 
                 let now = Instant::now();
-                if let Some(min_interval) = min_frame_interval {
+                #[cfg_attr(not(feature = "profiler"), expect(unused_variables))]
+                if let Some((min_interval, limit)) = min_frame_interval {
                     if let Some(last_frame) = last_frame_time.get()
-                        && frame_request_arrived_too_early(
-                            now.duration_since(last_frame),
-                            min_interval,
-                        )
+                        && now.duration_since(last_frame) < min_interval
                     {
                         // Don't lose a pending forced render to throttling.
                         deferred_force_render |= force_render;
@@ -1911,12 +1867,13 @@ impl Window {
                         profiler::journal::record_frame_skipped(
                             window_id,
                             Instant::now(),
-                            if inactive_without_high_rate_input {
-                                profiler::journal::FrameSkipReason::InactiveFrameRateLimit
-                            } else if power_mode == crate::PowerMode::LowPower {
-                                profiler::journal::FrameSkipReason::LowPowerFrameRateLimit
-                            } else {
-                                profiler::journal::FrameSkipReason::ThermalFrameRateLimit
+                            match limit {
+                                FrameRateLimit::Inactive => {
+                                    profiler::journal::FrameSkipReason::InactiveFrameRateLimit
+                                }
+                                FrameRateLimit::Thermal => {
+                                    profiler::journal::FrameSkipReason::ThermalFrameRateLimit
+                                }
                             },
                         );
                         return;
@@ -2068,7 +2025,7 @@ impl Window {
                         window
                             .activation_observers
                             .clone()
-                            .retain(|callback| callback(window, cx));
+                            .retain(&(), |callback| callback(window, cx));
 
                         window.bounds_changed(cx);
                         window.refresh();
@@ -2188,7 +2145,7 @@ impl Window {
             removed: false,
             platform_window,
             display_id,
-            display_observers: SingleSubscriberSet::new(),
+            display_observers: SubscriberSet::new(),
             is_resizable,
             is_minimizable,
             sprite_atlas,
@@ -2215,8 +2172,8 @@ impl Window {
             next_tooltip_id: TooltipId::default(),
             tooltip_bounds: None,
             dirty_views: FxHashSet::default(),
-            focus_listeners: SingleSubscriberSet::new(),
-            focus_lost_listeners: SingleSubscriberSet::new(),
+            focus_listeners: SubscriberSet::new(),
+            focus_lost_listeners: SubscriberSet::new(),
             focus_lost_path: SmallVec::new(),
             default_prevented: true,
             mouse_position,
@@ -2224,13 +2181,13 @@ impl Window {
             modifiers,
             capslock,
             scale_factor,
-            bounds_observers: SingleSubscriberSet::new(),
+            bounds_observers: SubscriberSet::new(),
             appearance,
-            appearance_observers: SingleSubscriberSet::new(),
-            button_layout_observers: SingleSubscriberSet::new(),
+            appearance_observers: SubscriberSet::new(),
+            button_layout_observers: SubscriberSet::new(),
             active,
             visibility,
-            visibility_observers: SingleSubscriberSet::new(),
+            visibility_observers: SubscriberSet::new(),
             hovered,
             needs_present,
             input_rate_tracker,
@@ -2246,13 +2203,13 @@ impl Window {
             long_press_timer: None,
             long_press_capture: None,
             refreshing: false,
-            activation_observers: SingleSubscriberSet::new(),
+            activation_observers: SubscriberSet::new(),
             focus: None,
             focus_enabled: true,
             focus_generation: 0,
             pending_input: None,
             pending_modifier: ModifierState::default(),
-            pending_input_observers: SingleSubscriberSet::new(),
+            pending_input_observers: SubscriberSet::new(),
             prompt: None,
             client_inset: None,
             image_cache_stack: Vec::new(),
@@ -2273,7 +2230,7 @@ impl Window {
         &self,
         value: AnyWindowFocusListener,
     ) -> (Subscription, impl FnOnce() + use<>) {
-        self.focus_listeners.insert_pending(value)
+        self.focus_listeners.insert((), value)
     }
 }
 
@@ -2332,7 +2289,7 @@ impl Window {
             profiler::journal::record_window_visibility(self.handle.window_id(), visibility);
             self.visibility_observers
                 .clone()
-                .retain(|callback| callback(visibility, self, cx));
+                .retain(&(), |callback| callback(visibility, self, cx));
         }
         #[cfg(feature = "profiler")]
         if self.invalidator.is_dirty() || self.needs_present.get() {
@@ -2360,11 +2317,15 @@ impl Window {
         &self,
         mut callback: impl FnMut(WindowVisibility, &mut Window, &mut App) + 'static,
     ) -> Subscription {
-        self.visibility_observers
-            .insert(Box::new(move |visibility, window, cx| {
+        let (subscription, activate) = self.visibility_observers.insert(
+            (),
+            Box::new(move |visibility, window, cx| {
                 callback(visibility, window, cx);
                 true
-            }))
+            }),
+        );
+        activate();
+        subscription
     }
 
     /// Registers a callback to be invoked when the window appearance changes.
@@ -2372,11 +2333,15 @@ impl Window {
         &self,
         mut callback: impl FnMut(&mut Window, &mut App) + 'static,
     ) -> Subscription {
-        self.appearance_observers
-            .insert(Box::new(move |window, cx| {
+        let (subscription, activate) = self.appearance_observers.insert(
+            (),
+            Box::new(move |window, cx| {
                 callback(window, cx);
                 true
-            }))
+            }),
+        );
+        activate();
+        subscription
     }
 
     /// Registers a callback to be invoked when the window button layout changes.
@@ -2384,11 +2349,15 @@ impl Window {
         &self,
         mut callback: impl FnMut(&mut Window, &mut App) + 'static,
     ) -> Subscription {
-        self.button_layout_observers
-            .insert(Box::new(move |window, cx| {
+        let (subscription, activate) = self.button_layout_observers.insert(
+            (),
+            Box::new(move |window, cx| {
                 callback(window, cx);
                 true
-            }))
+            }),
+        );
+        activate();
+        subscription
     }
 
     /// Replaces the root entity of the window with a new one.
@@ -2508,7 +2477,7 @@ impl Window {
     }
 
     /// Accessor for the text system.
-    pub fn text_system(&self) -> &Rc<WindowTextSystem> {
+    pub fn text_system(&self) -> &Arc<WindowTextSystem> {
         &self.text_system
     }
 
@@ -2614,7 +2583,7 @@ impl Window {
         context_stack: Vec<KeyContext>,
         cx: &mut App,
     ) {
-        cx.keystroke_observers.clone().retain(move |callback| {
+        cx.keystroke_observers.clone().retain(&(), move |callback| {
             (callback)(
                 &KeystrokeEvent {
                     keystroke: keystroke.clone(),
@@ -2635,18 +2604,20 @@ impl Window {
         context_stack: Vec<KeyContext>,
         cx: &mut App,
     ) {
-        cx.keystroke_interceptors.clone().retain(move |callback| {
-            (callback)(
-                &KeystrokeEvent {
-                    keystroke: keystroke.clone(),
-                    input_preference,
-                    action: None,
-                    context_stack: context_stack.clone(),
-                },
-                self,
-                cx,
-            )
-        });
+        cx.keystroke_interceptors
+            .clone()
+            .retain(&(), move |callback| {
+                (callback)(
+                    &KeystrokeEvent {
+                        keystroke: keystroke.clone(),
+                        input_preference,
+                        action: None,
+                        context_stack: context_stack.clone(),
+                    },
+                    self,
+                    cx,
+                )
+            });
     }
 
     /// Schedules the given function to be run at the end of the current effect cycle, allowing entities
@@ -2729,20 +2700,22 @@ impl Window {
         &self,
         entity: &Entity<T>,
         cx: &mut App,
-        on_release: impl FnOnce(&mut T, &mut Window, &mut App) + 'static,
+        mut on_release: impl FnOnce(&mut T, &mut Window, &mut App) + 'static,
     ) -> Subscription
     where
         T: 'static,
     {
         let entity_id = entity.entity_id();
         let window_handle = self.handle;
-        cx.release_listeners.insert(
+        let (subscription, activate) = cx.release_listeners.insert(
             entity_id,
             Box::new(move |entity, cx| {
                 let entity = entity.downcast_mut().expect("invalid entity type");
                 let _ = window_handle.update(cx, |_, window, cx| on_release(entity, window, cx));
             }),
-        )
+        );
+        activate();
+        subscription
     }
 
     /// Creates an [`AsyncWindowContext`], which has a static lifetime and can be held across
@@ -2842,7 +2815,7 @@ impl Window {
 
         self.bounds_observers
             .clone()
-            .retain(|callback| callback(self, cx));
+            .retain(&(), |callback| callback(self, cx));
     }
 
     fn display_changed(handle: AnyWindowHandle, cx: &mut App) {
@@ -2874,7 +2847,7 @@ impl Window {
     pub(crate) fn notify_display_observers(&mut self, cx: &mut App) {
         self.display_observers
             .clone()
-            .retain(|callback| callback(self, cx));
+            .retain(&(), |callback| callback(self, cx));
     }
 
     /// The time between refreshes of the display the window is on, as of the
@@ -2893,10 +2866,15 @@ impl Window {
         &self,
         mut callback: impl FnMut(&mut Window, &mut App) + 'static,
     ) -> Subscription {
-        self.display_observers.insert(Box::new(move |window, cx| {
-            callback(window, cx);
-            true
-        }))
+        let (subscription, activate) = self.display_observers.insert(
+            (),
+            Box::new(move |window, cx| {
+                callback(window, cx);
+                true
+            }),
+        );
+        activate();
+        subscription
     }
 
     /// Returns the bounds of the current window in the global coordinate space, which could span across multiple displays.
@@ -2955,13 +2933,13 @@ impl Window {
 
         self.appearance_observers
             .clone()
-            .retain(|callback| callback(self, cx));
+            .retain(&(), |callback| callback(self, cx));
     }
 
     pub(crate) fn button_layout_changed(&mut self, cx: &mut App) {
         self.button_layout_observers
             .clone()
-            .retain(|callback| callback(self, cx));
+            .retain(&(), |callback| callback(self, cx));
     }
 
     /// Returns the appearance of the current window.
@@ -3569,7 +3547,7 @@ impl Window {
                 self.focus_lost_path = previous_focus_path.clone();
                 self.focus_lost_listeners
                     .clone()
-                    .retain(|listener| listener(self, cx));
+                    .retain(&(), |listener| listener(self, cx));
                 self.focus_lost_path = SmallVec::new();
                 // The focus-lost fallback (e.g. a workspace refocusing itself) may target
                 // an element that isn't part of the element tree, in which case scheduling
@@ -3592,7 +3570,7 @@ impl Window {
             };
             self.focus_listeners
                 .clone()
-                .retain(|listener| listener(&event, self, cx));
+                .retain(&(), |listener| listener(&event, self, cx));
         }
 
         debug_assert!(self.rendered_entity_stack.is_empty());
@@ -3600,6 +3578,12 @@ impl Window {
         self.reset_cursor_style(cx);
         self.refreshing = false;
         self.invalidator.set_phase(DrawPhase::None);
+        // Invalidations raised after this draw drained `dirty_views` were not applied to
+        // the frame being built. Re-arm the window so they cannot remain pending until
+        // unrelated platform input requests another frame.
+        if self.invalidator.has_dirty_views() {
+            self.refresh();
+        }
         // Focus listeners may move focus (e.g. a dock forwarding focus to its active
         // panel). `Window::focus` suppresses `refresh` while a draw is in progress, so
         // schedule another frame here to render the new focus state and dispatch the
@@ -3994,7 +3978,7 @@ impl Window {
         let traversal_order = self.deferred_draw_traversal_order();
         let mut deferred_draws = mem::take(&mut self.next_frame.deferred_draws);
         for deferred_draw_ix in traversal_order {
-            let deferred_draw = &mut deferred_draws[deferred_draw_ix];
+            let mut deferred_draw = &mut deferred_draws[deferred_draw_ix];
             self.element_id_stack
                 .clone_from(&deferred_draw.element_id_stack);
             self.next_frame
@@ -5030,7 +5014,7 @@ impl Window {
         &mut self,
         bounds: Bounds<Pixels>,
         path: SharedString,
-        data: Option<&[u8]>,
+        mut data: Option<&[u8]>,
         transformation: TransformationMatrix,
         color: Hsla,
         cx: &App,
@@ -5342,7 +5326,7 @@ impl Window {
         self.invalidator.debug_assert_prepaint();
 
         let content_mask = self.content_mask();
-        let id = self.next_hitbox_id;
+        let mut id = self.next_hitbox_id;
         self.next_hitbox_id = self.next_hitbox_id.next();
         let hitbox = Hitbox {
             id,
@@ -5734,6 +5718,7 @@ impl Window {
                             cursor_offset: position,
                             cursor_style: None,
                             external_payload_source: None,
+                            release_outside_source: None,
                         });
                     }
                     PlatformInput::MouseMove(MouseMoveEvent {
@@ -6043,10 +6028,15 @@ impl Window {
                 // If this was a mouse move event, redraw the window so that the
                 // active drag can follow the mouse cursor.
                 self.refresh();
-            } else if event.is::<MouseUpEvent>() {
-                // If this was a mouse up event, cancel the active drag and redraw
-                // the window.
-                cx.active_drag = None;
+            } else if let Some(mouse_up) = event.downcast_ref::<MouseUpEvent>() {
+                let drag = cx.active_drag.take();
+                if let Some(mut drag) = drag
+                    && !Bounds::new(Point::default(), self.viewport_size)
+                        .contains(&mouse_up.position)
+                    && let Some(release_outside_source) = drag.release_outside_source.take()
+                {
+                    release_outside_source(drag.value.as_ref(), self, cx);
+                }
                 self.refresh();
             }
         }
@@ -6313,7 +6303,7 @@ impl Window {
     pub(crate) fn pending_input_changed(&mut self, cx: &mut App) {
         self.pending_input_observers
             .clone()
-            .retain(|callback| callback(self, cx));
+            .retain(&(), |callback| callback(self, cx));
     }
 
     fn defer_pending_input_changed(&self, cx: &mut App) {
@@ -6681,7 +6671,7 @@ impl Window {
         f: impl Fn(&mut Window, &mut App) + 'static,
     ) -> Subscription {
         let window_handle = self.handle;
-        let (subscription, activate) = cx.global_observers.insert_pending(
+        let (subscription, activate) = cx.global_observers.insert(
             TypeId::of::<G>(),
             Box::new(move |cx| {
                 window_handle
@@ -7251,7 +7241,7 @@ impl Window {
     }
 
     #[cfg(any(feature = "inspector", debug_assertions))]
-    fn paint_inspector(&mut self, inspector_element: Option<AnyElement>, cx: &mut App) {
+    fn paint_inspector(&mut self, mut inspector_element: Option<AnyElement>, cx: &mut App) {
         if let Some(mut inspector_element) = inspector_element {
             inspector_element.paint(self, cx);
         };
@@ -7950,15 +7940,17 @@ mod tests {
         time::Duration,
     };
 
+    use collections::FxHashSet;
+
     use crate::{
         AnyWindowHandle, AppContext as _, BackGestureEvent, BackGesturePhase, Bounds, ContentMask,
         Context, DispatchPhase, DragMoveEvent, Empty, ExternalDragPayload, ExternalPaths,
         FileDragPaths, FileDropEvent, FocusHandle, InputEvent as _, InteractiveElement as _,
         IntoElement, KeyDownEvent, Keystroke, LongPressEvent, MouseButton, MouseDownEvent,
         MouseMoveEvent, ParentElement, Pixels, PlatformInput, Point, Render, RequestFrameOptions,
-        ScaledPixels, StatefulInteractiveElement as _, Styled, TestAppContext, ThermalState,
-        TouchDragEvent, TouchEvent, TouchId, TouchPhase, Underline, UnderlineStyle, Window,
-        WindowAppearance, WindowOptions, canvas, div, hsla, point, px, size,
+        ScaledPixels, StatefulInteractiveElement as _, Styled, TestAppContext, TouchDragEvent,
+        TouchEvent, TouchId, TouchPhase, Underline, UnderlineStyle, Window, WindowAppearance,
+        WindowOptions, canvas, div, hsla, point, px, size,
     };
 
     #[gpui::test]
@@ -8048,19 +8040,6 @@ mod tests {
                 assert_eq!(window.focus_generation, 0);
             })
             .expect("window exists");
-    }
-
-    #[gpui::test]
-    fn test_native_close_defers_app_access(cx: &mut TestAppContext) {
-        let window = cx.add_window(|_, _| EmptyView);
-        let platform_window = cx.test_window(window.into());
-        {
-            let app = cx.app.borrow_mut();
-            platform_window.simulate_close();
-            assert!(app.windows.contains_key(window.window_id()));
-        }
-        cx.run_until_parked();
-        assert!(!cx.app.borrow().windows.contains_key(window.window_id()));
     }
 
     #[cfg(feature = "profiler")]
@@ -8466,64 +8445,6 @@ mod tests {
             .unwrap();
     }
 
-    #[test]
-    fn frame_throttle_accepts_display_link_rounding() {
-        assert!(!super::frame_request_arrived_too_early(
-            Duration::from_micros(16_666),
-            super::SIXTY_FPS_INTERVAL,
-        ));
-        assert!(!super::frame_request_arrived_too_early(
-            Duration::from_micros(33_332),
-            super::THIRTY_FPS_INTERVAL,
-        ));
-    }
-
-    #[test]
-    fn frame_throttle_rejects_an_extra_display_refresh() {
-        assert!(super::frame_request_arrived_too_early(
-            Duration::from_micros(8_333),
-            super::SIXTY_FPS_INTERVAL,
-        ));
-        assert!(super::frame_request_arrived_too_early(
-            Duration::from_micros(16_666),
-            super::THIRTY_FPS_INTERVAL,
-        ));
-    }
-
-    #[test]
-    fn power_modes_preserve_frame_limits() {
-        for (power_mode, active_interval, thermal_interval) in [
-            (
-                crate::PowerMode::LowPower,
-                Some(super::THIRTY_FPS_INTERVAL),
-                super::THIRTY_FPS_INTERVAL,
-            ),
-            (crate::PowerMode::Unknown, None, super::SIXTY_FPS_INTERVAL),
-            (crate::PowerMode::Balanced, None, super::SIXTY_FPS_INTERVAL),
-            (crate::PowerMode::HighPower, None, super::SIXTY_FPS_INTERVAL),
-        ] {
-            assert_eq!(
-                super::minimum_frame_interval(true, false, None, ThermalState::Nominal, power_mode),
-                active_interval,
-            );
-            assert_eq!(
-                super::minimum_frame_interval(true, false, None, ThermalState::Serious, power_mode),
-                Some(thermal_interval),
-            );
-            let inactive_interval = Duration::from_millis(100);
-            assert_eq!(
-                super::minimum_frame_interval(
-                    true,
-                    true,
-                    Some(inactive_interval),
-                    ThermalState::Nominal,
-                    power_mode,
-                ),
-                Some(inactive_interval),
-            );
-        }
-    }
-
     struct EmptyView;
 
     impl Render for EmptyView {
@@ -8676,6 +8597,66 @@ mod tests {
         assert!(
             test_window.frame_wake_count() > baseline,
             "scheduling a next-frame callback in an idle window must wake the frame source"
+        );
+    }
+
+    struct InvalidatesDuringPaint {
+        render_count: Rc<Cell<usize>>,
+        invalidate: Rc<Cell<bool>>,
+    }
+
+    impl Render for InvalidatesDuringPaint {
+        fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            self.render_count.set(self.render_count.get() + 1);
+            let this = cx.entity();
+            let invalidate = self.invalidate.clone();
+            canvas(
+                |_, _, _| {},
+                move |_, _, _, cx| {
+                    if invalidate.replace(false) {
+                        this.update(cx, |_, cx| cx.notify());
+                    }
+                },
+            )
+        }
+    }
+
+    #[test]
+    fn test_invalidation_during_draw_requests_a_follow_up_frame() {
+        let mut cx = TestAppContext::single();
+        let render_count = Rc::new(Cell::new(0));
+        let invalidate = Rc::new(Cell::new(false));
+        let window = cx.add_window({
+            let render_count = render_count.clone();
+            let invalidate = invalidate.clone();
+            move |_, _| InvalidatesDuringPaint {
+                render_count,
+                invalidate,
+            }
+        });
+
+        cx.update_window(window.into(), |_, window, cx| window.draw(cx).clear(cx))
+            .unwrap();
+        invalidate.set(true);
+        cx.update_window(window.into(), |root, window, cx| {
+            window.invalidator.set_dirty(true);
+            window
+                .invalidator
+                .replace_views(FxHashSet::from_iter([root.entity_id()]));
+            window.draw(cx).clear(cx);
+            assert!(
+                window.invalidator.is_dirty(),
+                "an invalidation raised during draw must keep frame demand armed"
+            );
+        })
+        .unwrap();
+
+        let render_count_after_draw = render_count.get();
+        cx.update_window(window.into(), |_, window, cx| window.draw(cx).clear(cx))
+            .unwrap();
+        assert!(
+            render_count.get() > render_count_after_draw,
+            "the follow-up frame must consume the draw-time invalidation"
         );
     }
 

@@ -154,10 +154,7 @@ impl XAiLanguageModelProvider {
     ) -> BoxFuture<
         'static,
         Result<
-            futures::stream::BoxStream<
-                'static,
-                Result<ResponseStreamEvent, LanguageModelCompletionError>,
-            >,
+            futures::stream::BoxStream<'static, Result<ResponseStreamEvent>>,
             LanguageModelCompletionError,
         >,
     > {

@@ -23,6 +23,9 @@ impl Render for TableView {
             .bg(theme.colors().editor_background)
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(Self::move_focused_cell))
+            .on_action(cx.listener(Self::edit_focused_cell))
+            .on_action(cx.listener(Self::confirm_cell_edit))
+            .on_action(cx.listener(Self::cancel_inline_edit))
             .child({
                 let is_loading = self.is_loading;
                 if is_loading || self.engine.contents.number_of_cols == 0 {
@@ -51,10 +54,10 @@ impl Render for TableView {
                                         h_flex()
                                             .gap_2()
                                             .child(SpinnerLabel::new())
-                                            .child("Loading…"),
+                                            .child(i18n::t!("21bd738e0d7191a7")),
                                     )
                                 })
-                                .when(!is_loading, |div| div.child("No data to display")),
+                                .when(!is_loading, |div| div.child(i18n::t!("1c77a8adce30a16e"))),
                         )
                         .into_any_element()
                 } else {

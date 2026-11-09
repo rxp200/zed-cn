@@ -92,18 +92,10 @@ impl State {
             .spawn({
                 let credentials_provider = credentials_provider.clone();
                 async move |this, cx| {
-                    let result = language_model::read_credentials(
-                        credentials_provider.as_ref(),
-                        CREDENTIALS_KEY,
-                        cx,
-                    )
-                    .await;
+                    let result = credentials_provider
+                        .read_credentials(CREDENTIALS_KEY, cx)
+                        .await;
                     this.update(cx, |state, cx| {
-                        state.load_task = None;
-                        cx.notify();
-                        if state.auth_generation != 0 {
-                            return;
-                        }
                         match result {
                             Ok(Some((_, bytes))) => {
                                 match serde_json::from_slice::<SuperGrokCredentials>(&bytes) {
@@ -124,6 +116,8 @@ impl State {
                                 log::error!("Failed to load SuperGrok credentials: {error:#}");
                             }
                         }
+                        state.load_task = None;
+                        cx.notify();
                     })?;
                     Ok::<(), Arc<anyhow::Error>>(())
                 }
@@ -428,10 +422,7 @@ fn stream_open_ai_completion(
 ) -> BoxFuture<
     'static,
     Result<
-        futures::stream::BoxStream<
-            'static,
-            Result<ResponseStreamEvent, LanguageModelCompletionError>,
-        >,
+        futures::stream::BoxStream<'static, Result<ResponseStreamEvent>>,
         LanguageModelCompletionError,
     >,
 > {
@@ -879,11 +870,24 @@ fn extract_email_claim(jwt: &str) -> Option<String> {
 
 fn redact_token_body(body: &str) -> String {
     const MAX_LEN: usize = 240;
-    if body.len() <= MAX_LEN {
-        body.to_string()
-    } else {
-        format!("{}…", &body[..MAX_LEN])
-    }
+    let summary = serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|value| {
+            let error = value.get("error")?;
+            let code = error
+                .as_str()
+                .or_else(|| error.get("code").and_then(serde_json::Value::as_str))?;
+            let description = value
+                .get("error_description")
+                .or_else(|| error.get("message"))
+                .and_then(serde_json::Value::as_str);
+            Some(match description {
+                Some(description) => format!("{code}: {description}"),
+                None => code.to_string(),
+            })
+        })
+        .unwrap_or_else(|| "OAuth provider returned an unrecognized error response".to_string());
+    summary.chars().take(MAX_LEN).collect()
 }
 
 fn now_ms() -> u64 {
@@ -994,6 +998,19 @@ mod tests {
         assert_eq!(
             SuperGrokModel::GrokBuild01.max_output_tokens(),
             Some(64_000)
+        );
+    }
+
+    #[test]
+    fn token_error_body_excludes_sensitive_fields() {
+        let body = r#"{"error":"invalid_grant","error_description":"expired","access_token":"secret-access","refresh_token":"secret-refresh"}"#;
+        let summary = redact_token_body(body);
+        assert_eq!(summary, "invalid_grant: expired");
+        assert!(!summary.contains("secret-access"));
+        assert!(!summary.contains("secret-refresh"));
+        assert_eq!(
+            redact_token_body("not json secret-token"),
+            "OAuth provider returned an unrecognized error response"
         );
     }
 
@@ -1330,7 +1347,7 @@ mod tests {
                 .status(200)
                 .body(http_client::AsyncBody::default())?)
         });
-        let state = cx.new(|cx| State::new(http.clone(), creds_provider.clone(), cx));
+        let state = cx.new(|cx| State::new(http, creds_provider, cx));
         let load_task = cx
             .read(|cx| state.read(cx).load_task())
             .expect("constructor should start the credentials load");
@@ -1341,25 +1358,6 @@ mod tests {
         cx.read(|cx| {
             let state = state.read(cx);
             assert!(state.is_authenticated());
-            assert!(state.load_task().is_none());
-        });
-
-        let state = cx.new(|cx| State::new(http, creds_provider, cx));
-        state.update(cx, |state, _| state.auth_generation += 1);
-        let load_task = cx
-            .read(|cx| state.read(cx).load_task())
-            .expect("constructor should start the credentials load");
-        cx.run_until_parked();
-        load_task.await.expect("stale load should complete");
-        cx.read(|cx| {
-            let state = state.read(cx);
-            assert_eq!(
-                state
-                    .credentials
-                    .as_ref()
-                    .map(|creds| creds.access_token.as_str()),
-                None
-            );
             assert!(state.load_task().is_none());
         });
     }

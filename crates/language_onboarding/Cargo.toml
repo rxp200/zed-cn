@@ -17,6 +17,7 @@ doctest = false
 default = []
 
 [dependencies]
+i18n.workspace = true
 db.workspace = true
 editor.workspace = true
 gpui.workspace = true

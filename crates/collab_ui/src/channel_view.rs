@@ -208,7 +208,7 @@ impl ChannelView {
             editor.set_custom_context_menu(move |_, position, window, cx| {
                 let this = this.clone();
                 Some(ui::ContextMenu::build(window, cx, move |menu, _, _| {
-                    menu.entry("Copy Link to Section", None, move |window, cx| {
+                    menu.entry(i18n::t!("f46331f49277fe55"), None, move |window, cx| {
                         this.update(cx, |this, cx| {
                             this.copy_link_for_position(position, window, cx)
                         })
@@ -333,7 +333,7 @@ impl ChannelView {
                 workspace.show_toast(
                     Toast::new(
                         NotificationId::unique::<CopyLinkForPositionToast>(),
-                        "Link copied to clipboard",
+                        i18n::t!("2f7602ddf50b3dde"),
                     ),
                     cx,
                 );

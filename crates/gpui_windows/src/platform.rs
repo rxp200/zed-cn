@@ -1,3 +1,5 @@
+// Modified by the Zed CN project, 2026. See MODIFICATIONS.md.
+
 use std::{
     cell::{Cell, RefCell},
     ffi::{OsStr, OsString},
@@ -28,7 +30,7 @@ use windows::{
             Ole::*,
             Power::*,
             SystemInformation::*,
-            SystemServices::{GUID_POWER_SAVING_STATUS, POWER_REQUEST_CONTEXT_VERSION},
+            SystemServices::POWER_REQUEST_CONTEXT_VERSION,
             Threading::{POWER_REQUEST_CONTEXT_SIMPLE_STRING, REASON_CONTEXT, REASON_CONTEXT_0},
         },
         UI::{Input::KeyboardAndMouse::*, Shell::*, WindowsAndMessaging::*},
@@ -71,7 +73,6 @@ pub struct WindowsPlatform {
     invalidate_devices: Arc<AtomicBool>,
     handle: HWND,
     suspend_resume_notification: RefCell<Option<HPOWERNOTIFY>>,
-    power_saving_notification: RefCell<Option<HPOWERNOTIFY>>,
     disable_direct_composition: bool,
     has_package_identity: bool,
     app_identity: RefCell<Option<(String, String)>>,
@@ -99,7 +100,6 @@ pub(crate) struct WindowsPlatformState {
     /// thread; see [`DrawCoordinator`].
     pub(crate) draw_coordinator: Rc<DrawCoordinator>,
     directx_devices: RefCell<Option<DirectXDevices>>,
-    low_power_mode_enabled: Cell<bool>,
 }
 
 #[derive(Default)]
@@ -113,7 +113,6 @@ struct PlatformCallbacks {
     keyboard_layout_change: Cell<Option<Box<dyn FnMut()>>>,
     system_sleep: Cell<Option<Box<dyn FnMut()>>>,
     system_wake: Cell<Option<Box<dyn FnMut()>>>,
-    low_power_mode_change: Cell<Option<Box<dyn FnMut()>>>,
     displays_changed: Cell<Option<Box<dyn FnMut()>>>,
 }
 
@@ -130,7 +129,6 @@ impl WindowsPlatformState {
             cursor_visible: Arc::new(AtomicBool::new(true)),
             draw_coordinator: Rc::new(DrawCoordinator::new()),
             directx_devices: RefCell::new(directx_devices),
-            low_power_mode_enabled: Cell::new(false),
             menus: RefCell::new(Vec::new()),
         }
     }
@@ -244,14 +242,6 @@ impl WindowsPlatform {
             .inner
             .take()
             .context("CreateWindowExW did not run correctly")??;
-        let mut power_status = SYSTEM_POWER_STATUS::default();
-        match unsafe { GetSystemPowerStatus(&mut power_status) } {
-            Ok(()) => inner
-                .state
-                .low_power_mode_enabled
-                .set(power_status.SystemStatusFlag == 1),
-            Err(error) => log::warn!("Failed to query Windows battery saver status: {error}"),
-        }
         let dispatcher = context
             .dispatcher
             .take()
@@ -290,7 +280,6 @@ impl WindowsPlatform {
             text_system,
             direct_write_text_system,
             suspend_resume_notification: RefCell::new(None),
-            power_saving_notification: RefCell::new(None),
             disable_direct_composition,
             has_package_identity: has_package_identity(),
             drop_target_helper,
@@ -890,33 +879,6 @@ impl Platform for WindowsPlatform {
         }
     }
 
-    fn power_mode(&self) -> PowerMode {
-        if self.inner.state.low_power_mode_enabled.get() {
-            PowerMode::LowPower
-        } else {
-            PowerMode::HighPower
-        }
-    }
-
-    fn on_power_mode_change(&self, callback: Box<dyn FnMut()>) {
-        self.inner
-            .state
-            .callbacks
-            .low_power_mode_change
-            .set(Some(callback));
-        let mut notification = self.power_saving_notification.borrow_mut();
-        if notification.is_none() {
-            *notification = unsafe {
-                RegisterPowerSettingNotification(
-                    HANDLE(self.handle.0),
-                    &GUID_POWER_SAVING_STATUS,
-                    DEVICE_NOTIFY_WINDOW_HANDLE,
-                )
-                .log_err()
-            };
-        }
-    }
-
     fn set_app_identity(&self, identifier: &str, name: &str) {
         // If the process has package identity, it's automatally granted an AUMID by the system.
         if self.has_package_identity {
@@ -1226,6 +1188,7 @@ impl WindowsPlatformInner {
 
     fn handle_msg(
         self: &Rc<Self>,
+        wnd_proc_guard: &WndProcGuard,
         handle: HWND,
         msg: u32,
         wparam: WPARAM,
@@ -1237,8 +1200,10 @@ impl WindowsPlatformInner {
             | WM_GPUI_DOCK_MENU_ACTION
             | WM_GPUI_KEYBOARD_LAYOUT_CHANGED
             | WM_GPUI_DISPLAYS_CHANGED
-            | WM_GPUI_GPU_DEVICE_LOST => self.handle_gpui_events(msg, wparam, lparam),
-            WM_POWERBROADCAST => self.handle_power_broadcast(wparam, lparam),
+            | WM_GPUI_GPU_DEVICE_LOST => {
+                self.handle_gpui_events(wnd_proc_guard, msg, wparam, lparam)
+            }
+            WM_POWERBROADCAST => self.handle_power_broadcast(wparam),
             WM_DISPLAYCHANGE => self.handle_display_change(handle),
             WM_QUERYENDSESSION => Some(1),
             WM_ENDSESSION if wparam.0 != 0 => self.handle_end_session(),
@@ -1251,7 +1216,13 @@ impl WindowsPlatformInner {
         }
     }
 
-    fn handle_gpui_events(&self, message: u32, wparam: WPARAM, lparam: LPARAM) -> Option<isize> {
+    fn handle_gpui_events(
+        self: &Rc<Self>,
+        wnd_proc_guard: &WndProcGuard,
+        message: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> Option<isize> {
         if wparam.0 != self.validation_number {
             log::error!("Wrong validation number while processing message: {message}");
             return None;
@@ -1261,7 +1232,7 @@ impl WindowsPlatformInner {
                 self.close_one_window(HWND(lparam.0 as _));
                 Some(0)
             }
-            WM_GPUI_TASK_DISPATCHED_ON_MAIN_THREAD => self.run_foreground_task(),
+            WM_GPUI_TASK_DISPATCHED_ON_MAIN_THREAD => self.handle_foreground_task(wnd_proc_guard),
             WM_GPUI_DOCK_MENU_ACTION => self.handle_dock_action_event(lparam.0 as _),
             WM_GPUI_KEYBOARD_LAYOUT_CHANGED => self.handle_keyboard_layout_change(),
             WM_GPUI_DISPLAYS_CHANGED => self.handle_displays_changed(),
@@ -1324,6 +1295,16 @@ impl WindowsPlatformInner {
         lock.remove(index);
 
         lock.is_empty()
+    }
+
+    fn handle_foreground_task(self: &Rc<Self>, wnd_proc_guard: &WndProcGuard) -> Option<isize> {
+        wnd_proc_guard.run_at_outermost({
+            let this = self.clone();
+            move || {
+                this.run_foreground_task();
+            }
+        });
+        Some(0)
     }
 
     #[inline]
@@ -1420,23 +1401,13 @@ impl WindowsPlatformInner {
         Some(0)
     }
 
-    fn handle_power_broadcast(&self, wparam: WPARAM, lparam: LPARAM) -> Option<isize> {
+    fn handle_power_broadcast(&self, wparam: WPARAM) -> Option<isize> {
         match wparam.0 as u32 {
             PBT_APMSUSPEND => {
                 self.with_callback(|callbacks| &callbacks.system_sleep, |callback| callback());
             }
             PBT_APMRESUMEAUTOMATIC => {
                 self.with_callback(|callbacks| &callbacks.system_wake, |callback| callback());
-            }
-            PBT_POWERSETTINGCHANGE => {
-                if let Some(enabled) = unsafe { power_saving_status(lparam) } {
-                    if self.state.low_power_mode_enabled.replace(enabled) != enabled {
-                        self.with_callback(
-                            |callbacks| &callbacks.low_power_mode_change,
-                            |callback| callback(),
-                        );
-                    }
-                }
             }
             _ => {}
         }
@@ -1456,23 +1427,6 @@ impl WindowsPlatformInner {
     }
 }
 
-unsafe fn power_saving_status(lparam: LPARAM) -> Option<bool> {
-    let setting = unsafe { (lparam.0 as *const POWERBROADCAST_SETTING).as_ref()? };
-    if setting.PowerSetting != GUID_POWER_SAVING_STATUS || setting.DataLength != 4 {
-        return None;
-    }
-    let data = unsafe {
-        std::ptr::addr_of!(setting.Data)
-            .cast::<u32>()
-            .read_unaligned()
-    };
-    match data {
-        0 => Some(false),
-        1 => Some(true),
-        _ => None,
-    }
-}
-
 impl Drop for WindowsPlatform {
     fn drop(&mut self) {
         if let Some(stop) = self.vsync_stop.borrow_mut().take() {
@@ -1482,9 +1436,6 @@ impl Drop for WindowsPlatform {
             if let Some(notification) = self.suspend_resume_notification.borrow_mut().take() {
                 // SAFETY: notification was returned by RegisterSuspendResumeNotification.
                 UnregisterSuspendResumeNotification(notification).log_err();
-            }
-            if let Some(notification) = self.power_saving_notification.borrow_mut().take() {
-                UnregisterPowerSettingNotification(notification).log_err();
             }
             DestroyWindow(self.handle)
                 .context("Destroying platform window")
@@ -1853,6 +1804,8 @@ unsafe extern "system" fn window_procedure(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
+    let wnd_proc_guard = WndProcGuard::enter();
+
     if msg == WM_NCCREATE {
         let params = unsafe { &*(lparam.0 as *const CREATESTRUCTW) };
         let creation_context = params.lpCreateParams as *mut PlatformWindowCreateContext;
@@ -1890,12 +1843,14 @@ unsafe extern "system" fn window_procedure(
     let result = if let Some(inner) = inner.upgrade() {
         if cfg!(debug_assertions) {
             let inner = std::panic::AssertUnwindSafe(inner);
-            match std::panic::catch_unwind(|| { inner }.handle_msg(hwnd, msg, wparam, lparam)) {
+            match std::panic::catch_unwind(|| {
+                inner.handle_msg(&wnd_proc_guard, hwnd, msg, wparam, lparam)
+            }) {
                 Ok(result) => result,
                 Err(_) => std::process::abort(),
             }
         } else {
-            inner.handle_msg(hwnd, msg, wparam, lparam)
+            inner.handle_msg(&wnd_proc_guard, hwnd, msg, wparam, lparam)
         }
     } else {
         unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
@@ -1907,6 +1862,70 @@ unsafe extern "system" fn window_procedure(
     }
 
     result
+}
+
+thread_local! {
+    static WND_PROC_DEPTH: Cell<usize> = const { Cell::new(0) };
+    static WND_PROC_DEFERRED_CALLBACKS: RefCell<Vec<Box<dyn FnOnce()>>> = const { RefCell::new(Vec::new()) };
+}
+
+pub(crate) struct WndProcGuard {
+    depth: usize,
+}
+
+impl WndProcGuard {
+    pub(crate) fn enter() -> Self {
+        let depth = WND_PROC_DEPTH.get() + 1;
+        WND_PROC_DEPTH.set(depth);
+        Self { depth }
+    }
+
+    pub(crate) fn run_at_outermost(&self, callback: impl FnOnce() + 'static) {
+        if self.depth == 1 {
+            callback();
+        } else {
+            WND_PROC_DEFERRED_CALLBACKS.with_borrow_mut(|callbacks| {
+                callbacks.push(Box::new(callback));
+            });
+        }
+    }
+
+    #[cfg(test)]
+    fn depth() -> usize {
+        WND_PROC_DEPTH.get()
+    }
+
+    #[cfg(test)]
+    fn deferred_callback_count() -> usize {
+        WND_PROC_DEFERRED_CALLBACKS.with_borrow(Vec::len)
+    }
+}
+
+impl Drop for WndProcGuard {
+    fn drop(&mut self) {
+        if self.depth == 1 {
+            loop {
+                let callbacks = WND_PROC_DEFERRED_CALLBACKS
+                    .with_borrow_mut(|callbacks| std::mem::take(callbacks));
+                if callbacks.is_empty() {
+                    break;
+                }
+                for callback in callbacks {
+                    if cfg!(debug_assertions) {
+                        if std::panic::catch_unwind(std::panic::AssertUnwindSafe(callback)).is_err()
+                        {
+                            std::process::abort();
+                        }
+                    } else {
+                        callback();
+                    }
+                }
+            }
+        }
+
+        debug_assert_eq!(WND_PROC_DEPTH.get(), self.depth);
+        WND_PROC_DEPTH.set(self.depth - 1);
+    }
 }
 
 /// Copies the username and secret out of a credential returned by `CredReadW`.
@@ -1943,9 +1962,13 @@ unsafe fn username_and_password(credential: &CREDENTIALW) -> Result<(String, Vec
 
 #[cfg(test)]
 mod tests {
-    use std::ffi::{OsStr, OsString};
+    use std::{
+        cell::RefCell,
+        ffi::{OsStr, OsString},
+        rc::Rc,
+    };
 
-    use crate::{read_from_clipboard, write_to_clipboard};
+    use crate::{WndProcGuard, read_from_clipboard, write_to_clipboard};
     use gpui::ClipboardItem;
     use windows::Win32::Security::Credentials::{
         CRED_PERSIST_SESSION, CRED_TYPE_GENERIC, CREDENTIALW, CredDeleteW, CredFree, CredReadW,
@@ -2022,6 +2045,41 @@ mod tests {
             encode_restart_arguments(&[OsString::from(r"C:\")]),
             OsStr::new(r#""C:\\""#)
         );
+    }
+
+    #[test]
+    fn defers_nested_window_procedure_callbacks() {
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        {
+            let _outer_guard = WndProcGuard::enter();
+            {
+                let nested_guard = WndProcGuard::enter();
+                nested_guard.run_at_outermost({
+                    let calls = calls.clone();
+                    move || {
+                        calls.borrow_mut().push("first");
+                        let nested_guard = WndProcGuard::enter();
+                        nested_guard.run_at_outermost({
+                            let calls = calls.clone();
+                            move || calls.borrow_mut().push("third")
+                        });
+                    }
+                });
+                nested_guard.run_at_outermost({
+                    let calls = calls.clone();
+                    move || calls.borrow_mut().push("second")
+                });
+
+                assert!(calls.borrow().is_empty());
+                assert_eq!(WndProcGuard::depth(), 2);
+                assert_eq!(WndProcGuard::deferred_callback_count(), 2);
+            }
+            assert!(calls.borrow().is_empty());
+        }
+
+        assert_eq!(calls.borrow().as_slice(), &["first", "second", "third"]);
+        assert_eq!(WndProcGuard::depth(), 0);
+        assert_eq!(WndProcGuard::deferred_callback_count(), 0);
     }
 
     #[test]

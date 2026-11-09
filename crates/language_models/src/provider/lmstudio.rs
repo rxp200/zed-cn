@@ -102,13 +102,22 @@ impl State {
                 .into_iter()
                 .filter(|model| model.r#type != ModelType::Embeddings)
                 .map(|model| {
+                    // When the server does not report capabilities (e.g. LM Studio's
+                    // OpenAI-compatible `/v1/models` endpoint), assume modern local
+                    // instruct models support tools. Users can still disable this via
+                    // the `available_models` settings override.
+                    let supports_tool_calls = if model.capabilities.is_empty() {
+                        true
+                    } else {
+                        model.capabilities.supports_tool_calls()
+                    };
                     lmstudio::Model::new(
                         &model.id,
                         None,
                         model
                             .loaded_context_length
                             .or_else(|| model.max_context_length),
-                        model.capabilities.supports_tool_calls(),
+                        supports_tool_calls,
                         model.capabilities.supports_images() || model.r#type == ModelType::Vlm,
                     )
                 })
@@ -140,7 +149,7 @@ impl State {
     fn authenticate(&mut self, cx: &mut Context<Self>) -> Task<Result<(), AuthenticateError>> {
         let credentials_provider = self.credentials_provider.clone();
         let api_url = LmStudioLanguageModelProvider::api_url(cx).into();
-        let load_key = self.api_key_state.load_if_needed(
+        let _task = self.api_key_state.load_if_needed(
             api_url,
             |this| &mut this.api_key_state,
             credentials_provider,
@@ -151,9 +160,8 @@ impl State {
             return Task::ready(Ok(()));
         }
 
-        cx.spawn(async move |state, cx| {
-            load_key.await?;
-            let fetch_models_task = state.update(cx, |state, cx| state.fetch_models(cx))?;
+        let fetch_models_task = self.fetch_models(cx);
+        cx.spawn(async move |_this, _cx| {
             match fetch_models_task.await {
                 Ok(()) => Ok(()),
                 Err(err) => {
@@ -330,11 +338,6 @@ impl LanguageModelProvider for LmStudioLanguageModelProvider {
         self.state.update(cx, |state, cx| state.authenticate(cx))
     }
 
-    fn refresh_models(&self, cx: &mut App) {
-        self.state
-            .update(cx, |state, cx| state.restart_fetch_models_task(cx));
-    }
-
     fn settings_view(&self, _cx: &mut App) -> Option<ProviderSettingsView> {
         let state = self.state.clone();
         Some(ProviderSettingsView::SubPage(
@@ -342,9 +345,7 @@ impl LanguageModelProvider for LmStudioLanguageModelProvider {
                 cx.new(|cx| ConfigurationView::new(state.clone(), window, cx))
                     .into()
             })
-            .description(InlineDescription::Text(
-                "Run local LLMs like Llama, Phi, and Qwen with LM Studio.".into(),
-            )),
+            .description(InlineDescription::Text(i18n::t!("93ee8ad0ac43b3cd").into())),
         ))
     }
 }
@@ -612,10 +613,12 @@ struct ConfigurationView {
 
 impl ConfigurationView {
     pub fn new(state: Entity<State>, _window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let api_key_editor = cx.new(|cx| InputField::new(_window, cx, "sk-...").label("API key"));
+        let api_key_editor =
+            cx.new(|cx| InputField::new(_window, cx, "sk-...").label(i18n::t!("5f600b307b4eb0fb")));
 
         let api_url_editor = cx.new(|cx| {
-            let input = InputField::new(_window, cx, LMSTUDIO_API_URL).label("API URL");
+            let input =
+                InputField::new(_window, cx, LMSTUDIO_API_URL).label(i18n::t!("d94c3fb876621695"));
             input.set_text(&LmStudioLanguageModelProvider::api_url(cx), _window, cx);
             input
         });
@@ -747,9 +750,12 @@ impl ConfigurationView {
         let state = self.state.read(cx);
         let env_var_set = state.api_key_state.is_from_env_var();
         let configured_card_label = if env_var_set {
-            format!("API key set in {API_KEY_ENV_VAR_NAME} environment variable.")
+            i18n::t!(
+                "7038424f663d69bc",
+                API_KEY_ENV_VAR_NAME = API_KEY_ENV_VAR_NAME
+            )
         } else {
-            "API key configured".to_string()
+            i18n::t!("d95b24a24825e6c7").to_string()
         };
 
         let api_key_control = if !state.api_key_state.has_key() {
@@ -759,8 +765,9 @@ impl ConfigurationView {
                 .disabled(env_var_set)
                 .on_click(cx.listener(|this, _, _window, cx| this.reset_api_key(_window, cx)))
                 .when(env_var_set, |this| {
-                    this.tooltip_label(format!(
-                        "To reset your API key, unset the {API_KEY_ENV_VAR_NAME} environment variable."
+                    this.tooltip_label(i18n::t!(
+                        "d402e5e520ed1b1e",
+                        API_KEY_ENV_VAR_NAME = API_KEY_ENV_VAR_NAME
                     ))
                 })
                 .into_any_element()
@@ -772,8 +779,9 @@ impl ConfigurationView {
             .gap_1p5()
             .mb_2()
             .child(
-                Label::new(format!(
-                    "You can also set the {API_KEY_ENV_VAR_NAME} environment variable and restart Zed."
+                Label::new(i18n::t!(
+                    "db72caa0fa37b7f9",
+                    API_KEY_ENV_VAR_NAME = API_KEY_ENV_VAR_NAME
                 ))
                 .size(LabelSize::Small)
                 .color(Color::Muted),
@@ -792,16 +800,16 @@ impl Render for ConfigurationView {
                     .gap_1()
                     .child(Headline::new("LM Studio").size(HeadlineSize::Small))
                     .child(
-                        Label::new("Run local LLMs like Llama, Phi, and Qwen.").color(Color::Muted),
+                        Label::new(i18n::t!("223d619944fda585")).color(Color::Muted),
                     )
                     .child(
                         List::new()
                             .child(ListBulletItem::new(
-                                "LM Studio needs to be running with at least one model downloaded.",
+                                i18n::t!("51dd27c924207366"),
                             ).label_color(Color::Muted))
                             .child(
                                 ListBulletItem::new("")
-                                    .child(Label::new("To get your first model, try running").color(Color::Muted))
+                                    .child(Label::new(i18n::t!("4dd4fb8c6081befb")).color(Color::Muted))
                                     .child(Label::new("lms get qwen2.5-coder-7b").inline_code(cx).color(Color::Muted).ml_1()),
                             ),
                     )
@@ -826,7 +834,7 @@ impl Render for ConfigurationView {
                             .map(|this| {
                                 if is_authenticated {
                                     this.child(
-                                        Button::new("lmstudio-site", "LM Studio")
+                                        Button::new("lmstudio-site", i18n::t!("6b9727908e373676"))
                                             .style(ButtonStyle::OutlinedGhost)
                                             .size(ButtonSize::Medium)
                                             .end_icon(
@@ -843,7 +851,7 @@ impl Render for ConfigurationView {
                                     this.child(
                                         Button::new(
                                             "download_lmstudio_button",
-                                            "Download LM Studio",
+                                            i18n::t!("133313477aa50b6d"),
                                         )
                                         .style(ButtonStyle::OutlinedGhost)
                                         .size(ButtonSize::Medium)
@@ -860,7 +868,7 @@ impl Render for ConfigurationView {
                                 }
                             })
                             .child(
-                                Button::new("view-models", "Model Catalog")
+                                Button::new("view-models", i18n::t!("8135034002c770ac"))
                                     .style(ButtonStyle::OutlinedGhost)
                                     .size(ButtonSize::Medium)
                                     .end_icon(
@@ -882,11 +890,11 @@ impl Render for ConfigurationView {
                                         h_flex()
                                             .gap_1()
                                             .child(Icon::new(IconName::Check).color(Color::Success))
-                                            .child(Label::new("Connected"))
+                                            .child(Label::new(i18n::t!("5be0323e8adcaeae")))
                                     )
                                     .child(
                                         IconButton::new("refresh-models", IconName::RotateCcw)
-                                            .tooltip(Tooltip::text("Refresh Models"))
+                                            .tooltip(Tooltip::text(i18n::t!("a76952e53abfc0d9")))
                                             .icon_size(IconSize::Small)
                                             .on_click(cx.listener(|this, _, _window, cx| {
                                                 this.state.update(cx, |state, _| {
@@ -898,7 +906,7 @@ impl Render for ConfigurationView {
                             )
                         } else {
                             this.child(
-                                Button::new("retry_lmstudio_models", "Connect")
+                                Button::new("retry_lmstudio_models", i18n::t!("a5574109f0208e89"))
                                     .style(ButtonStyle::Outlined)
                                     .size(ButtonSize::Medium)
                                     .start_icon(
@@ -917,72 +925,39 @@ impl Render for ConfigurationView {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use credentials_provider::test_support::FakeCredentialsProvider;
     use gpui::TestAppContext;
-    use http_client::{AsyncBody, FakeHttpClient, Response};
+    use http_client::FakeHttpClient;
 
-    #[gpui::test]
-    async fn enabling_ai_discovers_models_with_stored_credentials(cx: &mut TestAppContext) {
-        cx.update(|cx| {
-            let mut store = SettingsStore::test(cx);
-            store.update_user_settings(cx, |settings| {
-                settings.project.disable_ai = Some(true.into());
-            });
-            cx.set_global(store);
-            language_model::set_credentials_read_gate::<SettingsStore>(crate::ai_disabled, cx);
-        });
-        let credentials = Arc::new(FakeCredentialsProvider::default());
-        credentials
-            .state
-            .lock()
-            .keys
-            .insert(LMSTUDIO_API_URL.to_string(), b"stored-key".to_vec());
-        let client = FakeHttpClient::create(|request| async move {
-            if request
-                .headers()
-                .get("Authorization")
-                .and_then(|value| value.to_str().ok())
-                != Some("Bearer stored-key")
-            {
-                return Ok(Response::builder().status(401).body(AsyncBody::default())?);
-            }
-            Ok(Response::builder().status(200).body(AsyncBody::from(
-                r#"{"data":[{"id":"stored-model","object":"model","type":"llm","publisher":"test","compatibility_type":"gguf","state":"loaded"}]}"#,
-            ))?)
-        });
-        let provider = cx.update(|cx| {
-            let provider = LmStudioLanguageModelProvider::new(client, credentials.clone(), cx);
-            provider.state.update(cx, |state, _| {
-                state.api_key_state = ApiKeyState::new(
-                    SharedString::from(LMSTUDIO_API_URL),
-                    EnvVar {
-                        name: SharedString::from("TEST_API_KEY"),
-                        value: None,
-                    },
-                );
-            });
-            provider
-        });
-        let authentication = cx.update(|cx| provider.authenticate(cx));
-        cx.run_until_parked();
-        credentials.assert_reads(&[]);
-        cx.update_global::<SettingsStore, _>(|store, cx| {
-            store.update_user_settings(cx, |settings| {
-                settings.project.disable_ai = Some(false.into());
-            });
-        });
-        authentication
-            .await
-            .expect("authentication after enabling AI");
-        assert_eq!(
-            cx.update(|cx| provider
-                .provided_models(cx)
-                .into_iter()
-                .map(|model| model.id.0.to_string())
-                .collect::<Vec<_>>()),
-            ["stored-model"]
-        );
-        credentials.assert_reads(&[LMSTUDIO_API_URL]);
+    struct TestCredentialsProvider;
+
+    impl CredentialsProvider for TestCredentialsProvider {
+        fn read_credentials<'a>(
+            &'a self,
+            _url: &'a str,
+            _cx: &'a AsyncApp,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<Option<(String, Vec<u8>)>>> + 'a>,
+        > {
+            Box::pin(async { Ok(None) })
+        }
+
+        fn write_credentials<'a>(
+            &'a self,
+            _url: &'a str,
+            _username: &'a str,
+            _password: &'a [u8],
+            _cx: &'a AsyncApp,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + 'a>> {
+            Box::pin(async { Ok(()) })
+        }
+
+        fn delete_credentials<'a>(
+            &'a self,
+            _url: &'a str,
+            _cx: &'a AsyncApp,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + 'a>> {
+            Box::pin(async { Ok(()) })
+        }
     }
 
     #[gpui::test]
@@ -998,11 +973,7 @@ mod tests {
                 .body(http_client::AsyncBody::from("server error"))?)
         });
         let provider = cx.update(|cx| {
-            LmStudioLanguageModelProvider::new(
-                http_client,
-                Arc::new(FakeCredentialsProvider::default()),
-                cx,
-            )
+            LmStudioLanguageModelProvider::new(http_client, Arc::new(TestCredentialsProvider), cx)
         });
         cx.run_until_parked();
 

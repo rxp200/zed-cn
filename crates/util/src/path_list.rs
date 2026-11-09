@@ -1,3 +1,5 @@
+// Modified by the Zed CN project, 2026. See MODIFICATIONS.md.
+
 use std::{
     hash::{Hash, Hasher},
     path::{Path, PathBuf},
@@ -78,6 +80,21 @@ impl PathList {
     /// Get the paths in lexicographic order.
     pub fn paths(&self) -> &[PathBuf] {
         self.paths.as_ref()
+    }
+
+    /// Get the distinct paths in lexicographic order.
+    ///
+    /// A project can hold both a repository and its linked worktree, and both
+    /// map to the same main worktree path, so a main-worktree path list may
+    /// contain duplicate entries that still describe a single project.
+    pub fn distinct_paths(&self) -> Vec<&Path> {
+        let mut distinct: Vec<&Path> = Vec::with_capacity(self.paths.len());
+        for path in self.paths.iter() {
+            if distinct.last().copied() != Some(path.as_path()) {
+                distinct.push(path.as_path());
+            }
+        }
+        distinct
     }
 
     /// Get the paths in the lexicographic order.
@@ -229,5 +246,17 @@ mod tests {
                 &PathBuf::from("a"),
             ]
         );
+    }
+
+    #[test]
+    fn test_distinct_paths_drops_duplicate_main_worktrees() {
+        let list = PathList::new(&["a/repo", "a/repo", "a/repo-worktree"]);
+        assert_eq!(
+            list.distinct_paths(),
+            vec![Path::new("a/repo"), Path::new("a/repo-worktree")]
+        );
+
+        let single = PathList::new(&["a/repo"]);
+        assert_eq!(single.distinct_paths(), vec![Path::new("a/repo")]);
     }
 }

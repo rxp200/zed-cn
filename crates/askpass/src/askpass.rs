@@ -297,11 +297,10 @@ impl PasswordProxy {
         #[cfg(not(target_os = "windows"))]
         let (gpg_wrapper_script_path, gpg_wrapper_script) =
             match generate_gpg_wrapper_script(askpass_program, &askpass_socket_path) {
-                Ok(Some(script)) => (
+                Ok(script) => (
                     Some(temp_dir.path().join(GPG_WRAPPER_SCRIPT_NAME)),
                     Some(script),
                 ),
-                Ok(None) => (None, None),
                 Err(err) => {
                     log::warn!("could not create gpg askpass wrapper: {err:#}");
                     (None, None)
@@ -506,11 +505,9 @@ fn generate_askpass_script(
 fn generate_gpg_wrapper_script(
     askpass_program: &std::path::Path,
     askpass_socket: &std::path::Path,
-) -> Result<Option<String>> {
+) -> Result<String> {
     let shell_kind = ShellKind::Posix;
-    let Some(gpg_program) = find_gpg_program() else {
-        return Ok(None);
-    };
+    let gpg_program = find_gpg_program().context("could not find a gpg binary on PATH")?;
     let gpg_program = gpg_program
         .to_str()
         .context("gpg program is on a non-utf8 path")?;
@@ -553,7 +550,7 @@ fn generate_gpg_wrapper_script(
     // from stdout, so we buffer stdin to replay it into each attempt and buffer
     // each attempt's output, forwarding it only if it succeeds. The
     // passphrase goes to fd 3 via a pipe.
-    Ok(Some(format!(
+    Ok(format!(
         r#"#!/bin/sh
 for arg in "$@"; do
     case "$arg" in
@@ -606,7 +603,7 @@ passphrase=$(printf '%s\0' {prompt} | {askpass_program} --askpass={askpass_socke
 printf '%s\n' "$passphrase" |
 {gpg_program} --pinentry-mode loopback --passphrase-fd 3 "$@" 3<&0 < "$payload"
 "#,
-    )))
+    ))
 }
 
 /// Finds the real `gpg` (or `gpg2`) executable on `PATH`.

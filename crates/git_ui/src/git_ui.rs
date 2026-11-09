@@ -38,13 +38,16 @@ use crate::{
 
 pub mod branch_diff;
 pub mod branch_picker;
+pub mod branch_tree;
 mod commit_context_menu;
 mod commit_modal;
 pub mod commit_tooltip;
 pub mod commit_view;
 mod conflict_view;
+mod diff_explanations;
 mod diff_multibuffer;
 pub mod git_graph;
+pub mod git_history_panel;
 pub mod git_panel;
 mod git_panel_settings;
 pub mod git_picker;
@@ -114,6 +117,7 @@ pub fn init(cx: &mut App) {
         branch_diff::BranchDiff::register(workspace, cx);
         CommitModal::register(workspace);
         git_panel::register(workspace);
+        git_history_panel::register(workspace);
         repository_selector::register(workspace);
         git_picker::register(workspace);
 
@@ -730,7 +734,7 @@ impl RefPickerModal {
     ) -> Self {
         let editor = cx.new(|cx| {
             let mut editor = Editor::single_line(window, cx);
-            editor.set_placeholder_text("Enter git ref...", window, cx);
+            editor.set_placeholder_text(i18n::t!("398c4265c44044ac"), window, cx);
             editor
         });
 
@@ -915,7 +919,7 @@ impl Render for RefPickerModal {
                     .w_full()
                     .gap_1p5()
                     .child(Icon::new(IconName::Hash).size(IconSize::XSmall))
-                    .child(Headline::new("View Commit").size(HeadlineSize::XSmall)),
+                    .child(Headline::new(i18n::t!("f9241c1ae340b651")).size(HeadlineSize::XSmall)),
             )
             .child(div().px_3().w_full().child(self.editor.clone()))
             .when_some(commit_preview, |el, preview| {
@@ -1202,14 +1206,14 @@ mod remote_button {
                         .when_some(keybinding_target.clone(), |el, keybinding_target| {
                             el.context(keybinding_target)
                         })
-                        .action("Fetch", git::Fetch.boxed_clone())
-                        .action("Fetch From", git::FetchFrom.boxed_clone())
-                        .action("Pull", git::Pull.boxed_clone())
-                        .action("Pull (Rebase)", git::PullRebase.boxed_clone())
+                        .action(i18n::t!("3025ba82c94c2575"), git::Fetch.boxed_clone())
+                        .action(i18n::t!("9076ee6c0bccb050"), git::FetchFrom.boxed_clone())
+                        .action(i18n::t!("b4588d032129f61b"), git::Pull.boxed_clone())
+                        .action(i18n::t!("98fd095c4dd942bb"), git::PullRebase.boxed_clone())
                         .separator()
-                        .action("Push", git::Push.boxed_clone())
-                        .action("Push To", git::PushTo.boxed_clone())
-                        .action("Force Push", git::ForcePush.boxed_clone())
+                        .action(i18n::t!("c757c9cc2dfaf9d5"), git::Push.boxed_clone())
+                        .action(i18n::t!("f445565918f4dd5e"), git::PushTo.boxed_clone())
+                        .action(i18n::t!("cbb348f18bdea850"), git::ForcePush.boxed_clone())
                 }))
             })
             .anchor(Anchor::TopRight)
@@ -1420,7 +1424,7 @@ impl GitCloneModal {
     pub fn show(panel: Entity<GitPanel>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let repo_input = cx.new(|cx| {
             let mut editor = Editor::single_line(window, cx);
-            editor.set_placeholder_text("Enter repository URL…", window, cx);
+            editor.set_placeholder_text(i18n::t!("3cd1da214173427f"), window, cx);
             editor
         });
         let focus_handle = repo_input.focus_handle(cx);
@@ -1464,12 +1468,12 @@ impl Render for GitCloneModal {
                     .rounded_b_sm()
                     .bg(cx.theme().colors().editor_background)
                     .child(
-                        Label::new("Clone a repository from GitHub or other sources.")
+                        Label::new(i18n::t!("2048bf308be64dd2"))
                             .color(Color::Muted)
                             .size(LabelSize::Small),
                     )
                     .child(
-                        Button::new("learn-more", "Learn More")
+                        Button::new("learn-more", i18n::t!("ca66c2da6f5bf825"))
                             .label_size(LabelSize::Small)
                             .end_icon(Icon::new(IconName::ArrowUpRight).size(IconSize::XSmall))
                             .on_click(|_, _, cx| {
@@ -1665,6 +1669,8 @@ mod view_commit_tests {
                 commit_context_menu::CommitContextMenuData {
                     sha: selected_commit,
                     tag_names: Vec::new(),
+                    author_name: None,
+                    author_email: None,
                 },
                 commit_context_menu::CommitContextMenuSource::GitPanel,
                 None,

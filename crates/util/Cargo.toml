@@ -21,6 +21,7 @@ debug-embed = ["rust-embed/debug-embed"]
 
 [dependencies]
 anyhow.workspace = true
+i18n.workspace = true
 collections.workspace = true
 dunce.workspace = true
 globset.workspace = true

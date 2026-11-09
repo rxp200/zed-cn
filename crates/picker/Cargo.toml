@@ -16,6 +16,7 @@ doctest = false
 test-support = []
 
 [dependencies]
+i18n.workspace = true
 anyhow.workspace = true
 db.workspace = true
 language.workspace = true

@@ -1065,6 +1065,9 @@ impl Domain for WorkspaceDb {
         sql!(
             ALTER TABLE workspaces ADD COLUMN native_window_state BLOB;
         ),
+        sql!(
+            ALTER TABLE workspaces ADD COLUMN remote_terminal_mode INTEGER; //bool
+        ),
     ];
 
     // Allow recovering from bad migration that was initially shipped to nightly
@@ -1209,6 +1212,7 @@ impl WorkspaceDb {
                 .log_err()?,
             window_bounds,
             centered_layout: centered_layout.unwrap_or(false),
+            remote_terminal_mode: self.remote_terminal_mode_for_workspace(workspace_id),
             display,
             docks,
             session_id: None,
@@ -1314,6 +1318,7 @@ impl WorkspaceDb {
                 .log_err()?,
             window_bounds,
             centered_layout: centered_layout.unwrap_or(false),
+            remote_terminal_mode: self.remote_terminal_mode_for_workspace(workspace_id),
             display,
             docks,
             session_id: None,
@@ -1323,6 +1328,25 @@ impl WorkspaceDb {
             user_toolchains: self.user_toolchains(workspace_id, remote_connection_id),
             recent_navigation_history: self.recent_navigation_history(workspace_id),
         })
+    }
+
+    /// Reads the `remote_terminal_mode` flag for a single workspace.
+    ///
+    /// The flag is queried separately because `select_row_bound` only supports
+    /// column tuples up to ten elements and the workspace row already uses all
+    /// of them.
+    fn remote_terminal_mode_for_workspace(&self, workspace_id: WorkspaceId) -> bool {
+        let Ok(mut statement) = self.select_row_bound::<_, Option<bool>>(sql!(
+            SELECT remote_terminal_mode
+            FROM workspaces
+            WHERE workspace_id = ?
+        )) else {
+            return false;
+        };
+        match statement(workspace_id) {
+            Ok(Some(remote_terminal_mode)) => remote_terminal_mode.unwrap_or(false),
+            _ => false,
+        }
     }
 
     fn recent_navigation_history(&self, workspace_id: WorkspaceId) -> Vec<PathBuf> {
@@ -1626,9 +1650,10 @@ impl WorkspaceDb {
                         bottom_dock_zoom,
                         session_id,
                         window_id,
+                        remote_terminal_mode,
                         timestamp
                     )
-                    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, CURRENT_TIMESTAMP)
+                    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, CURRENT_TIMESTAMP)
                     ON CONFLICT DO
                     UPDATE SET
                         paths = ?2,
@@ -1647,6 +1672,7 @@ impl WorkspaceDb {
                         bottom_dock_zoom = ?15,
                         session_id = ?16,
                         window_id = ?17,
+                        remote_terminal_mode = ?18,
                         timestamp = CURRENT_TIMESTAMP
                 );
                 let mut prepared_query = conn.exec_bound(query)?;
@@ -1660,6 +1686,7 @@ impl WorkspaceDb {
                     workspace.docks,
                     workspace.session_id,
                     workspace.window_id,
+                    workspace.remote_terminal_mode,
                 );
 
                 prepared_query(args).context("Updating workspace")?;
@@ -1848,6 +1875,7 @@ impl WorkspaceDb {
             Option<RemoteConnectionId>,
             Option<String>,
             DateTime<Utc>,
+            bool,
         )>,
     > {
         Ok(self
@@ -1863,6 +1891,7 @@ impl WorkspaceDb {
                     remote_connection_id,
                     session_id,
                     timestamp,
+                    remote_terminal_mode,
                 )| {
                     (
                         id,
@@ -1876,6 +1905,7 @@ impl WorkspaceDb {
                         remote_connection_id.map(RemoteConnectionId),
                         session_id,
                         parse_timestamp(&timestamp),
+                        remote_terminal_mode.unwrap_or(false),
                     )
                 },
             )
@@ -1883,8 +1913,8 @@ impl WorkspaceDb {
     }
 
     query! {
-        fn recent_workspaces_query() -> Result<Vec<(WorkspaceId, String, String, Option<String>, Option<String>, Option<u64>, Option<String>, String)>> {
-            SELECT workspace_id, paths, paths_order, identity_paths, identity_paths_order, remote_connection_id, session_id, timestamp
+        fn recent_workspaces_query() -> Result<Vec<(WorkspaceId, String, String, Option<String>, Option<String>, Option<u64>, Option<String>, String, Option<bool>)>> {
+            SELECT workspace_id, paths, paths_order, identity_paths, identity_paths_order, remote_connection_id, session_id, timestamp, remote_terminal_mode
             FROM workspaces
             WHERE
                 paths IS NOT NULL OR
@@ -2065,8 +2095,15 @@ impl WorkspaceDb {
     ) -> Result<Vec<RecentWorkspace>> {
         let remote_connections = self.remote_connections()?;
         let mut result = Vec::new();
-        for (id, paths, identity_paths_hint, remote_connection_id, _session_id, timestamp) in
-            self.recent_workspaces()?
+        for (
+            id,
+            paths,
+            identity_paths_hint,
+            remote_connection_id,
+            _session_id,
+            timestamp,
+            remote_terminal_mode,
+        ) in self.recent_workspaces()?
         {
             if let Some(remote_connection_id) = remote_connection_id {
                 if let Some(connection_options) = remote_connections.get(&remote_connection_id) {
@@ -2075,6 +2112,7 @@ impl WorkspaceDb {
                         location: SerializedWorkspaceLocation::Remote(connection_options.clone()),
                         paths: paths.clone(),
                         identity_paths: identity_paths_hint.unwrap_or(paths),
+                        remote_terminal_mode,
                         timestamp,
                     });
                 }
@@ -2095,6 +2133,7 @@ impl WorkspaceDb {
                     location: SerializedWorkspaceLocation::Local,
                     paths,
                     identity_paths,
+                    remote_terminal_mode,
                     timestamp,
                 });
             }
@@ -2127,8 +2166,15 @@ impl WorkspaceDb {
         let remote_connections = self.remote_connections()?;
 
         let mut workspace_ids = Vec::new();
-        for (workspace_id, paths, identity_paths, remote_connection_id, _, _) in
-            self.recent_workspaces()?
+        for (
+            workspace_id,
+            paths,
+            identity_paths,
+            remote_connection_id,
+            _,
+            _,
+            _remote_terminal_mode,
+        ) in self.recent_workspaces()?
         {
             let remote_connection = if let Some(id) = remote_connection_id {
                 let Some(connection_options) = remote_connections.get(&id) else {
@@ -2170,8 +2216,15 @@ impl WorkspaceDb {
         let remote_connections = self.remote_connections()?;
         let now = Utc::now();
         let mut workspaces_to_delete = Vec::new();
-        for (id, paths, _identity_paths_hint, remote_connection_id, session_id, timestamp) in
-            self.recent_workspaces()?
+        for (
+            id,
+            paths,
+            _identity_paths_hint,
+            remote_connection_id,
+            session_id,
+            timestamp,
+            _remote_terminal_mode,
+        ) in self.recent_workspaces()?
         {
             if let Some(session_id) = session_id.as_deref() {
                 if session_id == current_session_id || Some(session_id) == last_session_id {
@@ -2505,6 +2558,14 @@ impl WorkspaceDb {
     }
 
     query! {
+        pub(crate) async fn set_remote_terminal_mode(workspace_id: WorkspaceId, remote_terminal_mode: bool) -> Result<()> {
+            UPDATE workspaces
+            SET remote_terminal_mode = ?2
+            WHERE workspace_id = ?1
+        }
+    }
+
+    query! {
         pub(crate) async fn set_session_binding(workspace_id: WorkspaceId, session_id: Option<String>, window_id: Option<u64>) -> Result<()> {
             UPDATE workspaces
             SET session_id = ?2, window_id = ?3
@@ -2707,6 +2768,10 @@ pub struct RecentWorkspace {
     pub location: SerializedWorkspaceLocation,
     pub paths: PathList,
     pub identity_paths: PathList,
+    /// Whether this workspace was a remote terminal workspace rather than a
+    /// regular remote project. Persisted so recent-project UIs can tell the
+    /// two apart after the workspace is closed.
+    pub remote_terminal_mode: bool,
     pub timestamp: DateTime<Utc>,
 }
 
@@ -2962,6 +3027,7 @@ mod tests {
             display: Default::default(),
             docks: Default::default(),
             centered_layout: false,
+            remote_terminal_mode: false,
             bookmarks: Default::default(),
             breakpoints: {
                 let mut map = collections::BTreeMap::default();
@@ -3120,6 +3186,7 @@ mod tests {
             display: Default::default(),
             docks: Default::default(),
             centered_layout: false,
+            remote_terminal_mode: false,
             bookmarks: Default::default(),
             breakpoints: {
                 let mut map = collections::BTreeMap::default();
@@ -3171,6 +3238,7 @@ mod tests {
             display: Default::default(),
             docks: Default::default(),
             centered_layout: false,
+            remote_terminal_mode: false,
             bookmarks: Default::default(),
             breakpoints: collections::BTreeMap::default(),
             session_id: None,
@@ -3264,6 +3332,7 @@ mod tests {
             bookmarks: Default::default(),
             breakpoints: Default::default(),
             centered_layout: false,
+            remote_terminal_mode: false,
             session_id: None,
             window_id: None,
             user_toolchains: Default::default(),
@@ -3344,6 +3413,7 @@ mod tests {
             display: Default::default(),
             docks: Default::default(),
             centered_layout: false,
+            remote_terminal_mode: false,
             bookmarks: Default::default(),
             breakpoints: Default::default(),
             session_id: None,
@@ -3362,6 +3432,7 @@ mod tests {
             display: Default::default(),
             docks: Default::default(),
             centered_layout: false,
+            remote_terminal_mode: false,
             bookmarks: Default::default(),
             breakpoints: Default::default(),
             session_id: None,
@@ -3474,6 +3545,7 @@ mod tests {
             display: Default::default(),
             docks: Default::default(),
             centered_layout: false,
+            remote_terminal_mode: false,
             session_id: None,
             window_id: Some(999),
             user_toolchains: Default::default(),
@@ -3516,6 +3588,7 @@ mod tests {
             display: Default::default(),
             docks: Default::default(),
             centered_layout: false,
+            remote_terminal_mode: false,
             session_id: None,
             window_id: Some(1),
             user_toolchains: Default::default(),
@@ -3532,6 +3605,7 @@ mod tests {
             display: Default::default(),
             docks: Default::default(),
             centered_layout: false,
+            remote_terminal_mode: false,
             bookmarks: Default::default(),
             breakpoints: Default::default(),
             session_id: None,
@@ -3579,6 +3653,7 @@ mod tests {
             display: Default::default(),
             docks: Default::default(),
             centered_layout: false,
+            remote_terminal_mode: false,
             session_id: None,
             window_id: Some(3),
             user_toolchains: Default::default(),
@@ -3618,6 +3693,7 @@ mod tests {
             display: Default::default(),
             docks: Default::default(),
             centered_layout: false,
+            remote_terminal_mode: false,
             bookmarks: Default::default(),
             breakpoints: Default::default(),
             session_id: Some("session-id-1".to_owned()),
@@ -3636,6 +3712,7 @@ mod tests {
             display: Default::default(),
             docks: Default::default(),
             centered_layout: false,
+            remote_terminal_mode: false,
             bookmarks: Default::default(),
             breakpoints: Default::default(),
             session_id: Some("session-id-1".to_owned()),
@@ -3654,6 +3731,7 @@ mod tests {
             display: Default::default(),
             docks: Default::default(),
             centered_layout: false,
+            remote_terminal_mode: false,
             bookmarks: Default::default(),
             breakpoints: Default::default(),
             session_id: Some("session-id-2".to_owned()),
@@ -3672,6 +3750,7 @@ mod tests {
             display: Default::default(),
             docks: Default::default(),
             centered_layout: false,
+            remote_terminal_mode: false,
             bookmarks: Default::default(),
             breakpoints: Default::default(),
             session_id: None,
@@ -3701,6 +3780,7 @@ mod tests {
             display: Default::default(),
             docks: Default::default(),
             centered_layout: false,
+            remote_terminal_mode: false,
             bookmarks: Default::default(),
             breakpoints: Default::default(),
             session_id: Some("session-id-2".to_owned()),
@@ -3721,6 +3801,7 @@ mod tests {
             display: Default::default(),
             docks: Default::default(),
             centered_layout: false,
+            remote_terminal_mode: false,
             session_id: Some("session-id-3".to_owned()),
             window_id: Some(60),
             user_toolchains: Default::default(),
@@ -3781,6 +3862,7 @@ mod tests {
             bookmarks: Default::default(),
             breakpoints: Default::default(),
             centered_layout: false,
+            remote_terminal_mode: false,
             session_id: None,
             window_id: None,
             user_toolchains: Default::default(),
@@ -3823,6 +3905,7 @@ mod tests {
             display: Default::default(),
             docks: Default::default(),
             centered_layout: false,
+            remote_terminal_mode: false,
             session_id: Some("one-session".to_owned()),
             bookmarks: Default::default(),
             breakpoints: Default::default(),
@@ -3925,6 +4008,7 @@ mod tests {
             bookmarks: Default::default(),
             breakpoints: Default::default(),
             centered_layout: false,
+            remote_terminal_mode: false,
             session_id: session_id.map(|s| s.to_owned()),
             window_id: Some(id),
             user_toolchains: Default::default(),
@@ -3950,6 +4034,7 @@ mod tests {
             bookmarks: Default::default(),
             breakpoints: Default::default(),
             centered_layout: false,
+            remote_terminal_mode: false,
             session_id: None,
             window_id: Some(id),
             user_toolchains: Default::default(),
@@ -3971,6 +4056,7 @@ mod tests {
             location: SerializedWorkspaceLocation::Local,
             paths,
             identity_paths,
+            remote_terminal_mode: false,
             timestamp,
         }
     }
@@ -4207,6 +4293,7 @@ mod tests {
             display: Default::default(),
             docks: Default::default(),
             centered_layout: false,
+            remote_terminal_mode: false,
             session_id: Some("one-session".to_owned()),
             bookmarks: Default::default(),
             breakpoints: Default::default(),
@@ -4573,6 +4660,7 @@ mod tests {
             bookmarks: Default::default(),
             breakpoints: Default::default(),
             centered_layout: false,
+            remote_terminal_mode: false,
             session_id: None,
             window_id: None,
             user_toolchains: Default::default(),
@@ -4650,6 +4738,7 @@ mod tests {
                 display: Default::default(),
                 docks: Default::default(),
                 centered_layout: false,
+                remote_terminal_mode: false,
                 session_id: Some("test-session".to_owned()),
                 bookmarks: Default::default(),
                 breakpoints: Default::default(),
@@ -4989,6 +5078,7 @@ mod tests {
             display: Default::default(),
             docks: Default::default(),
             centered_layout: false,
+            remote_terminal_mode: false,
             session_id: Some(session_id.clone()),
             bookmarks: Default::default(),
             breakpoints: Default::default(),
@@ -5087,6 +5177,7 @@ mod tests {
             display: Default::default(),
             docks: Default::default(),
             centered_layout: false,
+            remote_terminal_mode: false,
             session_id: Some(session_id.to_owned()),
             bookmarks: Default::default(),
             breakpoints: Default::default(),
@@ -5106,6 +5197,7 @@ mod tests {
             display: Default::default(),
             docks: Default::default(),
             centered_layout: false,
+            remote_terminal_mode: false,
             session_id: Some(session_id.to_owned()),
             bookmarks: Default::default(),
             breakpoints: Default::default(),
@@ -5187,6 +5279,7 @@ mod tests {
             display: Default::default(),
             docks: Default::default(),
             centered_layout: false,
+            remote_terminal_mode: false,
             session_id: Some(session_id.clone()),
             bookmarks: Default::default(),
             breakpoints: Default::default(),
@@ -5912,6 +6005,60 @@ mod tests {
             &[PathBuf::from("/repo/feature-a")]
         );
         assert_eq!(recents[0].identity_paths.paths(), &[PathBuf::from("/repo")]);
+    }
+
+    #[gpui::test]
+    async fn test_recent_project_workspaces_remote_terminal_mode_round_trips(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let fs = fs::FakeFs::new(cx.executor());
+        let db = WorkspaceDb::open_test_db(
+            "test_recent_project_workspaces_remote_terminal_mode_round_trips",
+        )
+        .await;
+
+        db.save_workspace(SerializedWorkspace {
+            remote_terminal_mode: true,
+            ..remote_workspace_with(1, "example.com", &[Path::new("/home/user")])
+        })
+        .await;
+        db.save_workspace(remote_workspace_with(
+            2,
+            "example.com",
+            &[Path::new("/repo")],
+        ))
+        .await;
+
+        let recents = db.recent_project_workspaces(fs.as_ref()).await.unwrap();
+        assert_eq!(recents.len(), 2);
+
+        let terminal = recents
+            .iter()
+            .find(|workspace| workspace.paths.paths() == [PathBuf::from("/home/user")])
+            .expect("the remote terminal workspace must be listed");
+        assert!(
+            terminal.remote_terminal_mode,
+            "the remote terminal mode flag must survive a save/load round trip"
+        );
+
+        let regular = recents
+            .iter()
+            .find(|workspace| workspace.paths.paths() == [PathBuf::from("/repo")])
+            .expect("the regular remote project must be listed");
+        assert!(
+            !regular.remote_terminal_mode,
+            "regular remote projects must not be marked as terminal workspaces"
+        );
+
+        // The restore path (`workspace_for_id`) must observe the persisted flag too.
+        db.set_remote_terminal_mode(WorkspaceId(2), true)
+            .await
+            .unwrap();
+        let restored = db.workspace_for_id(WorkspaceId(2)).unwrap();
+        assert!(
+            restored.remote_terminal_mode,
+            "restoring a workspace must read back the terminal mode flag"
+        );
     }
 
     #[gpui::test]

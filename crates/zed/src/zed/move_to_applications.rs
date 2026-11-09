@@ -73,14 +73,12 @@ impl MoveToApplicationsRequest {
         let response = cx
             .prompt(
                 PromptLevel::Info,
-                "Move Zed to Applications?",
-                Some(
-                    "Zed is running from a temporary location. Move it to Applications to finish installing it.",
-                ),
+                i18n::t!("1f4d36c9381bfaca"),
+                Some(i18n::t!("3708272adce57778")),
                 &[
-                    PromptButton::ok("Yes"),
-                    PromptButton::cancel("No"),
-                    PromptButton::new("Don't ask me again"),
+                    PromptButton::ok(i18n::t!("b5141d3d19e9a048")),
+                    PromptButton::cancel(i18n::t!("0c70665b6eb65f1a")),
+                    PromptButton::new(i18n::t!("709337c2e01a97b4")),
                 ],
             )
             .await?;
@@ -103,9 +101,9 @@ impl MoveToApplicationsRequest {
                         .ok();
                     cx.prompt(
                         PromptLevel::Critical,
-                        "Failed to move Zed to Applications",
+                        i18n::t!("84bfb4d595523cc4"),
                         Some(&error.to_string()),
-                        &["OK"],
+                        &[i18n::t!("fac2a67ad87807c4")],
                     )
                     .await
                     .log_err();
@@ -178,7 +176,7 @@ impl Render for InstallingZedModal {
                     .py_3()
                     .border_b_1()
                     .border_color(theme.colors().border_variant)
-                    .child(Label::new("Installing Zed…")),
+                    .child(Label::new(i18n::t!("3ffd579da47c9b99"))),
             )
             .child(
                 h_flex()
@@ -196,9 +194,9 @@ impl Render for InstallingZedModal {
                     .child(
                         v_flex()
                             .gap_1()
-                            .child(Label::new("Moving Zed to Applications"))
+                            .child(Label::new(i18n::t!("b4c3949577d59853")))
                             .child(
-                                Label::new("Zed will reopen when installation is complete.")
+                                Label::new(i18n::t!("d4380ee707067367"))
                                     .size(LabelSize::Small)
                                     .color(Color::Muted),
                             ),

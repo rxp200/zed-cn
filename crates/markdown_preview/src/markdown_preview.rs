@@ -1,6 +1,7 @@
 use gpui::{App, actions};
 use workspace::Workspace;
 
+pub mod image_cache;
 pub mod markdown_preview_settings;
 pub mod markdown_preview_view;
 

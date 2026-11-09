@@ -142,28 +142,28 @@ impl Component for Color {
                     vec![
                         single_example(
                             "Default",
-                            Label::new("Default text color")
+                            Label::new(i18n::t!("2dc48d3f2ca4835a"))
                                 .color(Color::Default)
                                 .into_any_element(),
                         )
                         .description(Color::Default.get_variant_docs()),
                         single_example(
                             "Muted",
-                            Label::new("Muted text color")
+                            Label::new(i18n::t!("f6e8e3ba56cc4b48"))
                                 .color(Color::Muted)
                                 .into_any_element(),
                         )
                         .description(Color::Muted.get_variant_docs()),
                         single_example(
                             "Accent",
-                            Label::new("Accent text color")
+                            Label::new(i18n::t!("eeb09af771a1465b"))
                                 .color(Color::Accent)
                                 .into_any_element(),
                         )
                         .description(Color::Accent.get_variant_docs()),
                         single_example(
                             "Disabled",
-                            Label::new("Disabled text color")
+                            Label::new(i18n::t!("deb20fe667494b0e"))
                                 .color(Color::Disabled)
                                 .into_any_element(),
                         )
@@ -175,28 +175,28 @@ impl Component for Color {
                     vec![
                         single_example(
                             "Success",
-                            Label::new("Success status")
+                            Label::new(i18n::t!("72e821b78ac50be3"))
                                 .color(Color::Success)
                                 .into_any_element(),
                         )
                         .description(Color::Success.get_variant_docs()),
                         single_example(
                             "Warning",
-                            Label::new("Warning status")
+                            Label::new(i18n::t!("bbf813497b302bea"))
                                 .color(Color::Warning)
                                 .into_any_element(),
                         )
                         .description(Color::Warning.get_variant_docs()),
                         single_example(
                             "Error",
-                            Label::new("Error status")
+                            Label::new(i18n::t!("947f83949af152a5"))
                                 .color(Color::Error)
                                 .into_any_element(),
                         )
                         .description(Color::Error.get_variant_docs()),
                         single_example(
                             "Info",
-                            Label::new("Info status")
+                            Label::new(i18n::t!("75f7214ba654b613"))
                                 .color(Color::Info)
                                 .into_any_element(),
                         )
@@ -208,28 +208,28 @@ impl Component for Color {
                     vec![
                         single_example(
                             "Created",
-                            Label::new("Created item")
+                            Label::new(i18n::t!("67453509d9542170"))
                                 .color(Color::Created)
                                 .into_any_element(),
                         )
                         .description(Color::Created.get_variant_docs()),
                         single_example(
                             "Modified",
-                            Label::new("Modified item")
+                            Label::new(i18n::t!("436c66ebd27ef996"))
                                 .color(Color::Modified)
                                 .into_any_element(),
                         )
                         .description(Color::Modified.get_variant_docs()),
                         single_example(
                             "Deleted",
-                            Label::new("Deleted item")
+                            Label::new(i18n::t!("8c472fa0e1a8957d"))
                                 .color(Color::Deleted)
                                 .into_any_element(),
                         )
                         .description(Color::Deleted.get_variant_docs()),
                         single_example(
                             "Conflict",
-                            Label::new("Conflict item")
+                            Label::new(i18n::t!("2d0d0cae3490b1d4"))
                                 .color(Color::Conflict)
                                 .into_any_element(),
                         )

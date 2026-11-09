@@ -36,9 +36,6 @@ Clone the [Zed repository](https://github.com/zed-industries/zed).
   brew install cmake
   ```
 
-Release bundling with `script/bundle-mac` requires the macOS 26 SDK or newer, provided by Xcode 26 or newer.
-The bundled app requires macOS 12.0 (Monterey) or later.
-
 ## Building Zed from Source
 
 Once you have the dependencies installed, you can build Zed using [Cargo](https://doc.rust-lang.org/cargo/).

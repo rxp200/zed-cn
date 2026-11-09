@@ -188,10 +188,7 @@ pub(crate) async fn start_wayland_desktop_capture(
         })?
         .ok_or_else(|| {
             stop_flag.store(true, Ordering::Relaxed);
-            anyhow::anyhow!(
-                "Screen sharing was canceled, permission was denied, or the PipeWire \
-                 connection failed. You can try again from the screen share button."
-            )
+            anyhow::anyhow!(i18n::t!("81e9c67f770a01e6"))
         })?;
 
     let track = super::LocalVideoTrack(track::LocalVideoTrack::create_video_track(

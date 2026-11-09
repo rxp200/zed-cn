@@ -7,7 +7,7 @@ use gpui::{
     Entity, EntityId, GlobalElementId, Hitbox, HitboxBehavior, Hsla, InteractiveElement,
     IntoElement, IsZero, LayoutId, ListState, MouseButton, MouseDownEvent, MouseMoveEvent,
     MouseUpEvent, ParentElement, Pixels, Point, Position, Render, ScrollEvent, ScrollHandle, Size,
-    Stateful, StatefulInteractiveElement, Style, StyleRefinement, Styled, Subscription, Task,
+    Stateful, StatefulInteractiveElement, Style, StyleRefinement, Styled, Task,
     UniformListDecoration, UniformListScrollHandle, Window, ease_in_out, fill,
     prelude::FluentBuilder as _, px, quad, relative, size,
 };
@@ -324,15 +324,12 @@ enum ShowBehavior {
 }
 
 impl ShowBehavior {
-    fn from_setting(setting: ShowScrollbar, cx: &App) -> Self {
+    fn from_setting(setting: ShowScrollbar, cx: &mut App) -> Self {
         match setting {
             ShowScrollbar::Never => Self::Never,
             ShowScrollbar::Auto => Self::Autohide,
             ShowScrollbar::System => {
-                if cx
-                    .try_global::<ScrollbarAutoHide>()
-                    .is_some_and(ScrollbarAutoHide::should_hide)
-                {
+                if cx.default_global::<ScrollbarAutoHide>().should_hide() {
                     Self::Autohide
                 } else {
                     Self::Always
@@ -674,16 +671,14 @@ struct TrackColors {
     has_border: bool,
 }
 
-/// Lets scrollbars observe settings without `ui` depending on the settings crate.
-struct ScrollbarSettingsChanged;
-
-impl gpui::Global for ScrollbarSettingsChanged {}
-
-pub fn observe_scrollbar_settings<T: gpui::Global>(cx: &mut App) {
-    cx.observe_global::<T>(|cx| cx.set_global(ScrollbarSettingsChanged))
-        .detach();
-    cx.observe_global::<ScrollbarAutoHide>(|cx| cx.set_global(ScrollbarSettingsChanged))
-        .detach();
+pub fn on_new_scrollbars<T: gpui::Global>(cx: &mut App) {
+    cx.observe_new::<ScrollbarState>(|_, window, cx| {
+        if let Some(window) = window {
+            cx.observe_global_in::<T>(window, ScrollbarState::settings_changed)
+                .detach();
+        }
+    })
+    .detach();
 }
 
 /// This is used to ensure notifies within the state do not notify the parent
@@ -707,7 +702,6 @@ struct ScrollbarState<T: ScrollableHandle = ScrollHandle> {
     mouse_in_parent: bool,
     last_prepaint_state: Option<ScrollbarPrepaintState>,
     _auto_hide_task: Option<Task<()>>,
-    _settings_subscription: Subscription,
 }
 
 impl<T: ScrollableHandle> ScrollbarState<T> {
@@ -742,24 +736,23 @@ impl<T: ScrollableHandle> ScrollbarState<T> {
             mouse_in_parent: true,
             last_prepaint_state: None,
             _auto_hide_task: None,
-            _settings_subscription: cx
-                .observe_global::<ScrollbarSettingsChanged>(Self::settings_changed),
         }
     }
 
-    fn settings_changed(&mut self, cx: &mut Context<Self>) {
+    fn settings_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.set_show_behavior(
             ShowBehavior::from_setting((self.get_visibility)(cx), cx),
+            window,
             cx,
         );
     }
 
     /// Schedules a scrollbar auto hide if no auto hide is currently in progress yet.
-    fn schedule_auto_hide(&mut self, cx: &mut Context<Self>) {
+    fn schedule_auto_hide(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self._auto_hide_task.is_none() {
             self._auto_hide_task = (self.visible() && self.show_behavior == ShowBehavior::Autohide)
                 .then(|| {
-                    cx.spawn(async move |scrollbar_state, cx| {
+                    cx.spawn_in(window, async move |scrollbar_state, cx| {
                         cx.background_executor()
                             .timer(SCROLLBAR_HIDE_DELAY_INTERVAL)
                             .await;
@@ -776,27 +769,23 @@ impl<T: ScrollableHandle> ScrollbarState<T> {
         }
     }
 
-    fn restart_auto_hide(&mut self, cx: &mut Context<Self>) {
-        self._auto_hide_task.take();
-        self.schedule_auto_hide(cx);
-    }
-
-    fn show_scrollbars(&mut self, cx: &mut Context<Self>) {
+    fn show_scrollbars(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let visibility = self.show_state.toggle_visible(self.show_behavior);
         self.set_visibility(visibility, cx);
-        self.restart_auto_hide(cx);
+        self._auto_hide_task.take();
+        self.schedule_auto_hide(window, cx);
     }
 
-    fn set_show_behavior(&mut self, behavior: ShowBehavior, cx: &mut Context<Self>) {
+    fn set_show_behavior(
+        &mut self,
+        behavior: ShowBehavior,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.show_behavior != behavior {
             self.show_behavior = behavior;
-            let visibility = if behavior == ShowBehavior::Autohide && self.visible() {
-                self.show_state.clone()
-            } else {
-                VisibilityState::from_behavior(behavior)
-            };
-            self.set_visibility(visibility, cx);
-            self.restart_auto_hide(cx);
+            self.set_visibility(VisibilityState::from_behavior(behavior), cx);
+            self.schedule_auto_hide(window, cx);
             cx.notify();
         }
     }
@@ -851,8 +840,14 @@ impl<T: ScrollableHandle> ScrollbarState<T> {
         self.thumb_state.is_dragging()
     }
 
-    fn set_dragging(&mut self, axis: ScrollbarAxis, drag_offset: Pixels, cx: &mut Context<Self>) {
-        self.set_thumb_state(ThumbState::Dragging(axis, drag_offset), cx);
+    fn set_dragging(
+        &mut self,
+        axis: ScrollbarAxis,
+        drag_offset: Pixels,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.set_thumb_state(ThumbState::Dragging(axis, drag_offset), window, cx);
         self.scroll_handle().drag_started();
     }
 
@@ -874,14 +869,15 @@ impl<T: ScrollableHandle> ScrollbarState<T> {
             } else {
                 ThumbState::Inactive
             },
+            window,
             cx,
         );
     }
 
-    fn set_thumb_state(&mut self, state: ThumbState, cx: &mut Context<Self>) {
+    fn set_thumb_state(&mut self, state: ThumbState, window: &mut Window, cx: &mut Context<Self>) {
         if self.thumb_state != state {
             if state == ThumbState::Inactive {
-                self.schedule_auto_hide(cx);
+                self.schedule_auto_hide(window, cx);
             } else {
                 self.set_visibility(self.show_state.toggle_visible(self.show_behavior), cx);
                 self._auto_hide_task.take();
@@ -1395,7 +1391,8 @@ impl<T: ScrollableHandle> Element for ScrollbarElement<T> {
                 scrollbar_state.reveal_policy,
             )
         }) {
-            self.state.update(cx, |state, cx| state.show_scrollbars(cx));
+            self.state
+                .update(cx, |state, cx| state.show_scrollbars(window, cx));
         }
 
         prepaint_state.map(|state| {
@@ -1630,7 +1627,7 @@ impl<T: ScrollableHandle> Element for ScrollbarElement<T> {
             window.on_mouse_event({
                 let state = self.state.clone();
 
-                move |event: &MouseDownEvent, phase, _, cx| {
+                move |event: &MouseDownEvent, phase, window, cx| {
                     state.update(cx, |state, cx| {
                         let Some(scrollbar_layout) = (phase == capture_phase
                             && event.button == MouseButton::Left)
@@ -1647,7 +1644,7 @@ impl<T: ScrollableHandle> Element for ScrollbarElement<T> {
                         if thumb_bounds.contains(&event.position) {
                             let offset =
                                 event.position.along(*axis) - thumb_bounds.origin.along(*axis);
-                            state.set_dragging(*axis, offset, cx);
+                            state.set_dragging(*axis, offset, window, cx);
                         } else {
                             let scroll_handle = state.scroll_handle();
                             let click_offset = scrollbar_layout.compute_click_offset(
@@ -1709,7 +1706,7 @@ impl<T: ScrollableHandle> Element for ScrollbarElement<T> {
                                     if event.pressed_button.is_none() =>
                                 {
                                     if matches!(hover, ParentHoverEvent::Entered) {
-                                        state.show_scrollbars(cx);
+                                        state.show_scrollbars(window, cx);
                                     }
                                     state.update_hovered_thumb(&event.position, window, cx);
                                     if state.thumb_state != ThumbState::Inactive {
@@ -1717,7 +1714,7 @@ impl<T: ScrollableHandle> Element for ScrollbarElement<T> {
                                     }
                                 }
                                 ParentHoverEvent::Exited => {
-                                    state.set_thumb_state(ThumbState::Inactive, cx);
+                                    state.set_thumb_state(ThumbState::Inactive, window, cx);
                                 }
                                 _ => {}
                             }
@@ -1739,7 +1736,7 @@ impl<T: ScrollableHandle> Element for ScrollbarElement<T> {
                         }
 
                         if !state.parent_hovered(window) {
-                            state.schedule_auto_hide(cx);
+                            state.schedule_auto_hide(window, cx);
                             return;
                         }
 
@@ -1766,80 +1763,7 @@ impl<T: ScrollableHandle> IntoElement for ScrollbarElement<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gpui::{TestAppContext, point};
-
-    struct TestScrollbarSetting(ShowScrollbar);
-
-    impl gpui::Global for TestScrollbarSetting {}
-
-    fn new_scrollbar_state(
-        setting: ShowScrollbar,
-        cx: &mut TestAppContext,
-    ) -> Entity<ScrollbarState<UniformListScrollHandle>> {
-        cx.update(|cx| {
-            cx.set_global(TestScrollbarSetting(setting));
-            observe_scrollbar_settings::<TestScrollbarSetting>(cx);
-        });
-        cx.new(|cx| {
-            ScrollbarState::new_from_config(
-                Scrollbars::new_with_setting(ScrollAxes::Both, |cx| {
-                    cx.global::<TestScrollbarSetting>().0
-                })
-                .tracked_scroll_handle(&UniformListScrollHandle::new()),
-                Corners::default(),
-                cx.entity_id(),
-                cx,
-            )
-        })
-    }
-
-    #[gpui::test]
-    fn test_settings_change_updates_scrollbar_with_custom_handle(cx: &mut TestAppContext) {
-        let state = new_scrollbar_state(ShowScrollbar::Always, cx);
-        cx.update(|cx| cx.set_global(TestScrollbarSetting(ShowScrollbar::Never)));
-        state.read_with(cx, |state, _| {
-            assert_eq!(state.show_state, VisibilityState::Disabled);
-        });
-    }
-
-    #[gpui::test]
-    fn test_switching_to_auto_keeps_visible_scrollbar(cx: &mut TestAppContext) {
-        let state = new_scrollbar_state(ShowScrollbar::Always, cx);
-        cx.update(|cx| cx.set_global(TestScrollbarSetting(ShowScrollbar::Auto)));
-        state.read_with(cx, |state, _| {
-            assert_eq!(state.show_state, VisibilityState::Visible);
-        });
-
-        cx.executor().advance_clock(SCROLLBAR_HIDE_DELAY_INTERVAL);
-        state.read_with(cx, |state, _| {
-            assert_eq!(state.show_state, VisibilityState::for_autohide());
-        });
-    }
-
-    #[gpui::test]
-    fn test_settings_change_cancels_pending_auto_hide(cx: &mut TestAppContext) {
-        let state = new_scrollbar_state(ShowScrollbar::Auto, cx);
-        state.update(cx, |state, cx| state.schedule_auto_hide(cx));
-
-        cx.update(|cx| cx.set_global(TestScrollbarSetting(ShowScrollbar::Always)));
-        cx.executor().advance_clock(SCROLLBAR_HIDE_DELAY_INTERVAL);
-        state.read_with(cx, |state, _| {
-            assert_eq!(state.show_state, VisibilityState::Visible);
-        });
-    }
-
-    #[gpui::test]
-    fn test_auto_hide_change_updates_system_scrollbar(cx: &mut TestAppContext) {
-        let state = new_scrollbar_state(ShowScrollbar::System, cx);
-        state.read_with(cx, |state, _| {
-            assert!(state.show_behavior == ShowBehavior::Always);
-        });
-
-        cx.update(|cx| cx.set_global(ScrollbarAutoHide(true)));
-        state.read_with(cx, |state, _| {
-            assert!(state.show_behavior == ShowBehavior::Autohide);
-        });
-    }
+    use gpui::point;
 
     #[test]
     fn default_reveal_policy_reveals_for_content_changes() {

@@ -109,7 +109,9 @@ impl AgentTool for WebSearchTool {
                         Ok(response) => response,
                         Err(err) => {
                             event_stream
-                                .update_fields(|update| update.title("Web Search Failed"));
+                                .update_fields(|update| {
+                                    update.title(i18n::t!("f87e3dfe26d2fd69"))
+                                });
                             return Err(WebSearchToolOutput::Error { error: err.to_string() });
                         }
                     }
@@ -146,7 +148,7 @@ fn emit_update(response: &WebSearchResponse, event_stream: &ToolCallEventStream)
     };
     event_stream.update_fields(|update| {
         update
-            .title(format!("Searched the web: {result_text}"))
+            .title(i18n::t!("3cc580e59b86f30f", result_text = result_text))
             .content(
                 response
                     .results

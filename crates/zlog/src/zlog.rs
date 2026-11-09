@@ -1,6 +1,7 @@
 //! # logger
 pub use log as log_impl;
 
+pub mod diagnostics;
 mod env_config;
 pub mod filter;
 pub mod sink;

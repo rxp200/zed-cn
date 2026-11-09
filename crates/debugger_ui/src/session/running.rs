@@ -1928,7 +1928,7 @@ impl RunningState {
                 if let Some(view) = terminal.terminal.as_ref() {
                     view.update(cx, |view, cx| {
                         view.terminal()
-                            .update(cx, |terminal, _| terminal.kill_active_task())
+                            .update(cx, |terminal, cx| terminal.kill_active_task(cx))
                     })
                 }
             })

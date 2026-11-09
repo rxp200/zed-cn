@@ -566,9 +566,16 @@ impl Member {
                 let decoration = render_cx.decorate(pane, cx);
                 let is_active = pane == render_cx.active_pane();
 
+                let pane_entity_id = pane.entity_id();
                 let pane = div()
                     .relative()
                     .size_full()
+                    .rounded(crate::WORKBENCH_MODULE_RADIUS)
+                    .border_1()
+                    .border_color(cx.theme().colors().border_variant)
+                    .bg(cx.theme().colors().editor_background)
+                    .overflow_hidden()
+                    .debug_selector(move || format!("pane-card-{pane_entity_id}"))
                     .when(is_maximized, |this| {
                         this.bg(cx.theme().colors().background)
                             .border_1()
@@ -598,6 +605,7 @@ impl Member {
                         .relative()
                         .flex_1()
                         .size_full()
+                        .p(crate::WORKBENCH_MODULE_INSET)
                         .when(is_maximized, |this| this.p_2())
                         .child(pane)
                         .into_any(),
@@ -1533,20 +1541,39 @@ mod element {
                         Axis::Horizontal => CursorStyle::ResizeColumn,
                     };
 
-                    if layout
+                    let is_dragged = layout
                         .dragged_handle
                         .borrow()
-                        .is_some_and(|dragged_ix| dragged_ix == ix)
-                    {
+                        .is_some_and(|dragged_ix| dragged_ix == ix);
+                    if is_dragged {
                         window.set_window_cursor_style(cursor_style);
                     } else {
                         window.set_cursor_style(cursor_style, &handle.hitbox);
                     }
 
-                    window.paint_quad(gpui::fill(
-                        handle.divider_bounds,
-                        cx.theme().colors().pane_group_border,
-                    ));
+                    // Like the VS Code sash, the divider under the cursor (or
+                    // being dragged) lights up in the accent color with a soft
+                    // glow around it.
+                    if is_dragged || handle.hitbox.is_hovered(window) {
+                        let accent = cx.theme().colors().border_focused;
+                        let glow_bounds = Bounds {
+                            origin: handle
+                                .divider_bounds
+                                .origin
+                                .apply_along(self.axis, |origin| origin - px(2.)),
+                            size: handle
+                                .divider_bounds
+                                .size
+                                .apply_along(self.axis, |size| size + px(4.)),
+                        };
+                        window.paint_quad(gpui::fill(glow_bounds, accent.opacity(0.25)));
+                        window.paint_quad(gpui::fill(handle.divider_bounds, accent));
+                    } else {
+                        window.paint_quad(gpui::fill(
+                            handle.divider_bounds,
+                            cx.theme().colors().pane_group_border,
+                        ));
+                    }
 
                     window.on_mouse_event({
                         let dragged_handle = layout.dragged_handle.clone();

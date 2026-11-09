@@ -16,6 +16,7 @@ doctest = false
 test-support = ["gpui/test-support", "project/test-support", "dep:parking_lot"]
 
 [dependencies]
+i18n.workspace = true
 action_log.workspace = true
 agent_settings.workspace = true
 agent-client-protocol.workspace = true

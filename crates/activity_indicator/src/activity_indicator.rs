@@ -1,3 +1,7 @@
+pub mod file_transfer;
+mod process_memory;
+pub mod system_monitor;
+
 use auto_update::DismissMessage;
 use editor::Editor;
 use extension_host::{ExtensionOperation, ExtensionStore};
@@ -11,7 +15,7 @@ use language::{
 };
 use project::{
     LanguageServerProgress, LspStoreEvent, ProgressToken, Project, ProjectEnvironmentEvent,
-    git_store::{GitStoreEvent, Repository},
+    git_store::{GitStoreEvent, JobInfo, Repository},
 };
 use smallvec::SmallVec;
 use std::{
@@ -94,7 +98,44 @@ impl ActivityIndicator {
         cx: &mut Context<Workspace>,
     ) -> Entity<ActivityIndicator> {
         let project = workspace.project().clone();
+        if let Some(remote_client) = project.read(cx).remote_client() {
+            cx.subscribe(&remote_client, |workspace, remote_client, event, cx| {
+                if matches!(event, remote::RemoteClientEvent::Reconnected) {
+                    let project_name = workspace
+                        .project()
+                        .read(cx)
+                        .worktree_root_names(cx)
+                        .collect::<Vec<_>>()
+                        .join("、");
+                    let recovery = if remote_client.read(cx).was_manual_reconnect() {
+                        i18n::t!("27c4460bbc3152d9")
+                    } else {
+                        i18n::t!("2f22a5848e3fed83")
+                    };
+                    let toast = notifications::status_toast::StatusToast::new(
+                        i18n::t_mix!("d5d72c783fdfd470"; if project_name.is_empty() {
+                                i18n::t!("7ba00927dde9122f")
+                            } else {
+                                &project_name
+                            }; recovery = recovery),
+                        cx,
+                        |this, _| {
+                            this.icon(
+                                Icon::new(IconName::Check)
+                                    .size(IconSize::Small)
+                                    .color(Color::Success),
+                            )
+                        },
+                    );
+                    workspace.toggle_status_toast(toast, cx);
+                }
+            })
+            .detach();
+        }
         let this = cx.new(|cx| {
+            if let Some(remote_client) = project.read(cx).remote_client() {
+                cx.observe(&remote_client, |_, _, cx| cx.notify()).detach();
+            }
             let fs = project.read(cx).fs().clone();
             let mut job_events = fs.subscribe_to_jobs();
             cx.spawn(async move |this, cx| {
@@ -351,6 +392,13 @@ impl ActivityIndicator {
         self.project.read(cx).peek_environment_error(cx)
     }
 
+    /// The git command currently running in the active repository, if any.
+    fn active_git_job(&self, cx: &App) -> Option<(Entity<Repository>, JobInfo)> {
+        let repository = self.project.read(cx).active_repository(cx)?;
+        let job = repository.read(cx).current_job()?;
+        Some((repository, job))
+    }
+
     fn update_deferred_scan_status(&mut self, cx: &mut Context<Self>) {
         let has_deferred_scan_dirs = self.project.read(cx).visible_worktrees(cx).any(|worktree| {
             let worktree = worktree.read(cx);
@@ -383,6 +431,38 @@ impl ActivityIndicator {
     }
 
     fn content_to_render(&mut self, cx: &mut Context<Self>) -> Option<Content> {
+        if let Some(remote_client) = self.project.read(cx).remote_client() {
+            let remote_client = remote_client.read(cx);
+            let message = match remote_client.connection_state() {
+                remote::ConnectionState::HeartbeatMissed => {
+                    Some(i18n::t!("a2c2e2c47484b683").to_string())
+                }
+                remote::ConnectionState::Reconnecting => Some(
+                    remote_client
+                        .reconnect_status()
+                        .unwrap_or(i18n::t!("fc42aaef78e2cf51"))
+                        .to_string(),
+                ),
+                remote::ConnectionState::Disconnected => {
+                    Some(i18n::t!("b43656e184c0e9b5").to_string())
+                }
+                _ => None,
+            };
+            if let Some(message) = message {
+                return Some(Content {
+                    icon: if remote_client.connection_state()
+                        == remote::ConnectionState::Disconnected
+                    {
+                        ActivityIcon::Icon(IconName::Warning)
+                    } else {
+                        ActivityIcon::LoadingSpinner
+                    },
+                    message,
+                    on_click: None,
+                    tooltip_message: None,
+                });
+            }
+        }
         if let Some(content) = self.primary_content(cx) {
             return Some(content);
         }
@@ -718,8 +798,8 @@ impl ActivityIndicator {
         }
         Some(Content {
             icon: ActivityIcon::Icon(IconName::Info),
-            message: "Partial file index".to_string(),
-            tooltip_message: Some("Directories outside of git repositories and deeper than the `file_scan_depth` setting will be indexed on demand.".to_string()),
+            message: i18n::t!("c00cdc36f8a02133").to_string(),
+            tooltip_message: Some(i18n::t!("11eabee7c77c5d18").to_string()),
             on_click: Some(Arc::new(|this, _, cx| {
                 this.deferred_scan_message = DeferredScanMessage::Dismissed;
                 cx.notify();
@@ -842,6 +922,72 @@ impl Render for ActivityIndicator {
 
                                     menu = menu.label(title);
                                 }
+                            }
+
+                            if let Some((repository, job)) = strong_this.read(cx).active_git_job(cx)
+                                && job.cancellable
+                            {
+                                has_cancellable_work = true;
+                                let activity_indicator = activity_indicator.clone();
+                                let job_id = job.id;
+                                let message = job.message;
+                                let cancel_label = i18n::t!("2cd0f3be8738a86c");
+                                menu = menu.custom_entry(
+                                    {
+                                        let repository = repository.clone();
+                                        let activity_indicator = activity_indicator.clone();
+                                        move |_, _| {
+                                            h_flex()
+                                                .w_full()
+                                                .justify_between()
+                                                .gap_2()
+                                                .child(Label::new(message.clone()).truncate())
+                                                .child(
+                                                    Button::new(
+                                                        "cancel-git-operation",
+                                                        cancel_label,
+                                                    )
+                                                    .label_size(LabelSize::Small)
+                                                    .style(ButtonStyle::Subtle)
+                                                    .color(Color::Muted)
+                                                    .on_click({
+                                                        let repository = repository.clone();
+                                                        let activity_indicator =
+                                                            activity_indicator.clone();
+                                                        move |_, _, cx| {
+                                                            repository.update(
+                                                                cx,
+                                                                |repository, cx| {
+                                                                    repository
+                                                                        .cancel_job(job_id, cx)
+                                                                },
+                                                            );
+                                                            activity_indicator
+                                                                .update(cx, |indicator, cx| {
+                                                                    indicator
+                                                                        .context_menu_handle
+                                                                        .hide(cx)
+                                                                })
+                                                                .ok();
+                                                        }
+                                                    }),
+                                                )
+                                                .into_any_element()
+                                        }
+                                    },
+                                    {
+                                        move |_, cx| {
+                                            repository.update(cx, |repository, cx| {
+                                                repository.cancel_job(job_id, cx)
+                                            });
+                                            activity_indicator
+                                                .update(cx, |indicator, cx| {
+                                                    indicator.context_menu_handle.hide(cx)
+                                                })
+                                                .ok();
+                                        }
+                                    },
+                                );
                             }
                             menu
                         });

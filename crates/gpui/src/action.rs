@@ -194,13 +194,13 @@ pub enum ActionBuildError {
     /// Indicates that an action with this name has not been registered.
     NotFound {
         /// Name of the action that was not found.
-        name: Box<str>,
+        name: String,
     },
     /// Indicates that an error occurred while building the action, typically a JSON deserialization
     /// error.
     BuildError {
         /// Name of the action that was attempting to be built.
-        name: Box<str>,
+        name: String,
         /// Error that occurred while building the action.
         error: anyhow::Error,
     },
@@ -356,11 +356,13 @@ impl ActionRegistry {
         let build_action = self
             .by_name
             .get(name)
-            .ok_or_else(|| ActionBuildError::NotFound { name: name.into() })?
+            .ok_or_else(|| ActionBuildError::NotFound {
+                name: name.to_owned(),
+            })?
             .build;
         (build_action)(params.unwrap_or_else(|| json!({}))).map_err(|e| {
             ActionBuildError::BuildError {
-                name: name.into(),
+                name: name.to_owned(),
                 error: e,
             }
         })

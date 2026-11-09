@@ -527,11 +527,8 @@ impl EditPipeline {
                 let snapshot = buffer.read_with(cx, |buffer, _cx| buffer.snapshot());
 
                 let line = snapshot.offset_to_point(range.start).row;
-                // ACP numbers lines from 1.
                 event_stream.update_fields(|update| {
-                    update.locations(vec![
-                        acp::ToolCallLocation::new(abs_path).line(Some(line + 1)),
-                    ])
+                    update.locations(vec![acp::ToolCallLocation::new(abs_path).line(Some(line))])
                 });
 
                 let buffer_indent = snapshot.line_indent_for_row(line);

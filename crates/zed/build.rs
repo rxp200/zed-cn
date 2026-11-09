@@ -1,7 +1,21 @@
 #![allow(clippy::disallowed_methods, reason = "build scripts are exempt")]
 use std::process::Command;
 
+#[path = "src/zed/about_version.rs"]
+mod about_version;
+
 fn main() {
+    println!("cargo:rerun-if-env-changed=ZED_CUSTOM_RELEASE_TAG");
+    println!("cargo:rerun-if-changed=src/zed/about_version.rs");
+    let release_tag = std::env::var("ZED_CUSTOM_RELEASE_TAG").unwrap_or_default();
+    if !release_tag.is_empty()
+        && about_version::custom_version(env!("CARGO_PKG_VERSION"), Some(&release_tag)).is_none()
+    {
+        panic!(
+            "ZED_CUSTOM_RELEASE_TAG must match zed-cn-v<CARGO_PKG_VERSION>-r<positive revision> or zed-cn-dev-v<CARGO_PKG_VERSION>-r<positive revision>"
+        );
+    }
+    println!("cargo:rustc-env=ZED_CUSTOM_RELEASE_TAG={release_tag}");
     #[cfg(target_os = "linux")]
     {
         // Add rpaths for libraries that webrtc-sys dlopens at runtime.
@@ -24,8 +38,9 @@ fn main() {
     }
 
     if cfg!(target_os = "macos") {
-        println!("cargo:rustc-env=MACOSX_DEPLOYMENT_TARGET=12.0");
+        println!("cargo:rustc-env=MACOSX_DEPLOYMENT_TARGET=10.15.7");
 
+        // Weakly link ReplayKit to ensure Zed can be used on macOS 10.15+.
         println!("cargo:rustc-link-arg=-Wl,-weak_framework,ReplayKit");
 
         // Seems to be required to enable Swift concurrency
@@ -34,11 +49,12 @@ fn main() {
         // Register exported Objective-C selectors, protocols, etc
         println!("cargo:rustc-link-arg=-Wl,-ObjC");
 
+        // weak link to support Catalina
         println!("cargo:rustc-link-arg=-Wl,-weak_framework,ScreenCaptureKit");
     }
 
     // Populate git sha environment variable if git is available
-    println!("cargo:rerun-if-changed=../../.git/logs/HEAD");
+    println!("cargo:rerun-if-env-changed=ZED_COMMIT_SHA");
     println!(
         "cargo:rustc-env=TARGET={}",
         std::env::var("TARGET").unwrap()

@@ -505,7 +505,7 @@ impl Render for WatcherDebug {
                     .bg(cx.theme().colors().elevated_surface_background)
                     .p(DynamicSpacing::Base04.rems(cx))
                     .child(
-                        Button::new("save-watcher-json", "Export as JSON")
+                        Button::new("save-watcher-json", i18n::t!("b72e86288cdf889e"))
                             .disabled(self.saving || self.recording.is_none())
                             .on_click(cx.listener(|this, _, _, cx| this.save(cx))),
                     ),

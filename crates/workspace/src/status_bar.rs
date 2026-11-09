@@ -266,7 +266,7 @@ impl StatusBar {
                         .indicator_border_color(Some(indicator_border))
                 })
                 .tooltip(move |_, cx| {
-                    Tooltip::for_action("Open Threads Sidebar", &ToggleWorkspaceSidebar, cx)
+                    Tooltip::for_action(i18n::t!("9c9188f87febd40e"), &ToggleWorkspaceSidebar, cx)
                 })
                 .on_click(move |_, window, cx| {
                     if let Some(multi_workspace) = window.root::<MultiWorkspace>().flatten() {

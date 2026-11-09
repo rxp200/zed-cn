@@ -30,44 +30,22 @@ pub struct LineWrapper {
     text_system: Arc<TextSystem>,
     pub(crate) font_id: FontId,
     pub(crate) font_size: Pixels,
-    char_widths: CharWidthCache,
-}
-
-/// Cached character widths for one font and size.
-pub(crate) struct CharWidthCache {
-    ascii: [Option<Pixels>; 128],
-    other: HashMap<char, Pixels>,
-}
-
-impl Default for CharWidthCache {
-    fn default() -> Self {
-        Self {
-            ascii: [None; 128],
-            other: HashMap::default(),
-        }
-    }
+    cached_ascii_char_widths: [Option<Pixels>; 128],
+    cached_other_char_widths: HashMap<char, Pixels>,
 }
 
 impl LineWrapper {
     /// The maximum indent that can be applied to a line.
     pub const MAX_INDENT: u32 = 256;
 
-    pub(crate) fn new(
-        font_id: FontId,
-        font_size: Pixels,
-        text_system: Arc<TextSystem>,
-        char_widths: CharWidthCache,
-    ) -> Self {
+    pub(crate) fn new(font_id: FontId, font_size: Pixels, text_system: Arc<TextSystem>) -> Self {
         Self {
             text_system,
             font_id,
             font_size,
-            char_widths,
+            cached_ascii_char_widths: [None; 128],
+            cached_other_char_widths: HashMap::default(),
         }
-    }
-
-    pub(crate) fn into_char_widths(self) -> CharWidthCache {
-        self.char_widths
     }
 
     /// Wrap a line of text to the given width with this wrapper's font and font size.
@@ -565,22 +543,22 @@ impl LineWrapper {
     #[inline(always)]
     fn width_for_char(&mut self, c: char) -> Pixels {
         if (c as u32) < 128 {
-            if let Some(cached_width) = self.char_widths.ascii[c as usize] {
+            if let Some(cached_width) = self.cached_ascii_char_widths[c as usize] {
                 cached_width
             } else {
                 let width = self
                     .text_system
                     .layout_width(self.font_id, self.font_size, c);
-                self.char_widths.ascii[c as usize] = Some(width);
+                self.cached_ascii_char_widths[c as usize] = Some(width);
                 width
             }
-        } else if let Some(cached_width) = self.char_widths.other.get(&c) {
+        } else if let Some(cached_width) = self.cached_other_char_widths.get(&c) {
             *cached_width
         } else {
             let width = self
                 .text_system
                 .layout_width(self.font_id, self.font_size, c);
-            self.char_widths.other.insert(c, width);
+            self.cached_other_char_widths.insert(c, width);
             width
         }
     }
@@ -768,12 +746,7 @@ mod tests {
         let dispatcher = TestDispatcher::new(0);
         let cx = TestAppContext::build(dispatcher, None);
         let id = cx.text_system().resolve_font(&font(".ZedMono"));
-        LineWrapper::new(
-            id,
-            px(16.),
-            cx.text_system().clone(),
-            CharWidthCache::default(),
-        )
+        LineWrapper::new(id, px(16.), cx.text_system().clone())
     }
 
     fn generate_test_runs(input_run_len: &[usize]) -> Vec<TextRun> {

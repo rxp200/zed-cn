@@ -306,7 +306,10 @@ pub async fn stream_chat_completion(
         .uri(uri)
         .header("Content-Type", "application/json")
         .when_some(api_key, |builder, api_key| {
-            builder.header("Authorization", format!("Bearer {api_key}"))
+            builder.header(
+                "Authorization",
+                i18n::t!("4c1921d519adeb3b", api_key = api_key),
+            )
         })
         .extra_headers(extra_headers)
         .body(AsyncBody::from(serde_json::to_string(&request)?))?;
@@ -345,7 +348,10 @@ pub async fn get_models(
         .uri(uri)
         .header("Accept", "application/json")
         .when_some(api_key, |builder, api_key| {
-            builder.header("Authorization", format!("Bearer {api_key}"))
+            builder.header(
+                "Authorization",
+                i18n::t!("4c1921d519adeb3b", api_key = api_key),
+            )
         })
         .extra_headers(extra_headers)
         .body(AsyncBody::default())?;
@@ -380,7 +386,10 @@ pub async fn show_model(
         .uri(uri)
         .header("Content-Type", "application/json")
         .when_some(api_key, |builder, api_key| {
-            builder.header("Authorization", format!("Bearer {api_key}"))
+            builder.header(
+                "Authorization",
+                i18n::t!("4c1921d519adeb3b", api_key = api_key),
+            )
         })
         .extra_headers(extra_headers)
         .body(AsyncBody::from(

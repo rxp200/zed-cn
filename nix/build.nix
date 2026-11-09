@@ -4,7 +4,7 @@
   lib,
   stdenv,
 
-  apple-sdk_26,
+  apple-sdk_15,
   darwin,
   darwinMinVersionHook,
 
@@ -206,8 +206,8 @@ let
         libxrandr
       ]
       ++ lib.optionals stdenv'.hostPlatform.isDarwin [
-        apple-sdk_26
-        (darwinMinVersionHook "12.0")
+        apple-sdk_15
+        (darwinMinVersionHook "10.15")
       ];
 
       cargoExtraArgs = "-p zed -p cli --locked --features=gpui_platform/runtime_shaders";

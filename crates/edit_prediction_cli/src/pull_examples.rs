@@ -369,7 +369,7 @@ pub(crate) async fn fetch_partition(
     let http_request = Request::builder()
         .method(Method::GET)
         .uri(url.as_str())
-        .header("Authorization", format!("Bearer {token}"))
+        .header("Authorization", i18n::t!("bf733da73429e88a", token = token))
         .header(
             "X-Snowflake-Authorization-Token-Type",
             "PROGRAMMATIC_ACCESS_TOKEN",
@@ -506,7 +506,7 @@ pub(crate) async fn run_sql(
     let http_request = Request::builder()
         .method(Method::POST)
         .uri(url.as_str())
-        .header("Authorization", format!("Bearer {token}"))
+        .header("Authorization", i18n::t!("bf733da73429e88a", token = token))
         .header(
             "X-Snowflake-Authorization-Token-Type",
             "PROGRAMMATIC_ACCESS_TOKEN",

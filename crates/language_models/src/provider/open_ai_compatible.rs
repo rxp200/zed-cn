@@ -137,10 +137,7 @@ impl OpenAiCompatibleLanguageModelProvider {
     ) -> BoxFuture<
         'static,
         Result<
-            futures::stream::BoxStream<
-                'static,
-                Result<ResponseStreamEvent, LanguageModelCompletionError>,
-            >,
+            futures::stream::BoxStream<'static, Result<ResponseStreamEvent>>,
             LanguageModelCompletionError,
         >,
     > {
@@ -283,6 +280,14 @@ impl LanguageModelProvider for OpenAiCompatibleLanguageModelProvider {
                 .into()
             },
         )))
+    }
+
+    fn configuration_api_key(&self, api_url: &str, cx: &App) -> Option<String> {
+        self.state
+            .read(cx)
+            .api_key_state
+            .key(api_url)
+            .map(|key| key.to_string())
     }
 
     fn set_api_key(&self, api_key: Option<String>, cx: &mut App) -> Task<Result<()>> {

@@ -167,7 +167,7 @@ impl RenderOnce for SandboxStatusTooltip {
         let content = match self {
             SandboxStatusTooltip::DisabledInSettings => v_flex()
                 .child(
-                    Label::new("You have sandboxing disabled in settings.")
+                    Label::new(i18n::t!("237f2336ee0a19c3"))
                         .size(LabelSize::Small)
                         .color(Color::Muted),
                 )
@@ -176,7 +176,7 @@ impl RenderOnce for SandboxStatusTooltip {
                 .gap_1()
                 .child(div().opacity(0.5).child(settings.render(cx)))
                 .child(Divider::horizontal())
-                .child(Label::new("Sandboxing is disabled for this thread").size(LabelSize::Small))
+                .child(Label::new(i18n::t!("4dade89b355cba1a")).size(LabelSize::Small))
                 .into_any_element(),
             SandboxStatusTooltip::Enabled { settings, thread } => v_flex()
                 .gap_2()
@@ -193,7 +193,7 @@ impl RenderOnce for SandboxStatusTooltip {
         v_flex()
             .w(rems_from_px(280_f32))
             .gap_1()
-            .child(Label::new("Sandboxing"))
+            .child(Label::new(i18n::t!("05fdf30411d98d32")))
             .child(content)
     }
 }
@@ -228,15 +228,19 @@ impl Component for SandboxStatusTooltip {
             .group(
                 SandboxGroup::new("Write Access").row(SandboxRow::path("/Users/you/project/build")),
             )
-            .group(SandboxGroup::new("Network Access").row(SandboxRow::message("None")));
-
-        let unrestricted_section = SandboxSection::new("Defined in your settings:")
-            .group(SandboxGroup::new("Write Access").row(SandboxRow::message(
-                "All paths except protected Git metadata",
-            )))
             .group(
-                SandboxGroup::new("Network Access")
-                    .row(SandboxRow::message("All domains (unrestricted)")),
+                SandboxGroup::new(i18n::t!("84a5571a1cc78c74"))
+                    .row(SandboxRow::message(i18n::t!("484d55613910eb8c"))),
+            );
+
+        let unrestricted_section = SandboxSection::new(i18n::t!("53db6a8bbe066fc7"))
+            .group(
+                SandboxGroup::new(i18n::t!("d7ddc7cd709d321b"))
+                    .row(SandboxRow::message(i18n::t!("150282bad39d8397"))),
+            )
+            .group(
+                SandboxGroup::new(i18n::t!("84a5571a1cc78c74"))
+                    .row(SandboxRow::message(i18n::t!("a0645eebfeabe2d1"))),
             );
 
         let container = || div().p_2().elevation_2(cx).max_w_112();
@@ -245,7 +249,7 @@ impl Component for SandboxStatusTooltip {
             .gap_4()
             .child(example_group(vec![
                 single_example(
-                    "Enabled",
+                    i18n::t!("dfb802238b38fbd4"),
                     container()
                         .child(SandboxStatusTooltip::enabled(
                             settings_section.clone(),
@@ -254,19 +258,19 @@ impl Component for SandboxStatusTooltip {
                         .into_any_element(),
                 ),
                 single_example(
-                    "Enabled (unrestricted, no overrides)",
+                    i18n::t!("efabe1d0eb656d89"),
                     container()
                         .child(SandboxStatusTooltip::enabled(unrestricted_section, None))
                         .into_any_element(),
                 ),
                 single_example(
-                    "Disabled for thread",
+                    i18n::t!("4e6ac035efa05f29"),
                     container()
                         .child(SandboxStatusTooltip::disabled_for_thread(settings_section))
                         .into_any_element(),
                 ),
                 single_example(
-                    "Disabled in settings",
+                    i18n::t!("8c555245eb53d787"),
                     container()
                         .child(SandboxStatusTooltip::disabled_in_settings())
                         .into_any_element(),

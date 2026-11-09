@@ -20,11 +20,11 @@ use gpui::{
     Action, AnyWindowHandle, AppLifecyclePhase, BackgroundExecutor, ClipboardItem, CursorStyle,
     DummyKeyboardMapper, ForegroundExecutor, Keymap, Menu, MenuItem, PathPromptOptions, Platform,
     PlatformDisplay, PlatformKeyboardLayout, PlatformKeyboardMapper, PlatformTextSystem,
-    PlatformWindow, PowerMode, Result, Task, ThermalState, WindowAppearance, WindowParams,
+    PlatformWindow, Result, Task, ThermalState, WindowAppearance, WindowParams,
 };
 use gpui_apple::{
     AppleDispatcher, keychain, main_thread_marker,
-    process_info::{self, ProcessInfoObserver},
+    thermal::{self, ThermalObserver},
 };
 use objc2::{MainThreadOnly, rc::Retained, runtime::ProtocolObject};
 use objc2_foundation::{
@@ -51,8 +51,7 @@ pub(crate) struct IosPlatformState {
     background_executor: BackgroundExecutor,
     foreground_executor: ForegroundExecutor,
     text_system: Arc<dyn PlatformTextSystem>,
-    thermal_observer: RefCell<Option<ProcessInfoObserver>>,
-    power_mode_observer: RefCell<Option<ProcessInfoObserver>>,
+    thermal_observer: RefCell<Option<ThermalObserver>>,
     display_observers: RefCell<Vec<Retained<ProtocolObject<dyn NSObjectProtocol>>>>,
     display_task: RefCell<Option<Task<()>>>,
     displays_changed_callback: CallbackSlot<Box<dyn FnMut()>>,
@@ -76,7 +75,6 @@ impl IosPlatform {
             foreground_executor: ForegroundExecutor::new(dispatcher),
             text_system,
             thermal_observer: RefCell::new(None),
-            power_mode_observer: RefCell::new(None),
             display_observers: RefCell::new(Vec::new()),
             display_task: RefCell::new(None),
             displays_changed_callback: CallbackSlot::default(),
@@ -461,21 +459,12 @@ impl Platform for IosPlatform {
     }
 
     fn thermal_state(&self) -> ThermalState {
-        process_info::thermal_state()
+        thermal::thermal_state()
     }
 
     fn on_thermal_state_change(&self, callback: Box<dyn FnMut()>) {
-        let observer = process_info::observe_thermal_state(&self.0.foreground_executor, callback);
+        let observer = ThermalObserver::new(&self.0.foreground_executor, callback);
         self.0.thermal_observer.replace(Some(observer));
-    }
-
-    fn power_mode(&self) -> PowerMode {
-        process_info::power_mode()
-    }
-
-    fn on_power_mode_change(&self, callback: Box<dyn FnMut()>) {
-        let observer = process_info::observe_power_mode(&self.0.foreground_executor, callback);
-        self.0.power_mode_observer.replace(Some(observer));
     }
 
     fn keyboard_layout(&self) -> Box<dyn PlatformKeyboardLayout> {

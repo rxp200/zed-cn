@@ -32,6 +32,11 @@ impl IndentGuideColors {
 /// standard [`ListItem`](crate::ListItem)-based row.
 pub const LIST_ITEM_INDENT_GUIDE_LEFT_OFFSET: Pixels = px(15.);
 
+/// Horizontal inset applied to a list row whose highlight should read as a
+/// rounded card instead of spanning the panel edge to edge. Panels that inset
+/// their rows must shift their indent guides by the same amount.
+pub const LIST_ITEM_HIGHLIGHT_INSET: Pixels = px(4.);
+
 pub struct IndentGuides {
     colors: IndentGuideColors,
     indent_size: Pixels,

@@ -116,11 +116,11 @@ impl Render for IncomingCallNotification {
         div().size_full().font(ui_font).child(
             CollabNotification::new(
                 self.state.call.calling_user.avatar_uri.clone(),
-                Button::new("accept", "Accept").on_click({
+                Button::new("accept", i18n::t!("329fcec61856d4e5")).on_click({
                     let state = self.state.clone();
                     move |_, _, cx| state.respond(true, cx)
                 }),
-                Button::new("decline", "Decline").on_click({
+                Button::new("decline", i18n::t!("136de7a8c46fc803")).on_click({
                     let state = self.state.clone();
                     move |_, _, cx| state.respond(false, cx)
                 }),

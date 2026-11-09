@@ -18,6 +18,7 @@ default = []
 test-support = ["db/test-support"]
 
 [dependencies]
+i18n.workspace = true
 anyhow.workspace = true
 client.workspace = true
 collections.workspace = true

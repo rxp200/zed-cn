@@ -52,13 +52,21 @@ impl TabularFormat {
             .map(|(_, format)| *format)
     }
 
+    /// The field separator of a delimited format, or `None` for formats that carry structure
+    /// rather than a plain delimiter (JSON Lines) and therefore cannot be edited as text fields.
+    pub(crate) fn delimiter(self) -> Option<char> {
+        match self {
+            Self::Csv => Some(','),
+            Self::Tsv => Some('\t'),
+            Self::Psv => Some('|'),
+            Self::Ssv => Some(';'),
+            Self::JsonLines => None,
+        }
+    }
+
     fn parse(self, buffer_snapshot: &BufferSnapshot) -> anyhow::Result<TableLikeContent> {
-        let delimiter = match self {
-            Self::Csv => ',',
-            Self::Tsv => '\t',
-            Self::Psv => '|',
-            Self::Ssv => ';',
-            Self::JsonLines => return from_json_lines(buffer_snapshot),
+        let Some(delimiter) = self.delimiter() else {
+            return from_json_lines(buffer_snapshot);
         };
         Ok(from_buffer_with_delimiter(buffer_snapshot, delimiter))
     }

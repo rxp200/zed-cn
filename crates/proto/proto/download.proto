@@ -15,6 +15,24 @@ message DownloadFileResponse {
   uint64 file_id = 1;
 }
 
+// Pulls one bounded chunk of a remote file. The client requests chunks in
+// order and the server sends nothing until the next request, so a download
+// never queues ahead of interactive traffic on the shared connection.
+message DownloadFileChunk {
+  uint64 worktree_id = 1;
+  string path = 2;
+  uint64 offset = 3;
+  uint64 expected_size = 4;
+  optional Timestamp expected_mtime = 5;
+  uint32 max_bytes = 6;
+}
+
+message DownloadFileChunkResponse {
+  File file = 1;
+  bytes content = 2;
+  uint64 total_size = 3;
+}
+
 message CreateFileForPeer {
   uint64 project_id = 1;
   PeerId peer_id = 2;

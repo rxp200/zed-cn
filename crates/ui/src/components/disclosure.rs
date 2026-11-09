@@ -146,7 +146,7 @@ impl Component for Disclosure {
                         v_flex()
                             .gap_2()
                             .child(Disclosure::new("interactive", false).into_any_element())
-                            .child(Label::new("Click to toggle"))
+                            .child(Label::new(i18n::t!("f4dfe64726ba5706")))
                             .into_any_element(),
                     )],
                 ),

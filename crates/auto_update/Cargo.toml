@@ -12,8 +12,13 @@ workspace = true
 path = "src/auto_update.rs"
 doctest = false
 
+[features]
+test-support = []
+
 [dependencies]
+i18n.workspace = true
 anyhow.workspace = true
+async-lock.workspace = true
 client.workspace = true
 db.workspace = true
 futures-lite.workspace = true
@@ -27,6 +32,7 @@ serde.workspace = true
 serde_json.workspace = true
 settings.workspace = true
 smol.workspace = true
+sha2.workspace = true
 tempfile.workspace = true
 util.workspace = true
 workspace.workspace = true
@@ -37,6 +43,7 @@ which.workspace = true
 [dev-dependencies]
 ctor.workspace = true
 clock= { workspace = true, "features" = ["test-support"] }
+db = { workspace = true, "features" = ["test-support"] }
 futures.workspace = true
 gpui = { workspace = true, "features" = ["test-support"] }
 parking_lot.workspace = true

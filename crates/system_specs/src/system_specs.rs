@@ -1,3 +1,5 @@
+pub mod hardware;
+
 pub use gpui::GpuSpecs;
 use gpui::{App, AppContext as _, Task, Window, actions};
 use human_bytes::human_bytes;
@@ -186,11 +188,24 @@ pub struct GpuInfo {
 
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 pub fn read_gpu_info_from_sys_class_drm() -> anyhow::Result<Vec<GpuInfo>> {
+    Ok(read_drm_gpus()?.into_iter().map(|gpu| gpu.info).collect())
+}
+
+/// `/sys/class/drm` 中发现的一张显卡：崩溃上报只需要 [`GpuInfo`]，硬件监控还需要
+/// sysfs 路径去读显存、占用率和温度。
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+pub struct DrmGpu {
+    pub info: GpuInfo,
+    pub sysfs_path: std::path::PathBuf,
+}
+
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+pub(crate) fn read_drm_gpus() -> anyhow::Result<Vec<DrmGpu>> {
     use anyhow::Context as _;
     use pciid_parser;
     let dir_iter = std::fs::read_dir("/sys/class/drm").context("Failed to read /sys/class/drm")?;
     let mut pci_addresses = vec![];
-    let mut gpus = Vec::<GpuInfo>::new();
+    let mut gpus = Vec::<DrmGpu>::new();
     let pci_db = pciid_parser::Database::read().ok();
     for entry in dir_iter {
         let Ok(entry) = entry else {
@@ -236,8 +251,8 @@ pub fn read_gpu_info_from_sys_class_drm() -> anyhow::Result<Vec<GpuInfo>> {
             .zip(&pci_addresses)
             .any(|(gpu, gpu_pci_address)| {
                 gpu_pci_address == &pci_address
-                    && gpu.driver_version == driver_version
-                    && gpu.driver_name == driver_name
+                    && gpu.info.driver_version == driver_version
+                    && gpu.info.driver_name == driver_name
             });
 
         if already_found {
@@ -252,13 +267,16 @@ pub fn read_gpu_info_from_sys_class_drm() -> anyhow::Result<Vec<GpuInfo>> {
             .and_then(|vendor| vendor.devices.get(&device_pci_id))
             .map(|device| device.name.clone());
 
-        gpus.push(GpuInfo {
-            device_name,
-            device_pci_id,
-            vendor_name,
-            vendor_pci_id,
-            driver_version,
-            driver_name,
+        gpus.push(DrmGpu {
+            info: GpuInfo {
+                device_name,
+                device_pci_id,
+                vendor_name,
+                vendor_pci_id,
+                driver_version,
+                driver_name,
+            },
+            sysfs_path: device_path,
         });
         pci_addresses.push(pci_address);
     }

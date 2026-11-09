@@ -51,23 +51,14 @@ impl ElicitationFormState {
         let mut fields = HashMap::default();
 
         for (name, property) in &schema.properties {
-            // The store rejects forms whose required properties can't be rendered, so these
-            // are optional and left out of the form.
-            if !acp_thread::is_renderable_elicitation_property(property) {
-                continue;
-            }
             let is_required = required.iter().any(|required| required == name);
-            let title = property_title(name, property);
             let field = match property {
                 acp::ElicitationPropertySchema::String(schema) => {
                     let options = single_select_options(schema);
                     if options.is_empty() {
-                        let default = schema.default.as_ref().filter(|default| {
-                            validate_string_value(title.clone(), schema, default).is_ok()
-                        });
                         let editor = cx.new(|cx| {
                             let mut editor = Editor::single_line(window, cx);
-                            if let Some(default) = default {
+                            if let Some(default) = &schema.default {
                                 editor.set_text(default.clone(), window, cx);
                             }
                             editor
@@ -83,34 +74,20 @@ impl ElicitationFormState {
                     }
                 }
                 acp::ElicitationPropertySchema::Number(schema) => {
-                    let default =
-                        schema
-                            .default
-                            .map(|default| default.to_string())
-                            .filter(|default| {
-                                validate_number_value(title.clone(), schema, default).is_ok()
-                            });
                     let editor = cx.new(|cx| {
                         let mut editor = Editor::single_line(window, cx);
-                        if let Some(default) = default {
-                            editor.set_text(default, window, cx);
+                        if let Some(default) = schema.default {
+                            editor.set_text(default.to_string(), window, cx);
                         }
                         editor
                     });
                     ElicitationFieldState::Text(editor)
                 }
                 acp::ElicitationPropertySchema::Integer(schema) => {
-                    let default =
-                        schema
-                            .default
-                            .map(|default| default.to_string())
-                            .filter(|default| {
-                                validate_integer_value(title.clone(), schema, default).is_ok()
-                            });
                     let editor = cx.new(|cx| {
                         let mut editor = Editor::single_line(window, cx);
-                        if let Some(default) = default {
-                            editor.set_text(default, window, cx);
+                        if let Some(default) = schema.default {
+                            editor.set_text(default.to_string(), window, cx);
                         }
                         editor
                     });
@@ -121,7 +98,9 @@ impl ElicitationFormState {
                 }
                 acp::ElicitationPropertySchema::Array(schema) => {
                     ElicitationFieldState::MultiSelect(
-                        multi_select_default_value(schema)
+                        schema
+                            .default
+                            .clone()
                             .unwrap_or_default()
                             .into_iter()
                             .collect(),
@@ -1181,42 +1160,6 @@ mod tests {
     }
 
     #[gpui::test]
-    fn form_state_skips_unrenderable_optional_properties_and_invalid_defaults(
-        cx: &mut TestAppContext,
-    ) {
-        crate::conversation_view::tests::init_test(cx);
-
-        cx.add_window(|window, cx| {
-            let schema: acp::ElicitationSchema = serde_json::from_value(serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "when": {"type": "_future"},
-                    "labels": {"type": "array", "items": {"type": "_future"}},
-                    "code": {"type": "string", "pattern": "^[0-9]+$", "default": "abc"},
-                    "count": {"type": "integer", "minimum": 1, "default": 0},
-                    "ratio": {"type": "number", "maximum": 1, "default": 2},
-                    "tags": {
-                        "type": "array",
-                        "items": {"type": "string", "enum": ["a", "b"]},
-                        "default": ["a", "c"],
-                    },
-                },
-            }))
-            .expect("form schema");
-            let form_state = ElicitationFormState::new(&schema, window, cx);
-            assert!(!form_state.fields.contains_key("when"));
-            assert!(!form_state.fields.contains_key("labels"));
-            let content = form_state
-                .collect(&schema, cx)
-                .expect("invalid defaults should be ignored");
-
-            assert!(content.is_empty(), "{content:?}");
-
-            Editor::single_line(window, cx)
-        });
-    }
-
-    #[gpui::test]
     fn form_state_replaces_invalid_required_single_select_default(cx: &mut TestAppContext) {
         crate::conversation_view::tests::init_test(cx);
 
@@ -1347,15 +1290,15 @@ impl Component for ElicitationCardPreview {
             .gap_6()
             .children([
                 example_group_with_title(
-                    "Form Requests",
+                    "表单请求",
                     vec![
                         single_example(
-                            "Pending Form",
+                            "待处理表单",
                             render_form_preview(0, pending_status(), &[], window, cx),
                         )
                         .width(px(640.)),
                         single_example(
-                            "Validation Errors",
+                            "验证错误",
                             render_form_preview(
                                 1,
                                 pending_status(),
@@ -1374,10 +1317,10 @@ impl Component for ElicitationCardPreview {
                 .vertical()
                 .into_any_element(),
                 example_group_with_title(
-                    "URL Requests",
+                    "URL 请求",
                     vec![
                         single_example(
-                            "URL Consent",
+                            "URL 授权",
                             render_url_preview(3, pending_status(), window, cx),
                         )
                         .width(px(640.)),
@@ -1386,15 +1329,15 @@ impl Component for ElicitationCardPreview {
                 .vertical()
                 .into_any_element(),
                 example_group_with_title(
-                    "Terminal States",
+                    "终端状态",
                     vec![
                         single_example(
-                            "Declined",
+                            "已拒绝",
                             render_form_preview(6, ElicitationStatus::Declined, &[], window, cx),
                         )
                         .width(px(640.)),
                         single_example(
-                            "Canceled",
+                            "已取消",
                             render_form_preview(7, ElicitationStatus::Canceled, &[], window, cx),
                         )
                         .width(px(640.)),
@@ -1581,20 +1524,6 @@ fn single_select_default_value(
                 .any(|option| option.value.as_str() == default.as_str())
         })
         .cloned()
-}
-
-/// A default with an unknown value or the wrong number of selections doesn't match its schema
-/// and is ignored.
-fn multi_select_default_value(schema: &acp::MultiSelectPropertySchema) -> Option<Vec<String>> {
-    let default = schema.default.as_ref()?;
-    let options = multi_select_options(schema);
-    let all_offered = default
-        .iter()
-        .all(|value| options.iter().any(|option| &option.value == value));
-    let count = default.len() as u64;
-    let count_allowed = schema.min_items.is_none_or(|min_items| count >= min_items)
-        && schema.max_items.is_none_or(|max_items| count <= max_items);
-    (all_offered && count_allowed).then(|| default.clone())
 }
 
 fn multi_select_options(schema: &acp::MultiSelectPropertySchema) -> Vec<ElicitationOption> {
@@ -1991,7 +1920,9 @@ impl<'a> ElicitationCard<'a> {
             (ElicitationStatus::Accepted, acp::ElicitationMode::Url(_))
         );
         let (status_label, status_icon, status_color) = match &self.elicitation.status {
-            ElicitationStatus::Pending { .. } => ("Waiting for input", IconName::Info, Color::Info),
+            ElicitationStatus::Pending { .. } => {
+                (i18n::t!("6569c6e69886e855"), IconName::Info, Color::Info)
+            }
             ElicitationStatus::Accepted if is_accepted_url => {
                 ("Waiting for completion", IconName::Info, Color::Info)
             }
@@ -2044,7 +1975,7 @@ impl<'a> ElicitationCard<'a> {
                                     .color(status_color),
                             )
                             .child(
-                                Label::new(format!("Input Requested by {}", self.requester_name))
+                                Label::new(i18n::t_args!("7c4a1fec1d88bf21", self.requester_name))
                                     .size(LabelSize::Custom(tool_name_font_size))
                                     .truncate(),
                             ),
@@ -2334,7 +2265,7 @@ impl<'a> ElicitationCard<'a> {
                             h_flex()
                                 .gap_1()
                                 .child(
-                                    Label::new("Destination")
+                                    Label::new(i18n::t!("57060c88a36bf3d0"))
                                         .size(LabelSize::Small)
                                         .color(Color::Muted),
                                 )
@@ -2400,11 +2331,23 @@ impl<'a> ElicitationCard<'a> {
             open_url.is_some() && matches!(self.elicitation.status, ElicitationStatus::Accepted);
         let is_submitting = self.form_state.is_some_and(|state| state.is_submitting);
         let (accept_label, accept_icon, accept_icon_color) = if is_accepted_url {
-            ("Open Again", IconName::ArrowUpRight, Color::Muted)
+            (
+                i18n::t!("29a2407a872863cb"),
+                IconName::ArrowUpRight,
+                Color::Muted,
+            )
         } else if open_url.is_some() {
-            ("Open", IconName::ArrowUpRight, Color::Muted)
+            (
+                i18n::t!("c771248e511fbf93"),
+                IconName::ArrowUpRight,
+                Color::Muted,
+            )
         } else {
-            ("Submit", IconName::Check, Color::Success)
+            (
+                i18n::t!("08a85f4ab4bab9ca"),
+                IconName::Check,
+                Color::Success,
+            )
         };
         let border_color = cx.theme().colors().border.opacity(0.8);
         let on_submit = self.handlers.on_submit.clone();
@@ -2447,35 +2390,44 @@ impl<'a> ElicitationCard<'a> {
             )
             .when(!is_accepted_url, |this| {
                 this.child(
-                    Button::new(("elicitation-decline", self.entry_ix), "Decline")
-                        .tab_index(0_isize)
-                        .start_icon(
-                            Icon::new(IconName::Close)
-                                .size(IconSize::XSmall)
-                                .color(Color::Error),
-                        )
-                        .label_size(LabelSize::Small)
-                        .on_click(move |_, window, cx| {
-                            on_decline(decline_id.clone(), window, cx);
-                        }),
+                    Button::new(
+                        ("elicitation-decline", self.entry_ix),
+                        i18n::t!("136de7a8c46fc803"),
+                    )
+                    .tab_index(0_isize)
+                    .start_icon(
+                        Icon::new(IconName::Close)
+                            .size(IconSize::XSmall)
+                            .color(Color::Error),
+                    )
+                    .label_size(LabelSize::Small)
+                    .on_click(move |_, window, cx| {
+                        on_decline(decline_id.clone(), window, cx);
+                    }),
                 )
                 .child(
-                    Button::new(("elicitation-cancel", self.entry_ix), "Cancel")
-                        .tab_index(0_isize)
-                        .label_size(LabelSize::Small)
-                        .on_click(move |_, window, cx| {
-                            on_cancel(cancel_id.clone(), window, cx);
-                        }),
+                    Button::new(
+                        ("elicitation-cancel", self.entry_ix),
+                        i18n::t!("2cd0f3be8738a86c"),
+                    )
+                    .tab_index(0_isize)
+                    .label_size(LabelSize::Small)
+                    .on_click(move |_, window, cx| {
+                        on_cancel(cancel_id.clone(), window, cx);
+                    }),
                 )
             })
             .when(is_accepted_url, |this| {
                 this.child(
-                    Button::new(("elicitation-dismiss-url", self.entry_ix), "Cancel")
-                        .tab_index(0_isize)
-                        .label_size(LabelSize::Small)
-                        .on_click(move |_, window, cx| {
-                            on_dismiss_url(dismiss_id.clone(), window, cx);
-                        }),
+                    Button::new(
+                        ("elicitation-dismiss-url", self.entry_ix),
+                        i18n::t!("2cd0f3be8738a86c"),
+                    )
+                    .tab_index(0_isize)
+                    .label_size(LabelSize::Small)
+                    .on_click(move |_, window, cx| {
+                        on_dismiss_url(dismiss_id.clone(), window, cx);
+                    }),
                 )
             })
             .into_any_element()

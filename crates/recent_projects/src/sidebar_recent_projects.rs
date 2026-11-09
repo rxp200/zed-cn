@@ -20,7 +20,7 @@ use workspace::{
 
 use zed_actions::OpenRemote;
 
-use crate::{highlights_for_path, icon_for_remote_connection, open_remote_project};
+use crate::{highlights_for_path, icon_for_remote_connection_with_mode, open_remote_project};
 
 pub struct SidebarRecentProjects {
     pub picker: Entity<Picker<SidebarRecentProjectsDelegate>>,
@@ -263,9 +263,26 @@ impl PickerDelegate for SidebarRecentProjectsDelegate {
                             .fill_connection_options_from_settings(connection);
                     };
                     let paths = recent_workspace.paths.paths().to_vec();
+                    let remote_terminal_mode = recent_workspace.remote_terminal_mode;
                     cx.spawn_in(window, async move |_, cx| {
-                        open_remote_project(connection.clone(), paths, app_state, open_options, cx)
+                        if remote_terminal_mode {
+                            crate::remote_terminal_workspace::open_remote_terminal_workspace(
+                                connection.clone(),
+                                app_state,
+                                open_options,
+                                cx,
+                            )
                             .await
+                        } else {
+                            open_remote_project(
+                                connection.clone(),
+                                paths,
+                                app_state,
+                                open_options,
+                                cx,
+                            )
+                            .await
+                        }
                     })
                     .detach_and_prompt_err(
                         "Failed to open project",
@@ -283,9 +300,9 @@ impl PickerDelegate for SidebarRecentProjectsDelegate {
 
     fn no_matches_text(&self, _window: &mut Window, _cx: &mut App) -> Option<SharedString> {
         let text = if self.workspaces.is_empty() {
-            "Recently opened projects will show up here"
+            i18n::t!("ac988c0bd18bef78")
         } else {
-            "No matches"
+            i18n::t!("336cba9a92414d13")
         };
         Some(text.into())
     }
@@ -345,10 +362,13 @@ impl PickerDelegate for SidebarRecentProjectsDelegate {
             active: false,
         };
 
-        let icon = icon_for_remote_connection(match &workspace.location {
-            SerializedWorkspaceLocation::Local => None,
-            SerializedWorkspaceLocation::Remote(options) => Some(options),
-        });
+        let icon = icon_for_remote_connection_with_mode(
+            match &workspace.location {
+                SerializedWorkspaceLocation::Local => None,
+                SerializedWorkspaceLocation::Remote(options) => Some(options),
+            },
+            workspace.remote_terminal_mode,
+        );
 
         Some(
             ListItem::new(ix)
@@ -399,7 +419,7 @@ impl PickerDelegate for SidebarRecentProjectsDelegate {
                                 .w_full()
                                 .gap_1()
                                 .justify_between()
-                                .child(Label::new("Open Local Folders"))
+                                .child(Label::new(i18n::t!("51541381cd3e6c3c")))
                                 .child(KeyBinding::for_action_in(&open_action, &focus_handle, cx)),
                         )
                         .on_click(cx.listener(move |_, _, window, cx| {
@@ -414,7 +434,7 @@ impl PickerDelegate for SidebarRecentProjectsDelegate {
                                 .w_full()
                                 .gap_1()
                                 .justify_between()
-                                .child(Label::new("Open Remote Folder"))
+                                .child(Label::new(i18n::t!("8231c3d317598e09")))
                                 .child(KeyBinding::for_action(
                                     &OpenRemote {
                                         from_existing_connection: false,

@@ -4,6 +4,7 @@ use crate::{
     display_map::{ToDisplayPoint, is_invisible},
     editor_settings::EditorSettingsScrollbarProxy,
     hover_links::{InlayHighlight, RangeInEditor},
+    hover_translation::{HoverTranslationSettings, TranslationService, needs_translation},
     movement::TextLayoutDetails,
     scroll::ScrollAmount,
 };
@@ -29,7 +30,7 @@ use std::{path::PathBuf, rc::Rc};
 use theme_settings::ThemeSettings;
 use ui::{CopyButton, Scrollbars, WithScrollbar, prelude::*, theme_is_transparent};
 use url::Url;
-use util::TryFutureExt;
+use util::{ResultExt, TryFutureExt};
 use workspace::{OpenOptions, OpenVisible, Workspace};
 
 use crate::debugger_hover::{
@@ -209,16 +210,19 @@ pub fn hover_at_inlay(
                     symbol_range,
                     fallback_state: None,
                     parsed_content,
+                    translated_content: None,
                     debugger_hover: None,
                     scroll_handle: ScrollHandle::new(),
                     keyboard_grace: Rc::new(RefCell::new(false)),
                     anchor: None,
                     last_bounds: Rc::new(Cell::new(None)),
                     _subscriptions: subscription.into_iter().collect(),
+                    _translated_subscription: None,
+                    _translation_task: None,
                 }];
                 cx.notify();
             })
-            .ok();
+            .log_err();
     }))
 }
 
@@ -449,8 +453,13 @@ fn show_hover(
             let snapshot = this.update_in(cx, |this, window, cx| this.snapshot(window, cx))?;
             let mut hover_highlights = Vec::with_capacity(hovers_response.len());
             let mut info_popovers = Vec::with_capacity(
-                hovers_response.len() + if invisible_char.is_some() { 1 } else { 0 },
+                hovers_response.len()
+                    + if invisible_char.is_some() { 1 } else { 0 }
+                    + if debugger_response.is_some() { 1 } else { 0 },
             );
+            // Documentation text (non-code blocks) for each info popover, used
+            // for AI translation of hover contents.
+            let mut doc_texts: Vec<Option<String>> = Vec::new();
 
             if !show_debugger_hover_only && let Some((invisible, range)) = invisible_char {
                 let blocks = vec![HoverBlock {
@@ -474,13 +483,17 @@ fn show_hover(
                     symbol_range: RangeInEditor::Text(range),
                     fallback_state: None,
                     parsed_content,
+                    translated_content: None,
                     debugger_hover: None,
                     scroll_handle,
                     keyboard_grace: Rc::new(RefCell::new(ignore_timeout)),
                     anchor: Some(anchor),
                     last_bounds: Rc::new(Cell::new(None)),
                     _subscriptions: subscriptions,
-                })
+                    _translated_subscription: None,
+                    _translation_task: None,
+                });
+                doc_texts.push(None);
             }
 
             let doc_link_task = if show_debugger_hover_only {
@@ -528,13 +541,17 @@ fn show_hover(
                         symbol_range: RangeInEditor::Text(range),
                         fallback_state: None,
                         parsed_content: None,
+                        translated_content: None,
                         debugger_hover: Some(view),
                         scroll_handle: ScrollHandle::new(),
                         keyboard_grace: Rc::new(RefCell::new(ignore_timeout)),
                         anchor: Some(anchor),
                         last_bounds: Rc::new(Cell::new(None)),
                         _subscriptions: vec![subscription],
+                        _translated_subscription: None,
+                        _translation_task: None,
                     });
+                    doc_texts.push(None);
                 }
             }
 
@@ -556,6 +573,7 @@ fn show_hover(
                         (range, Some(fallback_state))
                     });
 
+                let doc_text = crate::hover_translation::documentation_text(&blocks);
                 let parsed_content =
                     parse_blocks(&blocks, language_registry.as_ref(), language, cx);
                 if parsed_content.is_none() {
@@ -577,13 +595,17 @@ fn show_hover(
                     symbol_range: RangeInEditor::Text(range),
                     fallback_state,
                     parsed_content,
+                    translated_content: None,
                     debugger_hover: None,
                     scroll_handle,
                     keyboard_grace: Rc::new(RefCell::new(ignore_timeout)),
                     anchor: Some(anchor),
                     last_bounds: Rc::new(Cell::new(None)),
                     _subscriptions: subscriptions,
+                    _translated_subscription: None,
+                    _translation_task: None,
                 });
+                doc_texts.push(doc_text);
             }
 
             if !show_debugger_hover_only {
@@ -607,13 +629,17 @@ fn show_hover(
                         symbol_range: RangeInEditor::Text(multi_buffer_range),
                         fallback_state: None,
                         parsed_content,
+                        translated_content: None,
                         debugger_hover: None,
                         scroll_handle,
                         keyboard_grace: Rc::new(RefCell::new(ignore_timeout)),
                         anchor: Some(anchor),
                         last_bounds: Rc::new(Cell::new(None)),
                         _subscriptions: subscription.into_iter().collect(),
+                        _translated_subscription: None,
+                        _translation_task: None,
                     });
+                    doc_texts.push(None);
                 }
             }
 
@@ -632,6 +658,38 @@ fn show_hover(
 
                 if show_debugger_hover_only {
                     editor.hover_state.diagnostic_popover = None;
+                }
+                if HoverTranslationSettings::get_global(cx).enabled {
+                    for (popover, doc_text) in info_popovers.iter_mut().zip(doc_texts) {
+                        let Some(doc_text) = doc_text else {
+                            continue;
+                        };
+                        if !needs_translation(&doc_text) {
+                            continue;
+                        }
+                        // Rendered once the translation arrives; kept empty
+                        // until then so the popover shows the original first.
+                        let markdown =
+                            cx.new(|cx| Markdown::new(Default::default(), None, None, cx));
+                        let subscription = cx.observe(&markdown, |_, _, cx| cx.notify());
+                        let task = cx.spawn_in(window, {
+                            let markdown = markdown.clone();
+                            async move |_, cx| {
+                                let Ok(translation_task) =
+                                    cx.update(|_, cx| TranslationService::translate(doc_text, cx))
+                                else {
+                                    return;
+                                };
+                                if let Ok(translation) = translation_task.await {
+                                    markdown
+                                        .update(cx, |markdown, cx| markdown.reset(translation, cx));
+                                }
+                            }
+                        });
+                        popover.translated_content = Some(markdown);
+                        popover._translated_subscription = Some(subscription);
+                        popover._translation_task = Some(task);
+                    }
                 }
                 editor.hover_state.stable_debugger_hover_origin = None;
                 editor.hover_state.info_popovers = info_popovers;
@@ -665,6 +723,7 @@ fn show_hover(
                             editor.hover_state.info_popovers.push(InfoPopover {
                                 symbol_range,
                                 parsed_content: Some(markdown),
+                                translated_content: None,
                                 debugger_hover: None,
                                 scroll_handle: ScrollHandle::new(),
                                 keyboard_grace,
@@ -672,6 +731,8 @@ fn show_hover(
                                 last_bounds: Rc::new(Cell::new(None)),
                                 fallback_state: None,
                                 _subscriptions: vec![subscription],
+                                _translated_subscription: None,
+                                _translation_task: None,
                             });
                             cx.notify();
                             window.refresh();
@@ -1083,6 +1144,21 @@ pub fn hover_markdown_style(window: &Window, cx: &App) -> MarkdownStyle {
         table_columns_min_size: true,
         ..Default::default()
     }
+}
+
+/// Markdown style for AI translations of hover documentation: same as the
+/// regular hover style, but underlined and slightly muted to distinguish the
+/// translation from the original text.
+pub fn translation_markdown_style(window: &Window, cx: &App) -> MarkdownStyle {
+    let mut style = hover_markdown_style(window, cx);
+    let color = cx.theme().colors().editor_foreground.opacity(0.75);
+    style.base_text_style.color = color;
+    style.base_text_style.underline = Some(gpui::UnderlineStyle {
+        thickness: px(1.),
+        color: Some(color),
+        wavy: false,
+    });
+    style
 }
 
 pub fn diagnostics_markdown_style(window: &Window, cx: &App) -> MarkdownStyle {
@@ -1515,16 +1591,21 @@ impl Editor {
 pub struct InfoPopover {
     pub symbol_range: RangeInEditor,
     pub parsed_content: Option<Entity<Markdown>>,
-    debugger_hover: Option<Entity<DebuggerHoverView>>,
+    /// AI translation of the non-code parts of `parsed_content`, rendered
+    /// underlined below the original documentation once it arrives.
+    pub translated_content: Option<Entity<Markdown>>,
+    pub(crate) debugger_hover: Option<Entity<DebuggerHoverView>>,
     pub scroll_handle: ScrollHandle,
     pub keyboard_grace: Rc<RefCell<bool>>,
     pub anchor: Option<Anchor>,
     pub last_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
-    fallback_state: Option<FallbackHoverState>,
-    _subscriptions: Vec<Subscription>,
+    pub(crate) fallback_state: Option<FallbackHoverState>,
+    pub(crate) _subscriptions: Vec<Subscription>,
+    pub(crate) _translated_subscription: Option<Subscription>,
+    pub(crate) _translation_task: Option<Task<()>>,
 }
 
-struct FallbackHoverState {
+pub(crate) struct FallbackHoverState {
     edit_count: usize,
     non_text_state_update_count: usize,
     includes_end: bool,
@@ -1671,7 +1752,42 @@ impl InfoPopover {
                                                 }),
                                             ),
                                         )
-                                    }),
+                                    })
+                                    .when_some(
+                                        self.translated_content.clone(),
+                                        |this, translated| {
+                                            // Only take up space once the translation has arrived.
+                                            this.when(
+                                                !translated.read(cx).source().is_empty(),
+                                                |this| {
+                                                    this.child(
+                                                        div()
+                                                            .mx_2()
+                                                            .border_t_1()
+                                                            .border_color(
+                                                                cx.theme().colors().border,
+                                                            ),
+                                                    )
+                                                    .child(
+                                                        MarkdownElement::new(
+                                                            translated,
+                                                            translation_markdown_style(window, cx),
+                                                        )
+                                                        .code_block_renderer(
+                                                            markdown::CodeBlockRenderer::Default {
+                                                                copy_button_visibility:
+                                                                    CopyButtonVisibility::Hidden,
+                                                                wrap_button_visibility:
+                                                                    markdown::WrapButtonVisibility::Hidden,
+                                                                border: false,
+                                                            },
+                                                        )
+                                                        .p_2(),
+                                                    )
+                                                },
+                                            )
+                                        },
+                                    ),
                             )
                             .map(|content| {
                                 div()
@@ -1807,7 +1923,8 @@ impl DiagnosticPopover {
                             .message
                             .as_shared_string()
                             .clone();
-                        CopyButton::new("copy-diagnostic", message).tooltip_label("Copy Diagnostic")
+                        CopyButton::new("copy-diagnostic", message)
+                            .tooltip_label(i18n::t!("bbce140b7682b375"))
                     }))
                     .custom_scrollbars(
                         Scrollbars::for_settings::<EditorSettingsScrollbarProxy>()
