@@ -240,13 +240,26 @@ fn compute_explode_offsets(
 }
 
 /// Converts a screen-space drag into a model-space translation on the camera
-/// plane. Perspective is approximated with the part center's depth, which is
-/// stable for dragging and avoids inverting the full projection.
+/// plane. The part's displayed center is normalized with the same frame the
+/// rasterizer uses, because perspective must be evaluated at that normalized
+/// depth rather than at raw model coordinates.
+fn part_drag_translation(
+    camera: Camera,
+    dimensions: [u32; 2],
+    radius: f64,
+    model_center: Vertex,
+    part_center: Vertex,
+    delta: Point<Pixels>,
+) -> Vertex {
+    let normalized_center = model_section::normalize(part_center, model_center, radius);
+    drag_translation(camera, dimensions, radius, normalized_center, delta)
+}
+
 fn drag_translation(
     camera: Camera,
     dimensions: [u32; 2],
     radius: f64,
-    part_center: Vertex,
+    normalized_center: Vertex,
     delta: Point<Pixels>,
 ) -> Vertex {
     let [width, height] = dimensions;
@@ -256,8 +269,8 @@ fn drag_translation(
     }
     let (yaw_sin, yaw_cos) = camera.yaw.sin_cos();
     let (pitch_sin, pitch_cos) = camera.pitch.sin_cos();
-    let view_z = -part_center[0] * yaw_sin + part_center[2] * yaw_cos;
-    let depth = part_center[1] * pitch_sin + view_z * pitch_cos;
+    let view_z = -normalized_center[0] * yaw_sin + normalized_center[2] * yaw_cos;
+    let depth = normalized_center[1] * pitch_sin + view_z * pitch_cos;
     let perspective = if camera.perspective {
         let denominator = (2.5 - depth).abs().max(1e-6);
         2.5 / denominator
@@ -729,6 +742,16 @@ impl ModelReader {
             .collect()
     }
 
+    fn part_display_offset(&self, index: usize) -> Vertex {
+        let explode = self.explode_offsets.get(index).copied().unwrap_or([0.0; 3]);
+        let manual = self.manual_offsets.get(index).copied().unwrap_or([0.0; 3]);
+        [
+            explode[0] + manual[0],
+            explode[1] + manual[1],
+            explode[2] + manual[2],
+        ]
+    }
+
     fn rebuild_explode_offsets(&mut self) {
         let (center, radius) = self.mesh.frame();
         self.explode_offsets =
@@ -832,8 +855,11 @@ impl ModelReader {
     }
 
     /// Converts a screen-space drag into a model-space translation on the
-    /// camera plane. Perspective is approximated with the part center's depth,
-    /// which is stable for dragging and avoids inverting the full projection.
+    /// camera plane. Perspective is approximated with the part's displayed
+    /// center depth, which is stable for dragging and avoids inverting the full
+    /// projection. The center must be normalized exactly like the rasterizer's
+    /// vertices; using raw model coordinates makes parts at different offsets
+    /// move at wildly different speeds.
     fn screen_delta_to_model(&self, delta: Point<Pixels>, part: usize) -> Vertex {
         let (center, radius) = self.mesh.frame();
         let part_center = self
@@ -842,6 +868,12 @@ impl ModelReader {
             .get(part)
             .map(|part| part.center)
             .unwrap_or(center);
+        let offset = self.part_display_offset(part);
+        let display_center = [
+            part_center[0] + offset[0],
+            part_center[1] + offset[1],
+            part_center[2] + offset[2],
+        ];
         // The image is displayed with `ObjectFit::Contain`, so a window pixel
         // can cover more than one raster pixel when the viewport is larger than
         // the 1280x960 render limit.
@@ -856,7 +888,14 @@ impl ModelReader {
             px((f64::from(delta.x) / scale) as f32),
             px((f64::from(delta.y) / scale) as f32),
         );
-        drag_translation(self.camera, self.dimensions, radius, part_center, delta)
+        part_drag_translation(
+            self.camera,
+            self.dimensions,
+            radius,
+            center,
+            display_center,
+            delta,
+        )
     }
 
     fn move_part(&mut self, index: usize, delta: Point<Pixels>) {
@@ -3769,6 +3808,45 @@ mod tests {
         let moved = drag_translation(yawed, [100, 100], 1.0, [0.0; 3], point(px(8.0), px(0.0)));
         assert!((moved[2] - 0.1).abs() < 1e-12, "{moved:?}");
         assert!(moved[0].abs() < 1e-12, "{moved:?}");
+    }
+
+    #[test]
+    fn part_drag_translation_normalizes_far_away_centers() {
+        let camera = Camera {
+            yaw: 0.0,
+            pitch: 0.0,
+            zoom: 1.0,
+            pan: [0.0; 2],
+            perspective: true,
+            shading: Shading::SolidEdges,
+            grid: false,
+            axes: false,
+        };
+        // The part is far from the origin in raw model units, but its
+        // normalized center is zero, so an 8 px drag must still be 0.1 units.
+        let moved = part_drag_translation(
+            camera,
+            [100, 100],
+            1.0,
+            [1000.0, 2000.0, 3000.0],
+            [1000.0, 2000.0, 3000.0],
+            point(px(8.0), px(0.0)),
+        );
+        assert!((moved[0] - 0.1).abs() < 1e-12, "{moved:?}");
+        assert_eq!(moved[1], 0.0);
+
+        // A part one normalized unit toward the camera has a smaller screen
+        // response under the perspective divide.
+        let moved = part_drag_translation(
+            camera,
+            [100, 100],
+            1.0,
+            [0.0; 3],
+            [0.0, 0.0, 1.0],
+            point(px(8.0), px(0.0)),
+        );
+        let expected = 8.0 / (80.0 * (2.5 / 1.5));
+        assert!((moved[0] - expected).abs() < 1e-12, "{moved:?}");
     }
 
     #[test]
