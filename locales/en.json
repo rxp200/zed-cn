@@ -5773,7 +5773,6 @@
   "08a4c34560df2e32": "Part {}",
   "dacb6d45653e6f98": "Other parts",
   "efbcd674b4f43dcc": "Parts",
-  "21c81ea001d9fcbb": "Explode parts",
   "484d208c49def35b": "Move parts",
   "58fbbd8fae0e9cba": "Reset positions",
   "91113056591e6c40": "Reset this part",
@@ -5782,8 +5781,9 @@
   "c21e410e4be2f1e3": "Section caps are unavailable while parts are moved",
   "0a4644af439370c2": "Showing the {} largest parts",
   "2150d8df37e48957": "Show all",
-  "359a8477958d7f31": "Explode",
   "357975a377051487": "Click to select a part; drag in move mode to reposition it",
   "44e7d4b248469d73": "Assembly",
-  "dc1ddfc95171bd44": "{} parts"
+  "dc1ddfc95171bd44": "{} parts",
+  "84455d3e97053f88": "Arrange parts",
+  "d557a972ab065e6c": "Arrange"
 }

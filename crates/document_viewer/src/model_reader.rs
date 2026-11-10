@@ -46,9 +46,6 @@ const VIEW_CUBE_LABEL_MIN_WIDTH: f32 = 34.0;
 /// Largest bodies listed in the properties panel. The model still keeps every
 /// body; only the list is truncated for layout cost and scrolling.
 const PARTS_PANEL_LIMIT: usize = 120;
-/// Base fraction of the model radius every exploded part travels, in addition
-/// to its own distance from the assembly center.
-const EXPLODE_DISTANCE: f64 = 0.35;
 /// Depth bias that keeps the selected silhouette above its own surface.
 const SELECTION_DEPTH_BIAS: f64 = 3e-4;
 /// Muted fill palette for bodies without a file-provided color.
@@ -180,63 +177,101 @@ impl Default for Camera {
     }
 }
 
-fn compute_explode_offsets(
+/// Lays parts out on the horizontal X/Z plane, each resting on `ground` (the
+/// model's minimum Y). Parts are packed into centered shelves with a gap
+/// proportional to the model radius. The returned offsets are for a fully
+/// arranged model; callers scale them by the user's arrange factor.
+fn compute_arrange_layout(
     parts: &[ModelPart],
     center: Vertex,
+    ground: f64,
     radius: f64,
-    factor: f64,
 ) -> Vec<Vertex> {
-    if parts.len() < 2 || factor <= 0.0 {
-        return vec![[0.0; 3]; parts.len()];
+    let mut offsets = vec![[0.0; 3]; parts.len()];
+    if parts.len() < 2 {
+        return offsets;
     }
-    let factor = factor.clamp(0.0, 1.0);
-    let mut seen_centers: Vec<(Vertex, usize)> = Vec::with_capacity(parts.len());
-    parts
-        .iter()
-        .enumerate()
-        .map(|(index, part)| {
-            let radial = sub(part.center, center);
-            let length = dot(radial, radial).sqrt();
-            let mut direction = if length > radius * 1e-6 {
-                radial.map(|value| value / length)
-            } else {
-                alternative_explode_direction(index)
-            };
-            // Parts that share a center (mirrored instances, for example) would
-            // otherwise move along the same ray and stay overlapped. Give later
-            // duplicates a deterministic tangential component.
-            let duplicate = seen_centers.iter().position(|(other, _)| {
-                let distance = sub(*other, part.center);
-                dot(distance, distance).sqrt() <= radius * 1e-3
-            });
-            let ordinal = if let Some(position) = duplicate {
-                seen_centers[position].1 += 1;
-                seen_centers[position].1
-            } else {
-                seen_centers.push((part.center, 0));
-                0
-            };
-            if ordinal > 0 {
-                let seed = alternative_explode_direction(index);
-                let tangent = cross(direction, seed);
-                let tangent_length = dot(tangent, tangent).sqrt();
-                let tangent = if tangent_length > 1e-9 {
-                    tangent.map(|value| value / tangent_length)
-                } else {
-                    seed
-                };
-                let blended = [
-                    direction[0] + tangent[0] * 0.8,
-                    direction[1] + tangent[1] * 0.8,
-                    direction[2] + tangent[2] * 0.8,
-                ];
-                let blended_length = dot(blended, blended).sqrt().max(1e-9);
-                direction = blended.map(|value| value / blended_length);
-            }
-            let distance = factor * (length + radius * EXPLODE_DISTANCE);
-            direction.map(|value| value * distance)
-        })
-        .collect()
+    let gap = (radius * 0.06).max(1e-6);
+    let mut footprints = Vec::with_capacity(parts.len());
+    let mut total_area = 0.0;
+    let mut max_width: f64 = 0.0;
+    for part in parts {
+        let width = (part.maximum[0] - part.minimum[0]).max(1e-6);
+        let depth = (part.maximum[2] - part.minimum[2]).max(1e-6);
+        total_area += (width + gap) * (depth + gap);
+        max_width = max_width.max(width);
+        footprints.push((width, depth));
+    }
+    let target_width = (total_area.sqrt() * 1.8).max(max_width + gap);
+    let mut order: Vec<usize> = (0..parts.len()).collect();
+    order.sort_by(|&first, &second| {
+        let first_area = footprints[first].0 * footprints[first].1;
+        let second_area = footprints[second].0 * footprints[second].1;
+        second_area
+            .partial_cmp(&first_area)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(first.cmp(&second))
+    });
+
+    let mut placed = vec![[0.0; 2]; parts.len()];
+    let mut row_of = vec![0usize; parts.len()];
+    let mut row_widths = Vec::new();
+    let mut row = 0usize;
+    let mut x = 0.0;
+    let mut z = 0.0;
+    let mut row_depth: f64 = 0.0;
+    for &index in &order {
+        let (width, depth) = footprints[index];
+        if x > 0.0 && x - gap + width > target_width {
+            row_widths.push((x - gap).max(0.0));
+            row += 1;
+            z += row_depth + gap;
+            x = 0.0;
+            row_depth = 0.0;
+        }
+        placed[index] = [x, z];
+        row_of[index] = row;
+        x += width + gap;
+        row_depth = row_depth.max(depth);
+    }
+    row_widths.push((x - gap).max(0.0));
+
+    let total_depth = z + row_depth;
+    let layout_center_z = total_depth * 0.5;
+    let row_offsets: Vec<f64> = row_widths.iter().map(|width| -width * 0.5).collect();
+    for index in 0..parts.len() {
+        let (width, depth) = footprints[index];
+        let row = row_of[index];
+        let target_x = center[0] + row_offsets[row] + placed[index][0] + width * 0.5;
+        let target_z = center[2] + placed[index][1] + depth * 0.5 - layout_center_z;
+        offsets[index] = [
+            target_x - parts[index].center[0],
+            ground - parts[index].minimum[1],
+            target_z - parts[index].center[2],
+        ];
+    }
+    offsets
+}
+
+/// Zoom that makes the fully arranged layout fit the current viewport. Only
+/// used to pull the camera back; the user's own zoom is never increased here.
+fn arrange_fit_zoom(parts: &[ModelPart], layout: &[Vertex], radius: f64) -> f64 {
+    if parts.len() < 2 || layout.len() != parts.len() || radius <= 0.0 {
+        return 1.0;
+    }
+    let mut minimum = [f64::INFINITY; 3];
+    let mut maximum = [f64::NEG_INFINITY; 3];
+    for (part, offset) in parts.iter().zip(layout) {
+        for axis in 0..3 {
+            minimum[axis] = minimum[axis].min(part.minimum[axis] + offset[axis]);
+            maximum[axis] = maximum[axis].max(part.maximum[axis] + offset[axis]);
+        }
+    }
+    let extent = sub(maximum, minimum).into_iter().fold(0.0f64, f64::max);
+    if !extent.is_finite() || extent <= 0.0 {
+        return 1.0;
+    }
+    (radius / extent).clamp(0.05, 1.0)
 }
 
 /// Converts a screen-space drag into a model-space translation on the camera
@@ -288,13 +323,6 @@ fn drag_translation(
     let world_x = view_delta[0] * yaw_cos - undo_pitch_z * yaw_sin;
     let world_z = view_delta[0] * yaw_sin + undo_pitch_z * yaw_cos;
     [world_x * radius, undo_pitch_y * radius, world_z * radius]
-}
-
-fn alternative_explode_direction(index: usize) -> Vertex {
-    let angle = index as f64 * 2.399_963_229_728_653;
-    let z = if index.is_multiple_of(2) { 0.35 } else { -0.35 } + ((index % 5) as f64 - 2.0) * 0.05;
-    let xy = (1.0 - z * z).max(0.0).sqrt();
-    [angle.cos() * xy, angle.sin() * xy, z]
 }
 
 fn scale_color(color: [u8; 3], factor: f32) -> [u8; 3] {
@@ -503,14 +531,15 @@ pub struct ModelReader {
     dragging_section: bool,
     parts_open: bool,
     part_rows: Vec<usize>,
-    explode: f64,
-    explode_offsets: Vec<Vertex>,
+    arrange_factor: f64,
+    arrange_offsets: Vec<Vertex>,
+    arrange_zoom: f64,
     manual_offsets: Vec<Vertex>,
     hidden_parts: Vec<bool>,
     selected_part: Option<usize>,
     move_parts: bool,
-    explode_track: Option<Bounds<Pixels>>,
-    dragging_explode: bool,
+    arrange_track: Option<Bounds<Pixels>>,
+    dragging_arrange: bool,
     viewport: Option<Bounds<Pixels>>,
     pick: Option<Arc<Vec<u16>>>,
     pick_frame: Option<PickFrame>,
@@ -584,14 +613,15 @@ impl ModelReader {
             dragging_section: false,
             parts_open: true,
             part_rows: Vec::new(),
-            explode: 0.0,
-            explode_offsets: Vec::new(),
+            arrange_factor: 0.0,
+            arrange_offsets: Vec::new(),
+            arrange_zoom: 1.0,
             manual_offsets: Vec::new(),
             hidden_parts: Vec::new(),
             selected_part: None,
             move_parts: false,
-            explode_track: None,
-            dragging_explode: false,
+            arrange_track: None,
+            dragging_arrange: false,
             viewport: None,
             pick: None,
             pick_frame: None,
@@ -687,12 +717,16 @@ impl ModelReader {
 
     #[cfg(test)]
     pub(crate) fn parts_state_for_test(&self) -> (usize, f64, Option<usize>) {
-        (self.mesh.parts.len(), self.explode, self.selected_part)
+        (
+            self.mesh.parts.len(),
+            self.arrange_factor,
+            self.selected_part,
+        )
     }
 
     #[cfg(test)]
-    pub(crate) fn set_explode_for_test(&mut self, factor: f64, cx: &mut Context<Self>) {
-        self.set_explode(factor, cx);
+    pub(crate) fn set_arrange_for_test(&mut self, factor: f64, cx: &mut Context<Self>) {
+        self.set_arrange(factor, cx);
     }
 
     /// Test hook: moves the camera away from its default so a reload that
@@ -708,10 +742,11 @@ impl ModelReader {
     fn reset_part_layout(&mut self) {
         let count = self.mesh.parts.len();
         self.manual_offsets = vec![[0.0; 3]; count];
-        self.explode_offsets = vec![[0.0; 3]; count];
+        self.arrange_offsets = vec![[0.0; 3]; count];
+        self.arrange_zoom = 1.0;
         self.hidden_parts = vec![false; count];
         self.selected_part = None;
-        self.explode = 0.0;
+        self.arrange_factor = 0.0;
         self.move_parts = false;
         self.refresh_part_rows();
     }
@@ -731,58 +766,66 @@ impl ModelReader {
     fn effective_offsets(&self) -> Vec<Vertex> {
         (0..self.mesh.parts.len())
             .map(|index| {
-                let explode = self.explode_offsets.get(index).copied().unwrap_or([0.0; 3]);
+                let arrange = self.arrange_offsets.get(index).copied().unwrap_or([0.0; 3]);
                 let manual = self.manual_offsets.get(index).copied().unwrap_or([0.0; 3]);
                 [
-                    explode[0] + manual[0],
-                    explode[1] + manual[1],
-                    explode[2] + manual[2],
+                    arrange[0] + manual[0],
+                    arrange[1] + manual[1],
+                    arrange[2] + manual[2],
                 ]
             })
             .collect()
     }
 
     fn part_display_offset(&self, index: usize) -> Vertex {
-        let explode = self.explode_offsets.get(index).copied().unwrap_or([0.0; 3]);
+        let arrange = self.arrange_offsets.get(index).copied().unwrap_or([0.0; 3]);
         let manual = self.manual_offsets.get(index).copied().unwrap_or([0.0; 3]);
         [
-            explode[0] + manual[0],
-            explode[1] + manual[1],
-            explode[2] + manual[2],
+            arrange[0] + manual[0],
+            arrange[1] + manual[1],
+            arrange[2] + manual[2],
         ]
     }
 
-    fn rebuild_explode_offsets(&mut self) {
+    fn rebuild_arrange_offsets(&mut self) {
         let (center, radius) = self.mesh.frame();
-        self.explode_offsets =
-            compute_explode_offsets(&self.mesh.parts, center, radius, self.explode);
+        let ground = self.mesh.minimum[1];
+        let layout = compute_arrange_layout(&self.mesh.parts, center, ground, radius);
+        let factor = self.arrange_factor.clamp(0.0, 1.0);
+        self.arrange_offsets = layout
+            .iter()
+            .map(|offset| offset.map(|value| value * factor))
+            .collect();
+        let fit_zoom = arrange_fit_zoom(&self.mesh.parts, &layout, radius);
+        self.arrange_zoom = 1.0 + (fit_zoom - 1.0) * factor;
     }
 
-    fn set_explode(&mut self, factor: f64, cx: &mut Context<Self>) {
+    fn set_arrange(&mut self, factor: f64, cx: &mut Context<Self>) {
         let factor = (factor.clamp(0.0, 1.0) * 100.0).round() / 100.0;
-        if (self.explode - factor).abs() <= 1e-9 {
+        if (self.arrange_factor - factor).abs() <= 1e-9 {
             return;
         }
-        self.explode = factor;
-        self.rebuild_explode_offsets();
+        self.arrange_factor = factor;
+        self.rebuild_arrange_offsets();
         self.dirty = true;
         cx.notify();
     }
 
-    fn drag_explode(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
-        let Some(bounds) = self.explode_track else {
+    fn drag_arrange(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        let Some(bounds) = self.arrange_track else {
             return;
         };
         let width = f64::from(bounds.size.width).max(1.0);
         let factor = f64::from(position.x - bounds.origin.x) / width;
-        self.set_explode(factor, cx);
+        self.set_arrange(factor, cx);
     }
 
     fn reset_part_positions(&mut self, cx: &mut Context<Self>) {
         let count = self.mesh.parts.len();
         self.manual_offsets = vec![[0.0; 3]; count];
-        self.explode_offsets = vec![[0.0; 3]; count];
-        self.explode = 0.0;
+        self.arrange_offsets = vec![[0.0; 3]; count];
+        self.arrange_zoom = 1.0;
+        self.arrange_factor = 0.0;
         self.dirty = true;
         cx.notify();
     }
@@ -824,7 +867,7 @@ impl ModelReader {
         let picks = self.pick.as_ref()?;
         let frame = self.pick_frame.as_ref()?;
         let offsets = self.effective_offsets();
-        if frame.camera != self.camera
+        if frame.camera != self.render_camera()
             || frame.dimensions != self.dimensions
             || frame.offsets != offsets
             || frame.hidden != self.hidden_parts
@@ -852,6 +895,12 @@ impl ModelReader {
         }
         let pick = *picks.get(y as usize * width as usize + x as usize)?;
         (pick != u16::MAX).then_some(pick as usize)
+    }
+
+    fn render_camera(&self) -> Camera {
+        let mut camera = self.camera;
+        camera.zoom = (camera.zoom * self.arrange_zoom).clamp(0.005, 20.0);
+        camera
     }
 
     /// Converts a screen-space drag into a model-space translation on the
@@ -889,7 +938,7 @@ impl ModelReader {
             px((f64::from(delta.y) / scale) as f32),
         );
         part_drag_translation(
-            self.camera,
+            self.render_camera(),
             self.dimensions,
             radius,
             center,
@@ -940,7 +989,7 @@ impl ModelReader {
         }
         self.dirty = false;
         let mesh = self.mesh.clone();
-        let camera = self.camera;
+        let camera = self.render_camera();
         let style = self.rendered_style.unwrap_or(RasterStyle {
             model: [150, 160, 175],
             edge: [60, 64, 70],
@@ -1301,16 +1350,16 @@ impl ModelReader {
                 toolbar
                     .child(Divider::vertical())
                     .child(
-                        IconButton::new("model-explode", IconName::GenericMaximize)
+                        IconButton::new("model-arrange", IconName::GenericMaximize)
                             .icon_size(IconSize::Small)
-                            .toggle_state(self.explode > 0.0)
-                            .tooltip(Tooltip::text(i18n::t!("21c81ea001d9fcbb")))
+                            .toggle_state(self.arrange_factor > 0.0)
+                            .tooltip(Tooltip::text(i18n::t!("84455d3e97053f88")))
                             .on_click(cx.listener(|reader, _, _, cx| {
                                 reader.panel_open = true;
-                                if reader.explode > 0.0 {
-                                    reader.set_explode(0.0, cx);
+                                if reader.arrange_factor > 0.0 {
+                                    reader.set_arrange(0.0, cx);
                                 } else {
-                                    reader.set_explode(0.6, cx);
+                                    reader.set_arrange(1.0, cx);
                                 }
                             })),
                     )
@@ -1660,7 +1709,7 @@ impl ModelReader {
                         }),
                 )
                 .when(count > 1, |card| {
-                    card.child(self.render_explode_position(cx))
+                    card.child(self.render_arrange_position(cx))
                 })
                 .when(cap_warning, |card| {
                     card.child(
@@ -1816,9 +1865,9 @@ impl ModelReader {
             })
     }
 
-    fn render_explode_position(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_arrange_position(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let entity = cx.entity().downgrade();
-        let factor = self.explode;
+        let factor = self.arrange_factor;
         let accent = cx.theme().colors().text_accent;
         let track = cx.theme().colors().border;
         let handle_border = cx.theme().colors().background;
@@ -1830,7 +1879,7 @@ impl ModelReader {
                 h_flex()
                     .justify_between()
                     .child(
-                        Label::new(i18n::t!("359a8477958d7f31"))
+                        Label::new(i18n::t!("d557a972ab065e6c"))
                             .size(LabelSize::Default)
                             .color(Color::Muted),
                     )
@@ -1838,8 +1887,8 @@ impl ModelReader {
             )
             .child(
                 div()
-                    .id("model-explode-track")
-                    .debug_selector(|| "model-explode-track".to_string())
+                    .id("model-arrange-track")
+                    .debug_selector(|| "model-arrange-track".to_string())
                     .relative()
                     .h(px(20.0))
                     .w_full()
@@ -1847,24 +1896,24 @@ impl ModelReader {
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|reader, event: &gpui::MouseDownEvent, _, cx| {
-                            reader.dragging_explode = true;
-                            reader.drag_explode(event.position, cx);
+                            reader.dragging_arrange = true;
+                            reader.drag_arrange(event.position, cx);
                         }),
                     )
                     .on_mouse_up(
                         MouseButton::Left,
-                        cx.listener(|reader, _, _, _| reader.dragging_explode = false),
+                        cx.listener(|reader, _, _, _| reader.dragging_arrange = false),
                     )
                     .on_mouse_move(cx.listener(|reader, event: &gpui::MouseMoveEvent, _, cx| {
                         if !event
                             .pressed_button
                             .is_some_and(|button| button == MouseButton::Left)
                         {
-                            reader.dragging_explode = false;
+                            reader.dragging_arrange = false;
                             return;
                         }
-                        if reader.dragging_explode {
-                            reader.drag_explode(event.position, cx);
+                        if reader.dragging_arrange {
+                            reader.drag_arrange(event.position, cx);
                         }
                     }))
                     .child(
@@ -1903,7 +1952,7 @@ impl ModelReader {
                         canvas(
                             move |bounds, _, cx| {
                                 entity
-                                    .update(cx, |reader, _| reader.explode_track = Some(bounds))
+                                    .update(cx, |reader, _| reader.arrange_track = Some(bounds))
                                     .log_err();
                             },
                             |_, _, _, _| {},
@@ -3734,16 +3783,23 @@ mod tests {
             .count()
     }
 
-    fn part(name: &str, center: Vertex) -> ModelPart {
+    fn part_box(name: &str, minimum: Vertex, maximum: Vertex) -> ModelPart {
         ModelPart {
             name: name.to_string(),
             color: None,
             triangle_count: 1,
-            minimum: center,
-            maximum: center,
-            center,
+            minimum,
+            maximum,
+            center: std::array::from_fn(|axis| minimum[axis] * 0.5 + maximum[axis] * 0.5),
             depth: 0,
         }
+    }
+
+    fn effective_bounds(part: &ModelPart, offset: Vertex) -> (Vertex, Vertex) {
+        (
+            std::array::from_fn(|axis| part.minimum[axis] + offset[axis]),
+            std::array::from_fn(|axis| part.maximum[axis] + offset[axis]),
+        )
     }
 
     fn split_mesh() -> ModelMesh {
@@ -3755,32 +3811,49 @@ mod tests {
     }
 
     #[test]
-    fn explode_offsets_are_zero_at_rest_and_radial_under_load() {
+    fn arrange_layout_rests_parts_on_the_ground_without_overlap() {
         let parts = [
-            part("left", [-1.0, 0.0, 0.0]),
-            part("right", [1.0, 0.0, 0.0]),
+            part_box("a", [-1.0, 0.0, -0.5], [1.0, 2.0, 0.5]),
+            part_box("b", [-0.5, 0.0, -1.0], [0.5, 3.0, 1.0]),
+            part_box("c", [-1.5, 0.0, -0.5], [1.5, 1.0, 0.5]),
         ];
-        let rest = compute_explode_offsets(&parts, [0.0; 3], 2.0, 0.0);
-        assert_eq!(rest, vec![[0.0; 3]; 2]);
-        let moved = compute_explode_offsets(&parts, [0.0; 3], 2.0, 0.5);
-        assert!((moved[0][0] + 0.85).abs() < 1e-12, "{moved:?}");
-        assert!((moved[1][0] - 0.85).abs() < 1e-12, "{moved:?}");
-        assert_eq!(moved[0][1], 0.0);
-        assert_eq!(moved[1][1], 0.0);
-    }
-
-    #[test]
-    fn coincident_part_centers_get_distinct_directions() {
-        let parts = [part("first", [0.0; 3]), part("second", [0.0; 3])];
-        let moved = compute_explode_offsets(&parts, [0.0; 3], 1.0, 1.0);
-        let first = moved[0];
-        let second = moved[1];
-        assert!(dot(first, first).sqrt() > 0.3);
-        assert!(dot(second, second).sqrt() > 0.3);
-        assert!(
-            (first[0] - second[0]).abs() + (first[1] - second[1]).abs() > 0.1,
-            "{moved:?}"
-        );
+        let center = [0.0; 3];
+        let layout = compute_arrange_layout(&parts, center, 0.0, 3.0);
+        for (part, offset) in parts.iter().zip(&layout) {
+            assert!(
+                (part.minimum[1] + offset[1]).abs() < 1e-12,
+                "{} must rest on the ground: {offset:?}",
+                part.name
+            );
+        }
+        for first in 0..parts.len() {
+            let (first_min, first_max) = effective_bounds(&parts[first], layout[first]);
+            for second in first + 1..parts.len() {
+                let (second_min, second_max) = effective_bounds(&parts[second], layout[second]);
+                let overlaps = first_min[0] < second_max[0]
+                    && second_min[0] < first_max[0]
+                    && first_min[2] < second_max[2]
+                    && second_min[2] < first_max[2];
+                assert!(
+                    !overlaps,
+                    "{} and {} overlap: {first_min:?}..{first_max:?} / {second_min:?}..{second_max:?}",
+                    parts[first].name, parts[second].name
+                );
+            }
+        }
+        let mut minimum = [f64::INFINITY; 3];
+        let mut maximum = [f64::NEG_INFINITY; 3];
+        for (part, offset) in parts.iter().zip(&layout) {
+            let (low, high) = effective_bounds(part, *offset);
+            for axis in 0..3 {
+                minimum[axis] = minimum[axis].min(low[axis]);
+                maximum[axis] = maximum[axis].max(high[axis]);
+            }
+        }
+        assert!(((minimum[0] + maximum[0]) * 0.5).abs() < 1e-12);
+        assert!(((minimum[2] + maximum[2]) * 0.5).abs() < 1e-12);
+        let fit = arrange_fit_zoom(&parts, &layout, 3.0);
+        assert!(fit > 0.05 && fit <= 1.0, "fit={fit}");
     }
 
     #[test]
