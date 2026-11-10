@@ -1867,7 +1867,7 @@ mod tests {
     }
 
     #[gpui::test]
-    async fn test_model_parts_panel_and_explode(cx: &mut TestAppContext) {
+    async fn test_model_parts_panel_and_arrange(cx: &mut TestAppContext) {
         init_test(cx);
         let stl = b"solid test\n\
             facet normal 0 0 1\nouter loop\nvertex 0 0 0\nvertex 1 0 0\nvertex 0 1 0\nendloop\nendfacet\n\
@@ -1886,11 +1886,11 @@ mod tests {
             2
         );
         assert!(window.debug_bounds("model-parts-header").is_some());
-        assert!(window.debug_bounds("model-explode-track").is_some());
-        window.update(|_, cx| reader.update(cx, |reader, cx| reader.set_explode_for_test(0.6, cx)));
+        assert!(window.debug_bounds("model-arrange-track").is_some());
+        window.update(|_, cx| reader.update(cx, |reader, cx| reader.set_arrange_for_test(1.0, cx)));
         window.run_until_parked();
         assert!(
-            (window.update(|_, cx| reader.read(cx).parts_state_for_test().1) - 0.6).abs() < 1e-9
+            (window.update(|_, cx| reader.read(cx).parts_state_for_test().1) - 1.0).abs() < 1e-9
         );
     }
 
@@ -1907,7 +1907,7 @@ mod tests {
             cx.add_window_view(|window, cx| DocumentView::new(item, project, window, cx));
         window.run_until_parked();
         assert!(window.debug_bounds("model-parts-header").is_none());
-        assert!(window.debug_bounds("model-explode-track").is_none());
+        assert!(window.debug_bounds("model-arrange-track").is_none());
     }
 
     #[gpui::test]
