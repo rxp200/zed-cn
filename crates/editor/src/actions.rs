@@ -958,6 +958,8 @@ actions!(
         /// Generates a syntax-level explanation for the selected code and adds
         /// a line-end control that opens the explanation in a modal.
         DeepExplainSelection,
+        /// Sends the question currently typed in the deep code explanation dialog.
+        SendDeepExplanationFollowUp,
         /// Translates the selected text, or the word under the cursor when
         /// nothing is selected, using the model configured under
         /// `hover_translation` in settings.

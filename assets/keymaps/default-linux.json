@@ -173,6 +173,14 @@
     },
   },
   {
+    "context": "DeepExplanationComposer > Editor && mode == auto_height",
+    "bindings": {
+      "enter": "editor::SendDeepExplanationFollowUp",
+      "shift-enter": "editor::Newline",
+      "ctrl-enter": "editor::SendDeepExplanationFollowUp",
+    },
+  },
+  {
     "context": "Markdown",
     "bindings": {
       "copy": "markdown::Copy",

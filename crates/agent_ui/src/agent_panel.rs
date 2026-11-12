@@ -366,29 +366,6 @@ pub fn init(cx: &mut App) {
     cx.observe_new(
         |workspace: &mut Workspace, _window, _cx: &mut Context<Workspace>| {
             workspace
-                .register_action(
-                    |workspace,
-                     action: &zed_actions::assistant::FollowUpCodeExplanation,
-                     window,
-                     cx| {
-                        if project::DisableAiSettings::get_global(cx).disable_ai {
-                            return;
-                        }
-                        let Some(prompt) = ExternalSourcePrompt::new(&action.text) else {
-                            return;
-                        };
-                        if let Some(panel) = workspace.panel::<AgentPanel>(cx) {
-                            panel.update(cx, |panel, cx| {
-                                panel.new_agent_thread_with_external_source_prompt(
-                                    Some(prompt),
-                                    window,
-                                    cx,
-                                )
-                            });
-                            workspace.focus_panel::<AgentPanel>(window, cx);
-                        }
-                    },
-                )
                 .register_action(|workspace, _: &NewThread, window, cx| {
                     if let Some(panel) = workspace.panel::<AgentPanel>(cx) {
                         panel.update(cx, |panel, cx| {

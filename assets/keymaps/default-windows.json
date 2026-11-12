@@ -172,6 +172,15 @@
     },
   },
   {
+    "context": "DeepExplanationComposer > Editor && mode == auto_height",
+    "use_key_equivalents": true,
+    "bindings": {
+      "enter": "editor::SendDeepExplanationFollowUp",
+      "shift-enter": "editor::Newline",
+      "ctrl-enter": "editor::SendDeepExplanationFollowUp",
+    },
+  },
+  {
     "context": "Markdown",
     "use_key_equivalents": true,
     "bindings": {
