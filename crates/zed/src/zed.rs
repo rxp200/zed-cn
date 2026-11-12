@@ -63,7 +63,7 @@ use paths::{
     local_tasks_file_relative_path,
 };
 use project::{
-    DirectoryLister, DisableAiSettings, ProjectItem,
+    DirectoryLister, DisableAiSettings, Project, ProjectItem,
     project_settings::{SettingsObserver, SettingsObserverEvent},
 };
 use project_panel::ProjectPanel;
@@ -332,6 +332,12 @@ pub fn init(cx: &mut App) {
     .on_action(|_: &About, cx| {
         open_about_window(cx);
     });
+
+    cx.observe_new::<Project>(|_, _window, cx| {
+        let project = cx.entity();
+        editor::code_explanations::register_changed_file_prefetch(&project, cx);
+    })
+    .detach();
 }
 
 fn bind_on_window_closed(cx: &mut App) -> Option<gpui::Subscription> {

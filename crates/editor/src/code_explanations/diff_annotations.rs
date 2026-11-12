@@ -1,16 +1,24 @@
 use super::*;
 use language::{Buffer, BufferId, BufferSnapshot};
 use multi_buffer::{Anchor, MultiBufferSnapshot};
+use std::collections::VecDeque;
 use std::ops::Range;
+use std::time::{Duration, Instant};
 use text::ToOffset as _;
+
+const REQUEST_DEBOUNCE: Duration = Duration::from_millis(500);
+const WAITER_POLL: Duration = Duration::from_millis(200);
 
 #[derive(Default)]
 pub(super) struct DiffAnnotations {
     task: Option<Task<()>>,
+    running: bool,
     identity: String,
     blocks: HashSet<crate::CustomBlockId>,
     stopped: bool,
     coverage: Vec<(BufferId, Range<usize>)>,
+    queue: VecDeque<PendingUnit>,
+    requested: HashSet<(BufferId, Range<usize>)>,
 }
 
 struct VisibleCode {
@@ -28,6 +36,7 @@ struct PendingUnit {
     visible: Vec<(Range<usize>, Option<Anchor>)>,
     key: String,
     namespace: String,
+    enqueued: Instant,
 }
 
 pub(super) fn clear(editor: &mut Editor, cx: &mut Context<Editor>) {
@@ -36,8 +45,11 @@ pub(super) fn clear(editor: &mut Editor, cx: &mut Context<Editor>) {
         .write_generation
         .fetch_add(1, Ordering::SeqCst);
     editor.explanations.diff.task = None;
+    editor.explanations.diff.running = false;
     editor.explanations.diff.identity.clear();
     editor.explanations.diff.coverage.clear();
+    editor.explanations.diff.queue.clear();
+    editor.explanations.diff.requested.clear();
     editor.explanations.diff.stopped = false;
     let blocks = std::mem::take(&mut editor.explanations.diff.blocks);
     if !blocks.is_empty() {
@@ -48,10 +60,16 @@ pub(super) fn clear(editor: &mut Editor, cx: &mut Context<Editor>) {
 
 pub(super) fn stop(editor: &mut Editor) {
     editor.explanations.diff.task = None;
+    editor.explanations.diff.running = false;
+    editor.explanations.diff.queue.clear();
     editor.explanations.diff.stopped = true;
 }
 
 pub(super) fn retry(editor: &mut Editor) {
+    editor.explanations.diff.task = None;
+    editor.explanations.diff.running = false;
+    editor.explanations.diff.queue.clear();
+    editor.explanations.diff.requested.clear();
     editor.explanations.diff.identity.clear();
     editor.explanations.diff.stopped = false;
 }
@@ -148,6 +166,371 @@ fn annotation_anchor(
     }
 }
 
+fn covered(coverage: &[(BufferId, Range<usize>)], id: BufferId, range: &Range<usize>) -> bool {
+    coverage.iter().any(|(covered_id, covered)| {
+        *covered_id == id && covered.start <= range.start && covered.end >= range.end
+    })
+}
+
+fn extend_coverage(
+    coverage: &mut Vec<(BufferId, Range<usize>)>,
+    added: &[(BufferId, Range<usize>)],
+) {
+    for (id, range) in added {
+        let mut start = range.start;
+        let mut end = range.end;
+        coverage.retain_mut(|(covered_id, covered)| {
+            if *covered_id != *id || covered.end < start || end < covered.start {
+                return true;
+            }
+            start = start.min(covered.start);
+            end = end.max(covered.end);
+            false
+        });
+        coverage.push((*id, start..end));
+    }
+}
+
+fn collect_pending_units(
+    editor: &mut Editor,
+    project: &gpui::Entity<project::Project>,
+    regions: Vec<VisibleCode>,
+    settings: &CodeExplanationSettings,
+    model: &ConfiguredModel,
+    provider_configuration: &str,
+    cx: &mut Context<Editor>,
+) -> Vec<PendingUnit> {
+    let mut pending = Vec::<PendingUnit>::new();
+    let mut seen = HashMap::<(BufferId, Range<usize>), usize>::default();
+    for region in regions {
+        let snapshot = &region.snapshot;
+        let mut units = whole_file_unit(snapshot, settings.max_function_lines)
+            .into_iter()
+            .collect::<Vec<_>>();
+        if units.is_empty() {
+            let first = snapshot.offset_to_point(region.range.start).row;
+            let last = snapshot.offset_to_point(region.range.end).row;
+            let mut row = first;
+            while row <= last {
+                let candidates = units_at(snapshot, row);
+                let next = candidates
+                    .iter()
+                    .map(|unit| unit.last_row as u32 + 1)
+                    .max()
+                    .unwrap_or(row + 1);
+                units.extend(candidates);
+                row = next.max(row + 1);
+            }
+        }
+        let units = crate::code_explanation_units::fit_units_to_budget(
+            snapshot,
+            units,
+            crate::code_explanation_units::request_code_budget(model.model.max_token_count()),
+            |text| model.model.estimate_tokens(text),
+        );
+        for unit in units {
+            if unit.owner_lines as u64 > settings.max_function_lines {
+                continue;
+            }
+            let identity = (snapshot.remote_id(), unit.range.clone());
+            if let Some(index) = seen.get(&identity) {
+                pending[*index]
+                    .visible
+                    .push((region.range.clone(), region.deleted_anchor));
+                continue;
+            }
+            if editor.explanations.diff.requested.contains(&identity) {
+                continue;
+            }
+            let Some(file) = region.source.read(cx).file().cloned() else {
+                continue;
+            };
+            let store = project.read(cx).worktree_store();
+            let Some(worktree) = store.read(cx).worktree_for_id(file.worktree_id(cx), cx) else {
+                continue;
+            };
+            let namespace = format!(
+                "{:?}:{:?}",
+                worktree.read(cx).abs_path(),
+                project.read(cx).remote_connection_options(cx)
+            );
+            let language = snapshot
+                .language()
+                .map(|language| language.name().to_string())
+                .unwrap_or_default();
+            let code: String = snapshot.text_for_range(unit.range.clone()).collect();
+            let key = format!(
+                "v6:{provider_configuration}:{:?}:{:?}:{}:{}:{}",
+                settings.provider,
+                settings.model,
+                settings.target_language,
+                settings.detailed,
+                content_hash(&format!("{language}\n{}\n{code}", unit.context))
+            );
+            seen.insert(identity.clone(), pending.len());
+            editor.explanations.diff.requested.insert(identity);
+            pending.push(PendingUnit {
+                snapshot: snapshot.clone(),
+                source: region.source.clone(),
+                file,
+                unit,
+                visible: vec![(region.range.clone(), region.deleted_anchor)],
+                key,
+                namespace,
+                enqueued: Instant::now(),
+            });
+        }
+    }
+    pending
+}
+
+#[allow(clippy::too_many_arguments)]
+fn ensure_worker(
+    editor: &mut Editor,
+    project: &gpui::Entity<project::Project>,
+    identity: String,
+    settings: &CodeExplanationSettings,
+    provider_configuration: String,
+    model: ConfiguredModel,
+    epoch: u64,
+    cx: &mut Context<Editor>,
+) {
+    if editor.explanations.diff.running || editor.explanations.diff.queue.is_empty() {
+        return;
+    }
+    editor.explanations.diff.running = true;
+    editor.explanations.busy = true;
+    let queued = editor.explanations.diff.queue.len();
+    editor.explanations.progress = (0, queued);
+    let project = project.clone();
+    let settings = settings.clone();
+    editor.explanations.diff.task = Some(cx.spawn(async move |this, cx| {
+        loop {
+            let Some(pending) = this
+                .update(cx, |editor, _| {
+                    if editor.explanations.diff.identity != identity {
+                        return None;
+                    }
+                    editor.explanations.diff.queue.pop_front()
+                })
+                .log_err()
+                .flatten()
+            else {
+                break;
+            };
+            let authorized = |cx: &mut App| {
+                this.read_with(cx, |editor, cx| {
+                    editor.explanations.diff.identity == identity
+                        && editor.project() == Some(&project)
+                        && {
+                            let display = editor.buffer.read(cx).snapshot(cx);
+                            display
+                                .buffer_for_id(pending.snapshot.remote_id())
+                                .or_else(|| {
+                                    display.buffers_with_paths().find_map(|(snapshot, _)| {
+                                        display
+                                            .diff_for_buffer_id(snapshot.remote_id())
+                                            .map(|diff| diff.base_text())
+                                            .filter(|base| {
+                                                base.remote_id() == pending.snapshot.remote_id()
+                                            })
+                                    })
+                                })
+                                .is_some_and(|current| current.version() == pending.snapshot.version())
+                        }
+                })
+                .unwrap_or(false)
+                    && CodeExplanationSettings::get_global(cx).enabled
+                    && !project::DisableAiSettings::get_global(cx).disable_ai
+                    && format!("{:?}", CodeExplanationSettings::get_global(cx))
+                        == format!("{settings:?}")
+                    && selected_provider_configuration(&settings, cx) == provider_configuration
+                    && epoch == CACHE_EPOCH.load(Ordering::SeqCst)
+                    && pending
+                        .source
+                        .read(cx)
+                        .file()
+                        .is_some_and(|file| Arc::ptr_eq(file, &pending.file))
+                    && allowed(&pending.source, &project, cx)
+            };
+            if !cx.update(authorized) {
+                break;
+            }
+            let cache_path = paths::data_dir()
+                .join("code-explanations")
+                .join(format!("{}.sqlite", content_hash(&pending.namespace)));
+            let request_key = format!("{}:{}", pending.namespace, pending.key);
+            let shared_key = format!("{epoch}:{request_key}");
+            let code: String = pending
+                .snapshot
+                .text_for_range(pending.unit.range.clone())
+                .collect();
+            let language = pending
+                .snapshot
+                .language()
+                .map(|language| language.name().to_string())
+                .unwrap_or_default();
+            let bypass_cache = this
+                .read_with(cx, |editor, _| editor.explanations.bypass_cache)
+                .unwrap_or(false);
+            let mut cached = if bypass_cache {
+                None
+            } else {
+                shared_result(&shared_key, None)
+            };
+            if cached.is_none() && settings.cache_persist && !bypass_cache {
+                let path = cache_path.clone();
+                let key = pending.key.clone();
+                cached = cx
+                    .background_spawn(async move { cache_access(&path, &key, None, 0) })
+                    .await
+                    .log_err()
+                    .flatten()
+                    .map(Into::into);
+            }
+            if !cx.update(authorized) {
+                break;
+            }
+            let result = match cached {
+                Some(text) => Ok(text),
+                None => {
+                    let elapsed = pending.enqueued.elapsed();
+                    if elapsed < REQUEST_DEBOUNCE {
+                        cx.background_executor()
+                            .timer(REQUEST_DEBOUNCE - elapsed)
+                            .await;
+                    }
+                    let waiting = match CodeExplanationRequestWaiter::new(
+                        project.entity_id(),
+                        request_key,
+                        1,
+                    ) {
+                        Ok(waiting) => waiting,
+                        Err(error) => {
+                            log::error!("{error}");
+                            break;
+                        }
+                    };
+                    let permit = loop {
+                        if !cx.update(authorized) {
+                            break None;
+                        }
+                        if let Some(permit) = waiting.acquire(settings.max_concurrent_requests) {
+                            break Some(permit);
+                        }
+                        cx.background_executor().timer(WAITER_POLL).await;
+                    };
+                    let Some(permit) = permit else {
+                        break;
+                    };
+                    let result = request_if_authorized(
+                        authorized,
+                        model.clone(),
+                        settings.clone(),
+                        i18n::t_mix!("8e667b4105a98ce1"; pending.unit.context, code.lines().enumerate().map(|(index, line)| format!("{}: {line}", index + 1)).collect::<Vec<_>>().join("\n"); language = language),
+                        cx,
+                    )
+                    .await;
+                    drop(permit);
+                    result
+                }
+            };
+            if !cx.update(authorized) {
+                break;
+            }
+            match result.and_then(|text| {
+                let annotations = parse_annotations(
+                    &text,
+                    &code,
+                    if settings.prefer_existing_comments {
+                        &pending.unit.commented_rows
+                    } else {
+                        &[]
+                    },
+                )?;
+                Ok((text, annotations))
+            }) {
+                Ok((text, annotations)) => {
+                    shared_result(&shared_key, Some(text.clone()));
+                    if settings.cache_persist {
+                        let path = cache_path.clone();
+                        let key = pending.key.clone();
+                        let text = text.to_string();
+                        let budget = settings.cache_max_bytes;
+                        let generation = this
+                            .read_with(cx, |editor, _| editor.explanations.write_generation.clone())
+                            .ok();
+                        if let Some(generation) = generation {
+                            let expected = generation.load(Ordering::SeqCst);
+                            cx.background_spawn(async move {
+                                cache_access_guarded(&path, &key, Some(&text), budget, || {
+                                    generation.load(Ordering::SeqCst) == expected
+                                        && CACHE_EPOCH.load(Ordering::SeqCst) == epoch
+                                })
+                            })
+                            .await
+                            .log_err();
+                        }
+                    }
+                    if !cx.update(authorized) {
+                        break;
+                    }
+                    this.update(cx, |editor, cx| {
+                        let display = editor.buffer.read(cx).snapshot(cx);
+                        for annotation in annotations {
+                            let row = pending.unit.first_row + annotation.line - 1;
+                            let column = code
+                                .lines()
+                                .nth(annotation.line - 1)
+                                .map(first_non_whitespace_column)
+                                .unwrap_or(0);
+                            if let Some(anchor) = annotation_anchor(
+                                &display,
+                                &pending.snapshot,
+                                row,
+                                column,
+                                &pending.visible,
+                            ) {
+                                let before = editor.explanations.blocks.clone();
+                                show(editor, anchor, annotation.explanation.into(), false, cx);
+                                let added = editor
+                                    .explanations
+                                    .blocks
+                                    .difference(&before)
+                                    .copied()
+                                    .collect::<Vec<_>>();
+                                for id in added {
+                                    editor.explanations.blocks.remove(&id);
+                                    editor.explanations.diff.blocks.insert(id);
+                                }
+                            }
+                        }
+                        editor.explanations.progress.0 += 1;
+                        cx.notify();
+                    })
+                    .log_err();
+                }
+                Err(error) => {
+                    this.update(cx, |editor, cx| {
+                        editor.explanations.last_error = Some(error.to_string().into());
+                        editor.explanations.progress.0 += 1;
+                        cx.notify();
+                    })
+                    .log_err();
+                }
+            }
+        }
+        this.update(cx, |editor, cx| {
+            if editor.explanations.diff.identity == identity {
+                editor.explanations.diff.running = false;
+                editor.explanations.busy = !editor.explanations.diff.queue.is_empty();
+                cx.notify();
+            }
+        })
+        .log_err();
+    }));
+}
+
 pub(super) fn schedule(editor: &mut Editor, window: &gpui::Window, cx: &mut Context<Editor>) {
     let settings = CodeExplanationSettings::get_global(cx).clone();
     if !editor.explanations.diff_enabled
@@ -201,30 +584,27 @@ pub(super) fn schedule(editor: &mut Editor, window: &gpui::Window, cx: &mut Cont
             ))
             .collect::<Vec<_>>()
     );
-    let coverage = regions
-        .iter()
-        .map(|region| (region.snapshot.remote_id(), region.range.clone()))
-        .collect::<Vec<_>>();
-    if identity == editor.explanations.diff.identity
-        && (editor.explanations.busy
-            || coverage.iter().all(|(id, range)| {
-                editor
-                    .explanations
-                    .diff
-                    .coverage
-                    .iter()
-                    .any(|(old_id, old)| {
-                        old_id == id && old.start <= range.start && old.end >= range.end
-                    })
-            }))
-    {
-        return;
+    if identity != editor.explanations.diff.identity {
+        editor.explanations.diff.task = None;
+        editor.explanations.diff.running = false;
+        let blocks = std::mem::take(&mut editor.explanations.diff.blocks);
+        if !blocks.is_empty() {
+            editor.remove_blocks(blocks, None, cx);
+        }
+        editor.explanations.diff.coverage.clear();
+        editor.explanations.diff.queue.clear();
+        editor.explanations.diff.requested.clear();
+        editor.explanations.diff.identity = identity.clone();
+        editor.explanations.busy = false;
     }
-    clear(editor, cx);
-    editor.explanations.diff.identity = identity.clone();
-    editor.explanations.diff.coverage = coverage;
-    if !editor.is_focused(window) {
-        editor.explanations.diff.identity.clear();
+    let uncovered = regions.iter().any(|region| {
+        !covered(
+            &editor.explanations.diff.coverage,
+            region.snapshot.remote_id(),
+            &region.range,
+        )
+    });
+    if !uncovered || !editor.is_focused(window) {
         return;
     }
     let model = match resolve_model(&settings, cx) {
@@ -234,194 +614,38 @@ pub(super) fn schedule(editor: &mut Editor, window: &gpui::Window, cx: &mut Cont
             return;
         }
     };
-    let mut pending = Vec::<PendingUnit>::new();
-    let mut seen = HashMap::<(BufferId, Range<usize>), usize>::default();
-    for region in regions {
-        let snapshot = &region.snapshot;
-        let mut units = whole_file_unit(snapshot, settings.max_function_lines)
-            .into_iter()
-            .collect::<Vec<_>>();
-        if units.is_empty() {
-            let first = snapshot.offset_to_point(region.range.start).row;
-            let last = snapshot.offset_to_point(region.range.end).row;
-            let mut row = first;
-            while row <= last {
-                let candidates = units_at(snapshot, row);
-                let next = candidates
-                    .iter()
-                    .map(|unit| unit.last_row as u32 + 1)
-                    .max()
-                    .unwrap_or(row + 1);
-                units.extend(candidates);
-                row = next.max(row + 1);
-            }
-        }
-        let units = crate::code_explanation_units::fit_units_to_budget(
-            snapshot,
-            units,
-            crate::code_explanation_units::request_code_budget(model.model.max_token_count()),
-            |text| model.model.estimate_tokens(text),
-        );
-        for unit in units {
-            if unit.owner_lines as u64 > settings.max_function_lines {
-                continue;
-            }
-            let identity = (snapshot.remote_id(), unit.range.clone());
-            if let Some(index) = seen.get(&identity) {
-                pending[*index]
-                    .visible
-                    .push((region.range.clone(), region.deleted_anchor));
-                continue;
-            }
-            let Some(file) = region.source.read(cx).file().cloned() else {
-                continue;
-            };
-            let store = project.read(cx).worktree_store();
-            let Some(worktree) = store.read(cx).worktree_for_id(file.worktree_id(cx), cx) else {
-                continue;
-            };
-            let namespace = format!(
-                "{:?}:{:?}",
-                worktree.read(cx).abs_path(),
-                project.read(cx).remote_connection_options(cx)
-            );
-            let language = snapshot
-                .language()
-                .map(|language| language.name().to_string())
-                .unwrap_or_default();
-            let code: String = snapshot.text_for_range(unit.range.clone()).collect();
-            let key = format!(
-                "v6:{provider_configuration}:{:?}:{:?}:{}:{}:{}",
-                settings.provider,
-                settings.model,
-                settings.target_language,
-                settings.detailed,
-                content_hash(&format!("{language}\n{}\n{code}", unit.context))
-            );
-            seen.insert(identity, pending.len());
-            pending.push(PendingUnit {
-                snapshot: snapshot.clone(),
-                source: region.source.clone(),
-                file,
-                unit,
-                visible: vec![(region.range.clone(), region.deleted_anchor)],
-                key,
-                namespace,
-            });
-        }
+    let coverage = regions
+        .iter()
+        .map(|region| (region.snapshot.remote_id(), region.range.clone()))
+        .collect::<Vec<_>>();
+    let pending = collect_pending_units(
+        editor,
+        &project,
+        regions,
+        &settings,
+        &model,
+        &provider_configuration,
+        cx,
+    );
+    extend_coverage(&mut editor.explanations.diff.coverage, &coverage);
+    if pending.is_empty() {
+        return;
     }
-    editor.explanations.busy = !pending.is_empty();
-    editor.explanations.progress = (0, pending.len());
-    editor.explanations.diff.task = Some(cx.spawn(async move |this, cx| {
-        cx.background_executor().timer(std::time::Duration::from_millis(500)).await;
-        for pending in pending {
-            let authorized = |cx: &mut App| {
-                this.read_with(cx, |editor, cx| {
-                    editor.explanations.diff.identity == identity
-                        && editor.project() == Some(&project)
-                        && {
-                            let display = editor.buffer.read(cx).snapshot(cx);
-                            display.buffer_for_id(pending.snapshot.remote_id())
-                                .or_else(|| display.buffers_with_paths().find_map(|(snapshot, _)| {
-                                    display.diff_for_buffer_id(snapshot.remote_id())
-                                        .map(|diff| diff.base_text())
-                                        .filter(|base| base.remote_id() == pending.snapshot.remote_id())
-                                }))
-                                .is_some_and(|current| current.version() == pending.snapshot.version())
-                        }
-                }).unwrap_or(false)
-                    && CodeExplanationSettings::get_global(cx).enabled
-                    && !project::DisableAiSettings::get_global(cx).disable_ai
-                    && format!("{:?}", CodeExplanationSettings::get_global(cx)) == format!("{settings:?}")
-                    && selected_provider_configuration(&settings, cx) == provider_configuration
-                    && epoch == CACHE_EPOCH.load(Ordering::SeqCst)
-                    && pending.source.read(cx).file().is_some_and(|file| Arc::ptr_eq(file, &pending.file))
-                    && allowed(&pending.source, &project, cx)
-            };
-            if !cx.update(authorized) { break; }
-            let cache_path = paths::data_dir().join("code-explanations").join(format!("{}.sqlite", content_hash(&pending.namespace)));
-            let request_key = format!("{}:{}", pending.namespace, pending.key);
-            let shared_key = format!("{epoch}:{request_key}");
-            let waiting = match CodeExplanationRequestWaiter::new(project.entity_id(), request_key, 1) {
-                Ok(waiting) => waiting,
-                Err(error) => { log::error!("{error}"); break; }
-            };
-            let permit = loop {
-                if !cx.update(authorized) { break None; }
-                if let Some(permit) = waiting.acquire(settings.max_concurrent_requests) { break Some(permit); }
-                cx.background_executor().timer(std::time::Duration::from_millis(200)).await;
-            };
-            let Some(permit) = permit else { break };
-            let bypass_cache = this.read_with(cx, |editor, _| editor.explanations.bypass_cache).unwrap_or(false);
-            let mut cached = if bypass_cache { None } else { shared_result(&shared_key, None) };
-            if cached.is_none() && settings.cache_persist && !bypass_cache {
-                let path = cache_path.clone();
-                let key = pending.key.clone();
-                cached = cx.background_spawn(async move { cache_access(&path, &key, None, 0) }).await.log_err().flatten().map(Into::into);
-            }
-            if !cx.update(authorized) { break; }
-            let code: String = pending.snapshot.text_for_range(pending.unit.range.clone()).collect();
-            let language = pending.snapshot.language().map(|language| language.name().to_string()).unwrap_or_default();
-            let result = match cached {
-                Some(text) => Ok(text),
-                None => request_if_authorized(authorized, model.clone(), settings.clone(),
-                    i18n::t_mix!("8e667b4105a98ce1"; pending.unit.context, code.lines().enumerate().map(|(index, line)| format!("{}: {line}", index + 1)).collect::<Vec<_>>().join("\n"); language = language), cx).await,
-            };
-            drop(permit);
-            if !cx.update(authorized) { break; }
-            match result.and_then(|text| {
-                let annotations = parse_annotations(&text, &code, if settings.prefer_existing_comments { &pending.unit.commented_rows } else { &[] })?;
-                Ok((text, annotations))
-            }) {
-                Ok((text, annotations)) => {
-                    shared_result(&shared_key, Some(text.clone()));
-                    if settings.cache_persist {
-                        let path = cache_path.clone();
-                        let key = pending.key.clone();
-                        let text = text.to_string();
-                        let budget = settings.cache_max_bytes;
-                        let generation = this.read_with(cx, |editor, _| editor.explanations.write_generation.clone()).ok();
-                        if let Some(generation) = generation {
-                            let expected = generation.load(Ordering::SeqCst);
-                            cx.background_spawn(async move {
-                                cache_access_guarded(&path, &key, Some(&text), budget, || generation.load(Ordering::SeqCst) == expected && CACHE_EPOCH.load(Ordering::SeqCst) == epoch)
-                            }).await.log_err();
-                        }
-                    }
-                    if !cx.update(authorized) { break; }
-                    this.update(cx, |editor, cx| {
-                        let display = editor.buffer.read(cx).snapshot(cx);
-                        for annotation in annotations {
-                            let row = pending.unit.first_row + annotation.line - 1;
-                            let column = code.lines().nth(annotation.line - 1).map(first_non_whitespace_column).unwrap_or(0);
-                            if let Some(anchor) = annotation_anchor(&display, &pending.snapshot, row, column, &pending.visible) {
-                                let before = editor.explanations.blocks.clone();
-                                show(editor, anchor, annotation.explanation.into(), false, cx);
-                                let added = editor.explanations.blocks.difference(&before).copied().collect::<Vec<_>>();
-                                for id in added { editor.explanations.blocks.remove(&id); editor.explanations.diff.blocks.insert(id); }
-                            }
-                        }
-                        editor.explanations.progress.0 += 1;
-                        cx.notify();
-                    }).log_err();
-                }
-                Err(error) => {
-                    this.update(cx, |editor, cx| {
-                        editor.explanations.last_error = Some(error.to_string().into());
-                        editor.explanations.progress.0 += 1;
-                        cx.notify();
-                    }).log_err();
-                }
-            }
-        }
-        this.update(cx, |editor, cx| {
-            if editor.explanations.diff.identity == identity {
-                editor.explanations.busy = false;
-                editor.explanations.bypass_cache = false;
-                cx.notify();
-            }
-        }).log_err();
-    }));
+    let added = pending.len();
+    editor.explanations.diff.queue.extend(pending);
+    if editor.explanations.diff.running {
+        editor.explanations.progress.1 += added;
+    }
+    ensure_worker(
+        editor,
+        &project,
+        identity,
+        &settings,
+        provider_configuration,
+        model,
+        epoch,
+        cx,
+    );
 }
 
 #[cfg(test)]
@@ -842,5 +1066,116 @@ mod tests {
         assert!(annotation_anchor(&display, &snapshot, 1, 0, &visible).is_some());
         assert!(annotation_anchor(&display, &snapshot, 0, 0, &visible).is_none());
         assert!(annotation_anchor(&display, &other_snapshot, 1, 0, &visible).is_none());
+    }
+
+    #[gpui::test]
+    async fn scrolling_keeps_existing_annotation_blocks_without_restarting_requests(
+        cx: &mut TestAppContext,
+    ) {
+        crate::editor_tests::init_test(cx, |_| {});
+        let mut context = crate::test::editor_test_context::EditorTestContext::new(cx).await;
+        let mut code = String::new();
+        for index in 1..=100 {
+            code.push_str(&format!("fn function_{index}() {{\n    perform();\n}}\n"));
+        }
+        code.push('ˇ');
+        context.set_state(&code);
+        let (source, project) = context.update_editor(|editor, _, cx| {
+            let source = editor.buffer.read(cx).as_singleton().expect("source");
+            source.update(cx, |buffer, cx| {
+                buffer.set_language(Some(language::rust_lang()), cx)
+            });
+            (source, editor.project().expect("project").clone())
+        });
+        let provider = Arc::new(FakeLanguageModelProvider::new(
+            LanguageModelProviderId::from("fake".to_owned()),
+            language_model::LanguageModelProviderName::from("Fake".to_owned()),
+        ));
+        let model = provider.model("fake");
+        context.cx.update(|_, cx| {
+            project::trusted_worktrees::init(Default::default(), cx);
+            let file = source.read(cx).file().expect("file").clone();
+            let store = project.read(cx).worktree_store();
+            let trust =
+                project::trusted_worktrees::TrustedWorktrees::try_get_global(cx).expect("trust");
+            trust.update(cx, |trust, cx| {
+                trust.trust(
+                    &store,
+                    HashSet::from_iter([project::trusted_worktrees::PathTrust::Worktree(
+                        file.worktree_id(cx),
+                    )]),
+                    cx,
+                )
+            });
+            LanguageModelRegistry::test(cx);
+            LanguageModelRegistry::global(cx).update(cx, |registry, cx| {
+                registry.register_provider(provider.clone(), cx)
+            });
+            cx.update_global::<settings::SettingsStore, _>(|store, cx| {
+                store.update_user_settings(cx, |settings| {
+                    settings.code_explanations = Some(
+                        serde_json::from_value(serde_json::json!({
+                            "enabled": true,
+                            "provider": "fake",
+                            "model": "fake",
+                            "cache_persist": false,
+                            "max_function_lines": 2000,
+                        }))
+                        .expect("settings"),
+                    );
+                });
+            });
+        });
+        context.update_editor(|editor, window, cx| {
+            let snapshot = source.read(cx).snapshot();
+            let diff = cx.new(|cx| buffer_diff::BufferDiff::new_with_base_text("", &snapshot, cx));
+            let multibuffer = cx.new(|cx| {
+                let mut multibuffer = MultiBuffer::new(language::Capability::ReadOnly);
+                multibuffer.set_excerpts_for_buffer(
+                    source.clone(),
+                    [Point::zero()..snapshot.max_point()],
+                    0,
+                    cx,
+                );
+                multibuffer.add_diff(diff, cx);
+                multibuffer.set_all_diff_hunks_expanded(cx);
+                multibuffer
+            });
+            *editor = Editor::for_multibuffer(multibuffer, Some(project.clone()), window, cx);
+            editor.explanations.diff_enabled = true;
+            window.focus(&editor.focus_handle(cx), cx);
+            schedule(editor, window, cx);
+        });
+        context
+            .cx
+            .background_executor
+            .timer(std::time::Duration::from_millis(600))
+            .await;
+        context.cx.run_until_parked();
+        assert_eq!(provider.pending_completions().len(), 1);
+        provider.send_last_text(&model, r#"[{"line":1,"explanation":"首个讲解"}]"#);
+        provider.end_last(&model);
+        context.cx.run_until_parked();
+
+        let block_ids = context.update_editor(|editor, _, _| {
+            assert_eq!(editor.explanations.diff.blocks.len(), 1);
+            assert!(!editor.explanations.diff.identity.is_empty());
+            editor.explanations.diff.blocks.clone()
+        });
+
+        context.update_editor(|editor, window, cx| {
+            editor.set_scroll_top_row(crate::display_map::DisplayRow(200), window, cx);
+            schedule(editor, window, cx);
+            assert_eq!(
+                editor.explanations.diff.blocks, block_ids,
+                "scrolling must keep the rendered annotation blocks"
+            );
+            assert!(editor.explanations.diff.queue.is_empty());
+        });
+        context.cx.run_until_parked();
+        assert!(provider.pending_completions().is_empty());
+        context.update_editor(|editor, _, _| {
+            assert_eq!(editor.explanations.diff.blocks, block_ids);
+        });
     }
 }
