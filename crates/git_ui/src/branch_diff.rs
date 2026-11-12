@@ -1101,6 +1101,20 @@ mod tests {
     #[gpui::test]
     async fn test_branch_diff(cx: &mut TestAppContext) {
         init_test(cx);
+        cx.update(|cx| {
+            project::trusted_worktrees::init(
+                collections::HashMap::from_iter([(
+                    None,
+                    collections::HashSet::from_iter([Path::new(path!("/project")).to_path_buf()]),
+                )]),
+                cx,
+            );
+            cx.update_global::<settings::SettingsStore, _>(|store, cx| {
+                store.update_user_settings(cx, |settings| {
+                    settings.code_explanations.get_or_insert_default().enabled = Some(true);
+                });
+            });
+        });
 
         let fs = FakeFs::new(cx.executor());
         fs.insert_tree(
@@ -1149,6 +1163,16 @@ mod tests {
                 + created-in-head"
             .unindent();
         assert_state_with_diff(&editor, cx, &expected_diff);
+        editor.update_in(cx, |editor, window, cx| {
+            let snapshot = editor.snapshot(window, cx);
+            assert!(
+                snapshot
+                    .blocks_in_range(editor::display_map::DisplayRow(0)
+                        ..editor::display_map::DisplayRow(snapshot.max_point().row().0 + 1))
+                    .all(|(_, block)| !matches!(block, editor::display_map::Block::Custom(_))),
+                "Branch diffs must not insert AI explanation blocks when code explanations are enabled"
+            );
+        });
 
         cx.update(|window, cx| {
             editor.focus_handle(cx).focus(window, cx);

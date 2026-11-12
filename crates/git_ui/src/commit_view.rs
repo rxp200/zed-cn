@@ -15,8 +15,8 @@ use git::{
 use gpui::{
     AnyElement, App, AppContext as _, AsyncWindowContext, ClipboardItem, Context, Entity,
     EventEmitter, FocusHandle, Focusable, InteractiveElement, IntoElement, ParentElement,
-    PromptLevel, Render, ScrollHandle, StatefulInteractiveElement as _, Styled, Subscription, Task,
-    WeakEntity, Window, actions,
+    PromptLevel, Render, ScrollHandle, StatefulInteractiveElement as _, Styled, Task, WeakEntity,
+    Window, actions,
 };
 use language::{
     Buffer, Capability, DiskState, File, LanguageRegistry, LineEnding, OffsetRangeExt as _,
@@ -87,8 +87,6 @@ pub struct CommitView {
     remote: Option<GitRemote>,
     is_shallow_boundary: bool,
     file_filter: Option<RepoPath>,
-    explanation_controller: Entity<crate::diff_explanations::DiffExplanationController>,
-    _explanation_subscription: Subscription,
     _load_diff_task: Task<Result<()>>,
 }
 
@@ -357,9 +355,6 @@ impl CommitView {
             editor
         });
         let commit_sha = Arc::<str>::from(commit.sha.as_ref());
-        let explanation_controller =
-            cx.new(|_| crate::diff_explanations::DiffExplanationController::default());
-        let explanation_subscription = cx.observe(&explanation_controller, |_, _, cx| cx.notify());
 
         let repository_clone = repository.clone();
         let project_clone = project.clone();
@@ -516,7 +511,6 @@ impl CommitView {
                         });
                     });
                 }
-                this.schedule_explanations(crate::diff_explanations::DiffExplanationMode::Sync, cx);
             })?;
 
             anyhow::Ok(())
@@ -551,87 +545,8 @@ impl CommitView {
             remote,
             is_shallow_boundary,
             file_filter,
-            explanation_controller,
-            _explanation_subscription: explanation_subscription,
             _load_diff_task: load_diff_task,
         }
-    }
-
-    fn schedule_explanations(
-        &mut self,
-        mode: crate::diff_explanations::DiffExplanationMode,
-        cx: &mut Context<Self>,
-    ) {
-        let snapshot = self.multibuffer.read(cx).snapshot(cx);
-        let mut files = Vec::new();
-        for (buffer_snapshot, _) in snapshot.buffers_with_paths() {
-            let Some(file) = buffer_snapshot.file() else {
-                continue;
-            };
-            let Some(diff) = snapshot.diff_for_buffer_id(buffer_snapshot.remote_id()) else {
-                continue;
-            };
-            let mut hunks = Vec::new();
-            for (index, hunk) in diff
-                .hunks_intersecting_range(
-                    language::Anchor::min_max_range_for_buffer(buffer_snapshot.remote_id()),
-                    buffer_snapshot,
-                )
-                .enumerate()
-            {
-                let old_range = hunk.diff_base_byte_range.clone();
-                let new_range = hunk.buffer_range.to_offset(buffer_snapshot);
-                let anchor = snapshot
-                    .anchor_in_excerpt(hunk.buffer_range.start)
-                    .unwrap_or(multi_buffer::Anchor::Min);
-                hunks.push(crate::diff_explanations::DiffHunkInput {
-                    identifier: index + 1,
-                    old_start_line: diff.base_text().offset_to_point(old_range.start).row,
-                    new_start_line: buffer_snapshot.offset_to_point(new_range.start).row,
-                    old_text: diff.base_text().text_for_range(old_range).collect(),
-                    new_text: buffer_snapshot.text_for_range(new_range).collect(),
-                    anchor,
-                });
-            }
-            if hunks.is_empty() {
-                continue;
-            }
-            let anchor = snapshot
-                .excerpts_for_buffer(buffer_snapshot.remote_id())
-                .next()
-                .and_then(|excerpt| snapshot.anchor_in_excerpt(excerpt.context.start))
-                .unwrap_or_else(|| hunks[0].anchor);
-            files.push(crate::diff_explanations::DiffFileInput {
-                path: file.path().display(PathStyle::local()).to_string(),
-                language: buffer_snapshot
-                    .language()
-                    .map(|language| language.name().to_string())
-                    .unwrap_or_default(),
-                old_text: diff.base_text().text(),
-                new_text: buffer_snapshot.text(),
-                hunks,
-                anchor,
-                private: file.is_private(),
-                worktree_id: file.worktree_id(cx),
-            });
-        }
-        files.sort_by(|left, right| left.path.cmp(&right.path));
-        let refresh: crate::diff_explanations::DiffExplanationRefresh = Arc::new({
-            let view = cx.entity().downgrade();
-            move |mode, cx| {
-                view.update(cx, |view, cx| view.schedule_explanations(mode, cx))
-                    .log_err();
-            }
-        });
-        crate::diff_explanations::DiffExplanationController::update_from_view(
-            &self.explanation_controller,
-            self.editor.read(cx).rhs_editor().clone(),
-            self.project.clone(),
-            files,
-            mode,
-            refresh,
-            cx,
-        );
     }
 
     fn render_shallow_boundary_notice(&self, cx: &App) -> impl IntoElement {
@@ -1463,10 +1378,6 @@ impl Item for CommitView {
                     cx,
                 )
             });
-            let explanation_controller =
-                cx.new(|_| crate::diff_explanations::DiffExplanationController::default());
-            let explanation_subscription =
-                cx.observe(&explanation_controller, |_, _, cx| cx.notify());
             Self {
                 editor,
                 message,
@@ -1481,8 +1392,6 @@ impl Item for CommitView {
                 remote: self.remote.clone(),
                 is_shallow_boundary: self.is_shallow_boundary,
                 file_filter: self.file_filter.clone(),
-                explanation_controller,
-                _explanation_subscription: explanation_subscription,
                 _load_diff_task: Task::ready(Ok(())),
             }
         })))
@@ -1500,13 +1409,6 @@ impl Render for CommitView {
             .size_full()
             .bg(cx.theme().colors().editor_background)
             .child(self.render_header(window, cx))
-            .when_some(
-                crate::diff_explanations::render_explanation_controls(
-                    &self.explanation_controller,
-                    cx,
-                ),
-                |this, controls| this.child(controls),
-            )
             // The advertised editor focus must remain in the tree even before diff loading completes.
             .when(editor_is_empty, |this| {
                 this.track_focus(&self.editor.focus_handle(cx))
@@ -1666,8 +1568,20 @@ mod tests {
     #[gpui::test]
     async fn test_commit_view_focus_survives_diff_loading(cx: &mut TestAppContext) {
         cx.update(|cx| {
+            project::trusted_worktrees::init(
+                collections::HashMap::from_iter([(
+                    None,
+                    collections::HashSet::from_iter([Path::new("/project").to_path_buf()]),
+                )]),
+                cx,
+            );
             let settings_store = SettingsStore::test(cx);
             cx.set_global(settings_store);
+            cx.update_global::<SettingsStore, _>(|store, cx| {
+                store
+                    .set_user_settings(r#"{"code_explanations":{"enabled":true}}"#, cx)
+                    .expect("valid code explanation settings");
+            });
             theme_settings::init(theme::LoadThemes::JustBase, cx);
             language_model::init(cx);
             crate::init(cx);
@@ -1724,8 +1638,18 @@ mod tests {
         load_task.await.expect("diff should load");
         cx.run_until_parked();
         view.update_in(cx, |view, window, cx| {
-            let editor = view.editor.read(cx).rhs_editor();
+            let editor = view.editor.read(cx).rhs_editor().clone();
             assert!(!editor.read(cx).is_empty(cx));
+            editor.update(cx, |editor, cx| {
+                let snapshot = editor.snapshot(window, cx);
+                assert!(
+                    snapshot
+                        .blocks_in_range(editor::display_map::DisplayRow(0)
+                            ..editor::display_map::DisplayRow(snapshot.max_point().row().0 + 1))
+                        .all(|(_, block)| !matches!(block, editor::display_map::Block::Custom(_))),
+                    "Commit diffs must not insert AI explanation blocks when code explanations are enabled"
+                );
+            });
             assert!(view.focus_handle(cx).is_focused(window));
         });
         cx.run_until_parked();

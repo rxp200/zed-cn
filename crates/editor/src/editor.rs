@@ -1918,6 +1918,7 @@ impl Editor {
         clone
             .scroll_manager
             .clone_state(&self.scroll_manager, &my_snapshot, &clone_snapshot, cx);
+        clone.explanations.diff_enabled = self.explanations.diff_enabled;
         clone.searchable = self.searchable;
         clone.read_only = self.read_only;
         clone.buffers_with_disabled_indent_guides =
@@ -12711,6 +12712,7 @@ impl Render for Editor {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if code_explanations::CodeExplanationSettings::get_global(cx).enabled
             || self.explanations.version.is_some()
+            || self.explanations.diff_enabled
         {
             cx.defer_in(window, |editor, window, cx| {
                 code_explanations::schedule(editor, window, cx);
