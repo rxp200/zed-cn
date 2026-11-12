@@ -93,6 +93,9 @@ jobs:
       - name: Validate open-source license layout
         run: ./script/check-licenses
 
+      - name: Guard production Markdown outline API
+        run: python3 script/test_deep_explanation_production_api.py
+
       - name: Validate source version and frozen public main source
         id: source
         shell: pwsh
