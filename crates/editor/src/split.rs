@@ -623,6 +623,7 @@ impl SplittableEditor {
         let rhs_editor = cx.new(|cx| {
             let mut editor =
                 Editor::for_multibuffer(rhs_multibuffer.clone(), Some(project.clone()), window, cx);
+            editor.explanations.diff_enabled = true;
             editor.set_expand_all_diff_hunks(cx);
             editor.disable_runnables();
             editor.disable_code_lens(cx);
@@ -732,6 +733,7 @@ impl SplittableEditor {
         let lhs_editor = cx.new(|cx| {
             let mut editor =
                 Editor::for_multibuffer(lhs_multibuffer.clone(), Some(project.clone()), window, cx);
+            editor.explanations.diff_enabled = true;
             editor.set_number_deleted_lines(true, cx);
             editor.set_delegate_expand_excerpts(true);
             editor.set_diff_hunk_renderer(

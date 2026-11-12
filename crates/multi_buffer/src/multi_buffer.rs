@@ -2161,6 +2161,11 @@ impl MultiBuffer {
             .map(|state| state.buffer.clone())
     }
 
+    pub fn diff_source_buffer(&self, buffer_id: BufferId) -> Option<Entity<Buffer>> {
+        let state = self.diffs.get(&buffer_id)?;
+        state.main_buffer.clone().or_else(|| self.buffer(buffer_id))
+    }
+
     pub fn language_at<T: ToOffset>(&self, point: T, cx: &App) -> Option<Arc<Language>> {
         self.point_to_buffer_offset(point, cx)
             .and_then(|(buffer, offset)| buffer.read(cx).language_at(offset))

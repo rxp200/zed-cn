@@ -1,9 +1,5 @@
 use crate::{
     conflict_view,
-    diff_explanations::{
-        DiffExplanationController, DiffExplanationMode, DiffExplanationRefresh, DiffFileInput,
-        DiffHunkInput, render_explanation_controls,
-    },
     git_panel::{GitPanel, GitStatusEntry},
     git_panel_settings::GitPanelSettings,
 };
@@ -62,7 +58,6 @@ pub struct DiffMultibuffer {
     focus_handle: FocusHandle,
     pending_scroll: Option<PathKey>,
     review_comment_count: usize,
-    explanation_controller: Entity<DiffExplanationController>,
     empty_label: SharedString,
     _task: Task<Result<()>>,
     _subscription: Subscription,
@@ -161,8 +156,6 @@ impl DiffMultibuffer {
         })
         .detach();
 
-        let explanation_controller = cx.new(|_| DiffExplanationController::default());
-        let explanation_subscription = cx.observe(&explanation_controller, |_, _, cx| cx.notify());
         let task = window.spawn(cx, {
             let this = cx.weak_entity();
             async |cx| Self::refresh(this, cx).await
@@ -177,15 +170,11 @@ impl DiffMultibuffer {
             buffer_subscriptions: Default::default(),
             pending_scroll: None,
             review_comment_count: 0,
-            explanation_controller,
             empty_label: empty_label.into(),
             _task: task,
             _subscription: Subscription::join(
                 branch_diff_subscription,
-                Subscription::join(
-                    editor_subscription,
-                    Subscription::join(review_comment_subscription, explanation_subscription),
-                ),
+                Subscription::join(editor_subscription, review_comment_subscription),
             ),
         }
     }
@@ -740,97 +729,10 @@ impl DiffMultibuffer {
                 });
             }
             this.pending_scroll.take();
-            this.schedule_explanations(DiffExplanationMode::Sync, cx);
             cx.notify();
         })?;
 
         Ok(())
-    }
-
-    fn schedule_explanations(&mut self, mode: DiffExplanationMode, cx: &mut Context<Self>) {
-        let snapshot = self.multibuffer.read(cx).snapshot(cx);
-        let mut files = Vec::new();
-        for (repo_path, subscription) in &self.buffer_subscriptions {
-            let buffer_snapshot = subscription.display_buffer.read(cx).snapshot();
-            let diff_snapshot = subscription._diff.read(cx).snapshot(cx);
-            let Some(file) = buffer_snapshot.file() else {
-                continue;
-            };
-            let mut hunks = Vec::new();
-            for (index, hunk) in diff_snapshot
-                .hunks_intersecting_range(
-                    Anchor::min_max_range_for_buffer(buffer_snapshot.remote_id()),
-                    &buffer_snapshot,
-                )
-                .enumerate()
-            {
-                let old_range = hunk.diff_base_byte_range.clone();
-                let new_range = hunk.buffer_range.to_offset(&buffer_snapshot);
-                let old_text = diff_snapshot
-                    .base_text()
-                    .text_for_range(old_range.clone())
-                    .collect();
-                let new_text = buffer_snapshot.text_for_range(new_range.clone()).collect();
-                let anchor = snapshot
-                    .anchor_in_excerpt(hunk.buffer_range.start)
-                    .unwrap_or(multi_buffer::Anchor::Min);
-                hunks.push(DiffHunkInput {
-                    identifier: index + 1,
-                    old_start_line: diff_snapshot
-                        .base_text()
-                        .offset_to_point(old_range.start)
-                        .row,
-                    new_start_line: buffer_snapshot.offset_to_point(new_range.start).row,
-                    old_text,
-                    new_text,
-                    anchor,
-                });
-            }
-            if hunks.is_empty() {
-                continue;
-            }
-            let anchor = snapshot
-                .excerpts_for_buffer(buffer_snapshot.remote_id())
-                .next()
-                .and_then(|excerpt| snapshot.anchor_in_excerpt(excerpt.context.start))
-                .unwrap_or_else(|| hunks[0].anchor);
-            files.push(DiffFileInput {
-                path: repo_path
-                    .display(util::paths::PathStyle::local())
-                    .to_string(),
-                language: buffer_snapshot
-                    .language()
-                    .map(|language| language.name().to_string())
-                    .unwrap_or_default(),
-                old_text: diff_snapshot.base_text().text(),
-                new_text: buffer_snapshot.text(),
-                hunks,
-                anchor,
-                private: file.is_private(),
-                worktree_id: file.worktree_id(cx),
-            });
-        }
-        files.sort_by(|left, right| left.path.cmp(&right.path));
-        let editor = self.editor.read(cx).rhs_editor().clone();
-        let project = editor.read(cx).project().cloned();
-        if let Some(project) = project {
-            let refresh: DiffExplanationRefresh = Arc::new({
-                let view = cx.entity().downgrade();
-                move |mode, cx| {
-                    view.update(cx, |view, cx| view.schedule_explanations(mode, cx))
-                        .log_err();
-                }
-            });
-            DiffExplanationController::update_from_view(
-                &self.explanation_controller,
-                editor,
-                project,
-                files,
-                mode,
-                refresh,
-                cx,
-            );
-        }
     }
 
     pub(crate) fn active_project_path(&self, cx: &App) -> Option<ProjectPath> {
@@ -1003,11 +905,6 @@ impl Render for DiffMultibuffer {
         let is_empty = self.multibuffer.read(cx).is_empty();
         let is_loading = self.branch_diff.read(cx).is_tree_base_loading() || !self._task.is_ready();
         let empty_label = self.empty_label.clone();
-        let explanation_controls = if is_empty {
-            None
-        } else {
-            render_explanation_controls(&self.explanation_controller, cx)
-        };
 
         div()
             .track_focus(&self.focus_handle)
@@ -1074,7 +971,6 @@ impl Render for DiffMultibuffer {
                 el.child(
                     v_flex()
                         .size_full()
-                        .when_some(explanation_controls, |el, controls| el.child(controls))
                         .child(div().flex_1().min_h_0().child(self.editor.clone())),
                 )
             })

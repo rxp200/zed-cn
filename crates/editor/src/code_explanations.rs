@@ -2,6 +2,7 @@ use crate::code_explanation_units::{
     first_non_whitespace_column, parse_annotations, units_at, whole_file_unit,
 };
 use crate::{Autoscroll, BlockPlacement, BlockProperties, BlockStyle, Editor};
+mod diff_annotations;
 use anyhow::{Context as _, Result};
 use collections::{HashMap, HashSet};
 use futures::{StreamExt as _, stream::FuturesUnordered};
@@ -340,6 +341,8 @@ fn code_explanation_concurrency(value: u64) -> usize {
 #[derive(Default)]
 pub(crate) struct ExplanationState {
     pub task: Option<Task<()>>,
+    diff: diff_annotations::DiffAnnotations,
+    pub(crate) diff_enabled: bool,
     pub deep_task: Option<Task<Result<()>>>,
     pub deep_cancelled: Arc<AtomicBool>,
     pub failed: HashSet<std::ops::Range<usize>>,
@@ -479,6 +482,7 @@ fn preload_range(
 }
 
 pub(crate) fn code_edited(editor: &mut Editor, cx: &mut Context<Editor>) {
+    diff_annotations::clear(editor, cx);
     editor
         .explanations
         .write_generation
@@ -566,6 +570,7 @@ pub(crate) fn request_refresh(editor: &mut Editor) {
 }
 
 pub(crate) fn clear(editor: &mut Editor, cx: &mut Context<Editor>) {
+    diff_annotations::clear(editor, cx);
     editor
         .explanations
         .write_generation
@@ -659,6 +664,10 @@ fn show(
 }
 
 pub(crate) fn schedule(editor: &mut Editor, window: &gpui::Window, cx: &mut Context<Editor>) {
+    if !editor.buffer.read(cx).is_singleton() {
+        diff_annotations::schedule(editor, window, cx);
+        return;
+    }
     let settings = CodeExplanationSettings::get_global(cx).clone();
     let epoch = CACHE_EPOCH.load(std::sync::atomic::Ordering::SeqCst);
     if editor.explanations.cache_epoch != epoch {
@@ -2111,6 +2120,18 @@ pub fn deep_explain_selection(
     let cancelled = Arc::new(AtomicBool::new(false));
     editor.explanations.deep_cancelled = cancelled.clone();
     let provider_configuration = selected_provider_configuration(&settings, cx);
+    let source_label: SharedString = i18n::t!(
+        "d5e829de3160cd80",
+        file = file.file_name(cx),
+        start = row + 1,
+        end = snapshot
+            .buffer_snapshot()
+            .offset_to_point(selection.end)
+            .row
+            + 1,
+    )
+    .into();
+    let status = cx.new(|_| DeepExplanationStatus::Waiting);
     let markdown = cx.new(|cx| {
         Markdown::new(
             deep_explanation_markdown(&code, i18n::t!("399172ca1f0ca325")),
@@ -2123,19 +2144,36 @@ pub fn deep_explain_selection(
         workspace.update(cx, |workspace, cx| {
             let markdown = markdown.clone();
             let workspace_handle = cx.weak_entity();
-            workspace.toggle_modal(window, cx, |_, cx| DeepExplanationModal {
-                markdown,
-                source_range: Some(crease_start..crease_end),
-                focus_handle: cx.focus_handle(),
-                scroll_handle: gpui::ScrollHandle::new(),
-                cancelled: Some(cancelled.clone()),
-                source_editor: Some(editor_handle.clone()),
-                workspace: Some(workspace_handle),
+            workspace.toggle_modal(window, cx, |_, cx| {
+                let mut modal = DeepExplanationModal::from_markdown(
+                    markdown,
+                    status.clone(),
+                    source_label.clone(),
+                    language.clone(),
+                    false,
+                    cx,
+                );
+                modal.source_range = Some(crease_start..crease_end);
+                modal.cancelled = Some(cancelled.clone());
+                modal.source_editor = Some(editor_handle.clone());
+                modal.workspace = Some(workspace_handle);
+                modal
             });
         });
     }
     cx.notify();
     editor.explanations.deep_task = Some(cx.spawn_in(window, async move |_, cx| {
+        let cancelled_on_drop = cancelled.clone();
+        let _status_guard = cx.on_drop(&status.downgrade(), move |status, cx| {
+            if status.is_active() {
+                *status = if cancelled_on_drop.load(Ordering::SeqCst) {
+                    DeepExplanationStatus::Stopped
+                } else {
+                    DeepExplanationStatus::Failed
+                };
+                cx.notify();
+            }
+        });
         let related_context = if let Some(task) = definition_task {
             let mut items = Vec::new();
             for location in task.await.unwrap_or_default().into_iter().take(5) {
@@ -2229,6 +2267,10 @@ pub fn deep_explain_selection(
             CodeExplanationRequestWaiter::new(project.entity_id(), request_key.clone(), 0)?;
         let permit = loop {
             if cancelled.load(Ordering::SeqCst) {
+                status.update(cx, |status, cx| {
+                    *status = DeepExplanationStatus::Stopped;
+                    cx.notify();
+                });
                 markdown.update(cx, |markdown, cx| {
                     markdown.replace(i18n::t!("a095d9d5e35ba72c"), cx)
                 });
@@ -2267,6 +2309,10 @@ pub fn deep_explain_selection(
                 && trust.update(cx, |trust, cx| trust.can_trust(&store, worktree_id, cx))
         })?;
         let result = if authorized {
+            status.update(cx, |status, cx| {
+                *status = DeepExplanationStatus::Generating;
+                cx.notify();
+            });
             markdown.update(cx, |markdown, cx| {
                 markdown.replace(
                     deep_explanation_markdown(&code, i18n::t!("eb37fc3399caa9b6")),
@@ -2336,6 +2382,18 @@ pub fn deep_explain_selection(
                     .is_some_and(|current| Arc::ptr_eq(current, &file) && !current.is_private())
                 && trust.update(cx, |trust, cx| trust.can_trust(&store, worktree_id, cx))
         })?;
+        status.update(cx, |status, cx| {
+            *status = if !still_authorized {
+                DeepExplanationStatus::Failed
+            } else if cancelled.load(Ordering::SeqCst) {
+                DeepExplanationStatus::Stopped
+            } else if result.is_ok() {
+                DeepExplanationStatus::Complete
+            } else {
+                DeepExplanationStatus::Failed
+            };
+            cx.notify();
+        });
         editor_handle.update(cx, |editor, cx| {
             if !still_authorized {
                 markdown.update(cx, |markdown, cx| {
@@ -2350,6 +2408,7 @@ pub fn deep_explain_selection(
                 markdown.replace(deep_explanation_markdown(&code, &explanation), cx)
             });
             let explanation_for_modal = explanation;
+            let completed_status = *status.read(cx);
             let code_for_modal = code.clone();
             let workspace = workspace.clone();
             let crease = crate::Crease::Inline {
@@ -2362,6 +2421,7 @@ pub fn deep_explain_selection(
                     let workspace = workspace.clone();
                     let languages = languages.clone();
                     let language = language.clone();
+                    let source_label = source_label.clone();
                     IconButton::new(("deep-code-explanation", row), IconName::WarningCircle)
                         .icon_size(IconSize::XSmall)
                         .icon_color(Color::Muted)
@@ -2377,13 +2437,19 @@ pub fn deep_explain_selection(
                             let code = code.clone();
                             workspace.update(cx, |workspace, cx| {
                                 workspace.toggle_modal(window, cx, |_, cx| {
-                                    DeepExplanationModal::new(
+                                    let mut modal = DeepExplanationModal::new(
                                         code,
                                         explanation,
                                         languages.clone(),
                                         language.clone(),
                                         cx,
-                                    )
+                                    );
+                                    modal.source_label = source_label.clone();
+                                    modal.status.update(cx, |status, cx| {
+                                        *status = completed_status;
+                                        cx.notify();
+                                    });
+                                    modal
                                 });
                             });
                         })
@@ -2496,8 +2562,318 @@ fn deep_explanation_markdown(code: &str, explanation: &str) -> SharedString {
     format!("{fence}\n{code}\n{fence}\n\n{explanation}").into()
 }
 
+fn deep_explanation_outline(parsed: &markdown::ParsedMarkdown) -> Vec<(usize, SharedString)> {
+    use markdown::parser::{MarkdownEvent, MarkdownTag, MarkdownTagEnd};
+    let mut result = Vec::new();
+    let mut heading: Option<(usize, String)> = None;
+    for (range, event) in parsed.events().iter() {
+        match event {
+            MarkdownEvent::Start(MarkdownTag::Heading { .. }) => {
+                heading = Some((range.start, String::new()));
+            }
+            MarkdownEvent::End(MarkdownTagEnd::Heading(_)) => {
+                if let Some((offset, title)) = heading.take() {
+                    let title = title.split_whitespace().collect::<Vec<_>>().join(" ");
+                    if !title.is_empty() {
+                        let mut short = title.chars().take(48).collect::<String>();
+                        if title.chars().count() > 48 {
+                            short.push('…');
+                        }
+                        result.push((offset, short.into()));
+                        if result.len() == 8 {
+                            break;
+                        }
+                    }
+                }
+            }
+            MarkdownEvent::Text | MarkdownEvent::Code => {
+                if let Some((_, title)) = &mut heading
+                    && let Some(text) = parsed.source().get(range.clone())
+                {
+                    title.push_str(text);
+                }
+            }
+            MarkdownEvent::SubstitutedText(text) | MarkdownEvent::SubstitutedCode(text) => {
+                if let Some((_, title)) = &mut heading {
+                    title.push_str(text);
+                }
+            }
+            MarkdownEvent::SoftBreak | MarkdownEvent::HardBreak => {
+                if let Some((_, title)) = &mut heading {
+                    title.push(' ');
+                }
+            }
+            _ => {}
+        }
+    }
+    result
+}
+
+#[cfg(test)]
+mod deep_explanation_view_tests {
+    use super::*;
+
+    #[gpui::test]
+    fn outline_uses_markdown_headings_not_code_and_bounds_its_size(cx: &mut gpui::TestAppContext) {
+        crate::editor_tests::init_test(cx, |_| {});
+        let markdown = cx.new(|cx| Markdown::new(
+            "```rust\n# not a heading\n```\n\n## 参数与 `Result`\n\ntext\n\n重复标题\n---\n\n## 参数与 `Result`\n".into(), None, None, cx));
+        cx.run_until_parked();
+        markdown.read_with(cx, |markdown, _| {
+            let outline = deep_explanation_outline(markdown.parsed_markdown());
+            assert_eq!(
+                outline
+                    .iter()
+                    .map(|(_, title)| title.as_ref())
+                    .collect::<Vec<_>>(),
+                vec!["参数与 Result", "重复标题", "参数与 Result"]
+            );
+            assert_ne!(outline[0].0, outline[2].0);
+            for (offset, _) in outline {
+                assert!(markdown.source().is_char_boundary(offset));
+            }
+        });
+        let source = (0..20)
+            .map(|index| format!("## {index} {}\n\n", "长标题".repeat(50)))
+            .collect::<String>();
+        markdown.update(cx, |markdown, cx| markdown.replace(source, cx));
+        cx.run_until_parked();
+        markdown.read_with(cx, |markdown, _| {
+            let outline = deep_explanation_outline(markdown.parsed_markdown());
+            assert_eq!(outline.len(), 8);
+            assert!(outline.iter().all(|(_, title)| title.chars().count() <= 49));
+        });
+    }
+
+    #[gpui::test]
+    fn modal_layout_keeps_chrome_outside_scrolling_content(cx: &mut gpui::TestAppContext) {
+        crate::editor_tests::init_test(cx, |_| {});
+        let explanation = format!(
+            "## 整体目的\n\n{}\n\n## 类型关系\n\n{}",
+            "这是一段讲解。".repeat(300),
+            "解释。".repeat(300)
+        );
+        let (view, cx) = cx.add_window_view(|_, cx| {
+            DeepExplanationModal::new(
+                "fn example() {}".into(),
+                explanation.into(),
+                Arc::new(language::LanguageRegistry::test(
+                    cx.background_executor().clone(),
+                )),
+                None,
+                cx,
+            )
+        });
+        for size in [
+            gpui::size(px(1200.), px(900.)),
+            gpui::size(px(520.), px(700.)),
+        ] {
+            cx.simulate_resize(size);
+            cx.run_until_parked();
+            cx.update(|window, cx| window.draw(cx).clear(cx));
+            let header = cx.debug_bounds("deep-explanation-header").unwrap();
+            let toolbar = cx.debug_bounds("deep-explanation-toolbar").unwrap();
+            let body = cx.debug_bounds("deep-code-explanation-content").unwrap();
+            let footer = cx.debug_bounds("deep-explanation-footer").unwrap();
+            let surface = cx.debug_bounds("deep-explanation-surface").unwrap();
+            assert!(header.bottom() <= toolbar.top());
+            assert!(toolbar.bottom() <= body.top());
+            assert!(body.bottom() <= footer.top() + px(1.));
+            assert!(body.size.height > px(100.));
+            assert!(surface.size.width <= size.width && surface.size.height <= size.height);
+            assert!(cx.debug_bounds("deep-explanation-outline").is_some());
+            view.read_with(cx, |view, _| {
+                assert_eq!(view.scroll_handle.bounds(), body);
+                assert!(view.scroll_handle.max_offset().y > px(0.));
+            });
+        }
+    }
+
+    #[gpui::test]
+    fn shared_status_stop_and_copy_preserve_the_markdown(cx: &mut gpui::TestAppContext) {
+        crate::editor_tests::init_test(cx, |_| {});
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let (view, cx) = cx.add_window_view(|_, cx| {
+            let mut view = DeepExplanationModal::new(
+                "fn example() {}".into(),
+                "## 讲解\n正文".into(),
+                Arc::new(language::LanguageRegistry::test(
+                    cx.background_executor().clone(),
+                )),
+                None,
+                cx,
+            );
+            view.cancelled = Some(cancelled.clone());
+            view.status.update(cx, |status, cx| {
+                *status = DeepExplanationStatus::Generating;
+                cx.notify();
+            });
+            view
+        });
+        cx.run_until_parked();
+        let original = view.read_with(cx, |view, cx| view.markdown.read(cx).source().clone());
+        let copy = cx.debug_bounds("deep-explanation-copy-control").unwrap();
+        cx.simulate_click(copy.center(), gpui::Modifiers::default());
+        assert_eq!(
+            cx.read_from_clipboard().and_then(|item| item.text()),
+            Some(original.to_string())
+        );
+        let stop = cx.debug_bounds("deep-explanation-stop-control").unwrap();
+        cx.simulate_click(stop.center(), gpui::Modifiers::default());
+        cx.run_until_parked();
+        assert!(cancelled.load(Ordering::SeqCst));
+        view.read_with(cx, |view, cx| {
+            assert_eq!(*view.status.read(cx), DeepExplanationStatus::Stopped);
+            assert_eq!(view.markdown.read(cx).source(), &original);
+        });
+        assert!(cx.debug_bounds("deep-explanation-stop-control").is_none());
+    }
+
+    #[gpui::test]
+    async fn workspace_controls_pin_live_content_and_keep_a_read_only_copy(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        crate::editor_tests::init_test(cx, |_| {});
+        let fs = project::FakeFs::new(cx.executor());
+        let project = project::Project::test(fs, [], cx).await;
+        let (multi_workspace, cx) = cx
+            .add_window_view(|window, cx| workspace::MultiWorkspace::test_new(project, window, cx));
+        let workspace =
+            multi_workspace.read_with(cx, |multi_workspace, _| multi_workspace.workspace().clone());
+        workspace.update_in(cx, |workspace, window, cx| {
+            let workspace_handle = cx.weak_entity();
+            workspace.toggle_modal(window, cx, |_, cx| {
+                let mut modal = DeepExplanationModal::new(
+                    "fn example() {}".into(),
+                    "## 目的\n正文".into(),
+                    Arc::new(language::LanguageRegistry::test(
+                        cx.background_executor().clone(),
+                    )),
+                    None,
+                    cx,
+                );
+                modal.workspace = Some(workspace_handle);
+                modal
+            });
+        });
+        cx.run_until_parked();
+        let modal = workspace.read_with(cx, |workspace, cx| {
+            workspace.active_modal::<DeepExplanationModal>(cx).unwrap()
+        });
+        let original = modal.read_with(cx, |modal, cx| modal.markdown.read(cx).source().clone());
+        for size in [
+            gpui::size(px(1100.), px(800.)),
+            gpui::size(px(420.), px(700.)),
+        ] {
+            cx.simulate_resize(size);
+            cx.run_until_parked();
+            cx.update(|window, cx| window.draw(cx).clear(cx));
+            let surface = cx.debug_bounds("deep-explanation-surface").unwrap();
+            let toolbar = cx.debug_bounds("deep-explanation-toolbar").unwrap();
+            assert!(toolbar.right() <= surface.right());
+            let pin = cx.debug_bounds("ICON-Split").unwrap();
+            assert!(pin.right() <= surface.right() && pin.bottom() <= toolbar.bottom());
+        }
+        let pin = cx.debug_bounds("ICON-Split").unwrap();
+        cx.simulate_click(pin.center(), gpui::Modifiers::default());
+        cx.run_until_parked();
+        let pinned = workspace.read_with(cx, |workspace, cx| {
+            assert!(workspace.active_modal::<DeepExplanationModal>(cx).is_none());
+            assert_eq!(workspace.panes().len(), 2);
+            workspace
+                .active_item_as::<DeepExplanationModal>(cx)
+                .unwrap()
+        });
+        pinned.read_with(cx, |pinned, cx| {
+            assert!(pinned.pinned);
+            assert_eq!(pinned.markdown.read(cx).source(), &original);
+            assert_eq!(pinned.markdown, modal.read(cx).markdown);
+            assert_eq!(pinned.status, modal.read(cx).status);
+        });
+        pinned.update_in(cx, |pinned, window, cx| pinned.keep_copy(window, cx));
+        cx.run_until_parked();
+        workspace.read_with(cx, |workspace, cx| {
+            let editor = workspace.active_item_as::<Editor>(cx).unwrap();
+            assert_eq!(editor.read(cx).text(cx), original.as_ref());
+            assert!(editor.read(cx).read_only(cx));
+        });
+    }
+
+    #[gpui::test]
+    fn pinned_view_fills_its_pane_and_observes_shared_updates(cx: &mut gpui::TestAppContext) {
+        crate::editor_tests::init_test(cx, |_| {});
+        let (view, cx) = cx.add_window_view(|_, cx| {
+            let markdown = cx.new(|cx| Markdown::new("## 第一节\n正文".into(), None, None, cx));
+            let status = cx.new(|_| DeepExplanationStatus::Waiting);
+            DeepExplanationModal::from_markdown(
+                markdown,
+                status,
+                "example.rs".into(),
+                None,
+                true,
+                cx,
+            )
+        });
+        cx.simulate_resize(gpui::size(px(360.), px(800.)));
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        let surface = cx.debug_bounds("deep-explanation-surface").unwrap();
+        assert_eq!(surface.size, gpui::size(px(360.), px(800.)));
+        let (markdown, status) =
+            view.read_with(cx, |view, _| (view.markdown.clone(), view.status.clone()));
+        markdown.update(cx, |markdown, cx| {
+            markdown.replace("## 更新的章节\n更多正文", cx)
+        });
+        status.update(cx, |status, cx| {
+            *status = DeepExplanationStatus::Complete;
+            cx.notify();
+        });
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("deep-explanation-outline").is_some());
+        view.read_with(cx, |view, cx| {
+            assert_eq!(*view.status.read(cx), DeepExplanationStatus::Complete);
+            assert_eq!(
+                deep_explanation_outline(view.markdown.read(cx).parsed_markdown())[0]
+                    .1
+                    .as_ref(),
+                "更新的章节"
+            );
+        });
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DeepExplanationStatus {
+    Waiting,
+    Generating,
+    Complete,
+    Stopped,
+    Failed,
+}
+
+impl DeepExplanationStatus {
+    fn is_active(self) -> bool {
+        matches!(self, Self::Waiting | Self::Generating)
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Waiting => i18n::t!("399172ca1f0ca325"),
+            Self::Generating => i18n::t!("eb37fc3399caa9b6"),
+            Self::Complete => i18n::t!("e6d08075d07a9fe9"),
+            Self::Stopped => i18n::t!("a095d9d5e35ba72c"),
+            Self::Failed => i18n::t!("afe6206f0db687d4"),
+        }
+    }
+}
+
 struct DeepExplanationModal {
     markdown: gpui::Entity<Markdown>,
+    status: gpui::Entity<DeepExplanationStatus>,
+    source_label: SharedString,
+    language: Option<language::LanguageName>,
+    pinned: bool,
+    _subscriptions: Vec<gpui::Subscription>,
     source_range: Option<std::ops::Range<multi_buffer::Anchor>>,
     source_editor: Option<gpui::WeakEntity<Editor>>,
     cancelled: Option<Arc<AtomicBool>>,
@@ -2515,8 +2891,37 @@ impl DeepExplanationModal {
         cx: &mut Context<Self>,
     ) -> Self {
         let source = deep_explanation_markdown(&code, &explanation);
+        let markdown = cx.new(|cx| Markdown::new(source, Some(languages), language.clone(), cx));
+        let status = cx.new(|_| DeepExplanationStatus::Complete);
+        Self::from_markdown(
+            markdown,
+            status,
+            i18n::t!("16ece1acc00be44a").into(),
+            language,
+            false,
+            cx,
+        )
+    }
+
+    fn from_markdown(
+        markdown: gpui::Entity<Markdown>,
+        status: gpui::Entity<DeepExplanationStatus>,
+        source_label: SharedString,
+        language: Option<language::LanguageName>,
+        pinned: bool,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let subscriptions = vec![
+            cx.observe(&markdown, |_, _, cx| cx.notify()),
+            cx.observe(&status, |_, _, cx| cx.notify()),
+        ];
         Self {
-            markdown: cx.new(|cx| Markdown::new(source, Some(languages), language, cx)),
+            markdown,
+            status,
+            source_label,
+            language,
+            pinned,
+            _subscriptions: subscriptions,
             source_range: None,
             cancelled: None,
             source_editor: None,
@@ -2524,6 +2929,41 @@ impl DeepExplanationModal {
             focus_handle: cx.focus_handle(),
             scroll_handle: gpui::ScrollHandle::new(),
         }
+    }
+
+    fn stop(&mut self, cx: &mut Context<Self>) {
+        if self.status.read(cx).is_active()
+            && let Some(cancelled) = &self.cancelled
+        {
+            cancelled.store(true, Ordering::SeqCst);
+            self.status.update(cx, |status, cx| {
+                *status = DeepExplanationStatus::Stopped;
+                cx.notify();
+            });
+        }
+    }
+
+    fn keep_copy(&mut self, window: &mut gpui::Window, cx: &mut Context<Self>) {
+        let Some(workspace) = self
+            .workspace
+            .as_ref()
+            .and_then(|workspace| workspace.upgrade())
+        else {
+            return;
+        };
+        let text = self.markdown.read(cx).source().to_string();
+        window.defer(cx, move |window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                let buffer = cx.new(|cx| language::Buffer::local(text, cx));
+                let editor = cx.new(|cx| {
+                    let mut editor = Editor::for_buffer(buffer, None, window, cx);
+                    editor.set_read_only(true);
+                    editor
+                });
+                workspace.add_item_to_active_pane(Box::new(editor), None, true, window, cx);
+            });
+        });
+        cx.emit(DismissEvent);
     }
 
     fn cancel(&mut self, _: &menu::Cancel, _: &mut gpui::Window, cx: &mut Context<Self>) {
@@ -2553,178 +2993,306 @@ impl workspace::Item for DeepExplanationModal {
 impl gpui::Render for DeepExplanationModal {
     fn render(&mut self, window: &mut gpui::Window, cx: &mut Context<Self>) -> impl IntoElement {
         let height =
-            (window.viewport_size().height * 0.8).min(rems(42.).to_pixels(window.rem_size()));
+            (window.viewport_size().height * 0.82).min(rems(50.).to_pixels(window.rem_size()));
+        let colors = cx.theme().colors().clone();
+        let status = *self.status.read(cx);
+        let outline = deep_explanation_outline(self.markdown.read(cx).parsed_markdown());
+        let modal_handle = cx.weak_entity();
         let markdown = MarkdownElement::new(
             self.markdown.clone(),
             MarkdownStyle::themed(MarkdownFont::Preview, window, cx),
         )
         .code_block_renderer(CodeBlockRenderer::Default {
-            copy_button_visibility: CopyButtonVisibility::VisibleOnHover,
-            wrap_button_visibility: WrapButtonVisibility::VisibleOnHover,
-            border: false,
+            copy_button_visibility: CopyButtonVisibility::AlwaysVisible,
+            wrap_button_visibility: WrapButtonVisibility::AlwaysVisible,
+            border: true,
         })
         .scroll_handle(self.scroll_handle.clone());
 
+        let toolbar = h_flex()
+            .id("deep-explanation-toolbar")
+            .debug_selector(|| "deep-explanation-toolbar".into())
+            .w_full()
+            .flex_wrap()
+            .gap_2()
+            .justify_between()
+            .px_4()
+            .py_2()
+            .border_y_1()
+            .border_color(colors.border_variant)
+            .child(
+                h_flex()
+                    .gap_1()
+                    .flex_wrap()
+                    .when_some(self.source_editor.clone(), |this, source| {
+                        let source_range = self.source_range.clone();
+                        this.child(
+                            Button::new("return-to-explained-source", i18n::t!("8cd52c1af8febf66"))
+                                .start_icon(Icon::new(IconName::ArrowLeft).size(IconSize::Small))
+                                .label_size(LabelSize::Small)
+                                .on_click(move |_, window, cx| {
+                                    if let Some(editor) = source.upgrade() {
+                                        editor.update(cx, |editor, cx| {
+                                            if let Some(range) = source_range.clone() {
+                                                editor.change_selections(
+                                                    Default::default(),
+                                                    window,
+                                                    cx,
+                                                    |selections| selections.select_ranges([range]),
+                                                );
+                                                editor.request_autoscroll(Autoscroll::fit(), cx);
+                                            }
+                                            editor.focus_handle(cx).focus(window, cx);
+                                        });
+                                    }
+                                }),
+                        )
+                    })
+                    .child(
+                        div()
+                            .debug_selector(|| "deep-explanation-copy-control".into())
+                            .child(
+                                Button::new("copy-deep-explanation", i18n::t!("6258a2c6f9c89143"))
+                                    .start_icon(Icon::new(IconName::Copy).size(IconSize::Small))
+                                    .label_size(LabelSize::Small)
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                                            this.markdown.read(cx).source().to_string(),
+                                        ));
+                                    })),
+                            ),
+                    ),
+            )
+            .child(
+                h_flex()
+                    .gap_1()
+                    .flex_wrap()
+                    .when(self.workspace.is_some(), |this| {
+                        this.child(
+                            Button::new("follow-up-explanation", i18n::t!("b09fe286c17bf635"))
+                                .start_icon(Icon::new(IconName::Sparkle).size(IconSize::Small))
+                                .label_size(LabelSize::Small)
+                                .style(ButtonStyle::Tinted(ui::TintColor::Accent))
+                                .disabled(project::DisableAiSettings::get_global(cx).disable_ai)
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    if project::DisableAiSettings::get_global(cx).disable_ai {
+                                        return;
+                                    }
+                                    let text = i18n::t_args!(
+                                        "86758a83bafd6e15",
+                                        this.markdown.read(cx).source()
+                                    );
+                                    let workspace = this.workspace.clone();
+                                    cx.emit(DismissEvent);
+                                    if let Some(workspace) =
+                                        workspace.and_then(|workspace| workspace.upgrade())
+                                    {
+                                        workspace.update(cx, |workspace, cx| {
+                                            workspace.focus_handle(cx).dispatch_action(
+                                                &zed_actions::assistant::FollowUpCodeExplanation {
+                                                    text,
+                                                },
+                                                window,
+                                                cx,
+                                            );
+                                        });
+                                    }
+                                })),
+                        )
+                    })
+                    .when_some(self.workspace.clone(), |this, workspace| {
+                        let pin_workspace = workspace;
+                        this.child(
+                            IconButton::new("pin-explanation", IconName::Split)
+                                .tooltip(Tooltip::text(i18n::t!("5323bbacebd32ca3")))
+                                .disabled(self.pinned)
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    let Some(workspace) = pin_workspace.upgrade() else {
+                                        return;
+                                    };
+                                    let markdown = this.markdown.clone();
+                                    let cancelled = this.cancelled.clone();
+                                    let source_editor = this.source_editor.clone();
+                                    let source_range = this.source_range.clone();
+                                    let status = this.status.clone();
+                                    let source_label = this.source_label.clone();
+                                    let language = this.language.clone();
+                                    window.defer(cx, move |window, cx| {
+                                        workspace.update(cx, |workspace, cx| {
+                                            let workspace_handle = cx.weak_entity();
+                                            let view = cx.new(|cx| {
+                                                let mut view = DeepExplanationModal::from_markdown(
+                                                    markdown,
+                                                    status,
+                                                    source_label,
+                                                    language,
+                                                    true,
+                                                    cx,
+                                                );
+                                                view.source_range = source_range;
+                                                view.cancelled = cancelled;
+                                                view.source_editor = source_editor;
+                                                view.workspace = Some(workspace_handle);
+                                                view
+                                            });
+                                            let pane = workspace.split_pane(
+                                                workspace.active_pane().clone(),
+                                                workspace::SplitDirection::Right,
+                                                window,
+                                                cx,
+                                            );
+                                            pane.update(cx, |pane, cx| {
+                                                pane.add_item(
+                                                    Box::new(view),
+                                                    true,
+                                                    true,
+                                                    None,
+                                                    window,
+                                                    cx,
+                                                )
+                                            });
+                                        });
+                                    });
+                                    cx.emit(DismissEvent);
+                                })),
+                        )
+                        .child(
+                            ui::PopoverMenu::new("deep-explanation-more")
+                                .trigger(
+                                    IconButton::new(
+                                        "deep-explanation-more-trigger",
+                                        IconName::Ellipsis,
+                                    )
+                                    .tooltip(Tooltip::text(i18n::t!("9f07d2ce4115f575"))),
+                                )
+                                .menu(move |window, cx| {
+                                    let modal = modal_handle.clone();
+                                    Some(ui::ContextMenu::build(window, cx, |menu, _, _| {
+                                        menu.entry(
+                                            i18n::t!("e04b69643cbdb136"),
+                                            None,
+                                            move |window, cx| {
+                                                modal
+                                                    .update(cx, |modal, cx| {
+                                                        modal.keep_copy(window, cx)
+                                                    })
+                                                    .log_err();
+                                            },
+                                        )
+                                    }))
+                                }),
+                        )
+                    }),
+            );
+
         v_flex()
+            .id("deep-explanation-surface")
+            .debug_selector(|| "deep-explanation-surface".into())
             .key_context("DeepExplanationModal")
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(Self::cancel))
-            .elevation_3(cx)
-            .occlude()
-            .w(rems(46.))
-            .max_w(window.viewport_size().width * 0.9)
-            .h(height)
+            .when(!self.pinned, |this| {
+                this.elevation_3(cx)
+                    .w(rems(54.))
+                    .max_w(window.viewport_size().width * 0.94)
+                    .h(height)
+            })
+            .when(self.pinned, |this| this.size_full().min_w_0().min_h_0())
+            .bg(colors.elevated_surface_background)
             .overflow_hidden()
+            .occlude()
             .child(
-                ModalHeader::new()
-                    .show_dismiss_button(true)
-                    .headline(i18n::t!("d18350e9052d513e")),
+                h_flex()
+                    .id("deep-explanation-header")
+                    .debug_selector(|| "deep-explanation-header".into())
+                    .w_full()
+                    .justify_between()
+                    .gap_3()
+                    .p_4()
+                    .child(h_flex().gap_3().min_w_0()
+                        .child(Icon::new(IconName::Book).color(Color::Accent))
+                        .child(v_flex().gap_1().min_w_0()
+                            .child(Label::new(i18n::t!("d18350e9052d513e")).weight(gpui::FontWeight::SEMIBOLD))
+                            .child(h_flex().gap_2().min_w_0()
+                                .when_some(self.language.clone(), |this, language| {
+                                    this.child(Label::new(language.to_string()).size(LabelSize::Small).color(Color::Muted))
+                                })
+                                .child(Label::new(self.source_label.clone()).size(LabelSize::Small).color(Color::Muted).truncate()))))
+                    .child(IconButton::new("close-deep-explanation", IconName::Close)
+                        .tooltip(Tooltip::text(i18n::t!("7d9eb7acb13e2462")))
+                        .on_click(cx.listener(|_, _, _, cx| cx.emit(DismissEvent)))),
             )
-            .when_some(self.source_editor.clone(), |this, source| {
-                let source_range = self.source_range.clone();
-                this.child(
-                    Button::new("return-to-explained-source", i18n::t!("8cd52c1af8febf66"))
-                        .on_click(move |_, window, cx| {
-                            if let Some(editor) = source.upgrade() {
-                                editor.update(cx, |editor, cx| {
-                                    if let Some(range) = source_range.clone() {
-                                        editor.change_selections(
-                                            Default::default(),
-                                            window,
-                                            cx,
-                                            |selections| selections.select_ranges([range]),
-                                        );
-                                        editor.request_autoscroll(Autoscroll::fit(), cx);
-                                    }
-                                    editor.focus_handle(cx).focus(window, cx);
-                                });
-                            }
-                        }),
-                )
-            })
-            .when(self.workspace.is_some(), |this| {
-                this.child(
-                    Button::new("follow-up-explanation", i18n::t!("b09fe286c17bf635")).on_click(
-                        cx.listener(|this, _, window, cx| {
-                            if project::DisableAiSettings::get_global(cx).disable_ai {
-                                return;
-                            }
-                            let text =
-                                i18n::t_args!("86758a83bafd6e15", this.markdown.read(cx).source());
-                            let workspace = this.workspace.clone();
-                            cx.emit(DismissEvent);
-                            if let Some(workspace) =
-                                workspace.and_then(|workspace| workspace.upgrade())
-                            {
-                                workspace.update(cx, |workspace, cx| {
-                                    workspace.focus_handle(cx).dispatch_action(
-                                        &zed_actions::assistant::FollowUpCodeExplanation { text },
-                                        window,
-                                        cx,
-                                    );
-                                });
-                            }
-                        }),
-                    ),
-                )
-            })
-            .when_some(self.workspace.clone(), |this, workspace| {
-                let pin_workspace = workspace.clone();
-                this.child(
-                    Button::new("pin-explanation", i18n::t!("5323bbacebd32ca3")).on_click(
-                        cx.listener(move |this, _, window, cx| {
-                            let Some(workspace) = pin_workspace.upgrade() else {
-                                return;
-                            };
-                            let markdown = this.markdown.clone();
-                            let cancelled = this.cancelled.clone();
-                            let source_editor = this.source_editor.clone();
-                            let source_range = this.source_range.clone();
-                            workspace.update(cx, |workspace, cx| {
-                                let workspace_handle = cx.weak_entity();
-                                let view = cx.new(|cx| DeepExplanationModal {
-                                    markdown,
-                                    source_range,
-                                    cancelled,
-                                    source_editor,
-                                    workspace: Some(workspace_handle),
-                                    focus_handle: cx.focus_handle(),
-                                    scroll_handle: gpui::ScrollHandle::new(),
-                                });
-                                let pane = workspace.split_pane(
-                                    workspace.active_pane().clone(),
-                                    workspace::SplitDirection::Right,
-                                    window,
-                                    cx,
-                                );
-                                pane.update(cx, |pane, cx| {
-                                    pane.add_item(Box::new(view), true, true, None, window, cx)
-                                });
-                            });
-                            cx.emit(DismissEvent);
-                        }),
-                    ),
-                )
-                .child(
-                    Button::new("keep-explanation", i18n::t!("e04b69643cbdb136")).on_click(
-                        cx.listener(move |this, _, window, cx| {
-                            let Some(workspace) = workspace.upgrade() else {
-                                return;
-                            };
-                            let text = this.markdown.read(cx).source().to_string();
-                            workspace.update(cx, |workspace, cx| {
-                                let buffer = cx.new(|cx| language::Buffer::local(text, cx));
-                                let editor = cx.new(|cx| {
-                                    let mut editor = Editor::for_buffer(buffer, None, window, cx);
-                                    editor.set_read_only(true);
-                                    editor
-                                });
-                                workspace.add_item_to_active_pane(
-                                    Box::new(editor),
-                                    None,
-                                    true,
-                                    window,
-                                    cx,
-                                );
-                            });
-                            cx.emit(DismissEvent);
-                        }),
-                    ),
-                )
-            })
-            .when_some(self.cancelled.clone(), |this, cancelled| {
-                this.child(
-                    Button::new("stop-deep-explanation", i18n::t!("9ad0aac32ea304be")).on_click(
-                        move |_, _, _| {
-                            cancelled.store(true, Ordering::SeqCst);
-                        },
-                    ),
-                )
-            })
-            .child(
-                Button::new("copy-deep-explanation", i18n::t!("6258a2c6f9c89143")).on_click(
-                    cx.listener(|this, _, _, cx| {
-                        let text = this.markdown.read(cx).source().to_string();
-                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
-                    }),
-                ),
-            )
+            .child(toolbar)
             .child(
                 div()
                     .relative()
+                    .w_full()
                     .flex_1()
                     .min_h_0()
                     .child(
                         div()
                             .id("deep-code-explanation-content")
+                            .debug_selector(|| "deep-code-explanation-content".into())
                             .size_full()
                             .overflow_y_scroll()
                             .track_scroll(&self.scroll_handle)
-                            .p_4()
-                            .child(markdown),
+                            .px_6()
+                            .py_4()
+                            .child(v_flex().w_full().min_w_0().max_w(rems(48.)).mx_auto()
+                                .when(!outline.is_empty(), |this| {
+                                    this.child(h_flex()
+                                        .id("deep-explanation-outline")
+                                        .debug_selector(|| "deep-explanation-outline".into())
+                                        .flex_wrap()
+                                        .gap_1()
+                                        .mb_4()
+                                        .pb_3()
+                                        .border_b_1()
+                                        .border_color(colors.border_variant)
+                                        .children(outline.into_iter().enumerate().map(|(index, (offset, title))| {
+                                            Button::new(("deep-explanation-heading", index), title)
+                                                .truncate(true)
+                                                .label_size(LabelSize::Small)
+                                                .style(ButtonStyle::OutlinedGhost)
+                                                .on_click(cx.listener(move |this, _, _, cx| {
+                                                    this.markdown.update(cx, |markdown, cx| {
+                                                        markdown.request_autoscroll_to_source_index(offset, cx);
+                                                    });
+                                                }))
+                                        })))
+                                })
+                                .child(markdown)),
                     )
                     .vertical_scrollbar_for(&self.scroll_handle, window, cx),
             )
+            .child(h_flex()
+                .id("deep-explanation-footer")
+                .debug_selector(|| "deep-explanation-footer".into())
+                .w_full()
+                .flex_wrap()
+                .justify_between()
+                .gap_2()
+                .px_4()
+                .py_2()
+                .border_t_1()
+                .border_color(colors.border_variant)
+                .child(h_flex().gap_2()
+                    .when(status.is_active(), |this| this.child(SpinnerLabel::dots_variant().size(LabelSize::Small)))
+                    .when(!status.is_active(), |this| this.child(Icon::new(match status {
+                        DeepExplanationStatus::Failed => IconName::WarningCircle,
+                        DeepExplanationStatus::Stopped => IconName::Stop,
+                        _ => IconName::Check,
+                    }).size(IconSize::XSmall).color(if status == DeepExplanationStatus::Failed { Color::Error } else { Color::Muted })))
+                    .child(Label::new(status.label()).size(LabelSize::Small).color(Color::Muted)))
+                .when(status.is_active() && self.cancelled.is_some(), |this| {
+                    this.child(div().debug_selector(|| "deep-explanation-stop-control".into()).child(Button::new("stop-deep-explanation", i18n::t!("9ad0aac32ea304be"))
+                        .start_icon(Icon::new(IconName::Stop).size(IconSize::Small))
+                        .label_size(LabelSize::Small)
+                        .on_click(cx.listener(|this, _, _, cx| this.stop(cx)))))
+                })
+                .when(!status.is_active(), |this| {
+                    this.child(Label::new(i18n::t!("361fa544b10f9508")).size(LabelSize::XSmall).color(Color::Muted))
+                }))
     }
 }
 
@@ -3916,6 +4484,7 @@ impl gpui::Render for CodeExplanationIndicator {
                                         editor.explanations.last_error = None;
                                         request_refresh(editor);
                                         editor.explanations.last_view = None;
+                                        diff_annotations::retry(editor);
                                         cx.notify();
                                     });
                                 }
@@ -3931,6 +4500,7 @@ impl gpui::Render for CodeExplanationIndicator {
                                         editor.explanations.generation =
                                             editor.explanations.generation.wrapping_add(1);
                                         editor.explanations.task = None;
+                                        diff_annotations::stop(editor);
                                         editor
                                             .explanations
                                             .deep_cancelled
