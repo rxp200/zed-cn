@@ -424,14 +424,20 @@ fn changed_file_prefetch_registry(cx: &mut App) -> gpui::Entity<ChangedFilePrefe
 }
 
 /// 为工作树中已修改的文件预生成讲解，使打开 Git 差异视图时直接命中缓存。
-pub fn register_changed_file_prefetch(project: &gpui::Entity<project::Project>, cx: &mut App) {
+///
+/// `git_store` 必须由调用方传入：本函数会在 `Project` 的 `observe_new` 回调里被调用，
+/// 那时 `Project` 正持有可变租约，任何 `project.read(cx)` 都会触发重入 panic。
+pub fn register_changed_file_prefetch(
+    project: &gpui::Entity<project::Project>,
+    git_store: gpui::Entity<project::git_store::GitStore>,
+    cx: &mut App,
+) {
     let registry = changed_file_prefetch_registry(cx);
     let project_id = project.entity_id();
     if registry.read(cx).subscriptions.contains_key(&project_id) {
         return;
     }
     let project = project.clone();
-    let git_store = project.read(cx).git_store().clone();
     registry.update(cx, |registry, cx| {
         let event_project = project.clone();
         let subscription = cx.subscribe(
@@ -5208,6 +5214,35 @@ mod changed_file_prefetch_tests {
         )));
         assert!(!status_is_changed(FileStatus::Untracked));
         assert!(!status_is_changed(FileStatus::Ignored));
+    }
+
+    #[gpui::test]
+    async fn prefetch_registration_from_a_new_project_observer_does_not_reenter_the_project(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        crate::editor_tests::init_test(cx, |_| {});
+        cx.update(|cx| {
+            cx.observe_new::<project::Project>(|project, _window, cx| {
+                let git_store = project.git_store().clone();
+                let project = cx.entity();
+                register_changed_file_prefetch(&project, git_store, cx);
+            })
+            .detach();
+        });
+        let fs = FakeFs::new(cx.executor());
+        fs.insert_tree(
+            "/root",
+            serde_json::json!({ ".git": {}, "lib.rs": "fn helper() {\n    work();\n}\n" }),
+        )
+        .await;
+        let project = project::Project::test(fs, [Path::new("/root")], cx).await;
+        cx.run_until_parked();
+        cx.read(|cx| {
+            assert!(
+                project.read(cx).worktrees(cx).next().is_some(),
+                "project must stay usable after prefetch registration"
+            );
+        });
     }
 
     #[gpui::test]
