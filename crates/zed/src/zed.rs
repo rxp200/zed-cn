@@ -333,9 +333,10 @@ pub fn init(cx: &mut App) {
         open_about_window(cx);
     });
 
-    cx.observe_new::<Project>(|_, _window, cx| {
+    cx.observe_new::<Project>(|project, _window, cx| {
+        let git_store = project.git_store().clone();
         let project = cx.entity();
-        editor::code_explanations::register_changed_file_prefetch(&project, cx);
+        editor::code_explanations::register_changed_file_prefetch(&project, git_store, cx);
     })
     .detach();
 }
