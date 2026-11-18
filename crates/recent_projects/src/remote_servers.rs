@@ -75,6 +75,12 @@ const COLLAPSED_SERVER_ROWS: usize = 6;
 /// value or the results stop short of the modal edge.
 const DEFAULT_PICKER_WIDTH: Rems = rems(40.);
 
+/// Size of the jump-host popover. The picker inside it is built with the same
+/// height cap and fills it instead of its own content, so the list scrolls
+/// inside the popover rather than running past its bottom edge.
+const JUMP_HOST_POPOVER_WIDTH: Rems = rems(24.);
+const JUMP_HOST_POPOVER_HEIGHT: Rems = rems(14.);
+
 /// Records `project` as the most recently used location on a server,
 /// deduplicating by value and evicting the least recently used entries once
 /// the per-server limit is exceeded. The list is ordered most recently used
@@ -699,6 +705,12 @@ impl PickerDelegate for JumpHostPickerDelegate {
         self.selected_index = index;
     }
 
+    fn select_on_hover(&self) -> bool {
+        // Following the pointer would move the selection away from the row the
+        // user is aiming at as soon as the list scrolls under the cursor.
+        false
+    }
+
     fn placeholder_text(&self, _: &mut Window, _: &mut App) -> Arc<str> {
         i18n::t!("16dde1c78091301a").into()
     }
@@ -771,19 +783,26 @@ impl PickerDelegate for JumpHostPickerDelegate {
     ) -> Option<AnyElement> {
         let candidate_index = *self.matching.get(index)?;
         let candidate = self.candidates.get(candidate_index)?;
+        // A saved server's label is its nickname, so repeating it as the detail
+        // would only cost a line of an already short popover.
+        let detail = candidate.detail();
+        let show_detail = detail != candidate.label;
         Some(
             ListItem::new(SharedString::from(format!("jump-host-{candidate_index}")))
                 .inset(true)
                 .spacing(ui::ListItemSpacing::Sparse)
                 .toggle_state(selected)
                 .start_slot(Icon::new(IconName::Server).color(Color::Muted))
-                .child(
-                    v_flex().child(Label::new(candidate.label.clone())).child(
-                        Label::new(candidate.detail())
-                            .size(LabelSize::Small)
-                            .color(Color::Muted),
-                    ),
-                )
+                .child(v_flex().child(Label::new(candidate.label.clone())).when(
+                    show_detail,
+                    |this| {
+                        this.child(
+                            Label::new(detail)
+                                .size(LabelSize::Small)
+                                .color(Color::Muted),
+                        )
+                    },
+                ))
                 .when(candidate.source == JumpHostSource::SshConfig, |this| {
                     this.end_slot(
                         Label::new("~/.ssh/config")
@@ -4107,7 +4126,17 @@ impl RemoteServerProjects {
         cx: &mut Context<Self>,
     ) {
         let delegate = JumpHostPickerDelegate::new(candidates, cx.entity().downgrade());
-        let picker = cx.new(|cx| Picker::uniform_list(delegate, window, cx).embedded());
+        // The popover is smaller than the picker's default height cap, and a
+        // picker sized by its content overflows it: the rows past the popover's
+        // edge get clipped and the list can't scroll to them. Cap the picker to
+        // the popover and let the list fill that height, so it scrolls.
+        let picker = cx.new(|cx| {
+            Picker::uniform_list(delegate, window, cx)
+                .max_height(JUMP_HOST_POPOVER_HEIGHT)
+                .show_scrollbar(true)
+                .fill_results_height()
+                .embedded()
+        });
         picker.focus_handle(cx).focus(window, cx);
         if let Mode::CreateRemoteServerForm(state) = &mut self.mode {
             state.jump_host_picker = Some(picker);
@@ -4941,9 +4970,14 @@ impl RemoteServerProjects {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         if let Some(prompt) = state.ssh_prompt.clone() {
+            // Track the prompt's own focus handle, not the modal's: clicking the
+            // password or host-key input has to focus that input, otherwise the
+            // keystrokes go to the modal and the field can never be entered.
+            let prompt_focus = prompt.read(cx).input_focus_handle(cx);
             return v_flex()
-                .track_focus(&self.focus_handle(cx))
+                .track_focus(&prompt_focus)
                 .id("create-remote-server-form-prompt")
+                .debug_selector(|| "form-connection-prompt".into())
                 .size_full()
                 .child(prompt)
                 .into_any_element();
@@ -5608,8 +5642,8 @@ impl RemoteServerProjects {
                                             v_flex()
                                                 .debug_selector(|| "form-jump-host-popover".into())
                                                 .occlude()
-                                                .w(rems(24.))
-                                                .h(rems(14.))
+                                                .w(JUMP_HOST_POPOVER_WIDTH)
+                                                .h(JUMP_HOST_POPOVER_HEIGHT)
                                                 .overflow_hidden()
                                                 .rounded_md()
                                                 .border_1()
@@ -9015,11 +9049,16 @@ impl Render for RemoteServerProjects {
             .on_action(cx.listener(Self::select_first))
             .on_action(cx.listener(Self::select_last))
             .capture_any_mouse_down(cx.listener(|this, _, window, cx| {
-                if matches!(&this.mode, Mode::CreateRemoteServerForm(state) if state.jump_host_picker.is_some())
-                {
-                    this.close_jump_host_picker(window, cx);
+                // The form owns its own focus routing: every field tracks the
+                // editor it edits, and a connection prompt focuses its input
+                // when it appears. Focusing the modal here would steal the
+                // click from all of them, which left the password and
+                // host-key prompts impossible to click into. The jump-host
+                // popover closes from its own backdrop instead, so clicking
+                // inside it (search box, rows) keeps working.
+                if !matches!(this.mode, Mode::CreateRemoteServerForm(_)) {
+                    this.focus_handle(cx).focus(window, cx);
                 }
-                this.focus_handle(cx).focus(window, cx);
             }))
             .on_mouse_down_out(cx.listener(|this, _, _, cx| {
                 if matches!(this.mode, Mode::Default) {
@@ -9213,7 +9252,7 @@ mod filter_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gpui::TestAppContext;
+    use gpui::{Modifiers, TestAppContext};
 
     fn init_test(cx: &mut TestAppContext) -> Arc<AppState> {
         cx.update(|cx| {
@@ -10365,6 +10404,179 @@ mod tests {
         assert!(
             popover.top() >= px(0.) && popover.bottom() <= viewport.height,
             "the overlay stays inside the window instead of being clipped: {popover:?}"
+        );
+    }
+
+    /// The popover is a fixed-size box, so the picker inside it has to be capped
+    /// to that box. Left at its own default cap the picker laid out for more
+    /// rows than the popover showed, and the rows past the popover's bottom edge
+    /// could not be reached however far the list was scrolled.
+    #[gpui::test]
+    async fn jump_host_picker_fits_its_popover(cx: &mut TestAppContext) {
+        let app_state = init_test(cx);
+        let fs = app_state.fs.as_fake();
+        let project = Project::test(fs.clone(), [], cx).await;
+        let (multi_workspace, cx) = cx.add_window_view(|window, cx| {
+            let workspace = cx.new(|cx| Workspace::test_new(project, window, cx));
+            MultiWorkspace::new(workspace, window, cx)
+        });
+        let workspace =
+            multi_workspace.read_with(cx, |multi_workspace, _| multi_workspace.workspace().clone());
+        workspace.update_in(cx, |workspace, window, cx| {
+            let weak = cx.weak_entity();
+            workspace.toggle_modal(window, cx, |window, cx| {
+                RemoteServerProjects::new(false, fs.clone(), window, weak, cx)
+            });
+        });
+        cx.run_until_parked();
+
+        workspace.update_in(cx, |workspace, window, cx| {
+            let modal = workspace
+                .active_modal::<RemoteServerProjects>(cx)
+                .expect("the remote server modal is open");
+            modal.update(cx, |modal, cx| {
+                modal.mode = Mode::CreateRemoteServerForm(CreateRemoteServerForm::new(window, cx));
+                cx.notify();
+            });
+        });
+        cx.run_until_parked();
+
+        let candidates = (0..12)
+            .map(|index| {
+                JumpHostCandidate::saved(
+                    format!("bastion-{index}").into(),
+                    format!("bastion-{index}.example.com"),
+                    None,
+                    None,
+                )
+            })
+            .collect::<Vec<_>>();
+        workspace.update_in(cx, |workspace, window, cx| {
+            let modal = workspace
+                .active_modal::<RemoteServerProjects>(cx)
+                .expect("the remote server modal is open");
+            modal.update(cx, |modal, cx| {
+                modal.show_jump_host_picker(candidates, point(px(200.), px(200.)), window, cx);
+            });
+        });
+
+        let popover = cx
+            .debug_bounds("form-jump-host-popover")
+            .expect("the jump-host overlay is laid out");
+        let picker = workspace
+            .update_in(cx, |workspace, _window, cx| {
+                let modal = workspace
+                    .active_modal::<RemoteServerProjects>(cx)
+                    .expect("the remote server modal is open");
+                modal.read_with(cx, |modal, _cx| {
+                    let Mode::CreateRemoteServerForm(state) = &modal.mode else {
+                        panic!("expected the form mode");
+                    };
+                    state.jump_host_picker.clone()
+                })
+            })
+            .expect("the jump-host picker is open");
+        let picker_bounds = picker
+            .read_with(cx, |picker, _cx| picker.bounds())
+            .expect("the picker is laid out");
+        assert!(
+            picker_bounds.size.height <= popover.size.height,
+            "the picker must fit inside its popover instead of laying out taller and \
+             having the extra rows clipped: {picker_bounds:?} vs {popover:?}"
+        );
+    }
+
+    /// A connection prompt shown inside the add-server form has to take focus
+    /// when it is clicked. The editor does not grab focus by itself, so the
+    /// container has to track the prompt's input handle; tracking the modal's
+    /// handle instead left the password and host-key fields impossible to
+    /// click into.
+    #[gpui::test]
+    async fn connection_prompt_input_takes_focus_from_a_click(cx: &mut TestAppContext) {
+        let app_state = init_test(cx);
+        let fs = app_state.fs.as_fake();
+        let project = Project::test(fs.clone(), [], cx).await;
+        let (multi_workspace, cx) = cx.add_window_view(|window, cx| {
+            let workspace = cx.new(|cx| Workspace::test_new(project, window, cx));
+            MultiWorkspace::new(workspace, window, cx)
+        });
+        let workspace =
+            multi_workspace.read_with(cx, |multi_workspace, _| multi_workspace.workspace().clone());
+        workspace.update_in(cx, |workspace, window, cx| {
+            let weak = cx.weak_entity();
+            workspace.toggle_modal(window, cx, |window, cx| {
+                RemoteServerProjects::new(false, fs.clone(), window, weak, cx)
+            });
+        });
+        cx.run_until_parked();
+
+        let prompt = workspace.update_in(cx, |workspace, window, cx| {
+            let modal = workspace
+                .active_modal::<RemoteServerProjects>(cx)
+                .expect("the remote server modal is open");
+            modal.update(cx, |modal, cx| {
+                modal.mode = Mode::CreateRemoteServerForm(CreateRemoteServerForm::new(window, cx));
+                let prompt = cx.new(|cx| {
+                    RemoteConnectionPrompt::new(
+                        "dev@target.example".to_string(),
+                        None,
+                        false,
+                        false,
+                        window,
+                        cx,
+                    )
+                });
+                let Mode::CreateRemoteServerForm(state) = &mut modal.mode else {
+                    panic!("expected the form mode");
+                };
+                state.ssh_prompt = Some(prompt.clone());
+                cx.notify();
+                prompt
+            })
+        });
+        cx.run_until_parked();
+
+        // A host-key confirmation is what a first connection shows; it is the
+        // prompt whose input the user has to click into to answer `yes`.
+        let (tx, _rx) = oneshot::channel();
+        let (_cancel_tx, cancel_rx) = oneshot::channel();
+        workspace.update_in(cx, |_workspace, window, cx| {
+            prompt.update(cx, |prompt, cx| {
+                prompt.set_prompt(
+                    "The authenticity of host 'target.example' can't be established.\n\
+                     Are you sure you want to continue connecting (yes/no)?"
+                        .to_string(),
+                    tx,
+                    cancel_rx,
+                    window,
+                    cx,
+                );
+            });
+        });
+        cx.run_until_parked();
+
+        // Move focus away, as clicking elsewhere in the modal does, then click
+        // the prompt to come back to it.
+        workspace.update_in(cx, |workspace, window, cx| {
+            let modal = workspace
+                .active_modal::<RemoteServerProjects>(cx)
+                .expect("the remote server modal is open");
+            let form_focus = modal.read(cx).focus_handle.clone();
+            form_focus.focus(window, cx);
+        });
+        cx.run_until_parked();
+
+        let prompt_bounds = cx
+            .debug_bounds("form-connection-prompt")
+            .expect("the prompt replaces the form body");
+        cx.simulate_click(prompt_bounds.center(), Modifiers::none());
+        cx.run_until_parked();
+
+        let input_focused =
+            cx.update(|window, cx| prompt.read(cx).input_focus_handle(cx).is_focused(window));
+        assert!(
+            input_focused,
+            "clicking the connection prompt focuses its input so it accepts typing"
         );
     }
 

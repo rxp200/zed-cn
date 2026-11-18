@@ -139,6 +139,11 @@ pub struct Picker<D: PickerDelegate> {
     size_bounds: shape::SizeBounds,
     /// An external control to display a scrollbar in the `Picker`.
     show_scrollbar: bool,
+    /// Whether the results list must fill the space its container allows instead
+    /// of growing to its content height. Required when the picker is embedded in
+    /// a bounded container: a content-sized list overflows that container and
+    /// the rows past its edge can't be scrolled into view.
+    fill_results_height: bool,
     /// How the picker is presented, which controls its chrome and behavior.
     presentation: Presentation,
     /// Bounds tracking for the picker container (for aside positioning)
@@ -636,6 +641,7 @@ impl<D: PickerDelegate> Picker<D> {
             }),
             default_shape,
             show_scrollbar: false,
+            fill_results_height: false,
             presentation: Presentation::Modal {
                 resizable: has_preview,
             },
@@ -702,6 +708,10 @@ impl<D: PickerDelegate> Picker<D> {
         if self.live_shape_is_hidden_default() {
             self.shape.set_initial_height(height);
         }
+        // The cap is only a maximum: the picker also has a default minimum
+        // height, which would keep it taller than a container smaller than that
+        // minimum and push its rows outside the container's clipping.
+        self.size_bounds.min_results.height = ui::rems_from_px(96_f32);
         self
     }
 
@@ -727,6 +737,24 @@ impl<D: PickerDelegate> Picker<D> {
     pub fn show_scrollbar(mut self, show_scrollbar: bool) -> Self {
         self.show_scrollbar = show_scrollbar;
         self
+    }
+
+    /// Makes the results list fill the height its container allows instead of
+    /// sizing itself to its content.
+    ///
+    /// Use this for an embedded picker whose container is smaller than the
+    /// picker's own cap: a content-sized list lays out taller than the container
+    /// and the rows past the container's edge are clipped away without the list
+    /// being scrollable to them.
+    pub fn fill_results_height(mut self) -> Self {
+        self.fill_results_height = true;
+        self
+    }
+
+    /// The picker rect of the last frame, for callers that embed the picker in a
+    /// container of their own and need to check it fits.
+    pub fn bounds(&self) -> Option<Bounds<Pixels>> {
+        self.picker_bounds.get()
     }
 
     /// Controls whether a modal hosting this picker can be revealed again with
@@ -1514,9 +1542,10 @@ impl<D: PickerDelegate> Picker<D> {
 
     fn render_element_container(&self, cx: &mut Context<Self>) -> impl IntoElement {
         // When the picker shrinks to fit its content, the list infers its size
-        // from its items. When it fills its full height (preview visible), the
-        // list fills the available space.
-        let sizing_behavior = if self.fill_height() {
+        // from its items. When it fills its full height (preview visible), or the
+        // picker is embedded in a bounded container, the list fills the space it
+        // is given so it scrolls instead of overflowing.
+        let sizing_behavior = if self.fill_height() || self.fill_results_height {
             ListSizingBehavior::Auto
         } else {
             ListSizingBehavior::Infer
