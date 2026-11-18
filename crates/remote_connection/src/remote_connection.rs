@@ -12,8 +12,8 @@ use askpass::EncryptedPassword;
 use auto_update::AutoUpdater;
 use futures::{FutureExt as _, channel::oneshot, select};
 use gpui::{
-    AnyWindowHandle, App, AsyncApp, DismissEvent, Entity, EventEmitter, Focusable, FontFeatures,
-    ParentElement as _, Render, SharedString, Task, TextStyleRefinement, WeakEntity,
+    AnyWindowHandle, App, AsyncApp, DismissEvent, Entity, EventEmitter, FocusHandle, Focusable,
+    FontFeatures, ParentElement as _, Render, SharedString, Task, TextStyleRefinement, WeakEntity,
 };
 use markdown::{Markdown, MarkdownElement, MarkdownStyle};
 use release_channel::ReleaseChannel;
@@ -104,6 +104,15 @@ impl RemoteConnectionPrompt {
 
     pub fn set_cancellation_tx(&mut self, tx: oneshot::Sender<()>) {
         self.cancellation = Some(tx);
+    }
+
+    /// The focus handle of the input the user types the password or the
+    /// host-key confirmation into.
+    ///
+    /// Hosts that embed this prompt in their own container need it to route
+    /// clicks to the input; the editor does not take focus on its own.
+    pub fn input_focus_handle(&self, cx: &App) -> FocusHandle {
+        self.editor.focus_handle(cx)
     }
 
     /// The opt-in flag the managed-key checkbox writes and the SSH transport

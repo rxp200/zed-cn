@@ -1,3 +1,5 @@
+#[cfg(any(windows, test))]
+use std::ffi::OsString;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -101,7 +103,11 @@ pub async fn apply_managed_identity(
 ) -> Result<Option<ManagedSshKey>> {
     if let Some(key_id) = options.ssh_key_id.clone() {
         let identity = cx
-            .background_spawn(async move { load_managed_identity_by_id(&key_id) })
+            .background_spawn(async move {
+                let identity = load_managed_identity_by_id(&key_id)?;
+                repair_identity_permissions(identity.as_ref().map(|(_, path)| path))?;
+                Ok::<_, anyhow::Error>(identity)
+            })
             .await?;
         let Some((key, private_key_path)) = identity else {
             anyhow::bail!(i18n::t_args!(
@@ -118,12 +124,14 @@ pub async fn apply_managed_identity(
     let username = options.username.clone();
     let identity = cx
         .background_spawn(async move {
-            load_managed_identity(
+            let identity = load_managed_identity(
                 &managed_ssh_key_directory(),
                 &host,
                 port,
                 username.as_deref(),
-            )
+            )?;
+            repair_identity_permissions(identity.as_ref().map(|(_, path)| path))?;
+            Ok::<_, anyhow::Error>(identity)
         })
         .await?;
     let Some((key, private_key_path)) = identity else {
@@ -376,8 +384,12 @@ async fn import_managed_ssh_key_into(
         .iter()
         .find(|key| key.key_id == key_id && directory.join(&key.private_key_file).is_file())
     {
+        let private_key_path = directory.join(&key.private_key_file);
+        // Reusing a stored copy must not skip the permission step: an older
+        // build's copy can carry an ACL that ssh rejects.
+        enforce_restricted_permissions(&private_key_path, RestrictedPath::File)?;
         return Ok(ImportedManagedSshKey {
-            private_key_path: directory.join(&key.private_key_file),
+            private_key_path,
             record: key.clone(),
         });
     }
@@ -756,7 +768,7 @@ fn utc_timestamp() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RestrictedPath {
     Directory,
     File,
@@ -845,16 +857,6 @@ fn restrict_directory_permissions(path: &Path) -> Result<()> {
         .with_context(|| i18n::t_args!("bec42db568eddd46", path.display()))
 }
 
-#[cfg(windows)]
-fn restrict_directory_permissions(path: &Path) -> Result<()> {
-    restrict_windows_permissions(path)
-}
-
-#[cfg(not(any(unix, windows)))]
-fn restrict_directory_permissions(_path: &Path) -> Result<()> {
-    Ok(())
-}
-
 #[cfg(unix)]
 fn restrict_private_key_permissions(path: &Path) -> Result<()> {
     use std::os::unix::fs::PermissionsExt as _;
@@ -863,22 +865,28 @@ fn restrict_private_key_permissions(path: &Path) -> Result<()> {
 }
 
 #[cfg(windows)]
-fn restrict_private_key_permissions(path: &Path) -> Result<()> {
-    restrict_windows_permissions(path)
-}
-
-#[cfg(not(any(unix, windows)))]
-fn restrict_private_key_permissions(_path: &Path) -> Result<()> {
-    Ok(())
+fn restrict_directory_permissions(path: &Path) -> Result<()> {
+    restrict_windows_permissions(path, RestrictedPath::Directory)
 }
 
 #[cfg(windows)]
-fn restrict_windows_permissions(path: &Path) -> Result<()> {
-    let username = std::env::var("USERNAME").context("无法确定当前 Windows 用户")?;
+fn restrict_private_key_permissions(path: &Path) -> Result<()> {
+    restrict_windows_permissions(path, RestrictedPath::File)
+}
+
+#[cfg(windows)]
+fn restrict_windows_permissions(path: &Path, kind: RestrictedPath) -> Result<()> {
+    // A file's DACL is rebuilt from its directory, so the directory has to carry
+    // the inheritable grant before the file is reset.
+    if kind == RestrictedPath::File
+        && let Some(directory) = path.parent()
+    {
+        restrict_directory_permissions(directory)?;
+    }
+
+    let username = std::env::var("USERNAME").context(i18n::t!("d14b8a00f0d9701d"))?;
     let output = std::process::Command::new("icacls")
-        .arg(path)
-        .args(["/inheritance:r", "/grant:r"])
-        .arg(format!("{username}:(F)"))
+        .args(windows_restriction_arguments(path, kind, &username))
         .output()
         .with_context(|| i18n::t_args!("d5c6acb3da489960", path.display()))?;
     if !output.status.success() {
@@ -888,6 +896,72 @@ fn restrict_windows_permissions(path: &Path) -> Result<()> {
             String::from_utf8_lossy(&output.stderr).trim()
         ));
     }
+    Ok(())
+}
+
+/// The `icacls` arguments that put `path` into the shape ssh requires.
+///
+/// Kept apart from the spawn so the ACL shape stays reviewable and covered by
+/// tests on every platform, including the non-Windows ones.
+#[cfg(any(windows, test))]
+fn windows_restriction_arguments(
+    path: &Path,
+    kind: RestrictedPath,
+    username: &str,
+) -> Vec<OsString> {
+    let mut arguments = vec![path.as_os_str().to_owned()];
+    match kind {
+        RestrictedPath::Directory => {
+            arguments.push("/inheritance:r".into());
+            arguments.push("/grant:r".into());
+            // `(OI)(CI)` is what makes the grant inheritable. Without it a file
+            // created in the directory inherits no ACE at all, and Windows builds
+            // its DACL from the creating process's default DACL instead, which
+            // also grants the `NT AUTHORITY\LogonSessionId_*` SID. OpenSSH treats
+            // that extra allow entry as "too open" and ignores the key.
+            arguments.push(format!("{username}:(OI)(CI)F").into());
+        }
+        RestrictedPath::File => {
+            // Rebuild the whole DACL from the parent directory. `/inheritance:r`
+            // only drops inherited ACEs and `/grant:r` only rewrites the named
+            // user's entry, so an explicit stale grant — the logon-session SID
+            // that a default DACL leaves behind — survives either way and keeps
+            // the key unusable.
+            arguments.push("/reset".into());
+        }
+    }
+    arguments
+}
+
+#[cfg(not(any(unix, windows)))]
+fn restrict_directory_permissions(_path: &Path) -> Result<()> {
+    Ok(())
+}
+
+#[cfg(not(any(unix, windows)))]
+fn restrict_private_key_permissions(_path: &Path) -> Result<()> {
+    Ok(())
+}
+
+/// Re-applies a stored private key's platform permissions before ssh reads it.
+///
+/// Unix repairs permissions on every manifest read, but a Windows ACL check costs
+/// an `icacls` process, so Windows only enforced them where key material was
+/// created or rewritten. A key whose ACL drifted afterwards — imported by an
+/// older build, restored from a backup, or carried over from another machine —
+/// therefore kept failing with `bad permissions` forever. Checking the one key
+/// that is about to be used costs one directory plus one file restriction per
+/// connection, on the background executor, and repairs those installs by itself.
+#[cfg(windows)]
+fn repair_identity_permissions(private_key_path: Option<&PathBuf>) -> Result<()> {
+    match private_key_path {
+        Some(private_key_path) => restrict_private_key_permissions(private_key_path),
+        None => Ok(()),
+    }
+}
+
+#[cfg(not(windows))]
+fn repair_identity_permissions(_private_key_path: Option<&PathBuf>) -> Result<()> {
     Ok(())
 }
 
@@ -1026,6 +1100,35 @@ mod tests {
     fn sanitizes_managed_key_file_components() {
         assert_eq!(sanitize_file_component("root/a:b"), "root_a_b");
         assert_eq!(sanitize_file_component("..."), "unknown");
+    }
+
+    /// The Windows ACL shape has to be reviewable without a Windows host: the
+    /// missing `(OI)(CI)` flags were what let Windows fall back to the process
+    /// default DACL, which grants the logon-session SID that OpenSSH rejects.
+    #[test]
+    fn windows_restriction_arguments_make_the_key_directory_grant_inheritable() {
+        let directory = Path::new("C:/Users/dev/AppData/Local/Zed/ssh/keys");
+        assert_eq!(
+            windows_restriction_arguments(directory, RestrictedPath::Directory, "dev"),
+            [
+                OsString::from(directory),
+                "/inheritance:r".into(),
+                "/grant:r".into(),
+                "dev:(OI)(CI)F".into(),
+            ],
+            "the only grant has to be inheritable, or children fall back to the \
+             process default DACL"
+        );
+    }
+
+    #[test]
+    fn windows_restriction_arguments_rebuild_the_key_file_dacl() {
+        let private_key = Path::new("C:/Users/dev/AppData/Local/Zed/ssh/keys/zed-key");
+        assert_eq!(
+            windows_restriction_arguments(private_key, RestrictedPath::File, "dev"),
+            [OsString::from(private_key), "/reset".into()],
+            "only /reset drops a stale explicit grant such as the logon-session SID"
+        );
     }
 
     #[test]
