@@ -8,7 +8,9 @@ import unittest
 
 import yaml
 
-WORKFLOW = Path(__file__).resolve().parents[1] / ".github/workflows/build-windows-release.yml"
+ROOT = Path(__file__).resolve().parents[1]
+WORKFLOW = ROOT / ".github/workflows/build-windows-release.yml"
+PUBLISHER = ROOT / "script/publish-release-assets"
 JOBS = yaml.safe_load(WORKFLOW.read_text())["jobs"]
 SOURCE = "${{ needs.validate_source.outputs.source_sha }}"
 
@@ -69,9 +71,13 @@ subprocess.run(['git', '--git-dir', os.environ['FIXTURE_REMOTE'], 'update-ref',
                               text=True, capture_output=True)
 
     def tag_guard(self):
-        step = next(step for step in JOBS["publish_release"]["steps"]
-                    if step["name"] == "Create or update GitHub Release")
-        return step["run"].split('notes_path="release-notes.md"')[0]
+        publisher = PUBLISHER.read_text()
+        start = publisher.index("verify_release_tag() {")
+        end = publisher.index("\n}\n", start) + len("\n}\n")
+        return ("set -euo pipefail\n"
+                "tag=\"$RELEASE_TAG\"; commit=\"$SOURCE_SHA\"; repository=\"$GH_REPO\"\n"
+                + publisher[start:end]
+                + "verify_release_tag create-if-missing\n")
 
     def test_all_downstream_checkouts_pin_and_assert_before_other_steps(self):
         checked = []
@@ -93,7 +99,8 @@ subprocess.run(['git', '--git-dir', os.environ['FIXTURE_REMOTE'], 'update-ref',
                     failure = self.shell(guard["run"])
                     self.assertNotEqual(failure.returncode, 0)
                     self.assertIn("does not match validated source", failure.stdout)
-        self.assertEqual(set(checked), {"bundle_linux", "bundle_macos", "bundle_windows", "publish_release"})
+        self.assertEqual(set(checked), {"bundle_linux", "bundle_macos", "bundle_windows",
+                                        "publish_fast_platforms", "publish_macos"})
         self.assertNotIn("source_ref", JOBS["validate_source"]["outputs"])
 
     def test_desktop_builds_embed_validated_custom_release_tag(self):
@@ -102,22 +109,29 @@ subprocess.run(['git', '--git-dir', os.environ['FIXTURE_REMOTE'], 'update-ref',
                              "${{ needs.validate_source.outputs.release_tag }}")
             self.assertEqual(JOBS[name]["env"]["ZED_COMMIT_SHA"], SOURCE)
 
+    def test_source_validation_runs_the_publisher_regression(self):
+        step = next(step for step in JOBS["validate_source"]["steps"]
+                    if step["name"] == "Test the release publisher")
+        self.assertEqual(step["run"], "python3 -m unittest script.test_publish_release_assets")
+
     def test_source_validation_checks_license_layout(self):
         step = next(step for step in JOBS["validate_source"]["steps"]
                     if step["name"] == "Validate open-source license layout")
         self.assertEqual(step["run"], "./script/check-licenses")
 
     def test_release_notes_link_exact_source_and_licenses(self):
-        step = next(step for step in JOBS["publish_release"]["steps"]
-                    if step["name"] == "Create or update GitHub Release")
-        for text in (
-            "## 源码与许可证",
-            "https://github.com/$GH_REPO/tree/$SOURCE_SHA",
-            "blob/$SOURCE_SHA/LICENSE-GPL",
-            "blob/$SOURCE_SHA/LICENSE-APACHE",
-            "blob/$SOURCE_SHA/MODIFICATIONS.md",
-        ):
-            self.assertIn(text, step["run"])
+        for job in ("publish_fast_platforms", "publish_macos"):
+            step = next(step for step in JOBS[job]["steps"]
+                        if step["name"] == "Write release notes body")
+            self.assertIn("https://github.com/$GH_REPO/tree/$SOURCE_SHA", step["run"])
+            for text in (
+                "## 源码与许可证",
+                "blob/$SOURCE_SHA/LICENSE-GPL",
+                "blob/$SOURCE_SHA/LICENSE-APACHE",
+                "blob/$SOURCE_SHA/MODIFICATIONS.md",
+                "各平台的产物在完成构建并通过校验后陆续发布到本 Release",
+            ):
+                self.assertIn(text, step["run"])
 
     def test_matching_lightweight_and_annotated_tags(self):
         for annotated in (False, True):
@@ -162,18 +176,20 @@ subprocess.run(['git', '--git-dir', os.environ['FIXTURE_REMOTE'], 'update-ref',
         self.assertNotIn("refs/tags/", self.git("ls-remote", "origin"))
 
     def test_manual_tag_creation_retains_nonrecursive_workflow_token(self):
-        publisher = JOBS["publish_release"]["steps"][-1]
-        self.assertEqual(publisher["env"]["GH_TOKEN"], "${{ github.token }}")
-        self.assertIn('gh api --method POST "repos/$GH_REPO/git/refs"', publisher["run"])
+        for job in ("publish_fast_platforms", "publish_macos"):
+            step = next(step for step in JOBS[job]["steps"]
+                        if step["name"] == "Publish finished assets")
+            self.assertEqual(step["env"]["GH_TOKEN"], "${{ github.token }}")
+        publisher = PUBLISHER.read_text()
+        self.assertIn('gh api --method POST "repos/$repository/git/refs"', publisher)
 
     def test_each_release_upload_rechecks_tag_and_partial_policy_is_preserved(self):
-        step = JOBS["publish_release"]["steps"][-1]
-        lines = step["run"].splitlines()
+        publisher = PUBLISHER.read_text()
+        lines = publisher.splitlines()
         uploads = [index for index, line in enumerate(lines) if line.startswith("gh release upload ")]
         self.assertEqual(len(uploads), 2)
         for index in uploads:
             self.assertEqual(lines[index - 1], "verify_release_tag")
-        self.assertIn("verify_release_tag\nrm -f release-artifacts/MISSING-ASSETS.txt", step["run"])
         for name in ("bundle_linux", "bundle_macos", "bundle_windows", "build_static_bwrap"):
             self.assertTrue(JOBS[name]["continue-on-error"])
             self.assertFalse(JOBS[name]["strategy"]["fail-fast"])
@@ -186,9 +202,8 @@ subprocess.run(['git', '--git-dir', os.environ['FIXTURE_REMOTE'], 'update-ref',
             {"arch": "x86_64", "target": "x86_64-apple-darwin", "runner": "macos-15-intel"},
         ])
 
-    def test_asset_aggregation_requires_every_published_platform(self):
-        step = next(step for step in JOBS["publish_release"]["steps"]
-                    if step.get("name") == "Validate available assets and generate checksums")
+    def test_asset_aggregation_lives_in_the_publisher(self):
+        publisher = PUBLISHER.read_text()
         expected = {
             "bwrap-linux-aarch64.gz", "bwrap-linux-x86_64.gz",
             "Zed-aarch64.dmg", "Zed-x86_64.dmg", "Zed-aarch64.exe", "Zed-x86_64.exe",
@@ -197,22 +212,48 @@ subprocess.run(['git', '--git-dir', os.environ['FIXTURE_REMOTE'], 'update-ref',
             "zed-remote-server-macos-aarch64.gz", "zed-remote-server-macos-x86_64.gz",
             "zed-remote-server-windows-aarch64.zip", "zed-remote-server-windows-x86_64.zip",
         }
-        directory = self.repository / "release-artifacts"
-        directory.mkdir()
         for name in expected:
-            (directory / name).write_bytes(b"fixture")
-        result = self.shell(step["run"])
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual((directory / "MISSING-ASSETS.txt").read_text(), "")
-        self.assertEqual(len((directory / "SHA256SUMS.txt").read_text().splitlines()), 14)
-        for name in ("MISSING-ASSETS.txt", "SHA256SUMS.txt"):
-            (directory / name).unlink()
-        (directory / "Zed-arm64.dmg").write_bytes(b"unexpected")
-        result = self.shell(step["run"])
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("Unexpected release asset: Zed-arm64.dmg", result.stderr)
-        (directory / "Zed-arm64.dmg").unlink()
+            self.assertIn(name, publisher)
+        # One source of truth: the workflow must not keep a second asset list or
+        # its own checksum generation that could drift from the publisher.
+        workflow = WORKFLOW.read_text()
+        self.assertNotIn("sha256sum", workflow)
+        for name in expected:
+            self.assertNotIn(name, workflow)
+        for job, phase in (("publish_fast_platforms", "--phase partial"),
+                           ("publish_macos", "--phase final")):
+            step = next(step for step in JOBS[job]["steps"]
+                        if step["name"] == "Publish finished assets")
+            self.assertIn("./script/publish-release-assets", step["run"])
+            self.assertIn(phase, step["run"])
+            self.assertIn("--refresh-feed", step["run"])
 
+    def test_phases_are_serialised_and_scan_every_platform(self):
+        fast = JOBS["publish_fast_platforms"]
+        macos = JOBS["publish_macos"]
+        self.assertEqual(fast["needs"], ["validate_source", "bundle_linux",
+                                         "build_static_bwrap", "bundle_windows"])
+        self.assertEqual(macos["needs"], ["validate_source", "publish_fast_platforms",
+                                          "bundle_macos"])
+        for job in (fast, macos):
+            self.assertEqual(job["concurrency"]["group"],
+                             "publish-${{ needs.validate_source.outputs.release_tag }}")
+            self.assertFalse(job["concurrency"]["cancel-in-progress"])
+            self.assertEqual(job["permissions"]["contents"], "write")
+            self.assertEqual(job["permissions"]["actions"], "write")
+        # The phases must not overlap: a macOS artifact that finishes early may not
+        # slip into the partial phase, and the append phase only needs macOS.
+        fast_patterns = [step["with"]["pattern"] for step in fast["steps"]
+                         if step.get("with", {}).get("pattern")]
+        macos_patterns = [step["with"]["pattern"] for step in macos["steps"]
+                          if step.get("with", {}).get("pattern")]
+        self.assertTrue(fast_patterns and macos_patterns)
+        for pattern in macos_patterns:
+            self.assertNotIn(pattern, fast_patterns)
+            self.assertTrue("dmg" in pattern or "macos" in pattern, pattern)
+        for pattern in fast_patterns:
+            self.assertNotIn("dmg", pattern)
+            self.assertNotIn("macos", pattern)
 
 if __name__ == "__main__":
     unittest.main()
