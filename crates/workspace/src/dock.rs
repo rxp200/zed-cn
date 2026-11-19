@@ -1316,27 +1316,24 @@ impl Render for Dock {
             let resize_drag_active = self.resize_drag_active;
             let dock_entity = cx.weak_entity();
             let create_resize_handle = || {
-                // Mimics the VS Code sash: hovering (or dragging, which keeps
-                // the edge under the cursor) lights up the edge with an accent
-                // bar surrounded by a soft glow.
                 let (glow, bar) = match position {
                     DockPosition::Left | DockPosition::Right => (
+                        div().absolute().top_0().bottom_0().left(px(1.)).w(px(4.)),
                         div()
                             .absolute()
-                            .top_0()
-                            .bottom_0()
-                            .left_0()
-                            .w(RESIZE_HANDLE_SIZE),
-                        div().absolute().top_0().bottom_0().left(px(2.)).w(px(2.)),
+                            .top(px(8.))
+                            .bottom(px(8.))
+                            .left(px(2.))
+                            .w(px(2.)),
                     ),
                     DockPosition::Bottom => (
+                        div().absolute().left_0().right_0().top(px(1.)).h(px(4.)),
                         div()
                             .absolute()
-                            .left_0()
-                            .right_0()
-                            .top_0()
-                            .h(RESIZE_HANDLE_SIZE),
-                        div().absolute().left_0().right_0().top(px(2.)).h(px(2.)),
+                            .left(px(8.))
+                            .right(px(8.))
+                            .top(px(2.))
+                            .h(px(2.)),
                     ),
                 };
                 let glow = glow.rounded_full();
@@ -1357,10 +1354,10 @@ impl Render for Dock {
                         DockPosition::Bottom => "bottom-dock-resize-handle".into(),
                     })
                     .child(if resize_drag_active {
-                        glow.bg(accent.opacity(0.25))
+                        glow.bg(accent.opacity(0.28))
                     } else {
                         glow.group_hover("dock-resize-handle", |style| {
-                            style.bg(accent.opacity(0.25))
+                            style.bg(accent.opacity(0.16))
                         })
                     })
                     .child(if resize_drag_active {
