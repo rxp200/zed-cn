@@ -44,11 +44,14 @@ impl HostedTerminals {
     async fn client(&self) -> Result<std::sync::Arc<HostedTerminalClient>> {
         let mut client = self.client.lock().await;
         if let Some(connected) = client.as_ref() {
-            anyhow::ensure!(
-                connected.is_connected(),
-                "hosted terminal service connection was lost; reopen the remote project"
-            );
-            return Ok(connected.clone());
+            if connected.is_connected() {
+                return Ok(connected.clone());
+            }
+            // The daemon that served this connection is gone: it was replaced
+            // after an upgrade, or the host restarted. Reconnecting here keeps
+            // a lost link from disabling terminals for the rest of the session.
+            log::info!("hosted terminal service connection was lost; reconnecting");
+            *client = None;
         }
         let connected = HostedTerminalClient::connect_or_spawn(&self.service_dir).await?;
         *client = Some(connected.clone());
@@ -517,7 +520,7 @@ mod tests {
     use super::*;
     use crate::hosted_terminal::serve_with_shutdown;
     use std::path::Path;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     struct TestDaemon {
         #[allow(dead_code, reason = "keeps the temporary state directory alive")]
@@ -674,6 +677,43 @@ mod tests {
             }
         }
         frames
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_lost_service_connection_reconnects_instead_of_disabling_terminals() {
+        let (first_daemon, service_dir, root) = daemon();
+        let hosted = HostedTerminals::new(service_dir.clone());
+        smol::block_on(hosted.create(create_request(&root, "before-restart"), None))
+            .expect("create against the first daemon");
+
+        // The daemon goes away exactly like a replaced or restarted service.
+        drop(first_daemon);
+        let socket = service_dir.join("hosted-terminals-v2.sock");
+        let pid_file = service_dir.join("hosted-terminals-v2.pid");
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while socket.exists() || pid_file.exists() {
+            assert!(Instant::now() < deadline, "first daemon did not stop");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+
+        let serve_dir = service_dir;
+        let (shutdown, stop) = async_channel::bounded(1);
+        std::thread::spawn(move || {
+            smol::block_on(serve_with_shutdown(serve_dir, stop)).expect("serve second daemon");
+        });
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while !socket.exists() {
+            assert!(Instant::now() < deadline, "second daemon did not start");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+
+        // The cached link belonged to the daemon that died; terminals must
+        // reconnect instead of failing for the rest of the session.
+        let created = smol::block_on(hosted.create(create_request(&root, "after-restart"), None))
+            .expect("create after the service restart");
+        assert_eq!(created.server_instance_id, HOSTED_INSTANCE_ID);
+        shutdown.close();
     }
 
     #[test]

@@ -25,6 +25,15 @@ const MAX_ATTACHMENTS: usize = 16;
 const MAX_NAME_BYTES: usize = 256;
 const MAX_ROOT_BYTES: usize = 4096;
 
+/// Bumped whenever a change must replace the daemon already serving a host.
+/// The daemon outlives every client connection, so without this an endpoint can
+/// keep running an old build and its old bugs for weeks.
+const DAEMON_EPOCH: u32 = 2;
+
+/// How long a replaced daemon is given to stop before the caller is told to
+/// retry instead of racing a second daemon onto the same endpoint.
+const DAEMON_REPLACE_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// Grace an unhosted session survives without an attachment. Hosted sessions
 /// never expire on their own; only termination or process exit ends them.
 pub const ORDINARY_SESSION_GRACE: Duration = Duration::from_secs(30 * 60);
@@ -465,6 +474,23 @@ impl Session {
         }
     }
 
+    /// An ended session is only reachable through an attachment that can still
+    /// read its exit status, so an ended record nobody is attached to can never
+    /// be addressed again.
+    fn ended_without_viewers(&self) -> bool {
+        self.state
+            .lock()
+            .map(|state| state.lifecycle.is_exited() && state.lifecycle.viewer_count() == 0)
+            .unwrap_or(false)
+    }
+
+    fn is_running(&self) -> bool {
+        self.state
+            .lock()
+            .map(|state| !state.lifecycle.is_exited())
+            .unwrap_or(false)
+    }
+
     fn pull_output(&self, attachment_id: &str) -> OutputPull {
         let Ok(mut state) = self.state.lock() else {
             return OutputPull::Superseded;
@@ -634,6 +660,27 @@ impl HostedTerminalService {
         self.state.lock().map_err(|_| SessionError::NotFound)
     }
 
+    /// Drops ended records that no attachment can read from any more. Nothing
+    /// can address them, yet they used to cover one of `MAX_SESSIONS` until
+    /// their whole connection died, so a host that only ever opened a handful
+    /// of terminals could still exhaust the budget after a few days.
+    pub fn reclaim_ended_sessions(&self) -> usize {
+        let Ok(mut state) = self.state() else {
+            return 0;
+        };
+        let ended: Vec<String> = state
+            .sessions
+            .iter()
+            .filter(|(_, session)| session.ended_without_viewers())
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in &ended {
+            state.sessions.remove(id);
+            state.by_creation_id.retain(|_, stored| stored != id);
+        }
+        ended.len()
+    }
+
     /// Creating is idempotent by `creation_id` so a retried request cannot spawn
     /// a second PTY. The first attachment id comes from the serving connection.
     pub fn create(&self, request: proto::CreateHostedTerminal) -> Result<String, SessionError> {
@@ -643,12 +690,22 @@ impl HostedTerminalService {
         if request.canonical_root.len() > MAX_ROOT_BYTES {
             return Err(SessionError::InvalidRoot);
         }
+        // Ended records must not keep a slot away from a new terminal.
+        self.reclaim_ended_sessions();
         {
             let state = self.state()?;
             if let Some(session_id) = state.by_creation_id.get(&request.creation_id) {
                 return Ok(session_id.clone());
             }
-            if state.sessions.len() >= MAX_SESSIONS {
+            // The budget bounds live shells and their replay buffers. An ended
+            // record only exists so an attached viewer can read its exit
+            // status, so it must not hold a slot away from a new terminal.
+            let running = state
+                .sessions
+                .values()
+                .filter(|session| session.is_running())
+                .count();
+            if running >= MAX_SESSIONS {
                 return Err(SessionError::SessionLimit);
             }
         }
@@ -827,14 +884,19 @@ impl HostedTerminalService {
     }
 
     pub fn detach(&self, session_id: &str, attachment_id: &str) -> Result<(), SessionError> {
-        let session = self.session(session_id)?;
-        let now = self.now();
-        let mut state = session.state.lock().map_err(|_| SessionError::NotFound)?;
-        state.lifecycle.detach(attachment_id, now)?;
-        state.cursors.remove(attachment_id);
-        if let Some(kick) = state.kicks.remove(attachment_id) {
-            kick.try_send(()).ok();
+        {
+            let session = self.session(session_id)?;
+            let now = self.now();
+            let mut state = session.state.lock().map_err(|_| SessionError::NotFound)?;
+            state.lifecycle.detach(attachment_id, now)?;
+            state.cursors.remove(attachment_id);
+            if let Some(kick) = state.kicks.remove(attachment_id) {
+                kick.try_send(()).ok();
+            }
         }
+        // The last viewer of an ended session leaves a record nobody can
+        // address again, so it is released here instead of covering a slot.
+        self.reclaim_ended_sessions();
         Ok(())
     }
 
@@ -946,6 +1008,20 @@ impl HostedTerminalService {
         Ok(())
     }
 
+    /// Ends a session and releases the attachment that asked for it. Closing a
+    /// terminal used to leave an ended record behind for as long as the client
+    /// connection lived, which is what filled `MAX_SESSIONS`.
+    pub fn terminate_for(&self, session_id: &str, attachment_id: &str) -> Result<(), SessionError> {
+        self.terminate(session_id)?;
+        match self.detach(session_id, attachment_id) {
+            Ok(()) => Ok(()),
+            // Another connection already released this attachment; the session
+            // is ended either way, so the request is satisfied.
+            Err(SessionError::UnknownAttachment) => Ok(()),
+            Err(error) => Err(error),
+        }
+    }
+
     /// Removing an ended record keeps a running PTY from being orphaned: a live
     /// session must be terminated first.
     pub fn delete(&self, session_id: &str) -> Result<(), SessionError> {
@@ -1047,6 +1123,20 @@ impl HostedTerminalService {
     #[cfg(test)]
     pub fn session_exists(&self, session_id: &str) -> bool {
         self.session(session_id).is_ok()
+    }
+
+    #[cfg(test)]
+    pub fn session_ended(&self, session_id: &str) -> bool {
+        self.session(session_id)
+            .ok()
+            .and_then(|session| {
+                session
+                    .state
+                    .lock()
+                    .ok()
+                    .map(|state| state.lifecycle.is_exited())
+            })
+            .unwrap_or(false)
     }
 
     fn session(&self, session_id: &str) -> Result<Arc<Session>, SessionError> {
@@ -1188,6 +1278,32 @@ fn daemon_pid_path(state_dir: &Path) -> PathBuf {
     state_dir.join("hosted-terminals-v2.pid")
 }
 
+fn daemon_epoch_path(state_dir: &Path) -> PathBuf {
+    state_dir.join("hosted-terminals-v2.epoch")
+}
+
+fn read_daemon_pid(state_dir: &Path) -> Option<u32> {
+    std::fs::read_to_string(daemon_pid_path(state_dir))
+        .ok()?
+        .trim()
+        .parse()
+        .ok()
+}
+
+fn read_daemon_epoch(state_dir: &Path) -> Option<u32> {
+    std::fs::read_to_string(daemon_epoch_path(state_dir))
+        .ok()?
+        .trim()
+        .parse()
+        .ok()
+}
+
+/// Both files are written by the daemon itself, so a caller can neither fake a
+/// live endpoint nor claim that the daemon already runs this build.
+pub fn daemon_needs_replacement(state_dir: &Path) -> bool {
+    daemon_is_running(state_dir) && read_daemon_epoch(state_dir).unwrap_or(0) < DAEMON_EPOCH
+}
+
 /// Serves the terminal service on its account-private local endpoint. Only the
 /// current remote OS account can connect.
 pub async fn serve(state_dir: PathBuf) -> Result<()> {
@@ -1200,11 +1316,23 @@ pub async fn serve_with_shutdown(
     shutdown: async_channel::Receiver<()>,
 ) -> Result<()> {
     ensure_private_directory(&state_dir)?;
+    let socket = endpoint_path(&state_dir);
+    // A second daemon used to unlink this endpoint under the first one and bind
+    // its own, so the sessions and the shells of a live daemon became
+    // unreachable while the pid file pointed at the newcomer.
+    if let Some(pid) = read_daemon_pid(&state_dir)
+        && process_is_alive(pid)
+    {
+        anyhow::bail!("hosted terminal service {pid} is already serving {state_dir:?}");
+    }
     std::fs::write(daemon_pid_path(&state_dir), std::process::id().to_string())
         .with_context(|| format!("writing hosted terminal pid file in {state_dir:?}"))?;
-    let socket = endpoint_path(&state_dir);
+    std::fs::write(daemon_epoch_path(&state_dir), DAEMON_EPOCH.to_string())
+        .with_context(|| format!("writing hosted terminal epoch file in {state_dir:?}"))?;
     if socket.exists() {
-        let _ = smol::fs::remove_file(&socket).await;
+        smol::fs::remove_file(&socket)
+            .await
+            .with_context(|| format!("removing stale hosted terminal endpoint {socket:?}"))?;
     }
     let listener = net::async_net::UnixListener::bind(&socket)
         .with_context(|| format!("binding hosted terminal endpoint {socket:?}"))?;
@@ -1227,6 +1355,10 @@ pub async fn serve_with_shutdown(
                 let expired = service.expire_ordinary_sessions();
                 if expired > 0 {
                     log::info!("expired {expired} unhosted terminal session(s)");
+                }
+                let reclaimed = service.reclaim_ended_sessions();
+                if reclaimed > 0 {
+                    log::info!("released {reclaimed} ended terminal session(s)");
                 }
             }
         })
@@ -1256,8 +1388,15 @@ pub async fn serve_with_shutdown(
     }
     // The endpoint only ever belongs to this process; removing a stale name must
     // never delete a socket another live daemon is serving.
-    let _ = smol::fs::remove_file(&socket).await;
-    let _ = std::fs::remove_file(daemon_pid_path(&state_dir));
+    for path in [
+        &socket,
+        &daemon_pid_path(&state_dir),
+        &daemon_epoch_path(&state_dir),
+    ] {
+        if let Err(error) = smol::fs::remove_file(path).await {
+            log::debug!("hosted terminal service could not remove {path:?}: {error}");
+        }
+    }
     Ok(())
 }
 
@@ -1469,7 +1608,7 @@ fn dispatch(
         Some(Kind::Terminate(terminate)) => {
             {
                 service.check_attachment(&terminate.session_id, &terminate.attachment_id)?;
-                service.terminate(&terminate.session_id)?;
+                service.terminate_for(&terminate.session_id, &terminate.attachment_id)?;
             }
             ResponseKind::Ack(ack)
         }
@@ -1494,7 +1633,7 @@ fn dispatch(
         }
         Some(Kind::Close(close)) => {
             service.check_attachment(&close.session_id, &close.attachment_id)?;
-            service.terminate(&close.session_id)?;
+            service.terminate_for(&close.session_id, &close.attachment_id)?;
             ResponseKind::Ack(ack)
         }
         Some(Kind::Subscribe(_)) => ResponseKind::Ack(ack),
@@ -1606,10 +1745,14 @@ impl HostedTerminalClient {
         !self.shared.disconnected.load(SeqCst)
     }
 
-    /// Connects to the account's terminal service, starting it when absent.
-    /// Starting is serialized by the daemon's own endpoint bind, so concurrent
-    /// callers end up on one service instead of racing to replace each other.
+    /// Connects to the account's terminal service, starting it when absent and
+    /// replacing one that runs an older build. The daemon's own endpoint bind
+    /// keeps concurrent callers on one service; replacing is additionally
+    /// guarded by the state that the old daemon wrote for itself.
     pub async fn connect_or_spawn(state_dir: &Path) -> Result<Arc<Self>> {
+        if daemon_needs_replacement(state_dir) {
+            replace_outdated_daemon(state_dir).await?;
+        }
         if let Ok(client) = Self::connect(state_dir).await {
             return Ok(client);
         }
@@ -1839,13 +1982,103 @@ fn daemon_is_running(state_dir: &Path) -> bool {
 #[cfg(unix)]
 fn process_is_alive(pid: u32) -> bool {
     // SAFETY: signal 0 only probes whether the pid exists.
-    unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
+    if unsafe { libc::kill(pid as libc::pid_t, 0) } != 0 {
+        return false;
+    }
+    // A daemon spawned by a server process that never reaps it stays a zombie
+    // and keeps answering `kill(0)`, so an exited daemon would look alive and
+    // no replacement could ever be started.
+    !process_is_zombie(pid)
+}
+
+#[cfg(target_os = "linux")]
+fn process_is_zombie(pid: u32) -> bool {
+    std::fs::read_to_string(format!("/proc/{pid}/stat"))
+        .map(|stat| linux_stat_is_zombie(&stat))
+        .unwrap_or(false)
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
+fn process_is_zombie(_pid: u32) -> bool {
+    false
+}
+
+/// The executable name in `/proc/<pid>/stat` may contain spaces and
+/// parentheses, so the state is the first field after the last `)`.
+fn linux_stat_is_zombie(stat: &str) -> bool {
+    stat.rsplit_once(')')
+        .and_then(|(_, rest)| rest.split_whitespace().next())
+        .is_some_and(|state| state == "Z")
 }
 
 #[cfg(not(unix))]
 fn process_is_alive(_pid: u32) -> bool {
     // Windows process probing is verified together with the named-pipe ACL work.
     false
+}
+
+#[cfg(unix)]
+fn signal_terminate(pid: u32) -> Result<()> {
+    // SAFETY: signal 0 and SIGTERM only address the pid the daemon wrote for
+    // itself, and the call has no preconditions.
+    if unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) } == 0 {
+        return Ok(());
+    }
+    let error = std::io::Error::last_os_error();
+    if error.raw_os_error() == Some(libc::ESRCH) {
+        return Ok(());
+    }
+    Err(error).with_context(|| format!("stopping hosted terminal service {pid}"))
+}
+
+#[cfg(not(unix))]
+fn signal_terminate(_pid: u32) -> Result<()> {
+    anyhow::bail!("replacing a hosted terminal service is not supported on this platform yet")
+}
+
+/// Reaps the daemon when this process spawned it. Without that it stays a
+/// zombie, which either keeps looking alive or delays the replacement.
+#[cfg(unix)]
+fn reap_terminated_child(pid: u32) {
+    // SAFETY: `waitpid` with `WNOHANG` never blocks.
+    let outcome = unsafe { libc::waitpid(pid as libc::pid_t, std::ptr::null_mut(), libc::WNOHANG) };
+    if outcome < 0 {
+        // `ECHILD` means another server process owns the daemon and reaps it.
+        log::trace!("hosted terminal service {pid} is not this process's child");
+    }
+}
+
+#[cfg(not(unix))]
+fn reap_terminated_child(_pid: u32) {}
+
+/// Stops a daemon that predates the current build before a new one is started.
+/// Its terminals end with it: a host that has been up for weeks would otherwise
+/// keep running the build (and the bugs) that the upgrade was meant to fix.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "the daemon handover runs outside GPUI, so its deadlines use the process timer"
+)]
+async fn replace_outdated_daemon(state_dir: &Path) -> Result<()> {
+    let socket = endpoint_path(state_dir);
+    let Some(pid) = read_daemon_pid(state_dir) else {
+        return Ok(());
+    };
+    log::info!(
+        "replacing hosted terminal service {pid} from an older build; its terminals will end"
+    );
+    signal_terminate(pid)?;
+    let deadline = Instant::now() + DAEMON_REPLACE_TIMEOUT;
+    loop {
+        reap_terminated_child(pid);
+        if net::async_net::UnixStream::connect(&socket).await.is_err() {
+            return Ok(());
+        }
+        anyhow::ensure!(
+            Instant::now() < deadline,
+            "hosted terminal service {pid} did not stop; reopen the remote project to retry"
+        );
+        smol::Timer::after(Duration::from_millis(50)).await;
+    }
 }
 
 /// Starts the colocated terminal service as an independent process so it
@@ -2339,6 +2572,71 @@ mod tests {
     }
 
     #[cfg(unix)]
+    fn wait_until_ended(service: &HostedTerminalService, session_id: &str) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !service.session_ended(session_id) {
+            assert!(
+                Instant::now() < deadline,
+                "hosted terminal session did not end in time"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ended_sessions_do_not_keep_a_slot_away_from_a_new_terminal() {
+        let service = HostedTerminalService::new();
+        // Every closed terminal used to leave an ended record behind for as long
+        // as its connection lived, so ordinary use filled the budget with
+        // records no client could address any more.
+        for index in 0..MAX_SESSIONS {
+            let attachment_id = format!("attachment-{index}");
+            let session_id = create_session(
+                &service,
+                &format!("creation-{index}"),
+                "/bin/sh",
+                &["-c", "exit 0"],
+                &attachment_id,
+            );
+            wait_until_ended(&service, &session_id);
+            service.detach(&session_id, &attachment_id).unwrap();
+            assert!(!service.session_exists(&session_id));
+        }
+        let session_id = create_session(
+            &service,
+            "after-budget",
+            "/bin/sh",
+            &["-c", "sleep 30"],
+            "owner",
+        );
+        assert!(service.session_exists(&session_id));
+        service.terminate_for(&session_id, "owner").unwrap();
+        assert!(!service.session_exists(&session_id));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_ended_session_stays_listed_for_its_viewer_and_is_released_on_close() {
+        let service = HostedTerminalService::new();
+        let session_id = create_session(&service, "ended", "/bin/sh", &["-c", "exit 7"], "owner");
+        service.host(&session_id, "owner", "agent").unwrap();
+        wait_until_ended(&service, &session_id);
+        // The viewer still needs the exit status, so the record survives the
+        // end of its shell and keeps its slot only while it is reachable.
+        let listed = service.list("/home/user/project");
+        assert_eq!(listed.len(), 1);
+        assert!(!listed[0].running);
+        assert_eq!(listed[0].exit_code, Some(7));
+        assert!(service.session_exists(&session_id));
+
+        // Closing the terminal releases the attachment and with it the slot.
+        service.terminate_for(&session_id, "owner").unwrap();
+        assert!(!service.session_exists(&session_id));
+        assert!(service.list("/home/user/project").is_empty());
+    }
+
+    #[cfg(unix)]
     #[test]
     fn creation_is_idempotent_and_bounded() {
         let service = HostedTerminalService::new();
@@ -2461,5 +2759,129 @@ mod tests {
             );
             std::thread::sleep(Duration::from_millis(20));
         }
+    }
+
+    fn wait_for_endpoint(state_dir: &Path) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !endpoint_path(state_dir).exists() {
+            assert!(Instant::now() < deadline, "daemon endpoint did not appear");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    fn serve_in_thread(
+        state_dir: PathBuf,
+    ) -> (
+        async_channel::Sender<()>,
+        std::thread::JoinHandle<Result<()>>,
+    ) {
+        let serve_dir = state_dir;
+        let (shutdown_tx, shutdown) = async_channel::bounded(1);
+        let served =
+            std::thread::spawn(move || smol::block_on(serve_with_shutdown(serve_dir, shutdown)));
+        (shutdown_tx, served)
+    }
+
+    #[test]
+    fn a_serving_daemon_records_an_epoch_this_build_accepts() {
+        let directory = tempfile::tempdir().unwrap();
+        let state_dir = directory.path().join("hosted-terminals");
+        let (shutdown_tx, served) = serve_in_thread(state_dir.clone());
+        wait_for_endpoint(&state_dir);
+        assert_eq!(read_daemon_epoch(&state_dir), Some(DAEMON_EPOCH));
+        assert!(!daemon_needs_replacement(&state_dir));
+        shutdown_tx.close();
+        served
+            .join()
+            .expect("daemon thread")
+            .expect("daemon shuts down cleanly");
+        assert!(!daemon_epoch_path(&state_dir).exists());
+        assert!(!daemon_pid_path(&state_dir).exists());
+    }
+
+    #[test]
+    fn a_daemon_from_an_older_build_is_flagged_for_replacement() {
+        let directory = tempfile::tempdir().unwrap();
+        let state_dir = directory.path().join("hosted-terminals");
+        std::fs::create_dir_all(&state_dir).unwrap();
+        std::fs::write(daemon_pid_path(&state_dir), std::process::id().to_string()).unwrap();
+        // A daemon written by a build that predates the epoch file cannot report
+        // one, so it counts as older than any epoch this build knows.
+        assert!(daemon_needs_replacement(&state_dir));
+        std::fs::write(
+            daemon_epoch_path(&state_dir),
+            (DAEMON_EPOCH - 1).to_string(),
+        )
+        .unwrap();
+        assert!(daemon_needs_replacement(&state_dir));
+        std::fs::write(daemon_epoch_path(&state_dir), DAEMON_EPOCH.to_string()).unwrap();
+        assert!(!daemon_needs_replacement(&state_dir));
+    }
+
+    #[test]
+    fn a_second_daemon_does_not_take_over_a_live_endpoint() {
+        let directory = tempfile::tempdir().unwrap();
+        let state_dir = directory.path().join("hosted-terminals");
+        let (shutdown_tx, served) = serve_in_thread(state_dir.clone());
+        wait_for_endpoint(&state_dir);
+
+        let (second_shutdown_tx, second_shutdown) = async_channel::bounded(1);
+        let second = smol::block_on(serve_with_shutdown(state_dir.clone(), second_shutdown));
+        assert!(
+            second.is_err(),
+            "a second daemon must refuse to serve an endpoint another daemon owns"
+        );
+        second_shutdown_tx.close();
+
+        // The original daemon must still answer on the endpoint it kept.
+        let client = smol::block_on(HostedTerminalClient::connect(&state_dir))
+            .expect("connect to the original daemon");
+        let listed = smol::block_on(client.request(
+            proto::hosted_terminal_daemon_request::Kind::List(proto::ListHostedTerminals {
+                canonical_root: "/home/user/project".into(),
+            }),
+        ))
+        .expect("list over the surviving endpoint");
+        assert!(matches!(
+            listed.kind,
+            Some(proto::hosted_terminal_daemon_response::Kind::Sessions(_))
+        ));
+
+        shutdown_tx.close();
+        served
+            .join()
+            .expect("daemon thread")
+            .expect("daemon shuts down cleanly");
+    }
+
+    #[test]
+    fn zombie_state_is_read_after_the_command_name() {
+        assert!(linux_stat_is_zombie("1234 (sh) Z 1 1234 1234 0 -1 4194560"));
+        assert!(!linux_stat_is_zombie(
+            "1234 (sh) S 1 1234 1234 0 -1 4194560"
+        ));
+        assert!(linux_stat_is_zombie("1234 (a b) c) Z 1 2"));
+        assert!(!linux_stat_is_zombie("1234 (sh)"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn an_unreaped_child_does_not_look_like_a_running_daemon() {
+        let mut child = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg("exit 0")
+            .spawn()
+            .expect("spawn a child that exits at once");
+        let pid = child.id();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !process_is_zombie(pid) {
+            assert!(Instant::now() < deadline, "child did not become a zombie");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        // A daemon spawned by a server that never reaps it stays a zombie; it
+        // must not be reported as running, or no replacement can ever start.
+        assert!(!process_is_alive(pid));
+        child.wait().expect("reap the child");
+        assert!(!process_is_alive(pid));
     }
 }
