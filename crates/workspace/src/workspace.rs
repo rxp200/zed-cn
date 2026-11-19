@@ -178,8 +178,8 @@ pub const SERIALIZATION_THROTTLE_TIME: Duration = Duration::from_millis(200);
 pub const MAX_RECENT_SELECTIONS: usize = 20;
 /// Gap between a workbench module (dock or pane) and the window edge, and half
 /// of the seam between two neighbouring modules.
-pub(crate) const WORKBENCH_MODULE_INSET: Pixels = px(1.5);
-pub(crate) const WORKBENCH_MODULE_RADIUS: Pixels = px(6.);
+pub(crate) const WORKBENCH_MODULE_INSET: Pixels = px(3.);
+pub(crate) const WORKBENCH_MODULE_RADIUS: Pixels = px(9.);
 
 /// Which optional window-title variables are actually referenced by the active
 /// template. Used to skip expensive lookups when the template doesn't need them.

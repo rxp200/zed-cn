@@ -1,6 +1,8 @@
 use std::cmp::Ordering;
 
-use gpui::{AnyElement, IntoElement, Stateful};
+use gpui::{
+    Animation, AnimationExt as _, AnyElement, EntityId, IntoElement, Stateful, ease_out_quint,
+};
 use smallvec::SmallVec;
 
 use crate::prelude::*;
@@ -33,6 +35,7 @@ pub enum TabCloseSide {
 pub struct Tab {
     div: Stateful<Div>,
     selected: bool,
+    workbench_item: Option<EntityId>,
     position: TabPosition,
     close_side: TabCloseSide,
     start_slot: Option<AnyElement>,
@@ -48,12 +51,19 @@ impl Tab {
                 .id(id.clone())
                 .debug_selector(|| format!("TAB-{}", id)),
             selected: false,
+            workbench_item: None,
             position: TabPosition::First,
             close_side: TabCloseSide::End,
             start_slot: None,
             end_slot: None,
             children: SmallVec::new(),
         }
+    }
+
+    /// Adds a selection marker keyed to the workspace item, not its tab index.
+    pub fn workbench_item(mut self, item_id: EntityId) -> Self {
+        self.workbench_item = Some(item_id);
+        self
     }
 
     pub fn position(mut self, position: TabPosition) -> Self {
@@ -141,7 +151,10 @@ impl RenderOnce for Tab {
             }
         };
 
+        let accent = cx.theme().colors().text_accent;
+        let selected_item = self.workbench_item.filter(|_| self.selected);
         self.div
+            .relative()
             .h(Tab::container_height(cx))
             .bg(tab_bg)
             .border_color(cx.theme().colors().border)
@@ -185,6 +198,25 @@ impl RenderOnce for Tab {
                     .children(self.children)
                     .child(end_slot),
             )
+            .when_some(selected_item, |tab, item_id| {
+                tab.child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left(px(5.))
+                        .right(px(5.))
+                        .h(px(2.))
+                        .rounded_full()
+                        .bg(accent)
+                        .debug_selector(move || format!("workbench-tab-marker-{item_id}"))
+                        .with_animation(
+                            ElementId::View(item_id),
+                            Animation::new(crate::animation::AnimationDuration::Fast.duration())
+                                .with_easing(ease_out_quint()),
+                            |marker, progress| marker.opacity(0.45 + 0.55 * progress),
+                        ),
+                )
+            })
     }
 }
 

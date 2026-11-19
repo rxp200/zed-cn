@@ -1,0 +1,286 @@
+#!/usr/bin/env bash
+# Publish the assets one publish phase produced, on top of whatever the Release
+# already holds.
+#
+# The release workflow runs two phases so a platform does not have to wait for the
+# slowest one: the fast platforms (Linux, Windows, static bwrap) publish first and
+# macOS appends to the same Release when it finishes. The published update feed
+# carries per-platform fallbacks, so clients only see the new version once their
+# own asset exists.
+#
+# Every phase is idempotent and fails closed:
+#   * an asset that is already published must be byte-identical, so the bytes of a
+#     published version never change silently;
+#   * SHA256SUMS.txt is regenerated from the union of published and new assets and
+#     only ever lists files that exist on the Release;
+#   * the completion marker (update-metadata.json) is deleted before anything is
+#     replaced and uploaded last, so the feed never advertises a half-written set.
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+expected_assets=(
+  bwrap-linux-aarch64.gz
+  bwrap-linux-x86_64.gz
+  Zed-aarch64.dmg
+  Zed-aarch64.exe
+  Zed-x86_64.dmg
+  zed-linux-aarch64.tar.gz
+  zed-linux-x86_64.tar.gz
+  zed-remote-server-linux-aarch64.gz
+  zed-remote-server-linux-x86_64.gz
+  zed-remote-server-macos-aarch64.gz
+  zed-remote-server-macos-x86_64.gz
+  zed-remote-server-windows-aarch64.zip
+  zed-remote-server-windows-x86_64.zip
+  Zed-x86_64.exe
+)
+marker_asset=update-metadata.json
+checksum_asset=SHA256SUMS.txt
+
+usage() {
+  cat >&2 <<'USAGE'
+Usage: script/publish-release-assets --tag TAG --commit SHA --version VERSION \
+        --revision N --channel dev|stable --notes-file FILE --assets-dir DIR \
+        --phase partial|final [--pending TEXT] [--draft] [--refresh-feed]
+
+--phase partial  platforms that have not started publishing yet are announced as
+                 still building instead of being reported as missing.
+--phase final    assets that are still absent are reported as not produced.
+USAGE
+  exit 2
+}
+
+tag=""
+commit=""
+version=""
+revision=""
+channel=""
+notes_file=""
+assets_dir=""
+phase=""
+pending=""
+draft=false
+refresh_feed=false
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --tag) tag="${2:?}"; shift 2 ;;
+    --commit) commit="${2:?}"; shift 2 ;;
+    --version) version="${2:?}"; shift 2 ;;
+    --revision) revision="${2:?}"; shift 2 ;;
+    --channel) channel="${2:?}"; shift 2 ;;
+    --notes-file) notes_file="${2:?}"; shift 2 ;;
+    --assets-dir) assets_dir="${2:?}"; shift 2 ;;
+    --phase) phase="${2:?}"; shift 2 ;;
+    --pending) pending="${2:-}"; shift 2 ;;
+    --draft) draft=true; shift ;;
+    --refresh-feed) refresh_feed=true; shift ;;
+    -h|--help) usage ;;
+    *) echo "unknown argument: $1" >&2; usage ;;
+  esac
+done
+
+for required in tag commit version revision channel notes_file assets_dir phase; do
+  if [[ -z "${!required}" ]]; then
+    echo "missing --${required//_/-}" >&2
+    usage
+  fi
+done
+case "$phase" in
+  partial|final) ;;
+  *) echo "--phase must be partial or final" >&2; usage ;;
+esac
+case "$channel" in
+  dev|stable) ;;
+  *) echo "--channel must be dev or stable" >&2; usage ;;
+esac
+test -d "$assets_dir" || { echo "no asset directory: $assets_dir" >&2; exit 1; }
+test -s "$notes_file" || { echo "release notes are empty: $notes_file" >&2; exit 1; }
+command -v gh >/dev/null || { echo "gh is required" >&2; exit 1; }
+
+repository="${GH_REPO:?GH_REPO must name the GitHub repository}"
+
+# The Release must point at the validated source. On a manual dispatch the tag may
+# not exist yet, and creating an absent ref is the only mutation allowed here.
+verify_release_tag() {
+  local remote_tags tag_sha
+  remote_tags="$(git ls-remote origin "refs/tags/$tag" "refs/tags/$tag^{}")"
+  tag_sha="$(awk -v ref="refs/tags/$tag" '$2 == ref { direct = $1 } $2 == ref "^{}" { peeled = $1 } END { print peeled ? peeled : direct }' <<< "$remote_tags")"
+  if [[ -z "$tag_sha" && "${1:-}" == "create-if-missing" && "${RELEASE_EVENT:-}" == "workflow_dispatch" ]]; then
+    gh api --method POST "repos/$repository/git/refs" \
+      -f "ref=refs/tags/$tag" -f "sha=$commit"
+    verify_release_tag
+    return
+  fi
+  if [[ "$tag_sha" != "$commit" ]]; then
+    echo "::error::Release tag $tag peels to '$tag_sha', expected $commit."
+    return 1
+  fi
+}
+
+asset_is_expected() {
+  local candidate="$1" known
+  for known in "${expected_assets[@]}"; do
+    [[ "$candidate" == "$known" ]] && return 0
+  done
+  return 1
+}
+
+release_exists() {
+  gh release view "$tag" --repo "$repository" >/dev/null 2>&1
+}
+
+published_assets() {
+  release_exists || return 0
+  gh release view "$tag" --repo "$repository" --json assets --jq '.assets[].name'
+}
+
+new_assets=()
+while IFS= read -r path; do
+  new_assets+=("$(basename "$path")")
+done < <(find "$assets_dir" -maxdepth 1 -type f -printf '%p\n' | sort)
+
+# Phase one must produce something; a phase that only re-runs an already complete
+# Release is fine and simply refreshes the checksums.
+for asset in "${new_assets[@]}"; do
+  asset_is_expected "$asset" || { echo "::error::Unexpected release asset: $asset" >&2; exit 1; }
+  test -s "$assets_dir/$asset" || { echo "::error::Empty release asset: $asset" >&2; exit 1; }
+done
+if [[ "$phase" == partial && ${#new_assets[@]} -eq 0 ]]; then
+  echo "::error::No release assets were produced by the finished build jobs." >&2
+  exit 1
+fi
+
+stage="$assets_dir/.release-stage"
+rm -rf "$stage"
+mkdir -p "$stage/merged"
+for asset in "${new_assets[@]}"; do
+  cp "$assets_dir/$asset" "$stage/merged/$asset"
+done
+
+verify_release_tag create-if-missing
+
+already_published=()
+if release_exists; then
+  mapfile -t already_published < <(published_assets)
+fi
+
+# Published bytes are immutable for a tag: never replace one with different content.
+mkdir -p "$stage/published"
+for asset in "${already_published[@]}"; do
+  case "$asset" in
+    "$marker_asset"|"$checksum_asset") continue ;;
+  esac
+  gh release download "$tag" --repo "$repository" --pattern "$asset" --dir "$stage/published" --clobber
+  test -s "$stage/published/$asset" || { echo "::error::Failed to fetch published asset $asset" >&2; exit 1; }
+  if [[ -f "$stage/merged/$asset" ]]; then
+    if ! cmp -s "$stage/published/$asset" "$stage/merged/$asset"; then
+      echo "::error::$asset is already published for $tag with different content; publish a new revision instead of replacing it." >&2
+      exit 1
+    fi
+    continue
+  fi
+  cp "$stage/published/$asset" "$stage/merged/$asset"
+done
+
+mapfile -t merged_assets < <(find "$stage/merged" -maxdepth 1 -type f -printf '%f\n' | sort)
+test "${#merged_assets[@]}" -gt 0 || { echo "::error::Nothing to publish for $tag" >&2; exit 1; }
+
+missing=()
+for asset in "${expected_assets[@]}"; do
+  [[ -f "$stage/merged/$asset" ]] || missing+=("$asset")
+done
+
+notes_path="$stage/release-notes.md"
+cp "$notes_file" "$notes_path"
+if [[ "$phase" == partial ]]; then
+  {
+    echo
+    echo "## 正在构建的产物"
+    echo
+    if [[ -n "$pending" ]]; then
+      echo "$pending 的产物仍在构建，完成后会自动补充到本 Release。"
+    else
+      echo "其余平台的产物仍在构建，完成后会自动补充到本 Release。"
+    fi
+    echo "本次已发布的产物均已完成构建并通过校验，可直接下载使用。"
+  } >> "$notes_path"
+elif [[ ${#missing[@]} -gt 0 ]]; then
+  {
+    echo
+    echo "## 本次未生成的产物"
+    echo
+    for asset in "${missing[@]}"; do
+      echo "- \`$asset\`"
+    done
+  } >> "$notes_path"
+fi
+
+if release_exists; then
+  gh release edit "$tag" --repo "$repository" \
+    --title "Zed CN $version r$revision" \
+    --notes-file "$notes_path" \
+    --prerelease="$([[ "$channel" == dev ]] && echo true || echo false)"
+else
+  arguments=(release create "$tag" --repo "$repository" --target "$commit"
+    --title "Zed CN $version r$revision" --notes-file "$notes_path")
+  [[ "$channel" == dev ]] && arguments+=(--prerelease)
+  [[ "$draft" == true ]] && arguments+=(--draft)
+  gh "${arguments[@]}"
+fi
+
+# Drop the completion marker before touching any published file, so the feed can
+# never read a half-replaced asset set.
+if printf '%s\n' "${already_published[@]}" | grep -qx "$marker_asset"; then
+  gh release delete-asset "$tag" "$marker_asset" --repo "$repository" --yes
+fi
+
+# The checksum list must only describe files that are actually on the Release.
+(cd "$stage/merged" && sha256sum "${merged_assets[@]}" | sort -k2 > "$checksum_asset")
+cat "$stage/merged/$checksum_asset"
+
+upload=()
+for asset in "${merged_assets[@]}"; do
+  already=false
+  for name in "${already_published[@]}"; do
+    [[ "$name" == "$asset" ]] && already=true && break
+  done
+  if [[ "$already" == true ]]; then
+    echo "unchanged: $asset"
+  else
+    upload+=("$stage/merged/$asset")
+  fi
+done
+upload+=("$stage/merged/$checksum_asset")
+
+verify_release_tag
+gh release upload "$tag" "${upload[@]}" --repo "$repository" --clobber
+
+verify_release_tag
+python3 script/generate-update-manifest.py \
+  --release-directory "$stage/merged" \
+  --tag "$tag" --commit "$commit" \
+  --title "Zed CN $version r$revision" \
+  --release-notes-file "$notes_path" \
+  --output "$stage/$marker_asset"
+verify_release_tag
+gh release upload "$tag" "$stage/$marker_asset" --repo "$repository" --clobber
+
+if [[ "$refresh_feed" == true ]]; then
+  # Refresh the update feed now so clients on the platforms published in this
+  # phase can already see the release; the final workflow_run trigger refreshes
+  # once more when the whole build finishes.
+  refreshed=false
+  for attempt in 1 2; do
+    if gh workflow run publish-update-manifest.yml --repo "$repository" --ref main; then
+      refreshed=true
+      break
+    fi
+    echo "::warning::Feed refresh attempt $attempt failed."
+    sleep 15
+  done
+  [[ "$refreshed" == true ]] || echo "::warning::Could not refresh the update feed for this phase; the run-end refresh still applies."
+fi
+
+echo "Published phase '$phase' for $tag: ${#upload[@]} uploaded, ${#already_published[@]} already present, ${#missing[@]} expected assets absent."

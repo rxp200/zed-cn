@@ -3077,6 +3077,7 @@ impl Pane {
 
         let capability = item.capability(cx);
         let tab = Tab::new(ix)
+            .workbench_item(item_id)
             .position(if is_first_item {
                 TabPosition::First
             } else if is_last_item {
@@ -7040,6 +7041,49 @@ mod tests {
 
         // C should be at the beginning
         assert_item_labels(&pane_a, ["C*", "A", "B"], cx);
+    }
+
+    #[gpui::test]
+    async fn test_workbench_tab_marker_follows_selection_without_changing_tab_layout(
+        cx: &mut TestAppContext,
+    ) {
+        init_test(cx);
+        cx.update(|cx| cx.set_reduce_motion(true));
+        let fs = FakeFs::new(cx.executor());
+        let project = Project::test(fs, None, cx).await;
+        let (workspace, cx) =
+            cx.add_window_view(|window, cx| Workspace::test_new(project, window, cx));
+        let pane = workspace.read_with(cx, |workspace, _| workspace.active_pane().clone());
+        let first = add_labeled_item(&pane, "A", false, cx);
+        let second = add_labeled_item(&pane, "B", false, cx);
+        let first_marker = format!("workbench-tab-marker-{}", first.entity_id()).leak();
+        let second_marker = format!("workbench-tab-marker-{}", second.entity_id()).leak();
+        cx.run_until_parked();
+
+        let first_tab = cx.debug_bounds("TAB-0").expect("first tab is rendered");
+        let second_tab = cx.debug_bounds("TAB-1").expect("second tab is rendered");
+        assert!(cx.debug_bounds(first_marker).is_none());
+        let marker = cx.debug_bounds(second_marker).expect("selected tab marker");
+        assert_eq!(marker.top(), second_tab.top());
+        assert_eq!(marker.size.height, px(2.));
+        assert!(marker.left() > second_tab.left() && marker.right() < second_tab.right());
+
+        cx.simulate_click(first_tab.center(), Modifiers::default());
+        cx.run_until_parked();
+        assert_item_labels(&pane, ["A*", "B"], cx);
+        assert!(cx.debug_bounds(second_marker).is_none());
+        let marker = cx
+            .debug_bounds(first_marker)
+            .expect("newly selected tab marker");
+        assert_eq!(marker.top(), first_tab.top());
+        assert_eq!(
+            cx.debug_bounds("TAB-0").expect("first tab").size.height,
+            first_tab.size.height
+        );
+        assert_eq!(
+            cx.debug_bounds("TAB-1").expect("second tab").size.height,
+            second_tab.size.height
+        );
     }
 
     #[gpui::test]

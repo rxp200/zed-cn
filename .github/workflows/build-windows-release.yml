@@ -96,6 +96,9 @@ jobs:
       - name: Guard production Markdown outline API
         run: python3 script/test_deep_explanation_production_api.py
 
+      - name: Test the release publisher
+        run: python3 -m unittest script.test_publish_release_assets
+
       - name: Validate source version and frozen public main source
         id: source
         shell: pwsh
@@ -583,17 +586,24 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  publish_release:
-    name: Publish GitHub Release assets
+  publish_fast_platforms:
+    name: Publish Linux and Windows assets
     needs:
       - validate_source
       - bundle_linux
       - build_static_bwrap
-      - bundle_macos
       - bundle_windows
     if: ${{ always() && needs.validate_source.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    # macOS appends to the same Release later; serialising the phases keeps the
+    # published asset set, its checksums and the completion marker consistent.
+    concurrency:
+      group: publish-${{ needs.validate_source.outputs.release_tag }}
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      actions: write
     steps:
       - name: Check out release source
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
@@ -613,104 +623,56 @@ jobs:
             exit 1
           fi
 
-      - name: Download all release assets
+      - name: Download finished release assets
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          pattern: release-*
+          pattern: release-zed-linux-*
           path: release-artifacts
           merge-multiple: true
 
-      - name: Validate available assets and generate checksums
-        run: |
-          expected_assets=(
-            bwrap-linux-aarch64.gz
-            bwrap-linux-x86_64.gz
-            Zed-aarch64.dmg
-            Zed-aarch64.exe
-            Zed-x86_64.dmg
-            zed-linux-aarch64.tar.gz
-            zed-linux-x86_64.tar.gz
-            zed-remote-server-linux-aarch64.gz
-            zed-remote-server-linux-x86_64.gz
-            zed-remote-server-macos-aarch64.gz
-            zed-remote-server-macos-x86_64.gz
-            zed-remote-server-windows-aarch64.zip
-            zed-remote-server-windows-x86_64.zip
-            Zed-x86_64.exe
-          )
-          mapfile -t actual_assets < <(find release-artifacts -maxdepth 1 -type f -printf '%f\n' | sort)
-          test "${#actual_assets[@]}" -gt 0 || {
-            echo "No release assets were produced by successful build jobs." >&2
-            exit 1
-          }
-          for asset in "${actual_assets[@]}"; do
-            [[ " ${expected_assets[*]} " == *" $asset "* ]] || {
-              echo "Unexpected release asset: $asset" >&2
-              exit 1
-            }
-            test -s "release-artifacts/$asset" || {
-              echo "Empty release asset: $asset" >&2
-              exit 1
-            }
-          done
-          : > release-artifacts/MISSING-ASSETS.txt
-          for asset in "${expected_assets[@]}"; do
-            if [[ ! -s "release-artifacts/$asset" ]]; then
-              echo "$asset" | tee -a release-artifacts/MISSING-ASSETS.txt
-            fi
-          done
-          (cd release-artifacts && sha256sum "${actual_assets[@]}" | sort -k2 > SHA256SUMS.txt)
-          cat release-artifacts/SHA256SUMS.txt
-
-      - name: Upload consolidated workflow artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - name: Download finished Remote Server assets
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          name: Zed-CN-${{ needs.validate_source.outputs.release_version }}-all-platforms
-          path: release-artifacts/*
-          if-no-files-found: error
-          retention-days: 7
+          pattern: release-zed-remote-server-linux-*
+          path: release-artifacts
+          merge-multiple: true
 
-      - name: Create or update GitHub Release
+      - name: Download finished bwrap assets
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: release-bwrap-linux-*
+          path: release-artifacts
+          merge-multiple: true
+
+      - name: Download finished Windows assets
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: release-Zed-*.exe
+          path: release-artifacts
+          merge-multiple: true
+
+      - name: Download finished Windows Remote Server assets
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: release-zed-remote-server-windows-*
+          path: release-artifacts
+          merge-multiple: true
+
+      - name: Write release notes body
         env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ needs.validate_source.outputs.release_tag }}
           RELEASE_VERSION: ${{ needs.validate_source.outputs.release_version }}
           RELEASE_REVISION: ${{ needs.validate_source.outputs.release_revision }}
           UPDATE_CHANNEL: ${{ needs.validate_source.outputs.update_channel }}
           SOURCE_SHA: ${{ needs.validate_source.outputs.source_sha }}
-          CREATE_DRAFT: ${{ needs.validate_source.outputs.draft }}
-          RELEASE_EVENT: ${{ github.event_name }}
           GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          verify_release_tag() {
-            local remote_tags tag_sha
-            remote_tags="$(git ls-remote origin "refs/tags/$RELEASE_TAG" "refs/tags/$RELEASE_TAG^{}")"
-            tag_sha="$(awk -v ref="refs/tags/$RELEASE_TAG" '$2 == ref { direct = $1 } $2 == ref "^{}" { peeled = $1 } END { print peeled ? peeled : direct }' <<< "$remote_tags")"
-            if [[ -z "$tag_sha" && "${1:-}" == "create-if-missing" && "$RELEASE_EVENT" == "workflow_dispatch" ]]; then
-              # Draft Release creation need not materialize a tag. Create only an absent ref;
-              # the API rejects a concurrent creator rather than overwriting their tag.
-              gh api --method POST "repos/$GH_REPO/git/refs" \
-                -f "ref=refs/tags/$RELEASE_TAG" -f "sha=$SOURCE_SHA"
-              verify_release_tag
-              return
-            fi
-            if [[ "$tag_sha" != "$SOURCE_SHA" ]]; then
-              echo "::error::Release tag $RELEASE_TAG peels to '$tag_sha', expected $SOURCE_SHA."
-              return 1
-            fi
-          }
-          verify_release_tag create-if-missing
-
-          notes_path="release-notes.md"
-          commit_body="$(git show -s --format=%B HEAD)"
-          detailed_notes="$(printf '%s\n' "$commit_body" | sed -n '/^Zed-CN-Release-Notes:$/,/^Zed-CN-Release-Notes-End$/p' | sed '1d;$d')"
+          detailed_notes="$(printf '%s\n' "$(git show -s --format=%B HEAD)" | sed -n '/^Zed-CN-Release-Notes:$/,/^Zed-CN-Release-Notes-End$/p' | sed '1d;$d')"
           if [[ -z "$detailed_notes" ]]; then
             echo "Detailed Zed CN release notes were not found in the Stable source commit." >&2
             exit 1
           fi
-
-          cat > "$notes_path" <<EOF
+          cat > release-notes.md <<EOF
           $detailed_notes
 
           ## 构建信息
@@ -722,7 +684,7 @@ jobs:
           - 支持平台：Linux、Windows、macOS（x86_64 / aarch64）
           - 代码签名：Windows 未签名，macOS 使用临时签名且未公证
 
-          本次 Release 包含所有成功完成构建并通过验证的产物。失败平台的产物不会阻止其他平台发布，也不会作为空文件上传。所有已发布二进制的 SHA-256 见 \`SHA256SUMS.txt\`。Windows SmartScreen 和 macOS Gatekeeper 可能显示警告。
+          各平台的产物在完成构建并通过校验后陆续发布到本 Release，所有已发布二进制的 SHA-256 见 \`SHA256SUMS.txt\`。Windows SmartScreen 和 macOS Gatekeeper 可能显示警告。
 
           ## 源码与许可证
 
@@ -732,58 +694,123 @@ jobs:
           - [GPL-3.0-or-later](https://github.com/$GH_REPO/blob/$SOURCE_SHA/LICENSE-GPL) · [Apache-2.0](https://github.com/$GH_REPO/blob/$SOURCE_SHA/LICENSE-APACHE) · [修改声明](https://github.com/$GH_REPO/blob/$SOURCE_SHA/MODIFICATIONS.md)
           EOF
 
-          if [[ -s release-artifacts/MISSING-ASSETS.txt ]]; then
-            {
-              echo
-              echo "## 本次未生成的产物"
-              echo
-              while IFS= read -r asset; do
-                echo "- \`$asset\`"
-              done < release-artifacts/MISSING-ASSETS.txt
-            } >> "$notes_path"
-          fi
-
-          if gh release view "$RELEASE_TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
-            gh release edit "$RELEASE_TAG" \
-              --repo "${{ github.repository }}" \
-              --title "Zed CN $RELEASE_VERSION r$RELEASE_REVISION" \
-              --notes-file "$notes_path" --prerelease="$([[ "$UPDATE_CHANNEL" == dev ]] && echo true || echo false)"
-          else
-            arguments=(
-              release create "$RELEASE_TAG"
-              --repo "${{ github.repository }}"
-              --target "$SOURCE_SHA"
-              --title "Zed CN $RELEASE_VERSION r$RELEASE_REVISION"
-              --notes-file "$notes_path"
-            )
-            if [[ "$UPDATE_CHANNEL" == "dev" ]]; then
-              arguments+=(--prerelease)
-            fi
-            if [[ "$CREATE_DRAFT" == "true" ]]; then
-              arguments+=(--draft)
-            fi
-            gh "${arguments[@]}"
-          fi
-
-          verify_release_tag
-          rm -f release-artifacts/MISSING-ASSETS.txt
-          # Remove the completion marker before replacing any published binary.
-          published_assets="$(gh release view "$RELEASE_TAG" --repo "${{ github.repository }}" \
-            --json assets --jq '.assets[].name')"
-          if grep -qx 'update-metadata.json' <<< "$published_assets"; then
-            gh release delete-asset "$RELEASE_TAG" update-metadata.json \
-              --repo "${{ github.repository }}" --yes
-          fi
-          verify_release_tag
-          gh release upload "$RELEASE_TAG" release-artifacts/* \
-            --repo "${{ github.repository }}" \
-            --clobber
-          python3 script/generate-update-manifest.py \
-            --release-directory release-artifacts \
+      - name: Publish finished assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_EVENT: ${{ github.event_name }}
+          RELEASE_TAG: ${{ needs.validate_source.outputs.release_tag }}
+          RELEASE_VERSION: ${{ needs.validate_source.outputs.release_version }}
+          RELEASE_REVISION: ${{ needs.validate_source.outputs.release_revision }}
+          UPDATE_CHANNEL: ${{ needs.validate_source.outputs.update_channel }}
+          SOURCE_SHA: ${{ needs.validate_source.outputs.source_sha }}
+        run: |
+          ./script/publish-release-assets \
             --tag "$RELEASE_TAG" --commit "$SOURCE_SHA" \
-            --title "Zed CN $RELEASE_VERSION r$RELEASE_REVISION" \
-            --release-notes-file "$notes_path" \
-            --output update-metadata.json
-          verify_release_tag
-          gh release upload "$RELEASE_TAG" update-metadata.json \
-            --repo "${{ github.repository }}" --clobber
+            --version "$RELEASE_VERSION" --revision "$RELEASE_REVISION" \
+            --channel "$UPDATE_CHANNEL" \
+            --notes-file release-notes.md --assets-dir release-artifacts \
+            --phase partial --pending "macOS（x86_64 / aarch64）" \
+            --refresh-feed
+
+  publish_macos:
+    name: Append macOS assets
+    needs:
+      - validate_source
+      - publish_fast_platforms
+      - bundle_macos
+    if: ${{ always() && needs.validate_source.result == 'success' && needs.bundle_macos.result != 'skipped' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    concurrency:
+      group: publish-${{ needs.validate_source.outputs.release_tag }}
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - name: Check out release source
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          ref: ${{ needs.validate_source.outputs.source_sha }}
+          fetch-depth: 0
+          clean: true
+
+      - name: Assert validated source checkout
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ needs.validate_source.outputs.source_sha }}
+        run: |
+          actual_sha="$(git rev-parse --verify HEAD)"
+          if [[ "$actual_sha" != "$EXPECTED_SHA" ]]; then
+            echo "::error::Checkout HEAD $actual_sha does not match validated source $EXPECTED_SHA."
+            exit 1
+          fi
+
+      - name: Download finished release assets
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: release-Zed-*.dmg
+          path: release-artifacts
+          merge-multiple: true
+
+      - name: Download finished macOS Remote Server assets
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: release-zed-remote-server-macos-*
+          path: release-artifacts
+          merge-multiple: true
+
+      - name: Write release notes body
+        env:
+          RELEASE_VERSION: ${{ needs.validate_source.outputs.release_version }}
+          RELEASE_REVISION: ${{ needs.validate_source.outputs.release_revision }}
+          UPDATE_CHANNEL: ${{ needs.validate_source.outputs.update_channel }}
+          SOURCE_SHA: ${{ needs.validate_source.outputs.source_sha }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          detailed_notes="$(printf '%s\n' "$(git show -s --format=%B HEAD)" | sed -n '/^Zed-CN-Release-Notes:$/,/^Zed-CN-Release-Notes-End$/p' | sed '1d;$d')"
+          if [[ -z "$detailed_notes" ]]; then
+            echo "Detailed Zed CN release notes were not found in the Stable source commit." >&2
+            exit 1
+          fi
+          cat > release-notes.md <<EOF
+          $detailed_notes
+
+          ## 构建信息
+
+          - Zed 版本：$RELEASE_VERSION
+          - 定制修订：r$RELEASE_REVISION
+          - 源码提交：\`$SOURCE_SHA\`
+          - 发布渠道：$UPDATE_CHANNEL
+          - 支持平台：Linux、Windows、macOS（x86_64 / aarch64）
+          - 代码签名：Windows 未签名，macOS 使用临时签名且未公证
+
+          各平台的产物在完成构建并通过校验后陆续发布到本 Release，所有已发布二进制的 SHA-256 见 \`SHA256SUMS.txt\`。Windows SmartScreen 和 macOS Gatekeeper 可能显示警告。
+
+          ## 源码与许可证
+
+          - 对应完整源码：[\`$SOURCE_SHA\`](https://github.com/$GH_REPO/tree/$SOURCE_SHA)
+          - 源码归档由本 Release 标签自动提供，并包含构建脚本、清单和锁文件。
+          - Zed 主程序及大部分源码采用 GPL-3.0-or-later；明确标注的组件采用 Apache-2.0；第三方组件和资源遵循各自许可证。
+          - [GPL-3.0-or-later](https://github.com/$GH_REPO/blob/$SOURCE_SHA/LICENSE-GPL) · [Apache-2.0](https://github.com/$GH_REPO/blob/$SOURCE_SHA/LICENSE-APACHE) · [修改声明](https://github.com/$GH_REPO/blob/$SOURCE_SHA/MODIFICATIONS.md)
+          EOF
+
+      - name: Publish finished assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_EVENT: ${{ github.event_name }}
+          RELEASE_TAG: ${{ needs.validate_source.outputs.release_tag }}
+          RELEASE_VERSION: ${{ needs.validate_source.outputs.release_version }}
+          RELEASE_REVISION: ${{ needs.validate_source.outputs.release_revision }}
+          UPDATE_CHANNEL: ${{ needs.validate_source.outputs.update_channel }}
+          SOURCE_SHA: ${{ needs.validate_source.outputs.source_sha }}
+        run: |
+          ./script/publish-release-assets \
+            --tag "$RELEASE_TAG" --commit "$SOURCE_SHA" \
+            --version "$RELEASE_VERSION" --revision "$RELEASE_REVISION" \
+            --channel "$UPDATE_CHANNEL" \
+            --notes-file release-notes.md --assets-dir release-artifacts \
+            --phase final --refresh-feed

@@ -51,7 +51,7 @@ use theme::ActiveTheme;
 use title_bar_settings::TitleBarSettings;
 use ui::{
     Avatar, ButtonLike, ContextMenu, ContextMenuEntry, IconButtonShape, IconWithIndicator,
-    Indicator, PopoverMenu, PopoverMenuHandle, TintColor, Tooltip, prelude::*,
+    Indicator, KeyBinding, PopoverMenu, PopoverMenuHandle, TintColor, Tooltip, prelude::*,
     utils::platform_title_bar_height,
 };
 use update_version::UpdateVersion;
@@ -368,6 +368,25 @@ impl Render for TitleBar {
                 .into_any_element(),
         );
 
+        if window.viewport_size().width >= px(900.) {
+            let action = zed_actions::command_palette::Toggle;
+            children.push(
+                h_flex()
+                    .flex_shrink_0()
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .child(
+                        Button::new("title-bar-command-palette", i18n::t!("58109680a1e144f6"))
+                            .start_icon(Icon::new(IconName::MagnifyingGlass).size(IconSize::Small))
+                            .style(ButtonStyle::Outlined)
+                            .tab_index(0isize)
+                            .key_binding(KeyBinding::for_action(&action, cx))
+                            .on_click(move |_, window, cx| {
+                                window.dispatch_action(action.boxed_clone(), cx);
+                            }),
+                    )
+                    .into_any_element(),
+            );
+        }
         children.push(self.render_collaborator_list(window, cx).into_any_element());
 
         if title_bar_settings.show_onboarding_banner {
