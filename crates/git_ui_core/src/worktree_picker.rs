@@ -25,8 +25,8 @@ use workspace::{
 use crate::notifications::show_error_toast;
 use crate::worktree_service::{RemoteBranchName, WorktreeCreateTarget, worktree_create_targets};
 use zed_actions::{
-    CreateWorktree, NewWorktreeBranchTarget, OpenWorktreeInNewWindow, OpenWorktreeSetupTasks,
-    SwitchWorktree,
+    CreateWorktree, ImportWorktree, NewWorktreeBranchTarget, OpenWorktreeInNewWindow,
+    OpenWorktreeSetupTasks, SwitchWorktree,
 };
 
 actions!(
@@ -1296,9 +1296,31 @@ impl PickerDelegate for WorktreePickerDelegate {
                                         })),
                                 );
 
+                            let can_import_into_project =
+                                !self.project_worktree_paths.contains(&worktree.path);
+                            let import_path = worktree.path.clone();
+                            let import_button = IconButton::new(
+                                ("import-worktree-into-project", ix),
+                                IconName::Download,
+                            )
+                            .icon_size(IconSize::Small)
+                            .tooltip(Tooltip::text(i18n::t!("dddb3c22c0dc474c")))
+                            .on_click(cx.listener(
+                                move |_, _, window, cx| {
+                                    window.dispatch_action(
+                                        Box::new(ImportWorktree {
+                                            path: import_path.clone(),
+                                        }),
+                                        cx,
+                                    );
+                                    cx.emit(DismissEvent);
+                                },
+                            ));
+
                             this.end_slot(
                                 h_flex()
                                     .gap_0p5()
+                                    .when(can_import_into_project, |this| this.child(import_button))
                                     .child(open_in_new_window_button)
                                     .when(can_remove_from_window, |this| {
                                         let worktree_path = worktree.path.clone();

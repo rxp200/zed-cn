@@ -128,6 +128,17 @@ enum WorktreeOperation {
     Switch,
 }
 
+/// Where a newly created git worktree should appear.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WorktreeOpenTarget {
+    /// Attach the worktree to the project that is already open. This keeps its
+    /// files and git status visible next to the main checkout.
+    CurrentProject,
+    /// Open the worktree as its own workspace, which is what agent threads and
+    /// the title-bar "open in new window" flow expect.
+    NewWorkspace,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum RemoteBranchFetchMode {
     Fetch,
@@ -277,6 +288,7 @@ impl Render for WorktreeFetchFailedToast {
                                 RemoteBranchFetchMode::UseLocal,
                                 // User-initiated retry of a foreground create.
                                 true,
+                                WorktreeOpenTarget::CurrentProject,
                                 cx,
                             );
                             task.detach_and_log_err(cx);
@@ -700,6 +712,33 @@ pub fn handle_create_worktree(
         RemoteBranchFetchMode::Fetch,
         // The user explicitly asked to create a worktree, so foreground it.
         true,
+        WorktreeOpenTarget::CurrentProject,
+        cx,
+    );
+    task.detach_and_log_err(cx);
+}
+
+/// Creates a worktree and opens it as its own workspace.
+///
+/// The sidebar's new-thread menu needs the new workspace to host the thread, so
+/// it keeps the pre-import behavior. Other create-worktree entry points use
+/// [`handle_create_worktree`], which imports the worktree into the current
+/// project instead.
+pub fn handle_create_worktree_in_new_workspace(
+    workspace: &mut Workspace,
+    action: &zed_actions::CreateWorktree,
+    window: &mut gpui::Window,
+    fallback_focused_dock: Option<DockPosition>,
+    cx: &mut gpui::Context<Workspace>,
+) {
+    let task = create_worktree_workspace_inner(
+        workspace,
+        action,
+        window,
+        fallback_focused_dock,
+        RemoteBranchFetchMode::Fetch,
+        true,
+        WorktreeOpenTarget::NewWorkspace,
         cx,
     );
     task.detach_and_log_err(cx);
@@ -748,6 +787,7 @@ pub fn create_worktree_workspace(
         RemoteBranchFetchMode::Fetch,
         // Agent-created worktree workspaces open in the background.
         false,
+        WorktreeOpenTarget::NewWorkspace,
         cx,
     )
 }
@@ -759,6 +799,7 @@ fn create_worktree_workspace_inner(
     fallback_focused_dock: Option<DockPosition>,
     remote_branch_fetch_mode: RemoteBranchFetchMode,
     activate: bool,
+    open_target: WorktreeOpenTarget,
     cx: &mut gpui::Context<Workspace>,
 ) -> Task<anyhow::Result<CreatedWorktreeWorkspace>> {
     let project = workspace.project().clone();
@@ -862,6 +903,7 @@ fn create_worktree_workspace_inner(
             window_handle,
             remote_connection_options,
             activate,
+            open_target,
             &mut cx,
         )
         .await;
@@ -976,6 +1018,7 @@ async fn do_create_worktree(
     window_handle: Option<gpui::WindowHandle<MultiWorkspace>>,
     remote_connection_options: Option<RemoteConnectionOptions>,
     activate: bool,
+    open_target: WorktreeOpenTarget,
     cx: &mut AsyncWindowContext,
 ) -> anyhow::Result<CreatedWorktreeWorkspace> {
     // List existing worktrees from all repos to detect name collisions
@@ -1086,6 +1129,49 @@ async fn do_create_worktree(
     let mut all_paths = created_paths;
     let has_non_git = !non_git_paths.is_empty();
     all_paths.extend(non_git_paths.iter().cloned());
+
+    if open_target == WorktreeOpenTarget::CurrentProject {
+        let current_workspace = workspace
+            .upgrade()
+            .ok_or_else(|| anyhow!("the workspace was closed while creating the worktree"))?;
+        let current_project =
+            current_workspace.read_with(cx, |workspace, _| workspace.project().clone());
+        let propagate_trust = cx
+            .update(|_, cx| crate::worktree_import::should_propagate_trust(&current_project, cx))?;
+        let imported = crate::worktree_import::import_worktrees(
+            current_project.clone(),
+            all_paths,
+            propagate_trust,
+            cx,
+        )
+        .await?;
+        let imported_worktree_ids = cx.update(|_, cx| {
+            imported
+                .iter()
+                .filter_map(|path| {
+                    let worktree = crate::worktree_import::find_project_root(
+                        current_project.read(cx),
+                        path,
+                        cx,
+                    )?;
+                    Some(worktree.read(cx).id())
+                })
+                .collect::<HashSet<_>>()
+        })?;
+
+        current_workspace.update(cx, |workspace, cx| {
+            workspace.set_active_worktree_creation(None, false, cx);
+        });
+        workspace.update_in(cx, |workspace, window, cx| {
+            workspace.show_worktree_trust_security_modal(false, window, cx);
+            workspace.run_create_worktree_tasks_for(&imported_worktree_ids, window, cx);
+        })?;
+
+        return Ok(CreatedWorktreeWorkspace {
+            workspace: current_workspace,
+            consolidated_worktrees,
+        });
+    }
 
     let workspace = open_worktree_workspace(
         all_paths,
@@ -1484,6 +1570,103 @@ mod tests {
                     .expect("should inject create_worktree hook tasks for linked worktree");
             });
         });
+    }
+
+    #[gpui::test]
+    async fn test_create_worktree_imports_into_current_project(cx: &mut TestAppContext) {
+        init_test(cx);
+
+        let fs = FakeFs::new(cx.background_executor.clone());
+        cx.update(|cx| <dyn Fs>::set_global(fs.clone(), cx));
+        fs.insert_tree(
+            "/root",
+            json!({
+                "project": {
+                    ".git": {},
+                    "src": {
+                        "main.rs": "fn main() {}",
+                    },
+                },
+            }),
+        )
+        .await;
+
+        let main_project_root = PathBuf::from(path!("/root/project"));
+        let project = Project::test(fs.clone(), [main_project_root.as_path()], cx).await;
+        project
+            .update(cx, |project, cx| project.git_scans_complete(cx))
+            .await;
+
+        let (multi_workspace, cx) =
+            cx.add_window_view(|window, cx| MultiWorkspace::test_new(project.clone(), window, cx));
+        multi_workspace.update(cx, |multi_workspace, cx| {
+            multi_workspace.retain_active_workspace(cx);
+        });
+
+        let workspace =
+            multi_workspace.read_with(cx, |multi_workspace, _| multi_workspace.workspace().clone());
+        workspace.update_in(cx, |workspace, window, cx| {
+            handle_create_worktree(
+                workspace,
+                &zed_actions::CreateWorktree {
+                    worktree_name: Some("feature".to_string()),
+                    branch_target: NewWorktreeBranchTarget::CurrentBranch,
+                },
+                window,
+                None,
+                cx,
+            );
+        });
+        cx.run_until_parked();
+
+        let project_roots = project.read_with(cx, |project, cx| {
+            project
+                .visible_worktrees(cx)
+                .map(|worktree| worktree.read(cx).abs_path().to_path_buf())
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(
+            project_roots.len(),
+            2,
+            "the new worktree must be attached to the current project"
+        );
+        assert!(
+            project_roots.iter().any(|path| {
+                path != &main_project_root
+                    && path.file_name().and_then(|name| name.to_str()).is_some()
+            }),
+            "the linked worktree directory should be a visible root: {project_roots:?}"
+        );
+
+        project
+            .update(cx, |project, cx| project.git_scans_complete(cx))
+            .await;
+        let repository_count = project.read_with(cx, |project, cx| {
+            project.git_store().read(cx).repositories().len()
+        });
+        assert_eq!(
+            repository_count, 2,
+            "each imported worktree should have its own git repository entry"
+        );
+        let active_repository_path = project.read_with(cx, |project, cx| {
+            project
+                .active_repository(cx)
+                .map(|repository| repository.read(cx).work_directory_abs_path.to_path_buf())
+        });
+        assert!(
+            active_repository_path
+                .as_ref()
+                .is_some_and(|path| path != &main_project_root),
+            "the imported worktree should become the active git repository"
+        );
+
+        let workspace_count = multi_workspace.read_with(cx, |multi_workspace, _| {
+            multi_workspace.workspaces().count()
+        });
+        assert_eq!(
+            workspace_count, 1,
+            "creating a worktree must not open a second workspace"
+        );
     }
 
     #[gpui::test]

@@ -236,6 +236,24 @@ impl Workspace {
     }
 
     pub fn run_create_worktree_tasks(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let worktree_ids = self
+            .project
+            .read(cx)
+            .worktrees(cx)
+            .map(|worktree| worktree.read(cx).id())
+            .collect::<HashSet<_>>();
+        self.run_create_worktree_tasks_for(&worktree_ids, window, cx);
+    }
+
+    /// Runs create-worktree hooks only for the given roots. Importing worktrees
+    /// into an existing project must not rerun setup tasks for the roots that
+    /// were already open.
+    pub fn run_create_worktree_tasks_for(
+        &mut self,
+        worktree_ids: &HashSet<WorktreeId>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let project = self.project().clone();
         let hooks = HashSet::from_iter([TaskHook::CreateWorktree]);
 
@@ -252,6 +270,9 @@ impl Workspace {
             for worktree in project.worktrees(cx) {
                 let worktree = worktree.read(cx);
                 let worktree_id = worktree.id();
+                if !worktree_ids.contains(&worktree_id) {
+                    continue;
+                }
                 let worktree_abs_path = worktree.abs_path();
 
                 let templates: Vec<TaskTemplate> = inventory

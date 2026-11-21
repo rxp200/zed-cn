@@ -4,7 +4,7 @@ use rpc::proto;
 use std::{path::PathBuf, sync::Mutex};
 use uuid::Uuid;
 
-use crate::hosted_terminal::HostedTerminalClient;
+use crate::hosted_terminal::{HostedTerminalClient, SessionError};
 
 /// Identity the client sees for a daemon-backed terminal. The daemon session id
 /// never leaves the server, so a client cannot address another client's session.
@@ -196,7 +196,7 @@ impl HostedTerminals {
         self.require_instance(&request.server_instance_id)?;
         let (session_id, attachment_id, control_generation) = self.link(&request.terminal_id)?;
         let client = self.client().await?;
-        client
+        let result = client
             .request(proto::hosted_terminal_daemon_request::Kind::Resize(
                 proto::HostedTerminalDaemonResize {
                     session_id,
@@ -208,8 +208,19 @@ impl HostedTerminals {
                     pixel_height: request.pixel_height,
                 },
             ))
-            .await
-            .map(|_| ())
+            .await;
+        match result {
+            Ok(_) => Ok(()),
+            // A hosted session has one controller and the controller owns the
+            // PTY size, so a viewer's resize is expected to be rejected. It is
+            // not an error: the viewer keeps rendering at its own size and the
+            // next resize after a takeover applies.
+            Err(error) if is_session_control_rejection(&error) => {
+                log::debug!("hosted terminal resize from a non-controlling attachment: {error:#}");
+                Ok(())
+            }
+            Err(error) => Err(error),
+        }
     }
 
     pub async fn credit(&self, request: proto::PersistentTerminalOutputCredit) -> Result<()> {
@@ -238,9 +249,22 @@ impl HostedTerminals {
         self.require_instance(&request.server_instance_id)?;
         let (session_id, attachment_id, _) = self.link(&request.terminal_id)?;
         let client = self.client().await?;
-        client
+        match client
             .subscribe(&session_id, &attachment_id, request.offset)
             .await
+        {
+            Ok(outputs) => Ok(outputs),
+            Err(error) => {
+                if is_unknown_attachment(&error) {
+                    // The daemon released this attachment (its serving connection
+                    // ended) while the session may still be running. Forgetting
+                    // the stale link makes the failure report "no longer
+                    // attached" instead of repeating an expired identity.
+                    self.links()?.terminals.remove(&request.terminal_id);
+                }
+                Err(error)
+            }
+        }
     }
 
     /// Hosted terminals outlive the view, so closing only detaches them. An
@@ -511,6 +535,18 @@ impl HostedTerminals {
     }
 }
 
+/// Whether the daemon rejected a request because this attachment is (or is no
+/// longer) the session's input controller.
+fn is_session_control_rejection(error: &anyhow::Error) -> bool {
+    let message = error.to_string();
+    message == SessionError::NotController.message()
+        || message == SessionError::StaleControl.message()
+}
+
+fn is_unknown_attachment(error: &anyhow::Error) -> bool {
+    error.to_string() == SessionError::UnknownAttachment.message()
+}
+
 #[cfg(test)]
 #[allow(
     clippy::disallowed_methods,
@@ -748,13 +784,24 @@ mod tests {
         assert_eq!(listed.sessions[0].name, "agent");
 
         // A second project connection attaches the same running session.
-        let second = HostedTerminals::new(service_dir);
+        let second = HostedTerminals::new(service_dir.clone());
         let attached = smol::block_on(second.attach(proto::AttachHostedTerminal {
             canonical_root: canonical_root.clone(),
             session_id: listed.sessions[0].session_id.clone(),
         }))
         .expect("attach");
         assert!(!attached.controls_input);
+        // The controller owns the PTY size, so a viewer's resize is expected to
+        // be rejected. It must not surface as a terminal error.
+        smol::block_on(second.resize(proto::ResizePersistentTerminal {
+            server_instance_id: attached.server_instance_id.clone(),
+            terminal_id: attached.terminal_id.clone(),
+            rows: 30,
+            columns: 100,
+            pixel_width: 0,
+            pixel_height: 0,
+        }))
+        .expect("a viewer resize must be ignored, not reported as a failure");
         let replay = smol::block_on(second.subscribe(proto::SubscribePersistentTerminal {
             server_instance_id: attached.server_instance_id.clone(),
             terminal_id: attached.terminal_id.clone(),
@@ -762,6 +809,62 @@ mod tests {
         }))
         .expect("subscribe");
         assert!(output_text(&smol::block_on(drain(&replay))).contains("hosted-ready"));
+
+        // The daemon releases an attachment when its connection ends; the link
+        // must be forgotten instead of being reused for a view that can no
+        // longer receive output.
+        let released_attachment = second
+            .links()
+            .expect("links")
+            .terminals
+            .get(&attached.terminal_id)
+            .expect("link")
+            .attachment_id
+            .clone();
+        let raw = smol::block_on(HostedTerminalClient::connect(&service_dir)).expect("connect");
+        smol::block_on(
+            raw.request(proto::hosted_terminal_daemon_request::Kind::Detach(
+                proto::DetachHostedTerminal {
+                    session_id: listed.sessions[0].session_id.clone(),
+                    attachment_id: released_attachment,
+                },
+            )),
+        )
+        .expect("release the attachment");
+        let error = smol::block_on(second.subscribe(proto::SubscribePersistentTerminal {
+            server_instance_id: attached.server_instance_id.clone(),
+            terminal_id: attached.terminal_id.clone(),
+            offset: 0,
+        }))
+        .expect_err("a released attachment must not subscribe");
+        assert!(
+            error
+                .to_string()
+                .contains("hosted terminal attachment not found"),
+            "{error:#}"
+        );
+        assert!(
+            !second
+                .links()
+                .expect("links")
+                .terminals
+                .contains_key(&attached.terminal_id),
+            "the expired link must be forgotten"
+        );
+        // The client recovers by reopening the view, so the next attempt has to
+        // say the view is not attached at all.
+        let error = smol::block_on(second.subscribe(proto::SubscribePersistentTerminal {
+            server_instance_id: attached.server_instance_id.clone(),
+            terminal_id: attached.terminal_id.clone(),
+            offset: 0,
+        }))
+        .expect_err("a forgotten terminal must not subscribe");
+        assert!(
+            error
+                .to_string()
+                .contains("hosted terminal is no longer attached"),
+            "{error:#}"
+        );
 
         // Closing the attached viewer only detaches it; the session survives.
         smol::block_on(second.close(proto::ClosePersistentTerminal {
@@ -800,6 +903,7 @@ mod tests {
         }))
         .expect_err("stale controller input must be rejected");
         assert!(stale.to_string().contains("control"), "{stale:#}");
+
         smol::block_on(first.terminate(proto::TerminateHostedTerminal {
             session_id: listed.sessions[0].session_id.clone(),
             attachment_id: String::new(),

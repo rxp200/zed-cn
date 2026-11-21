@@ -345,6 +345,14 @@ pub struct OpenWorktreeInNewWindow {
     pub path: PathBuf,
 }
 
+/// Imports an existing worktree into the project that is already open.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Action)]
+#[action(namespace = git)]
+#[serde(deny_unknown_fields)]
+pub struct ImportWorktree {
+    pub path: PathBuf,
+}
+
 pub mod git {
     use gpui::actions;
 
