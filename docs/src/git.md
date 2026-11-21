@@ -207,9 +207,22 @@ From the picker, you can:
 
 - Create a new linked worktree either from the current branch or default branch
 - Type a name to create a named worktree or let Zed automatically pick one for you
+- Import an existing worktree into the project that is already open
 - Switch the current workspace to an existing worktree
 - Open an existing worktree in a new window
 - Delete linked worktrees that are not currently open in the project
+
+### Worktrees in the Current Project
+
+Creating a linked worktree from the picker or the command palette attaches it to the project that is already open instead of opening a second workspace.
+The project panel shows the main checkout and the worktree as separate roots, each with its own branch label and Git status.
+
+Zed also watches for linked worktrees created outside the editor while the project is open and imports them automatically.
+The first check after opening a project only records the worktrees that already exist, so a long-lived repository does not import old worktrees on startup.
+Use the import button in the worktree picker to add an existing worktree explicitly.
+
+The Git panel lists every worktree with its branch, staged file count, and change count.
+Selecting an entry switches the changes list and commit target to that worktree, so staging and committing never leak across checkouts.
 
 ### Worktree Management
 

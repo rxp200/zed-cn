@@ -5770,5 +5770,7 @@
   "dbf9dc8fd9d350fd": "AI is disabled for this project",
   "b6153e81c2383d70": "Enter to send, Shift+Enter for a new line",
   "edecf0ae6e5144f9": "Send",
-  "1b3e0a35e1f68d52": "Clear follow-ups"
+  "1b3e0a35e1f68d52": "Clear follow-ups",
+  "aec2f93d67b7c4c5": "Worktrees",
+  "dddb3c22c0dc474c": "Import into current project"
 }

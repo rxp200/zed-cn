@@ -119,6 +119,7 @@ pub fn init(cx: &mut App) {
         git_history_panel::register(workspace);
         repository_selector::register(workspace);
         git_picker::register(workspace);
+        git_ui_core::worktree_import::start_worktree_discovery(workspace, cx);
 
         workspace.register_action(
             |workspace, action: &zed_actions::CreateWorktree, window, cx| {
@@ -131,6 +132,16 @@ pub fn init(cx: &mut App) {
             |workspace, action: &zed_actions::SwitchWorktree, window, cx| {
                 git_ui_core::worktree_service::handle_switch_worktree(
                     workspace, action, window, None, cx,
+                );
+            },
+        );
+        workspace.register_action(
+            |workspace, action: &zed_actions::ImportWorktree, window, cx| {
+                git_ui_core::worktree_import::handle_import_worktree(
+                    workspace,
+                    action.path.clone(),
+                    window,
+                    cx,
                 );
             },
         );

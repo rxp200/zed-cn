@@ -755,7 +755,7 @@ fn create_worktree_in_workspace(
 ) {
     workspace.update(cx, |workspace, cx| {
         let focused_dock = workspace.focused_dock_position(window, cx);
-        git_ui_core::worktree_service::handle_create_worktree(
+        git_ui_core::worktree_service::handle_create_worktree_in_new_workspace(
             workspace,
             &CreateWorktree {
                 worktree_name: None,

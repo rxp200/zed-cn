@@ -6842,6 +6842,170 @@ impl GitPanel {
         )
     }
 
+    /// Lists every repository/worktree in the project so their branch and
+    /// change counts are visible without switching the whole workspace. The
+    /// detailed staged/unstaged list below always follows the selected entry.
+    fn render_worktree_switcher(
+        &self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let repositories = sorted_worktree_repositories(self.project.read(cx), cx);
+        if repositories.len() <= 1 {
+            return None;
+        }
+
+        let active_repository_id = self
+            .active_repository
+            .as_ref()
+            .map(|repository| repository.entity_id());
+        let mut rows = Vec::with_capacity(repositories.len());
+        for repository in repositories {
+            let (display_name, branch_name, summary, path, is_linked) = {
+                let repository = repository.read(cx);
+                (
+                    repository.display_name(),
+                    repository
+                        .branch
+                        .as_ref()
+                        .map(|branch| branch.name().to_string()),
+                    repository.status_summary(),
+                    repository.work_directory_abs_path.clone(),
+                    repository.is_linked_worktree(),
+                )
+            };
+            let is_active = active_repository_id == Some(repository.entity_id());
+            let staged = summary.index.added + summary.index.modified + summary.index.deleted;
+            let changes = summary.worktree.added
+                + summary.worktree.modified
+                + summary.worktree.deleted
+                + summary.untracked;
+            let repository_for_click = repository.clone();
+            rows.push(
+                h_flex()
+                    .id(("git-worktree-switch", repository.entity_id()))
+                    .w_full()
+                    .px_2()
+                    .py_1()
+                    .gap_2()
+                    .rounded_md()
+                    .cursor_pointer()
+                    .when(is_active, |this| {
+                        this.bg(cx.theme().colors().element_selected)
+                    })
+                    .hover(|this| this.bg(cx.theme().colors().element_hover))
+                    .on_click(cx.listener(move |_, _, _, cx| {
+                        repository_for_click.update(cx, |repository, cx| {
+                            repository.set_as_active_repository(cx);
+                        });
+                    }))
+                    .child(
+                        Icon::new(if is_linked {
+                            IconName::GitWorktree
+                        } else {
+                            IconName::GitBranch
+                        })
+                        .size(IconSize::Small)
+                        .color(if is_active {
+                            Color::Accent
+                        } else {
+                            Color::Muted
+                        }),
+                    )
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .child(
+                                h_flex()
+                                    .gap_1p5()
+                                    .child(Label::new(display_name).size(LabelSize::Small))
+                                    .when_some(branch_name, |this, branch| {
+                                        this.child(
+                                            Label::new(branch)
+                                                .size(LabelSize::Small)
+                                                .color(Color::Muted)
+                                                .truncate(),
+                                        )
+                                    }),
+                            )
+                            .child(
+                                Label::new(path.display().to_string())
+                                    .size(LabelSize::Small)
+                                    .color(Color::Muted)
+                                    .truncate(),
+                            ),
+                    )
+                    .when(staged + changes > 0, |this| {
+                        this.child(
+                            h_flex()
+                                .gap_1p5()
+                                .child(
+                                    Label::new(format!(
+                                        "{staged} {}",
+                                        i18n::t!("847d376afd41a334")
+                                    ))
+                                    .size(LabelSize::Small)
+                                    .color(if staged > 0 {
+                                        Color::Success
+                                    } else {
+                                        Color::Disabled
+                                    }),
+                                )
+                                .child(
+                                    Label::new(format!(
+                                        "{changes} {}",
+                                        i18n::t!("bbd4b6a86bc65b6a")
+                                    ))
+                                    .size(LabelSize::Small)
+                                    .color(if changes > 0 {
+                                        Color::Warning
+                                    } else {
+                                        Color::Muted
+                                    }),
+                                ),
+                        )
+                    }),
+            );
+        }
+
+        Some(
+            v_flex()
+                .id("git-worktree-switcher")
+                .flex_none()
+                .w_full()
+                .px_1()
+                .py_1()
+                .gap_px()
+                .border_b_1()
+                .border_color(cx.theme().colors().border)
+                .child(
+                    h_flex()
+                        .px_2()
+                        .py_1()
+                        .gap_1()
+                        .child(
+                            Icon::new(IconName::GitWorktree)
+                                .size(IconSize::XSmall)
+                                .color(Color::Muted),
+                        )
+                        .child(
+                            Label::new(i18n::t!("aec2f93d67b7c4c5"))
+                                .size(LabelSize::Small)
+                                .color(Color::Muted),
+                        ),
+                )
+                .child(
+                    v_flex()
+                        .id("git-worktree-switcher-rows")
+                        .max_h(rems(14.))
+                        .overflow_y_scroll()
+                        .children(rows),
+                )
+                .into_any_element(),
+        )
+    }
+
     fn render_changes_header(
         &self,
         _window: &mut Window,
@@ -8946,6 +9110,25 @@ impl GitPanel {
     }
 }
 
+/// Orders the repositories shown in the Git panel: the main checkout first,
+/// then linked worktrees by their directory name. Nested repositories in a
+/// multi-repo project keep the same ordering.
+fn sorted_worktree_repositories(project: &Project, cx: &App) -> Vec<Entity<Repository>> {
+    let mut repositories = project
+        .repositories(cx)
+        .values()
+        .cloned()
+        .collect::<Vec<Entity<Repository>>>();
+    repositories.sort_by(|left, right| {
+        let left = left.read(cx);
+        let right = right.read(cx);
+        left.is_linked_worktree()
+            .cmp(&right.is_linked_worktree())
+            .then_with(|| left.display_name().cmp(&right.display_name()))
+    });
+    repositories
+}
+
 impl Render for GitPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let project = self.project.read(cx);
@@ -9055,23 +9238,27 @@ impl Render for GitPanel {
                         let Some(repo) = self.active_repository.clone() else {
                             return this;
                         };
-                        this.children(self.render_changes_header(window, cx))
-                            .when(!self.commit_editor_expanded, |this| {
-                                this.child(self.render_sections(
-                                    has_write_access,
-                                    has_entries,
-                                    repo,
-                                    window,
-                                    cx,
-                                ))
-                            })
-                            .children(self.render_footer(window, cx))
-                            .when(self.amend_pending, |this| {
-                                this.child(self.render_pending_amend(cx))
-                            })
-                            .when(!self.amend_pending, |this| {
-                                this.children(self.render_previous_commit(window, cx))
-                            })
+                        this.when_some(
+                            self.render_worktree_switcher(window, cx),
+                            |this, switcher| this.child(switcher),
+                        )
+                        .children(self.render_changes_header(window, cx))
+                        .when(!self.commit_editor_expanded, |this| {
+                            this.child(self.render_sections(
+                                has_write_access,
+                                has_entries,
+                                repo,
+                                window,
+                                cx,
+                            ))
+                        })
+                        .children(self.render_footer(window, cx))
+                        .when(self.amend_pending, |this| {
+                            this.child(self.render_pending_amend(cx))
+                        })
+                        .when(!self.amend_pending, |this| {
+                            this.children(self.render_previous_commit(window, cx))
+                        })
                     })
                     .into_any_element(),
             )
@@ -9756,6 +9943,52 @@ mod tests {
             editor::init(cx);
             crate::init(cx);
         });
+    }
+
+    #[gpui::test]
+    async fn test_worktree_switcher_lists_every_repository_main_first(cx: &mut TestAppContext) {
+        init_test(cx);
+
+        let fs = FakeFs::new(cx.background_executor.clone());
+        fs.insert_tree(
+            "/root",
+            json!({
+                "alpha": {
+                    ".git": {},
+                    "a.rs": "fn a() {}",
+                },
+                "zeta": {
+                    ".git": {},
+                    "z.rs": "fn z() {}",
+                },
+            }),
+        )
+        .await;
+
+        let project = Project::test(
+            fs,
+            [
+                Path::new(path!("/root/alpha")),
+                Path::new(path!("/root/zeta")),
+            ],
+            cx,
+        )
+        .await;
+        project
+            .update(cx, |project, cx| project.git_scans_complete(cx))
+            .await;
+
+        let names = cx.read(|cx| {
+            sorted_worktree_repositories(project.read(cx), cx)
+                .iter()
+                .map(|repository| repository.read(cx).display_name().to_string())
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(
+            names,
+            vec!["alpha".to_string(), "zeta".to_string()],
+            "every repository must be listed, sorted by directory name"
+        );
     }
 
     #[test]
