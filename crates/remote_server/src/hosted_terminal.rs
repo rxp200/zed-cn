@@ -857,15 +857,19 @@ impl HostedTerminalService {
         if !state.lifecycle.has_attachment(attachment_id) {
             return Err(SessionError::UnknownAttachment);
         }
+        let replay_end = state.output_end;
+        // An attachment without a cursor can never receive anything, so
+        // acknowledging the subscription would hand the client a stream that
+        // closes immediately, with no error to explain the blank view.
+        let Some(cursor) = state.cursors.get_mut(attachment_id) else {
+            return Err(SessionError::UnknownAttachment);
+        };
+        cursor.replay_end = replay_end;
+        cursor.next_offset = offset;
+        cursor.credit = offset;
+        cursor.final_frame_sent = false;
         let (kick, receiver) = async_channel::bounded(1);
         state.kicks.insert(attachment_id.to_owned(), kick);
-        let replay_end = state.output_end;
-        if let Some(cursor) = state.cursors.get_mut(attachment_id) {
-            cursor.replay_end = replay_end;
-            cursor.next_offset = offset;
-            cursor.credit = offset;
-            cursor.final_frame_sent = false;
-        }
         Ok(receiver)
     }
 
@@ -2233,6 +2237,15 @@ mod tests {
         };
         assert_eq!(replayed.offset, 3);
         assert_eq!(replayed.data, &bytes[3..]);
+
+        // An attachment without a cursor can never receive output. Acknowledging
+        // the subscription would hand the client a stream that closes immediately
+        // and looks like a blank terminal with no error.
+        session.state.lock().expect("state").cursors.clear();
+        assert!(matches!(
+            service.subscribe(&id, "owner", 0),
+            Err(SessionError::UnknownAttachment)
+        ));
         service.terminate(&id).expect("cleanup");
     }
 

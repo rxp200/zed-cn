@@ -909,6 +909,14 @@ const PERSISTENT_TERMINAL_INPUT_BACKLOG_FULL: &str = "persistent terminal input 
 /// (or is no longer) that controller, so they must never end the terminal.
 const PERSISTENT_TERMINAL_NOT_CONTROLLER: &str = "attachment does not control this terminal";
 const PERSISTENT_TERMINAL_STALE_CONTROL: &str = "terminal input control was taken over";
+/// The hosted session released this view's attachment (its owning connection
+/// ended) or the server no longer knows it. The session itself may still run for
+/// other clients, so the view reports the loss instead of staying silently
+/// blank.
+const PERSISTENT_TERMINAL_HOSTED_ATTACHMENT_LOST: &[&str] = &[
+    "hosted terminal attachment not found",
+    "hosted terminal is no longer attached",
+];
 /// Delay between retries of a batch the server rejected because its input
 /// backlog was full.
 const INPUT_BACKLOG_RETRY_INTERVAL: Duration = Duration::from_millis(200);
@@ -1595,6 +1603,13 @@ impl TerminalBuilder {
                 // always arrives over the streaming subscription; there is no
                 // polling fallback for servers that never advertised it.
                 let mut consecutive_stream_failures = 0;
+                // A view that never received a byte looks exactly like an idle
+                // terminal, so remember whether the stream ever delivered
+                // anything and explain the empty case once instead of leaving a
+                // silent blank screen.
+                let mut applied_output = false;
+                let mut empty_stream_explained = false;
+                let mut last_stream_error: Option<String> = None;
                 loop {
                     if terminal.read_with(cx, |terminal, _| {
                         matches!(&terminal.terminal_type, TerminalType::Remote(remote) if remote.failed || remote.session_ended.get())
@@ -1622,9 +1637,16 @@ impl TerminalBuilder {
                                 })?;
                                 return Ok(());
                             }
+                            if persistent_terminal_hosted_attachment_lost(&error) {
+                                terminal.update(cx, |terminal, cx| {
+                                    terminal.report_hosted_attachment_lost(&error, cx);
+                                })?;
+                                return Ok(());
+                            }
                             log::debug!(
                                 "persistent terminal output stream unavailable, retrying subscription: {error:#}"
                             );
+                            last_stream_error = Some(format!("{error:#}"));
                             consecutive_stream_failures += 1;
                         }
                         Ok(mut frames) => {
@@ -1655,9 +1677,16 @@ impl TerminalBuilder {
                                             })?;
                                             return Ok(());
                                         }
+                                        if persistent_terminal_hosted_attachment_lost(&error) {
+                                            terminal.update(cx, |terminal, cx| {
+                                                terminal.report_hosted_attachment_lost(&error, cx);
+                                            })?;
+                                            return Ok(());
+                                        }
                                         log::debug!(
                                             "persistent terminal output stream interrupted: {error:#}"
                                         );
+                                        last_stream_error = Some(format!("{error:#}"));
                                         consecutive_stream_failures += 1;
                                         break 'stream;
                                     }
@@ -1689,6 +1718,7 @@ impl TerminalBuilder {
                                 })?;
                                 offset = offset.max(frame_end);
                                 made_progress = true;
+                                applied_output |= skip < frame.data.len();
                                 if offset - last_credit_offset
                                     >= OUTPUT_CREDIT_GRANULARITY_BYTES
                                 {
@@ -1712,6 +1742,17 @@ impl TerminalBuilder {
                                 );
                             }
                         }
+                    }
+
+                    if !applied_output
+                        && !empty_stream_explained
+                        && consecutive_stream_failures >= MAX_STREAM_FAILURES
+                    {
+                        empty_stream_explained = true;
+                        let error = last_stream_error.clone().unwrap_or_default();
+                        terminal.update(cx, |terminal, cx| {
+                            terminal.report_empty_output_stream(&error, cx);
+                        })?;
                     }
 
                     // A hosted task terminal reports completion only through a
@@ -1922,6 +1963,12 @@ async fn send_persistent_terminal_input(
                         control_tx.try_send(()).log_err();
                     }
                 }
+                Err(error) if persistent_terminal_hosted_attachment_lost(&error) => {
+                    // The output stream reports a released attachment with the
+                    // reason and how to recover; input cannot bring it back.
+                    log::debug!("hosted terminal input stopped, attachment lost: {error:#}");
+                    return Ok(());
+                }
                 Err(error) => return Err(error),
             }
         }
@@ -1966,10 +2013,17 @@ fn persistent_terminal_session_ended(error: &anyhow::Error) -> bool {
             matches!(
                 error.raw_message(),
                 "hosted terminal has exited"
-                    | "hosted terminal attachment not found"
                     | "hosted terminal not found"
                     | "terminal is not hosted"
             )
+        })
+}
+
+fn persistent_terminal_hosted_attachment_lost(error: &anyhow::Error) -> bool {
+    error
+        .downcast_ref::<proto::RpcError>()
+        .is_some_and(|error| {
+            PERSISTENT_TERMINAL_HOSTED_ATTACHMENT_LOST.contains(&error.raw_message())
         })
 }
 
@@ -4269,6 +4323,33 @@ impl Terminal {
         self.task
             .as_ref()
             .is_some_and(|task| task.status == TaskStatus::Running)
+    }
+
+    /// Reports a view whose hosted attachment was released by the server. The
+    /// session may still be running for other clients, but this attachment can
+    /// never resume, so the stream ends and the view says why instead of
+    /// staying silently blank.
+    fn report_hosted_attachment_lost(&mut self, error: &anyhow::Error, cx: &mut Context<Self>) {
+        log::warn!("hosted terminal view lost its attachment: {error:#}");
+        let message = i18n::t!("63aed9c93d539555", error = format!("{error:#}"));
+        self.end_remote_session();
+        self.write_raw_output(format!("\r\n{message}\r\n").as_bytes(), cx);
+        cx.notify();
+        // The exit status only arrives through a stream frame this view can no
+        // longer receive, so a running task must not keep waiting for it.
+        if self.has_running_task() {
+            self.register_task_finished(None, cx);
+        }
+    }
+
+    /// Explains a remote view that is still empty because its output stream has
+    /// never delivered a byte. The subscription keeps retrying, so a recovered
+    /// connection still fills the view.
+    fn report_empty_output_stream(&mut self, error: &str, cx: &mut Context<Self>) {
+        log::warn!("persistent terminal output stream has not delivered any output: {error}");
+        let message = i18n::t!("94da195699286fdf", error = error.to_owned());
+        self.write_raw_output(format!("\r\n{message}\r\n").as_bytes(), cx);
+        cx.notify();
     }
 
     /// Finishes a running task whose hosted output stream is gone without
@@ -8441,11 +8522,21 @@ mod tests {
         assert!(input_tx.is_closed());
     }
 
+    #[derive(Clone, Copy, PartialEq)]
+    enum StreamFailure {
+        /// The session itself no longer exists.
+        Missing,
+        /// A stream error that repeats without ever delivering a byte.
+        Transient,
+        /// The server released this view's attachment to a running session.
+        AttachmentLost,
+    }
+
     struct StreamTestClient {
         handler_set: Mutex<ProtoMessageHandlerSet>,
         subscriptions: std::sync::atomic::AtomicUsize,
         closes: std::sync::atomic::AtomicUsize,
-        missing: bool,
+        failure: StreamFailure,
     }
 
     impl ProtoClient for StreamTestClient {
@@ -8478,8 +8569,8 @@ mod tests {
             ));
             self.subscriptions
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            if self.missing {
-                async move {
+            match self.failure {
+                StreamFailure::Missing => async move {
                     Err(proto::RpcError::from_proto(
                         &proto::Error {
                             message: "persistent terminal not found".into(),
@@ -8488,9 +8579,18 @@ mod tests {
                         "SubscribePersistentTerminal",
                     ))
                 }
-                .boxed()
-            } else {
-                async move {
+                .boxed(),
+                StreamFailure::AttachmentLost => async move {
+                    Err(proto::RpcError::from_proto(
+                        &proto::Error {
+                            message: "hosted terminal attachment not found".into(),
+                            ..Default::default()
+                        },
+                        "SubscribePersistentTerminal",
+                    ))
+                }
+                .boxed(),
+                StreamFailure::Transient => async move {
                     Ok(futures::stream::once(async {
                         Err(proto::RpcError::from_proto(
                             &proto::Error {
@@ -8502,7 +8602,7 @@ mod tests {
                     })
                     .boxed())
                 }
-                .boxed()
+                .boxed(),
             }
         }
         fn send(&self, _: proto::Envelope, _: &'static str) -> Result<()> {
@@ -8560,7 +8660,7 @@ mod tests {
             handler_set: Mutex::new(ProtoMessageHandlerSet::default()),
             subscriptions: Default::default(),
             closes: Default::default(),
-            missing: true,
+            failure: StreamFailure::Missing,
         });
         let terminal = streaming_terminal(client.clone(), cx);
         cx.run_until_parked();
@@ -8589,7 +8689,7 @@ mod tests {
             handler_set: Mutex::new(ProtoMessageHandlerSet::default()),
             subscriptions: Default::default(),
             closes: Default::default(),
-            missing: true,
+            failure: StreamFailure::Missing,
         });
         let mode = task_mode();
         let terminal = streaming_terminal_with_mode(client, mode, cx);
@@ -8626,7 +8726,7 @@ mod tests {
             handler_set: Mutex::new(ProtoMessageHandlerSet::default()),
             subscriptions: Default::default(),
             closes: Default::default(),
-            missing: false,
+            failure: StreamFailure::Transient,
         });
         let mode = task_mode();
         let terminal = streaming_terminal_with_mode(client.clone(), mode, cx);
@@ -8677,7 +8777,7 @@ mod tests {
             handler_set: Mutex::new(ProtoMessageHandlerSet::default()),
             subscriptions: Default::default(),
             closes: Default::default(),
-            missing: false,
+            failure: StreamFailure::Transient,
         });
         let terminal = streaming_terminal(client, cx);
         advance_past_stream_failure_limit(cx);
@@ -8695,6 +8795,79 @@ mod tests {
                 "an interactive terminal must remain usable after transient stream failures"
             );
         });
+    }
+
+    #[gpui::test]
+    fn hosted_viewer_reports_a_released_attachment_instead_of_staying_blank(
+        cx: &mut TestAppContext,
+    ) {
+        let client = Arc::new(StreamTestClient {
+            handler_set: Mutex::new(ProtoMessageHandlerSet::default()),
+            subscriptions: Default::default(),
+            closes: Default::default(),
+            failure: StreamFailure::AttachmentLost,
+        });
+        let terminal = streaming_terminal(client.clone(), cx);
+        cx.run_until_parked();
+        cx.background_executor.advance_clock(Duration::from_secs(1));
+        cx.run_until_parked();
+
+        // The attachment is gone for good, so retrying cannot restore the view.
+        assert_eq!(
+            client
+                .subscriptions
+                .load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "a released attachment must not be retried forever"
+        );
+        let content = terminal.read_with(cx, |terminal, _| {
+            let TerminalType::Remote(remote) = &terminal.terminal_type else {
+                panic!("remote terminal")
+            };
+            assert!(remote.session_ended.get());
+            assert!(remote.input_tx.is_closed());
+            terminal.last_n_non_empty_lines(6).join("")
+        });
+        assert!(
+            content.contains("hosted terminal attachment not found"),
+            "the view must say why it stays empty: {content:?}"
+        );
+    }
+
+    #[gpui::test]
+    fn remote_view_explains_an_empty_stream_only_once(cx: &mut TestAppContext) {
+        let client = Arc::new(StreamTestClient {
+            handler_set: Mutex::new(ProtoMessageHandlerSet::default()),
+            subscriptions: Default::default(),
+            closes: Default::default(),
+            failure: StreamFailure::Transient,
+        });
+        let terminal = streaming_terminal(client.clone(), cx);
+        advance_past_stream_failure_limit(cx);
+
+        // The stream still retries, so a reconnect can fill the view, but a view
+        // that never received a byte explains itself exactly once.
+        assert!(
+            client
+                .subscriptions
+                .load(std::sync::atomic::Ordering::SeqCst)
+                > MAX_STREAM_FAILURES as usize
+        );
+        let content = terminal.read_with(cx, |terminal, _| {
+            let TerminalType::Remote(remote) = &terminal.terminal_type else {
+                panic!("remote terminal")
+            };
+            assert!(
+                !remote.failed && !remote.session_ended.get(),
+                "a broken stream keeps the terminal usable"
+            );
+            terminal.last_n_non_empty_lines(6).join("")
+        });
+        assert_eq!(
+            content.matches("temporary error").count(),
+            1,
+            "the empty-stream explanation must not repeat: {content:?}"
+        );
     }
 
     #[test]
@@ -8732,7 +8905,7 @@ mod tests {
             handler_set: Mutex::new(ProtoMessageHandlerSet::default()),
             subscriptions: Default::default(),
             closes: Default::default(),
-            missing: false,
+            failure: StreamFailure::Transient,
         });
         let mode = TerminalMode::task(SpawnInTerminal {
             command: Some("sleep".to_string()),
@@ -8774,7 +8947,7 @@ mod tests {
             handler_set: Mutex::new(ProtoMessageHandlerSet::default()),
             subscriptions: Default::default(),
             closes: Default::default(),
-            missing: false,
+            failure: StreamFailure::Transient,
         });
         let terminal = streaming_terminal(client.clone(), cx);
         cx.run_until_parked();
