@@ -7275,7 +7275,11 @@ impl Project {
         &self.agent_server_store
     }
 
-    #[cfg(feature = "test-support")]
+    /// Waits until the current worktrees finished their initial scan and the
+    /// git repositories processed their queued jobs.
+    ///
+    /// Worktree import uses this so a freshly added root is addressable by the
+    /// Git panel switcher instead of appearing only after an unrelated event.
     pub fn git_scans_complete(&self, cx: &Context<Self>) -> Task<()> {
         use futures::future::join_all;
         cx.spawn(async move |this, cx| {
@@ -7285,7 +7289,7 @@ impl Project {
                         .filter_map(|worktree| Some(worktree.read(cx).as_local()?.scan_complete()))
                         .collect::<Vec<_>>()
                 })
-                .unwrap();
+                .unwrap_or_default();
             join_all(scans_complete).await;
             let barriers = this
                 .update(cx, |this, cx| {
@@ -7295,7 +7299,7 @@ impl Project {
                         .map(|repo| repo.update(cx, |repo, _| repo.barrier()))
                         .collect::<Vec<_>>()
                 })
-                .unwrap();
+                .unwrap_or_default();
             join_all(barriers).await;
         })
     }
