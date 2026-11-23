@@ -221,6 +221,9 @@ Zed also watches for linked worktrees created outside the editor while the proje
 The first check after opening a project only records the worktrees that already exist, so a long-lived repository does not import old worktrees on startup.
 Use the import button in the worktree picker to add an existing worktree explicitly.
 
+Deleting a worktree from the picker also drops its root from the project, and the automatic check drops a root whose checkout no longer exists on disk, including one that Git still lists as prunable.
+Only roots that stand for a linked worktree of an open repository are removed this way; the main checkout and folders you added yourself stay in the project.
+
 The Git panel lists every worktree with its branch, staged file count, and change count.
 Selecting an entry switches the changes list and commit target to that worktree, so staging and committing never leak across checkouts.
 
