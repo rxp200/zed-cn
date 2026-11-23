@@ -658,6 +658,10 @@ impl WorktreePickerDelegate {
                     picker.delegate.selected_index = picker.delegate.matches.len() - 1;
                 }
                 picker.delegate.hovered_delete_index = None;
+                // The deleted worktree is usually imported into this project as
+                // a visible root; leaving that root behind would keep a
+                // checkout in the sidebar that no longer exists on disk.
+                crate::worktree_import::remove_worktree_root(&picker.delegate.project, &path, cx);
                 cx.notify();
             })?;
 
@@ -1897,6 +1901,56 @@ mod tests {
         assert!(
             !repo_contains_worktree(&repository, &worktree_path, &mut cx).await,
             "worktree should be removed after successful delete"
+        );
+    }
+
+    fn open_project_roots(
+        worktree_picker: &Entity<WorktreePicker>,
+        cx: &mut VisualTestContext,
+    ) -> Vec<PathBuf> {
+        worktree_picker.update(cx, |worktree_picker, cx| {
+            let project = worktree_picker.picker.read(cx).delegate.project.clone();
+            project
+                .read(cx)
+                .visible_worktrees(cx)
+                .map(|worktree| worktree.read(cx).abs_path().to_path_buf())
+                .collect()
+        })
+    }
+
+    #[gpui::test]
+    async fn test_delete_worktree_removes_its_imported_project_root(cx: &mut TestAppContext) {
+        let (_, worktree_picker, _repository, worktree_path, mut cx) =
+            init_worktree_picker_test(cx).await;
+
+        let project = worktree_picker.read_with(&cx, |worktree_picker, cx| {
+            worktree_picker.picker.read(cx).delegate.project.clone()
+        });
+        crate::worktree_import::import_worktrees(
+            project,
+            vec![worktree_path.clone()],
+            false,
+            &mut cx.to_async(),
+        )
+        .await
+        .unwrap();
+        cx.run_until_parked();
+        assert!(
+            open_project_roots(&worktree_picker, &mut cx).contains(&worktree_path),
+            "the worktree should be imported as a project root first"
+        );
+
+        let index = worktree_index(&worktree_picker, &worktree_path, &mut cx);
+        worktree_picker.update_in(&mut cx, |worktree_picker, window, cx| {
+            worktree_picker.picker.update(cx, |picker, cx| {
+                picker.delegate.delete_worktree(index, false, window, cx);
+            })
+        });
+        cx.run_until_parked();
+
+        assert!(
+            !open_project_roots(&worktree_picker, &mut cx).contains(&worktree_path),
+            "deleting a worktree must also drop its root from the project"
         );
     }
 
