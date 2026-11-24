@@ -54,6 +54,7 @@ fs = { workspace = true, features = ["test-support"] }
 git = { workspace = true, features = ["test-support"] }
 gpui = { workspace = true, features = ["test-support"] }
 project = { workspace = true, features = ["test-support"] }
+release_channel.workspace = true
 remote_connection = { workspace = true, features = ["test-support"] }
 settings = { workspace = true, features = ["test-support"] }
 task.workspace = true

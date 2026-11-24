@@ -9,8 +9,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use collections::HashSet;
-use fs::Fs;
+use collections::{HashMap, HashSet};
 use gpui::{App, AsyncApp, Context, Entity, TaskExt, WeakEntity, Window};
 use project::project_settings::ProjectSettings;
 use project::trusted_worktrees::{PathTrust, TrustedWorktrees};
@@ -214,27 +213,31 @@ async fn discovery_loop(workspace: WeakEntity<Workspace>, cx: &mut AsyncApp) {
     let mut reported_stale_repositories = 0usize;
 
     loop {
-        let delay = if first_pass {
+        let delay = if first_pass && failure_streak == 0 {
             INITIAL_DISCOVERY_DELAY
         } else {
             discovery_delay(failure_streak)
         };
         cx.background_executor().timer(delay).await;
 
-        let Some((project, fs, repositories, project_roots)) = workspace
+        let Some((project, repositories, mut project_roots)) = workspace
             .update(cx, |workspace, cx| {
                 let project = workspace.project().clone();
                 if project.read(cx).is_via_collab() {
                     return None;
                 }
-                let fs = project.read(cx).fs().clone();
                 let repositories = project
                     .read(cx)
                     .repositories(cx)
                     .values()
                     .map(|repository| {
-                        let root = repository.read(cx).work_directory_abs_path.to_path_buf();
-                        (repository.clone(), root)
+                        let repo = repository.read(cx);
+                        let root = repo.work_directory_abs_path.to_path_buf();
+                        (
+                            repository.clone(),
+                            root,
+                            repo.linked_worktree_path().is_some(),
+                        )
                     })
                     .collect::<Vec<_>>();
                 let project_roots = project
@@ -242,7 +245,7 @@ async fn discovery_loop(workspace: WeakEntity<Workspace>, cx: &mut AsyncApp) {
                     .visible_worktrees(cx)
                     .map(|worktree| worktree.read(cx).abs_path().to_path_buf())
                     .collect::<HashSet<_>>();
-                Some((project, fs, repositories, project_roots))
+                Some((project, repositories, project_roots))
             })
             .ok()
             .flatten()
@@ -250,40 +253,42 @@ async fn discovery_loop(workspace: WeakEntity<Workspace>, cx: &mut AsyncApp) {
             break;
         };
 
-        // A checkout that was deleted keeps answering `worktrees()` with "No such
-        // file or directory" and never recovers. Polling such a repository every
-        // pass is what turned one stale handle into a permanent RPC failure, and
-        // because any single failure used to disable the departed-root cleanup
-        // below, it also kept the dead roots from ever being released. Dead
-        // repositories therefore leave the poll set instead of being retried.
+        // A stale checkout makes `worktrees()` fail every time, which would
+        // also block reconciliation of other linked roots.
+        let mut checkout_status = HashMap::default();
         let mut live_repositories = Vec::with_capacity(repositories.len());
-        let mut stale_roots: Vec<PathBuf> = Vec::new();
-        for (repository, root) in repositories {
-            match fs.metadata(&root).await {
-                Ok(Some(_)) => live_repositories.push(repository),
-                Ok(None) => stale_roots.push(root),
-                // An error is an unknown state, not a missing checkout.
-                Err(_) => live_repositories.push(repository),
+        let mut stale_repositories = 0;
+        let mut stale_linked_roots = Vec::new();
+        let mut listing_failed = false;
+        for (repository, root, is_linked) in repositories {
+            match check_checkout(&project, &root, &mut checkout_status, cx).await {
+                CheckoutStatus::Present => live_repositories.push(repository),
+                CheckoutStatus::Missing => {
+                    stale_repositories += 1;
+                    if is_linked {
+                        stale_linked_roots.push(root);
+                    }
+                }
+                CheckoutStatus::Unknown => listing_failed = true,
             }
         }
 
-        if !stale_roots.is_empty() {
+        if !stale_linked_roots.is_empty() {
             cx.update(|cx| {
-                for root in &stale_roots {
-                    remove_worktree_root(&project, root, cx);
+                for root in &stale_linked_roots {
+                    if remove_worktree_root(&project, root, cx) {
+                        project_roots.remove(root);
+                    }
+                    tracked_paths.remove(root);
                 }
             });
-            tracked_paths.retain(|path| !stale_roots.contains(path));
-            if stale_roots.len() != reported_stale_repositories {
-                reported_stale_repositories = stale_roots.len();
-                log::info!(
-                    "ignoring {} git repository handle(s) whose checkout no longer exists",
-                    stale_roots.len()
-                );
-            }
-        } else {
-            reported_stale_repositories = 0;
         }
+        if stale_repositories > 0 && stale_repositories != reported_stale_repositories {
+            log::info!(
+                "ignoring {stale_repositories} git repository handle(s) whose checkout no longer exists"
+            );
+        }
+        reported_stale_repositories = stale_repositories;
 
         let requests = cx.update(|cx| {
             live_repositories
@@ -293,7 +298,6 @@ async fn discovery_loop(workspace: WeakEntity<Workspace>, cx: &mut AsyncApp) {
         });
 
         let mut linked_paths = HashSet::default();
-        let mut listing_failed = false;
         for request in requests {
             match request.await {
                 Ok(Ok(worktrees)) => {
@@ -313,19 +317,28 @@ async fn discovery_loop(workspace: WeakEntity<Workspace>, cx: &mut AsyncApp) {
             }
         }
 
+        // A partial listing cannot tell us that a previously known path is gone.
         if listing_failed {
+            failure_streak = failure_streak.saturating_add(1);
+            continue;
+        }
+
+        let mut missing_paths = HashSet::default();
+        let mut metadata_failed = false;
+        for path in linked_paths.union(&tracked_paths) {
+            match check_checkout(&project, path, &mut checkout_status, cx).await {
+                CheckoutStatus::Missing => {
+                    missing_paths.insert(path.clone());
+                }
+                CheckoutStatus::Unknown => metadata_failed = true,
+                CheckoutStatus::Present => {}
+            }
+        }
+        if metadata_failed {
             failure_streak = failure_streak.saturating_add(1);
         } else {
             failure_streak = 0;
         }
-
-        // A worktree whose directory is gone (`git worktree remove`, or a
-        // prunable entry that Git still lists) no longer describes a usable
-        // checkout. Failures keep the path: an unknown state must not turn
-        // into a removed root.
-        let mut paths_to_check = linked_paths.clone();
-        paths_to_check.extend(tracked_paths.iter().cloned());
-        let on_disk_paths = worktree_paths_on_disk(fs.as_ref(), &paths_to_check).await;
 
         // Remember which open roots stand for linked worktrees, so a root can
         // be dropped once its checkout is gone even though Git has already
@@ -338,8 +351,8 @@ async fn discovery_loop(workspace: WeakEntity<Workspace>, cx: &mut AsyncApp) {
         );
         tracked_paths.retain(|path| project_roots.contains(path));
 
-        if !first_pass && !listing_failed {
-            let departed_paths = select_departed_worktree_roots(&tracked_paths, &on_disk_paths);
+        if !first_pass {
+            let departed_paths = select_departed_worktree_roots(&tracked_paths, &missing_paths);
             if !departed_paths.is_empty() {
                 let mut removed = 0;
                 cx.update(|cx| {
@@ -358,17 +371,14 @@ async fn discovery_loop(workspace: WeakEntity<Workspace>, cx: &mut AsyncApp) {
             }
         }
 
-        let existing_linked_paths = linked_paths
+        let linked_paths = linked_paths
             .into_iter()
-            .filter(|path| on_disk_paths.contains(path))
-            .collect::<HashSet<_>>();
-        let mut candidates = select_new_worktree_paths(
-            &mut known_paths,
-            &project_roots,
-            existing_linked_paths,
-            first_pass,
-        );
+            .filter(|path| !missing_paths.contains(path))
+            .collect();
+        let mut candidates =
+            select_new_worktree_paths(&mut known_paths, &project_roots, linked_paths, first_pass);
         first_pass = false;
+        candidates.retain(|path| checkout_status.get(path) == Some(&CheckoutStatus::Present));
 
         if candidates.is_empty() {
             continue;
@@ -394,24 +404,40 @@ async fn discovery_loop(workspace: WeakEntity<Workspace>, cx: &mut AsyncApp) {
     }
 }
 
-async fn worktree_paths_on_disk(fs: &dyn Fs, paths: &HashSet<PathBuf>) -> HashSet<PathBuf> {
-    let mut on_disk_paths = HashSet::default();
-    for path in paths {
-        match fs.metadata(path).await {
-            Ok(Some(_)) => {
-                on_disk_paths.insert(path.clone());
-            }
-            Ok(None) => {}
-            Err(error) => {
-                log::debug!(
-                    "could not check git worktree '{}': {error:#}",
-                    path.display()
-                );
-                on_disk_paths.insert(path.clone());
-            }
-        }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CheckoutStatus {
+    Present,
+    Missing,
+    Unknown,
+}
+
+async fn check_checkout(
+    project: &Entity<Project>,
+    path: &Path,
+    checkout_status: &mut HashMap<PathBuf, CheckoutStatus>,
+    cx: &AsyncApp,
+) -> CheckoutStatus {
+    if let Some(status) = checkout_status.get(path) {
+        return *status;
     }
-    on_disk_paths
+    let status = match project
+        .read_with(cx, |project, cx| {
+            project.path_exists_on_project_host(path, cx)
+        })
+        .await
+    {
+        Ok(true) => CheckoutStatus::Present,
+        Ok(false) => CheckoutStatus::Missing,
+        Err(error) => {
+            log::debug!(
+                "could not check git worktree '{}': {error:#}",
+                path.display()
+            );
+            CheckoutStatus::Unknown
+        }
+    };
+    checkout_status.insert(path.to_owned(), status);
+    status
 }
 
 /// Chooses the paths to import from one `git worktree list` response.
@@ -424,10 +450,8 @@ fn select_new_worktree_paths(
     available_paths: HashSet<PathBuf>,
     first_pass: bool,
 ) -> Vec<PathBuf> {
-    // `known_paths` only remembers worktrees that currently exist on disk. A
-    // path whose checkout disappeared and is later created again (for example
-    // the same branch re-created at the same directory) must be treated as a
-    // new worktree instead of being skipped forever.
+    // Drop paths no longer available so reconciling a deleted checkout does
+    // not prevent importing a new checkout created at the same path.
     known_paths.retain(|path| available_paths.contains(path));
 
     if first_pass {
@@ -461,19 +485,15 @@ fn select_new_worktree_paths(
 /// still exists is left in place.
 fn select_departed_worktree_roots(
     tracked_paths: &HashSet<PathBuf>,
-    on_disk_paths: &HashSet<PathBuf>,
+    missing_paths: &HashSet<PathBuf>,
 ) -> Vec<PathBuf> {
-    tracked_paths
-        .iter()
-        .filter(|path| !on_disk_paths.contains(*path))
-        .cloned()
-        .collect()
+    tracked_paths.intersection(missing_paths).cloned().collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fs::FakeFs;
+    use fs::{FakeFs, Fs as _};
     use gpui::TestAppContext;
     use project::project_settings::ProjectSettings;
     use project::{Project, WorktreeSettings};
@@ -588,8 +608,16 @@ mod tests {
         // root's checkout is gone, so the root must go away too.
         let mut tracked_paths = HashSet::default();
         tracked_paths.insert(worktree_path.clone());
-        let on_disk_paths = worktree_paths_on_disk(fs.as_ref(), &tracked_paths).await;
-        let departed_paths = select_departed_worktree_roots(&tracked_paths, &on_disk_paths);
+        let status = check_checkout(
+            &project,
+            &worktree_path,
+            &mut HashMap::default(),
+            &cx.to_async(),
+        )
+        .await;
+        assert_eq!(status, CheckoutStatus::Missing);
+        let missing_paths = HashSet::from_iter([worktree_path.clone()]);
+        let departed_paths = select_departed_worktree_roots(&tracked_paths, &missing_paths);
         assert_eq!(departed_paths, vec![worktree_path.clone()]);
 
         cx.update(|cx| {
@@ -607,27 +635,233 @@ mod tests {
 
     #[gpui::test]
     async fn a_worktree_without_its_directory_is_no_longer_on_disk(cx: &mut TestAppContext) {
+        init_test(cx);
         let fs = FakeFs::new(cx.executor());
         fs.insert_tree(path!("/root"), json!({ "wt": {} })).await;
+        let project = Project::test(fs, [], cx).await;
+        let mut checkout_status = HashMap::default();
+        for (path, exists) in [
+            (path!("/root/wt"), CheckoutStatus::Present),
+            (path!("/root/gone"), CheckoutStatus::Missing),
+        ] {
+            assert_eq!(
+                check_checkout(
+                    &project,
+                    path.as_ref(),
+                    &mut checkout_status,
+                    &cx.to_async()
+                )
+                .await,
+                exists,
+            );
+        }
+    }
 
-        let on_disk_paths =
-            worktree_paths_on_disk(fs.as_ref(), &paths(&["/root/wt", "/root/gone"])).await;
+    #[gpui::test]
+    async fn remote_discovery_only_removes_confirmed_missing_linked_roots(
+        cx: &mut TestAppContext,
+        server_cx: &mut TestAppContext,
+    ) {
+        use gpui::AppContext as _;
+        use proto::{REMOTE_SERVER_PROJECT_ID, TypedEnvelope};
+        use remote::RemoteClient;
+        use workspace::MultiWorkspace;
 
-        assert!(on_disk_paths.contains(Path::new("/root/wt")));
-        assert!(
-            !on_disk_paths.contains(Path::new("/root/gone")),
-            "git keeps reporting prunable worktrees, but a missing directory is gone"
+        const MAIN: &str = path!("/remote/project");
+        const LINKED: &str = path!("/remote/linked");
+        const COMMON_DIR: &str = path!("/remote/project/.git");
+        const LINKED_GIT_DIR: &str = path!("/remote/project/.git/worktrees/linked");
+
+        init_test(cx);
+        cx.update(|cx| {
+            release_channel::init("0.0.0".parse().unwrap(), cx);
+            theme_settings::init(theme::LoadThemes::JustBase, cx);
+            editor::init(cx);
+        });
+        let client_fs = FakeFs::new(cx.executor());
+        let local_project = Project::test(client_fs.clone(), [], cx).await;
+        let remote_fs = FakeFs::new(server_cx.executor());
+        remote_fs
+            .insert_tree(
+                Path::new(path!("/remote")),
+                json!({ "project": {}, "linked": {} }),
+            )
+            .await;
+
+        let (options, server, guard) = RemoteClient::fake_server(cx, server_cx);
+        let metadata_allowed = server_cx.new(|_| true);
+        server.add_request_handler(metadata_allowed.downgrade(), {
+            let remote_fs = remote_fs.clone();
+            move |allowed, request: TypedEnvelope<proto::GetPathMetadata>, cx| {
+                let remote_fs = remote_fs.clone();
+                async move {
+                    anyhow::ensure!(
+                        cx.read_entity(&allowed, |allowed, _| *allowed),
+                        "metadata unavailable"
+                    );
+                    let path = request.payload.path;
+                    let metadata = remote_fs.metadata(Path::new(&path)).await?;
+                    Ok(proto::GetPathMetadataResponse {
+                        exists: metadata.is_some(),
+                        is_dir: metadata.is_some_and(|metadata| metadata.is_dir),
+                        path,
+                    })
+                }
+            }
+        });
+        server.add_request_handler(
+            metadata_allowed.downgrade(),
+            |_, _: TypedEnvelope<proto::Ping>, _| async { Ok(proto::Ack {}) },
         );
+        server.add_request_handler(
+            metadata_allowed.downgrade(),
+            |_, _: TypedEnvelope<proto::RemoveWorktree>, _| async { Ok(proto::Ack {}) },
+        );
+        server.add_request_handler(
+            metadata_allowed.downgrade(),
+            |_, _: TypedEnvelope<proto::GitGetWorktrees>, _| async {
+                Ok(proto::GitWorktreesResponse {
+                    worktrees: vec![
+                        proto::Worktree {
+                            path: MAIN.into(),
+                            is_main: true,
+                            ..Default::default()
+                        },
+                        proto::Worktree {
+                            path: LINKED.into(),
+                            ..Default::default()
+                        },
+                    ],
+                })
+            },
+        );
+        drop(guard);
+        let remote = RemoteClient::connect_mock(options, cx).await;
+        let project = cx.update(|cx| {
+            let local_project = local_project.read(cx);
+            let client = local_project.client();
+            let node = local_project.node_runtime().unwrap().clone();
+            let user_store = local_project.user_store();
+            let languages = local_project.languages().clone();
+            Project::init(&client, cx);
+            Project::remote(
+                remote,
+                client,
+                node,
+                user_store,
+                languages,
+                client_fs.clone(),
+                false,
+                cx,
+            )
+        });
+
+        server
+            .send(proto::UpdateProject {
+                project_id: REMOTE_SERVER_PROJECT_ID,
+                worktrees: [(1, MAIN, "project", false), (2, LINKED, "linked", true)]
+                    .into_iter()
+                    .map(
+                        |(id, abs_path, root_name, is_linked)| proto::WorktreeMetadata {
+                            id,
+                            abs_path: abs_path.into(),
+                            root_name: root_name.into(),
+                            visible: true,
+                            root_repo_common_dir: Some(COMMON_DIR.into()),
+                            root_repo_is_linked_worktree: is_linked,
+                        },
+                    )
+                    .collect(),
+            })
+            .unwrap();
+        let announce_repository = |id, path: &str, git_dir: &str| {
+            server
+                .send(proto::UpdateRepository {
+                    project_id: REMOTE_SERVER_PROJECT_ID,
+                    id,
+                    abs_path: path.into(),
+                    repository_dir_abs_path: Some(git_dir.into()),
+                    common_dir_abs_path: Some(COMMON_DIR.into()),
+                    is_last_update: true,
+                    ..Default::default()
+                })
+                .unwrap();
+        };
+        announce_repository(1, MAIN, COMMON_DIR);
+        cx.run_until_parked();
+        assert_eq!(
+            project.read_with(cx, |project, cx| project.repositories(cx).len()),
+            1
+        );
+        let window =
+            cx.add_window(|window, cx| MultiWorkspace::test_new(project.clone(), window, cx));
+        let workspace = window
+            .read_with(cx, |multi_workspace, _| {
+                multi_workspace.workspace().downgrade()
+            })
+            .unwrap();
+        let discovery = cx.spawn(|mut cx| async move { discovery_loop(workspace, &mut cx).await });
+        cx.run_until_parked();
+
+        assert!(client_fs.metadata(Path::new(MAIN)).await.unwrap().is_none());
+        assert!(is_open_root(&project, Path::new(MAIN), cx));
+        assert!(is_open_root(&project, Path::new(LINKED), cx));
+        cx.executor().advance_clock(INITIAL_DISCOVERY_DELAY);
+        cx.run_until_parked();
+        assert!(
+            is_open_root(&project, Path::new(MAIN), cx),
+            "the main checkout exists on the remote host"
+        );
+        assert!(
+            is_open_root(&project, Path::new(LINKED), cx),
+            "the linked checkout exists on the remote host"
+        );
+
+        cx.executor().advance_clock(DISCOVERY_INTERVAL);
+        cx.run_until_parked();
+        assert!(
+            is_open_root(&project, Path::new(LINKED), cx),
+            "a linked root without its own repository handle must also be checked remotely"
+        );
+        announce_repository(2, LINKED, LINKED_GIT_DIR);
+        remote_fs
+            .remove_dir(Path::new(LINKED), Default::default())
+            .await
+            .unwrap();
+        metadata_allowed.update(server_cx, |allowed, _| *allowed = false);
+        cx.executor().advance_clock(DISCOVERY_INTERVAL);
+        cx.run_until_parked();
+        assert!(is_open_root(&project, Path::new(MAIN), cx));
+        assert!(
+            is_open_root(&project, Path::new(LINKED), cx),
+            "metadata errors must not remove roots"
+        );
+        remote_fs
+            .remove_dir(Path::new(MAIN), Default::default())
+            .await
+            .unwrap();
+        metadata_allowed.update(server_cx, |allowed, _| *allowed = true);
+        cx.executor().advance_clock(DISCOVERY_INTERVAL);
+        cx.run_until_parked();
+        assert!(
+            is_open_root(&project, Path::new(MAIN), cx),
+            "Git discovery must never detach the main checkout"
+        );
+        assert!(
+            !is_open_root(&project, Path::new(LINKED), cx),
+            "only the missing linked worktree is detached"
+        );
+        drop(discovery);
     }
 
     #[test]
     fn only_tracked_roots_can_depart() {
         let mut tracked_paths = HashSet::default();
         tracked_paths.insert(PathBuf::from("/imported"));
-        let on_disk_paths = paths(&["/main", "/manual"]);
+        let missing_paths = paths(&["/main", "/manual", "/imported"]);
 
         assert_eq!(
-            select_departed_worktree_roots(&tracked_paths, &on_disk_paths),
+            select_departed_worktree_roots(&tracked_paths, &missing_paths),
             vec![PathBuf::from("/imported")]
         );
     }
@@ -636,9 +870,9 @@ mod tests {
     fn a_tracked_root_that_still_exists_is_kept() {
         let mut tracked_paths = HashSet::default();
         tracked_paths.insert(PathBuf::from("/wt"));
-        let on_disk_paths = paths(&["/main", "/wt"]);
+        let missing_paths = paths(&["/other"]);
 
-        assert!(select_departed_worktree_roots(&tracked_paths, &on_disk_paths).is_empty());
+        assert!(select_departed_worktree_roots(&tracked_paths, &missing_paths).is_empty());
     }
 
     #[test]

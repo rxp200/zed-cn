@@ -95,8 +95,8 @@ use image_store::{ImageItemEvent, ImageStoreEvent};
 
 use ::git::{blame::Blame, status::FileStatus};
 use gpui::{
-    App, AppContext, AsyncApp, BorrowAppContext, Context, Entity, EventEmitter, Hsla, SharedString,
-    Task, TaskExt, WeakEntity, Window,
+    App, AppContext, AsyncApp, BorrowAppContext, Context, Entity, EventEmitter, FutureExt as _,
+    Hsla, SharedString, Task, TaskExt, WeakEntity, Window,
 };
 use language::{
     Buffer, BufferEditSource, BufferEvent, Capability, CodeLabel, CursorShape, DiskState, Language,
@@ -5795,6 +5795,48 @@ impl Project {
             })
         } else {
             Task::ready(Ok(None))
+        }
+    }
+
+    /// Checks whether an absolute path exists on the project host without
+    /// treating an unavailable check as a missing path.
+    pub fn path_exists_on_project_host(&self, path: &Path, cx: &App) -> Task<Result<bool>> {
+        if self.is_local() {
+            let path = path.to_path_buf();
+            let fs = self.fs.clone();
+            cx.background_spawn(async move { Ok(fs.metadata(&path).await?.is_some()) })
+        } else if let Some(remote) = self
+            .remote_client
+            .as_ref()
+            .filter(|_| self.is_via_remote_server())
+        {
+            let remote = remote.read(cx);
+            if remote.connection_state() != remote::ConnectionState::Connected {
+                return Task::ready(Err(anyhow!("project host is not connected")));
+            }
+            if !remote.path_style().is_absolute(path) {
+                return Task::ready(Err(anyhow!(
+                    "expected an absolute path on the project host"
+                )));
+            }
+            let Some(path) = path.to_str() else {
+                return Task::ready(Err(anyhow!("remote path is not valid UTF-8")));
+            };
+            let executor = cx.background_executor().clone();
+            let request = remote.proto_client().request(proto::GetPathMetadata {
+                project_id: REMOTE_SERVER_PROJECT_ID,
+                path: path.to_owned(),
+                canonicalize: false,
+            });
+            cx.background_spawn(async move {
+                let response = request
+                    .with_timeout(Duration::from_secs(10), &executor)
+                    .await
+                    .context("timed out checking path on project host")??;
+                Ok(response.exists)
+            })
+        } else {
+            Task::ready(Err(anyhow!("project has no accessible host filesystem")))
         }
     }
 
