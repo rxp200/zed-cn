@@ -1068,6 +1068,29 @@ impl Domain for WorkspaceDb {
         sql!(
             ALTER TABLE workspaces ADD COLUMN remote_terminal_mode INTEGER; //bool
         ),
+        // A workspace is saved with an empty path list when its project has no root folders
+        // yet or any more: during remote connection setup, when its last root folder is
+        // closed, and when every root directory was found missing and its worktrees were
+        // closed. Those workspaces are identified by `workspace_id`, so several of them may
+        // legitimately coexist for the same connection (see the `save_workspace` comment
+        // about empty workspaces).
+        //
+        // The unique index used to include empty path lists, which made every empty
+        // workspace of one remote connection share the same key. Saving a second one then
+        // could not be resolved by the pre-insert `UPSERT`: the row for the saved
+        // workspace already existed with different paths, and updating it to the empty list
+        // collided with the other empty row, failing the whole save with
+        // `UNIQUE constraint failed: workspaces.remote_connection_id, workspaces.paths`
+        // (SQLite error 2067) and rolling back panes, items, and layout.
+        //
+        // Local workspaces were never affected because SQLite treats `NULL` remote
+        // connection ids as distinct keys; excluding empty path lists keeps the same
+        // behavior for remote connections while non-empty path lists stay unique per
+        // connection.
+        sql!(
+            DROP INDEX ix_workspaces_location;
+            CREATE UNIQUE INDEX ix_workspaces_location ON workspaces(remote_connection_id, paths) WHERE paths IS NOT NULL AND paths != "";
+        ),
     ];
 
     // Allow recovering from bad migration that was initially shipped to nightly
@@ -4355,6 +4378,178 @@ mod tests {
                 window_id: Some(WindowId::from(9u64)),
             }
         );
+    }
+
+    fn test_remote_workspace(
+        id: i64,
+        options: &RemoteConnectionOptions,
+        paths: &[&str],
+        window_id: u64,
+    ) -> SerializedWorkspace {
+        SerializedWorkspace {
+            id: WorkspaceId(id),
+            paths: PathList::new(paths),
+            identity_paths: None,
+            location: SerializedWorkspaceLocation::Remote(options.clone()),
+            center_group: Default::default(),
+            window_bounds: Default::default(),
+            display: Default::default(),
+            docks: Default::default(),
+            centered_layout: false,
+            remote_terminal_mode: false,
+            session_id: Some("test-session".to_owned()),
+            bookmarks: Default::default(),
+            breakpoints: Default::default(),
+            window_id: Some(window_id),
+            user_toolchains: Default::default(),
+            recent_navigation_history: Default::default(),
+        }
+    }
+
+    fn test_local_workspace(id: i64, paths: &[&str], window_id: u64) -> SerializedWorkspace {
+        SerializedWorkspace {
+            id: WorkspaceId(id),
+            paths: PathList::new(paths),
+            identity_paths: None,
+            location: SerializedWorkspaceLocation::Local,
+            center_group: Default::default(),
+            window_bounds: Default::default(),
+            display: Default::default(),
+            docks: Default::default(),
+            centered_layout: false,
+            remote_terminal_mode: false,
+            session_id: Some("test-session".to_owned()),
+            bookmarks: Default::default(),
+            breakpoints: Default::default(),
+            window_id: Some(window_id),
+            user_toolchains: Default::default(),
+            recent_navigation_history: Default::default(),
+        }
+    }
+
+    async fn test_remote_connection_options(db: &WorkspaceDb) -> RemoteConnectionOptions {
+        let options = RemoteConnectionOptions::Ssh(SshConnectionOptions {
+            host: "example.com".into(),
+            username: Some("user".to_string()),
+            ..Default::default()
+        });
+        db.get_or_create_remote_connection(options.clone())
+            .await
+            .unwrap();
+        options
+    }
+
+    #[gpui::test]
+    async fn test_empty_remote_workspaces_coexist_for_the_same_connection() {
+        let db = WorkspaceDb::open_test_db(
+            "test_empty_remote_workspaces_coexist_for_the_same_connection",
+        )
+        .await;
+        let options = test_remote_connection_options(&db).await;
+
+        db.save_workspace(test_remote_workspace(1, &options, &[], 1))
+            .await;
+        db.save_workspace(test_remote_workspace(2, &options, &[], 2))
+            .await;
+
+        let first = db
+            .workspace_for_id(WorkspaceId(1))
+            .expect("the first empty remote workspace must keep its own row");
+        let second = db
+            .workspace_for_id(WorkspaceId(2))
+            .expect("the second empty remote workspace must get its own row");
+        assert!(first.paths.is_empty());
+        assert!(second.paths.is_empty());
+        assert_eq!(first.window_id, Some(1));
+        assert_eq!(second.window_id, Some(2));
+    }
+
+    #[gpui::test]
+    async fn test_empty_local_workspaces_coexist() {
+        let db = WorkspaceDb::open_test_db("test_empty_local_workspaces_coexist").await;
+
+        db.save_workspace(test_local_workspace(1, &[], 1)).await;
+        db.save_workspace(test_local_workspace(2, &[], 2)).await;
+
+        let first = db
+            .workspace_for_id(WorkspaceId(1))
+            .expect("the first empty local workspace must keep its own row");
+        let second = db
+            .workspace_for_id(WorkspaceId(2))
+            .expect("the second empty local workspace must get its own row");
+        assert!(first.paths.is_empty());
+        assert!(second.paths.is_empty());
+    }
+
+    #[gpui::test]
+    async fn test_empty_paths_do_not_collide_with_another_empty_remote_workspace() {
+        let db = WorkspaceDb::open_test_db(
+            "test_empty_paths_do_not_collide_with_another_empty_remote_workspace",
+        )
+        .await;
+        let options = test_remote_connection_options(&db).await;
+
+        // A remote workspace with a root folder, plus a second, already empty remote
+        // workspace for the same connection.
+        db.save_workspace(test_remote_workspace(
+            1,
+            &options,
+            &["/home/user/project"],
+            1,
+        ))
+        .await;
+        db.save_workspace(test_remote_workspace(2, &options, &[], 2))
+            .await;
+
+        // The first workspace loses its last root folder (its root directory was deleted on
+        // the project host, so its worktree was closed) and is saved with no paths.
+        db.save_workspace(test_remote_workspace(1, &options, &[], 1))
+            .await;
+
+        let saved = db
+            .workspace_for_id(WorkspaceId(1))
+            .expect("saving an empty path list must still update the workspace row");
+        assert!(
+            saved.paths.is_empty(),
+            "the workspace row must reflect the empty path list instead of failing the save"
+        );
+        assert!(
+            db.workspace_for_id(WorkspaceId(2)).is_some(),
+            "the other empty workspace must keep its own row"
+        );
+    }
+
+    #[gpui::test]
+    async fn test_same_remote_paths_still_replace_the_older_workspace_row() {
+        let db = WorkspaceDb::open_test_db(
+            "test_same_remote_paths_still_replace_the_older_workspace_row",
+        )
+        .await;
+        let options = test_remote_connection_options(&db).await;
+
+        db.save_workspace(test_remote_workspace(
+            1,
+            &options,
+            &["/home/user/project"],
+            1,
+        ))
+        .await;
+        db.save_workspace(test_remote_workspace(
+            2,
+            &options,
+            &["/home/user/project"],
+            2,
+        ))
+        .await;
+
+        assert!(
+            db.workspace_for_id(WorkspaceId(1)).is_none(),
+            "only one workspace row may exist for a non-empty path list on a connection"
+        );
+        let second = db
+            .workspace_for_id(WorkspaceId(2))
+            .expect("the newer workspace must keep the row for the shared paths");
+        assert_eq!(second.paths, PathList::new(&["/home/user/project"]));
     }
 
     #[gpui::test]
