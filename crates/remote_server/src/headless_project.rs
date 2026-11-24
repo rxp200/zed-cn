@@ -541,6 +541,7 @@ impl HeadlessProject {
         session.add_request_handler(cx.weak_entity(), Self::handle_get_system_stats);
         session.add_request_handler(cx.weak_entity(), Self::handle_read_document_chunk);
         session.add_request_handler(cx.weak_entity(), Self::handle_read_download_chunk);
+        session.add_request_handler(cx.weak_entity(), Self::handle_list_worktree_files);
         session.add_request_handler(cx.weak_entity(), Self::handle_read_epub_entry);
         session.add_request_handler(cx.weak_entity(), Self::handle_create_persistent_terminal);
         session.add_request_handler(cx.weak_entity(), Self::handle_persistent_terminal_input);
@@ -1322,6 +1323,69 @@ impl HeadlessProject {
             file: Some(file),
             content,
             total_size: metadata.len,
+        })
+    }
+
+    /// Pages through a worktree directory straight from the filesystem, so the
+    /// client can download files that the worktree snapshot never loaded.
+    pub async fn handle_list_worktree_files(
+        this: Entity<Self>,
+        message: TypedEnvelope<proto::ListWorktreeFiles>,
+        cx: AsyncApp,
+    ) -> Result<proto::ListWorktreeFilesResponse> {
+        let request = message.payload;
+        let root: Arc<RelPath> = Arc::from(RelPath::from_unix_str(&request.path)?);
+        let cursor = if request.cursor.is_empty() {
+            None
+        } else {
+            let cursor = RelPath::from_unix_str(&request.cursor)?;
+            anyhow::ensure!(
+                cursor.starts_with(&root),
+                "cursor is outside the requested directory"
+            );
+            Some(cursor)
+        };
+
+        let (worktree, fs) = this.read_with(&cx, |this, cx| {
+            (
+                this.worktree_store
+                    .read(cx)
+                    .worktree_for_id(WorktreeId::from_proto(request.worktree_id), cx),
+                this.fs.clone(),
+            )
+        });
+        let worktree = worktree.context("worktree not found")?;
+        let (root_abs, settings) = worktree
+            .read_with(&cx, |worktree, _| {
+                worktree
+                    .as_local()
+                    .map(|worktree| (worktree.absolutize(&root), worktree.settings()))
+            })
+            .context("worktree is not local")?;
+
+        let max_files = match request.max_files {
+            0 => crate::file_listing::DEFAULT_PAGE_FILES,
+            max_files => max_files as usize,
+        };
+        let mut walker =
+            crate::file_listing::WorktreeFileWalker::new(fs, settings, &root_abs, root).await?;
+        let page = walker.next_page(cursor, max_files).await?;
+        let next_cursor = if page.complete {
+            String::new()
+        } else {
+            page.paths
+                .last()
+                .map(|path| path.as_unix_str().to_owned())
+                .unwrap_or_default()
+        };
+
+        Ok(proto::ListWorktreeFilesResponse {
+            paths: page
+                .paths
+                .iter()
+                .map(|path| path.as_unix_str().to_owned())
+                .collect(),
+            next_cursor,
         })
     }
 

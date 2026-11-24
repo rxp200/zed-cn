@@ -4871,6 +4871,178 @@ async fn test_chunked_download_rejects_invalid_requests(
 }
 
 #[gpui::test]
+async fn test_worktree_file_listing_includes_ignored_directories(
+    cx: &mut TestAppContext,
+    server_cx: &mut TestAppContext,
+) {
+    let remote_fs = FakeFs::new(server_cx.executor());
+    remote_fs
+        .insert_tree(
+            path!("/code"),
+            json!({
+                "project1": {
+                    ".git": { "objects": {} },
+                    ".gitignore": "ignored_dir\n*.log\n",
+                    "src": { "main.rs": "fn main() {}" },
+                    "ignored_dir": { "nested": { "data.bin": "ignored" } },
+                    "debug.log": "ignored file",
+                },
+            }),
+        )
+        .await;
+
+    let (project, _) = init_test(&remote_fs, cx, server_cx).await;
+    let (worktree, _) = project
+        .update(cx, |project, cx| {
+            project.find_or_create_worktree(path!("/code/project1"), true, cx)
+        })
+        .await
+        .unwrap();
+    cx.run_until_parked();
+
+    assert!(
+        project.read_with(cx, |project, cx| project
+            .supports_remote_worktree_file_listing(cx)),
+        "the mock server advertises the file listing capability"
+    );
+    assert!(
+        worktree.read_with(cx, |worktree, _| worktree
+            .entry_for_path(rel_path("ignored_dir/nested/data.bin"))
+            .is_none()),
+        "the worktree snapshot must not contain files from an ignored directory"
+    );
+
+    let worktree_id = worktree.read_with(cx, |worktree, _| worktree.id());
+    let mut paths = Vec::new();
+    let mut cursor = None;
+    loop {
+        let page = project
+            .update(cx, |project, cx| {
+                project.list_remote_worktree_files(
+                    worktree_id,
+                    rel_path("").into(),
+                    cursor.clone(),
+                    cx,
+                )
+            })
+            .await
+            .expect("list page");
+        paths.extend(page.paths.iter().map(|path| path.as_unix_str().to_owned()));
+        match page.next_cursor {
+            Some(next_cursor) => cursor = Some(next_cursor),
+            None => break,
+        }
+    }
+
+    assert_eq!(
+        paths,
+        vec![
+            ".gitignore".to_owned(),
+            "debug.log".to_owned(),
+            "ignored_dir/nested/data.bin".to_owned(),
+            "src/main.rs".to_owned(),
+        ],
+        "ignored directories are listed, ignored files are kept and .git is skipped"
+    );
+}
+
+#[gpui::test]
+async fn test_worktree_file_listing_pages_and_validates_requests(
+    cx: &mut TestAppContext,
+    server_cx: &mut TestAppContext,
+) {
+    let remote_fs = FakeFs::new(server_cx.executor());
+    remote_fs
+        .insert_tree(
+            path!("/code"),
+            json!({
+                "project1": {
+                    ".git": {},
+                    "a.txt": "a",
+                    "dir": { "b.txt": "b", "c.txt": "c" },
+                },
+            }),
+        )
+        .await;
+
+    let (project, _) = init_test(&remote_fs, cx, server_cx).await;
+    let (worktree, _) = project
+        .update(cx, |project, cx| {
+            project.find_or_create_worktree(path!("/code/project1"), true, cx)
+        })
+        .await
+        .unwrap();
+    cx.run_until_parked();
+
+    let client = project.read_with(cx, |project, cx| {
+        project
+            .remote_client()
+            .expect("remote client")
+            .read(cx)
+            .proto_client()
+    });
+    let worktree_id = worktree.read_with(cx, |worktree, _| worktree.id().to_proto());
+    let list = |path: &str, cursor: &str, max_files: u32| proto::ListWorktreeFiles {
+        worktree_id,
+        path: path.to_owned(),
+        cursor: cursor.to_owned(),
+        max_files,
+    };
+
+    let first = client.request(list("", "", 2)).await.expect("first page");
+    assert_eq!(
+        first.paths,
+        vec!["a.txt".to_owned(), "dir/b.txt".to_owned()]
+    );
+    assert_eq!(first.next_cursor, "dir/b.txt");
+
+    let second = client
+        .request(list("", &first.next_cursor, 2))
+        .await
+        .expect("second page");
+    assert_eq!(second.paths, vec!["dir/c.txt".to_owned()]);
+    assert_eq!(
+        second.next_cursor, "",
+        "the walker reports completion once the last file was returned"
+    );
+
+    let subdirectory = client
+        .request(list("dir", "", 0))
+        .await
+        .expect("subdirectory listing");
+    assert_eq!(
+        subdirectory.paths,
+        vec!["dir/b.txt".to_owned(), "dir/c.txt".to_owned()],
+        "paths stay relative to the worktree root"
+    );
+
+    assert!(
+        client.request(list("dir", "a.txt", 0)).await.is_err(),
+        "a cursor outside the requested directory is rejected"
+    );
+    assert!(
+        client.request(list("a.txt", "", 0)).await.is_err(),
+        "a file cannot be listed as a directory"
+    );
+    assert!(
+        client.request(list("../escape", "", 0)).await.is_err(),
+        "request paths cannot escape the worktree"
+    );
+    assert!(
+        client
+            .request(proto::ListWorktreeFiles {
+                worktree_id: u64::MAX,
+                path: String::new(),
+                cursor: String::new(),
+                max_files: 0,
+            })
+            .await
+            .is_err(),
+        "a missing worktree is rejected"
+    );
+}
+
+#[gpui::test]
 async fn test_download_falls_back_without_the_chunk_capability(
     cx: &mut TestAppContext,
     server_cx: &mut TestAppContext,

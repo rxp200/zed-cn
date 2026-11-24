@@ -15,6 +15,7 @@ use gpui::BackgroundExecutor;
 use rpc::{AnyProtoClient, network_pacing, network_pacing::TransferPacer, proto};
 use smol::io::AsyncWriteExt as _;
 use std::{
+    cmp::Ordering,
     path::{Path, PathBuf},
     sync::Arc,
     time::Instant,
@@ -28,9 +29,82 @@ use worktree::{FileTransferProgress, WorktreeId};
 /// the same bound so a client cannot ask it to stream an unbounded file.
 pub const MAX_DOWNLOAD_FILE_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 
+/// Number of paths requested per file listing page. The server also bounds the
+/// response on its own, so the client can never be handed an unbounded batch.
+pub const LIST_WORKTREE_FILES_PAGE_SIZE: usize = 1024;
+
 /// Largest chunk a single request may return. The client asks for much smaller
 /// chunks; this only bounds what one response can allocate.
 pub const MAX_DOWNLOAD_CHUNK_BYTES: usize = 8 * 1024 * 1024;
+
+/// One page of a server-side recursive worktree file listing.
+pub struct WorktreeFilePage {
+    /// Worktree-relative paths, strictly increasing in depth-first order.
+    pub paths: Vec<Arc<RelPath>>,
+    /// Resume point for the next request; `None` completes the listing.
+    pub next_cursor: Option<Arc<RelPath>>,
+}
+
+/// Lists the next page of regular files below `root` on the server.
+///
+/// Unlike the legacy `DownloadFileByPath` path this walks the filesystem on the
+/// remote host, so directories that the worktree scanner leaves unloaded are
+/// still enumerated.
+pub(crate) async fn list_files_page(
+    client: &AnyProtoClient,
+    worktree_id: WorktreeId,
+    root: &Arc<RelPath>,
+    cursor: Option<&Arc<RelPath>>,
+) -> Result<WorktreeFilePage> {
+    let response = client
+        .request(proto::ListWorktreeFiles {
+            worktree_id: worktree_id.to_proto(),
+            path: root.as_unix_str().to_owned(),
+            cursor: cursor
+                .map(|cursor| cursor.as_unix_str().to_owned())
+                .unwrap_or_default(),
+            max_files: LIST_WORKTREE_FILES_PAGE_SIZE as u32,
+        })
+        .await?;
+
+    let invalid_data = i18n::t!("0973a57b0db888f7");
+    anyhow::ensure!(
+        response.paths.len() <= LIST_WORKTREE_FILES_PAGE_SIZE,
+        invalid_data
+    );
+
+    let mut paths: Vec<Arc<RelPath>> = Vec::with_capacity(response.paths.len());
+    let mut previous = cursor.map(|cursor| cursor.as_ref());
+    for path in &response.paths {
+        let path = RelPath::from_unix_str(path).context(invalid_data)?;
+        anyhow::ensure!(path.starts_with(root), invalid_data);
+        if let Some(previous) = previous {
+            anyhow::ensure!(
+                path.components().cmp(previous.components()) == Ordering::Greater,
+                invalid_data
+            );
+        }
+        previous = Some(path);
+        paths.push(Arc::from(path));
+    }
+
+    let next_cursor = if response.next_cursor.is_empty() {
+        None
+    } else {
+        let next_cursor = RelPath::from_unix_str(&response.next_cursor).context(invalid_data)?;
+        // The cursor must be the last path of this page, otherwise paging can
+        // loop forever or silently skip files.
+        anyhow::ensure!(
+            paths
+                .last()
+                .is_some_and(|path| path.as_unix_str() == next_cursor.as_unix_str()),
+            invalid_data
+        );
+        Some(Arc::from(next_cursor))
+    };
+
+    Ok(WorktreeFilePage { paths, next_cursor })
+}
 
 /// Downloads `path` from the remote worktree into `destination_path`.
 ///

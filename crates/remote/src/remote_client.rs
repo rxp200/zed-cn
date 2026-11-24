@@ -191,6 +191,10 @@ pub const HOSTED_TERMINALS_CAPABILITY: &str = "hosted_terminals_v2";
 /// worktree, so the remote project picker can turn a typed new name into a
 /// usable project root.
 pub const CREATE_REMOTE_DIRECTORY_CAPABILITY: &str = "create_remote_directory_v1";
+/// The server can recursively list a worktree directory straight from the
+/// filesystem, including directories that the worktree scanner leaves
+/// unloaded, so a download is not limited to indexed entries.
+pub const LIST_WORKTREE_FILES_CAPABILITY: &str = "list_worktree_files_v1";
 
 const MAX_MISSED_HEARTBEATS: usize = 5;
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
@@ -1498,6 +1502,10 @@ impl RemoteClient {
         self.client.supports_create_remote_directory.load(SeqCst)
     }
 
+    pub fn supports_list_worktree_files(&self) -> bool {
+        self.client.supports_list_worktree_files.load(SeqCst)
+    }
+
     pub fn host_terminal(
         &self,
         server_instance_id: String,
@@ -2290,6 +2298,7 @@ pub(crate) struct ChannelClient {
     supports_persistent_terminal_streaming: AtomicBool,
     supports_hosted_terminals: AtomicBool,
     supports_create_remote_directory: AtomicBool,
+    supports_list_worktree_files: AtomicBool,
     session_invalidated: Arc<Signal<String>>,
     session_is_invalid: Arc<AtomicBool>,
     has_wsl_interop: bool,
@@ -2335,6 +2344,7 @@ impl ChannelClient {
             supports_persistent_terminal_streaming: AtomicBool::new(false),
             supports_hosted_terminals: AtomicBool::new(false),
             supports_create_remote_directory: AtomicBool::new(false),
+            supports_list_worktree_files: AtomicBool::new(false),
             session_invalidated: Arc::new(Signal::new(cx)),
             session_is_invalid: Arc::new(AtomicBool::new(false)),
             has_wsl_interop,
@@ -2363,6 +2373,7 @@ impl ChannelClient {
                 PERSISTENT_TERMINAL_STREAMING_CAPABILITY.to_string(),
                 HOSTED_TERMINALS_CAPABILITY.to_string(),
                 CREATE_REMOTE_DIRECTORY_CAPABILITY.to_string(),
+                LIST_WORKTREE_FILES_CAPABILITY.to_string(),
             ],
         }
         .into_envelope(handshake_id, None, None);
@@ -2466,6 +2477,8 @@ impl ChannelClient {
                 .store(supports(HOSTED_TERMINALS_CAPABILITY), SeqCst);
             this.supports_create_remote_directory
                 .store(supports(CREATE_REMOTE_DIRECTORY_CAPABILITY), SeqCst);
+            this.supports_list_worktree_files
+                .store(supports(LIST_WORKTREE_FILES_CAPABILITY), SeqCst);
             this.remote_started.set(());
             let mut envelope = proto::Ack {}.into_envelope(0, Some(incoming.id), None);
             envelope.id = this.next_message_id.fetch_add(1, SeqCst);
@@ -3926,6 +3939,7 @@ mod customized_tests {
         assert!(!client.supports_download_chunks.load(SeqCst));
         assert!(!client.supports_git_operation_cancellation.load(SeqCst));
         assert!(!client.supports_create_remote_directory.load(SeqCst));
+        assert!(!client.supports_list_worktree_files.load(SeqCst));
         for (capabilities, expected) in [
             (Vec::new(), false),
             (vec![DOCUMENT_CHUNKS_CAPABILITY.to_owned()], true),
@@ -4054,6 +4068,23 @@ mod customized_tests {
                 client.supports_create_remote_directory.load(SeqCst),
                 expected
             );
+        }
+        for (capabilities, expected) in [
+            (vec![LIST_WORKTREE_FILES_CAPABILITY.to_owned()], true),
+            (
+                vec![
+                    LIST_WORKTREE_FILES_CAPABILITY.to_owned(),
+                    DOWNLOAD_CHUNKS_CAPABILITY.to_owned(),
+                ],
+                true,
+            ),
+            (Vec::new(), false),
+        ] {
+            incoming_tx
+                .unbounded_send(proto::RemoteStarted { capabilities }.into_envelope(0, None, None))
+                .expect("deliver worktree file listing capabilities");
+            cx.run_until_parked();
+            assert_eq!(client.supports_list_worktree_files.load(SeqCst), expected);
         }
     }
 

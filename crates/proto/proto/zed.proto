@@ -568,7 +568,9 @@ message Envelope {
     DeleteHostedTerminal delete_hosted_terminal = 536;
     CreateRemoteDirectory create_remote_directory = 537;
     CreateRemoteDirectoryResponse create_remote_directory_response = 538;
-    UnhostTerminal unhost_terminal = 539; // current max
+    UnhostTerminal unhost_terminal = 539;
+    ListWorktreeFiles list_worktree_files = 540;
+    ListWorktreeFilesResponse list_worktree_files_response = 541; // current max
   }
 
   reserved 87 to 88;
