@@ -2565,6 +2565,38 @@ impl Project {
         })
     }
 
+    /// Whether a directory selected for download can be enumerated on the
+    /// remote server. This changes wire semantics, so it requires a server that
+    /// advertised the listing capability; official and older servers keep
+    /// enumerating the worktree snapshot instead.
+    pub fn supports_remote_worktree_file_listing(&self, cx: &App) -> bool {
+        self.remote_client.as_ref().is_some_and(|client| {
+            let client = client.read(cx);
+            client.supports_list_worktree_files()
+        })
+    }
+
+    /// Lists one page of the regular files below a remote worktree directory.
+    ///
+    /// The paths are worktree-relative and only regular files are returned, so
+    /// gitignored directories that the worktree scanner leaves unloaded are
+    /// still covered.
+    pub fn list_remote_worktree_files(
+        &mut self,
+        worktree_id: WorktreeId,
+        root: Arc<RelPath>,
+        cursor: Option<Arc<RelPath>>,
+        cx: &mut Context<Self>,
+    ) -> Task<Result<file_download::WorktreeFilePage>> {
+        let Some(remote_client) = &self.remote_client else {
+            return Task::ready(Err(anyhow!("not a remote project")));
+        };
+        let proto_client = remote_client.read(cx).proto_client();
+        cx.background_spawn(async move {
+            file_download::list_files_page(&proto_client, worktree_id, &root, cursor.as_ref()).await
+        })
+    }
+
     /// Whether a git network operation running on this project's remote server
     /// can be cancelled from the client. This changes wire semantics, so it
     /// requires a server that advertised the cancellation capability as well as

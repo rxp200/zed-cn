@@ -1,3 +1,4 @@
+mod file_listing;
 mod headless_project;
 mod hosted_terminal;
 mod hosted_terminals;

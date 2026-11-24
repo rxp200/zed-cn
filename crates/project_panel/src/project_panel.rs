@@ -4009,10 +4009,14 @@ impl ProjectPanel {
         }
 
         let project = self.project.read(cx);
+        let can_list_remotely = project.supports_remote_worktree_file_listing(cx);
 
         // Collect file entries with their worktree_id, path, and relative path for destination
-        // For directories, we collect all files under them recursively
+        // For directories, either remember them for server-side enumeration or collect every
+        // indexed file under them when the server cannot enumerate.
         let mut files_to_download: Vec<(WorktreeId, Arc<RelPath>, PathBuf)> = Vec::new();
+        let mut directories_to_list: Vec<(WorktreeId, Arc<RelPath>, String)> = Vec::new();
+        let mut lists_directories = false;
 
         for selected in entries.iter() {
             let Some(worktree) = project.worktree_for_id(selected.worktree_id, cx) else {
@@ -4036,12 +4040,18 @@ impl ProjectPanel {
                     PathBuf::from(filename),
                 ));
             } else if entry.is_dir() {
-                // Directory: collect all files recursively, preserving relative paths
+                lists_directories = true;
+                // Directory: preserve paths relative to the directory itself
                 let dir_name = entry
                     .path
                     .file_name()
                     .map(str::to_string)
                     .unwrap_or_default();
+                if can_list_remotely {
+                    directories_to_list.push((selected.worktree_id, entry.path.clone(), dir_name));
+                    continue;
+                }
+
                 let base_path = entry.path.clone();
 
                 // Use traverse_from_path to iterate all entries under this directory
@@ -4078,8 +4088,12 @@ impl ProjectPanel {
             }
         }
 
-        if files_to_download.is_empty() {
+        if files_to_download.is_empty() && directories_to_list.is_empty() {
             return;
+        }
+
+        if lists_directories && !can_list_remotely {
+            self.notify_download_warning(i18n::t!("826d559b677b5f71").to_owned(), cx);
         }
 
         let destination_dir = cx.prompt_for_paths(PathPromptOptions {
@@ -4090,35 +4104,96 @@ impl ProjectPanel {
         });
 
         cx.spawn_in(window, async move |this, cx| {
-            if let Ok(Ok(Some(mut paths))) = destination_dir.await {
-                if let Some(dest_dir) = paths.pop() {
-                    for (worktree_id, entry_path, relative_path) in files_to_download {
-                        let destination_path = dest_dir.join(&relative_path);
+            let Ok(Ok(Some(mut paths))) = destination_dir.await else {
+                return;
+            };
+            let Some(dest_dir) = paths.pop() else {
+                return;
+            };
 
-                        let download_task = this.update(cx, |this, cx| {
-                            let project = this.project.clone();
-                            project.update(cx, |project, cx| {
-                                project.download_file(worktree_id, entry_path, destination_path, cx)
+            // Explicitly selected files always download; listing pages only add
+            // destinations that the batch has not written yet, so selecting both
+            // a directory and a file inside it does not download twice.
+            let mut downloaded: HashSet<PathBuf> = HashSet::default();
+            for (worktree_id, entry_path, relative_path) in files_to_download {
+                let destination = dest_dir.join(relative_path);
+                downloaded.insert(destination.clone());
+                if !download_remote_file(&this, cx, worktree_id, entry_path, destination).await {
+                    return;
+                }
+            }
+
+            for (worktree_id, root, dir_name) in directories_to_list {
+                let mut cursor = None;
+                loop {
+                    let listing = this.update(cx, |this, cx| {
+                        let project = this.project.clone();
+                        project.update(cx, |project, cx| {
+                            project.list_remote_worktree_files(
+                                worktree_id,
+                                root.clone(),
+                                cursor.clone(),
+                                cx,
+                            )
+                        })
+                    });
+                    let Ok(listing) = listing else {
+                        return;
+                    };
+                    let page = match listing.await {
+                        Ok(page) => page,
+                        Err(error) => {
+                            let message =
+                                i18n::t!("1ef0173389d50d3c", error = format!("{error:#}"));
+                            this.update(cx, |this, cx| {
+                                this.notify_download_warning(message, cx);
                             })
-                        });
-                        if let Ok(task) = download_task {
-                            let result = task.await;
-                            // Cancelling one file ends the whole batch instead of
-                            // silently starting the next one.
-                            if result.as_ref().is_err_and(|error| {
-                                error
-                                    .downcast_ref::<project::file_transfer::TransferCancelled>()
-                                    .is_some()
-                            }) {
-                                break;
-                            }
-                            result.log_err();
+                            .ok();
+                            return;
                         }
+                    };
+
+                    for path in page.paths {
+                        let relative_path = path
+                            .strip_prefix(&root)
+                            .map(|path| PathBuf::from(dir_name.clone()).join(path.as_unix_str()))
+                            .unwrap_or_else(|_| {
+                                PathBuf::from(path.file_name().unwrap_or_default())
+                            });
+                        let destination = dest_dir.join(relative_path);
+                        if !downloaded.insert(destination.clone()) {
+                            continue;
+                        }
+                        if !download_remote_file(&this, cx, worktree_id, path, destination).await {
+                            return;
+                        }
+                    }
+
+                    match page.next_cursor {
+                        Some(next_cursor) => cursor = Some(next_cursor),
+                        None => break,
                     }
                 }
             }
         })
         .detach();
+    }
+
+    fn notify_download_warning(&mut self, message: String, cx: &mut Context<Self>) {
+        let toast = StatusToast::new(message, cx, |this, _| {
+            this.icon(
+                Icon::new(IconName::Warning)
+                    .size(IconSize::Small)
+                    .color(Color::Warning),
+            )
+            .dismiss_button(true)
+        });
+
+        self.workspace
+            .update(cx, |workspace, cx| {
+                workspace.toggle_status_toast(toast, cx);
+            })
+            .ok();
     }
 
     fn duplicate(&mut self, _: &Duplicate, window: &mut Window, cx: &mut Context<Self>) {
@@ -8877,6 +8952,39 @@ pub fn par_sort_worktree_entries(
     order: settings::ProjectPanelSortOrder,
 ) {
     entries.par_sort_by(|lhs, rhs| cmp_worktree_entries(lhs, rhs, &mode, &order));
+}
+
+/// Downloads one remote file and reports whether the batch may continue.
+///
+/// A cancelled transfer stops the batch instead of silently starting the next
+/// file.
+async fn download_remote_file(
+    panel: &WeakEntity<ProjectPanel>,
+    cx: &mut AsyncWindowContext,
+    worktree_id: WorktreeId,
+    entry_path: Arc<RelPath>,
+    destination_path: PathBuf,
+) -> bool {
+    let download_task = panel.update(cx, |panel, cx| {
+        let project = panel.project.clone();
+        project.update(cx, |project, cx| {
+            project.download_file(worktree_id, entry_path, destination_path, cx)
+        })
+    });
+    let Ok(task) = download_task else {
+        return false;
+    };
+
+    let result = task.await;
+    if result.as_ref().is_err_and(|error| {
+        error
+            .downcast_ref::<project::file_transfer::TransferCancelled>()
+            .is_some()
+    }) {
+        return false;
+    }
+    result.log_err();
+    true
 }
 
 fn git_status_indicator(git_status: GitSummary) -> Option<(&'static str, Color)> {

@@ -33,6 +33,28 @@ message DownloadFileChunkResponse {
   uint64 total_size = 3;
 }
 
+// Lists the regular files below a worktree directory on the server, one bounded
+// page at a time. The listing walks the filesystem instead of the worktree
+// snapshot so directories that Zed does not index (gitignored or otherwise
+// ignored) are still included in a download. Only sent to servers that
+// advertised the `list_worktree_files_v1` capability.
+message ListWorktreeFiles {
+  uint64 worktree_id = 1;
+  // Worktree-relative directory to list; empty means the worktree root.
+  string path = 2;
+  // Last path returned by the previous page; empty starts a listing.
+  string cursor = 3;
+  // Requested number of paths; the server clamps it to its own bound.
+  uint32 max_files = 4;
+}
+
+message ListWorktreeFilesResponse {
+  // Worktree-relative paths in depth-first, name-sorted order.
+  repeated string paths = 1;
+  // Cursor for the next page; empty when the listing is complete.
+  string next_cursor = 2;
+}
+
 message CreateFileForPeer {
   uint64 project_id = 1;
   PeerId peer_id = 2;
