@@ -213,13 +213,8 @@ fn collect_pending_units(
             let mut row = first;
             while row <= last {
                 let candidates = units_at(snapshot, row);
-                let next = candidates
-                    .iter()
-                    .map(|unit| unit.last_row as u32 + 1)
-                    .max()
-                    .unwrap_or(row + 1);
+                row = crate::code_explanation_units::next_scan_row(row, &candidates);
                 units.extend(candidates);
-                row = next.max(row + 1);
             }
         }
         let units = crate::code_explanation_units::fit_units_to_budget(
