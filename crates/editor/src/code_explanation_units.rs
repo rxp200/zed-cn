@@ -117,6 +117,13 @@ fn function(node: tree_sitter::Node<'_>) -> bool {
     )
 }
 
+/// `units_at` 可能只返回结束于 `row` 之前的单元，因此扫描行必须至少前进一行，否则外层循环不会终止。
+pub fn next_scan_row(row: u32, units: &[Unit]) -> u32 {
+    let last_row = units.iter().map(|unit| unit.last_row).max();
+    let next = last_row.map_or(0, |last_row| last_row.saturating_add(1));
+    next.max(row as usize + 1).min(u32::MAX as usize) as u32
+}
+
 pub fn whole_file_unit(snapshot: &language::BufferSnapshot, maximum_lines: u64) -> Option<Unit> {
     let line_count = snapshot.max_point().row as u64 + 1;
     if line_count > maximum_lines
@@ -136,19 +143,14 @@ pub fn whole_file_unit(snapshot: &language::BufferSnapshot, maximum_lines: u64) 
     let mut row = 0;
     while row <= snapshot.max_point().row {
         let units = units_at(snapshot, row);
-        let next_row = units
-            .iter()
-            .map(|unit| unit.last_row + 1)
-            .max()
-            .unwrap_or(row as usize + 1);
-        for unit in units {
+        for unit in &units {
             commented_rows.extend(
                 unit.commented_rows
-                    .into_iter()
+                    .iter()
                     .map(|comment| unit.first_row + comment),
             );
         }
-        row = next_row.min(u32::MAX as usize) as u32;
+        row = next_scan_row(row, &units);
     }
     Some(Unit {
         range: range.clone(),
@@ -170,17 +172,12 @@ pub fn file_units(snapshot: &language::BufferSnapshot, maximum_lines: u64) -> Ve
     let mut row = 0;
     while row <= snapshot.max_point().row {
         let candidates = units_at(snapshot, row);
-        let next = candidates
-            .iter()
-            .map(|unit| unit.last_row + 1)
-            .max()
-            .unwrap_or(row as usize + 1);
+        row = next_scan_row(row, &candidates);
         for unit in candidates {
             if !unit.range.is_empty() && seen_ranges.insert((unit.range.start, unit.range.end)) {
                 units.push(unit);
             }
         }
-        row = next.min(u32::MAX as usize) as u32;
     }
     units
 }
@@ -621,6 +618,56 @@ mod tests {
                 .unwrap()
                 .len(),
             200
+        );
+    }
+
+    #[test]
+    fn scan_rows_advance_when_candidates_end_before_the_row() {
+        let unit = |first_row: usize, last_row: usize| Unit {
+            range: 0..0,
+            owner: 0..0,
+            owner_lines: 1,
+            first_row,
+            last_row,
+            context: String::new(),
+            commented_rows: Vec::new(),
+        };
+
+        assert_eq!(next_scan_row(3, &[]), 4);
+        assert_eq!(next_scan_row(3, &[unit(0, 9)]), 10);
+        assert_eq!(next_scan_row(10, &[unit(2, 7)]), 11);
+        assert_eq!(next_scan_row(10, &[unit(2, 7), unit(20, 30)]), 31);
+        assert_eq!(next_scan_row(u32::MAX, &[]), u32::MAX);
+    }
+
+    #[gpui::test]
+    fn file_scan_reaches_the_last_row_of_a_visit_limited_node(cx: &mut gpui::App) {
+        let body = (0..750)
+            .map(|line| {
+                let statements = (0..8)
+                    .map(|index| format!("let value_{} = {}; ", line * 8 + index, index))
+                    .collect::<String>();
+                format!("    {statements}\n")
+            })
+            .collect::<String>();
+        let code = format!("fn huge() {{\n{body}}}\n");
+        let snapshot = language::Buffer::build_snapshot_sync(
+            code.into(),
+            Some(language::rust_lang()),
+            None,
+            cx,
+        );
+        let maximum_row = snapshot.max_point().row;
+        let mut row = 0;
+        let mut steps = 0;
+        while row <= maximum_row && steps <= maximum_row as usize + 1 {
+            let candidates = units_at(&snapshot, row);
+            row = next_scan_row(row, &candidates);
+            steps += 1;
+        }
+        assert!(
+            row > maximum_row,
+            "第 {steps} 步停在 {row} 行，未越过文件末行 {maximum_row}"
         );
     }
 }

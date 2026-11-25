@@ -1,5 +1,5 @@
 use crate::code_explanation_units::{
-    first_non_whitespace_column, parse_annotations, units_at, whole_file_unit,
+    first_non_whitespace_column, next_scan_row, parse_annotations, units_at, whole_file_unit,
 };
 use crate::{Autoscroll, BlockPlacement, BlockProperties, BlockStyle, Editor};
 mod deep_chat;
@@ -922,11 +922,7 @@ pub(crate) fn schedule(editor: &mut Editor, window: &gpui::Window, cx: &mut Cont
         let mut row = preload_start;
         while row <= preload_end {
             let candidates = units_at(&snapshot, row);
-            let next_row = candidates
-                .iter()
-                .map(|unit| unit.last_row.saturating_add(1))
-                .max()
-                .unwrap_or(row as usize + 1);
+            let next_row = next_scan_row(row, &candidates);
             for unit in candidates {
                 if unit.range.is_empty()
                     || editor.explanations.completed.contains(&unit.range)
@@ -948,7 +944,7 @@ pub(crate) fn schedule(editor: &mut Editor, window: &gpui::Window, cx: &mut Cont
                 }
                 ranges.push(unit);
             }
-            row = next_row.min(u32::MAX as usize) as u32;
+            row = next_row;
         }
     }
     let mut ranges = crate::code_explanation_units::fit_units_to_budget(
