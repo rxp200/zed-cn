@@ -295,7 +295,10 @@ impl ProjectItem for ImageItem {
         cx: &mut App,
     ) -> Option<Task<anyhow::Result<Entity<Self>>>> {
         if is_image_file(project, path, cx) {
-            log::info!("[open-debug] ImageItem::try_open {:?}", path.path.as_unix_str());
+            log::debug!(
+                "[open-debug] ImageItem::try_open {:?}",
+                path.path.as_unix_str()
+            );
             Some(cx.spawn({
                 let path = path.clone();
                 let project = project.clone();
@@ -445,13 +448,16 @@ impl ImageStore {
     ) -> Task<Result<Entity<ImageItem>>> {
         let existing_image = self.get_by_path(&project_path, cx);
         if let Some(existing_image) = existing_image {
-            log::info!(
+            log::debug!(
                 "[open-debug] reusing already-open image {:?}",
                 project_path.path.as_unix_str()
             );
             return Task::ready(Ok(existing_image));
         }
-        log::info!("[open-debug] ImageStore::open_image {:?}", project_path.path.as_unix_str());
+        log::debug!(
+            "[open-debug] ImageStore::open_image {:?}",
+            project_path.path.as_unix_str()
+        );
 
         let Some(worktree) = self
             .worktree_store
@@ -627,7 +633,7 @@ impl RemoteImageStore {
                 loading.chunks.push(chunk.data);
 
                 if loading.received_size == loading.state.content_size {
-                    log::info!(
+                    log::debug!(
                         "[open-debug] remote image {} fully received ({} bytes)",
                         image_id,
                         loading.received_size
@@ -697,7 +703,7 @@ impl ImageStoreImpl for Entity<LocalImageStore> {
         });
         cx.spawn(async move |image_store, cx| {
             let LoadedBinaryFile { file, content } = load_file.await?;
-            log::info!(
+            log::debug!(
                 "[open-debug] local image loaded {:?} ({} bytes)",
                 file.path.as_unix_str(),
                 content.len()
@@ -776,7 +782,10 @@ impl ImageStoreImpl for Entity<RemoteImageStore> {
         let remote_store = self.clone();
 
         cx.spawn(async move |_image_store, cx| {
-            log::info!("[open-debug] requesting remote image {:?}", path.as_unix_str());
+            log::debug!(
+                "[open-debug] requesting remote image {:?}",
+                path.as_unix_str()
+            );
             let response = client
                 .request(rpc::proto::OpenImageByPath {
                     project_id,
@@ -975,7 +984,7 @@ impl LocalImageStore {
 
 fn create_gpui_image(content: Vec<u8>) -> anyhow::Result<Arc<gpui::Image>> {
     let format = image::guess_format(&content)?;
-    log::info!(
+    log::debug!(
         "[open-debug] create_gpui_image format={format:?} bytes={}",
         content.len()
     );

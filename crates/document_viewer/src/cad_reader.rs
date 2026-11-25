@@ -132,6 +132,10 @@ pub struct CadReader {
     /// Which layers the reader draws. The parsed scene stays immutable so the
     /// render thread can read it without a lock.
     visibility: Vec<bool>,
+    /// Number of primitives the current visibility leaves drawable. Counting it
+    /// walks the whole scene, so it is cached and refreshed only when the layer
+    /// visibility or the scene changes, not on every frame.
+    visible_primitives: usize,
     file_size: u64,
     camera: CadCamera,
     viewport: [u32; 2],
@@ -180,11 +184,13 @@ impl CadReader {
         };
 
         let visibility = scene.initial_visibility();
+        let visible_primitives = scene.visible_primitive_count(&visibility);
         Self {
             item,
             focus: cx.focus_handle(),
             scene,
             visibility,
+            visible_primitives,
             file_size,
             camera,
             viewport: [0, 0],
@@ -220,6 +226,7 @@ impl CadReader {
             window.drop_image(previous).log_err();
         }
         self.visibility = scene.initial_visibility();
+        self.visible_primitives = scene.visible_primitive_count(&self.visibility);
         self.scene = scene;
         self.file_size = file_size;
         self.rendered_camera = None;
@@ -323,6 +330,7 @@ impl CadReader {
     fn toggle_layer(&mut self, index: usize, cx: &mut Context<Self>) {
         if let Some(visible) = self.visibility.get_mut(index) {
             *visible = !*visible;
+            self.visible_primitives = self.scene.visible_primitive_count(&self.visibility);
             self.dirty = true;
             cx.notify();
         }
@@ -637,10 +645,7 @@ impl CadReader {
                 height = format_number(bounds.height())
             ));
         }
-        details.push(i18n::t_args!(
-            "80fee18c4c797dd3",
-            self.scene.visible_primitive_count(&self.visibility)
-        ));
+        details.push(i18n::t_args!("80fee18c4c797dd3", self.visible_primitives));
         if let Some(unit) = self.scene.units.and_then(unit_symbol) {
             details.push(unit.to_owned());
         }
@@ -717,7 +722,7 @@ impl Render for CadReader {
             self.dirty = true;
         }
         self.request_render(window, cx);
-        let empty = self.scene.visible_primitive_count(&self.visibility) == 0;
+        let empty = self.visible_primitives == 0;
         v_flex()
             .size_full()
             .track_focus(&self.focus)

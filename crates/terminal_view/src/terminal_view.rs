@@ -306,6 +306,10 @@ pub struct TerminalView {
     /// Tracks the current busy period or task run for long-task notifications.
     long_task_tracker: LongTaskTracker,
     _activity_monitor: Task<()>,
+    /// Coalesces remote port detection: output arrives in many small frames, and
+    /// scanning the last lines plus the project roots for every frame costs far
+    /// more than the scan itself reveals.
+    port_detection_task: Option<Task<()>>,
 }
 
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
@@ -320,6 +324,9 @@ enum TerminalActivity {
 /// How long a terminal may stay without program output before the tab indicator
 /// reports the idle (yellow) state.
 const TERMINAL_ACTIVITY_IDLE_DELAY: Duration = Duration::from_secs(3);
+
+/// Trailing debounce for scanning remote terminal output for forwarded ports.
+const PORT_DETECTION_DEBOUNCE: Duration = Duration::from_millis(250);
 
 /// Formats how long a finished task ran, reusing the wording the system monitor
 /// uses for how long a machine has been running.
@@ -929,6 +936,7 @@ impl TerminalView {
             terminal_activity: TerminalActivity::Idle,
             long_task_tracker,
             _activity_monitor: activity_monitor,
+            port_detection_task: None,
         }
     }
 
@@ -2160,17 +2168,44 @@ fn subscribe_for_terminal_events(
                     cx.emit(ItemEvent::UpdateTab);
                 }
                 Event::Wakeup => {
-                    if terminal.read(cx).is_remote_terminal() {
-                        let output = terminal.read(cx).last_n_non_empty_lines(12).join("\n");
-                        if let Some(project) = terminal_view.project.upgrade()
-                            && let Some(workspace) = terminal_view.workspace.upgrade()
-                            && let Some(terminal_panel) =
-                                workspace.read(cx).panel::<TerminalPanel>(cx)
-                        {
-                            terminal_panel.update(cx, |terminal_panel, cx| {
-                                terminal_panel.detect_ports(&output, project, cx);
-                            });
-                        }
+                    if terminal.read(cx).is_remote_terminal()
+                        && terminal_view.port_detection_task.is_none()
+                    {
+                        // Output arrives per streamed frame. Coalesce the scan of
+                        // the last lines and the project roots into one trailing
+                        // check instead of running it on every frame.
+                        let terminal = terminal.downgrade();
+                        terminal_view.port_detection_task =
+                            Some(cx.spawn_in(window, async move |terminal_view, cx| {
+                                cx.background_executor()
+                                    .timer(PORT_DETECTION_DEBOUNCE)
+                                    .await;
+                                terminal_view
+                                    .update_in(cx, |terminal_view, _, cx| {
+                                        terminal_view.port_detection_task = None;
+                                        let Some(terminal) = terminal.upgrade() else {
+                                            return;
+                                        };
+                                        let output =
+                                            terminal.read(cx).last_n_non_empty_lines(12).join("\n");
+                                        let Some(project) = terminal_view.project.upgrade() else {
+                                            return;
+                                        };
+                                        let Some(workspace) = terminal_view.workspace.upgrade()
+                                        else {
+                                            return;
+                                        };
+                                        let Some(terminal_panel) =
+                                            workspace.read(cx).panel::<TerminalPanel>(cx)
+                                        else {
+                                            return;
+                                        };
+                                        terminal_panel.update(cx, |terminal_panel, cx| {
+                                            terminal_panel.detect_ports(&output, project, cx);
+                                        });
+                                    })
+                                    .log_err();
+                            }));
                     }
                     cx.notify();
                     terminal_view.refresh_terminal_activity(window, cx);

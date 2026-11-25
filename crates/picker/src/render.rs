@@ -72,6 +72,7 @@ impl<D: PickerDelegate> Render for Picker<D> {
         let content = div()
             .when(self.draws_own_container(), |this| this.elevation_3(cx))
             .when(has_preview, |this| this.overflow_hidden())
+            .when(self.fill_results_height, |this| this.size_full())
             .child(content);
 
         let layout = self
@@ -80,6 +81,11 @@ impl<D: PickerDelegate> Render for Picker<D> {
 
         div()
             .relative()
+            // The menu fills this root, so the root has to fill the container
+            // the picker was embedded in: a percentage height on the menu
+            // resolves against an auto-sized box, which leaves the list without
+            // the height it needs to show its rows.
+            .when(self.fill_results_height, |this| this.size_full())
             .child(content)
             .when(self.is_resizable(), |this| {
                 this.left(self.shape.horizontal_offset(window))
@@ -175,6 +181,7 @@ impl<D: PickerDelegate> Picker<D> {
                     self.preview_layout_rendered(window),
                     &self.size_bounds,
                     self.fill_height(),
+                    self.fill_results_height,
                     this,
                     window,
                 )

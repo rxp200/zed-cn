@@ -13,8 +13,8 @@ use gpui::SharedString;
 
 use crate::cad_scene::{
     ACI_FOREGROUND, COLOR_INHERIT, CadColor, CadLayer, CadScene, MAX_BLOCK_POINTS,
-    MAX_INSERT_DEPTH, encode_aci, encode_truecolor, push_arc_points, push_bulge_points,
-    push_ellipse_points,
+    MAX_INSERT_DEPTH, encode_aci, encode_truecolor, normalize_ccw_sweep, push_arc_points,
+    push_bulge_points, push_ellipse_points,
 };
 
 /// Why a DXF file cannot be previewed at all.
@@ -839,11 +839,10 @@ impl<'a> Parser<'a> {
                 }
                 let start = entity.number(50).unwrap_or(0.0).to_radians();
                 let end = entity.number(51).unwrap_or(360.0).to_radians();
-                let mut sweep = end - start;
-                // DXF arcs always run counter-clockwise from the start angle.
-                while sweep <= 1e-12 {
-                    sweep += std::f64::consts::TAU;
-                }
+                // DXF arcs always run counter-clockwise from the start angle, so a
+                // non-positive sweep is a full turn. Normalizing with `rem_euclid`
+                // keeps out-of-range angles from spinning a `+= TAU` loop forever.
+                let sweep = normalize_ccw_sweep(end - start)?;
                 let mut points = Vec::with_capacity(80);
                 points.push([
                     center[0] + radius * start.cos(),
@@ -1203,6 +1202,12 @@ impl Expander<'_> {
             }
         };
         for entity in &block.entities {
+            // Nested INSERTs can reference this block again, so expansion must
+            // stop as soon as the scene budgets are exhausted instead of walking
+            // the remaining exponentially large expansion.
+            if self.scene.truncated {
+                return false;
+            }
             match entity {
                 BlockEntity::Path {
                     points,
@@ -1525,6 +1530,19 @@ pub(crate) fn minimal_dxf(entities: &str) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn arcs_with_out_of_range_angles_stay_bounded() {
+        // The angle pair once made the `+= TAU` normalization loop non-advancing,
+        // which hung the parser on a background thread forever.
+        let bytes =
+            minimal_dxf("0\nARC\n8\n0\n10\n0.0\n20\n0.0\n40\n5.0\n50\n1.0e300\n51\n-1.0e300\n");
+        let scene = parse(&bytes).expect("scene");
+        assert_eq!(scene.paths.len(), 1);
+        let path = scene.paths[0];
+        assert!(path.len >= 2, "arc must keep at least both endpoints");
+        assert!(path.len <= 600, "arc tessellation must stay bounded");
+    }
 
     #[test]
     fn supported_entities_keep_layer_and_geometry() {

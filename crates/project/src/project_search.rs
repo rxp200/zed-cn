@@ -191,23 +191,25 @@ pub fn collect_name_matches(
             let Some(name) = entry.path.file_name() else {
                 continue;
             };
-            let path = ProjectPath {
-                worktree_id: snapshot.id(),
-                path: entry.path.clone(),
-            };
-            let parent = parent_string(&path);
+            // Directories match by their own name only, so the path and parent
+            // strings for the (many) non-matching directories are never built.
+            let is_directory = entry.is_dir();
             let name_ranges = query.search_str(name);
-            if entry.is_dir() && name_ranges.is_empty() {
+            if is_directory && name_ranges.is_empty() {
                 continue;
             }
+            let parent = parent_string_for(&entry.path);
             let parent_ranges = query.search_str(&parent);
             if entry.is_file() && name_ranges.is_empty() && parent_ranges.is_empty() {
                 continue;
             }
 
             matches.push(NameMatch {
-                path,
-                is_directory: entry.is_dir(),
+                path: ProjectPath {
+                    worktree_id: snapshot.id(),
+                    path: entry.path.clone(),
+                },
+                is_directory,
                 name: name.to_owned(),
                 parent,
                 name_ranges,
@@ -223,7 +225,11 @@ pub fn collect_name_matches(
 }
 
 fn parent_string(path: &ProjectPath) -> String {
-    match path.path.parent() {
+    parent_string_for(&path.path)
+}
+
+fn parent_string_for(path: &RelPath) -> String {
+    match path.parent() {
         Some(parent) if !parent.is_empty() => {
             let mut parent = parent.to_string();
             parent.push('/');

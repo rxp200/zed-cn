@@ -18,7 +18,7 @@ use std::{
 use anyhow::{Context as _, Result};
 use gpui::{
     App, Context, Entity, EventEmitter, FocusHandle, Focusable, ImageSource, Pixels, Point,
-    ScrollHandle, SharedString, Task, Window, actions, div, px,
+    ScrollHandle, SharedString, Task, Window, actions, div, point, px, rems,
 };
 use markdown::{Markdown, MarkdownElement, MarkdownFont, MarkdownOptions, MarkdownStyle};
 use quick_xml::events::{BytesStart, Event};
@@ -295,6 +295,15 @@ impl Render for WordReader {
             let reader = cx.entity().downgrade();
             let mut style = MarkdownStyle::themed(MarkdownFont::Preview, window, cx);
             style.base_text_style.font_size = px(self.font_size).into();
+            // Word documents are read, not scanned: looser leading, more space
+            // between blocks, and tables that fill the text column.
+            style.paragraph_spacing = px(self.font_size * 0.9);
+            style.paragraph_line_height = rems(1.8).into();
+            style.list_spacing = px(self.font_size);
+            style.table_cell_padding = point(px(12.), px(8.));
+            style.table_stretch = true;
+            style.heading.margin.top = Some(px(28.).into());
+            style.heading.margin.bottom = Some(px(12.).into());
             let markdown_element = MarkdownElement::new(markdown, style)
                 .image_resolver(move |url, _cx| {
                     images.get(url.split('#').next().unwrap_or(url)).cloned()
@@ -316,21 +325,33 @@ impl Render for WordReader {
                 .size_full()
                 .overflow_y_scroll()
                 .track_scroll(&self.scroll_handle)
+                .bg(colors.panel_background)
                 .child(
-                    div()
-                        .w_full()
-                        .max_w(px(880.))
-                        .mx_auto()
-                        .p_4()
-                        .flex()
-                        .flex_col()
-                        .gap_2()
-                        .when(self.truncated, |element| {
-                            element.child(
-                                Label::new(i18n::t!("9995c30406b70f02")).color(Color::Warning),
-                            )
-                        })
-                        .child(markdown_element),
+                    // A sheet of paper on a desk: the page keeps a reading
+                    // measure and a visible edge, so a long document does not
+                    // bleed into the window chrome.
+                    div().w_full().max_w(px(920.)).mx_auto().p_6().child(
+                        div()
+                            .id("word-page")
+                            .debug_selector(|| "word-page".to_string())
+                            .w_full()
+                            .rounded_lg()
+                            .border_1()
+                            .border_color(colors.border)
+                            .bg(colors.elevated_surface_background)
+                            .shadow_md()
+                            .px(px(64.))
+                            .py(px(56.))
+                            .flex()
+                            .flex_col()
+                            .gap_2()
+                            .when(self.truncated, |element| {
+                                element.child(
+                                    Label::new(i18n::t!("9995c30406b70f02")).color(Color::Warning),
+                                )
+                            })
+                            .child(markdown_element),
+                    ),
                 )
                 .into_any_element()
         } else {

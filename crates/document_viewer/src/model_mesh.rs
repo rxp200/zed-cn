@@ -66,7 +66,7 @@ pub struct ModelMesh {
 
 impl ModelMesh {
     pub fn parse(extension: &str, bytes: &[u8]) -> Result<Self> {
-        log::info!(
+        log::debug!(
             "[open-debug] ModelMesh::parse extension={extension} bytes={}",
             bytes.len()
         );
@@ -145,7 +145,7 @@ impl ModelMesh {
             "model measurements exceed supported range"
         );
         mesh.finish_parts();
-        log::info!(
+        log::debug!(
             "[open-debug] ModelMesh::parse done: {} triangles, {} degenerate",
             mesh.triangles.len(),
             mesh.degenerate_faces

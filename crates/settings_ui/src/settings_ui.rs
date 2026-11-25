@@ -1493,6 +1493,18 @@ impl SettingsPageItem {
 /// Renders title + description on the left, control on the right, with
 /// optional reset button and copy-link icon.
 fn search_highlight_ranges(text: &str, query: &str) -> Vec<Range<usize>> {
+    // Called for every visible title and description on every frame; without an
+    // active query there is nothing to highlight, so skip the per-byte
+    // normalization vectors entirely.
+    let words = query
+        .split_whitespace()
+        .map(str::to_lowercase)
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>();
+    if words.is_empty() {
+        return Vec::new();
+    }
+
     let mut normalized_text = String::new();
     let mut source_ranges = Vec::new();
 
@@ -1505,10 +1517,8 @@ fn search_highlight_ranges(text: &str, query: &str) -> Vec<Range<usize>> {
         }
     }
 
-    let mut ranges = query
-        .split_whitespace()
-        .map(str::to_lowercase)
-        .filter(|word| !word.is_empty())
+    let mut ranges = words
+        .into_iter()
         .flat_map(|word| {
             normalized_text
                 .match_indices(&word)

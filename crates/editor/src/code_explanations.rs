@@ -129,6 +129,15 @@ struct ProjectScanCandidate {
     size: u64,
 }
 
+/// 收集候选文件时的 Git 范围。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CandidateGitScope {
+    /// 项目扫描：只收集 Git 已跟踪且未被忽略的文件。
+    TrackedOnly,
+    /// Git 差异视图预取：差异视图同时展示未跟踪文件，因此这些文件也算已修改文件。
+    DiffViewChanges,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ProjectScanMode {
     Incremental,
@@ -496,7 +505,8 @@ fn changed_file_prefetch_candidates(
     if resolve_model(settings, cx).is_err() {
         return Vec::new();
     }
-    let mut candidates = collect_project_scan_candidates(project, None, true, cx);
+    let mut candidates =
+        collect_project_scan_candidates(project, None, CandidateGitScope::DiffViewChanges, cx);
     candidates.truncate(CHANGED_FILE_PREFETCH_LIMIT);
     candidates
 }
@@ -576,11 +586,49 @@ pub fn resolve_model(settings: &CodeExplanationSettings, cx: &App) -> Result<Con
     Ok(ConfiguredModel { provider, model })
 }
 
+#[derive(Default)]
+struct ProviderConfigurationCache {
+    models: Option<settings::AllLanguageModelSettingsContent>,
+    provider: Option<String>,
+    configuration: String,
+}
+
+static PROVIDER_CONFIGURATION_CACHE: std::sync::LazyLock<
+    std::sync::Mutex<Option<ProviderConfigurationCache>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(None));
+
+/// Digest of the selected provider's model configuration.
+///
+/// [`schedule`] runs once per render of a focused editor, so this must not
+/// serialize the whole merged language-model settings tree on every call: the
+/// cache compares the settings structurally and only re-hashes when they change.
 pub fn selected_provider_configuration(settings: &CodeExplanationSettings, cx: &App) -> String {
     let models = &cx
         .global::<settings::SettingsStore>()
         .merged_settings()
         .language_models;
+    let Ok(mut cache) = PROVIDER_CONFIGURATION_CACHE.lock() else {
+        return compute_provider_configuration(settings, models);
+    };
+    if let Some(cached) = cache.as_ref()
+        && cached.models.as_ref() == models.as_ref()
+        && cached.provider == settings.provider
+    {
+        return cached.configuration.clone();
+    }
+    let configuration = compute_provider_configuration(settings, models);
+    *cache = Some(ProviderConfigurationCache {
+        models: models.clone(),
+        provider: settings.provider.clone(),
+        configuration: configuration.clone(),
+    });
+    configuration
+}
+
+fn compute_provider_configuration(
+    settings: &CodeExplanationSettings,
+    models: &Option<settings::AllLanguageModelSettingsContent>,
+) -> String {
     let Ok(value) = serde_json::to_value(models) else {
         return content_hash(&format!("{models:?}"));
     };
@@ -1602,6 +1650,31 @@ fn trim_global_cache(
 mod tests {
     use super::*;
 
+    #[gpui::test]
+    async fn provider_configuration_is_stable_and_memoized(cx: &mut gpui::TestAppContext) {
+        crate::editor_tests::init_test(cx, |_| {});
+        let settings_with = |provider: &str| CodeExplanationSettings {
+            enabled: true,
+            provider: Some(provider.to_string()),
+            model: Some("fake".to_string()),
+            target_language: String::new(),
+            max_function_lines: 500,
+            max_concurrent_requests: 5,
+            preload_lines: 100,
+            detailed: false,
+            prefer_existing_comments: true,
+            cache_persist: false,
+            cache_max_bytes: 1024,
+        };
+        cx.update(|cx| {
+            let first = selected_provider_configuration(&settings_with("fake"), cx);
+            let second = selected_provider_configuration(&settings_with("fake"), cx);
+            assert_eq!(first, second, "repeated lookups reuse the memoized digest");
+            let other = selected_provider_configuration(&settings_with("other"), cx);
+            assert_ne!(first, other, "a different provider invalidates the digest");
+        });
+    }
+
     #[test]
     fn explanation_concurrency_has_no_configured_maximum() {
         assert_eq!(code_explanation_concurrency(0), 1);
@@ -1894,8 +1967,10 @@ mod tests {
 
     #[test]
     fn project_scan_filters_sensitive_and_non_source_paths() {
-        assert!(!scan_git_status_allowed(git::status::FileStatus::Untracked));
-        assert!(!scan_git_status_allowed(git::status::FileStatus::Ignored));
+        assert!(!scan_git_status_allowed(git::status::FileStatus::Untracked, false));
+        assert!(!scan_git_status_allowed(git::status::FileStatus::Ignored, false));
+        assert!(scan_git_status_allowed(git::status::FileStatus::Untracked, true));
+        assert!(!scan_git_status_allowed(git::status::FileStatus::Ignored, true));
         use util::rel_path::rel_path;
 
         assert!(scan_source_extension(rel_path("src/main.ts")));
@@ -3804,14 +3879,15 @@ fn scan_path_is_sensitive(path: &util::rel_path::RelPath) -> bool {
         || file_name.starts_with("secrets.")
 }
 
-fn scan_git_status_allowed(status: git::status::FileStatus) -> bool {
-    !matches!(
-        status,
-        git::status::FileStatus::Untracked | git::status::FileStatus::Ignored
-    )
+fn scan_git_status_allowed(status: git::status::FileStatus, include_untracked: bool) -> bool {
+    match status {
+        git::status::FileStatus::Ignored => false,
+        git::status::FileStatus::Untracked => include_untracked,
+        git::status::FileStatus::Tracked(_) | git::status::FileStatus::Unmerged(_) => true,
+    }
 }
 
-fn status_is_changed(status: git::status::FileStatus) -> bool {
+fn status_is_changed(status: git::status::FileStatus, include_untracked: bool) -> bool {
     match status {
         git::status::FileStatus::Unmerged(_) => true,
         git::status::FileStatus::Tracked(tracked) => {
@@ -3819,7 +3895,8 @@ fn status_is_changed(status: git::status::FileStatus) -> bool {
                 && (tracked.index_status != git::status::StatusCode::Unmodified
                     || tracked.worktree_status != git::status::StatusCode::Unmodified)
         }
-        git::status::FileStatus::Untracked | git::status::FileStatus::Ignored => false,
+        git::status::FileStatus::Untracked => include_untracked,
+        git::status::FileStatus::Ignored => false,
     }
 }
 
@@ -3839,9 +3916,10 @@ fn path_is_within_scan_selection(
 fn collect_project_scan_candidates(
     project: &gpui::Entity<project::Project>,
     selected_paths: Option<&[project::ProjectPath]>,
-    changed_only: bool,
+    scope: CandidateGitScope,
     cx: &mut App,
 ) -> Vec<ProjectScanCandidate> {
+    let diff_view_changes = scope == CandidateGitScope::DiffViewChanges;
     let git_store = project.read(cx).git_store().clone();
     let worktree_store = project.read(cx).worktree_store();
     let Some(trust) = project::trusted_worktrees::TrustedWorktrees::try_get_global(cx) else {
@@ -3884,16 +3962,15 @@ fn collect_project_scan_candidates(
                 .read(cx)
                 .snapshot()
                 .status_for_path(&repository_path);
-            if status
-                .as_ref()
-                .is_some_and(|status| !scan_git_status_allowed(status.status))
-            {
+            if status.as_ref().is_some_and(|status| {
+                !scan_git_status_allowed(status.status, diff_view_changes)
+            }) {
                 continue;
             }
-            if changed_only
-                && !status
-                    .as_ref()
-                    .is_some_and(|status| status_is_changed(status.status))
+            if diff_view_changes
+                && !status.as_ref().is_some_and(|status| {
+                    status_is_changed(status.status, diff_view_changes)
+                })
             {
                 continue;
             }
@@ -4083,7 +4160,12 @@ fn show_project_scan_confirmation(
             .then(|| SharedString::from(i18n::t!("b30065caf5414bf4")))
     };
     let candidates = if error.is_none() {
-        collect_project_scan_candidates(&project, selected_paths.as_deref(), false, cx)
+        collect_project_scan_candidates(
+            &project,
+            selected_paths.as_deref(),
+            CandidateGitScope::TrackedOnly,
+            cx,
+        )
     } else {
         Vec::new()
     };
@@ -4120,7 +4202,12 @@ pub fn start_selected_project_scan(
             .then(|| SharedString::from(i18n::t!("b30065caf5414bf4")))
     };
     let candidates = if error.is_none() {
-        collect_project_scan_candidates(&project, Some(&selected_paths), false, cx)
+        collect_project_scan_candidates(
+            &project,
+            Some(&selected_paths),
+            CandidateGitScope::TrackedOnly,
+            cx,
+        )
     } else {
         Vec::new()
     };
@@ -5184,32 +5271,113 @@ mod changed_file_prefetch_tests {
                 worktree_status,
             })
         };
-        assert!(status_is_changed(tracked(
-            StatusCode::Unmodified,
-            StatusCode::Modified
-        )));
-        assert!(status_is_changed(tracked(
-            StatusCode::Modified,
-            StatusCode::Unmodified
-        )));
-        assert!(status_is_changed(tracked(
-            StatusCode::Added,
-            StatusCode::Unmodified
-        )));
-        assert!(status_is_changed(FileStatus::Unmerged(UnmergedStatus {
-            first_head: UnmergedStatusCode::Updated,
-            second_head: UnmergedStatusCode::Updated,
-        })));
-        assert!(!status_is_changed(tracked(
-            StatusCode::Unmodified,
-            StatusCode::Unmodified
-        )));
-        assert!(!status_is_changed(tracked(
-            StatusCode::Deleted,
-            StatusCode::Deleted
-        )));
-        assert!(!status_is_changed(FileStatus::Untracked));
-        assert!(!status_is_changed(FileStatus::Ignored));
+        assert!(status_is_changed(
+            tracked(StatusCode::Unmodified, StatusCode::Modified),
+            false
+        ));
+        assert!(status_is_changed(
+            tracked(StatusCode::Modified, StatusCode::Unmodified),
+            false
+        ));
+        assert!(status_is_changed(
+            tracked(StatusCode::Added, StatusCode::Unmodified),
+            false
+        ));
+        assert!(status_is_changed(
+            FileStatus::Unmerged(UnmergedStatus {
+                first_head: UnmergedStatusCode::Updated,
+                second_head: UnmergedStatusCode::Updated,
+            }),
+            false
+        ));
+        assert!(!status_is_changed(
+            tracked(StatusCode::Unmodified, StatusCode::Unmodified),
+            false
+        ));
+        assert!(!status_is_changed(
+            tracked(StatusCode::Deleted, StatusCode::Deleted),
+            false
+        ));
+        assert!(!status_is_changed(FileStatus::Untracked, false));
+        assert!(!status_is_changed(FileStatus::Ignored, false));
+        // 差异视图会列出未跟踪文件，因此预取把它们算作已修改文件。
+        assert!(status_is_changed(FileStatus::Untracked, true));
+        assert!(!status_is_changed(FileStatus::Ignored, true));
+        assert!(status_is_changed(
+            tracked(StatusCode::Unmodified, StatusCode::Modified),
+            true
+        ));
+    }
+
+    #[gpui::test]
+    async fn diff_view_prefetch_includes_untracked_files_but_project_scans_do_not(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        crate::editor_tests::init_test(cx, |_| {});
+        let fs = FakeFs::new(cx.executor());
+        fs.insert_tree(
+            "/root",
+            serde_json::json!({
+                ".git": {},
+                ".gitignore": "ignored.rs\n",
+                "tracked_clean.rs": "fn clean() {}\n",
+                "tracked_modified.rs": "fn modified() {}\n",
+                "untracked.rs": "fn untracked() {}\n",
+                "ignored.rs": "fn ignored() {}\n",
+            }),
+        )
+        .await;
+        fs.set_head_for_repo(
+            Path::new("/root/.git"),
+            &[
+                ("tracked_clean.rs", "fn clean() {}\n".to_string()),
+                ("tracked_modified.rs", "fn original() {}\n".to_string()),
+            ],
+            "abc123",
+        );
+        fs.set_index_for_repo(
+            Path::new("/root/.git"),
+            &[
+                ("tracked_clean.rs", "fn clean() {}\n".to_string()),
+                ("tracked_modified.rs", "fn original() {}\n".to_string()),
+            ],
+        );
+        let project = project::Project::test(fs, [Path::new("/root")], cx).await;
+        let worktree_id = cx.update(|cx| {
+            project
+                .read(cx)
+                .worktrees(cx)
+                .next()
+                .expect("worktree")
+                .read(cx)
+                .id()
+        });
+        cx.update(|cx| {
+            project::trusted_worktrees::init(Default::default(), cx);
+            let store = project.read(cx).worktree_store();
+            let trust =
+                project::trusted_worktrees::TrustedWorktrees::try_get_global(cx).expect("trust");
+            trust.update(cx, |trust, cx| {
+                trust.trust(
+                    &store,
+                    HashSet::from_iter([project::trusted_worktrees::PathTrust::Worktree(
+                        worktree_id,
+                    )]),
+                    cx,
+                )
+            });
+        });
+        cx.run_until_parked();
+        let collect = |scope, cx: &mut App| {
+            collect_project_scan_candidates(&project, None, scope, cx)
+                .into_iter()
+                .map(|candidate| candidate.path.path.as_unix_str().to_owned())
+                .collect::<Vec<_>>()
+        };
+        let scanned = cx.update(|cx| collect(CandidateGitScope::TrackedOnly, cx));
+        assert_eq!(scanned, vec!["tracked_clean.rs", "tracked_modified.rs"]);
+        let prefetched = cx.update(|cx| collect(CandidateGitScope::DiffViewChanges, cx));
+        assert_eq!(prefetched, vec!["tracked_modified.rs", "untracked.rs"]);
     }
 
     #[gpui::test]

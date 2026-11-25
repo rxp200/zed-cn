@@ -535,13 +535,10 @@ impl Session {
         let drained = next_offset + count as u64 == output_end;
         if count > 0 {
             let start = (next_offset - output_start) as usize;
-            let data: Vec<u8> = state
-                .output
-                .iter()
-                .skip(start)
-                .take(count)
-                .copied()
-                .collect();
+            // `range` is O(1) offset arithmetic; `iter().skip(start)` walks the
+            // whole retained history (up to the 8 MiB ring) for every frame while
+            // holding the session lock.
+            let data: Vec<u8> = state.output.range(start..start + count).copied().collect();
             let frame_exited = exited && drained;
             let frame = proto::PersistentTerminalOutput {
                 server_instance_id: attachment_id.to_owned(),

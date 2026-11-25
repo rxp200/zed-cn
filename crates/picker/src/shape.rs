@@ -514,9 +514,18 @@ impl Shape {
         layout: impl Into<Option<Layout>>,
         bounds: &SizeBounds,
         fill_height: bool,
+        fill_container: bool,
         div: Div,
         window: &Window,
     ) -> Div {
+        if fill_container {
+            // The picker sits in a container that already owns its rect (a
+            // popover of a fixed size). Applying the shape here would ignore
+            // that rect: a shape wider than the container clips the rows and
+            // their scrollbar, and a picker left at its content size gives the
+            // results list no height to fill, so the rows collapse to nothing.
+            return div.size_full();
+        }
         let layout = layout.into();
         // Work from the total picker size (full) to keep the divider from
         // growing the picker when dragged.

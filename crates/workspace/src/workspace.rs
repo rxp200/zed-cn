@@ -1098,7 +1098,7 @@ impl ProjectItemRegistry {
                 let is_local = project.read(cx).is_local();
                 let project_item =
                     <T::Item as project::ProjectItem>::try_open(project, &project_path, cx)?;
-                log::info!(
+                log::debug!(
                     "[open-debug] project item {} claims {:?}",
                     std::any::type_name::<T::Item>(),
                     entry_abs_path
@@ -1169,7 +1169,7 @@ impl ProjectItemRegistry {
         window: &mut Window,
         cx: &mut App,
     ) -> Task<Result<(Option<ProjectEntryId>, WorkspaceItemBuilder)>> {
-        log::info!(
+        log::debug!(
             "[open-debug] resolving project path {:?}",
             path.path.as_unix_str()
         );
@@ -4290,7 +4290,7 @@ impl Workspace {
     ) -> Task<Vec<Option<anyhow::Result<Box<dyn ItemHandle>>>>> {
         let fs = self.app_state.fs.clone();
 
-        log::info!("[open-debug] workspace::open_paths {:?}", abs_paths);
+        log::debug!("[open-debug] workspace::open_paths {:?}", abs_paths);
 
         let caller_ordered_abs_paths = abs_paths.clone();
 
@@ -5373,7 +5373,7 @@ impl Workspace {
 
         let workspace = self.weak_self.clone();
         let project_path = path.into();
-        log::info!(
+        log::debug!(
             "[open-debug] workspace::open_path_preview {:?}",
             project_path.path.as_unix_str()
         );

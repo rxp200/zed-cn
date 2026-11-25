@@ -132,6 +132,9 @@ pub struct MarkdownStyle {
     pub height_is_multiple_of_line_height: bool,
     pub prevent_mouse_interaction: bool,
     pub table_columns_min_size: bool,
+    /// Stretch tables to the container width with evenly sized columns instead of
+    /// sizing each column to its content. Document previews read better this way.
+    pub table_stretch: bool,
     pub soft_break_as_hard_break: bool,
 }
 
@@ -161,6 +164,7 @@ impl Default for MarkdownStyle {
             height_is_multiple_of_line_height: false,
             prevent_mouse_interaction: false,
             table_columns_min_size: false,
+            table_stretch: false,
             soft_break_as_hard_break: false,
         }
     }
@@ -3086,12 +3090,21 @@ impl Element for MarkdownElement {
                                     .debug_selector(|| "markdown_table".into())
                                     .min_w_0()
                                     .grid()
-                                    .when(self.style.table_columns_min_size, |this| {
-                                        this.w_full().grid_cols_min_content(column_count as u16)
+                                    .when(self.style.table_stretch, |this| {
+                                        this.w_full().grid_cols(column_count as u16)
                                     })
-                                    .when(!self.style.table_columns_min_size, |this| {
-                                        this.grid_cols_max_content(column_count as u16)
-                                    })
+                                    .when(
+                                        !self.style.table_stretch
+                                            && self.style.table_columns_min_size,
+                                        |this| {
+                                            this.w_full().grid_cols_min_content(column_count as u16)
+                                        },
+                                    )
+                                    .when(
+                                        !self.style.table_stretch
+                                            && !self.style.table_columns_min_size,
+                                        |this| this.grid_cols_max_content(column_count as u16),
+                                    )
                                     .mb_2()
                                     .border(px(1.5))
                                     .border_color(cx.theme().colors().border)
@@ -6658,6 +6671,44 @@ mod tests {
             table_width(400., cx),
             px(400.),
             "the table should shrink to the available width"
+        );
+    }
+
+    #[gpui::test]
+    fn test_stretched_table_fills_its_container(cx: &mut TestAppContext) {
+        ensure_theme_initialized(cx);
+
+        struct TableView {
+            markdown: Entity<Markdown>,
+        }
+
+        impl Render for TableView {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                let mut style = MarkdownStyle::default();
+                style.table_stretch = true;
+                div()
+                    .size_full()
+                    .child(MarkdownElement::new(self.markdown.clone(), style))
+            }
+        }
+
+        let table_width = |width: f32, cx: &mut TestAppContext| {
+            let window = cx.open_window(size(px(width), px(600.)), |_, cx| {
+                let markdown = cx.new(|cx| Markdown::new(REVIEW_TABLE.into(), None, None, cx));
+                TableView { markdown }
+            });
+            cx.run_until_parked();
+            gpui::VisualTestContext::from_window(window.into(), cx)
+                .debug_bounds("markdown_table")
+                .expect("table should have been rendered")
+                .size
+                .width
+        };
+
+        assert_eq!(
+            table_width(800., cx),
+            px(800.),
+            "a stretched table should use the full container width"
         );
     }
 

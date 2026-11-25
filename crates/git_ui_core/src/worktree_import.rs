@@ -541,10 +541,11 @@ fn select_new_worktree_paths(
     // Keep newly discovered paths out of `known_paths` until they are imported.
     // If the caller truncates this batch, the remaining candidates stay
     // eligible for the next pass instead of silently disappearing.
+    let candidate_paths = candidates.iter().cloned().collect::<HashSet<_>>();
     known_paths.extend(
         available_paths
             .iter()
-            .filter(|path| !candidates.contains(*path))
+            .filter(|path| !candidate_paths.contains(*path))
             .cloned(),
     );
     candidates

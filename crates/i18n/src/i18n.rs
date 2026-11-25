@@ -133,7 +133,12 @@ pub fn interpolate(
                 rest = &after[close + 1..];
             }
             None => {
-                out.push_str(rest);
+                // Unbalanced `{`: keep the rest verbatim exactly once. The prefix
+                // before the brace was already appended above, and `rest` is
+                // appended again after the loop, so only the brace and its tail
+                // may be pushed here.
+                out.push_str(&rest[open..]);
+                rest = "";
                 break;
             }
         }
@@ -324,6 +329,16 @@ mod tests {
             interpolate("失败：{error:#}", &[], &[("error", &"外层：内层")]),
             "失败：外层：内层"
         );
+    }
+
+    #[test]
+    fn interpolate_keeps_unbalanced_braces_verbatim() {
+        assert_eq!(interpolate("使用 {", &[], &[]), "使用 {");
+        assert_eq!(
+            interpolate("{name} 使用 {", &[], &[("name", &"x")]),
+            "x 使用 {"
+        );
+        assert_eq!(interpolate("a {b {c", &[], &[]), "a {b {c");
     }
 
     #[test]

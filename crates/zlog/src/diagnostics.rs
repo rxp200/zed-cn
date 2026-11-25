@@ -1,5 +1,6 @@
 use std::{
     fmt, fs,
+    fmt::Write as _,
     io::{self, Write},
     path::Path,
     sync::{
@@ -74,27 +75,80 @@ impl Drop for DiagnosticSpan {
     }
 }
 
+/// An open diagnostics file reused between records.
+///
+/// Every checkpoint used to re-stat and re-open the file (one `metadata`, one
+/// `open`, one `fsync` per record, three records per restored workspace item),
+/// which is slow on Windows and on scanned or network home directories.
+struct OpenLog {
+    path: std::path::PathBuf,
+    file: fs::File,
+    bytes: u64,
+}
+
+static OPEN_LOG: Mutex<Option<OpenLog>> = Mutex::new(None);
+
 fn append_record(path: &Path, max_bytes: u64, details: fmt::Arguments<'_>) -> io::Result<()> {
-    match fs::metadata(path) {
-        Ok(metadata) if metadata.len() >= max_bytes => {
-            // Copy before truncating so a failed rotation never destroys the previous evidence.
-            fs::copy(path, path.with_extension("log.old"))?;
-            fs::OpenOptions::new()
-                .write(true)
-                .truncate(true)
-                .open(path)?;
-        }
-        Ok(_) => {}
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error),
+    let mut open = OPEN_LOG
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    if open.as_ref().is_some_and(|log| log.path != path) {
+        *open = None;
     }
-    let mut file = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)?;
-    writeln!(file, "{details}")?;
+    if open.is_none() {
+        let file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)?;
+        let bytes = file.metadata()?.len();
+        *open = Some(OpenLog {
+            path: path.to_path_buf(),
+            file,
+            bytes,
+        });
+    }
+    // The rotation check must also cover a freshly opened file: the previous
+    // record may have been written before another thread switched the handle to
+    // a different diagnostics path.
+    if open.as_ref().is_some_and(|log| log.bytes >= max_bytes) {
+        *open = None;
+        // Copy before truncating so a failed rotation never destroys the previous evidence.
+        fs::copy(path, path.with_extension("log.old"))?;
+        fs::OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .open(path)?;
+        let file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)?;
+        *open = Some(OpenLog {
+            path: path.to_path_buf(),
+            file,
+            bytes: 0,
+        });
+    }
+    let log = open.as_mut().expect("diagnostics file is open");
+    let mut line = String::new();
+    writeln!(line, "{details}")
+        .map_err(|error| io::Error::other(format!("formatting diagnostics record: {error}")))?;
+    log.file.write_all(line.as_bytes())?;
+    log.bytes += line.len() as u64;
     // File::flush does not force the OS cache out. Checkpoints must survive an abrupt process exit.
-    file.sync_data()
+    log.file.sync_data()
+}
+
+/// Forces the cached diagnostics file to disk and closes it, so an external
+/// reader (or a harness that inspects the file after the process ends) sees
+/// every record without relying on the handle's drop order.
+pub fn flush_diagnostics() {
+    let mut open = OPEN_LOG.lock().unwrap_or_else(|error| error.into_inner());
+    if let Some(log) = open.as_mut() {
+        if let Err(error) = log.file.sync_data() {
+            eprintln!("Failed to flush diagnostics: {error}");
+        }
+    }
+    *open = None;
 }
 
 #[cfg(test)]

@@ -513,6 +513,37 @@ fn clip_line(origin: [f64; 2], direction: [f64; 2], bounds: CadBounds) -> Option
     ])
 }
 
+/// Normalizes a counter-clockwise sweep into `(0, TAU]`.
+///
+/// Angles come from untrusted drawing data. A loop that adds `TAU` until the
+/// sweep turns positive never advances once the value is large enough for the
+/// addition to round away (`|sweep| > ~1e16`), and costs one iteration per turn
+/// even for merely large values; `rem_euclid` normalizes in constant time.
+pub fn normalize_ccw_sweep(sweep: f64) -> Option<f64> {
+    if !sweep.is_finite() {
+        return None;
+    }
+    let normalized = sweep.rem_euclid(std::f64::consts::TAU);
+    Some(if normalized <= 1e-12 {
+        std::f64::consts::TAU
+    } else {
+        normalized
+    })
+}
+
+/// Normalizes a clockwise sweep into `[-TAU, 0)`, mirroring [`normalize_ccw_sweep`].
+pub fn normalize_cw_sweep(sweep: f64) -> Option<f64> {
+    if !sweep.is_finite() {
+        return None;
+    }
+    let normalized = -(-sweep).rem_euclid(std::f64::consts::TAU);
+    Some(if normalized >= -1e-12 {
+        -std::f64::consts::TAU
+    } else {
+        normalized
+    })
+}
+
 fn arc_steps(sweep: f64) -> usize {
     let steps = (sweep.abs() / ARC_STEP_DEGREES).ceil();
     if !steps.is_finite() || steps <= 0.0 {
@@ -647,6 +678,25 @@ const ACI_RGB: [[u8; 3]; 256] = [
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sweep_normalization_terminates_on_extreme_angles() {
+        let tau = std::f64::consts::TAU;
+        assert_eq!(normalize_ccw_sweep(tau), Some(tau));
+        assert_eq!(normalize_ccw_sweep(0.0), Some(tau));
+        assert_eq!(normalize_ccw_sweep(-tau), Some(tau));
+        assert_eq!(normalize_cw_sweep(0.0), Some(-tau));
+        assert_eq!(normalize_cw_sweep(-tau), Some(-tau));
+        assert_eq!(normalize_ccw_sweep(f64::NAN), None);
+        assert_eq!(normalize_ccw_sweep(f64::INFINITY), None);
+        assert_eq!(normalize_cw_sweep(f64::NEG_INFINITY), None);
+        // Values large enough that adding TAU in a loop cannot advance must still
+        // produce a normalized sweep instead of spinning forever.
+        let ccw = normalize_ccw_sweep(-1e300).expect("finite");
+        assert!((0.0..=tau).contains(&ccw), "{ccw}");
+        let cw = normalize_cw_sweep(1e300).expect("finite");
+        assert!((-tau..0.0).contains(&cw), "{cw}");
+    }
 
     #[test]
     fn aci_matches_the_reference_palette() {

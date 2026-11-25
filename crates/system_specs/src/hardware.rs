@@ -132,7 +132,21 @@ impl HardwareSampler {
     }
 
     fn sample_gpus(&mut self) -> Vec<GpuReading> {
-        self.gpus.iter_mut().map(GpuBackend::refresh).collect()
+        // `nvidia-smi` dumps every GPU per invocation, so a multi-GPU host would
+        // otherwise spawn one subprocess per card per sample.
+        let nvidia_smi = if self
+            .gpus
+            .iter()
+            .any(|gpu| matches!(gpu.refresh, GpuRefresh::NvidiaSmi { .. }))
+        {
+            query_nvidia_smi()
+        } else {
+            Vec::new()
+        };
+        self.gpus
+            .iter_mut()
+            .map(|gpu| gpu.refresh(&nvidia_smi))
+            .collect()
     }
 
     /// 没有 `hwmon`/SMC 读数时的兜底温度来源；目前只有 Windows 的 ACPI 热区需要它。
@@ -197,7 +211,7 @@ enum GpuRefresh {
 }
 
 impl GpuBackend {
-    fn refresh(&mut self) -> GpuReading {
+    fn refresh(&mut self, nvidia_smi: &[NvidiaGpu]) -> GpuReading {
         match &self.refresh {
             #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
             GpuRefresh::Static => {}
@@ -207,11 +221,8 @@ impl GpuBackend {
                     .is_none_or(|last| last.elapsed() >= NVIDIA_SMI_REFRESH_INTERVAL);
                 if due {
                     self.last_refresh_at = Some(Instant::now());
-                    if let Some(gpu) = query_nvidia_smi()
-                        .into_iter()
-                        .find(|gpu| gpu.index == *index)
-                    {
-                        self.reading = gpu.reading;
+                    if let Some(gpu) = nvidia_smi.iter().find(|gpu| gpu.index == *index) {
+                        self.reading = gpu.reading.clone();
                     }
                 }
             }

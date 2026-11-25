@@ -739,13 +739,14 @@ impl<D: PickerDelegate> Picker<D> {
         self
     }
 
-    /// Makes the results list fill the height its container allows instead of
-    /// sizing itself to its content.
+    /// Makes the picker fill the container it is embedded in instead of laying
+    /// itself out from its own shape, and makes the results list fill that
+    /// height rather than growing to its content.
     ///
-    /// Use this for an embedded picker whose container is smaller than the
-    /// picker's own cap: a content-sized list lays out taller than the container
-    /// and the rows past the container's edge are clipped away without the list
-    /// being scrollable to them.
+    /// Use this for an embedded picker that lives in a fixed-size container,
+    /// such as a popover: a picker sized from its shape is wider than such a
+    /// container (clipping the rows and their scrollbar) and leaves the results
+    /// list no height to fill, so a list with matches collapses to nothing.
     pub fn fill_results_height(mut self) -> Self {
         self.fill_results_height = true;
         self

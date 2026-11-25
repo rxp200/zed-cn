@@ -1,4 +1,5 @@
-use std::io::Write;
+use std::collections::VecDeque;
+use std::sync::Arc;
 
 use crate::{
     RemoteArch, RemoteOs, RemotePlatform,
@@ -14,6 +15,7 @@ use futures::{
     channel::mpsc::{Sender, UnboundedReceiver, UnboundedSender},
 };
 use gpui::{AppContext as _, AsyncApp, Task};
+use parking_lot::Mutex;
 use rpc::proto::Envelope;
 use util::command::Child;
 
@@ -148,6 +150,35 @@ fn parse_home_dir(output: &str) -> Option<String> {
     (home_dir.starts_with('/') && !home_dir.contains('\u{FFFD}')).then(|| home_dir.to_owned())
 }
 
+/// How many of the transport's own stderr lines are kept for the report that
+/// follows an unexpected exit.
+const STDERR_TAIL_LINES: usize = 20;
+
+/// Forwards one line of the transport's stderr, which carries both the remote
+/// server's JSON log records and plain-text diagnostics from `ssh` itself
+/// (connection resets, authentication failures, "Connection closed by remote
+/// host"). The plain text used to go only to the process stderr, which is not
+/// part of zed.log, so an unexplained exit like `proxy process terminated
+/// unexpectedly: 1` left no trace of its cause.
+fn forward_stderr_line(content: &[u8], stderr_tail: &Mutex<VecDeque<String>>) {
+    if let Ok(record) = serde_json::from_slice::<LogRecord>(content) {
+        record.log(log::logger());
+        return;
+    }
+
+    let line = String::from_utf8_lossy(content).trim_end().to_owned();
+    if line.is_empty() {
+        return;
+    }
+
+    log::warn!("(remote) {line}");
+    let mut tail = stderr_tail.lock();
+    if tail.len() == STDERR_TAIL_LINES {
+        tail.pop_front();
+    }
+    tail.push_back(line);
+}
+
 fn handle_rpc_messages_over_child_process_stdio(
     mut remote_proxy_process: Child,
     incoming_tx: UnboundedSender<Envelope>,
@@ -164,6 +195,7 @@ fn handle_rpc_messages_over_child_process_stdio(
     let mut stdout_buffer = Vec::new();
     let mut stderr_buffer = Vec::new();
     let mut stderr_offset = 0;
+    let stderr_tail = Arc::new(Mutex::new(VecDeque::with_capacity(STDERR_TAIL_LINES)));
 
     let stdin_task = cx.background_spawn(async move {
         while let Some(outgoing) = outgoing_rx.next().await {
@@ -199,41 +231,37 @@ fn handle_rpc_messages_over_child_process_stdio(
         }
     });
 
-    let stderr_task: Task<anyhow::Result<()>> = cx.background_spawn(async move {
-        loop {
-            stderr_buffer.resize(stderr_offset + 1024, 0);
+    let stderr_task: Task<anyhow::Result<()>> = cx.background_spawn({
+        let stderr_tail = stderr_tail.clone();
+        async move {
+            loop {
+                stderr_buffer.resize(stderr_offset + 1024, 0);
 
-            let len = child_stderr
-                .read(&mut stderr_buffer[stderr_offset..])
-                .await?;
-            if len == 0 {
-                return anyhow::Ok(());
-            }
-
-            stderr_offset += len;
-            let mut start_ix = 0;
-            while let Some(ix) = stderr_buffer[start_ix..stderr_offset]
-                .iter()
-                .position(|b| b == &b'\n')
-            {
-                let line_ix = start_ix + ix;
-                let content = &stderr_buffer[start_ix..line_ix];
-                start_ix = line_ix + 1;
-                if let Ok(record) = serde_json::from_slice::<LogRecord>(content) {
-                    record.log(log::logger())
-                } else {
-                    std::io::stderr()
-                        .write_fmt(format_args!(
-                            "(remote) {}\n",
-                            String::from_utf8_lossy(content)
-                        ))
-                        .ok();
+                let len = child_stderr
+                    .read(&mut stderr_buffer[stderr_offset..])
+                    .await?;
+                if len == 0 {
+                    if stderr_offset > 0 {
+                        forward_stderr_line(&stderr_buffer[..stderr_offset], &stderr_tail);
+                    }
+                    return anyhow::Ok(());
                 }
-            }
-            stderr_buffer.drain(0..start_ix);
-            stderr_offset -= start_ix;
 
-            connection_activity_tx.try_send(()).ok();
+                stderr_offset += len;
+                let mut start_ix = 0;
+                while let Some(ix) = stderr_buffer[start_ix..stderr_offset]
+                    .iter()
+                    .position(|b| b == &b'\n')
+                {
+                    let line_ix = start_ix + ix;
+                    forward_stderr_line(&stderr_buffer[start_ix..line_ix], &stderr_tail);
+                    start_ix = line_ix + 1;
+                }
+                stderr_buffer.drain(0..start_ix);
+                stderr_offset -= start_ix;
+
+                connection_activity_tx.try_send(()).ok();
+            }
         }
     });
 
@@ -257,6 +285,23 @@ fn handle_rpc_messages_over_child_process_stdio(
             let status = 1;
             status
         });
+        if status != 0 {
+            // The process is gone by now, so this is the last chance to say why
+            // it went away; the tail is what the ssh diagnostics reader kept.
+            let tail = stderr_tail
+                .lock()
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(" | ");
+            if tail.is_empty() {
+                log::error!(
+                    "remote transport exited with status {status} and produced no stderr output"
+                );
+            } else {
+                log::error!("remote transport exited with status {status}: {tail}");
+            }
+        }
         match result {
             Ok(_) => Ok(status),
             Err(error) => Err(error),
