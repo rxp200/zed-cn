@@ -872,18 +872,15 @@ impl HeadlessProject {
     ) -> Result<proto::AddWorktreeResponse> {
         use client::ErrorCodeExt;
         let fs = this.read_with(&cx, |this, _| this.fs.clone());
-        let path = PathBuf::from(shellexpand::tilde(&message.payload.path).to_string());
+        let path = requested_worktree_path(&message.payload.path)?;
 
         let canonicalized = match fs.canonicalize(&path).await {
             Ok(path) => path,
             Err(e) => {
-                let mut parent = path
+                let parent = path
                     .parent()
                     .ok_or(e)
                     .with_context(|| format!("{path:?} does not exist"))?;
-                if parent == Path::new("") {
-                    parent = util::paths::home_dir();
-                }
                 let parent = fs.canonicalize(parent).await.map_err(|_| {
                     anyhow!(
                         proto::ErrorCode::DevServerProjectPathDoesNotExist
@@ -2413,9 +2410,43 @@ fn find_venv_python(working_directory: &str) -> Option<std::path::PathBuf> {
     None
 }
 
+/// Resolves the path requested by an `AddWorktree` message on the project host.
+///
+/// The client's path style says nothing about this host, so a path that is not
+/// absolute here can not name a directory here. Resolving it relative to the
+/// working directory or the home directory would create a worktree root that can
+/// never exist — typically what happens when a client-local path such as
+/// `C:\\Users\\user\\...` reaches a POSIX host.
+fn requested_worktree_path(requested: &str) -> Result<PathBuf> {
+    use client::ErrorCodeExt;
+
+    let path = PathBuf::from(shellexpand::tilde(requested).to_string());
+    if !PathStyle::local().is_absolute(&path) {
+        return Err(anyhow!(
+            proto::ErrorCode::DevServerProjectPathDoesNotExist.with_tag("path", requested)
+        ));
+    }
+    anyhow::Ok(path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn add_worktree_requires_a_path_on_this_host() {
+        assert!(requested_worktree_path("/home/user/project").is_ok());
+        assert!(requested_worktree_path("~").is_ok());
+        assert!(requested_worktree_path("~/code/project").is_ok());
+
+        if !cfg!(windows) {
+            // A client-local Windows path must not be joined onto the home
+            // directory and turned into a root that never exists.
+            assert!(requested_worktree_path("C:\\Users\\user\\.ssh\\config").is_err());
+            assert!(requested_worktree_path("relative/folder").is_err());
+            assert!(requested_worktree_path("").is_err());
+        }
+    }
 
     /// 系统监控采样只需要进程数量，因此用最小刷新种类；这条用例确认换成
     /// `ProcessRefreshKind::nothing()` 后整机指标与进程计数仍然有效。

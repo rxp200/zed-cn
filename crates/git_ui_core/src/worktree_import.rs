@@ -15,6 +15,7 @@ use project::project_settings::ProjectSettings;
 use project::trusted_worktrees::{PathTrust, TrustedWorktrees};
 use project::{Project, Worktree};
 use settings::Settings;
+use util::rel_path::RelPath;
 use workspace::Workspace;
 
 /// A single discovery pass will import at most this many worktrees, so a
@@ -220,7 +221,7 @@ async fn discovery_loop(workspace: WeakEntity<Workspace>, cx: &mut AsyncApp) {
         };
         cx.background_executor().timer(delay).await;
 
-        let Some((project, repositories, mut project_roots)) = workspace
+        let Some((project, repositories, mut project_roots, primary_root, empty_roots)) = workspace
             .update(cx, |workspace, cx| {
                 let project = workspace.project().clone();
                 if project.read(cx).is_via_collab() {
@@ -240,12 +241,37 @@ async fn discovery_loop(workspace: WeakEntity<Workspace>, cx: &mut AsyncApp) {
                         )
                     })
                     .collect::<Vec<_>>();
-                let project_roots = project
-                    .read(cx)
-                    .visible_worktrees(cx)
+                let visible_worktrees = project.read(cx).visible_worktrees(cx).collect::<Vec<_>>();
+                let project_roots = visible_worktrees
+                    .iter()
                     .map(|worktree| worktree.read(cx).abs_path().to_path_buf())
                     .collect::<HashSet<_>>();
-                Some((project, repositories, project_roots))
+                let primary_root = visible_worktrees
+                    .first()
+                    .map(|worktree| worktree.read(cx).abs_path().to_path_buf());
+                // A root that holds no entries at all was never scanned, which is
+                // what a root for a directory that does not exist looks like. Roots
+                // with a scanned tree are left alone even when the directory is
+                // temporarily unavailable.
+                let empty_roots = visible_worktrees
+                    .iter()
+                    .filter(|worktree| {
+                        worktree
+                            .read(cx)
+                            .snapshot()
+                            .child_entries(RelPath::empty())
+                            .next()
+                            .is_none()
+                    })
+                    .map(|worktree| worktree.read(cx).abs_path().to_path_buf())
+                    .collect::<HashSet<_>>();
+                Some((
+                    project,
+                    repositories,
+                    project_roots,
+                    primary_root,
+                    empty_roots,
+                ))
             })
             .ok()
             .flatten()
@@ -256,6 +282,10 @@ async fn discovery_loop(workspace: WeakEntity<Workspace>, cx: &mut AsyncApp) {
         // A stale checkout makes `worktrees()` fail every time, which would
         // also block reconciliation of other linked roots.
         let mut checkout_status = HashMap::default();
+        let repository_roots = repositories
+            .iter()
+            .map(|(_, root, _)| root.clone())
+            .collect::<HashSet<_>>();
         let mut live_repositories = Vec::with_capacity(repositories.len());
         let mut stale_repositories = 0;
         let mut stale_linked_roots = Vec::new();
@@ -338,6 +368,49 @@ async fn discovery_loop(workspace: WeakEntity<Workspace>, cx: &mut AsyncApp) {
             failure_streak = failure_streak.saturating_add(1);
         } else {
             failure_streak = 0;
+        }
+
+        // A root restored from a persisted window can name a checkout that was
+        // deleted while the project was closed. Git no longer lists it, so it is
+        // never tracked as departed and would stay in the project forever.
+        let mut missing_roots = HashSet::default();
+        for path in empty_roots.iter() {
+            if check_checkout(&project, path, &mut checkout_status, cx).await
+                == CheckoutStatus::Missing
+            {
+                missing_roots.insert(path.clone());
+            }
+        }
+        // A missing root that is a repository work directory is the checkout
+        // the project is built around, and a missing primary root of a project
+        // without any repository could be a directory that is only temporarily
+        // unavailable, so neither is dropped. A primary root that is not a
+        // repository work directory, next to real repositories, is a stale root
+        // just like the others (restored windows list such roots first).
+        let mut protected_roots = repository_roots.clone();
+        if protected_roots.is_empty()
+            && let Some(primary_root) = primary_root.as_ref()
+        {
+            protected_roots.insert(primary_root.clone());
+        }
+        let vanished_roots =
+            select_vanished_project_roots(&empty_roots, &missing_roots, &protected_roots);
+        if !vanished_roots.is_empty() {
+            let mut removed = 0;
+            cx.update(|cx| {
+                for path in &vanished_roots {
+                    if remove_worktree_root(&project, path, cx) {
+                        removed += 1;
+                    }
+                    project_roots.remove(path);
+                    tracked_paths.remove(path);
+                }
+            });
+            if removed > 0 {
+                log::info!(
+                    "removed {removed} project root(s) whose directory no longer exists on the project host"
+                );
+            }
         }
 
         // Remember which open roots stand for linked worktrees, so a root can
@@ -488,6 +561,32 @@ fn select_departed_worktree_roots(
     missing_paths: &HashSet<PathBuf>,
 ) -> Vec<PathBuf> {
     tracked_paths.intersection(missing_paths).cloned().collect()
+}
+
+/// Returns the project roots that stand for a checkout that no longer exists on
+/// the project host and that Git does not list as one of its worktrees.
+///
+/// A root like that is what a worktree deleted while the project was closed
+/// leaves behind: the persisted window restores the path, but Git has already
+/// stopped listing it, so [`select_departed_worktree_roots`] can never see it
+/// and the root would stay in the project forever.
+///
+/// `empty_roots` must only contain roots that hold no entries at all, so a
+/// directory that is temporarily unavailable but was already scanned keeps its
+/// root. Paths in `protected_roots` are never removed, so discovery cannot
+/// detach a checkout the project is built around.
+fn select_vanished_project_roots(
+    empty_roots: &HashSet<PathBuf>,
+    missing_paths: &HashSet<PathBuf>,
+    protected_roots: &HashSet<PathBuf>,
+) -> Vec<PathBuf> {
+    let mut vanished = empty_roots
+        .intersection(missing_paths)
+        .filter(|path| !protected_roots.contains(*path))
+        .cloned()
+        .collect::<Vec<_>>();
+    vanished.sort();
+    vanished
 }
 
 #[cfg(test)]
@@ -669,6 +768,9 @@ mod tests {
 
         const MAIN: &str = path!("/remote/project");
         const LINKED: &str = path!("/remote/linked");
+        // Restored from a persisted window after the worktree was deleted on the
+        // project host: Git never listed it, and nothing on disk answers for it.
+        const GHOST: &str = path!("/remote/ghost");
         const COMMON_DIR: &str = path!("/remote/project/.git");
         const LINKED_GIT_DIR: &str = path!("/remote/project/.git/worktrees/linked");
 
@@ -759,19 +861,25 @@ mod tests {
         server
             .send(proto::UpdateProject {
                 project_id: REMOTE_SERVER_PROJECT_ID,
-                worktrees: [(1, MAIN, "project", false), (2, LINKED, "linked", true)]
-                    .into_iter()
-                    .map(
-                        |(id, abs_path, root_name, is_linked)| proto::WorktreeMetadata {
-                            id,
-                            abs_path: abs_path.into(),
-                            root_name: root_name.into(),
-                            visible: true,
-                            root_repo_common_dir: Some(COMMON_DIR.into()),
-                            root_repo_is_linked_worktree: is_linked,
-                        },
-                    )
-                    .collect(),
+                // The stale root is listed first, the way a restored window
+                // shows the root it was opened from first.
+                worktrees: [
+                    (3, GHOST, "ghost", false, false),
+                    (1, MAIN, "project", false, true),
+                    (2, LINKED, "linked", true, true),
+                ]
+                .into_iter()
+                .map(|(id, abs_path, root_name, is_linked, has_repository)| {
+                    proto::WorktreeMetadata {
+                        id,
+                        abs_path: abs_path.into(),
+                        root_name: root_name.into(),
+                        visible: true,
+                        root_repo_common_dir: has_repository.then(|| COMMON_DIR.into()),
+                        root_repo_is_linked_worktree: is_linked,
+                    }
+                })
+                .collect(),
             })
             .unwrap();
         let announce_repository = |id, path: &str, git_dir: &str| {
@@ -806,6 +914,7 @@ mod tests {
         assert!(client_fs.metadata(Path::new(MAIN)).await.unwrap().is_none());
         assert!(is_open_root(&project, Path::new(MAIN), cx));
         assert!(is_open_root(&project, Path::new(LINKED), cx));
+        assert!(is_open_root(&project, Path::new(GHOST), cx));
         cx.executor().advance_clock(INITIAL_DISCOVERY_DELAY);
         cx.run_until_parked();
         assert!(
@@ -815,6 +924,10 @@ mod tests {
         assert!(
             is_open_root(&project, Path::new(LINKED), cx),
             "the linked checkout exists on the remote host"
+        );
+        assert!(
+            !is_open_root(&project, Path::new(GHOST), cx),
+            "a root whose directory does not exist on the project host must be detached"
         );
 
         cx.executor().advance_clock(DISCOVERY_INTERVAL);
@@ -873,6 +986,43 @@ mod tests {
         let missing_paths = paths(&["/other"]);
 
         assert!(select_departed_worktree_roots(&tracked_paths, &missing_paths).is_empty());
+    }
+
+    #[test]
+    fn a_missing_empty_root_that_git_never_listed_is_removed() {
+        let empty_roots = paths(&["/main", "/ghost"]);
+        let missing_paths = paths(&["/ghost"]);
+
+        assert_eq!(
+            select_vanished_project_roots(&empty_roots, &missing_paths, &paths(&[])),
+            vec![PathBuf::from("/ghost")]
+        );
+    }
+
+    #[test]
+    fn protected_roots_are_never_removed() {
+        let protected_roots = paths(&["/main", "/repo-worktree"]);
+        let empty_roots = paths(&["/main", "/repo-worktree", "/ghost"]);
+        let missing_paths = paths(&["/main", "/repo-worktree", "/ghost"]);
+
+        assert_eq!(
+            select_vanished_project_roots(&empty_roots, &missing_paths, &protected_roots),
+            vec![PathBuf::from("/ghost")]
+        );
+    }
+
+    #[test]
+    fn a_root_with_a_scanned_tree_is_kept_when_its_directory_disappears() {
+        // Callers only offer empty roots once the project host confirms the
+        // directory is missing, so an unmounted directory that was already
+        // scanned keeps its root instead of being detached.
+        let empty_roots = paths(&["/ghost"]);
+        let missing_paths = paths(&["/ghost", "/unmounted"]);
+
+        assert_eq!(
+            select_vanished_project_roots(&empty_roots, &missing_paths, &paths(&[])),
+            vec![PathBuf::from("/ghost")]
+        );
     }
 
     #[test]

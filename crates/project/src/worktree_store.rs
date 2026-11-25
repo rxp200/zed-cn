@@ -237,6 +237,21 @@ pub enum WorktreeStoreEvent {
 
 impl EventEmitter<WorktreeStoreEvent> for WorktreeStore {}
 
+/// Returns whether `abs_path` can name a directory on the project host.
+///
+/// The path is interpreted with the project host's path style, because the
+/// client's own path style says nothing about where the project lives. A
+/// relative path, or an absolute path from another platform (for example a
+/// Windows drive path sent to a POSIX host), would otherwise be resolved by
+/// the host against its own working directory or home directory and produce a
+/// root that can never exist.
+fn is_path_on_project_host(abs_path: &str, path_style: PathStyle) -> bool {
+    if abs_path == "~" || abs_path.starts_with("~/") || abs_path.starts_with("~\\") {
+        return true;
+    }
+    path_style.is_absolute(Path::new(abs_path))
+}
+
 impl WorktreeStore {
     pub fn init(client: &AnyProtoClient) {
         client.add_entity_request_handler(Self::handle_create_project_entry);
@@ -897,6 +912,18 @@ impl WorktreeStore {
         }
         if abs_path.is_empty() {
             abs_path = "~/".to_string();
+        }
+        if !is_path_on_project_host(&abs_path, path_style) {
+            let message = format!(
+                "cannot open `{abs_path}` on the project host: it is not an absolute {} path",
+                if path_style.is_posix() {
+                    "POSIX"
+                } else {
+                    "Windows"
+                }
+            );
+            log::warn!("{message}");
+            return Task::ready(Err(Arc::new(anyhow!(message))));
         }
         let scan_depth_override = self.scan_depth_override;
 
@@ -1610,5 +1637,30 @@ impl WorktreeHandle {
             WorktreeHandle::Strong(handle) => Some(handle.clone()),
             WorktreeHandle::Weak(handle) => handle.upgrade(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_paths_of_the_project_host_reach_the_project_host() {
+        let posix = PathStyle::Unix;
+        assert!(is_path_on_project_host("/home/user/project", posix));
+        assert!(is_path_on_project_host("~", posix));
+        assert!(is_path_on_project_host("~/project", posix));
+        assert!(!is_path_on_project_host(
+            r"C:\Users\user\.ssh\config",
+            posix
+        ));
+        assert!(!is_path_on_project_host(r"relative\folder", posix));
+        assert!(!is_path_on_project_host("", posix));
+
+        let windows = PathStyle::Windows;
+        assert!(is_path_on_project_host(r"C:\Users\user\project", windows));
+        assert!(is_path_on_project_host("~/project", windows));
+        assert!(!is_path_on_project_host("/home/user/project", windows));
+        assert!(!is_path_on_project_host("project", windows));
     }
 }
